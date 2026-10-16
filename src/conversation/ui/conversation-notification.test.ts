@@ -157,3 +157,33 @@ it("does not send work of the person's own in place of an older refused message"
   expect(tab().draft).toEqual(work)
   expect(olderNow()).toMatchObject({ receipt: "failed" })
 })
+
+// Row 10: a refused message whose draft the person emptied is not sent.
+it("does not send a refused message whose draft the person cleared", async () => {
+  const effects = scenarioEffects("echo")
+  const create = vi.fn(async () => {
+    throw new Error("offline")
+  })
+  const submit = vi.fn(effects.submit)
+  const store = makeStore(
+    createDependencies({ conversation: { ...effects, create, submit } }),
+  )
+  const tab = () => {
+    const found = store.getState().conversation.conversations[0]
+    if (!found) throw new Error("missing conversation")
+    return found
+  }
+  const id = tab().id
+  await store.dispatch(sendDraft({ id, content: textContent("first") }))
+  const refused = tab().turns[0]
+  if (!refused) throw new Error("missing turn")
+  expect(refused).toMatchObject({ receipt: "failed" })
+  expect(tab().draft).toEqual(textContent("first"))
+  store.dispatch(setDraft({ id, draft: [] }))
+  const sendAgain = await renderNotice(store, tab)
+  expect(sendAgain.disabled).toBe(true)
+  await store.dispatch(retryFailedTurn({ id, turnId: refused.id }))
+  expect(create).toHaveBeenCalledTimes(1)
+  expect(submit).not.toHaveBeenCalled()
+  expect(tab().draft).toEqual([])
+})

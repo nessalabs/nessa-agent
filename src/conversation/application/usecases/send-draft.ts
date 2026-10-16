@@ -125,7 +125,9 @@ export function restoreFailedTurn(
 ): LocalTabs {
   const conv = findConversation(tabs, conversationId)
   const refused = conv && refusedTurn(conv, turnId)
-  if (!conv || !refused || conv.draft.length > 0) return tabs
+  // A draft this turn already owns and the person emptied was cleared on
+  // purpose; only a draft that was never this turn's takes it back.
+  if (!conv || !refused || conv.draft.length > 0 || conv.draftTurn === turnId) return tabs
   return replaceConversation(tabs, {
     ...conv,
     draft: notUploaded(refused.content),
