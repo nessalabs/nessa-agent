@@ -60,21 +60,30 @@ one failure at a time. A refused message is never lost from the slot: once
 nothing newer holds it, the latest refused message is offered again. Whether
 the conversation's error is a refused message's own is recorded with it, as
 the turn that set it, and never read from the text: a control can fail in the
-same words. Likewise the draft records which refused message it was put back
-from, and Send Again sends the draft only when it is that message's own. An
-empty draft takes a refused message back only when it was never that
-message's: one the person emptied was cleared on purpose. It also takes the
-message back only while the message is whole: an image whose original was let
-go to bound previews survives only as a reference, which a draft cannot send.
-`canSendAgain` in `send-draft.ts` is the one rule for all of this, read by the
-notice and by Send Again alike. A draft of its own whose images are still
-uploading again waits for them, so the button is live only when pressing it
-sends the message.
+same words.
+
+Send Again sends exactly the refused message, or it is held. `canSendAgain`
+in `send-draft.ts` is the one rule, read by the notice and by Send Again
+alike:
+
+- A draft that holds something is sent only when it is that message's own
+  (the draft records which refused message it was put back from) and every
+  file in it is ready. An image uploading again, or one whose upload failed,
+  holds it.
+- An empty draft takes a refused message back only if the message was never
+  put back before. Once a refused message is in the draft, the draft is its
+  only copy: a person who empties it, or sends something else in its place,
+  has let it go. The message also has to be whole: an image whose original
+  was let go to bound previews survives only as a reference, which a draft
+  cannot send.
+
+So the older message of row 2 is one refused while the person was already
+typing the next, which is the only way it is never put back.
 
 | # | State | Event | Notice shows | Conversation error |
 |---|-------|-------|--------------|--------------------|
 | 1 | One refused message | none | Error sending for it | its error |
-| 2 | Two refused messages | Send Again on the newer, accepted or still sending | Error sending for the older, with its own error; Send Again puts it back in the empty draft (files to upload again) and sends it | cleared |
+| 2 | Two refused messages, the older refused while the newer was being typed | Send Again on the newer, accepted or still sending | Error sending for the older, with its own error; Send Again puts it back in the empty draft (files to upload again) and sends it | cleared |
 | 3 | Two refused messages | Send Again on the newer, refused again | Error sending for the newer | the newer's new error |
 | 4 | A refused message | a control (Close, an answer) fails afterwards | the control failure | the control's error |
 | 5 | A refused message and a later control failure | Discard the refused message | the control failure | unchanged |
@@ -85,12 +94,14 @@ sends the message.
 | 10 | A refused message put back in the draft | the person empties the draft, then Send Again | Send Again is held, and nothing is sent | unchanged |
 | 11 | An older refused message whose image original was let go to bound previews | Send Again on it | Send Again is held, and nothing is sent; Discard still works | unchanged |
 | 12 | An older refused message with an image, put back in the draft by Send Again | the image uploads again | Send Again is held while it uploads, then live; the next press sends it | unchanged |
+| 13 | A refused message put back in the draft | the person replaces it with another message and sends that | Send Again on the refused message is held, and nothing is sent | cleared |
+| 14 | An older refused message with an image, put back in the draft by Send Again | the image fails to upload again | Send Again is held until the upload is retried from its tile | unchanged |
 
 Tests: rows 1 to 4 and 7 in `src/conversation/ui/notification.test.ts`; rows
 4 to 7 through the store in `src/conversation/adapters/store/unsent.test.ts`;
-rows 2, 8, 9 and 10's Send Again through the rendered control in
+rows 2, 8, 9, 10 and 13's Send Again through the rendered control in
 `src/conversation/ui/conversation-notification.test.ts`, its attachments in
-`src/conversation/application/usecases/attachments.test.ts` (rows 11 and 12 too), and in a real
+`src/conversation/application/usecases/attachments.test.ts` (rows 11, 12 and 14 too), and in a real
 browser with `verification/desktop/scripts/refused-messages.mjs`.
 
 ## Recovering a lost reply

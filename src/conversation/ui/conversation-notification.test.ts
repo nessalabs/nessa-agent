@@ -33,18 +33,24 @@ afterEach(async () => {
   host.remove()
 })
 
-/**
- * Two messages refused, then the newer one sent again: the older is offered
- * with an empty draft, and its Send Again is pressed.
- */
 type Store = ReturnType<typeof makeStore>
 
+/**
+ * Two messages refused, then the newer one sent again: the older is offered
+ * with an empty draft. The older was refused while the person was already
+ * typing the newer, so it was never put back in the draft.
+ */
 async function refuseTwiceRetryNewer(
   first: (store: Store, id: string) => MessageContent,
 ) {
   const effects = scenarioEffects("echo")
   let refusals = 2
+  let release = () => {}
+  const typed = new Promise<void>((resolve) => {
+    release = resolve
+  })
   const create = vi.fn(async (...args: Parameters<typeof effects.create>) => {
+    await typed
     if (refusals-- > 0) throw new Error("offline")
     return effects.create(...args)
   })
@@ -63,8 +69,11 @@ async function refuseTwiceRetryNewer(
     return found
   }
   const id = tab().id
-  await store.dispatch(sendDraft({ id, content: first(store, id) }))
-  store.dispatch(setDraft({ id, draft: [] }))
+  const sending = store.dispatch(sendDraft({ id, content: first(store, id) }))
+  store.dispatch(setDraft({ id, draft: textContent("second") }))
+  release()
+  await sending
+  expect(tab().draft).toEqual(textContent("second"))
   await store.dispatch(sendDraft({ id, content: textContent("second") }))
   const older = turn(0)
   const newer = turn(1)
@@ -185,5 +194,42 @@ it("does not send a refused message whose draft the person cleared", async () =>
   await store.dispatch(retryFailedTurn({ id, turnId: refused.id }))
   expect(create).toHaveBeenCalledTimes(1)
   expect(submit).not.toHaveBeenCalled()
+  expect(tab().draft).toEqual([])
+})
+
+// Row 13: a refused message put back in the draft, then let go for another
+// message that was sent, is never put back again.
+it("does not bring back a refused message the person replaced and sent past", async () => {
+  const effects = scenarioEffects("echo")
+  let refusals = 1
+  const create = vi.fn(async (...args: Parameters<typeof effects.create>) => {
+    if (refusals-- > 0) throw new Error("offline")
+    return effects.create(...args)
+  })
+  const submit = vi.fn(effects.submit)
+  const store = makeStore(
+    createDependencies({ conversation: { ...effects, create, submit } }),
+  )
+  const tab = () => {
+    const found = store.getState().conversation.conversations[0]
+    if (!found) throw new Error("missing conversation")
+    return found
+  }
+  const id = tab().id
+  await store.dispatch(sendDraft({ id, content: textContent("first") }))
+  const refused = tab().turns[0]
+  if (!refused) throw new Error("missing turn")
+  expect(tab().draft).toEqual(textContent("first"))
+  store.dispatch(setDraft({ id, draft: textContent("other") }))
+  await store.dispatch(sendDraft({ id, content: textContent("other") }))
+  expect(tab().draft).toEqual([])
+  expect(tab().turns.find((each) => each.id === refused.id)).toMatchObject({
+    receipt: "failed",
+  })
+  const sendAgain = await renderNotice(store, tab)
+  expect(sendAgain.disabled).toBe(true)
+  const calls = submit.mock.calls.length
+  await store.dispatch(retryFailedTurn({ id, turnId: refused.id }))
+  expect(submit.mock.calls).toHaveLength(calls)
   expect(tab().draft).toEqual([])
 })

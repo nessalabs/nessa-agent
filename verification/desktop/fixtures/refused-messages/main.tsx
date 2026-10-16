@@ -7,19 +7,28 @@ import { createRoot } from "react-dom/client"
 import { Provider } from "react-redux"
 import { createDependencies } from "../../../../src/composition/dependencies"
 import { makeStore } from "../../../../src/store"
-import { scenarioEffects, sendDraft } from "../../../../src/conversation/testing"
+import {
+  scenarioEffects,
+  sendDraft,
+  setDraft,
+} from "../../../../src/conversation/testing"
 import { textContent } from "../../../../src/conversation/model"
 import { ConversationNotification } from "../../../../src/conversation/ui/conversation-notification"
 import "../../../../src/styles.css"
 
 const effects = scenarioEffects("echo")
 const state = { refusals: 2, submitted: [] as string[] }
+let release = () => {}
+const typed = new Promise<void>((resolve) => {
+  release = resolve
+})
 Object.assign(window, { __refused: state })
 const store = makeStore(
   createDependencies({
     conversation: {
       ...effects,
       create: async (...args: Parameters<typeof effects.create>) => {
+        await typed
         if (state.refusals-- > 0) throw new Error("offline")
         return effects.create(...args)
       },
@@ -35,8 +44,12 @@ const tab = () => {
   if (!found) throw new Error("missing conversation")
   return found
 }
-await store.dispatch(sendDraft({ content: textContent("first") }))
+// The older message is refused while the newer one is already being typed.
 const id = tab().id
+const sending = store.dispatch(sendDraft({ id, content: textContent("first") }))
+store.dispatch(setDraft({ id, draft: textContent("second") }))
+release()
+await sending
 await store.dispatch(sendDraft({ id, content: textContent("second") }))
 const newer = tab().turns[1]
 if (!newer) throw new Error("missing newer refusal")

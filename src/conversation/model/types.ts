@@ -311,6 +311,12 @@ export type UserTurn = {
   mode?: "queued" | "steering"
   error?: string
   diagnostic?: SubmissionDiagnostic
+  /**
+   * This refused message was put back in the draft once. From then on the
+   * draft is its only copy to send again: a person who empties it, or sends
+   * something else in its place, has let it go, and it is never put back.
+   */
+  restored?: boolean
 }
 
 export type AgentPart = {
