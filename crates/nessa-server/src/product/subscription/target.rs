@@ -484,7 +484,7 @@ async fn read_batch(
                 }
             }
             (Target::List { archived }, Some(service)) => {
-                read_list(service, &current, *archived, request_id)
+                read_list(state, service, &current, *archived, request_id)
                     .await
                     .map(Batch::List)
             }

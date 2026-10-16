@@ -1022,7 +1022,12 @@ contract contains no routing or IO and is separate from generic protocol frames.
 
 **Device client core** (`crates/nessa-client-core`) — reusable Rust library and
 standalone retained-sync example. Owns device enrollment, private profile/cache,
-finite retained reads and bounded watch composition. The gateway's real paired
+finite retained reads, bounded watch composition, and an independent protected
+product child. The child reuses the canonical pinned OpenProduct handshake and
+shared incremental channel, with one bounded request/event pump, original native
+IDs and cancellation-independent physical drain. Actual Ready methods gate
+request admission; neither metadata nor the child grants credential authority.
+The gateway's real paired
 process tests consume its public entry point through a dev-dependency. Shared
 schemas, framing and conversation projection remain in `nessa-protocol`; the
 client graph cannot reach the gateway runtime. See the
@@ -1058,7 +1063,7 @@ names retain the existing validation, session and bounded Ordinary/Requests
 refusal path. Cedar and physical work remain with their existing owners.
 [ADR 921](adr/todo/921-close-product-method-classification.md) and its
 [implementation companion](design/product-method-classification.md) record the
-71-method catalogue, ordering matrix and verification evidence.
+74-method catalogue, ordering matrix and verification evidence.
 
 The panel authenticates using its distinct private surface credential loaded by
 the native host; the desktop window connects under the same credential and

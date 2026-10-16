@@ -355,6 +355,27 @@ fn every_current_method_has_its_reviewed_route_capacity_and_admission() {
             AdmissionPlan::Manifest,
         ),
         (
+            "phone.endpoint",
+            Handler::PhoneEndpoint,
+            ResponseLane::Ordinary,
+            ExecutionCapacity::Requests,
+            AdmissionPlan::Manifest,
+        ),
+        (
+            "phone.authorize",
+            Handler::Phone,
+            ResponseLane::Ordinary,
+            ExecutionCapacity::Requests,
+            AdmissionPlan::Manifest,
+        ),
+        (
+            "phone.status",
+            Handler::Phone,
+            ResponseLane::Ordinary,
+            ExecutionCapacity::Requests,
+            AdmissionPlan::Manifest,
+        ),
+        (
             "pairing.create",
             Handler::Pairing,
             ResponseLane::Ordinary,

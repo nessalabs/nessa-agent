@@ -5,7 +5,6 @@ use crate::conversation::application::{
 };
 use crate::conversation_test_support::EveryConversationGranted;
 use crate::product::change_watch::{watch_principal, Notice, WatchOwners};
-use nessa_protocol::conversation::read_scope::CatalogueReadScope;
 use nessa_sync::replication::domain::{Id, Scope};
 use serde_json::Value;
 use std::{
@@ -931,7 +930,7 @@ impl RecordReadSource for HeldPhysicalRead {
 impl CatalogueReadSource for HeldPhysicalRead {
     fn read(
         &self,
-        _: CatalogueReadScope,
+        _: crate::conversation::application::AdmittedCatalogueRead,
         _: PrincipalId,
         _: CatalogueReadOperation,
         lease: RecordReadLease,

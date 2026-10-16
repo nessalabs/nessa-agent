@@ -124,7 +124,8 @@ admitted-command proposal in #797 remains outside this migration.
 
 ## Complete current method catalogue
 
-Snapshot: all manifest methods at `9812c3c`; path labels refer to the owners above.
+Catalogue: the original 71 methods reviewed at `9812c3c`, plus the three owner-phone
+methods from upstream `4913fd3`; path labels refer to the owners above.
 The cutover's tests should encode reviewed expectations, not derive expected
 values from the new classifier under test. `Authentication` is phase-sensitive
 as described above; unknown names are absent and retain Requests/Ordinary refusal.
@@ -181,6 +182,9 @@ as described above; unknown names are absent and retain Requests/Ordinary refusa
 | `mcpServers.inspect` | `mcp_servers` | Ordinary | Requests | Manifest |
 | `mcpServers.authorize` | `mcp_servers` | Ordinary | Requests | Manifest |
 | `mcpServers.revoke` | `mcp_servers` | Ordinary | Requests | Manifest |
+| `phone.endpoint` | `phone_endpoint` | Ordinary | Requests | Manifest |
+| `phone.authorize` | `phone` | Ordinary | Requests | Manifest |
+| `phone.status` | `phone` | Ordinary | Requests | Manifest |
 | `pairing.create` | `pairing` | Ordinary | Requests | Manifest |
 | `pairing.pending` | `pairing` | Ordinary | Requests | Manifest |
 | `pairing.status` | `pairing` | Ordinary | Requests | Manifest |
@@ -203,13 +207,14 @@ as described above; unknown names are absent and retain Requests/Ordinary refusa
 | `conversation.permissionRules` | `conversation` | Ordinary | Requests | Request(CatalogueWrite) |
 | `conversation.revokePermissionRule` | `conversation` | Ordinary | Requests | Request(CatalogueWrite) |
 
-Catalogue membership checked against all **71** current manifest methods.
+Catalogue membership checked against all **74** current manifest methods (73 advertised in Ready;
+`session.authenticate` belongs to the handshake).
 
 ## Branch implementation and verification status
 
 `ProductMethod` is generated from the existing manifest with exact `from_name`,
 `as_str` and `ALL`. `product/method_plan.rs` exhaustively chooses the handler,
-response lane, execution capacity and admission shape for all 71 current methods.
+response lane, execution capacity and admission shape for all 74 current methods.
 Unknown names stay outside the exhaustive function and retain their existing
 bounded Ordinary/Requests refusal path.
 
@@ -220,7 +225,15 @@ plan; their paired-action/own-check/share/watch/subscription string classifiers
 are removed. Current Cedar checks, physical permits, per-batch admission and
 inline unsubscribe ordering remain with the same owners.
 
-| Evidence | Current status |
+The cutover evidence below records the earlier 71-method tree. It is historical
+evidence, not a test result for the later owner-phone integration. The integration
+retains those 71 literal expectations and adds three independently reviewed rows.
+Ordinary requests from an owner phone ask the canonical method policy before handler effects;
+`ordinary_native_request_asks_method_once_and_denial_has_zero_handler_effects`
+checks both the single evaluation and refusal ordering. Subscription and passive
+read owners retain their upstream authority boundaries.
+
+| Evidence | Cutover status |
 | --- | --- |
 | Identity exactness, variant collisions and real-classifier synthetic extension | Four focused Node tests passed; a synthetic granted method produces Rust E0004 against the unchanged real classifier. |
 | Reserved Rust names | Five focused validator tests passed, including imported and local ProductMethod collisions. |

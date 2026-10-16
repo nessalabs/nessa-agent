@@ -8,27 +8,48 @@ pub struct DisclosedConsent {
     public: PublicIntent,
     audience: AudienceId,
     grant: Grant,
+    additional_grants: Vec<Grant>,
 }
 impl DisclosedConsent {
-    /// Decode a bounded domain grant: it must be the one grant its class asks for.
+    /// Decode a legacy single-capability consent. Classes requiring more fail closed.
     /// Key/channel authentication and canonical-intent correlation belong to consumers.
     pub fn new(
         public: PublicIntent,
         audience: AudienceId,
         grant: Grant,
     ) -> Result<Self, PairingError> {
-        if grant != public.class().grant(grant.resource().clone())? {
+        Self::with_grants(public, audience, vec![grant])
+    }
+    /// Decode the complete ordered canonical capability set. Omitted or
+    /// additional capabilities cannot produce a narrower disclosure.
+    pub fn with_grants(
+        public: PublicIntent,
+        audience: AudienceId,
+        mut grants: Vec<Grant>,
+    ) -> Result<Self, PairingError> {
+        let resource = grants
+            .first()
+            .ok_or(PairingError::Invalid)?
+            .resource()
+            .clone();
+        if grants != public.class().grants(resource)? {
             return Err(PairingError::Invalid);
         }
+        let grant = grants.remove(0);
         Ok(Self {
             public,
             audience,
             grant,
+            additional_grants: grants,
         })
     }
     /// Derive one projection from canonical full consent and exact public correlation.
     pub fn from_intent(public: PublicIntent, intent: &ConsentIntent) -> Result<Self, PairingError> {
-        let value = Self::new(public, intent.audience().clone(), intent.grant().clone())?;
+        let value = Self::with_grants(
+            public,
+            intent.audience().clone(),
+            intent.grants().cloned().collect(),
+        )?;
         value.verify_intent(intent)?;
         Ok(value)
     }
@@ -39,7 +60,7 @@ impl DisclosedConsent {
             || self.public.generation() != intent.generation()
             || self.public.class() != intent.class()
             || self.audience != *intent.audience()
-            || self.grant != *intent.grant()
+            || self.grants().ne(intent.grants())
         {
             return Err(PairingError::Conflict);
         }
@@ -69,5 +90,13 @@ impl DisclosedConsent {
     /// Canonical grant of its class, not locally issued authority.
     pub fn grant(&self) -> &Grant {
         &self.grant
+    }
+    /// Complete canonical consent, including every capability of an owner phone.
+    pub fn grants(&self) -> impl Iterator<Item = &Grant> {
+        std::iter::once(&self.grant).chain(self.additional_grants.iter())
+    }
+    /// The explicit additional capabilities; empty for every legacy class.
+    pub fn additional_grants(&self) -> &[Grant] {
+        &self.additional_grants
     }
 }

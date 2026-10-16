@@ -237,6 +237,20 @@
           }
         }
       },
+      "conversation.erase": {
+        "appliesTo": {
+          "principalTypes": [
+            "Person",
+            "Reader"
+          ],
+          "resourceTypes": [
+            "Conversation"
+          ],
+          "context": {
+            "type": "Ask"
+          }
+        }
+      },
       "conversation.list": {
         "appliesTo": {
           "principalTypes": [

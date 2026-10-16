@@ -5,13 +5,12 @@
 
 use super::operation;
 use crate::conversation::application::{
-    CatalogueEntryAccess, CatalogueReadError, CatalogueReadFuture, CatalogueReadOperation,
-    CatalogueReadResponse, CatalogueReadSource, ConversationAccessPolicyEvaluator,
-    ConversationCatalogue, RecordReadLease,
+    AdmittedCatalogueRead, CatalogueEntryAccess, CatalogueReadError, CatalogueReadFuture,
+    CatalogueReadOperation, CatalogueReadResponse, CatalogueReadSource,
+    ConversationAccessPolicyEvaluator, ConversationCatalogue, RecordReadLease,
 };
 use crate::core::read_workers::{ReadWorkerError, ReadWorkers};
 use nessa_auth::domain::PrincipalId;
-use nessa_protocol::conversation::read_scope::CatalogueReadScope;
 use nessa_sync::replication::domain::Id;
 use std::sync::Arc;
 
@@ -44,13 +43,16 @@ impl NessaCatalogueReadSource {
 impl CatalogueReadSource for NessaCatalogueReadSource {
     fn read(
         &self,
-        admitted: CatalogueReadScope,
+        admitted: AdmittedCatalogueRead,
         signed_in_as: PrincipalId,
         operation: CatalogueReadOperation,
         lease: RecordReadLease,
     ) -> CatalogueReadFuture<'_> {
         Box::pin(async move {
-            operation::trusted_scope(&admitted, &self.origin, &operation)?;
+            admitted
+                .validate_reader()
+                .map_err(CatalogueReadError::Admission)?;
+            operation::trusted_scope(&admitted.scope, &self.origin, &operation)?;
             let catalogue = self.catalogue.clone();
             let entries = CatalogueEntryAccess::new(self.access_policy.clone(), signed_in_as);
             let origin = self.origin.clone();

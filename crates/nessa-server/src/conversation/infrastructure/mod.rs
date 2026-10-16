@@ -83,6 +83,9 @@
 //! the person. A rule change and its audit row commit in that file together.
 //! The same memory is the board a waiting review notifies, and clears when
 //! the review ends.
+//! `CedarOwnerPhonePolicyEvaluator` owns first-party method and input restrictions.
+pub mod owner_phone_policy;
+pub use owner_phone_policy::CedarOwnerPhonePolicyEvaluator;
 mod change_watch;
 pub use change_watch::{NessaRecordWatches, UuidWatchNamespaces};
 // Composed only by the Unix gateway (`composition/local_auth.rs`), as

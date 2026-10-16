@@ -21,7 +21,7 @@
 //! S1–S14 in `docs/design/auth/device-pairing.md` ("Owner routes and mounting")
 //! and S7, S8, D5, D6 ("Activation and credential delivery"), and PR1, PR13
 //! ("Protected reads over the native channel").
-use super::runtime_config::{NativeConfig, RelayAddress};
+use super::runtime_config::{routable_advertised_host, NativeConfig, RelayAddress};
 use crate::conversation::application::FenceCapture;
 use crate::conversation::infrastructure::LocalReceiverAuthority;
 use crate::core::{NativeFailure, NativeShutdownFailure, RunError};
@@ -52,12 +52,12 @@ use nessa_auth::{
             PortFuture, VerifiedCredential,
         },
     },
-    domain::{AudienceId, Resource},
+    domain::{pairing::OwnerPhoneRequest, AudienceId, Resource},
 };
 use nessa_protocol::clock::Clock as MonotonicClock;
 use std::{
     io::{ErrorKind, Result as IoResult},
-    net::SocketAddr,
+    net::{IpAddr, SocketAddr},
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -109,6 +109,12 @@ pub(super) struct PreparedNative {
     environments: Option<Arc<dyn EnvironmentPeers>>,
     /// The relay to serve through as well, if any.
     relay: Option<RelayAddress>,
+    /// Host a wildcard bind is published as. The port is the listener's.
+    advertised_address: Option<IpAddr>,
+    /// A listener already bound to `address`. Production leaves this empty
+    /// and `bind` binds `address`. A test that reserved the port hands the
+    /// listener here so the port stays owned until accept.
+    bound_socket: Option<TcpListener>,
 }
 
 impl PreparedNative {
@@ -122,6 +128,13 @@ impl PreparedNative {
     /// Serve `openEnvironment` with `environments`.
     pub(super) fn with_environments(mut self, environments: Arc<dyn EnvironmentPeers>) -> Self {
         self.environments = Some(environments);
+        self
+    }
+
+    /// Keep `socket` until `bind`. It must already be bound to `address`.
+    #[cfg(test)]
+    fn keep_bound_socket(mut self, socket: TcpListener) -> Self {
+        self.bound_socket = Some(socket);
         self
     }
 }
@@ -189,6 +202,7 @@ pub(super) async fn prepare(
     let gateway = Arc::new(
         GatewayPairing::open(PairingRuntimeDependencies {
             enrollments: registry.clone(),
+            originals: registry.clone(),
             access: registry.clone(),
             policy: inputs.policy,
             receivers: Arc::new(ConversationReceivers::new(inputs.receivers)),
@@ -217,6 +231,8 @@ pub(super) async fn prepare(
             clock: wall,
             environments: None,
             relay: config.relay.clone(),
+            advertised_address: config.advertised_address,
+            bound_socket: None,
         },
         commands,
         peers,
@@ -281,10 +297,39 @@ pub(super) async fn bind(
         clock: wall,
         environments,
         relay,
+        advertised_address,
+        bound_socket,
     } = prepared;
     let bind_failed = |source| RunError::Native(NativeFailure::Bind { address, source });
-    let socket = TcpEnrollmentAccept::new(TcpListener::bind(address).await.map_err(bind_failed)?);
+    let listener = match bound_socket {
+        Some(socket) => {
+            let bound = socket.local_addr().map_err(bind_failed)?;
+            if bound != address {
+                return Err(bind_failed(std::io::Error::new(
+                    ErrorKind::InvalidInput,
+                    "prebound listener is not the configured address",
+                )));
+            }
+            socket
+        }
+        None => TcpListener::bind(address).await.map_err(bind_failed)?,
+    };
+    let socket = TcpEnrollmentAccept::new(listener);
     let bound = socket.local_address().map_err(bind_failed)?;
+    // The configured port is the one a phone can keep. Binding port zero
+    // assigns an ephemeral port that the next start will not repeat, so that
+    // listener stays unpublished. A wildcard with a fixed port publishes the
+    // configured address on that port.
+    let route = (address.port() != 0 && bound.ip().is_unspecified())
+        .then_some(advertised_address)
+        .flatten();
+    if address.port() != 0 {
+        if let Some(endpoint) = advertised_endpoint(bound, route) {
+            gateway
+                .publish_native_endpoint(endpoint)
+                .map_err(|error| RunError::Native(NativeFailure::Open(error)))?;
+        }
+    }
     let sessions = NativeSessions::new(product, Arc::new(RegistryDevices(registry)));
     let connections = NativeEnrollmentConnections::new(gateway.clone(), clock.clone())
         .with_protected_sessions(Arc::new(sessions));
@@ -457,6 +502,25 @@ impl RunningNative {
             .await
             .map_err(NativeShutdownFailure::Cleanup)
     }
+}
+
+/// The address discovery may publish. A named bind is that address. A wildcard
+/// bind is the configured `advertised` host on the bound port. Both paths ask
+/// `OwnerPhoneRequest::validate_endpoint` before disclosure. Wildcards additionally
+/// require a non-loopback advertised host of the listen family; a concrete
+/// loopback endpoint remains usable by local clients.
+/// Callers pass the configured port: a port of zero here is unpublished, and
+/// `bind` does not substitute the ephemeral port.
+fn advertised_endpoint(bound: SocketAddr, advertised: Option<IpAddr>) -> Option<SocketAddr> {
+    let endpoint = if bound.ip().is_unspecified() {
+        let ip = advertised
+            .filter(|ip| routable_advertised_host(*ip) && ip.is_ipv4() == bound.is_ipv4())?;
+        SocketAddr::new(ip, bound.port())
+    } else {
+        bound
+    };
+    OwnerPhoneRequest::validate_endpoint(endpoint).ok()?;
+    Some(endpoint)
 }
 
 #[cfg(test)]

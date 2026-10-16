@@ -60,7 +60,7 @@ test("local and CI aggregate the same named frontend and native checks", () => {
   // limit (#366). The package list is one build; the runner overlaps binaries.
   assert.match(
     workflow,
-    /run: node scripts\/cargo-test-parallel\.mjs --concurrency 2 -- -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk\r?\n\s+timeout-minutes: \d+\r?\n/,
+    /run: node scripts\/cargo-test-parallel\.mjs --concurrency 2 --partition \$\{\{ matrix\.partition \}\} -- -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk\r?\n\s+timeout-minutes: \d+\r?\n/,
   )
   assert.doesNotMatch(
     workflow,
@@ -115,10 +115,10 @@ function assertCoverageJobSplit(localAuth, coverage, workflow) {
   assert.match(coverage, /prefix-key: sdk-domain-coverage/)
   assert.match(coverage, /cache-workspace-crates: "true"/)
   assert.doesNotMatch(coverage, /prepare\.mjs|desktop:smoke/)
-  assert.equal(workflow.match(/uses: Swatinem\/rust-cache@v2/g)?.length, 4)
+  assert.equal(workflow.match(/uses: Swatinem\/rust-cache@v2/g)?.length, 5)
   assert.equal(
     workflow.match(/github\.event\.inputs\.rust-cache != 'cold'/g)?.length,
-    4,
+    5,
     "a cold measurement skips the cache and nothing else",
   )
   assert.match(workflow, /options:\s+- restore\s+- cold\s+default: restore/)
@@ -261,6 +261,7 @@ test("apt installs and every CI job are bounded", () => {
       "desktop-release-profile": 45,
       frontend: 30,
       "local-auth": 130,
+      "windows-server-tests": 60,
       "sdk-domain-coverage": 60,
       "required-checks": 10,
     },

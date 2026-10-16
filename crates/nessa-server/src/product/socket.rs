@@ -1622,6 +1622,9 @@ async fn dispatch_passive_read_method(
         if let Err(error) = ensure_browser_session_present(state, &current).await {
             return (passive_access_failure(&frame.id, error), None);
         }
+        if let Err(code) = super::owner_phone::admit_method(state, &current, &frame.method).await {
+            return (WireResponse::ordinary(failure(&frame.id, code)), None);
+        }
         let request_id = frame.id.clone();
         let result = if method_plan(method).handler == Handler::CatalogueRead {
             super::catalogue_read::dispatch(state, &current, frame, lease)
@@ -1678,6 +1681,9 @@ async fn dispatch_method(
         return failure(&frame.id, "already_authenticated");
     }
     if method.is_some_and(|method| method_plan(method).admission == AdmissionPlan::CurrentSession) {
+        if let Err(code) = super::owner_phone::admit_method(state, &session, &frame.method).await {
+            return failure(&frame.id, code);
+        }
         if frame.params != json!({}) {
             return failure(&frame.id, "invalid_request");
         }
@@ -1713,6 +1719,7 @@ pub(super) async fn admit_action(
     session: &AuthenticatedSession,
     method: &str,
 ) -> Result<(), &'static str> {
+    super::owner_phone::admit_method(state, session, method).await?;
     let action_name = action_for_method(method).ok_or("unknown_method")?;
     admit_grant(state, session, action_name).await
 }
@@ -1892,6 +1899,8 @@ async fn dispatch_authorized(
         Handler::McpApps => super::mcp_apps::dispatch(state, session, frame).await,
         Handler::McpServers => super::mcp_servers::dispatch(state, session, frame).await,
         Handler::Pairing => super::pairing::dispatch(state, session, frame).await,
+        Handler::PhoneEndpoint => super::phone_endpoint::dispatch(state, session, frame),
+        Handler::Phone => super::phone::dispatch(state, session, frame).await,
         Handler::Peers => super::peers::dispatch(state, session, frame).await,
         Handler::Health => {
             if frame.params != json!({}) {
@@ -2488,9 +2497,7 @@ mod tests {
     use nessa_protocol::conversation::domain::{
         ConversationApprovalMode, ConversationId, ConversationModelId,
     };
-    use nessa_protocol::conversation::read_scope::{
-        CatalogueReadScope, ReadRefusal, ReceiverReadScope,
-    };
+    use nessa_protocol::conversation::read_scope::{ReadRefusal, ReceiverReadScope};
     use nessa_protocol::product::generated::{
         ConversationRecordsPageResult, RecordPageRequest, RecordScope, RecordWireRecord,
         MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,
@@ -4070,6 +4077,20 @@ mod tests {
         }
     }
 
+    impl nessa_auth::application::pairing::OwnerPhonePurposeSource for Authority {
+        fn owner_phone_purpose<'a>(
+            &'a self,
+            _: &'a AuthenticatedSession,
+            _: &'a dyn nessa_auth::application::ports::Clock,
+        ) -> nessa_auth::application::ports::PortFuture<
+            'a,
+            Option<nessa_auth::application::pairing::OwnerPhonePurpose>,
+        > {
+            // This substitute models ordinary credentials without a pairing ledger.
+            Box::pin(async { Ok(None) })
+        }
+    }
+
     fn fixture(role: MembershipRole) -> (ProductRouteState, Arc<Authority>) {
         let authority = Arc::new(Authority {
             snapshot: Mutex::new(snapshot(role, MembershipStatus::Active)),
@@ -4083,6 +4104,12 @@ mod tests {
             AudienceId::new("gateway").unwrap(),
             ProductDependencies {
                 verifier: authority.clone(),
+                owner_phone_purpose: authority.clone(),
+                owner_phone_policy: Arc::new(
+                    crate::conversation::infrastructure::CedarOwnerPhonePolicyEvaluator::new()
+                        .unwrap(),
+                ),
+                owner_phone_receivers: None,
                 access: authority.clone(),
                 clock: authority.clone(),
                 policy: Arc::new(CedarPolicyEvaluator::new().unwrap()),
@@ -5355,7 +5382,7 @@ mod tests {
     impl CatalogueReadSource for UnreachableCatalogueSource {
         fn read(
             &self,
-            _: CatalogueReadScope,
+            _: crate::conversation::application::AdmittedCatalogueRead,
             _: PrincipalId,
             _: CatalogueReadOperation,
             _: RecordReadLease,

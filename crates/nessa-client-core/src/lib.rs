@@ -14,6 +14,8 @@
 pub mod composition;
 pub mod outbox;
 pub mod pairing;
+pub mod product;
+mod protected;
 mod read_only_sync;
 pub mod retained;
 #[cfg(feature = "cli")]

@@ -1961,3 +1961,135 @@ async fn read_only_creation_refuses_a_conflicting_original_binding() {
     drop(db);
     retire(service, storage, metadata).await;
 }
+
+#[tokio::test]
+async fn ready_creation_publishes_a_real_empty_transcript_for_passive_reads() {
+    use crate::conversation::application::{
+        RecordReadError, RecordReadLease, RecordReadOperation, RecordReadSource, RecordReadValue,
+    };
+    use crate::conversation::infrastructure::NessaRecordReadSource;
+    use nessa_protocol::conversation::projection::retained_view;
+    use nessa_protocol::conversation::read_scope::ReceiverReadScope;
+    use nessa_sync::replication::domain::{Id, PageRequest};
+
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("data");
+    let provider = Arc::new(ProviderFactory::default());
+    let (service, storage, metadata) = fixture(&root, provider.clone());
+    let target = id();
+    let session = conversation_session(&target);
+    let origin = Id::new("creation-origin").unwrap();
+    let admitted = ReceiverReadScope {
+        receiver_id: "creation-reader".into(),
+        organization_id: caller("request").organization_id,
+        owner_id: caller("request").principal_id,
+        conversation_id: target.clone(),
+        access_epoch: 7,
+    };
+    let source = NessaRecordReadSource::new(
+        storage.clone(),
+        origin.clone(),
+        tokio::runtime::Handle::current(),
+    );
+    assert!(metadata.load(&target).await.unwrap().is_none());
+    assert!(storage
+        .record_identity(&session, origin.clone())
+        .await
+        .unwrap()
+        .is_none());
+    assert!(matches!(
+        source
+            .read(
+                admitted.clone(),
+                RecordReadOperation::Head,
+                RecordReadLease::new(())
+            )
+            .await,
+        Err(RecordReadError::IdentityChanged)
+    ));
+
+    let ready = service
+        .create_command(
+            storage.clone(),
+            target.clone(),
+            caller("request"),
+            RequestedConversation::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(ready.stage(), CreationStage::Ready);
+    let actual = metadata.load(&target).await.unwrap().unwrap();
+    assert_eq!(actual.id(), &target);
+    assert_eq!(actual.organization(), &admitted.organization_id);
+    assert_eq!(actual.owner(), &admitted.owner_id);
+    let committed = storage
+        .read_committed(session.clone())
+        .await
+        .unwrap()
+        .unwrap();
+    let snapshot = committed.snapshot().unwrap();
+    assert_eq!(snapshot.id, session);
+    assert!(snapshot.invocations.is_empty());
+    assert!(snapshot.queue_history.is_empty());
+    let view = retained_view(
+        &target,
+        Some(snapshot),
+        committed.status(),
+        uuid::Uuid::new_v4(),
+    );
+    assert!(view.messages.is_empty());
+
+    let identity = storage
+        .record_identity(&session, origin)
+        .await
+        .unwrap()
+        .unwrap();
+    let expected = identity.scope(
+        Id::new(&admitted.receiver_id).unwrap(),
+        Id::new("epoch-7").unwrap(),
+    );
+    let response = source
+        .read(
+            admitted.clone(),
+            RecordReadOperation::Head,
+            RecordReadLease::new(()),
+        )
+        .await
+        .unwrap();
+    let RecordReadValue::Head(head) = response.value else {
+        panic!("physical head expected")
+    };
+    assert_eq!(head.scope, expected);
+    assert!(
+        head.head > 0,
+        "creation publishes real snapshot records without a message"
+    );
+    drop(response.lease);
+    let response = source
+        .read(
+            admitted,
+            RecordReadOperation::Page(PageRequest {
+                scope: head.scope,
+                after: 0,
+                target: head.head,
+                max_records: 16,
+                max_payload_bytes:
+                    nessa_sdk::infrastructure::session_storage::MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,
+                max_record_bytes:
+                    nessa_sdk::infrastructure::session_storage::MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,
+            }),
+            RecordReadLease::new(()),
+        )
+        .await
+        .unwrap();
+    let RecordReadValue::Page(page) = response.value else {
+        panic!("physical page expected")
+    };
+    assert!(!page.records.is_empty());
+    assert_eq!(page.records.last().unwrap().position, head.head);
+    drop(response.lease);
+    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 1);
+    source.shutdown().await.unwrap();
+    drop(source);
+    retire(service, storage, metadata).await;
+}

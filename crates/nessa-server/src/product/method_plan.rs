@@ -22,6 +22,8 @@ pub(super) enum Handler {
     McpApps,
     McpServers,
     Pairing,
+    PhoneEndpoint,
+    Phone,
     Peers,
     RecordRead,
     CatalogueRead,
@@ -388,6 +390,24 @@ pub(super) const fn method_plan(method: ProductMethod) -> MethodPlan {
         },
         ProductMethod::McpServersRevoke => MethodPlan {
             handler: Handler::McpServers,
+            response: ResponseLane::Ordinary,
+            capacity: ExecutionCapacity::Requests,
+            admission: AdmissionPlan::Manifest,
+        },
+        ProductMethod::PhoneEndpoint => MethodPlan {
+            handler: Handler::PhoneEndpoint,
+            response: ResponseLane::Ordinary,
+            capacity: ExecutionCapacity::Requests,
+            admission: AdmissionPlan::Manifest,
+        },
+        ProductMethod::PhoneAuthorize => MethodPlan {
+            handler: Handler::Phone,
+            response: ResponseLane::Ordinary,
+            capacity: ExecutionCapacity::Requests,
+            admission: AdmissionPlan::Manifest,
+        },
+        ProductMethod::PhoneStatus => MethodPlan {
+            handler: Handler::Phone,
             response: ResponseLane::Ordinary,
             capacity: ExecutionCapacity::Requests,
             admission: AdmissionPlan::Manifest,

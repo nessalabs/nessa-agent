@@ -634,6 +634,19 @@ fn exchange<R: RngCore + CryptoRng>(
     let first = read_request(channel)?;
     check_deadline(deadline)?;
     let public = match first {
+        NativePairingRequest::RecoverOwnerPhone { request_id, digest } => {
+            let (public, status) = gateway
+                .recover_owner_phone(channel.transport(), request_id, &digest)
+                .map_err(|error| {
+                    NativeConnectionError::from(NativeConnectionFailure::Runtime(error))
+                })?;
+            check_deadline(deadline)?;
+            return write_reply(
+                channel,
+                wire::encode_owner_phone_recovery(request_id, digest, public, &status),
+            )
+            .map(|()| Exchanged::Finished);
+        }
         NativePairingRequest::OpenProduct => {
             let product = admissions
                 .product

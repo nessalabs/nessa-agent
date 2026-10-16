@@ -271,6 +271,9 @@ fn successful_purge_evidence_survives_failed_credential_removal() {
 fn only_authority_refusals_ask_status_again() {
     for asks in [
         GatewayError::ProductRefused,
+        GatewayError::Authentication(SessionCloseReason::AuthenticationFailed),
+        GatewayError::Authentication(SessionCloseReason::CredentialRevoked),
+        GatewayError::Authentication(SessionCloseReason::CredentialExpired),
         GatewayError::Authentication(SessionCloseReason::AuthorizationLost),
         GatewayError::Record(RecordReadErrorCode::Unauthorized),
         GatewayError::Record(RecordReadErrorCode::Forbidden),
@@ -288,11 +291,26 @@ fn only_authority_refusals_ask_status_again() {
         GatewayError::HeldFile(HeldFileRefusal::Forbidden),
         GatewayError::Subscription(SubscriptionRefusal::Unauthorized),
         GatewayError::Subscription(SubscriptionRefusal::Forbidden),
+        GatewayError::Closed(Some(SessionCloseReason::AuthenticationFailed)),
+        GatewayError::Closed(Some(SessionCloseReason::CredentialRevoked)),
+        GatewayError::Closed(Some(SessionCloseReason::CredentialExpired)),
+        GatewayError::Closed(Some(SessionCloseReason::AuthorizationLost)),
     ] {
         assert!(asks_status(asks), "{asks:?}");
     }
     for keeps in [
         GatewayError::Closed(None),
+        GatewayError::Closed(Some(SessionCloseReason::TemporaryUnavailable)),
+        GatewayError::Closed(Some(SessionCloseReason::ServerShutdown)),
+        GatewayError::Closed(Some(SessionCloseReason::ProtocolIncompatible)),
+        GatewayError::Closed(Some(SessionCloseReason::TransportInterrupted)),
+        GatewayError::Authentication(SessionCloseReason::HandshakeTimeout),
+        GatewayError::Authentication(SessionCloseReason::TemporaryUnavailable),
+        GatewayError::Authentication(SessionCloseReason::GatewayRestarting),
+        GatewayError::Authentication(SessionCloseReason::GatewayOverloaded),
+        GatewayError::Authentication(SessionCloseReason::TransportInterrupted),
+        GatewayError::Authentication(SessionCloseReason::ServerShutdown),
+        GatewayError::Authentication(SessionCloseReason::ProtocolIncompatible),
         GatewayError::Transport,
         GatewayError::TimedOut,
         GatewayError::NativeHandshake,

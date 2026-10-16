@@ -22,3 +22,6 @@ mod product_client;
 mod protected;
 #[path = "device_pairing/infrastructure/support.rs"]
 mod support;
+
+#[path = "device_pairing/infrastructure/receiver_dispatch.rs"]
+mod receiver_dispatch;

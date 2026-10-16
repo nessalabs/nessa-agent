@@ -25,6 +25,7 @@ use nessa_protocol::pairing::wire::NativePairingStatus;
 use nessa_protocol::product_contract::generated::{
     CatalogueReadErrorCode, ChangeWatchErrorCode, RecordReadErrorCode,
 };
+use nessa_protocol::product_contract::ConnectionOutcome;
 use nessa_sync::replication::domain::Id;
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -184,12 +185,17 @@ impl ClientPendingStore for PurgeBeforeEnd {
 /// the pinned status is asked again before anything else (design row PC5).
 /// A refused `openProduct` counts: a revoked key is its usual cause (row
 /// PR5), and the status read is what tells that cause from a full pool.
-/// The refusal itself never purges.
+/// An authentication reply or close counts only when the shared connection
+/// projection is a terminal revoke.
+/// Plain EOF, a retryable close, `server_shutdown`, and `protocol_incompatible`
+/// do not. The refusal itself never purges.
 pub(crate) fn asks_status(error: GatewayError) -> bool {
+    if let Some(outcome) = error.connection_outcome() {
+        return outcome == ConnectionOutcome::TerminalRevoke;
+    }
     matches!(
         error,
         GatewayError::ProductRefused
-            | GatewayError::Authentication(_)
             | GatewayError::Record(
                 RecordReadErrorCode::Unauthorized
                     | RecordReadErrorCode::Forbidden

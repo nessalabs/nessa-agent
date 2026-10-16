@@ -10,8 +10,10 @@ mod context;
 mod entropy;
 pub use entropy::OsEntropy;
 mod opaque;
+mod owner_phone;
 mod private_state;
 mod tls;
+pub use owner_phone::verify_owner_phone_request;
 // The adapter's existing generic RNG inputs use this exact upstream interface.
 pub use code::ManualCode;
 pub use context::PairingContext;
