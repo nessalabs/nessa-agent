@@ -7,7 +7,7 @@ use super::{
 };
 use crate::conversation::application::{
     conversation_session, event_error_code, project_events, validate_event_cursor,
-    ConversationEventError, ConversationService, ThreadEvent,
+    ConversationEventError, ConversationService, EventProgress, ThreadEvent,
 };
 use crate::product::conversation::caller;
 use crate::product::socket::{failure, success};
@@ -304,48 +304,6 @@ async fn authorize_event_target(
         .authorize_events(conversation, &caller(session, request.to_owned()))
         .await
         .map_err(|error| event_error_code(&ConversationEventError::Conversation(error)).to_owned())
-}
-
-/// Correlates otherwise valid adapter outputs with the requested start and
-/// previously observed checkpoint (E15). An outer boundary follows its changes.
-struct EventProgress {
-    previous: Option<CommittedEventCursor>,
-}
-impl EventProgress {
-    fn new(start: &EventStart) -> Self {
-        Self {
-            previous: match start {
-                EventStart::After(cursor) => Some(cursor.clone()),
-                _ => None,
-            },
-        }
-    }
-
-    fn accept(&mut self, read: &EventRead) -> Result<(), EventReadError> {
-        let (first, next, page) = match read {
-            EventRead::Preparing => return Ok(()),
-            EventRead::Page(page) => (page.events()[0].cursor(), page.next(), true),
-            EventRead::Idle(cursor) => (cursor, cursor, false),
-        };
-        if let Some(previous) = &self.previous {
-            let location = |cursor: &CommittedEventCursor| {
-                (
-                    cursor.position(),
-                    cursor.change_index().is_none(),
-                    cursor.change_index().unwrap_or(0),
-                )
-            };
-            if first.session() != previous.session()
-                || first.incarnation() != previous.incarnation()
-                || location(first) < location(previous)
-                || (page && location(first) == location(previous))
-            {
-                return Err(EventReadError::InvalidCursor);
-            }
-        }
-        self.previous = Some(next.clone());
-        Ok(())
-    }
 }
 
 async fn offer_event(

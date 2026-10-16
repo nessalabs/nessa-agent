@@ -7,7 +7,7 @@ use nessa_protocol::conversation::domain::ConversationId;
 use nessa_sdk::application::agent_execution::{
     executions::ExecutionUpdate,
     sessions::{
-        CommittedEvent, CommittedEventCursor, CommittedEventData, CommittedEventReader,
+        CommittedEvent, CommittedEventCursor, CommittedEventData, CommittedEventReader, EventRead,
         EventReadError, EventStart, SessionChange, StorageError,
     },
 };
@@ -45,6 +45,60 @@ pub fn event_error_code(error: &ConversationEventError) -> &'static str {
             EventReadError::Storage(_) => "unavailable",
         },
         ConversationEventError::Gap => "event_history_gap",
+    }
+}
+
+/// Correlate one reader's outputs with its requested start and prior checkpoint.
+///
+/// SDK page construction validates evidence inside one page; this application
+/// boundary validates continuity across otherwise valid custom-adapter replies.
+/// Consumers call [`Self::accept`] before projection or retaining a checkpoint.
+/// Target session admission remains with [`validate_event_cursor`].
+pub struct EventProgress {
+    previous: Option<CommittedEventCursor>,
+}
+impl EventProgress {
+    /// Retain an explicit After checkpoint. Beginning/Now establish continuity
+    /// when their first Page or Idle arrives; Preparing leaves progress intact.
+    pub fn new(start: &EventStart) -> Self {
+        Self {
+            previous: match start {
+                EventStart::After(cursor) => Some(cursor.clone()),
+                _ => None,
+            },
+        }
+    }
+
+    /// Admit exclusive Page progress or nondecreasing Idle in one history.
+    ///
+    /// Returns InvalidCursor for a different session/incarnation, a backwards
+    /// reply, or a Page repeating the prior checkpoint. Rejection retains the
+    /// earlier checkpoint; the E15 tests in `tests/conversation/event_read.rs`
+    /// exercise both invalid replies and valid continuation after them.
+    pub fn accept(&mut self, read: &EventRead) -> Result<(), EventReadError> {
+        let (first, next, page) = match read {
+            EventRead::Preparing => return Ok(()),
+            EventRead::Page(page) => (page.events()[0].cursor(), page.next(), true),
+            EventRead::Idle(cursor) => (cursor, cursor, false),
+        };
+        if let Some(previous) = &self.previous {
+            let location = |cursor: &CommittedEventCursor| {
+                (
+                    cursor.position(),
+                    cursor.change_index().is_none(),
+                    cursor.change_index().unwrap_or(0),
+                )
+            };
+            if first.session() != previous.session()
+                || first.incarnation() != previous.incarnation()
+                || location(first) < location(previous)
+                || (page && location(first) == location(previous))
+            {
+                return Err(EventReadError::InvalidCursor);
+            }
+        }
+        self.previous = Some(next.clone());
+        Ok(())
     }
 }
 
