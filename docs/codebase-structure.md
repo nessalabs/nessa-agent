@@ -2147,7 +2147,8 @@ principal stream for submit and exact-turn Stop. `infrastructure/session_storage
 implements request-bound owners and a shared principal receipt writer with the
 existing SQLite runtime. Sixteen ordinary owners, four reserved Stop owners and
 four passive reads bound admission; each handle admits one retained I/O operation.
-Weak principal states share replay while active and are evicted when idle. It does not
+Weak principal states share a validated receipt map and prefix cursor while active;
+uncertain writes reconcile only their suffix. States are evicted when idle. It does not
 modify the conversation semantic record writer. The host consumers live under
 `conversation/application/service/creation.rs` and `service/mutation.rs`, sharing
 the existing creation helper, metadata/deletion authority and admission guard.
@@ -2155,7 +2156,7 @@ The socket admits `conversation.create`, `conversation.send`, `conversation.stee
 `conversation.stop` and read-only `conversation.receipt` through that store.
 Tests mirror those owners under `nessa-sdk/tests/infrastructure/session_storage/creation.rs`,
 the public `session_storage/command_admission.rs` and private
-`session_storage/command_recovery.rs`,
+`session_storage/command_recovery.rs` and `session_storage/command_suffix.rs`,
 `nessa-server/tests/conversation/creation_commands.rs` and
 `nessa-server/tests/conversation/mutation_commands.rs`. The state table is in
 [command creation](design/command-creation.md).

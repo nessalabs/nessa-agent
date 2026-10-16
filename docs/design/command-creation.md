@@ -92,6 +92,31 @@ and drain physical runtime work; provider owners are joined by gateway shutdown.
 This change keeps the event format, receipt stages and finite retained-identity
 limit. It does not expire or delete old request identities.
 
+### Incremental dirty receipt recovery
+
+The shared receipt map retains an in-memory cursor for its verified prefix.
+Cold opening starts at zero; recovering a dirty live state folds only the suffix
+through one captured tail. Both use the same canonical event and transition
+checks. This cursor is not a durable checkpoint: an evicted state or process
+restart still validates the whole retained history.
+
+| Ordering | Required behavior | Regression |
+| --- | --- | --- |
+| A normal append is acknowledged | Validate the returned event and contiguous cursor; publish the receipt before advancing the verified cursor, without another history read | `dirty_recovery_reads_only_the_unverified_suffix_and_cold_open_reads_the_prefix` |
+| An append acknowledgement changes the event, cursor identity/version or skips the verified prefix | Refuse while remaining dirty; never publish the supplied receipt from an inconsistent acknowledgement | `command_append_publication_rejects_inconsistent_acknowledgements` |
+| A retained exact event is appended again after other requests progressed | A deduplicated acknowledgement names the old event position; keep the newer verified cursor | `deduplicated_command_acknowledgement_does_not_rewind_verified_progress` |
+| An append commits but publication fails | Leave dirty set. The next operation folds only records after the verified cursor; the unacknowledged Attempted still grants no effect authority | `dirty_recovery_reads_only_the_unverified_suffix_and_cold_open_reads_the_prefix`; `uncertain_command_append_reconciles_shared_receipts` |
+| A suffix page succeeds, then a later read or record fails | Retain the validated map prefix and cursor, but keep dirty set and return the failure. No caller receives a partial map; retry resumes after that verified prefix | `interrupted_suffix_read_resumes_after_its_verified_page`; `malformed_suffix_retains_verified_prefix_and_never_skips_the_bad_record` |
+| Captured bounds lost the prefix, changed identity/version, exceed the existing cap, or precede the verified cursor | Refuse before using the map. Never reset a verified cursor to treat old work as absent | `dirty_recovery_rejects_incompatible_bounds`; `suffix_recovery_preserves_the_shared_receipt_capacity` |
+| A replay record lies outside the captured contiguous prefix | Refuse wrong identity/version, gaps and records beyond the captured tail before changing the map or cursor | `suffix_fold_rejects_records_outside_its_captured_contiguous_history` |
+
+Receipt insertion precedes cursor advancement under the existing principal
+gate, and dirty clears only after the complete captured suffix is verified.
+Retained task ownership and the per-handle operation bound remain unchanged.
+Warm dirty recovery decodes O(D) new records instead of O(E) retained events;
+cold replay remains O(E), and the receipt map remains bounded by 4,096 bindings.
+This adds no resident cache, expiry, disk format or receipt deletion policy.
+
 ## Shared request identity
 
 One principal control stream (`nessa:commands:{sha256(principal)}`) holds every

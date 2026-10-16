@@ -852,6 +852,10 @@ Different requests share short receipt writes and can perform provider work
 concurrently. Stop has reserved command capacity; duplicate request identities
 retain one effect owner across command families. The record format and conservative
 interrupted recovery are unchanged.
+While a principal state is active, its receipt writer retains the cursor of the
+validated prefix and reconciles uncertain appends from that position. Cold opens
+still validate the complete history; this is an in-memory recovery optimization,
+not a durable checkpoint or receipt-retirement policy.
 
 Behavior belongs in the [SDK guides](../crates/nessa-sdk/docs/agent_execution/README.md),
 especially [Agent/storage](../crates/nessa-sdk/docs/agent_execution/agent.md),

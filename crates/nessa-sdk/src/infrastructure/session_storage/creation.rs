@@ -16,8 +16,8 @@ use crate::application::agent_execution::{
 };
 use crate::domain::agent_execution::{executions::ExecutionId, sessions::SessionId};
 use event_stream::{
-    Cursor, EventId, EventReader, EventSink, NewEvent, PageLimits, Payload, SchemaId, SchemaRef,
-    StreamId, StreamKey,
+    AppendKind, AppendReceipt, Bounds, Cursor, EventId, EventReader, EventSink, NewEvent,
+    PageLimits, Payload, Record, SchemaId, SchemaRef, StreamId, StreamKey,
 };
 use sha2::{Digest, Sha256};
 use std::{
@@ -68,6 +68,8 @@ impl Controls {
             state: Mutex::new(None),
             #[cfg(test)]
             publication_fault: RegistryMutex::new(None),
+            #[cfg(test)]
+            replay_probe: RegistryMutex::new(ReplayProbe::default()),
         });
         states.insert(principal, Arc::downgrade(&state));
         Ok(state)
@@ -89,6 +91,14 @@ enum Held {
     Creation(CreationReceipt),
     Mutation(MutationReceipt),
 }
+impl Held {
+    fn request_id(&self) -> &str {
+        match self {
+            Self::Creation(receipt) => receipt.binding().actor().request_id(),
+            Self::Mutation(receipt) => receipt.binding().actor().request_id(),
+        }
+    }
+}
 struct ControlInner {
     runtime: RecordRuntime,
     principal: String,
@@ -96,6 +106,15 @@ struct ControlInner {
     state: Mutex<Option<ControlState>>,
     #[cfg(test)]
     publication_fault: RegistryMutex<Option<PublicationFault>>,
+    #[cfg(test)]
+    replay_probe: RegistryMutex<ReplayProbe>,
+}
+#[cfg(test)]
+#[derive(Default)]
+struct ReplayProbe {
+    starts: Vec<u64>,
+    decoded: usize,
+    fail_before_page: Option<u64>,
 }
 #[cfg(test)]
 enum PublicationFault {
@@ -124,14 +143,148 @@ impl ControlInner {
 struct ControlState {
     stream: StreamKey,
     receipts: HashMap<String, Held>,
+    verified: Cursor,
     dirty: bool,
 }
 impl ControlState {
-    async fn reconcile(&mut self, inner: &ControlInner) -> Result<(), StorageError> {
-        if self.dirty {
-            self.receipts = replay(&inner.runtime, &self.stream, &inner.principal).await?;
-            self.dirty = false;
+    fn validate_bounds(&self, bounds: &Bounds) -> Result<(), StorageError> {
+        if self.verified != Cursor::new(self.stream.clone(), self.verified.offset)
+            || bounds.floor != Cursor::new(self.stream.clone(), 0)
+            || bounds.tail != Cursor::new(self.stream.clone(), bounds.tail.offset)
+            || bounds.tail.offset < self.verified.offset
+            || bounds.tail.offset > (MAX_RECEIPTS * 3) as u64
+        {
+            return Err(corrupt(
+                "command control bounds disagree with verified history",
+            ));
         }
+        Ok(())
+    }
+
+    async fn reconcile(&mut self, inner: &ControlInner) -> Result<(), StorageError> {
+        if !self.dirty {
+            return Ok(());
+        }
+        let bounds = inner
+            .runtime
+            .bounds(&self.stream)
+            .await
+            .map_err(store_error)?;
+        self.validate_bounds(&bounds)?;
+        while self.verified.offset < bounds.tail.offset {
+            #[cfg(test)]
+            {
+                let mut probe = inner.replay_probe.lock().unwrap();
+                probe.starts.push(self.verified.offset);
+                if probe.fail_before_page == Some(self.verified.offset) {
+                    probe.fail_before_page = None;
+                    return Err(StorageError::Io("injected command page failure".into()));
+                }
+            }
+            let page = inner
+                .runtime
+                .read_after(&self.verified, PAGE, Some(&bounds.tail))
+                .await
+                .map_err(store_error)?;
+            if page.records.is_empty() {
+                return Err(corrupt("creation control page made no progress"));
+            }
+            for record in page.records {
+                #[cfg(test)]
+                {
+                    inner.replay_probe.lock().unwrap().decoded += 1;
+                }
+                self.fold_record(&record, &bounds.tail, &inner.principal)?;
+            }
+        }
+        // A failed page or malformed record leaves dirty set, even when earlier
+        // records advanced the verified prefix. Loads cannot expose that prefix
+        // until the complete captured suffix has passed this same fold.
+        self.dirty = false;
+        Ok(())
+    }
+
+    fn fold_record(
+        &mut self,
+        record: &Record,
+        through: &Cursor,
+        principal: &str,
+    ) -> Result<(), StorageError> {
+        if record.cursor.offset > through.offset {
+            return Err(corrupt("command control page exceeds captured tail"));
+        }
+        let next = self
+            .verified
+            .offset
+            .checked_add(1)
+            .ok_or_else(|| corrupt("command control cursor overflow"))?;
+        if record.cursor != Cursor::new(self.stream.clone(), next) {
+            return Err(corrupt("creation control positions disagree"));
+        }
+        let held = match record.event.schema.id.as_str() {
+            SCHEMA => {
+                let receipt = decode(&record.event)?;
+                if receipt.binding().actor().principal_id() != principal {
+                    return Err(StorageError::IdentityMismatch);
+                }
+                check_creation(&self.receipts, &receipt).map_err(replay_error)?;
+                if encode(&receipt)? != record.event {
+                    return Err(corrupt("creation control event identity disagrees"));
+                }
+                Held::Creation(receipt)
+            }
+            COMMAND_SCHEMA => {
+                let receipt = decode_mutation(&record.event)?;
+                if receipt.binding().actor().principal_id() != principal {
+                    return Err(StorageError::IdentityMismatch);
+                }
+                check_mutation(&self.receipts, &receipt).map_err(replay_error)?;
+                if encode_mutation(&receipt)? != record.event {
+                    return Err(corrupt("command control event identity disagrees"));
+                }
+                Held::Mutation(receipt)
+            }
+            _ => return Err(corrupt("unknown command control schema")),
+        };
+        self.receipts.insert(held.request_id().to_owned(), held);
+        // Never advance before publishing the matching map entry. If a task
+        // faults after insertion but before this assignment, an exact retained
+        // record can pass the fold again without skipping evidence.
+        self.verified = record.cursor.clone();
+        Ok(())
+    }
+
+    fn publish_append(
+        &mut self,
+        appended: &AppendReceipt,
+        expected: &NewEvent,
+        receipt: Held,
+    ) -> Result<(), StorageError> {
+        let record = &appended.record;
+        if record.event != *expected
+            || record.cursor != Cursor::new(self.stream.clone(), record.cursor.offset)
+            || record.cursor.offset == 0
+            || record.cursor.offset > (MAX_RECEIPTS * 3) as u64
+        {
+            return Err(corrupt("command append acknowledgement disagrees"));
+        }
+        if appended.kind == AppendKind::Deduplicated && record.cursor.offset <= self.verified.offset
+        {
+            // Deduplication returns the original event, not the current tail.
+            // The pre-append transition check already confirmed this exact
+            // receipt is retained; keep the newer verified prefix unchanged.
+            return Ok(());
+        }
+        // A noncontiguous acknowledgement leaves dirty set. A later reconcile
+        // must validate any intervening records rather than trusting the gap.
+        if self.verified.offset.checked_add(1) != Some(record.cursor.offset) {
+            return Err(corrupt(
+                "command append acknowledgement skips verified history",
+            ));
+        }
+        self.receipts
+            .insert(receipt.request_id().to_owned(), receipt);
+        self.verified = record.cursor.clone();
         Ok(())
     }
 }
@@ -171,12 +324,14 @@ impl CreationStorage for RecordStorage {
                             None => return Ok(None),
                         }
                     };
-                    let receipts = replay(&inner.runtime, &stream, &inner.principal).await?;
-                    *state = Some(ControlState {
+                    let mut recovered = ControlState {
+                        verified: Cursor::new(stream.clone(), 0),
                         stream,
-                        receipts,
-                        dirty: false,
-                    });
+                        receipts: HashMap::new(),
+                        dirty: true,
+                    };
+                    recovered.reconcile(&inner).await?;
+                    *state = Some(recovered);
                 }
                 state
                     .as_mut()
@@ -281,15 +436,15 @@ impl Control {
                 // until publication succeeds, so no later decision uses stale
                 // receipt state. Outstanding work retains this request's claim.
                 state.dirty = true;
-                control
+                let appended = control
                     .inner
                     .runtime
-                    .append(&state.stream, event)
+                    .append(&state.stream, event.clone())
                     .await
                     .map_err(store_error)?;
                 #[cfg(test)]
                 control.inner.before_publication().await?;
-                state.receipts.insert(control.request.clone(), receipt);
+                state.publish_append(&appended, &event, receipt)?;
                 state.dirty = false;
                 Ok::<_, CreationStorageError>(())
             })
@@ -376,66 +531,6 @@ fn replay_error(error: CreationStorageError) -> StorageError {
         CreationStorageError::ForeignRequest => corrupt("conflicting command identity"),
         CreationStorageError::TaskFault(_) => corrupt("command replay task fault"),
     }
-}
-async fn replay(
-    runtime: &RecordRuntime,
-    stream: &StreamKey,
-    principal: &str,
-) -> Result<HashMap<String, Held>, StorageError> {
-    let bounds = runtime.bounds(stream).await.map_err(store_error)?;
-    if bounds.floor.offset != 0 || bounds.tail.offset > (MAX_RECEIPTS * 3) as u64 {
-        return Err(corrupt(
-            "creation control history exceeds bounds or lost its prefix",
-        ));
-    }
-    let mut receipts = HashMap::new();
-    let mut cursor = Cursor::new(stream.clone(), 0);
-    while cursor.offset < bounds.tail.offset {
-        let page = runtime
-            .read_after(&cursor, PAGE, Some(&bounds.tail))
-            .await
-            .map_err(store_error)?;
-        if page.records.is_empty() {
-            return Err(corrupt("creation control page made no progress"));
-        }
-        for record in page.records {
-            if record.cursor.stream != *stream || record.cursor.offset != cursor.offset + 1 {
-                return Err(corrupt("creation control positions disagree"));
-            }
-            let held = match record.event.schema.id.as_str() {
-                SCHEMA => {
-                    let receipt = decode(&record.event)?;
-                    if receipt.binding().actor().principal_id() != principal {
-                        return Err(StorageError::IdentityMismatch);
-                    }
-                    check_creation(&receipts, &receipt).map_err(replay_error)?;
-                    if encode(&receipt)? != record.event {
-                        return Err(corrupt("creation control event identity disagrees"));
-                    }
-                    Held::Creation(receipt)
-                }
-                COMMAND_SCHEMA => {
-                    let receipt = decode_mutation(&record.event)?;
-                    if receipt.binding().actor().principal_id() != principal {
-                        return Err(StorageError::IdentityMismatch);
-                    }
-                    check_mutation(&receipts, &receipt).map_err(replay_error)?;
-                    if encode_mutation(&receipt)? != record.event {
-                        return Err(corrupt("command control event identity disagrees"));
-                    }
-                    Held::Mutation(receipt)
-                }
-                _ => return Err(corrupt("unknown command control schema")),
-            };
-            let request_id = match &held {
-                Held::Creation(receipt) => receipt.binding().actor().request_id().to_owned(),
-                Held::Mutation(receipt) => receipt.binding().actor().request_id().to_owned(),
-            };
-            receipts.insert(request_id, held);
-            cursor = record.cursor.clone();
-        }
-    }
-    Ok(receipts)
 }
 fn stage_byte(stage: CreationStage) -> u8 {
     match stage {
@@ -665,3 +760,7 @@ mod tests;
 #[cfg(test)]
 #[path = "../../../tests/infrastructure/session_storage/command_recovery.rs"]
 mod recovery_tests;
+
+#[cfg(test)]
+#[path = "../../../tests/infrastructure/session_storage/command_suffix.rs"]
+mod suffix_tests;
