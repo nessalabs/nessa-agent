@@ -806,6 +806,22 @@ are written here.
 | Execution/session, tool, permission, and scheduling invariants | `crates/nessa-sdk/src/domain/agent_execution/`; see [the domain map](../crates/nessa-sdk/src/domain/agent_execution/mod.rs) |
 | Agent invocation, session snapshots, queueing, and hooks | `crates/nessa-sdk/src/application/agent_execution/`; see the [SDK guides](../crates/nessa-sdk/docs/agent_execution/README.md) |
 
+Conversation deletion orchestration lives in
+`crates/nessa-server/src/conversation/application/service/deletion.rs`.
+It uses the same service state, admission and stop lifecycle; the split adds no
+worker, lock or forwarding layer. Its order remains:
+
+| Boundary | Required order | Existing regression evidence |
+| --- | --- | --- |
+| Fence and stop | Commit the tombstone before cleanup; an unconfirmed stop erases nothing. | `delete_stops_a_live_conversation_before_it_records_or_erases_anything`, `an_unconfirmed_stop_erases_nothing_and_a_repeat_finishes` |
+| Provider and history | Keep provider identity before erasing local history; acknowledge deletion audit before history/summary erasure. | `the_agents_own_record_is_asked_to_go_after_the_stop_and_before_the_history`, `an_unavailable_deletion_record_keeps_the_history_but_still_lets_uploads_go` |
+| Retry and shutdown | Carry only typed recoverable waits; retain work after caller loss and stop retry work on retirement. | `a_worker_that_panics_is_replaced_with_every_waiting_deletion_due`, `a_shutdown_ends_a_delete_waiting_to_stop_or_to_lease_and_it_is_left_unfinished` |
+
+These tests live in `crates/nessa-server/tests/conversation/deletion.rs` and run
+under the deletion child module. Public command signatures and failure meanings
+are unchanged. The shared service still owns agent slots and their release;
+`application/retries.rs` still owns the retry queue.
+
 ## Execution domain foundation
 
 The [SDK execution domain](../crates/nessa-sdk/src/domain/agent_execution/mod.rs)

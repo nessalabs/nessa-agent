@@ -50,6 +50,8 @@
 //! Opening waits out
 //! the stopped agent's history lease for at most `history_lease`
 //! (`a_read_right_after_a_persons_close_is_not_busy`).
+//! Deletion orchestration and its retry worker live in `service/deletion.rs`;
+//! shared admission, stopping and history-lease waits remain in `service.rs`.
 //! Archive and delete: archiving is a flag in the summary, written as a
 //! person's decision and so failing visibly. Deleting runs in one order —
 //! authorize, fence (a tombstone in the repository, under the creation lock),

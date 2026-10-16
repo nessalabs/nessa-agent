@@ -1,6 +1,7 @@
 //! Deleting a conversation: the tombstone refuses every command on it, the
 //! agent is stopped before anything is erased, the deletion is recorded before
 //! its history goes, and a repeat finishes whatever did not.
+use super::super::*;
 use super::*;
 use crate::conversation::{
     application::{
