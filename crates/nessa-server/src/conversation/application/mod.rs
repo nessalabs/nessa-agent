@@ -331,6 +331,3 @@ mod local_golden_tests;
 #[path = "../../../tests/conversation/leases.rs"]
 pub(crate) mod lease_tests;
 
-pub use service::{
-    event_error_code, project_events, validate_event_cursor, ConversationEventError, ThreadEvent,
-};
