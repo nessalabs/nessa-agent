@@ -147,6 +147,8 @@ pub use catalogue_watch::{
     CatalogueChangeWatch, CatalogueWatchError, CatalogueWatchState, WatchCatalogue,
 };
 mod access_policy;
+mod agent_tools;
+pub use agent_tools::{AgentToolAudit, AgentToolAuditRecord, AgentToolSource};
 mod app_call_policy;
 mod artifacts;
 mod catalogue_read;
@@ -328,3 +330,7 @@ mod local_golden_tests;
 #[cfg(test)]
 #[path = "../../../tests/conversation/leases.rs"]
 pub(crate) mod lease_tests;
+
+pub use service::{
+    event_error_code, project_events, validate_event_cursor, ConversationEventError, ThreadEvent,
+};

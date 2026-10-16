@@ -1426,3 +1426,6 @@ impl PermissionRules for RecordingRules {
         Err(RememberError::Refused)
     }
 }
+
+#[path = "agent_tools.rs"]
+mod agent_tool_tests;

@@ -2281,3 +2281,14 @@ actual private scope locks through physical calls and captures until drain.
 from a frozen checkout; generated declarations remain build output, not hand-edited
 source. Nessa iOS embeds a reviewed dynamic package; its production native
 profile/enrollment and retained history repository remain unfinished.
+
+## Agent thread tools
+
+`nessa-server/src/composition/conversation_tools.rs` adapts four MCP tools to the
+conversation application. `conversation/application/service/agent_tools.rs`
+resolves the source actor and calls the existing Cedar access evaluator before
+using ordinary target command/read paths. `application/agent_tools.rs` owns
+admission evidence and its audit port; `infrastructure/agent_tool_audit.rs`
+persists it. The built-in collection in relay composition keeps these tools
+independent of optional environment commands. See the [ordering and ownership
+contract](design/agent-thread-tools.md).

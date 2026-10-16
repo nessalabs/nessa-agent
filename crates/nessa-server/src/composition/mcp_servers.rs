@@ -46,7 +46,7 @@ use nessa_sdk::infrastructure::{
 };
 use sha2::{Digest, Sha256};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashSet},
     ffi::OsString,
     path::{Path, PathBuf},
     sync::Arc,
@@ -212,15 +212,15 @@ pub(super) fn stand_ins(
     gateway: &str,
     socket: &str,
     key: &ConfigurationKey,
-    built_in: Option<&dyn BuiltInServer>,
+    built_in: &[Arc<dyn BuiltInServer>],
 ) -> Vec<StdioMcpServer> {
     // The built-in server takes its name: a configured one of the same name
     // is not offered beside it.
-    let taken = built_in.map(BuiltInServer::name);
+    let taken = |name: &str| built_in.iter().any(|server| server.name() == name);
     let mut stand_ins: Vec<StdioMcpServer> = servers
         .configured()
         .iter()
-        .filter(|launch| Some(launch.server.name.as_str()) != taken)
+        .filter(|launch| !taken(launch.server.name.as_str()))
         .map(|launch| StdioMcpServer {
             name: launch.server.name.clone(),
             command: gateway.into(),
@@ -230,7 +230,7 @@ pub(super) fn stand_ins(
     for remote in servers
         .configured_remotes()
         .into_iter()
-        .filter(|remote| Some(remote.name()) != taken)
+        .filter(|remote| !taken(remote.name()))
     {
         stand_ins.push(StdioMcpServer {
             name: remote.name().to_owned(),
@@ -246,11 +246,15 @@ pub(super) fn stand_ins(
             ),
         });
     }
-    if let Some(server) = built_in {
+    for server in built_in {
         stand_ins.push(StdioMcpServer {
             name: server.name().to_owned(),
             command: gateway.into(),
-            args: relay_arguments(socket, server.name(), &built_in_digest(key, server)),
+            args: relay_arguments(
+                socket,
+                server.name(),
+                &built_in_digest(key, server.as_ref()),
+            ),
         });
     }
     stand_ins
@@ -264,8 +268,8 @@ pub(super) struct StandIns {
     gateway: String,
     socket: String,
     key: ConfigurationKey,
-    /// The server the gateway serves itself, offered beside the configured.
-    built_in: Option<Arc<dyn BuiltInServer>>,
+    /// The servers the gateway serves itself, offered beside the configured.
+    built_in: Vec<Arc<dyn BuiltInServer>>,
 }
 impl StandIns {
     /// Stand-ins for `servers`, run by `gateway` over `socket`, their digests
@@ -283,12 +287,12 @@ impl StandIns {
             gateway: gateway.to_str()?.to_owned(),
             socket: socket.to_str()?.to_owned(),
             key,
-            built_in: None,
+            built_in: Vec::new(),
         })
     }
 
-    /// These stand-ins, with `server`'s beside them.
-    pub(super) fn with_built_in(mut self, server: Option<Arc<dyn BuiltInServer>>) -> Self {
+    /// These stand-ins, with the built-in servers beside them.
+    pub(super) fn with_built_in(mut self, server: Vec<Arc<dyn BuiltInServer>>) -> Self {
         self.built_in = server;
         self
     }
@@ -300,7 +304,7 @@ impl McpServerSource for StandIns {
             &self.gateway,
             &self.socket,
             &self.key,
-            self.built_in.as_deref(),
+            &self.built_in,
         )
     }
 }
@@ -334,8 +338,14 @@ pub(super) async fn compose(
     gateway: &Path,
     environment: BTreeMap<OsString, OsString>,
     bundled: bool,
-    built_in: Option<Arc<dyn BuiltInServer>>,
+    built_in: Vec<Arc<dyn BuiltInServer>>,
 ) -> Result<Option<McpComposition>, RunError> {
+    let mut names = HashSet::new();
+    if built_in.iter().any(|server| !names.insert(server.name())) {
+        return Err(RunError::Agent(
+            "built-in MCP server names must be distinct".into(),
+        ));
+    }
     let app_policy: Arc<dyn AppCallPolicyEvaluator> =
         Arc::new(CedarAppCallPolicyEvaluator::new().map_err(|_| {
             RunError::Agent("the MCP App call policy bundle does not validate".into())
@@ -358,7 +368,7 @@ pub(super) async fn compose(
     } else {
         tracing::error!("remote MCP is unreachable this run: the HTTP client could not be built");
     }
-    if let Some(server) = &built_in {
+    for server in &built_in {
         let named = |name: &str| name == server.name();
         if servers
             .configured()
@@ -396,10 +406,10 @@ pub(super) async fn compose(
     agents.stand_ins = StandInSessions::granted_by(Arc::new(grants.clone()));
     let (ticket_ends, ticket_events) = unbounded_channel();
     Ok(Some(McpComposition {
-        relay: Arc::new(match built_in {
-            Some(server) => Relay::new(servers.clone(), grants, key.clone()).with_built_in(server),
-            None => Relay::new(servers.clone(), grants, key.clone()),
-        }),
+        relay: Arc::new(built_in.into_iter().fold(
+            Relay::new(servers.clone(), grants, key.clone()),
+            |relay, server| relay.with_built_in(server),
+        )),
         key,
         servers,
         launches,

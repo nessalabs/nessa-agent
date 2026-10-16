@@ -5,6 +5,8 @@
 //! agents the servers themselves.
 use super::super::agent::AgentsConfig;
 use super::{compose, relay_socket, server_environment, stand_ins, StandIns};
+use crate::core::RunError;
+use crate::mcp_servers::application::BuiltInServer;
 use crate::mcp_servers::domain::{
     ConfigurationKey, ConfiguredMcpServer, StdioServer, StoredMcpServer,
 };
@@ -61,7 +63,7 @@ fn the_built_in_server_is_handed_over_beside_the_configured_and_takes_its_name()
         "/bundle/nessa",
         "/s.sock",
         &key,
-        Some(tools.as_ref()),
+        &[tools.clone()],
     );
     let names: Vec<&str> = handed
         .iter()
@@ -78,13 +80,7 @@ fn the_built_in_server_is_handed_over_beside_the_configured_and_takes_its_name()
         ]
     );
     // Without it, the configured server of that name is handed over again.
-    let handed = stand_ins(
-        &live_of(&configured),
-        "/bundle/nessa",
-        "/s.sock",
-        &key,
-        None,
-    );
+    let handed = stand_ins(&live_of(&configured), "/bundle/nessa", "/s.sock", &key, &[]);
     assert_eq!(handed.len(), 2);
     assert_eq!(handed[1].args[3], launch_digest(&key, &configured[1]));
 }
@@ -99,7 +95,7 @@ fn each_server_is_handed_over_as_a_relay_under_its_own_name() {
     let socket = "/tmp/nessa-mcp-501/0123456789abcdef.sock";
     let key = ConfigurationKey::new([7; 32]);
     let configured = launches(&configured);
-    let handed = stand_ins(&live_of(&configured), gateway, socket, &key, None);
+    let handed = stand_ins(&live_of(&configured), gateway, socket, &key, &[]);
     for (stand_in, launch) in handed.iter().zip(&configured) {
         assert_eq!(stand_in.name, launch.server.name);
         assert_eq!(stand_in.command, Path::new(gateway));
@@ -120,7 +116,7 @@ fn each_server_is_handed_over_as_a_relay_under_its_own_name() {
     // another stand-in: the restoration fingerprint does not read these
     // (ADR 344, #391).
     assert_eq!(
-        stand_ins(&live_of(&configured), gateway, socket, &key, None),
+        stand_ins(&live_of(&configured), gateway, socket, &key, &[]),
         handed
     );
     let mut changed = configured.clone();
@@ -130,7 +126,7 @@ fn each_server_is_handed_over_as_a_relay_under_its_own_name() {
         .environment
         .insert("API_TOKEN".into(), "rotated".into());
     for edited in [changed, environment_only] {
-        let again = stand_ins(&live_of(&edited), gateway, socket, &key, None);
+        let again = stand_ins(&live_of(&edited), gateway, socket, &key, &[]);
         assert_ne!(again[0].args, handed[0].args);
         assert_eq!(again[1].args, handed[1].args);
     }
@@ -139,7 +135,7 @@ fn each_server_is_handed_over_as_a_relay_under_its_own_name() {
         gateway,
         socket,
         &ConfigurationKey::new([8; 32]),
-        None,
+        &[],
     );
     assert_ne!(other_key[0].args, handed[0].args);
 }
@@ -253,7 +249,7 @@ async fn the_agents_get_stand_ins_and_the_relay_is_bound_privately() {
         Path::new("/nessa"),
         BTreeMap::new(),
         false,
-        None,
+        Vec::new(),
     )
     .await
     .unwrap()
@@ -286,7 +282,7 @@ async fn the_agents_get_stand_ins_and_the_relay_is_bound_privately() {
             Path::new("/nessa"),
             BTreeMap::new(),
             false,
-            None,
+            Vec::new(),
         )
         .await
         .unwrap();
@@ -349,7 +345,7 @@ async fn the_agents_grants_are_the_ones_the_composed_relay_lets_through() {
         Path::new("/nessa"),
         BTreeMap::new(),
         false,
-        None,
+        Vec::new(),
     )
     .await
     .unwrap()
@@ -413,7 +409,7 @@ async fn a_relay_that_cannot_be_bound_leaves_mcp_servers_off() {
         Path::new("/nessa"),
         BTreeMap::new(),
         false,
-        None,
+        Vec::new(),
     )
     .await
     .unwrap();
@@ -430,7 +426,7 @@ async fn a_relay_that_cannot_be_bound_leaves_mcp_servers_off() {
         Path::new("/nessa"),
         BTreeMap::new(),
         false,
-        None
+        Vec::new()
     )
     .await
     .unwrap()
@@ -464,7 +460,7 @@ async fn servers_that_cannot_be_launched_as_configured_are_an_agent_error_naming
             Path::new("/nessa"),
             BTreeMap::new(),
             false,
-            None,
+            Vec::new(),
         )
         .await;
         match refused {
@@ -521,7 +517,7 @@ async fn s18_with_no_server_configured_the_relay_exists_and_a_server_added_reach
         Path::new("/nessa"),
         BTreeMap::new(),
         false,
-        None,
+        Vec::new(),
     )
     .await
     .unwrap()
@@ -559,7 +555,7 @@ async fn s11_to_s13_a_replaced_set_reaches_the_next_open_and_old_stand_ins_are_r
         Path::new("/nessa"),
         BTreeMap::new(),
         false,
-        None,
+        Vec::new(),
     )
     .await
     .unwrap()
@@ -667,7 +663,7 @@ async fn stored_entries_parse_with_their_defaults_and_a_disabled_one_is_not_laun
         Path::new("/nessa"),
         BTreeMap::new(),
         false,
-        None,
+        Vec::new(),
     )
     .await
     .unwrap()
@@ -712,7 +708,7 @@ async fn composed_settings_publish_privately_under_the_lock_and_audit_without_va
         Path::new("/nessa"),
         BTreeMap::new(),
         true,
-        None,
+        Vec::new(),
     )
     .await
     .unwrap()
@@ -904,7 +900,7 @@ async fn composed_in(
         Path::new("/nessa"),
         BTreeMap::new(),
         false,
-        None,
+        Vec::new(),
     )
     .await
     .unwrap()
@@ -1657,7 +1653,7 @@ async fn a_composed_gateways_apps_drops_are_written_to_its_audit_before_it_exits
         Path::new("/nessa"),
         BTreeMap::new(),
         false,
-        None,
+        Vec::new(),
     )
     .await
     .unwrap()
@@ -1790,7 +1786,7 @@ async fn a_composed_gateways_dropped_context_is_written_by_its_recorder() {
         Path::new("/nessa"),
         BTreeMap::new(),
         false,
-        None,
+        Vec::new(),
     )
     .await
     .unwrap()
@@ -1840,4 +1836,44 @@ async fn a_composed_gateways_dropped_context_is_written_by_its_recorder() {
         "{:?}",
         drop.initiator
     );
+}
+
+#[test]
+fn agent_and_environment_built_ins_are_distinct_without_requiring_ssh_commands() {
+    let agent_tools = super::super::conversation_tools::ConversationTools::new();
+    let environment_tools = super::super::environment_tools::EnvironmentTools::new(
+        &crate::conversation::domain::CommandPolicy::new(["devbox".to_owned()], None, Vec::new()),
+    );
+    let key = ConfigurationKey::new([7; 32]);
+    let servers = live_of(&[]);
+    let built_ins: Vec<Arc<dyn BuiltInServer>> = vec![agent_tools.clone(), environment_tools];
+    let both = stand_ins(&servers, "/nessa", "/relay.sock", &key, &built_ins);
+    assert_eq!(
+        both.iter()
+            .map(|server| server.name.as_str())
+            .collect::<Vec<_>>(),
+        ["nessa-agents", "nessa-environments"]
+    );
+    let just_agents = stand_ins(&servers, "/nessa", "/relay.sock", &key, &[agent_tools]);
+    assert_eq!(just_agents.len(), 1);
+    assert_eq!(just_agents[0].name, "nessa-agents");
+    assert_eq!(both[0].args, just_agents[0].args);
+}
+
+#[tokio::test]
+async fn duplicate_built_in_names_are_refused_before_configured_servers_are_taken() {
+    let namespace = tempfile::tempdir().unwrap();
+    let tools = super::super::conversation_tools::ConversationTools::new();
+    let mut config = agents(vec![server("configured", &[])]);
+    let result = compose(
+        &mut config,
+        &namespace.path().join("relay.sock"),
+        Path::new("/nessa"),
+        BTreeMap::new(),
+        false,
+        vec![tools.clone(), tools],
+    )
+    .await;
+    assert!(matches!(result, Err(RunError::Agent(_))));
+    assert_eq!(config.mcp_servers.len(), 1);
 }

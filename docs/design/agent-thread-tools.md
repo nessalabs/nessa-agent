@@ -1,0 +1,100 @@
+# Agent thread tools
+
+The gateway offers `nessa-agents` beside configured MCP servers and the optional
+`nessa-environments` server. It uses the existing stand-in relay and host-issued
+provider-open token. Agent tools do not require SSH command configuration.
+
+A thread is a conversation. `create_thread` creates an empty thread using the
+configured default agent/model and normal Ask approval mode. `send_message`
+queues plain text and returns its execution identity and durable command
+receipt. `subscribe` returns committed event metadata and an opaque cursor;
+repeat the call with `after` to continue. With no cursor it starts from now; `replay: true` reads retained events from the
+beginning. `replay` and `after` are mutually exclusive. After sending a task,
+use replay when there was no prior checkpoint so a fast completion is included.
+`stop_thread` stops the named execution, or captures the current active execution
+when `executionId` is omitted. A stop does not delete or close the conversation.
+
+An optional `requestId` makes an intentional command retry recoverable. Creation,
+submission and stop use the existing durable command coordinators. Default
+conversation/execution IDs derive from source identity, request and purpose, so
+retrying creation or submission retains their target. Changing the payload under
+the same logical request is a conflict. A caller retrying a stop should preserve
+the returned `executionId`; without it a changed active turn produces a conflict
+rather than proving that the earlier stop completed. An omitted `requestId`
+means a new command on each call.
+
+For example, call `send_message({threadId, message: "Review the change"})`, then
+`subscribe({threadId, replay: true})`. Continue with the returned `cursor` as
+`after` until `more` is false; use `waitMs` when waiting for later changes.
+
+## Source authority
+
+The relay supplies source session identity; tool arguments supply no owner,
+source identity, credential or approval override. The conversation application
+captures the source's live lease and running invocation, including its original
+actor and initiation. The `conversation.agent_tools` Cedar action decides
+whether it may represent the source owner. `owner.agent_tools` admits owner
+initiations on their own live conversation and denies grant-origin turns. A Drive
+grant allowing a tool does not acquire owner-wide authority over other threads.
+Existing target Cedar admission still decides access to each target.
+
+The source decision is acknowledged in `audit/agent-tools` before target work.
+It records source conversation/execution/lease, original principal/surface,
+delivery call ID, logical request ID, tool, target and deciding policy IDs. Target
+commands retain their ordinary receipts, audit and permission behavior. Audit
+failure is visible and prevents successful admission. Its writer uses the same
+immutable private-file publication and directory sync as other conversation
+control audit adapters. Audit delivery does not depend on an MCP response writer.
+
+The token identifies a provider open, which can span several turns. The running
+source execution is resolved when the call is admitted; the token alone does not
+prove a request was emitted by a particular earlier execution. It is an opaque
+source grant, not an owner's product-session credential. Already admitted work
+can finish after source cancellation, as ordinary command admission does.
+
+## Observation and cancellation
+
+`subscribe` holds one independent committed SDK reader, not an Agent handle. It
+projects execution/tool IDs, kinds, statuses and outcomes; it omits message
+content, thinking and tool arguments. A history gap or invalid/reset/pruned
+cursor is an explicit refusal. A callback does not run inside a transition,
+and receiving events does not cause a model turn or enqueue another message.
+
+The tool returns up to 16 semantic facts per read step, with a maximum 256 MiB
+logical input budget because a stored semantic fact may span physical records.
+Only the metadata projection is returned, and tool result JSON is bounded to
+32 KiB before the MCP text/structured duplication. At most four observation calls
+run across the built-in tool server, leaving capacity under the relay's eight
+concurrent calls per connection. Initial source certification has a ten-second
+preparation bound. Idle reads poll at up to 250 ms for at most `waitMs` (maximum
+30 seconds), and each read rechecks current target access. SDK cursor progression
+makes coalesced notices harmless; the tool keeps no subscription registry.
+
+Call cancellation, disconnect and source token revocation signal the pending
+observation to stop and drop its reader. This does not stop the observed thread.
+A create/send/stop already admitted by the command coordinator retains its
+supervised receipt/audit lifecycle even when its answer is lost. Cancellation
+is not a claim that an external effect was rolled back.
+
+## Ordering and regression evidence
+
+| Order or failure | Behavior and test home |
+| --- | --- |
+| Source running owner asks for target | Original actor and source/target attribution preserved; `tests/conversation/agent_tools.rs`. |
+| Missing running source or call already cancelled | No source admission/audit or target effects; same tests. |
+| Grant origin or foreign/deleted source | Cedar denies; complete source truth table in `tests/conversation/access_policy.rs`. |
+| Admission audit fails | Typed failure before target dispatch; `tests/conversation/agent_tools.rs`. |
+| Repeated request | Existing command receipt owns retry/conflict rules; stable defaults tested in `composition/conversation_tools.rs`. |
+| Tools before late attachment | Explicit unavailable; same adapter tests. |
+| Multiple built-ins/configured collision | Each server's own name/digest used; `tests/composition/mcp_servers.rs`. |
+| Cancellation/disconnect/revoked grant | Existing relay stops affected calls; `tests/mcp_servers/built_in.rs`. |
+| Incomplete save, duplicate reads, cursor recovery | SDK committed-event reader owns visibility and replay; SDK record storage events tests. |
+| Slow or oversized observation | Reader permits, step/response budgets and timeout refuse explicitly. |
+| Delayed stop versus newer execution | Existing exact-execution stop coordinator owns cancellation; `tests/conversation/mutation_commands.rs`. |
+
+Implementation ownership: `composition/conversation_tools.rs` owns MCP parsing,
+serialization and bounded polling; `conversation/application/service/agent_tools.rs`
+owns source admission; the existing Cedar access adapter owns delegation policy;
+`conversation/infrastructure/agent_tool_audit.rs` owns durable delivery. Event
+projection and target admission are shared through the conversation application;
+private record formats stay in SDK infrastructure.

@@ -1,3 +1,8 @@
+mod event_read;
+pub use event_read::{
+    event_error_code, project_events, validate_event_cursor, ConversationEventError, ThreadEvent,
+};
+mod agent_tools;
 mod creation;
 mod mutation;
 use super::metadata_target::{load_conversation, validate_target};
@@ -12,17 +17,17 @@ use super::{
     placement::Environments,
     provider_sessions::{ProviderSessionErasers, ProviderSessionHandler},
     retries::{Claim, DeletionRetries, Waiting},
-    ArtifactBudget, ArtifactCollector, ArtifactOffer, AttachmentRelease, AttachmentReleaseCause,
-    ConversationAccessPolicyEvaluator, ConversationAttachments, ConversationCreationAudit,
-    ConversationDeletionAudit, ConversationDeletionAuditRecord, ConversationDeletionCause,
-    ConversationError, ConversationFileLinkAudit, ConversationFileLinkAuditRecord,
-    ConversationFileLinkCause, ConversationFileLinkState, ConversationListing,
-    ConversationModeApplication, ConversationModeAudit, ConversationModeAuditPhase,
-    ConversationModeRequest, ConversationModeRequestState, ConversationOwnershipState,
-    ConversationRepository, ConversationSummaries, DeletionFailures, FenceCapture, FetchRequests,
-    ListedConversation, ObservationCursor, ObservedConversations, OwnerAccess, PublishRequests,
-    RevisionHold, RuntimeReadiness, ShareGrants, StopFailure, SubmittedMessage,
-    UnfinishedDeletions,
+    AgentToolAudit, ArtifactBudget, ArtifactCollector, ArtifactOffer, AttachmentRelease,
+    AttachmentReleaseCause, ConversationAccessPolicyEvaluator, ConversationAttachments,
+    ConversationCreationAudit, ConversationDeletionAudit, ConversationDeletionAuditRecord,
+    ConversationDeletionCause, ConversationError, ConversationFileLinkAudit,
+    ConversationFileLinkAuditRecord, ConversationFileLinkCause, ConversationFileLinkState,
+    ConversationListing, ConversationModeApplication, ConversationModeAudit,
+    ConversationModeAuditPhase, ConversationModeRequest, ConversationModeRequestState,
+    ConversationOwnershipState, ConversationRepository, ConversationSummaries, DeletionFailures,
+    FenceCapture, FetchRequests, ListedConversation, ObservationCursor, ObservedConversations,
+    OwnerAccess, PublishRequests, RevisionHold, RuntimeReadiness, ShareGrants, StopFailure,
+    SubmittedMessage, UnfinishedDeletions,
 };
 use crate::conversation::domain::{
     Conversation, ConversationDeletion, ProviderSessionErasure, ProviderSessionLink, ToolSource,
@@ -720,6 +725,8 @@ struct Inner {
     /// Where agents run; every opening is leased from it.
     environment: Environments,
     clock: Arc<dyn Clock>,
+    /// Acknowledges a source turn's delegation decision before target work.
+    agent_tool_audit: OnceLock<Arc<dyn AgentToolAudit>>,
     /// Decides every command's admission to a conversation.
     access_policy: Arc<dyn ConversationAccessPolicyEvaluator>,
     limits: ConversationLimits,
@@ -1102,6 +1109,7 @@ impl ConversationService {
                 deletion_budgets,
                 environment,
                 clock,
+                agent_tool_audit: OnceLock::new(),
                 access_policy,
                 limits,
                 conversations: Mutex::new(HashMap::new()),

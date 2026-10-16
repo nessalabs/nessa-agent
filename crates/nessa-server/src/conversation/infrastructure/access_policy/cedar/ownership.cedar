@@ -96,3 +96,17 @@ when {
     principal.organization == resource.organization &&
     principal.id == resource.owner
 };
+
+// The source turn can represent its owner only when that owner initiated it.
+@id("owner.agent_tools")
+permit (
+    principal is NessaConversation::AgentTurn,
+    action == NessaConversation::Action::"conversation.agent_tools",
+    resource is NessaConversation::Conversation
+)
+when {
+    principal.organization == resource.organization &&
+    principal.id == resource.owner &&
+    principal.ownerInitiated &&
+    !resource.deleted
+};
