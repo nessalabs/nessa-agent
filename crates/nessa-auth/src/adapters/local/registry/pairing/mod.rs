@@ -2,6 +2,9 @@
 //! Restored history asks the domain transition to correlate cancellation and revocation.
 mod device_verifier;
 mod enrollment;
+mod owner_phone;
+mod owner_phone_original;
+mod owner_phone_purpose;
 mod projection;
 pub use device_verifier::DeviceCredentialVerifier;
 pub(super) use projection::StoredPairing;

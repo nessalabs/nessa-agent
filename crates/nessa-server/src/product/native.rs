@@ -20,6 +20,9 @@ use nessa_auth::application::{
     ports::{AccessError, CredentialEvidence, CredentialVerifier, PortFuture, VerifiedCredential},
 };
 use nessa_auth::domain::AudienceId;
+use nessa_protocol::product::generated::product_event;
+use nessa_protocol::product::handshake::accepted_termination;
+use nessa_protocol::protocol::{EventFrame, OutgoingMessage};
 use std::{
     future::Future,
     io::{Error as IoError, ErrorKind},
@@ -105,17 +108,24 @@ impl CredentialVerifier for ProvedKey<'_> {
 }
 
 /// Product messages over protected frames: one UTF-8 text message per frame.
-/// A close message ends the connection after the frames before it are
-/// written; it carries no reason on this profile (design "Framing").
+/// A close ends the connection after the frames before it are written. When
+/// its payload is a session termination, that payload is written as
+/// `session.terminated` and then the socket closes.
 struct NativeSocket {
     connection: ProtectedConnection,
-    closing: bool,
+    phase: Phase,
+}
+/// Open, flushing the termination frame, or shutting the socket down.
+enum Phase {
+    Open,
+    Deliver,
+    Shut,
 }
 impl NativeSocket {
     fn new(connection: ProtectedConnection) -> Self {
         Self {
             connection,
-            closing: false,
+            phase: Phase::Open,
         }
     }
 }
@@ -139,7 +149,7 @@ impl Sink<Message> for NativeSocket {
     type Error = Error;
     fn poll_ready(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Result<(), Error>> {
         let this = self.get_mut();
-        if this.closing {
+        if !matches!(this.phase, Phase::Open) {
             return Poll::Ready(Err(Error::new(IoError::from(ErrorKind::NotConnected))));
         }
         Pin::new(&mut this.connection)
@@ -152,8 +162,13 @@ impl Sink<Message> for NativeSocket {
             Message::Text(text) => Pin::new(&mut this.connection)
                 .start_send(text.as_str().as_bytes().to_vec())
                 .map_err(Error::new),
-            Message::Close(_) => {
-                this.closing = true;
+            Message::Close(frame) => {
+                let queued = frame
+                    .as_ref()
+                    .and_then(|frame| termination_frame(frame.reason.as_ref()))
+                    .is_some_and(|bytes| Pin::new(&mut this.connection).start_send(bytes).is_ok());
+                // A failed or absent termination still closes the socket.
+                this.phase = if queued { Phase::Deliver } else { Phase::Shut };
                 Ok(())
             }
             // The product writes text and close only; nothing else has a frame.
@@ -162,15 +177,67 @@ impl Sink<Message> for NativeSocket {
     }
     fn poll_flush(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Result<(), Error>> {
         let this = self.get_mut();
-        let connection = Pin::new(&mut this.connection);
-        if this.closing {
-            return connection.poll_close(context).map_err(Error::new);
+        if matches!(this.phase, Phase::Deliver) {
+            match Pin::new(&mut this.connection).poll_flush(context) {
+                Poll::Pending => return Poll::Pending,
+                // Delivery failed: close anyway. The peer then sees EOF
+                // without a termination, which stays an untyped disconnect.
+                Poll::Ready(_) => this.phase = Phase::Shut,
+            }
         }
-        connection.poll_flush(context).map_err(Error::new)
+        if matches!(this.phase, Phase::Shut) {
+            return Pin::new(&mut this.connection)
+                .poll_close(context)
+                .map_err(Error::new);
+        }
+        Pin::new(&mut this.connection)
+            .poll_flush(context)
+            .map_err(Error::new)
     }
     fn poll_close(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Result<(), Error>> {
         Pin::new(&mut self.get_mut().connection)
             .poll_close(context)
             .map_err(Error::new)
+    }
+}
+
+/// The text frame a native close carries when its reason is a termination.
+/// Sequence zero: termination is not a conversation state change.
+fn termination_frame(reason: &str) -> Option<Vec<u8>> {
+    let payload = serde_json::from_str(reason).ok()?;
+    let termination = accepted_termination(&payload)?;
+    let text = OutgoingMessage::Event(
+        EventFrame::push(product_event::SESSION_TERMINATED, &termination, 0, 0).ok()?,
+    )
+    .to_wire_text()
+    .ok()?;
+    Some(text.into_bytes())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::termination_frame;
+    use nessa_protocol::product::generated::SessionTermination;
+    use nessa_protocol::product_contract::generated::SessionCloseReason;
+    use nessa_protocol::protocol::OutgoingMessage;
+
+    #[test]
+    fn a_close_reason_becomes_session_terminated_and_a_blank_close_does_not() {
+        let termination = SessionTermination {
+            code: SessionCloseReason::CredentialRevoked,
+            retryable: false,
+            retry_after_ms: None,
+        };
+        let bytes = termination_frame(&serde_json::to_string(&termination).unwrap()).unwrap();
+        let OutgoingMessage::Event(event) =
+            OutgoingMessage::decode(std::str::from_utf8(&bytes).unwrap()).unwrap()
+        else {
+            panic!("termination is an event");
+        };
+        assert_eq!(event.event, "session.terminated");
+        assert_eq!(event.payload["code"], "credential_revoked");
+        assert_eq!(event.payload["retryable"], false);
+        assert!(termination_frame("").is_none());
+        assert!(termination_frame(r#"{"code":"credential_revoked","retryable":true}"#).is_none());
     }
 }

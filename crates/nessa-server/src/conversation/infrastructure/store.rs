@@ -291,9 +291,28 @@ fn stored_time(value: u64) -> Result<i64, ConversationError> {
 /// who reads every row.
 fn granted_to(reader: &Reader) -> Option<String> {
     match reader {
-        Reader::Owner => None,
+        Reader::Owner | Reader::OwnerPhone(_) => None,
         Reader::PairedDevice { receiver_id } => Some(receiver_id.clone()),
     }
+}
+
+/// SQL collects candidates; the current first-party reader asks Cedar before
+/// exposing scope or loaded target facts. Refusal ends the complete source read.
+fn admit_catalogue_target(
+    reader: &Reader,
+    organization: &OrganizationId,
+    owner: &PrincipalId,
+) -> Result<(), ConversationError> {
+    if let Reader::OwnerPhone(phone) = reader {
+        phone
+            .admit_catalogue(
+                owner,
+                organization,
+                crate::conversation::application::AccessAction::List,
+            )
+            .map_err(|_| ConversationError::Metadata)?;
+    }
+    Ok(())
 }
 
 /// A paired reader's head: the latest revision among the owner's rows granted
@@ -1555,7 +1574,9 @@ impl ConversationCatalogue for LocalConversationStore {
     ) -> ConversationFuture<'_, CatalogueHead> {
         let (organization, owner) = (organization.clone(), owner.clone());
         let receiver = granted_to(reader);
+        let reader = reader.clone();
         self.run(move |connection| {
+            admit_catalogue_target(&reader, &organization, &owner)?;
             let transaction = connection.transaction().map_err(failed)?;
             let incarnation: String = transaction
                 .query_row(
@@ -1591,6 +1612,7 @@ impl ConversationCatalogue for LocalConversationStore {
         }
         self.run(move |connection| {
             let pass = &manifest.pass;
+            admit_catalogue_target(&reader, &organization, &owner)?;
             let incarnation = pass.scope.incarnation().as_str();
             let limit = manifest.max_entries;
             let (completed, boundary, fetch) = (
@@ -1661,7 +1683,9 @@ impl ConversationCatalogue for LocalConversationStore {
         let (organization, owner, incarnation, id) =
             (organization.clone(), owner.clone(), incarnation, id.clone());
         let receiver = granted_to(reader);
+        let reader = reader.clone();
         self.run(move |connection| {
+            admit_catalogue_target(&reader, &organization, &owner)?;
             let transaction = connection.transaction().map_err(failed)?;
             catalogue_incarnation(&transaction, incarnation.as_str())?;
             owner_head(&transaction, &organization, &owner)?;
@@ -1706,6 +1730,7 @@ impl ConversationCatalogue for LocalConversationStore {
             {
                 return Err(unreadable("conversations", &id.to_string()));
             }
+
             let descriptor = CatalogueDescriptor {
                 key: CatalogueKey {
                     creation: u64::try_from(creation).map_err(|_| ConversationError::Metadata)?,

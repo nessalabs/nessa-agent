@@ -2,8 +2,8 @@
 
 use crate::conversation::{
     application::{
-        CatalogueEntryAccess, CatalogueReadError, CatalogueReadOperation, CatalogueReadValue,
-        ConversationCaller, ConversationCatalogue,
+        AdmittedCatalogueRead, CatalogueEntryAccess, CatalogueReadError, CatalogueReadOperation,
+        CatalogueReadValue, ConversationCaller, ConversationCatalogue,
     },
     infrastructure::{CatalogueWorkerError, NessaCatalogueSource},
 };
@@ -52,25 +52,41 @@ pub(super) fn trusted_scope(
 pub(super) fn execute(
     catalogue: Arc<dyn ConversationCatalogue>,
     entries: CatalogueEntryAccess,
-    admitted: CatalogueReadScope,
+    admitted: AdmittedCatalogueRead,
     origin: Id,
     operation: CatalogueReadOperation,
 ) -> Result<CatalogueReadValue, CatalogueReadError> {
-    trusted_scope(&admitted, &origin, &operation)?;
-    let caller = caller(&admitted);
+    admitted
+        .validate_reader()
+        .map_err(CatalogueReadError::Admission)?;
+    trusted_scope(&admitted.scope, &origin, &operation)?;
+    let caller = caller(&admitted.scope);
     let (mut source, captured_head) = match operation.scope() {
         Some(scope) => (
-            NessaCatalogueSource::new(catalogue, caller, entries, scope.clone())
-                .map_err(worker_error)?,
+            NessaCatalogueSource::new_as_reader(
+                catalogue,
+                caller,
+                entries,
+                scope.clone(),
+                admitted.reader.clone(),
+            )
+            .map_err(worker_error)?,
             None,
         ),
         None => {
             let (receiver, epoch) =
-                passive_read_selector(&admitted.receiver_id, admitted.access_epoch)
+                passive_read_selector(&admitted.scope.receiver_id, admitted.scope.access_epoch)
                     .map_err(CatalogueReadError::Admission)?;
-            let (source, head) =
-                NessaCatalogueSource::discover(catalogue, caller, entries, receiver, origin, epoch)
-                    .map_err(worker_error)?;
+            let (source, head) = NessaCatalogueSource::discover_as_reader(
+                catalogue,
+                caller,
+                entries,
+                receiver,
+                origin,
+                epoch,
+                admitted.reader.clone(),
+            )
+            .map_err(worker_error)?;
             (source, Some(head))
         }
     };
@@ -169,6 +185,12 @@ mod tests {
             Box::pin(async { Err(ConversationError::Unavailable) })
         }
     }
+    fn paired_admission(scope: CatalogueReadScope) -> AdmittedCatalogueRead {
+        let reader = crate::conversation::application::Reader::PairedDevice {
+            receiver_id: scope.receiver_id.clone(),
+        };
+        AdmittedCatalogueRead { scope, reader }
+    }
     fn admitted() -> CatalogueReadScope {
         CatalogueReadScope {
             receiver_id: "receiver".into(),
@@ -231,7 +253,7 @@ mod tests {
                 _ => CatalogueReadError::IdentityChanged,
             };
             assert!(
-                matches!(execute(catalogue.clone(),entries(),admitted.clone(),origin.clone(),operation),Err(error) if error == expected_error)
+                matches!(execute(catalogue.clone(), entries(), paired_admission(admitted.clone()),origin.clone(),operation),Err(error) if error == expected_error)
             );
             assert_eq!(catalogue.0.load(Ordering::SeqCst), 0);
         }
@@ -246,7 +268,13 @@ mod tests {
             max_entries: 1,
         });
         assert!(matches!(
-            execute(catalogue.clone(), entries(), admitted, origin, valid),
+            execute(
+                catalogue.clone(),
+                entries(),
+                paired_admission(admitted),
+                origin,
+                valid
+            ),
             Err(CatalogueReadError::SourceUnavailable)
         ));
         assert_eq!(catalogue.0.load(Ordering::SeqCst), 1);
@@ -259,7 +287,7 @@ mod tests {
         let value = execute(
             catalogue.clone(),
             entries(),
-            admitted.clone(),
+            paired_admission(admitted.clone()),
             id("gateway"),
             CatalogueReadOperation::Head,
         )

@@ -72,7 +72,9 @@ impl AuthorizePairing<'_> {
         let manage = Action::new("credential.manage").map_err(|_| AccessError::Unavailable)?;
         let mut asked = vec![(&manage, gateway)];
         if intent.class().delegates_owner_grant() {
-            asked.push((intent.grant().action(), intent.resource()));
+            for grant in intent.grants() {
+                asked.push((grant.action(), grant.resource()));
+            }
         }
         for (action, resource) in asked {
             if self.policy.evaluate(context, action, resource, &snapshot)? != Decision::Allow {

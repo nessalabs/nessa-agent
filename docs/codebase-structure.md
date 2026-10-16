@@ -685,6 +685,29 @@ numbers are the caller's: the gateway takes them from the selected model's
 
 ## Gateway conversation ownership
 
+First-party phone authorization is [ADR811](adr/todo/811-owner-phone-authorization.md).
+`nessa-server/src/product/phone_endpoint.rs` publishes actual authenticated native
+discovery. `composition/native_pairing.rs` publishes a wildcard listener as
+`native.advertisedAddress` on the bound port. `product/phone.rs` maps the signed
+setup/status DTOs, and `product/owner_phone.rs` supplies current purpose/method/input
+admission.
+`device_pairing/application/owner_phone.rs` and its infrastructure adapter use
+Auth's original-request ledger and the existing activation/expiry/cleanup owners.
+`device_pairing/application/read_status.rs` projects exact signed TLS recovery
+through the same current original holding owner as read-only pairing.
+
+`conversation/application/owner_phone_policy.rs` retains current signed purpose,
+receiver holding and linkage before the shared conversation-access policy may
+see a first-party Person. Its Cedar adapter under
+`conversation/infrastructure/owner_phone_policy/cedar/` owns only purpose linkage,
+method and input restrictions; `access_policy/cedar/` remains the single actual
+conversation target and catalogue entry policy owner. The source's admitted
+reader and caller travel together through bounded catalogue workers. The receiver
+profile hash consumes each enforcing bundle's owning sources, so an actual
+policy change fences saved read epochs. Server fixtures split mounted discovery,
+signed replay/refusal, actual TLS recovery, held late Pair cleanup, native method
+effect accounting, catalogue and policy-profile proofs under
+`tests/composition/owner_phone*.rs` and `tests/conversation/owner_phone*.rs`.
 Review notices receive an application-owned `ConversationMetadataReader` from
 product-route composition. Its private repository delegates to the checked
 metadata loader, so returned identity is correlated before ownership policy
@@ -2045,6 +2068,34 @@ method identity or prove gateway dispatch. [ADR 921](adr/todo/921-close-product-
 proposes that identity while keeping routing, response lanes, execution capacity and paired-admission
 shape in the gateway.
 
+The pure `crates/nessa-protocol/src/product/owner_phone.rs` mapper is shared by
+server phone routes and native preparation. It consumes Auth's immutable source,
+context/request constructors and complete consent publication.
+`nessa-auth`'s `application/pairing/owner_phone_private.rs` and
+`adapters/pairing/private_state/owner_phone.rs` reserve and restore original keys
+under the existing private directory/operation/publisher owner. The core
+`pairing/owner_phone.rs` consumes these ports without network, preserving the
+original signed proof and refusing missing/incomplete restoration. Matching
+fixtures live in Auth `tests/adapters/private_state/owner_phone.rs`, core
+`tests/pairing/owner_phone.rs` and protocol `tests/product/owner_phone.rs`.
+Auth's `application/pairing/owner_phone_adoption.rs` publishes the explicit local
+adoption port and independent acknowledgement/failure receipts.
+`adapters/pairing/private_state/owner_phone/adoption.rs` validates the actual
+original, binds its immutable public lineage, then publishes its pending/issued
+record. One shared public-field codec and joint relationship checker govern cold
+selection; cold getters acknowledge the named original, while adoption validates
+all offered selectors before its first acknowledgement. Generic enrollment writers
+remain excluded from original scopes. Actual storage regressions live in
+`tests/adapters/private_state/owner_phone_adoption.rs`. These Auth owners implement
+local historical adoption. Core `pairing/owner_recovery.rs` consumes the same
+combined private owner for actual pinned compact recovery, complete original/echo/
+disclosure correspondence, explicit settlement and actual saved-record correlation.
+`retained/owner.rs` structurally separates failed recovery from completed remote
+facts and later independent settlement/purge failures; `retained/device.rs` runs
+both inside the existing physical worker/permit. Current reader/product selection
+uses the same freshly reloaded, correlated issued record. Generated Apple bindings
+and app Send remain consuming integration work.
+
 ### Shared product contract values
 
 `crates/nessa-protocol/src/product_contract/generated.rs` publishes the pure typed
@@ -2075,6 +2126,16 @@ example's command line and the retained-sync composition behind it; gateway
 tests enable it as a dev-dependency (ADR 483, amended). The portable package
 gate refuses any client dependency path to `nessa-server`, including renamed
 and transitive edges. Both ends depend on `nessa-protocol` for shared rules.
+
+The public `product` library owns an independent bounded protected pump over the
+same canonical pinned TLS/OpenProduct handshake. `src/protected.rs` and its
+deadline stream own shared incremental framing; `src/product/ports.rs` supplies
+injected socket, independent interrupt and versioned wake ports. The original
+request/ticket and settlement handles in `src/product/session.rs` retain capacity
+through physical completion and final observer release; `src/product/worker.rs`
+is the sole serialized writer/reader. Matching real TLS evidence is under
+`tests/product/`. Actual Ready methods gate admission; this transport grants no
+new credential purpose and changes no method payload schemas or cached authority.
 
 The public `retained` library selects owner-device or granted-peer catalogue reads
 through the existing source authorizer. `retained/subscribe.rs` is the live
@@ -2162,7 +2223,8 @@ The socket admits `conversation.create`, `conversation.send`, `conversation.stee
 Tests mirror those owners under `nessa-sdk/tests/infrastructure/session_storage/creation.rs`,
 `nessa-server/tests/conversation/creation_commands.rs` and
 `nessa-server/tests/conversation/mutation_commands.rs`. The state table is in
-[command creation](design/command-creation.md).
+[command creation](design/command-creation.md). The phone send both sides share
+is [phone send](design/phone-send-contract.md).
 
 Watch shutdown is part of normal host cleanup in `composition/root.rs`: after native
 pairing is signalled to stop, it closes
@@ -2258,6 +2320,35 @@ injected; `src/native_session.rs` and `src/failures.rs` own immutable foreign
 representations. Public intent fields delegate to Auth's immutable historical
 correlation, and saved cursor restoration delegates Id validation to sync;
 neither creates authority. Admission/failure/correlation tests live in `tests/session`.
+`src/native_product.rs` owns immutable actual product Ready/ticket/completion/event
+views, delegating wire bounds, request IDs, pump lifecycle and permit accounting to
+core. `src/session.rs` registers the original product child before start and joins
+it before private-state disposal, including teardown-only poisoned-lock recovery.
+The pure `SessionProduct` holder keeps the injected native clock independently of
+the parent; the foreign relative wait captures one absolute deadline for core.
+`src/native_owner_phone.rs` maps bounded unique discovery through the canonical
+protocol owner and exposes immutable original preparation proof. Initial/restore
+calls share the same combined private store and delegate durable key/signature
+production to core; no network enrollment, issued credential or Ready is invented.
+`tests/session/owner_original.rs` holds actual FS publication/admission/close with
+injected entropy/socket counters; `tests/session/owner_proof.rs` crosses actual cold
+private state and the public foreign proof/error/close-observation boundary.
+`SessionCloseObservation` derives release under the existing driver lock after
+actual join/destruction, independently of retained Product/Damaged errors; an
+unknown poisoned empty slot stays unconfirmed. No new mutable cleanup flag exists.
+`src/serialization.rs` owns the shared capped saved/product JSON-copy writer;
+`tests/product/serialization.rs` covers exact limits and canonical growth without
+changing captured native facts.
+`tests/product/parent.rs` and `tests/product/fixtures.rs` exercise actual pinned TLS,
+private-scope retention and escaped foreign facts/permits. These additions do not
+compose Swift product waiting. `src/native_owner_recovery.rs` exposes immutable
+pinned recovery and independent exact local adoption failures, without a seed,
+bearer or parent lease. `SessionStatus` distinguishes current ReadOnly and original
+OwnerPhone outcomes; missing original state cannot fall through to ReadOnly.
+`tests/session/owner_recovery.rs` crosses actual private FS, pinned compact TLS,
+contradictory valid saved records, held publication/close, reader refusal recheck,
+terminal purge/removal and actual product Ready. Authorization/app Send and the
+changed generated Apple ABI remain separate integration gates.
 The admitted `local_enrollment` publication transfers an owned private-record seed to
 the Auth native identity adapter and returns only public key/pin/intent and optional
 issued selectors. `tests/session/local_enrollment.rs` covers records, failures,
@@ -2275,6 +2366,14 @@ admission reserved before enqueue, a per-call stop latch and a cancellation-inde
 close task. Per-operation capture overloads translate bounded immutable snapshots
 inside that same admission, including serialization/decoding. Verification holds
 actual private scope locks through physical calls and captures until drain.
+Its original prepare/restore/recovery calls use that same parent admission;
+close capture preserves native-confirmed physical release independently of a
+historical failure. `swift/NativeProductWorker.swift` dispatches the actual product
+child with separately admitted Ready, event and submission lanes. Native tickets
+settle on an independent wait lane; their captures retain native count/byte
+permits, original UInt64 identity and typed settlement. Synchronous close wakes
+native I/O before physical drain joins those captures. Neither wrapper allocates
+transport IDs, implements request deadlines or copies private device keys.
 `scripts/build-native-device.sh` generates a local Apple Swift package/XCFramework
 from a frozen checkout; generated declarations remain build output, not hand-edited
 source. Nessa iOS embeds a reviewed dynamic package; its production native

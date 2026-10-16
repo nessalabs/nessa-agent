@@ -32,6 +32,7 @@ const ENROLLMENT_FILE: &str = "client-enrollment";
 const LOCK_FILE: &str = "pairing-state.lock";
 const KEY_BYTES: usize = 36;
 const PENDING_BYTES: usize = 144;
+const PUBLIC_INTENT_BYTES: usize = 64;
 const KEY_MAGIC: &[u8; 4] = b"NSGK";
 const PENDING_MAGIC: &[u8; 4] = b"NSCP";
 const CREDENTIAL_MAGIC: &[u8; 4] = b"NSCA";
@@ -42,6 +43,9 @@ const PEER_CREDENTIAL_MAGIC: &[u8; 4] = b"NSPA";
 /// An environment peer's enrollment, told apart the same way.
 const ENVIRONMENT_PENDING_MAGIC: &[u8; 4] = b"NSEP";
 const ENVIRONMENT_CREDENTIAL_MAGIC: &[u8; 4] = b"NSEA";
+/// Owner-phone scope cannot be restored as a legacy shared reader.
+const OWNER_PHONE_PENDING_MAGIC: &[u8; 4] = b"NSOP";
+const OWNER_PHONE_CREDENTIAL_MAGIC: &[u8; 4] = b"NSOA";
 
 /// The pending and credential magics of one enrollment class.
 fn magics(class: ConsentClass) -> (&'static [u8; 4], &'static [u8; 4]) {
@@ -49,6 +53,9 @@ fn magics(class: ConsentClass) -> (&'static [u8; 4], &'static [u8; 4]) {
         ConsentClass::DeviceRead => (PENDING_MAGIC, CREDENTIAL_MAGIC),
         ConsentClass::PeerRead => (PEER_PENDING_MAGIC, PEER_CREDENTIAL_MAGIC),
         ConsentClass::PeerEnvironment => (ENVIRONMENT_PENDING_MAGIC, ENVIRONMENT_CREDENTIAL_MAGIC),
+        ConsentClass::OwnerPhoneReadWrite => {
+            (OWNER_PHONE_PENDING_MAGIC, OWNER_PHONE_CREDENTIAL_MAGIC)
+        }
     }
 }
 /// The class and record kind a magic names; `None` for any other bytes.
@@ -275,6 +282,16 @@ struct SavedClient {
 }
 impl FilePairingState {
     fn load_client(&self) -> Result<Option<SavedClient>, PrivateStateError> {
+        let original = self.load_original_record()?;
+        let saved = self.read_client_record()?;
+        if let (Some(original), Some(saved)) = (&original, &saved) {
+            let bytes = Self::checked_owner_phone_enrollment(original, &saved.record)?;
+            self.reconcile(owner_phone::ORIGINAL_FILE, &bytes)?;
+        }
+        Ok(saved)
+    }
+    // Raw data for same-lock validation, not a pending/issued selection getter.
+    fn read_client_record(&self) -> Result<Option<SavedClient>, PrivateStateError> {
         self.read_bounded(ENROLLMENT_FILE, CREDENTIAL_MAX_BYTES)?
             .map(|bytes| decode_client(&bytes).map(|record| SavedClient { record, bytes }))
             .transpose()
@@ -287,6 +304,16 @@ impl ClientPendingStore for FilePairingState {
             .lock()
             .map_err(|_| PrivateStateError::Unavailable)?;
         self.verify_lock()?;
+        let Some(saved) = self.load_client()? else {
+            return Ok(());
+        };
+        let intent = match &saved.record {
+            ClientRecord::Pending(pending) => pending.intent(),
+            ClientRecord::Credential(credential) => credential.intent(),
+        };
+        if intent != expected {
+            return Err(PrivateStateError::Conflict);
+        }
         let name = OsStr::new(ENROLLMENT_FILE);
         let mut file = match self.directory.open_file(name, OpenMode::ReadNonblocking) {
             Ok(file) => file,
@@ -301,11 +328,7 @@ impl ClientPendingStore for FilePairingState {
         if bytes.len() > CREDENTIAL_MAX_BYTES {
             return Err(PrivateStateError::Corrupt);
         }
-        let intent = match decode_client(&bytes)? {
-            ClientRecord::Pending(pending) => pending.intent(),
-            ClientRecord::Credential(credential) => credential.intent(),
-        };
-        if intent != expected {
+        if !bool::from(bytes.as_slice().ct_eq(saved.bytes.as_slice())) {
             return Err(PrivateStateError::Conflict);
         }
         // The open handle names the file read: a replacement is refused.
@@ -348,6 +371,7 @@ impl ClientPendingStore for FilePairingState {
             .operation
             .lock()
             .map_err(|_| PrivateStateError::Unavailable)?;
+        self.exclude_original()?;
         let bytes = encode_pending(key, gateway_pin, intent);
         let replace = match self.load_client()? {
             None if expected.is_none() => false,
@@ -388,6 +412,7 @@ impl ClientPendingStore for FilePairingState {
             .operation
             .lock()
             .map_err(|_| PrivateStateError::Unavailable)?;
+        self.exclude_original()?;
         match self.load_client()? {
             None => Err(PrivateStateError::Conflict),
             Some(SavedClient {
@@ -429,12 +454,15 @@ fn encode_pending(
     bytes.extend_from_slice(magics(intent.class()).0);
     bytes.extend_from_slice(key.expose_bytes());
     bytes.extend_from_slice(pin);
+    encode_public(&mut bytes, intent);
+    bytes
+}
+fn encode_public(bytes: &mut Vec<u8>, intent: PublicIntent) {
     bytes.extend_from_slice(intent.invitation().bytes());
     bytes.extend_from_slice(intent.attempt().bytes());
     bytes.extend_from_slice(intent.consent().bytes());
     bytes.extend_from_slice(&intent.generation().to_be_bytes());
     bytes.extend_from_slice(&intent.expiry_ms().to_be_bytes());
-    bytes
 }
 fn encode_credential(credential: &DeviceCredential) -> Zeroizing<Vec<u8>> {
     let mut bytes = encode_pending(
@@ -507,40 +535,46 @@ fn decode_pending_fields(
     seed.copy_from_slice(&bytes[4..36]);
     let mut pin = [0; 44];
     pin.copy_from_slice(&bytes[36..80]);
-    let intent = PublicIntent::new(
-        InvitationId::new(
-            bytes[80..96]
-                .try_into()
-                .map_err(|_| PrivateStateError::Corrupt)?,
-        ),
-        AttemptId::new(
-            bytes[96..112]
-                .try_into()
-                .map_err(|_| PrivateStateError::Corrupt)?,
-        ),
-        ConsentIntentId::new(
-            bytes[112..128]
-                .try_into()
-                .map_err(|_| PrivateStateError::Corrupt)?,
-        ),
-        u64::from_be_bytes(
-            bytes[128..136]
-                .try_into()
-                .map_err(|_| PrivateStateError::Corrupt)?,
-        ),
-        u64::from_be_bytes(
-            bytes[136..144]
-                .try_into()
-                .map_err(|_| PrivateStateError::Corrupt)?,
-        ),
-        class,
-    )
-    .map_err(|_| PrivateStateError::Corrupt)?;
+    let intent = decode_public(&bytes[80..PENDING_BYTES], class)?;
     Ok(PendingEnrollment::new(
         PrivateKeyMaterial::new(seed),
         pin,
         intent,
     ))
+}
+fn decode_public(bytes: &[u8], class: ConsentClass) -> Result<PublicIntent, PrivateStateError> {
+    if bytes.len() != PUBLIC_INTENT_BYTES {
+        return Err(PrivateStateError::Corrupt);
+    }
+    PublicIntent::new(
+        InvitationId::new(
+            bytes[0..16]
+                .try_into()
+                .map_err(|_| PrivateStateError::Corrupt)?,
+        ),
+        AttemptId::new(
+            bytes[16..32]
+                .try_into()
+                .map_err(|_| PrivateStateError::Corrupt)?,
+        ),
+        ConsentIntentId::new(
+            bytes[32..48]
+                .try_into()
+                .map_err(|_| PrivateStateError::Corrupt)?,
+        ),
+        u64::from_be_bytes(
+            bytes[48..56]
+                .try_into()
+                .map_err(|_| PrivateStateError::Corrupt)?,
+        ),
+        u64::from_be_bytes(
+            bytes[56..64]
+                .try_into()
+                .map_err(|_| PrivateStateError::Corrupt)?,
+        ),
+        class,
+    )
+    .map_err(|_| PrivateStateError::Corrupt)
 }
 fn storage_error(error: io::Error) -> PrivateStateError {
     if is_unsafe_file(&error) {
@@ -554,6 +588,7 @@ fn storage_error(error: io::Error) -> PrivateStateError {
 mod tests;
 
 mod gateway_audit;
+mod owner_phone;
 
 fn storage_failure(error: &io::Error) -> PrivateStorageFailure {
     if is_unsafe_file(error) {

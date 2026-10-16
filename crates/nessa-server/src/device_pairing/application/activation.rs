@@ -13,7 +13,7 @@
 //! from there with the same stage, never a second receiver or credential.
 use super::cleanup::{CleanupError, SettleCleanup};
 use super::owner::{OwnerError, PairingOwner};
-use super::receivers::{ReceiverError, ReceiverRequest};
+use super::receivers::{ReceiverDispatch, ReceiverError, ReceiverRequest};
 use super::recurrence::{access_error_recurs, receiver_error_recurs, store_error_recurs};
 use nessa_auth::{
     application::{
@@ -61,6 +61,8 @@ impl ActivationError {
             Self::Owner(OwnerError::Authorization(error)) => access_error_recurs(*error),
             Self::Owner(OwnerError::Enrollment(error)) => store_error_recurs(*error),
             Self::Owner(OwnerError::Domain(_)) => true,
+            // A generator that failed can succeed on the next approval.
+            Self::Owner(OwnerError::Entropy) => false,
             Self::Receiver(error) => receiver_error_recurs(*error),
             Self::ReceiverNotCurrent => true,
             Self::Cleanup(error) => error.recurs(),
@@ -93,6 +95,18 @@ impl PairingOwner<'_> {
         let decided = self
             .decide(session, id, OwnerDecision::Approve(key))
             .await?;
+        self.activate_approved(session, decided, Some(fresh)).await
+    }
+
+    /// Continue a canonical approval already committed by signed owner-phone consent.
+    /// This adds no second approval decision and keeps the existing physical stage owner.
+    pub(super) async fn activate_approved(
+        &self,
+        session: &AuthenticatedSession,
+        decided: PairingRecord,
+        fresh: Option<FreshStage>,
+    ) -> Result<Approval, OwnerError> {
+        let id = decided.id();
         if !matches!(
             decided.phase(),
             PairingPhase::Approved | PairingPhase::Staging
@@ -121,10 +135,13 @@ impl PairingOwner<'_> {
         &self,
         session: &AuthenticatedSession,
         record: PairingRecord,
-        fresh: FreshStage,
+        fresh: Option<FreshStage>,
     ) -> Result<PairingRecord, ActivationError> {
         let id = record.id();
         if record.phase() == PairingPhase::Approved {
+            // Staging is the only step that consumes fresh identities. A caller
+            // that reached an approved record without them cannot invent one.
+            let fresh = fresh.ok_or(ActivationError::Owner(OwnerError::Entropy))?;
             // The decision advanced the revision, so this admission is fresh.
             let admission = self
                 .admit(session, id)
@@ -172,9 +189,10 @@ impl PairingOwner<'_> {
         let id = current.id();
         let request = ReceiverRequest::for_stage(&current).ok_or_else(conflict)?;
         if current.receiver_binding().is_none() {
+            let dispatch = ReceiverDispatch::for_pair(stage).map_err(store)?;
             let outcome = self
                 .receivers
-                .pair(&request)
+                .pair(&dispatch)
                 .map_err(ActivationError::Receiver)?;
             // Auth correlates the outcome with the stage (design row P21).
             current = self

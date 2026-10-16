@@ -29,7 +29,10 @@ pub(crate) mod catalogue_read;
 mod change_watch;
 mod event_sequence;
 mod operational_limits;
+mod owner_phone;
 pub(crate) mod passive_read;
+mod phone;
+mod phone_endpoint;
 mod read_access;
 pub(crate) mod record_read;
 mod socket;
@@ -56,6 +59,9 @@ pub use native::{DeviceCredentials, NativeSessions};
 mod agent_install;
 
 pub use change_watch::WatchTaskFault;
+
+#[cfg(test)]
+pub(crate) use conversation::dispatch as dispatch_conversation;
 
 #[cfg(test)]
 pub(crate) use socket::HostWatchFixture;

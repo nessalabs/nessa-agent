@@ -1641,7 +1641,44 @@ fn validate_registry(
     validate_pairing_collection(&pairings)
         .map_err(|_| CredentialRegistryFault::InvalidState(RegistryInvariant::CredentialBinding))?;
     let mut reserved = HashSet::new();
+    let mut original_requests = HashSet::new();
     for (stored, record) in registry.pairings.iter().zip(&pairings) {
+        if let Some(request) = stored.owner_phone_request().map_err(|_| {
+            CredentialRegistryFault::InvalidState(RegistryInvariant::CredentialBinding)
+        })? {
+            let source = request.source();
+            let namespace = (
+                source.resource().organization_id().as_str().to_owned(),
+                source.owner().as_str().to_owned(),
+                source.membership().as_str().to_owned(),
+                source.audience().as_str().to_owned(),
+                source.credential().as_str().to_owned(),
+                *request.id().bytes(),
+            );
+            let original_issuer = registry
+                .credentials
+                .iter()
+                .find(|entry| entry.metadata.id == source.credential().as_str());
+            if record.owner_phone_approval().is_none()
+                || !original_requests.insert(namespace)
+                || !original_issuer.is_some_and(|issuer| {
+                    issuer.metadata.principal_id == source.owner().as_str()
+                        && issuer.metadata.organization_id
+                            == source.resource().organization_id().as_str()
+                        && issuer.metadata.audience_id == source.audience().as_str()
+                })
+                || !registry.memberships.iter().any(|membership| {
+                    membership.id == source.membership().as_str()
+                        && membership.principal_id == source.owner().as_str()
+                        && membership.organization_id
+                            == source.resource().organization_id().as_str()
+                })
+            {
+                return Err(CredentialRegistryFault::InvalidState(
+                    RegistryInvariant::CredentialBinding,
+                ));
+            }
+        }
         if let Some(identity) = record.credential() {
             if !reserved.insert(identity) {
                 return Err(CredentialRegistryFault::InvalidState(

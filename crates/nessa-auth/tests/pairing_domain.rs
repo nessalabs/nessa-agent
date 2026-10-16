@@ -7,3 +7,6 @@ mod disclosure;
 
 #[path = "domain/pairing/peer.rs"]
 mod peer;
+
+#[path = "domain/pairing/owner_phone.rs"]
+mod owner_phone;
