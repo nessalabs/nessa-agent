@@ -52,7 +52,7 @@ fn agents(servers: Vec<StdioMcpServer>) -> AgentsConfig {
 
 #[test]
 fn the_built_in_server_is_handed_over_beside_the_configured_and_takes_its_name() {
-    let tools = super::super::environment_tools::EnvironmentTools::new(
+    let tools: Arc<dyn BuiltInServer> = super::super::environment_tools::EnvironmentTools::new(
         &crate::conversation::domain::CommandPolicy::new(["devbox".to_owned()], None, Vec::new()),
     );
     let name = super::super::environment_tools::SERVER_NAME;
