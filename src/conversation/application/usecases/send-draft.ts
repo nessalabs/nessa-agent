@@ -142,9 +142,17 @@ export function restoreFailedTurn(
  * emptied was cleared on purpose) and the message is still whole: an image
  * whose original was let go to bound previews survives only as a reference,
  * which a draft cannot send, and the message without it is a different one.
+ * A draft of its own whose images are still uploading waits for them.
  */
 export function canSendAgain(conv: Conversation, turnId: string): boolean {
-  if (conv.draft.length > 0) return conv.draftTurn === turnId
+  if (conv.draft.length > 0) {
+    if (conv.draftTurn !== turnId) return false
+    // A restored image goes back to the gateway before the message can name
+    // it; the composer uploads it, and Send Again waits for that. A file that
+    // travels as a path has nothing to upload, so it never waits.
+    const images = messageImages(conv.draft)
+    return images.ok || images.refusal.kind !== "upload-in-flight"
+  }
   const refused = refusedTurn(conv, turnId)
   return (
     !!refused &&

@@ -1090,6 +1090,26 @@ describe("an older refused message goes back to the draft that owns its files", 
       declineReason(conv as Conversation, { content: conv?.draft ?? [] }, true),
     ).not.toMatchObject({ kind: "unknown-attachment" })
   })
+  it("holds Send Again until the restored image has uploaded again", () => {
+    // Row 12: the button is live only when pressing it sends the message.
+    let tabs: ReturnType<typeof emptyLocalTabs> = olderRefusal([])
+    expect(canSendAgain(tabs.conversations[0] as Conversation, "older")).toBe(true)
+    tabs = restoreFailedTurn(tabs, "c0", "older")
+    expect(canSendAgain(tabs.conversations[0] as Conversation, "older")).toBe(false)
+    tabs = changeUpload(tabs, {
+      conversationId: "c0",
+      placementId: "a1",
+      to: "uploading",
+    })
+    expect(canSendAgain(tabs.conversations[0] as Conversation, "older")).toBe(false)
+    tabs = changeUpload(tabs, {
+      conversationId: "c0",
+      placementId: "a1",
+      to: "stored",
+      image: reference(),
+    })
+    expect(canSendAgain(tabs.conversations[0] as Conversation, "older")).toBe(true)
+  })
   it("holds a message whose image survives only as a reference", () => {
     // Row 11: bounding previews let the original go, so Send Again would send
     // a different message.

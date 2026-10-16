@@ -1,5 +1,6 @@
 import type { SubmissionDiagnostic } from "../../model"
 import {
+  canSendAgain,
   discardFailedTurn,
   restoreFailedTurn,
 } from "../../application/usecases/send-draft"
@@ -24,7 +25,6 @@ import {
   conversationSelectionOpen,
   MAX_SENT_PREVIEW_BYTES,
   messageFiles,
-  messageImages,
   storedImages,
   type CommandFailure,
   type ConversationSelection,
@@ -298,13 +298,8 @@ export const retryFailedTurn = createAsyncThunk<
 >("conversation/retryFailedTurn", async ({ id, turnId }, { dispatch, getState }) => {
   dispatch(failedTurnRestored({ id, turnId }))
   const conv = getState().conversation.conversations.find((item) => item.id === id)
-  // Work of the person's own in the draft is never sent as this message.
-  if (!conv || conv.draft.length === 0 || conv.draftTurn !== turnId) return
-  // A restored image goes back to the gateway before the message can name it,
-  // and the composer uploads it; Send Again is pressed once that finishes. A
-  // file that travels as a path has nothing to upload, so it never waits.
-  const images = messageImages(conv.draft)
-  if (!images.ok && images.refusal.kind === "upload-in-flight") return
+  // Restored images upload first; Send Again is pressed again once they have.
+  if (!conv || conv.draft.length === 0 || !canSendAgain(conv, turnId)) return
   await dispatch(sendDraft({ id, content: conv.draft, retryTurnId: turnId }))
 })
 
