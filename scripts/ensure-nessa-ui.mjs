@@ -5,14 +5,14 @@
  * `nessa-ui-revision` is the only pin. This script has three entry points:
  *
  *   node scripts/ensure-nessa-ui.mjs           preinstall: fill or advance .vendor
- *   node scripts/ensure-nessa-ui.mjs --check   compare .vendor with the pin, never fetch
+ *   node scripts/ensure-nessa-ui.mjs --check   check the pin and declared entry files, never fetch
  *   node scripts/ensure-nessa-ui.mjs --update  pnpm ui:types: the same as preinstall
  *
  * pnpm skips preinstall when the lockfile is already satisfied, so after a
  * pull that only moves the pin, `pnpm install` does nothing. `pnpm ui:types`
  * is the reliable way to advance; `--check` says when that is needed.
  */
-import { existsSync, lstatSync, mkdirSync, readFileSync, rmSync } from "node:fs"
+import { existsSync, lstatSync, mkdirSync, readFileSync, rmSync, statSync } from "node:fs"
 import { spawnSync } from "node:child_process"
 import { dirname, resolve } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
@@ -61,27 +61,90 @@ export function readRevision(root) {
   return revision
 }
 
+// The read-only checker may inspect borrowed input; mutable preparation needs
+// private roots. Both consumers ask this one owner which root is borrowed.
+function borrowedVendorRoot(root) {
+  const parent = resolve(root, ".vendor")
+  if (lstatSync(parent, { throwIfNoEntry: false })?.isSymbolicLink()) return "parent"
+  if (lstatSync(resolve(parent, "nessa_ui"), { throwIfNoEntry: false })?.isSymbolicLink())
+    return "checkout"
+  return null
+}
+
 const hasPackages = (directory) =>
   linkedWorkspacePackages.every((pkg) =>
     existsSync(resolve(directory, pkg, "package.json")),
   )
 
+function declaredFiles(value) {
+  // Pattern declarations describe a family of subpaths, not a concrete file.
+  if (typeof value === "string") return value.includes("*") ? [] : [value]
+  if (value && typeof value === "object")
+    return Object.values(value).flatMap(declaredFiles)
+  return []
+}
+
+// Substitution arrays are ordered fallbacks. If a pattern participates, leave
+// that mapping to TypeScript; only fully concrete groups can be checked here.
+function declaredTypeAlternatives(value) {
+  if (Array.isArray(value)) {
+    const files = declaredFiles(value)
+    return files.length > 0 && files.length === value.length ? [files] : []
+  }
+  if (value && typeof value === "object")
+    return Object.values(value).flatMap(declaredTypeAlternatives)
+  return []
+}
+
 /**
  * Compare the vendored checkout with the pin without touching the network.
- * Returns null when they agree, otherwise one message naming the remedy.
+ * Checks concrete declared package entry files too; requireOwned also rejects borrowed
+ * roots for mutable startup. Default read-only checks may inspect borrowed input.
+ * Returns null when ready, otherwise
+ * one message naming the preparation remedy.
  */
-export function checkVendor({ root, git = gitQuery } = {}) {
+export function checkVendor({ root, git = gitQuery, requireOwned = false } = {}) {
   const vendor = resolve(root, ".vendor/nessa_ui")
   const revision = readRevision(root)
+  if (requireOwned && borrowedVendorRoot(root))
+    return "Vendored Nessa UI uses a borrowed root. Run `pnpm ui:types` to prepare a private checkout."
   if (!hasPackages(vendor))
     return ".vendor/nessa_ui is missing or incomplete. Run `pnpm ui:types` to fetch it."
   const head = git(["rev-parse", "HEAD"], vendor)
-  if (head === revision) return null
-  return (
-    `Vendored Nessa UI is at ${head?.slice(0, 7) ?? "an unknown commit"} but ` +
-    `nessa-ui-revision wants ${revision.slice(0, 7)}.\n` +
-    "Run `pnpm ui:types` to update it."
-  )
+  if (head !== revision)
+    return (
+      `Vendored Nessa UI is at ${head?.slice(0, 7) ?? "an unknown commit"} but ` +
+      `nessa-ui-revision wants ${revision.slice(0, 7)}.\n` +
+      "Run `pnpm ui:types` to update it."
+    )
+  for (const directory of linkedWorkspacePackages) {
+    const packageRoot = resolve(vendor, directory)
+    const manifest = JSON.parse(
+      readFileSync(resolve(packageRoot, "package.json"), "utf8"),
+    )
+    // The package owns its entry points; consumers must not copy a dist list.
+    const entries = [
+      ...new Set([
+        ...declaredFiles(manifest.exports),
+        ...declaredFiles(manifest.main),
+        ...declaredFiles(manifest.module),
+        ...declaredFiles(manifest.types),
+      ]),
+    ].map((entry) => [entry])
+    for (const alternatives of [
+      ...entries,
+      ...declaredTypeAlternatives(manifest.typesVersions),
+    ]) {
+      const ready = alternatives.some((entry) => {
+        const file = statSync(resolve(packageRoot, entry), { throwIfNoEntry: false })
+        if (!file?.isFile() || file.size === 0) return false
+        return true
+      })
+      if (!ready)
+        return `Vendored Nessa UI entry ${directory}/${alternatives.join(" or ")} is missing or empty. Run \`pnpm ui:types\` to rebuild it.`
+    }
+  }
+  return null
 }
 
 export function prepareVendor({ root, run = command, git = gitQuery } = {}) {
@@ -95,7 +158,8 @@ export function prepareVendor({ root, run = command, git = gitQuery } = {}) {
   }
 
   const vendorRoot = resolve(root, ".vendor")
-  if (lstatSync(vendorRoot, { throwIfNoEntry: false })?.isSymbolicLink())
+  const borrowedRoot = borrowedVendorRoot(root)
+  if (borrowedRoot === "parent")
     throw new Error(
       "Preserving linked .vendor directory; replace it with a directory owned " +
         "by this checkout, then run pnpm ui:types.",
@@ -103,7 +167,7 @@ export function prepareVendor({ root, run = command, git = gitQuery } = {}) {
   mkdirSync(vendorRoot, { recursive: true })
   // Build artifacts belong to this checkout. Remove only a borrowed link,
   // including a dangling one, before cloning; its target remains untouched.
-  if (lstatSync(vendor, { throwIfNoEntry: false })?.isSymbolicLink()) rmSync(vendor)
+  if (borrowedRoot === "checkout") rmSync(vendor)
   if (!hasPackages(vendor)) {
     if (existsSync(vendor)) rmSync(vendor, { recursive: true, force: true })
     run("git", ["clone", "--no-checkout", "--depth", "1", repo, vendor], root)
