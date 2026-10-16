@@ -306,10 +306,7 @@ async fn agent_tools_relay_create_send_replay_and_refuse_a_foreign_target() {
     );
     assert_eq!(provider.cancel_calls.load(Ordering::SeqCst), 0);
     let no_active = client.call("stop_thread", json!({"threadId":worker})).await;
-    assert_eq!(
-        no_active["structuredContent"]["error"],
-        "no_active_execution"
-    );
+    assert_eq!(no_active["structuredContent"]["error"], "no_active_turn");
     let invalid_replay = client
         .call(
             "subscribe",

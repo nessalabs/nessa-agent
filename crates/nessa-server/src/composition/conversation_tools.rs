@@ -6,7 +6,10 @@ use crate::conversation::application::{
 };
 use crate::mcp_servers::application::{BuiltInFuture, BuiltInServer};
 use nessa_protocol::agents::AgentId;
-use nessa_protocol::conversation::{domain::ConversationId, view::ConversationMessageStatus};
+use nessa_protocol::conversation::{
+    domain::ConversationId,
+    view::{ConversationMessageStatus, ConversationView},
+};
 use nessa_sdk::application::agent_execution::{
     commands::{
         CreationFailure, CreationStage, MutationFailure, MutationOutcome, MutationReceipt,
@@ -19,12 +22,13 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
+    future::Future,
     sync::{Arc, OnceLock},
     time::Duration,
 };
 use tokio::{
     sync::{watch, Semaphore},
-    time::{sleep, Instant},
+    time::{sleep, sleep_until, Instant},
 };
 
 pub(super) const SERVER_NAME: &str = "nessa-agents";
@@ -347,23 +351,7 @@ async fn run(
                         .read_at(target.clone(), caller.clone(), ReadOpening::LiveOnly)
                         .await
                         .map_err(code)?;
-                    view.messages
-                        .iter()
-                        .rev()
-                        .find(|message| {
-                            matches!(
-                                message.status,
-                                ConversationMessageStatus::Running
-                                    | ConversationMessageStatus::Injected
-                            )
-                        })
-                        .map(|message| message.execution_id.clone())
-                        .or_else(|| {
-                            view.pending
-                                .first()
-                                .map(|pending| pending.execution_id.clone())
-                        })
-                        .ok_or("no_active_execution")?
+                    active_execution(&view).ok_or("no_active_turn")?
                 }
             };
             let stopped = service
@@ -391,18 +379,20 @@ async fn run(
                 return Err("invalid_request".into());
             }
             let action = identity(&source, &call, "subscribe");
-            let source = service
-                .admit_agent_tool(
-                    source,
-                    call,
-                    tool,
-                    Some(target.clone()),
-                    action,
-                    stop.clone(),
-                )
-                .await
-                .map_err(code)?;
-            follow(&service, target, source.caller(), args, stop).await
+            let mut control = SubscriptionControl::new(stop, wait);
+            let admission = service.admit_agent_tool(
+                source,
+                call,
+                tool,
+                Some(target.clone()),
+                action,
+                control.stop.clone(),
+            );
+            let source = match control.step(admission).await {
+                Ok(result) => result.map_err(code)?,
+                Err(ended) => return control.finish(&target, ended),
+            };
+            follow(&service, target, source.caller(), args, control).await
         }
         _ => Err("unknown_tool".into()),
     }
@@ -419,16 +409,86 @@ fn failed(code: &str) -> Value {
     json!({"content":[{"type":"text","text":value.to_string()}],"structuredContent":value,"isError":true})
 }
 
-/// One retained reader per call; idle reads use a bounded timer, while the
-/// committed cursor makes wake coalescing harmless. No provider is opened.
+/// An omitted execution selects currently running work; queued work requires an
+/// explicit execution ID so a default stop cannot withdraw a future turn.
+fn active_execution(view: &ConversationView) -> Option<String> {
+    view.messages
+        .iter()
+        .rev()
+        .find(|message| {
+            matches!(
+                message.status,
+                ConversationMessageStatus::Running | ConversationMessageStatus::Injected
+            )
+        })
+        .map(|message| message.execution_id.clone())
+}
+
+#[derive(Clone, Copy)]
+enum SubscriptionEnd {
+    Cancelled,
+    Deadline,
+}
+
+/// Every awaited observation phase shares source cancellation and a deadline.
+/// The preparation budget begins before source admission, not after reader open.
+struct SubscriptionControl {
+    stop: watch::Receiver<bool>,
+    prepare_by: Instant,
+    wait_by: Option<Instant>,
+    wait_ms: u64,
+    idle: Option<CommittedEventCursor>,
+}
+impl SubscriptionControl {
+    fn new(stop: watch::Receiver<bool>, wait_ms: u64) -> Self {
+        Self {
+            stop,
+            prepare_by: Instant::now() + Duration::from_secs(10),
+            wait_by: None,
+            wait_ms,
+            idle: None,
+        }
+    }
+    async fn step<T>(&mut self, work: impl Future<Output = T>) -> Result<T, SubscriptionEnd> {
+        if *self.stop.borrow() {
+            return Err(SubscriptionEnd::Cancelled);
+        }
+        let by = self.wait_by.unwrap_or(self.prepare_by);
+        tokio::select! {
+            biased;
+            _ = self.stop.changed() => Err(SubscriptionEnd::Cancelled),
+            _ = sleep_until(by) => Err(SubscriptionEnd::Deadline),
+            result = work => Ok(result),
+        }
+    }
+    fn idle(&mut self, cursor: CommittedEventCursor) {
+        self.idle = Some(cursor);
+        let wait_ms = self.wait_ms;
+        self.wait_by
+            .get_or_insert_with(|| Instant::now() + Duration::from_millis(wait_ms));
+    }
+    fn finish(&self, target: &ConversationId, ended: SubscriptionEnd) -> Result<Value, String> {
+        match ended {
+            SubscriptionEnd::Cancelled => Err("cancelled".into()),
+            SubscriptionEnd::Deadline => match &self.idle {
+                Some(cursor) => Ok(
+                    json!({"threadId":target.to_string(),"events":[],"cursor":cursor.encode(),"more":false,"timedOut":self.wait_ms>0}),
+                ),
+                None => Err("event_source_preparing".into()),
+            },
+        }
+    }
+}
+
+/// One retained reader per call. Cancellation drops its local future; physical
+/// SDK read ownership and admitted source audit delivery retain their own owners.
 async fn follow(
     service: &ConversationService,
     target: ConversationId,
     caller: ConversationCaller,
     args: Follow,
-    mut stop: watch::Receiver<bool>,
+    mut control: SubscriptionControl,
 ) -> Result<Value, String> {
-    let wait_ms = args.wait_ms.unwrap_or(0);
     let limit = args.limit.unwrap_or(DEFAULT_LIMIT);
     let session = SessionId::new(&target.to_string()).map_err(|_| "invalid_request")?;
     let start = match args.after {
@@ -440,33 +500,27 @@ async fn follow(
     };
     let limits =
         EventReadLimits::new(limit.min(16), 256 * 1024 * 1024).map_err(|_| "invalid_request")?;
-    let mut reader = service
-        .open_events(target.clone(), caller.clone(), start)
-        .await
-        .map_err(|error| event_error_code(&error).to_owned())?;
-    let started = Instant::now();
-    let deadline = started + Duration::from_millis(wait_ms);
-    let prepare_deadline = started + Duration::from_secs(10);
+    let opening = service.open_events(target.clone(), caller.clone(), start);
+    let mut reader = match control.step(opening).await {
+        Ok(result) => result.map_err(|error| event_error_code(&error).to_owned())?,
+        Err(ended) => return control.finish(&target, ended),
+    };
     loop {
-        if *stop.borrow() {
-            return Err("cancelled".into());
-        }
-        service
-            .authorize_events(&target, &caller)
+        match control
+            .step(service.authorize_events(&target, &caller))
             .await
-            .map_err(code)?;
-        let read = tokio::select! {
-            biased;
-            _ = stop.changed() => return Err("cancelled".into()),
-            result = reader.read(limits) => result.map_err(|error| event_error_code(&ConversationEventError::Events(error)).to_owned())?,
+        {
+            Ok(result) => result.map_err(code)?,
+            Err(ended) => return control.finish(&target, ended),
+        }
+        let read = match control.step(reader.read(limits)).await {
+            Ok(result) => result.map_err(|error| {
+                event_error_code(&ConversationEventError::Events(error)).to_owned()
+            })?,
+            Err(ended) => return control.finish(&target, ended),
         };
         match read {
-            EventRead::Preparing => {
-                if Instant::now() >= prepare_deadline {
-                    return Err("event_source_preparing".into());
-                }
-                tokio::task::yield_now().await;
-            }
+            EventRead::Preparing => tokio::task::yield_now().await,
             EventRead::Page(page) => {
                 validate_event_cursor(&target, page.next())
                     .map_err(|error| event_error_code(&error).to_owned())?;
@@ -481,17 +535,12 @@ async fn follow(
             EventRead::Idle(cursor) => {
                 validate_event_cursor(&target, &cursor)
                     .map_err(|error| event_error_code(&error).to_owned())?;
-                if Instant::now() >= deadline {
-                    return Ok(
-                        json!({"threadId":target.to_string(),"events":[],"cursor":cursor.encode(),"more":false,"timedOut":wait_ms>0}),
-                    );
+                control.idle(cursor);
+                if Instant::now() >= control.wait_by.expect("idle sets its deadline") {
+                    return control.finish(&target, SubscriptionEnd::Deadline);
                 }
-                let remaining = deadline
-                    .saturating_duration_since(Instant::now())
-                    .min(Duration::from_millis(250));
-                tokio::select! {
-                    _ = stop.changed() => return Err("cancelled".into()),
-                    _ = sleep(remaining) => {}
+                if let Err(ended) = control.step(sleep(Duration::from_millis(250))).await {
+                    return control.finish(&target, ended);
                 }
             }
         }
@@ -573,3 +622,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/composition/conversation_tools_subscription.rs"]
+mod subscription_tests;
