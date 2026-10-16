@@ -176,3 +176,6 @@ mod store_tests;
 
 #[cfg(test)]
 pub(crate) use record_read::TestReadGate;
+
+mod agent_tool_audit;
+pub use agent_tool_audit::DurableAgentToolAudit;

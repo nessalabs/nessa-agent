@@ -1,3 +1,4 @@
+mod agent_tools;
 mod creation;
 mod deletion;
 pub use deletion::DeletionsLeft;
@@ -14,15 +15,15 @@ use super::{
     placement::Environments,
     provider_sessions::ProviderSessionErasers,
     retries::DeletionRetries,
-    ArtifactBudget, ArtifactCollector, ArtifactOffer, AttachmentRelease, AttachmentReleaseCause,
-    ConversationAccessPolicyEvaluator, ConversationAttachments, ConversationCreationAudit,
-    ConversationDeletionAudit, ConversationError, ConversationFileLinkAudit,
-    ConversationFileLinkAuditRecord, ConversationFileLinkCause, ConversationFileLinkState,
-    ConversationListing, ConversationModeApplication, ConversationModeAudit,
-    ConversationModeAuditPhase, ConversationModeRequest, ConversationModeRequestState,
-    ConversationRepository, ConversationSummaries, FenceCapture, FetchRequests, ListedConversation,
-    ObservationCursor, ObservedConversations, OwnerAccess, PublishRequests, RevisionHold,
-    RuntimeReadiness, ShareGrants, StopFailure, SubmittedMessage,
+    AgentToolAudit, ArtifactBudget, ArtifactCollector, ArtifactOffer, AttachmentRelease,
+    AttachmentReleaseCause, ConversationAccessPolicyEvaluator, ConversationAttachments,
+    ConversationCreationAudit, ConversationDeletionAudit, ConversationError,
+    ConversationFileLinkAudit, ConversationFileLinkAuditRecord, ConversationFileLinkCause,
+    ConversationFileLinkState, ConversationListing, ConversationModeApplication,
+    ConversationModeAudit, ConversationModeAuditPhase, ConversationModeRequest,
+    ConversationModeRequestState, ConversationRepository, ConversationSummaries, FenceCapture,
+    FetchRequests, ListedConversation, ObservationCursor, ObservedConversations, OwnerAccess,
+    PublishRequests, RevisionHold, RuntimeReadiness, ShareGrants, StopFailure, SubmittedMessage,
 };
 use crate::conversation::domain::{Conversation, ToolSource};
 use futures_util::{future::join_all, FutureExt};
@@ -709,6 +710,10 @@ struct Inner {
     /// Where agents run; every opening is leased from it.
     environment: Environments,
     clock: Arc<dyn Clock>,
+    /// Acknowledges a source turn's delegation decision before target work.
+    agent_tool_audit: OnceLock<Arc<dyn AgentToolAudit>>,
+    /// Physical source admission owners retain their slot after response loss.
+    agent_tool_admissions: Arc<Semaphore>,
     /// Decides every command's admission to a conversation.
     access_policy: Arc<dyn ConversationAccessPolicyEvaluator>,
     limits: ConversationLimits,
@@ -1097,6 +1102,8 @@ impl ConversationService {
                 deletion_budgets,
                 environment,
                 clock,
+                agent_tool_audit: OnceLock::new(),
+                agent_tool_admissions: Arc::new(Semaphore::new(super::MAX_AGENT_TOOL_ADMISSIONS)),
                 access_policy,
                 limits,
                 conversations: Mutex::new(HashMap::new()),

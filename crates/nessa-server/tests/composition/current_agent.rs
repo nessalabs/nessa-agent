@@ -1104,6 +1104,90 @@ fn service(root: &Path, resolver: Arc<CurrentAgentResolver>) -> ConversationServ
     .unwrap()
 }
 
+/// The late-attached tools and resolver must not retain their composition graph.
+#[tokio::test]
+async fn composed_builtin_tools_release_the_service_and_resolver_after_shutdown() {
+    use crate::composition::{
+        conversation_tools::ConversationTools, environment_tools::EnvironmentTools, mcp_servers,
+    };
+    use crate::conversation::domain::CommandPolicy;
+    use crate::mcp_servers::application::BuiltInServer;
+
+    let root = tempfile::tempdir().unwrap();
+    let mut config = config(root.path(), AgentId::Opencode);
+    let environment_tools =
+        EnvironmentTools::new(&CommandPolicy::new(["devbox".to_owned()], None, Vec::new()));
+    let conversation_tools = ConversationTools::new();
+    let weak_environment_tools = Arc::downgrade(&environment_tools);
+    let weak_conversation_tools = Arc::downgrade(&conversation_tools);
+    let built_in: Vec<Arc<dyn BuiltInServer>> =
+        vec![environment_tools.clone(), conversation_tools.clone()];
+    let composed = mcp_servers::compose(
+        &mut config,
+        &root.path().join("mcp/relay.sock"),
+        Path::new("/nessa"),
+        Default::default(),
+        false,
+        built_in,
+    )
+    .await
+    .unwrap()
+    .expect("the actual relay is bound");
+    let resolver = Arc::new(resolver_from(
+        root.path(),
+        ResolverTestInput {
+            config,
+            packaged: true,
+            host: host_platform(),
+            captured_environment: None,
+            store: Arc::new(Store::new(StoreAnswer::Missing)),
+            credentials: Arc::new(Credentials::new(CredentialAnswer::Missing)),
+            fixed: HashMap::from([(AgentId::Opencode, fixed_agent())]),
+        },
+    ));
+    let weak_resolver = Arc::downgrade(&resolver);
+    let service = service(root.path(), resolver.clone());
+    environment_tools.attach(service.clone());
+    conversation_tools.attach(service.clone());
+    // Exercise the resolver's actual stand-in source after late attachment;
+    // the providers need both built-ins for the lifetime of the live relay.
+    assert_eq!(
+        resolver
+            .config
+            .mcp_stand_ins
+            .opened()
+            .current()
+            .iter()
+            .map(|server| server.name.as_str())
+            .collect::<Vec<_>>(),
+        ["nessa-environments", "nessa-agents"]
+    );
+    service.shutdown().await.unwrap();
+    drop(environment_tools);
+    drop(conversation_tools);
+    drop(service);
+    drop(resolver);
+    assert!(
+        weak_resolver.upgrade().is_some(),
+        "the live relay still owns its late-attached tool service"
+    );
+    assert!(weak_environment_tools.upgrade().is_some());
+    assert!(weak_conversation_tools.upgrade().is_some());
+    drop(composed);
+    assert!(
+        weak_resolver.upgrade().is_none(),
+        "the current-agent resolver remains owned after gateway shutdown"
+    );
+    assert!(
+        weak_environment_tools.upgrade().is_none(),
+        "environment tools remain owned after gateway shutdown"
+    );
+    assert!(
+        weak_conversation_tools.upgrade().is_none(),
+        "conversation tools remain owned after gateway shutdown"
+    );
+}
+
 #[tokio::test]
 async fn install_refresh_launches_the_managed_fixture_and_live_generation_stays_owned() {
     let root = tempfile::tempdir().unwrap();

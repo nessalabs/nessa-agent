@@ -45,6 +45,12 @@ use std::collections::HashMap;
 /// Who is asking.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AccessSubject<'a> {
+    /// A source turn asking to act as its owner through gateway tools.
+    AgentTurn {
+        organization: &'a OrganizationId,
+        principal: &'a PrincipalId,
+        owner_initiated: bool,
+    },
     /// A person on one of their own surfaces, by the organization and
     /// principal their session is in.
     Person {
@@ -79,6 +85,8 @@ pub enum AccessSubject<'a> {
 /// ([`Self::name`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum AccessAction {
+    /// Delegate the source owner's authority to its running agent turn.
+    AgentTools,
     /// Find the conversation, deleted or not: whether it is the subject's
     /// to be told about at all.
     Locate,
@@ -119,7 +127,8 @@ pub enum AccessAction {
 
 impl AccessAction {
     /// Every action, in declaration order.
-    pub const ALL: [Self; 16] = [
+    pub const ALL: [Self; 17] = [
+        Self::AgentTools,
         Self::Locate,
         Self::Act,
         Self::Erase,
@@ -141,6 +150,7 @@ impl AccessAction {
     /// The action's name, as the policy spells it.
     pub fn name(self) -> &'static str {
         match self {
+            Self::AgentTools => "conversation.agent_tools",
             Self::Locate => "conversation.locate",
             Self::Act => "conversation.act",
             Self::Erase => "conversation.erase",

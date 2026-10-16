@@ -142,7 +142,7 @@ impl ConversationService {
     /// Its failures are [`FenceFailure`], so none of them can be answered as one
     /// of the two codes that promise a deletion, whatever a substituted
     /// repository returns (`a_repository_s_error_before_the_fence_is_never_answered_as_a_deletion`).
-    async fn fence(
+    pub(super) async fn fence(
         &self,
         id: &ConversationId,
         caller: &ConversationCaller,
@@ -931,7 +931,7 @@ enum AskFailure {
 /// ([`waiting_for`];
 /// `a_repository_error_past_the_fence_is_never_a_reason_to_wait`).
 #[derive(Debug)]
-enum RepositoryFailure {
+pub(super) enum RepositoryFailure {
     /// No record to delete.
     NotFound,
     /// A record from before records named their agent.
@@ -977,7 +977,7 @@ impl From<RepositoryFailure> for ConversationError {
 /// `audit_unavailable`, the two answers that promise a deletion: of a
 /// repository's error, only what [`RepositoryFailure`] keeps.
 #[derive(Debug)]
-enum FenceFailure {
+pub(super) enum FenceFailure {
     /// The request's own attribution or deletion could not be made.
     InvalidInput,
     /// No conversation of the caller's by that identity.
@@ -1001,7 +1001,7 @@ impl From<FenceFailure> for ConversationError {
 }
 
 /// How a delete stood once it was past [`ConversationService::fence`].
-enum Fence {
+pub(super) enum Fence {
     /// This delete wrote its tombstone, or carried the one there: the
     /// conversation as it now stands, whether this request is the deciding
     /// one, and the delete lock it holds to finish it.

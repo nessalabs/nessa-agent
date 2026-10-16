@@ -1087,6 +1087,16 @@ and session deadlines. Use the
 [local SDK/CLI guide](guides/local-auth.md) for gateway access and the
 [adversarial review](reviews/local-auth-gateway.md) for validation and limits.
 
+## Agent thread tools
+
+The gateway's `nessa-agents` built-in offers source-bound `create_thread`,
+`send_message`, `subscribe` and `stop_thread` tools through the existing MCP
+relay. Conversation application admission derives the actor from the live source
+turn, Cedar decides owner delegation, and target commands retain their existing
+durable receipts and permission handling. Observation polls an independent
+committed reader and never opens an Agent. The ownership and ordering table is
+[agent thread tools](design/agent-thread-tools.md).
+
 ## Nessa-owned tools over MCP
 
 `crates/nessa-mcp` is the stdio MCP server for all Nessa-provided tools. Claude's
