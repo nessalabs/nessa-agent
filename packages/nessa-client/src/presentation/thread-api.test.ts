@@ -2,82 +2,7 @@ import { describe, expect, it, vi } from "vitest"
 import { createConversationApi } from "./conversation-api.js"
 import { createThreadCommands } from "./thread-api.js"
 import { NessaConversationMutationError } from "../application/conversation-mutation-error.js"
-import type { ConversationView } from "../generated/product.js"
-
 const id = "00000000-0000-4000-8000-000000000001"
-
-function snapshot(running?: string): ConversationView {
-  return {
-    conversationId: id,
-    artifacts: [],
-    notes: [],
-    unreadable: [],
-    unreadableTruncated: false,
-    approvalMode: "ask",
-    approvalModes: [{ id: "ask", name: "Ask", description: "Ask" }],
-    title: null,
-    revision: "one",
-    serverNowMs: 1,
-    messages: [
-      ...(running
-        ? [
-            {
-              executionId: running,
-              userText: "hello",
-              attachments: [],
-              files: [],
-              status: "running" as const,
-              parts: [],
-            },
-          ]
-        : []),
-      {
-        executionId: "queued",
-        userText: "later",
-        attachments: [],
-        files: [],
-        status: "queued",
-        parts: [],
-      },
-    ],
-    pending: [
-      {
-        executionId: "queued",
-        text: "later",
-        attachments: [],
-        files: [],
-        mode: "queued",
-      },
-    ],
-    permissions: [],
-    questions: [],
-    tools: [],
-    capabilities: {
-      queue: true,
-      steer: true,
-      resume: true,
-      permissions: true,
-      imageInput: false,
-      agentFeatures: {
-        permissionDenial: "unknown",
-        nativeHookSuppression: "unknown",
-        nativeHooks: "off",
-        compactionReporting: "unsupported_not_implemented",
-        modelSwitchReporting: "unsupported_not_implemented",
-        permissionDeferral: "unsupported_not_implemented",
-        elicitationForwarding: "unknown",
-        preToolPolicy: "unsupported_not_implemented",
-        policyEndTurn: "unsupported",
-        policyCloseSession: "unsupported",
-        incomingElicitation: "unsupported",
-      },
-    },
-    lifecycle: { phase: "absent" },
-    truncated: false,
-    queueComplete: true,
-    transcriptState: "complete",
-  }
-}
 
 function commands(reply: (method: string, params: Record<string, unknown>) => unknown) {
   const request = vi.fn(async (method: string, params: unknown) =>
@@ -184,11 +109,11 @@ describe("thread commands", () => {
   })
 
   it("captures A through passive peek once and does not substitute B after A finishes", async () => {
-    const state = snapshot("A")
+    const state = { conversationId: id, executionId: "A" }
     const { api, request } = commands((method, params) => {
       if (method === "conversation.peek") return state
       // A new turn can already run when the stop reaches the gateway.
-      state.messages[0].executionId = "B"
+      state.executionId = "B"
       expect(params.executionId).toBe("A")
       return { requestId: params.requestId, stage: "settled", outcome: "already_final" }
     })
@@ -200,19 +125,28 @@ describe("thread commands", () => {
   })
 
   it("returns no_active_turn from an idle peek without stopping queued work", async () => {
-    const { api, request } = commands(() => snapshot())
+    const { api, request } = commands(() => ({ conversationId: id, executionId: null }))
     expect(await api.stopThread(id)).toEqual({ outcome: "no_active_turn" })
     expect(request.mock.calls.map(([method]) => method)).toEqual(["conversation.peek"])
   })
 
   it("rejects an inconsistent peek identity before any stop", async () => {
     const { api, request } = commands(() => ({
-      ...snapshot("A"),
+      executionId: "A",
       conversationId: "00000000-0000-4000-8000-000000000002",
     }))
     await expect(api.stopThread(id)).rejects.toThrow()
     expect(request).toHaveBeenCalledTimes(1)
   })
+
+  it.each([undefined, "", " ", 5, "x".repeat(257)])(
+    "rejects an invalid active identity %s before stopping",
+    async (executionId) => {
+      const { api, request } = commands(() => ({ conversationId: id, executionId }))
+      await expect(api.stopThread(id)).rejects.toThrow()
+      expect(request).toHaveBeenCalledTimes(1)
+    },
+  )
 
   it("rejects an unknown mode before sending anything", () => {
     const { api, request } = commands(() => undefined)

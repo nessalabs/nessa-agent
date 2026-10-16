@@ -421,6 +421,11 @@ results and thinking are not included. Existing owner policy applies to every ba
 | E10 | Source absent or closed | Following opens no Agent; source closure ends the subscription |
 | E11 | Handler issues another command | It uses ordinary admission/scheduling; handlers cannot mutate a transition |
 | E12 | Provider Finished precedes local settlement | No turn.ended until a local settlement is committed |
+| E13 | Paired read credential follows events | Same follow admission and target read grant as views; unshared targets stay hidden |
+| E14 | Reader capacity is exhausted, then released or access revoked | Bounded shared backoff; release request capacity and freshly authorize each retry; cancellation drops the wait |
+| E15 | Adapter returns a page or Idle after a start/prior checkpoint | Same session/incarnation, exclusive page progress, nondecreasing Idle; first valid output establishes continuity for Beginning/Now; contradictions refuse before delivery |
+| E16 | Client receives differing event identity and cursor | Reject the batch before invoking its handler |
+| E17 | First-party owner phone uses events or authoritative peek | Canonical purpose policy explicitly permits these read operations; ordinary current target admission still applies, while administrative methods remain denied |
 
 The socket owns subscription tasks; a reconnect recreates a subscription from the
 consumer's cursor. The SDK owns the semantic reader and its bounded storage work.

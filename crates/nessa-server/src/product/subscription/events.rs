@@ -3,7 +3,7 @@
 
 use super::{
     delivery::{Deadline, Outgoing, SubscriptionDeliveries},
-    target::{authorize_batch, Run, Sources, Target, Wake, DELIVERY_TIMEOUT},
+    target::{authorize_batch, backoff, Run, Sources, Target, Wake, DELIVERY_TIMEOUT},
 };
 use crate::conversation::application::{
     conversation_session, event_error_code, project_events, validate_event_cursor,
@@ -16,9 +16,11 @@ use nessa_auth::application::session::AuthenticatedSession;
 use nessa_protocol::product::generated::{
     product_event, ConversationSubscribeResult, MAX_PAYLOAD_BYTES,
 };
+use nessa_protocol::product_contract::generated::ConversationErrorCode;
 use nessa_protocol::protocol::{EventFrame, OutgoingMessage};
 use nessa_sdk::application::agent_execution::sessions::{
-    CommittedEventCursor, CommittedEventReader, EventRead, EventReadLimits, EventStart,
+    CommittedEventCursor, CommittedEventReader, EventRead, EventReadError, EventReadLimits,
+    EventStart,
 };
 use serde_json::{json, Value};
 use std::sync::Arc;
@@ -79,6 +81,7 @@ pub(super) async fn run(run: Run) {
         None if *replay => EventStart::Beginning,
         None => EventStart::Now,
     };
+    let mut progress = EventProgress::new(&start);
     let owner = caller(&session, request.clone());
     let mut reader = match timeout_at(
         read_by,
@@ -122,6 +125,14 @@ pub(super) async fn run(run: Run) {
                 return;
             }
         };
+        if let Err(error) = progress.accept(&result) {
+            let code = event_error_code(&ConversationEventError::Events(error));
+            if !replied {
+                refuse!(code);
+            }
+            end(&deliveries, &id, "refused", Some(code), last.as_deref());
+            return;
+        }
         let (mut events, cursor, idle) = match result {
             EventRead::Preparing => {
                 tokio::task::yield_now().await;
@@ -232,25 +243,92 @@ pub(in crate::product) async fn read_event(
     let Target::Events { conversation, .. } = target else {
         return Err("invalid_request".into());
     };
-    let _permit = state
-        .requests
-        .clone()
-        .acquire_owned()
-        .await
-        .map_err(|_| "unavailable".to_owned())?;
-    let current = authorize_batch(state, session, target)
-        .await
-        .map_err(str::to_owned)?;
-    service
-        .authorize_events(conversation, &caller(&current, request.to_owned()))
-        .await
-        .map_err(|error| {
-            event_error_code(&ConversationEventError::Conversation(error)).to_owned()
-        })?;
-    reader
-        .read(limits)
-        .await
-        .map_err(|error| event_error_code(&ConversationEventError::Events(error)).to_owned())
+    let mut attempt = 0;
+    loop {
+        let permit = state
+            .requests
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|_| "unavailable".to_owned())?;
+        let current = match authorize_batch(state, session, target).await {
+            Ok(current) => current,
+            Err(code) => match backoff(
+                code == ConversationErrorCode::TemporarilyUnavailable.as_str(),
+                attempt,
+            ) {
+                Some(wait) => {
+                    drop(permit);
+                    attempt += 1;
+                    tokio::time::sleep(wait).await;
+                    continue;
+                }
+                None => return Err(code.to_owned()),
+            },
+        };
+        service
+            .authorize_events(conversation, &caller(&current, request.to_owned()))
+            .await
+            .map_err(|error| {
+                event_error_code(&ConversationEventError::Conversation(error)).to_owned()
+            })?;
+        let result = reader.read(limits).await;
+        drop(permit);
+        match result {
+            Err(error) => match backoff(matches!(error, EventReadError::Capacity), attempt) {
+                Some(wait) => {
+                    attempt += 1;
+                    tokio::time::sleep(wait).await;
+                }
+                None => {
+                    return Err(event_error_code(&ConversationEventError::Events(error)).to_owned())
+                }
+            },
+            Ok(read) => return Ok(read),
+        }
+    }
+}
+
+/// Correlates otherwise valid adapter outputs with the requested start and
+/// previously observed checkpoint (E15). An outer boundary follows its changes.
+struct EventProgress {
+    previous: Option<CommittedEventCursor>,
+}
+impl EventProgress {
+    fn new(start: &EventStart) -> Self {
+        Self {
+            previous: match start {
+                EventStart::After(cursor) => Some(cursor.clone()),
+                _ => None,
+            },
+        }
+    }
+
+    fn accept(&mut self, read: &EventRead) -> Result<(), EventReadError> {
+        let (first, next, page) = match read {
+            EventRead::Preparing => return Ok(()),
+            EventRead::Page(page) => (page.events()[0].cursor(), page.next(), true),
+            EventRead::Idle(cursor) => (cursor, cursor, false),
+        };
+        if let Some(previous) = &self.previous {
+            let location = |cursor: &CommittedEventCursor| {
+                (
+                    cursor.position(),
+                    cursor.change_index().is_none(),
+                    cursor.change_index().unwrap_or(0),
+                )
+            };
+            if first.session() != previous.session()
+                || first.incarnation() != previous.incarnation()
+                || location(first) < location(previous)
+                || (page && location(first) == location(previous))
+            {
+                return Err(EventReadError::InvalidCursor);
+            }
+        }
+        self.previous = Some(next.clone());
+        Ok(())
+    }
 }
 
 async fn offer_event(

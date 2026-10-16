@@ -105,7 +105,7 @@ fn root() -> PrivateFixture {
 }
 fn compose(
     root: &Path,
-    state: Arc<dyn ClientPendingStore>,
+    state: Arc<dyn NativePrivateState>,
     connector: Arc<NoNetwork>,
 ) -> NativeSession {
     NativeSession::compose(Dependencies {
@@ -117,6 +117,7 @@ fn compose(
         wall: Arc::new(Wall),
         clock: Arc::new(Monotonic::new()),
         runtime: Builder::new_current_thread().enable_all().build().unwrap(),
+        product: ProductDependencies::default(),
     })
     .unwrap()
 }
@@ -364,4 +365,76 @@ fn local_enrollment_held_read_reserves_admission_and_private_scope_until_close()
         Err(SessionFailure::Closed)
     ));
     drop(FilePairingState::open(root.path(), Path::new("private")).unwrap());
+}
+
+impl OwnerPhoneOriginalStore for Store {
+    fn reserve_original(
+        &self,
+        _: OwnerPhoneReservation,
+    ) -> Result<
+        Box<dyn nessa_auth::application::pairing::OwnerPhoneOriginalCreation + '_>,
+        PrivateStateError,
+    > {
+        panic!("unexpected original reservation")
+    }
+    fn load_original(
+        &self,
+    ) -> Result<
+        Option<nessa_auth::application::pairing::OwnerPhonePrivateOriginal>,
+        PrivateStateError,
+    > {
+        Ok(None)
+    }
+}
+
+impl OwnerPhoneOriginalStore for HeldStore {
+    fn reserve_original(
+        &self,
+        reservation: OwnerPhoneReservation,
+    ) -> Result<
+        Box<dyn nessa_auth::application::pairing::OwnerPhoneOriginalCreation + '_>,
+        PrivateStateError,
+    > {
+        self.owned.reserve_original(reservation)
+    }
+    fn load_original(
+        &self,
+    ) -> Result<
+        Option<nessa_auth::application::pairing::OwnerPhonePrivateOriginal>,
+        PrivateStateError,
+    > {
+        self.owned.load_original()
+    }
+}
+
+impl nessa_auth::application::pairing::OwnerPhoneEnrollmentStore for Store {
+    fn adopt_owner_phone(
+        &self,
+        original: &nessa_auth::domain::pairing::OwnerPhoneRequest,
+        digest: &[u8; 32],
+        consent: &DisclosedConsent,
+        issued: Option<(&CredentialId, &ResourceId)>,
+    ) -> Result<
+        nessa_auth::application::pairing::OwnerPhoneAdoption,
+        nessa_auth::application::pairing::OwnerPhoneAdoptionFailure,
+    > {
+        let _ = (original, digest, consent, issued);
+        panic!("read-only fixture unexpectedly adopted owner-phone enrollment")
+    }
+}
+
+impl nessa_auth::application::pairing::OwnerPhoneEnrollmentStore for HeldStore {
+    fn adopt_owner_phone(
+        &self,
+        original: &nessa_auth::domain::pairing::OwnerPhoneRequest,
+        digest: &[u8; 32],
+        consent: &DisclosedConsent,
+        issued: Option<(&CredentialId, &ResourceId)>,
+    ) -> Result<
+        nessa_auth::application::pairing::OwnerPhoneAdoption,
+        nessa_auth::application::pairing::OwnerPhoneAdoptionFailure,
+    > {
+        self.owned
+            .adopt_owner_phone(original, digest, consent, issued)
+    }
 }

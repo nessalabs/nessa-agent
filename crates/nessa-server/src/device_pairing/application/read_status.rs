@@ -2,10 +2,13 @@
 use super::receivers::{PairingReceivers, ReceiverError, ReceiverRequest};
 use nessa_auth::{
     application::{
-        pairing::{DeviceConnectionProof, PairingStore, PairingStoreError},
+        pairing::{DeviceConnectionProof, OwnerPhoneStore, PairingStore, PairingStoreError},
         ports::Clock,
     },
-    domain::pairing::{AttemptId, AttemptOutcome, InvitationId, PairingPhase},
+    domain::pairing::{
+        AttemptId, AttemptOutcome, InvitationId, OwnerPhoneRequestId, PairingPhase, PairingRecord,
+        PublicIntent,
+    },
 };
 use nessa_protocol::pairing::DevicePairingStatus;
 
@@ -65,21 +68,63 @@ impl ReadDevicePairing<'_> {
                 terminal: record.terminal().map(|(cause, _)| cause),
             });
         }
-        if record.phase() != PairingPhase::Active {
-            return Ok(DevicePairingStatus::Claimed(Box::new(record)));
-        }
-        // Auth publishes Active only with a stage and its receiver.
-        let conflict = DeviceStatusError::Receiver(ReceiverError::Conflict);
-        let request = ReceiverRequest::for_stage(&record).ok_or(conflict)?;
-        let (receiver, paired_epoch) = record.receiver_binding().ok_or(conflict)?;
-        let access_epoch = self
-            .receivers
-            .holding(&request, receiver, paired_epoch)
-            .map_err(DeviceStatusError::Receiver)?
-            .ok_or(DeviceStatusError::Receiver(ReceiverError::NotPaired))?;
-        Ok(DevicePairingStatus::Active {
-            access_epoch,
-            record: Box::new(record),
-        })
+        claimed_status(record, self.receivers)
     }
+}
+
+/// Original owner-phone recovery is a read under actual TLS possession, not an
+/// enrollment attempt or a new owner's admission. It never expires or settles.
+pub struct ReadOwnerPhoneRecovery<'a> {
+    pub originals: &'a dyn OwnerPhoneStore,
+    pub receivers: &'a dyn PairingReceivers,
+}
+impl ReadOwnerPhoneRecovery<'_> {
+    pub fn execute(
+        &self,
+        request: OwnerPhoneRequestId,
+        digest: &[u8; 32],
+        device: &DeviceConnectionProof,
+    ) -> Result<(PublicIntent, DevicePairingStatus), DeviceStatusError> {
+        let original = self
+            .originals
+            .recover_owner_phone_original(request, digest, device)
+            .map_err(DeviceStatusError::Enrollment)?;
+        let record = original.record().clone();
+        // Canonical original restoration owns the exact signed key and claim.
+        // A contradictory record is refused rather than given legacy status.
+        let expected = (request, device.key(), *digest);
+        if record.owner_phone_approval() != Some(expected) {
+            return Err(DeviceStatusError::Receiver(ReceiverError::Conflict));
+        }
+        // Signed owner approval has canonical public claim lineage, but no PAKE attempt.
+        let attempt = AttemptId::new(*request.bytes());
+        if record.claim_binding() != Some((attempt, device.key())) {
+            return Err(DeviceStatusError::Receiver(ReceiverError::Conflict));
+        }
+        let public = PublicIntent::from_record(&record, attempt)
+            .map_err(|error| DeviceStatusError::Enrollment(PairingStoreError::Domain(error)))?;
+        claimed_status(record, self.receivers).map(|status| (public, status))
+    }
+}
+
+/// Both recovery protocols use one factual claimed-record/current-holding projection.
+pub(crate) fn claimed_status(
+    record: PairingRecord,
+    receivers: &dyn PairingReceivers,
+) -> Result<DevicePairingStatus, DeviceStatusError> {
+    if record.phase() != PairingPhase::Active {
+        return Ok(DevicePairingStatus::Claimed(Box::new(record)));
+    }
+    // Auth publishes Active only with a stage and its receiver.
+    let conflict = DeviceStatusError::Receiver(ReceiverError::Conflict);
+    let request = ReceiverRequest::for_stage(&record).ok_or(conflict)?;
+    let (receiver, paired_epoch) = record.receiver_binding().ok_or(conflict)?;
+    let access_epoch = receivers
+        .holding(&request, receiver, paired_epoch)
+        .map_err(DeviceStatusError::Receiver)?
+        .ok_or(DeviceStatusError::Receiver(ReceiverError::NotPaired))?;
+    Ok(DevicePairingStatus::Active {
+        access_epoch,
+        record: Box::new(record),
+    })
 }

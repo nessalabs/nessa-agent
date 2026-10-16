@@ -1021,6 +1021,11 @@ pub(crate) enum ExportHoldFailure {
 }
 
 impl ConversationService {
+    /// Canonical approval selection when creation supplies no override.
+    pub fn default_creation_approval_mode() -> ConversationApprovalMode {
+        ConversationApprovalMode::Ask
+    }
+
     /// Own every configured agent, and the one a caller gets by default. No
     /// MCP call shows a UI: see [`Self::with_tool_uis`].
     pub fn new(
@@ -1238,7 +1243,7 @@ impl ConversationService {
         let agent = service.inner.agents.select(agent_request)?;
         let approval_mode = requested
             .approval_mode
-            .unwrap_or(ConversationApprovalMode::Ask);
+            .unwrap_or_else(Self::default_creation_approval_mode);
         let configured = match requested.model.as_deref() {
             Some(model) => {
                 service
@@ -2273,6 +2278,22 @@ impl ConversationService {
         self.read_at(id, caller, ReadOpening::Open)
             .await
             .map(|(view, _)| view)
+    }
+
+    /// Capture the current locally owned execution after target admission.
+    /// Opens no provider and does not infer activity from a bounded display view.
+    pub async fn active_execution(
+        &self,
+        id: ConversationId,
+        caller: ConversationCaller,
+    ) -> Result<Option<String>, ConversationError> {
+        let _admission = self.admit().await?;
+        let live = self.live_now(&id, &caller).await?;
+        // Waiting for an already opening slot must not retain old target authority.
+        self.check_view_access(&id, &caller).await?;
+        Ok(live
+            .and_then(|live| live.agent.active_execution_id())
+            .map(|execution| execution.as_str().to_owned()))
     }
 
     /// Follow `id`'s live facts: subscribe before [`Self::read_at`], and a

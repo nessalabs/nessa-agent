@@ -4,7 +4,7 @@ import { issueExecutionTarget } from "../application/execution-target.js"
 import type { RpcRequester } from "../application/session-port.js"
 import {
   conversationIdPattern,
-  conversationView,
+  conversationPeek,
 } from "../protocol/conversation-validate.js"
 import type {
   ConversationApi,
@@ -82,14 +82,14 @@ export function createThreadCommands(
         throw new TypeError("Invalid execution ID")
       const id =
         executionId === undefined
-          ? conversationView(
+          ? (conversationPeek(
               await session.request(
                 ProductMethod.ConversationPeek,
                 { conversationId: threadId },
                 { atLeastMs: passiveReadTiming.minRequestTimeoutMs },
               ),
               threadId,
-            ).messages.find((message) => message.status === "running")?.executionId
+            ).executionId ?? undefined)
           : executionId
       if (id === undefined) return { outcome: "no_active_turn" }
       return conversation.stop(issueExecutionTarget(threadId, id), { requestId })

@@ -87,8 +87,8 @@ reached the socket, not what your application processed. A `for await` break,
 `close()`, or abort signal releases the subscription. Save checkpoints outside
 this client if they must survive process exit.
 
-`stopThread(threadId)` passively reads once and targets the running execution in
-that snapshot. If none runs it returns `{ outcome: "no_active_turn" }` and targets
+`stopThread(threadId)` captures the live SDK lifecycle's active execution through
+`conversation.peek`, without opening a provider or scanning a bounded display view. If none runs it returns `{ outcome: "no_active_turn" }` and targets
 no queued work. Pass `executionId` to stop one known queued or running execution
 directly. A newer turn never replaces that captured target; the agent attachment
 stays open. The existing control error reports uncertain acknowledgements: inspect
@@ -103,7 +103,7 @@ The linked tests force each ordering using controlled callbacks or requests.
 | --- | --- | --- |
 | Send reply lost; caller retries | Original text, mode, request and execution IDs are reused; no automatic replay | [thread-api.test.ts](src/presentation/thread-api.test.ts), “keeps immutable original inputs and IDs in existing explicit retry” and “reuses the caller request ID” |
 | Passive saved or steering queued | Passive receipt says recorded; a queued steering receipt stays queued | [thread-api.test.ts](src/presentation/thread-api.test.ts), “records passive text” and “keeps provider queue admission truthful” |
-| Stop captures A; A finishes and B starts | Stop still names A; an idle snapshot targets no queued work | [thread-api.test.ts](src/presentation/thread-api.test.ts), “captures A through passive peek once” and “returns no_active_turn” |
+| Stop captures authoritative A; display may omit A, or B may start later | Stop still names A; an idle snapshot targets no queued work | [thread-api.test.ts](src/presentation/thread-api.test.ts), “captures A through passive peek once” and “returns no_active_turn” |
 | Event batches arrive before open reply | Preserve batch order, including empty filtered checkpoints | [subscription-api.test.ts](src/presentation/subscription-api.test.ts), “follows semantic batches in order”; [thread-subscription.test.ts](src/presentation/thread-subscription.test.ts), “retains early batches in order” |
 | Batches precede a terminal frame | Drain retained batches, then throw the typed terminal error | [thread-subscription.test.ts](src/presentation/thread-subscription.test.ts), “drains delivered batches before exposing remote termination evidence” |
 | Slow consumer or early batch overflow | End lagging and release the subscription; never coalesce semantic events | [thread-subscription.test.ts](src/presentation/thread-subscription.test.ts), “fails and closes” and “handles termination or overflow before open resolves”; [subscription-api.test.ts](src/presentation/subscription-api.test.ts), “bounds total early batches” |

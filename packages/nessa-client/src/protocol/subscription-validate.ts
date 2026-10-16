@@ -94,6 +94,7 @@ export function eventsFrame(value: unknown): Omit<ConversationEvents, "subscript
       ]) ||
       !validEventCursor(event.id) ||
       !validEventCursor(event.cursor) ||
+      event.id !== event.cursor ||
       typeof event.kind !== "string" ||
       !EVENT_KINDS.includes(event.kind)
     )

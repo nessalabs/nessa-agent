@@ -1,4 +1,25 @@
-use crate::domain::pairing::{AttemptId, ConsentIntentId, DeviceKey, InvitationId};
+use crate::domain::pairing::{
+    AttemptId, ConsentIntentId, DeviceKey, InvitationId, OwnerPhoneRequest,
+};
+/// Device signature verified over the complete immutable original request.
+/// This is neither an OPAQUE claim nor TLS proof nor current owner authorization.
+pub struct VerifiedOwnerPhoneDeviceProof {
+    request: OwnerPhoneRequest,
+    digest: [u8; 32],
+}
+impl VerifiedOwnerPhoneDeviceProof {
+    pub(crate) fn from_signature(request: OwnerPhoneRequest, digest: [u8; 32]) -> Self {
+        Self { request, digest }
+    }
+    /// Exact original signed input; consumers still establish current owner admission.
+    pub fn request(&self) -> &OwnerPhoneRequest {
+        &self.request
+    }
+    /// Complete signing transcript fingerprint, never authority by itself.
+    pub fn digest(&self) -> &[u8; 32] {
+        &self.digest
+    }
+}
 /// Possession of an Ed25519 device key proved by a complete native TLS handshake.
 /// Only the concrete cryptographic adapter can construct this evidence; a
 /// copy is the same evidence, kept by whoever holds the live connection.

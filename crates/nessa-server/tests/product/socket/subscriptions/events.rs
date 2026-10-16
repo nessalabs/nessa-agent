@@ -214,3 +214,167 @@ async fn resume_with_explicit_false_replay_is_invalid() {
     assert!(events.is_empty());
     client.close().await;
 }
+
+/// E13: event follows share the view admission owner for paired read credentials.
+#[tokio::test]
+async fn paired_read_grant_follows_events_only_on_shared_conversations() {
+    let fixture = SubscriptionFixture::new()
+        .await
+        .with_devices(this_device(true));
+    grants(&fixture.authority, &["conversation.read", "server.read"]);
+    let mut client = fixture.connect();
+    client.send(
+        "missing",
+        "conversation.subscribeEvents",
+        json!({"conversationId":fixture.id.to_string()}),
+    );
+    let (reply, events) = client.reply("missing").await;
+    assert_eq!(reply["error"]["code"], "conversation_not_found", "{reply}");
+    assert!(events.is_empty());
+    fixture
+        .grant_to(
+            crate::conversation::application::ShareGrantTransition::Grant(
+                crate::conversation::domain::ShareAccess::read(),
+            ),
+        )
+        .await;
+    let id = subscribe(&mut client, &fixture.id, json!({})).await;
+    let initial = client.next().await;
+    assert_eq!(initial["payload"]["subscriptionId"], id);
+    client.send(
+        "stop",
+        "conversation.unsubscribe",
+        json!({"subscriptionId":id}),
+    );
+    let (reply, _) = client.reply("stop").await;
+    assert_eq!(reply["ok"], true, "{reply}");
+    client.close().await;
+}
+
+/// E14: transient SDK worker contention releases capacity and rechecks admission.
+#[tokio::test(start_paused = true)]
+async fn event_reader_capacity_retries_are_bounded_cancelable_and_reauthorized() {
+    use crate::product::subscription::{read_event, Target};
+    use nessa_sdk::application::agent_execution::sessions::{
+        CommittedEventReader, EventFuture, EventRead, EventReadError, EventReadLimits,
+    };
+    struct Busy {
+        reads: Arc<std::sync::atomic::AtomicUsize>,
+        succeeds: bool,
+    }
+    impl CommittedEventReader for Busy {
+        fn read(&mut self, _: EventReadLimits) -> EventFuture<'_, EventRead> {
+            let count = self.reads.fetch_add(1, Ordering::SeqCst) + 1;
+            let capacity = count == 1 || !self.succeeds;
+            Box::pin(async move {
+                if capacity {
+                    Err(EventReadError::Capacity)
+                } else {
+                    Ok(EventRead::Preparing)
+                }
+            })
+        }
+    }
+    let fixture = SubscriptionFixture::new().await;
+    let target = Target::Events {
+        conversation: fixture.id.clone(),
+        after: None,
+        replay: false,
+        kinds: Vec::new(),
+    };
+    let limits = EventReadLimits::new(16, 256 * 1024 * 1024).unwrap();
+    let mut reader = Busy {
+        reads: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        succeeds: true,
+    };
+    assert!(matches!(
+        read_event(
+            &fixture.state,
+            &fixture.service,
+            &fixture.session,
+            &target,
+            "retry",
+            &mut reader,
+            limits
+        )
+        .await,
+        Ok(EventRead::Preparing)
+    ));
+    assert_eq!(reader.reads.load(Ordering::SeqCst), 2);
+    let mut reader = Busy {
+        reads: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        succeeds: false,
+    };
+    let started = tokio::time::Instant::now();
+    assert!(
+        matches!(read_event(&fixture.state, &fixture.service, &fixture.session, &target, "bounded", &mut reader, limits).await, Err(code) if code == "subscription_capacity")
+    );
+    assert_eq!(reader.reads.load(Ordering::SeqCst), 7);
+    assert!(started.elapsed() <= Duration::from_secs(4));
+    let mut reader = Busy {
+        reads: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        succeeds: true,
+    };
+    let observed = reader.reads.clone();
+    {
+        let read = read_event(
+            &fixture.state,
+            &fixture.service,
+            &fixture.session,
+            &target,
+            "revoked",
+            &mut reader,
+            limits,
+        );
+        tokio::pin!(read);
+        // Admission can suspend before the reader runs. Keep this task runnable
+        // until read() reports Capacity and the future parks in its backoff.
+        loop {
+            assert!(futures_util::poll!(&mut read).is_pending());
+            if observed.load(Ordering::SeqCst) > 0 {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(
+            fixture.state.requests.available_permits(),
+            fixture.state.limits.requests()
+        );
+        grants(&fixture.authority, &["server.read"]);
+        assert!(matches!(read.await, Err(code) if code == "forbidden"));
+    }
+    assert_eq!(reader.reads.load(Ordering::SeqCst), 1);
+    grants(&fixture.authority, &["conversation.write", "server.read"]);
+    let mut reader = Busy {
+        reads: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        succeeds: true,
+    };
+    let observed = reader.reads.clone();
+    {
+        let read = read_event(
+            &fixture.state,
+            &fixture.service,
+            &fixture.session,
+            &target,
+            "cancel",
+            &mut reader,
+            limits,
+        );
+        tokio::pin!(read);
+        // Admission can suspend before the reader runs. Keep this task runnable
+        // until read() reports Capacity and the future parks in its backoff.
+        loop {
+            assert!(futures_util::poll!(&mut read).is_pending());
+            if observed.load(Ordering::SeqCst) > 0 {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    }
+    tokio::time::advance(Duration::from_secs(5)).await;
+    assert_eq!(reader.reads.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        fixture.state.requests.available_permits(),
+        fixture.state.limits.requests()
+    );
+}
