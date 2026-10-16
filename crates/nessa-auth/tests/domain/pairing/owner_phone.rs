@@ -27,6 +27,7 @@ fn endpoint_validation_is_shared_by_context_and_signed_request() {
         ("[2001:db8::1]:47650", true),
         ("[fd00::1]:47650", true),
         ("127.0.0.1:47650", true),
+        ("[::ffff:127.0.0.1]:47650", true),
         ("[::1]:47650", true),
         ("0.0.0.0:47650", false),
         ("0.1.2.3:47650", false),

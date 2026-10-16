@@ -282,6 +282,9 @@ async fn endpoint_asks_current_socket_policy_before_native_disclosure() {
 fn concrete_and_wildcard_binds_share_the_auth_endpoint_rule() {
     for (host, accepted) in [
         ("192.0.2.10", true),
+        ("::ffff:192.0.2.10", true),
+        ("::ffff:0.0.0.1", false),
+        ("::ffff:224.0.0.1", false),
         ("10.0.0.1", true),
         ("2001:db8::1", true),
         ("fd00::1", true),
@@ -315,6 +318,18 @@ fn concrete_and_wildcard_binds_share_the_auth_endpoint_rule() {
     }
     assert_eq!(
         super::super::advertised_endpoint("[fe80::1%3]:47650".parse().unwrap(), None),
+        None
+    );
+    let loopback = "[::ffff:127.0.0.1]:47650".parse().unwrap();
+    assert_eq!(
+        super::super::advertised_endpoint(loopback, None),
+        Some(loopback)
+    );
+    assert_eq!(
+        super::super::advertised_endpoint(
+            "[::]:47650".parse().unwrap(),
+            Some("::ffff:127.0.0.1".parse().unwrap())
+        ),
         None
     );
 }

@@ -505,10 +505,10 @@ impl RunningNative {
 }
 
 /// The address discovery may publish. A named bind is that address. A wildcard
-/// bind is the configured `advertised` host on the bound port. Port zero, no
-/// configured host, loopback, the IPv4 this-network block, the IPv4 limited
-/// broadcast, link-local IPv6, or the other IP family stays unpublished;
-/// `OwnerPhoneRequest::validate_endpoint` is the owner of what may be disclosed.
+/// bind is the configured `advertised` host on the bound port. Both paths ask
+/// `OwnerPhoneRequest::validate_endpoint` before disclosure. Wildcards additionally
+/// require a non-loopback advertised host of the listen family; a concrete
+/// loopback endpoint remains usable by local clients.
 /// Callers pass the configured port: a port of zero here is unpublished, and
 /// `bind` does not substitute the ephemeral port.
 fn advertised_endpoint(bound: SocketAddr, advertised: Option<IpAddr>) -> Option<SocketAddr> {

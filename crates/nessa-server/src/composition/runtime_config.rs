@@ -507,6 +507,7 @@ mod tests {
             br#"{"native":{"listenAddress":"0.0.0.0:47650","advertisedAddress":"224.0.0.1"}}"#,
             br#"{"native":{"listenAddress":"0.0.0.0:47650","advertisedAddress":"2001:db8::1"}}"#,
             br#"{"native":{"listenAddress":"[::]:47650","advertisedAddress":"fe80::1"}}"#,
+            br#"{"native":{"listenAddress":"[::]:47650","advertisedAddress":"::ffff:127.0.0.1"}}"#,
             br#"{"native":{"listenAddress":"0.0.0.0:47650","advertisedAddress":"0.0.0.1"}}"#,
             br#"{"native":{"listenAddress":"0.0.0.0:47650","advertisedAddress":"255.255.255.255"}}"#,
             br#"{"native":{"listenAddress":"0.0.0.0:47650","advertisedAddress":"not-an-address"}}"#,
