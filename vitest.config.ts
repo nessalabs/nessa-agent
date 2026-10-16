@@ -39,6 +39,7 @@ export default defineConfig({
   test: {
     include: ["src/**/*.test.ts", "src/**/*.test.tsx", "packages/**/*.test.ts"],
     environment: "node",
+    setupFiles: ["src/test/match-media.ts"],
     deps: {
       optimizer: {
         web: {

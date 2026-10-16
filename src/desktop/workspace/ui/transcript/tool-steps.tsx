@@ -1,5 +1,7 @@
+import { useId, useState } from "react"
+import { AgentActivity, AgentActivityTrigger } from "@nessa-ui/react/agent-activity"
 import { DesktopIcon, type DesktopIconRole } from "../../../ui/icons"
-import type { StepKind, StepPart } from "../../model/transcript"
+import { workSummary, type StepKind, type StepPart } from "../../model/transcript"
 
 const stepIcons: Record<StepKind, DesktopIconRole> = {
   read: "file",
@@ -8,10 +10,42 @@ const stepIcons: Record<StepKind, DesktopIconRole> = {
   search: "search",
 }
 
-/** What the agent did, one quiet line each, on a hairline. */
-export function ToolSteps({ steps }: { steps: readonly StepPart[] }) {
+/**
+ * What the agent did. While its turn runs, one quiet line each, on a
+ * hairline, so the reader follows the work as it happens. Once the turn has
+ * ended (`settled`), the run is one line that says what it came to
+ * (`workSummary`) and opens to the same steps in place.
+ */
+export function ToolSteps({
+  steps,
+  settled = false,
+}: {
+  steps: readonly StepPart[]
+  /** The turn this run belongs to has ended (`TurnMessage.working` is absent). */
+  settled?: boolean
+}) {
+  const [open, setOpen] = useState(false)
+  const listId = useId()
+  if (!settled) return <StepList steps={steps} />
   return (
-    <ul className="workspace-steps">
+    <AgentActivity className="workspace-work" status="complete">
+      <AgentActivityTrigger
+        // It opens the steps below it, not a sheet.
+        opens="inline"
+        aria-expanded={open}
+        aria-controls={open ? listId : undefined}
+        onClick={() => setOpen((shown) => !shown)}
+      >
+        {workSummary(steps)}
+      </AgentActivityTrigger>
+      {open ? <StepList id={listId} steps={steps} /> : null}
+    </AgentActivity>
+  )
+}
+
+function StepList({ id, steps }: { id?: string; steps: readonly StepPart[] }) {
+  return (
+    <ul id={id} className="workspace-steps">
       {steps.map((step, index) => (
         <li key={index}>
           <DesktopIcon name={stepIcons[step.step]} />
