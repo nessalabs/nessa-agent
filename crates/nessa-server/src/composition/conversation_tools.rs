@@ -15,9 +15,14 @@ use nessa_sdk::application::agent_execution::{
         CreationFailure, CreationStage, MutationFailure, MutationOutcome, MutationReceipt,
         MutationStage,
     },
-    sessions::{CommittedEventCursor, EventRead, EventReadLimits, EventStart},
+    sessions::{
+        CommittedEventCursor, EventRead, EventReadLimits, EventStart, NoteDelivery, NoteState,
+    },
 };
-use nessa_sdk::domain::agent_execution::{executions::Initiation, sessions::SessionId};
+use nessa_sdk::domain::agent_execution::{
+    executions::{Initiation, Initiator},
+    sessions::SessionId,
+};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -82,12 +87,13 @@ impl BuiltInServer for ConversationTools {
             }),
             json!({
                 "name": "send_message",
-                "description": "Queue a plain text message in another thread of the same owner. Returns the executionId and durable command status; accepted does not mean completed. Intentional retries should reuse requestId.",
+                "description": "Send plain text in another thread of the same owner. queued (default) starts a queued turn; steering uses the existing steering semantics; passive records a note without starting or steering a turn. Retry with identical thread, text and mode using the same requestId. Passive notes and active submissions retain separate existing operation namespaces.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
                         "threadId": {"type": "string"},
                         "message": {"type": "string"},
+                        "mode": {"type": "string", "enum": ["queued", "steering", "passive"], "default": "queued"},
                         "requestId": identity,
                     },
                     "required": ["threadId", "message"],
@@ -175,7 +181,26 @@ struct Create {
 struct Send {
     thread_id: String,
     message: String,
+    #[serde(default)]
+    mode: SendMode,
     request_id: Option<String>,
+}
+#[derive(Clone, Copy, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum SendMode {
+    #[default]
+    Queued,
+    Steering,
+    Passive,
+}
+impl SendMode {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Queued => "queued",
+            Self::Steering => "steering",
+            Self::Passive => "passive",
+        }
+    }
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -314,6 +339,31 @@ async fn run(
                 .admit_agent_tool(source, call, tool, Some(target.clone()), action, stop)
                 .await
                 .map_err(code)?;
+            let mode = match args.mode {
+                SendMode::Queued => SubmissionMode::Queue,
+                SendMode::Steering => SubmissionMode::Steer,
+                SendMode::Passive => {
+                    let (note, state) = service
+                        .leave_note(
+                            target.clone(),
+                            source.caller(),
+                            Initiator::Owner,
+                            args.message,
+                            NoteDelivery::RecordOnly,
+                        )
+                        .await
+                        .map_err(code)?;
+                    let state = match state {
+                        NoteState::Recorded => "recorded",
+                        NoteState::Pending => "pending",
+                        NoteState::Assigned(_) => "assigned",
+                        NoteState::Retired(_) => "retired",
+                    };
+                    return Ok(
+                        json!({"threadId":target.to_string(),"requestId":request,"mode":"passive","messageId":note.id.as_str(),"acceptedAtMs":note.accepted_at_ms,"deliveryState":state}),
+                    );
+                }
+            };
             let submitted = service
                 .submit_command(
                     service.commands().ok_or("command_unavailable")?,
@@ -326,12 +376,12 @@ async fn run(
                         text: args.message,
                         ..Default::default()
                     },
-                    SubmissionMode::Queue,
+                    mode,
                 )
                 .await
                 .map_err(mutation)?;
             Ok(
-                json!({"threadId":target.to_string(),"requestId":request,"executionId":execution,"command":receipt(&submitted.progress)}),
+                json!({"threadId":target.to_string(),"requestId":request,"mode":args.mode.name(),"executionId":execution,"command":receipt(&submitted.progress)}),
             )
         }
         "stop_thread" => {
@@ -583,6 +633,16 @@ mod tests {
         }
         assert!(parse::<Create>(json!({"ownerId":"other"})).is_err());
         assert!(parse::<Create>(json!({"approvalMode":"full"})).is_err());
+        assert!(
+            parse::<Send>(json!({"threadId":"target","message":"hello","mode":"unknown"})).is_err()
+        );
+        assert_eq!(
+            parse::<Send>(json!({"threadId":"target","message":"hello"}))
+                .unwrap()
+                .mode
+                .name(),
+            "queued"
+        );
         assert!(parse::<Send>(
             json!({"threadId":"target","message":"hello","sourceExecutionId":"forged"})
         )

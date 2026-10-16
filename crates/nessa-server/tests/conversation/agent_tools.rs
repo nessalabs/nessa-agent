@@ -9,7 +9,9 @@ use crate::mcp_servers::{
     },
 };
 use nessa_sdk::{
-    application::agent_execution::executions::ExecutionUpdate,
+    application::agent_execution::executions::{
+        ExecutionUpdate, SubmissionMode as InvocationSubmissionMode,
+    },
     domain::agent_execution::{
         sessions::SessionId,
         tools::{McpTool, ToolCallId, ToolCallUpdate, ToolStatus},
@@ -162,6 +164,7 @@ impl McpClient {
 async fn agent_tools_relay_create_send_replay_and_refuse_a_foreign_target() {
     let directory = tempfile::tempdir().unwrap();
     let provider = Arc::new(ProviderFactory::default());
+    provider.turn_cancel.store(true, Ordering::SeqCst);
     let (service, storage, metadata) = fixture(directory.path(), provider.clone());
     service.bind_commands(storage.clone());
     let audit = Arc::new(Audit::default());
@@ -208,6 +211,26 @@ async fn agent_tools_relay_create_send_replay_and_refuse_a_foreign_target() {
         .as_str()
         .unwrap()
         .to_owned();
+    let before_passive = provider.executions.lock().unwrap().clone();
+    let passive = client.call("send_message",json!({"threadId":worker,"message":"context only","mode":"passive","requestId":"worker-note"})).await;
+    assert_eq!(passive["isError"], false, "{passive}");
+    assert_eq!(passive["structuredContent"]["deliveryState"], "recorded");
+    assert!(passive["structuredContent"].get("executionId").is_none());
+    let passive_retry = client.call("send_message",json!({"threadId":worker,"message":"context only","mode":"passive","requestId":"worker-note"})).await;
+    assert_eq!(
+        passive_retry["structuredContent"]["messageId"],
+        passive["structuredContent"]["messageId"]
+    );
+    let changed_passive = client.call("send_message",json!({"threadId":worker,"message":"different context","mode":"passive","requestId":"worker-note"})).await;
+    assert_eq!(
+        changed_passive["structuredContent"]["error"],
+        "idempotency_conflict"
+    );
+    assert_eq!(
+        *provider.executions.lock().unwrap(),
+        before_passive,
+        "passive delivery starts no model turn"
+    );
     provider
         .execution_updates
         .lock()
@@ -293,6 +316,16 @@ async fn agent_tools_relay_create_send_replay_and_refuse_a_foreign_target() {
             .count(),
         1
     );
+    let changed_active_mode = client
+        .call(
+            "send_message",
+            json!({"threadId":worker,"message":"work","mode":"steering","requestId":"worker-send"}),
+        )
+        .await;
+    assert_eq!(
+        changed_active_mode["structuredContent"]["error"],
+        "request_conflict"
+    );
     let stopped = client
         .call(
             "stop_thread",
@@ -324,6 +357,103 @@ async fn agent_tools_relay_create_send_replay_and_refuse_a_foreign_target() {
         invalid_wait["structuredContent"]["error"],
         "invalid_request"
     );
+    // Hold a real worker execution, steer through the provider's existing
+    // non-native fallback, then stop the captured running parent through MCP.
+    let (release_active, active_gate) = oneshot::channel();
+    *provider.execution_gate.lock().unwrap() = Some(active_gate);
+    let active = client
+        .call(
+            "send_message",
+            json!({"threadId":worker,"message":"stay active","requestId":"worker-active"}),
+        )
+        .await;
+    assert_eq!(active["isError"], false, "{active}");
+    let active_execution = active["structuredContent"]["executionId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !provider
+            .executions
+            .lock()
+            .unwrap()
+            .contains(&active_execution)
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    let steering = client.call("send_message",json!({"threadId":worker,"message":"adjust direction","mode":"steering","requestId":"worker-steer"})).await;
+    assert_eq!(steering["isError"], false, "{steering}");
+    let steering_execution = steering["structuredContent"]["executionId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let live = service
+        .resolve(&worker_id, &caller("verify-steer"))
+        .await
+        .unwrap();
+    let snapshot = live.agent.session_manager().snapshot().await.unwrap();
+    let recorded_steer = snapshot
+        .invocations
+        .iter()
+        .find(|record| record.request.execution_id.as_str() == steering_execution)
+        .unwrap();
+    assert_eq!(
+        recorded_steer.submission,
+        InvocationSubmissionMode::Steering
+    );
+    assert!(
+        live.agent
+            .queued_ids()
+            .await
+            .iter()
+            .any(|queued| queued.as_str() == steering_execution),
+        "the provider's non-native steer fallback stays queued behind its running parent"
+    );
+    let steer_retry = client.call("send_message",json!({"threadId":worker,"message":"adjust direction","mode":"steering","requestId":"worker-steer"})).await;
+    assert_eq!(
+        steer_retry["structuredContent"]["executionId"],
+        steering_execution
+    );
+    let changed_steer = client.call("send_message",json!({"threadId":worker,"message":"adjust direction","mode":"queued","requestId":"worker-steer"})).await;
+    assert_eq!(
+        changed_steer["structuredContent"]["error"],
+        "request_conflict"
+    );
+    let active_stop = client
+        .call(
+            "stop_thread",
+            json!({"threadId":worker,"requestId":"stop-active"}),
+        )
+        .await;
+    assert_eq!(active_stop["isError"], false, "{active_stop}");
+    assert_eq!(
+        active_stop["structuredContent"]["executionId"],
+        active_execution
+    );
+    assert_eq!(
+        active_stop["structuredContent"]["command"]["outcome"],
+        "cancelled"
+    );
+    assert_eq!(provider.cancel_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        provider.cancel_turns.lock().unwrap().as_slice(),
+        [active_execution.clone()]
+    );
+    let retry_stop = client
+        .call(
+            "stop_thread",
+            json!({"threadId":worker,"executionId":active_execution,"requestId":"stop-active"}),
+        )
+        .await;
+    assert_eq!(
+        retry_stop["structuredContent"]["command"]["outcome"],
+        "cancelled"
+    );
+    assert_eq!(provider.cancel_calls.load(Ordering::SeqCst), 1);
+    drop(release_active);
     let foreign = id();
     let mut stranger = caller("foreign-create");
     stranger.principal_id = PrincipalId::new("stranger").unwrap();

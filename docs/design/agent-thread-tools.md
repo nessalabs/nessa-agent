@@ -6,8 +6,11 @@ provider-open token. Agent tools do not require SSH command configuration.
 
 A thread is a conversation. `create_thread` creates an empty thread using the
 configured default agent/model and normal Ask approval mode. `send_message`
-queues plain text and returns its execution identity and durable command
-receipt. `subscribe` returns committed event metadata and an opaque cursor;
+accepts plain text with `mode`: `queued` (the default) queues a turn;
+`steering` uses existing steering delivery and fallback semantics; `passive`
+records a RecordOnly note without starting or steering a model turn. Active
+modes return an execution identity and durable command receipt; passive returns
+a message identity, acceptance time and note delivery state. `subscribe` returns committed event metadata and an opaque cursor;
 repeat the call with `after` to continue. With no cursor it starts from now; `replay: true` reads retained events from the
 beginning. `replay` and `after` are mutually exclusive. After sending a task,
 use replay when there was no prior checkpoint so a fast completion is included.
@@ -19,8 +22,13 @@ explicit execution identity. A stop does not delete or close the conversation.
 An optional `requestId` makes an intentional command retry recoverable. Creation,
 submission and stop use the existing durable command coordinators. Default
 conversation/execution IDs derive from source identity, request and purpose, so
-retrying creation or submission retains their target. Changing the payload under
-the same logical request is a conflict. A caller retrying a stop should preserve
+retrying creation or submission retains their target. A retry preserves thread,
+text and mode. Queued and steering submissions share the existing command
+namespace, so switching between them under one request conflicts. Passive notes
+retain their existing separate note namespace: switching between passive and an
+active mode is a different existing operation, with no cross-namespace conflict
+or deduplication guarantee. Repeating a passive request with identical text returns
+the original note; changed text conflicts in the note owner. A caller retrying a stop should preserve
 the returned `executionId`; without it a changed active turn produces a conflict
 rather than proving that the earlier stop completed. An omitted `requestId`
 means a new command on each call.
@@ -94,7 +102,10 @@ is not a claim that an external effect was rolled back.
 | Missing running source or call already cancelled | No source admission/audit or target effects; same tests. |
 | Grant origin or foreign/deleted source | Cedar denies; complete source truth table in `tests/conversation/access_policy.rs`. |
 | Admission audit fails | Typed failure before target dispatch; `tests/conversation/agent_tools.rs`. |
-| Repeated request | Existing command receipt owns retry/conflict rules; stable defaults tested in `composition/conversation_tools.rs`. |
+| Repeated request | Existing command receipt owns active retry/conflict rules; stable defaults tested in `composition/conversation_tools.rs`. |
+| Passive send and retry | RecordOnly note is saved once, changed text conflicts, and provider execution count stays unchanged; actual Relay test in `tests/conversation/agent_tools.rs`. |
+| Steering and queued mode change | SDK retains Steering intent and its non-native queue fallback; queued/steering changed mode conflicts in the command fingerprint; same Relay test. |
+| Default stop on a running worker | Real provider cancellation names the running execution once; explicit retry returns the original stop receipt; same Relay test. |
 | Tools before late attachment | Explicit unavailable; same adapter tests. |
 | Multiple built-ins/configured collision | Each server's own name/digest used; `tests/composition/mcp_servers.rs`. |
 | Cancellation/disconnect/revoked grant | Existing relay stops affected calls; `tests/mcp_servers/built_in.rs`. |
