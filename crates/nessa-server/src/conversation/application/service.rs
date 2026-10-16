@@ -2268,6 +2268,22 @@ impl ConversationService {
             .map(|(view, _)| view)
     }
 
+    /// Capture the current locally owned execution after target admission.
+    /// Opens no provider and does not infer activity from a bounded display view.
+    pub async fn active_execution(
+        &self,
+        id: ConversationId,
+        caller: ConversationCaller,
+    ) -> Result<Option<String>, ConversationError> {
+        let _admission = self.admit().await?;
+        let live = self.live_now(&id, &caller).await?;
+        // Waiting for an already opening slot must not retain old target authority.
+        self.check_view_access(&id, &caller).await?;
+        Ok(live
+            .and_then(|live| live.agent.active_execution_id())
+            .map(|execution| execution.as_str().to_owned()))
+    }
+
     /// Follow `id`'s live facts: subscribe before [`Self::read_at`], and a
     /// change during or after that read is not missed.
     pub fn live_changes(&self, id: &ConversationId) -> tokio::sync::watch::Receiver<u64> {

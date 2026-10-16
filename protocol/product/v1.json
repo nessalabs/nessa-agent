@@ -1767,6 +1767,32 @@
       },
       "required": ["conversationId"]
     },
+    "ConversationPeekResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Capture the locally active execution without opening a provider. Null means no active execution; bounded transcript views are not used to select it.",
+      "properties": {
+        "conversationId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization."
+        },
+        "executionId": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "maxLength": 256
+        }
+      },
+      "required": [
+        "conversationId",
+        "executionId"
+      ]
+    },
     "ConversationReadParams": {
       "type": "object",
       "additionalProperties": false,

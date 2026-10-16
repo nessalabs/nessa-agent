@@ -237,6 +237,22 @@ describe("subscription API", () => {
     })
   })
 
+  it("rejects contradictory event identity before publishing a batch", async () => {
+    const wire = port()
+    const handlers = { batch: vi.fn(), ended: vi.fn() }
+    await createSubscriptionApi(wire.session).events(conversationId, handlers)
+    wire.emit(ProductEvent.ConversationEvents, {
+      subscriptionId: "1",
+      cursor: "checkpoint",
+      events: [{ id: "identity", cursor: "different", kind: "state.changed" }],
+    })
+    expect(handlers.batch).not.toHaveBeenCalled()
+    expect(handlers.ended).toHaveBeenCalledExactlyOnceWith({ reason: "invalid_frame" })
+    expect(wire.request).toHaveBeenLastCalledWith(ProductMethod.ConversationUnsubscribe, {
+      subscriptionId: "1",
+    })
+  })
+
   it("fails explicitly when early event batches exceed the bounded opening buffer", async () => {
     const wire = port(() => {
       for (let count = 0; count < 100; count++)

@@ -1426,3 +1426,49 @@ impl PermissionRules for RecordingRules {
         Err(RememberError::Refused)
     }
 }
+
+/// The display can evict the Running parent after many Injected children.
+/// Activity selection belongs to the live lifecycle even in that state.
+#[tokio::test]
+async fn active_execution_ignores_truncated_display_and_opens_no_provider() {
+    let directory = tempfile::tempdir().unwrap();
+    let provider = Arc::new(ProviderFactory::default());
+    let (service, _, _) = fixture(directory.path(), provider.clone());
+    let target = id();
+    opened(&service, &provider, &target).await;
+    assert_eq!(
+        service
+            .active_execution(target.clone(), caller("peek"))
+            .await
+            .unwrap(),
+        None
+    );
+    let release = hold_turn(&service, &provider, &target, "running-parent").await;
+    let live = service.resolve(&target, &caller("read")).await.unwrap();
+    {
+        let mut projection = live.projection.lock().await;
+        for index in 0..30 {
+            projection.injected(&format!("steering-{index}"), "running-parent");
+        }
+        assert!(projection.view().truncated);
+        assert!(!projection
+            .view()
+            .messages
+            .iter()
+            .any(|message| message.execution_id == "running-parent"));
+    }
+    let opens = provider.open_calls.load(Ordering::SeqCst);
+    assert_eq!(
+        service
+            .active_execution(target.clone(), caller("peek"))
+            .await
+            .unwrap(),
+        Some("running-parent".into())
+    );
+    assert_eq!(provider.open_calls.load(Ordering::SeqCst), opens);
+    let mut foreign = caller("foreign");
+    foreign.principal_id = PrincipalId::new("other").unwrap();
+    assert!(service.active_execution(target, foreign).await.is_err());
+    let _ = release.send(());
+    service.shutdown().await.unwrap();
+}

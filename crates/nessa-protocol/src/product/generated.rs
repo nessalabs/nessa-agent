@@ -720,6 +720,13 @@ pub struct ConversationCreateResult {
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationPeekResult {
+    pub conversation_id: String,
+    #[serde(deserialize_with = "Option::deserialize")]
+    pub execution_id: Option<String>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConversationReadParams {
     pub conversation_id: String,
 }

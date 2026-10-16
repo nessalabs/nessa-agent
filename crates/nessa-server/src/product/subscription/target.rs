@@ -421,7 +421,7 @@ fn retry_after(error: &ConversationError, attempt: u32) -> Option<Duration> {
 }
 
 /// The wait before attempt `attempt + 1` of something `transient`, or `None`.
-fn backoff(transient: bool, attempt: u32) -> Option<Duration> {
+pub(super) fn backoff(transient: bool, attempt: u32) -> Option<Duration> {
     if !transient || attempt >= TRANSIENT_RETRIES {
         return None;
     }

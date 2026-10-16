@@ -165,7 +165,8 @@ async fn unpaired_may_see_review(
 /// `method`.
 ///
 /// Returns whether this call admitted it. A session that is not paired, and
-/// a method other than `conversation.subscribe` or `conversation.unsubscribe`,
+/// a method other than `conversation.subscribe`, `conversation.subscribeEvents`,
+/// or `conversation.unsubscribe`,
 /// returns false so the caller asks the method's own grant. A paired session
 /// is admitted on the grant pairing mints (`conversation.read`). One that
 /// holds `conversation.write` instead is admitted on that grant, as a paired
@@ -178,7 +179,10 @@ pub(super) async fn admit_paired_follow(
     session: &AuthenticatedSession,
     method: &str,
 ) -> Result<bool, &'static str> {
-    if method != "conversation.subscribe" && method != "conversation.unsubscribe" {
+    if !matches!(
+        method,
+        "conversation.subscribe" | "conversation.subscribeEvents" | "conversation.unsubscribe"
+    ) {
         return Ok(false);
     }
     if paired_binding(state, session).await?.is_none() {

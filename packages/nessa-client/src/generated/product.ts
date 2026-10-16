@@ -717,6 +717,12 @@ export interface ConversationCreateResult {
   /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
   conversationId: string
 }
+/** Capture the locally active execution without opening a provider. Null means no active execution; bounded transcript views are not used to select it. */
+export interface ConversationPeekResult {
+  /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
+  conversationId: string
+  executionId: string | null
+}
 /** Read the current bounded projection. */
 export interface ConversationReadParams {
   /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
