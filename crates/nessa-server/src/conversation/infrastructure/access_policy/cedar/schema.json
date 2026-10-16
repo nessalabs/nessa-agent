@@ -206,6 +206,26 @@
           },
           "additionalAttributes": false
         }
+      },
+      "AgentTurn": {
+        "shape": {
+          "type": "Record",
+          "attributes": {
+            "organization": {
+              "type": "String",
+              "required": true
+            },
+            "id": {
+              "type": "String",
+              "required": true
+            },
+            "ownerInitiated": {
+              "type": "Boolean",
+              "required": true
+            }
+          },
+          "additionalAttributes": false
+        }
       }
     },
     "actions": {
@@ -417,6 +437,19 @@
         "appliesTo": {
           "principalTypes": [
             "ReviewRecipient"
+          ],
+          "resourceTypes": [
+            "Conversation"
+          ],
+          "context": {
+            "type": "Ask"
+          }
+        }
+      },
+      "conversation.agent_tools": {
+        "appliesTo": {
+          "principalTypes": [
+            "AgentTurn"
           ],
           "resourceTypes": [
             "Conversation"

@@ -149,6 +149,11 @@ pub use catalogue_watch::{
     CatalogueChangeWatch, CatalogueWatchError, CatalogueWatchState, WatchCatalogue,
 };
 mod access_policy;
+mod agent_tools;
+pub use agent_tools::{
+    AgentToolAudit, AgentToolAuditRecord, AgentToolRequest, AgentToolSource,
+    MAX_AGENT_TOOL_ADMISSIONS,
+};
 mod app_call_policy;
 mod artifacts;
 mod catalogue_read;

@@ -1427,6 +1427,8 @@ impl PermissionRules for RecordingRules {
     }
 }
 
+#[path = "agent_tools.rs"]
+mod agent_tool_tests;
 /// The display can evict the Running parent after many Injected children.
 /// Activity selection belongs to the live lifecycle even in that state.
 #[tokio::test]
