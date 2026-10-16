@@ -63,7 +63,11 @@ the turn that set it, and never read from the text: a control can fail in the
 same words. Likewise the draft records which refused message it was put back
 from, and Send Again sends the draft only when it is that message's own. An
 empty draft takes a refused message back only when it was never that
-message's: one the person emptied was cleared on purpose.
+message's: one the person emptied was cleared on purpose. It also takes the
+message back only while the message is whole: an image whose original was let
+go to bound previews survives only as a reference, which a draft cannot send.
+`canSendAgain` in `send-draft.ts` is the one rule for all of this, read by the
+notice and by Send Again alike.
 
 | # | State | Event | Notice shows | Conversation error |
 |---|-------|-------|--------------|--------------------|
@@ -77,12 +81,13 @@ message's: one the person emptied was cleared on purpose.
 | 8 | Two refused messages, the older pointing at a file by path | Send Again on the newer, accepted; then Send Again on the older | the older is sent at once, since a file sent by path has nothing to upload | cleared |
 | 9 | Two refused messages, the newer sent again and taken, other work typed in the draft | Send Again on the older | Send Again is held, and nothing is sent; the draft keeps the work | unchanged |
 | 10 | A refused message put back in the draft | the person empties the draft, then Send Again | Send Again is held, and nothing is sent | unchanged |
+| 11 | An older refused message whose image original was let go to bound previews | Send Again on it | Send Again is held, and nothing is sent; Discard still works | unchanged |
 
 Tests: rows 1 to 4 and 7 in `src/conversation/ui/notification.test.ts`; rows
 4 to 7 through the store in `src/conversation/adapters/store/unsent.test.ts`;
 rows 2, 8, 9 and 10's Send Again through the rendered control in
 `src/conversation/ui/conversation-notification.test.ts`, its attachments in
-`src/conversation/application/usecases/attachments.test.ts`, and in a real
+`src/conversation/application/usecases/attachments.test.ts` (row 11 too), and in a real
 browser with `verification/desktop/scripts/refused-messages.mjs`.
 
 ## Recovering a lost reply

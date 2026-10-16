@@ -8,6 +8,7 @@ import {
   followConversation,
   retryFailedTurn,
   failedTurnDiscarded,
+  canSendAgain,
 } from "../adapters/store/slice"
 import { useConversationDispatch } from "../adapters/store/hooks"
 import { conversationNotice } from "./notification"
@@ -74,9 +75,7 @@ export function ConversationNotification({
           pending={
             !gatewayAvailable ||
             Boolean(conversation.controlPending) ||
-            (conversation.draft.length > 0
-              ? conversation.draftTurn !== turnId
-              : failed?.from !== "user" || conversation.draftTurn === turnId)
+            !canSendAgain(conversation, turnId)
           }
           onRetry={() => void dispatch(retryFailedTurn({ id: conversation.id, turnId }))}
           onDiscard={() => dispatch(failedTurnDiscarded({ id: conversation.id, turnId }))}

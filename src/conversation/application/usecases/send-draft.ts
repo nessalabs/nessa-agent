@@ -125,15 +125,32 @@ export function restoreFailedTurn(
 ): LocalTabs {
   const conv = findConversation(tabs, conversationId)
   const refused = conv && refusedTurn(conv, turnId)
-  // A draft this turn already owns and the person emptied was cleared on
-  // purpose; only a draft that was never this turn's takes it back.
-  if (!conv || !refused || conv.draft.length > 0 || conv.draftTurn === turnId) return tabs
+  if (!conv || !refused || conv.draft.length > 0 || !canSendAgain(conv, turnId))
+    return tabs
   return replaceConversation(tabs, {
     ...conv,
     draft: notUploaded(refused.content),
     draftReset: (conv.draftReset ?? 0) + 1,
     draftTurn: turnId,
   })
+}
+
+/**
+ * Whether Send Again on this refused turn can send exactly that message. A
+ * draft holding something sends only when it is this turn's own. An empty one
+ * takes the message back only when it was never this turn's (one the person
+ * emptied was cleared on purpose) and the message is still whole: an image
+ * whose original was let go to bound previews survives only as a reference,
+ * which a draft cannot send, and the message without it is a different one.
+ */
+export function canSendAgain(conv: Conversation, turnId: string): boolean {
+  if (conv.draft.length > 0) return conv.draftTurn === turnId
+  const refused = refusedTurn(conv, turnId)
+  return (
+    !!refused &&
+    conv.draftTurn !== turnId &&
+    refused.content.every((part) => part.type !== "image-reference")
+  )
 }
 
 /** Only a certainly refused local turn may be replaced by an explicit retry. */

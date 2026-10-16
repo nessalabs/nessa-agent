@@ -31,6 +31,7 @@ import {
   imageRefusalMessage,
   refusalReleasesImages,
   restoreFailedTurn,
+  canSendAgain,
   submissionRefusalMessage,
 } from "./send-draft"
 import { controlFailureMessage } from "./control-failure"
@@ -1088,6 +1089,15 @@ describe("an older refused message goes back to the draft that owns its files", 
     expect(
       declineReason(conv as Conversation, { content: conv?.draft ?? [] }, true),
     ).not.toMatchObject({ kind: "unknown-attachment" })
+  })
+  it("holds a message whose image survives only as a reference", () => {
+    // Row 11: bounding previews let the original go, so Send Again would send
+    // a different message.
+    const before = boundSentPreviews(olderRefusal([]), 0)
+    const kept = before.conversations[0]
+    expect(kept?.turns[0]).toMatchObject({ content: [{ type: "image-reference" }] })
+    expect(canSendAgain(kept as Conversation, "older")).toBe(false)
+    expect(restoreFailedTurn(before, "c0", "older")).toBe(before)
   })
   it("leaves a draft that already holds work alone", () => {
     const work = [{ type: "text" as const, text: "new work" }]

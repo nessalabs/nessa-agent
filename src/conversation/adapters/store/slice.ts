@@ -1072,5 +1072,6 @@ export { conversationHistoryReducer } from "./history"
 
 // Narrow composition entry: the store mounts reducers without loading UI barrels.
 export { attachmentResourceUsage } from "../../application/queries/attachment-resources"
+export { canSendAgain } from "../../application/usecases/send-draft"
 
 export { AttachmentResource } from "../../model"
