@@ -3,12 +3,15 @@
 Owner: [#921](https://github.com/nessalabs/nessa-agent/issues/921). This is the
 implementation companion to [ADR 921](../adr/todo/921-close-product-method-classification.md).
 The ADR owns the architectural decision; this document owns the source inventory,
-type sketch, migration and regression plan. All changes below are proposed.
-Runtime classification is still string-based; no compile probe or runtime
-migration is implemented by these documents.
+type sketch, migration and regression plan. The simplification branch implements the closed identity and the complete gateway
+cutover. The tables below record the preserved contract; the verification section
+distinguishes passing evidence from planned checks.
 
-## Current source catalogue
+## Classifiers replaced by the cutover
 
+
+The following inventory describes the baseline classifiers replaced by this
+cutover, not additional current owners.
 
 The manifest already owns product method names, parameter types, and the Cedar
 grant asked before dispatch. Its generator publishes string constants,
@@ -74,7 +77,7 @@ Current source owners (reviewed at `9812c3c`):
 [record admission](../../crates/nessa-server/src/product/record_read/dispatch.rs), and
 [catalogue admission](../../crates/nessa-server/src/product/catalogue_read/dispatch.rs).
 
-## Proposed admission taxonomy
+## Admission taxonomy
 
 The fourth field is `AdmissionPlan`: it
 selects an existing admission owner and the operation shape that owner consumes.
@@ -106,7 +109,7 @@ the conversation service after socket departure; ConnectionOwned branches before
 these pools. Authentication retains pre-authentication ownership and the Requests
 pool on an authenticated repetition. No new permit owner is introduced.
 
-Static shape selection moves to the plan; existing admission facades consume it
+Static shape selection lives in `product/method_plan.rs`; existing admission facades consume it
 instead of rematching strings. Request and share shapes do not copy Cedar rules.
 Handler operation dispatch can retain exact typed matches, but must not invent a
 second routing owner. Required plan fields have no defaults; the synthetic
@@ -202,6 +205,43 @@ as described above; unknown names are absent and retain Requests/Ordinary refusa
 
 Catalogue membership checked against all **71** current manifest methods.
 
+## Branch implementation and verification status
+
+`ProductMethod` is generated from the existing manifest with exact `from_name`,
+`as_str` and `ALL`. `product/method_plan.rs` exhaustively chooses the handler,
+response lane, execution capacity and admission shape for all 71 current methods.
+Unknown names stay outside the exhaustive function and retain their existing
+bounded Ordinary/Requests refusal path.
+
+The socket carries the parsed identity through held input and dispatch. It no
+longer owns a response-name classifier, execution-pool name ladder, prefix router
+or passive catalogue-name list. Access, watch and subscription owners consume the
+plan; their paired-action/own-check/share/watch/subscription string classifiers
+are removed. Current Cedar checks, physical permits, per-batch admission and
+inline unsubscribe ordering remain with the same owners.
+
+| Evidence | Current status |
+| --- | --- |
+| Identity exactness, variant collisions and real-classifier synthetic extension | Four focused Node tests passed; a synthetic granted method produces Rust E0004 against the unchanged real classifier. |
+| Reserved Rust names | Five focused validator tests passed, including imported and local ProductMethod collisions. |
+| Identity falsification | Six isolated temporary-copy probes failed as expected; live source was not mutated. |
+| 71 reviewed semantic choices and gateway ordering/capacity suites | Restored-tree full server suite: 3,084 passed, 13 ignored. Includes the reviewed 71-row classification test and deterministic unsubscribe-admission/resubscribe ordering regression. Nine semantic probes failed as expected and source was restored. |
+
+Final local verification also passed the complete product protocol check (66 Node
+tests plus schema/fixture/generated-output consistency), seven-crate CI Clippy
+selection across all targets with `-D warnings`, Rust formatting, JavaScript
+formatting and whitespace checks. Protocol documentation builds successfully.
+Warning-denying documentation is blocked by six pre-existing private/unresolved
+links in two conversation files that are byte-identical to the baseline; none
+points to the generated identity. The isolated identity compilation checks its
+public documentation with `deny(missing_docs)`.
+
+These are macOS arm64 local results, not a live provider, physical phone or
+cross-platform runtime claim. The cutover preserves the original wire contract,
+authority owners and finite capacity; it does not add a new command bus or policy
+executor. Static classification completeness cannot prove future handler semantics:
+per-method expectations and gateway tests remain necessary.
+
 ## Verification plan
 
 | Change or defect | Enforcement |
@@ -216,7 +256,7 @@ Catalogue membership checked against all **71** current manifest methods.
 | Unknown input becomes known or bypasses refusal | Socket test fails before handler effects and asserts `unknown_method` after successful existing admission prerequisites |
 | Control work can be starved by ordinary saturation | Existing saturated-lane socket tests fail; the migration adds one typed-method counterpart |
 
-The implementation proof adds a generator fixture with a synthetic granted
+The implementation proof uses a generator fixture with a synthetic granted
 method, regenerates into a temporary tree, and compiles the real gateway
 classifier module without editing it. The expected result is a
 non-exhaustive-match compiler error. This proves omission detection for a new identity: it cannot inherit an
@@ -229,7 +269,7 @@ the classifier dependency-light enough to compile that real module with
 This probe belongs in the existing product-protocol check. No additional source
 parser or AST-shape guard is needed to restate the compiler's check.
 
-Rename `every_manifest_method_has_one_runtime_dispatch_path` to describe its
+The membership test is renamed from `every_manifest_method_has_one_runtime_dispatch_path` to describe its
 actual guarantee: manifest/generated method membership and generated action
 membership agree. The exhaustive `ProductMethod -> MethodPlan` compilation
 proof establishes classification completeness. Classification tests establish

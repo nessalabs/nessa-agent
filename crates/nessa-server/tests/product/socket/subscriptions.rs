@@ -5283,3 +5283,94 @@ async fn a_queued_drive_turn_is_not_sent_where_its_tools_can_no_longer_be_checke
         .iter()
         .any(|execution| execution == "queued"));
 }
+
+/// Hold exactly the inline unsubscribe admission after its input identity check.
+/// No timers or sleeps choose which authority read is suspended.
+struct HeldUnsubscribeAdmission {
+    authority: Arc<Authority>,
+    armed: AtomicBool,
+    reads: AtomicU64,
+    entered: Notify,
+    release: Notify,
+}
+
+impl AccessReader for HeldUnsubscribeAdmission {
+    fn read<'a>(&'a self, id: &'a CredentialId) -> PortFuture<'a, AccessSnapshot> {
+        Box::pin(async move {
+            if self.armed.load(Ordering::SeqCst) && self.reads.fetch_add(1, Ordering::SeqCst) == 1 {
+                self.entered.notify_one();
+                self.release.notified().await;
+            }
+            self.authority.read(id).await
+        })
+    }
+}
+
+/// Wire order is also ownership order: a new follow of the same target cannot
+/// race the preceding unsubscribe's admission and see the old registration.
+#[tokio::test]
+async fn unsubscribe_admission_finishes_before_resubscribe_of_the_same_target() {
+    let mut fixture = SubscriptionFixture::new().await;
+    fixture.state.settings = SessionSettings::new(
+        Duration::from_secs(10),
+        Duration::from_millis(SUBSCRIPTION_DELIVERY_TIMEOUT_MS * 3),
+        Duration::from_secs(120),
+    )
+    .unwrap();
+    let held = Arc::new(HeldUnsubscribeAdmission {
+        authority: fixture.authority.clone(),
+        armed: AtomicBool::new(false),
+        reads: AtomicU64::new(0),
+        entered: Notify::new(),
+        release: Notify::new(),
+    });
+    fixture.state.access = held.clone();
+    let mut client = fixture.connect();
+    let old = client.subscribe("original", &fixture.id).await;
+    let first = client.next().await;
+    assert_eq!(first["payload"]["subscriptionId"], old);
+
+    held.armed.store(true, Ordering::SeqCst);
+    client.send(
+        "stop",
+        "conversation.unsubscribe",
+        json!({"subscriptionId": old}),
+    );
+    timeout(EXPECTED, held.entered.notified()).await.unwrap();
+    assert_eq!(held.reads.load(Ordering::SeqCst), 2);
+    client.send(
+        "restart",
+        "conversation.subscribe",
+        json!({"conversationId": fixture.id.to_string()}),
+    );
+    // The admission barrier is definitely entered. A task-owned unsubscribe
+    // would let the next input run and reject its still-registered target.
+    assert!(client.within(QUIET).await.is_none());
+    assert_eq!(held.reads.load(Ordering::SeqCst), 2);
+
+    held.armed.store(false, Ordering::SeqCst);
+    held.release.notify_one();
+    let stopped = client.next().await;
+    assert_eq!(stopped["id"], "stop", "{stopped}");
+    assert_eq!(stopped["ok"], true, "{stopped}");
+    assert_eq!(stopped["payload"]["subscriptionId"], old);
+    let restarted = client.next().await;
+    assert_eq!(restarted["id"], "restart", "{restarted}");
+    assert_eq!(restarted["ok"], true, "{restarted}");
+    let new = restarted["payload"]["subscriptionId"].as_str().unwrap();
+    assert_ne!(new, old);
+    fixture.turn("after-restart").await;
+    timeout(EXPECTED, async {
+        loop {
+            let frame = client.next().await;
+            assert_eq!(frame["payload"]["subscriptionId"], new, "{frame}");
+            if settled(&frame, 1) {
+                break;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    client.quiet(&old).await;
+    client.close().await;
+}

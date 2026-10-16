@@ -13,6 +13,7 @@ import {
   pairingArrayOwner,
   pairingValueSchema,
 } from "./product-protocol/pairing-values.mjs"
+import { methodIdentityRust } from "./product-protocol/method-identity.mjs"
 import { rustWireShapes } from "./product-protocol/rust-wire-shapes.mjs"
 import { validateExternalRustTypes } from "./product-protocol/rust-types.mjs"
 
@@ -747,6 +748,7 @@ rs += rustWireShapes(schema.$defs, [
 rs += `pub const PRODUCT_HANDSHAKE_METHOD: &str = ${JSON.stringify(manifest.handshakeMethod)};
 pub const PRODUCT_READY_METHODS: &[&str] = &[${readyMethods.map(JSON.stringify).join(",")}];
 `
+rs += methodIdentityRust(Object.keys(productMethods))
 rs += actionForMethodRust(productMethods)
 ts += `export const ProductHandshakeMethod = ${JSON.stringify(manifest.handshakeMethod)} as const
 export const productReadyMethods = ${JSON.stringify(readyMethods)} as const

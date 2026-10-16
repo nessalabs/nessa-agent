@@ -3,11 +3,11 @@
 ## Purpose
 
 Make method-extension omissions visible before they reach the gateway. This
-selects an implementation direction for #921; runtime migration remains future
-work in `todo/`.
+records the implementation direction for #921. The branch implements the
+cutover; verification and its limits are recorded in the companion.
 
 - **Date:** 2026-10-15
-- **Status:** proposed
+- **Status:** implemented and locally verified on the simplification branch
 
 ## Context
 
@@ -48,4 +48,5 @@ semantic choices, which compilation alone cannot prove; it cannot detect an
 unmodeled future policy stage. The companion owns the fixture mechanics, expectation catalogue, ordering matrix and bounded migration.
 This accepts an inert generated identity followed by one gateway cutover, with
 more explicit extension work in exchange for deleting distributed defaults.
-Runtime behavior and wire contract remain unchanged by this design record.
+The cutover preserves runtime behavior and the wire contract; it does not
+add an authorization verdict or change capacity limits.

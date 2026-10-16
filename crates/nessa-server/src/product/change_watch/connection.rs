@@ -3,6 +3,7 @@ use super::{
     WatchSelector, WatchToken,
 };
 use crate::product::{
+    method_plan::AdmissionPlan,
     socket::{failure, success, valid_product_request},
     state::ProductRouteState,
 };
@@ -13,8 +14,7 @@ use futures_util::{
 };
 use nessa_auth::application::session::AuthenticatedSession;
 use nessa_protocol::product::generated::{
-    product_method, ConversationUnwatchParams, ConversationWatchResult,
-    MAX_CONNECTION_CHANGE_WATCHES,
+    ConversationUnwatchParams, ConversationWatchResult, MAX_CONNECTION_CHANGE_WATCHES,
 };
 use nessa_protocol::product_contract::generated::{
     ChangeWatchEndReason, ChangeWatchErrorCode, SessionCloseReason,
@@ -159,21 +159,12 @@ impl ConnectionWatches {
         !self.pending.is_empty()
     }
 
-    /// Closed generated method identities only; ordinary input admission is unchanged.
-    pub fn method(method: &str) -> bool {
-        matches!(
-            method,
-            product_method::CONVERSATION_WATCH_RECORDS
-                | product_method::CONVERSATION_WATCH_CATALOGUE
-                | product_method::CONVERSATION_UNWATCH
-        )
-    }
-
     pub fn begin(
         &mut self,
         state: &ProductRouteState,
         session: &AuthenticatedSession,
         frame: RequestFrame,
+        admission: AdmissionPlan,
         slot: Arc<OwnedSemaphorePermit>,
         deadline: Instant,
     ) -> Option<WatchReply> {
@@ -185,7 +176,7 @@ impl ConnectionWatches {
         if !valid_product_request(&frame) {
             return Some(refused(ChangeWatchErrorCode::InvalidRequest));
         }
-        if frame.method == product_method::CONVERSATION_UNWATCH {
+        if admission == AdmissionPlan::Unwatch {
             let params: ConversationUnwatchParams =
                 match serde_json::from_value(frame.params.clone()) {
                     Ok(params) => params,
@@ -221,7 +212,7 @@ impl ConnectionWatches {
             // Bounded by this unwatch request's own deadline, like any reply.
             return Some(self.reply(key, message, slot, deadline, false));
         }
-        let selector = match WatchSelector::decode(&frame.method, frame.params.clone()) {
+        let selector = match WatchSelector::decode(admission, frame.params.clone()) {
             Ok(selector) => selector,
             Err(code) => return Some(refused(code)),
         };

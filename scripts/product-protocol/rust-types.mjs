@@ -10,6 +10,7 @@ export function validateExternalRustTypes(definitions) {
     "Vec",
     "Option",
     "Method",
+    "ProductMethod",
     "Event",
     "Serialize",
     "Deserialize",
@@ -17,6 +18,8 @@ export function validateExternalRustTypes(definitions) {
     "u16",
     "bool",
   ]) {
+    if (names.has(name))
+      throw new Error(`Generated type ${name} conflicts with reserved type ${name}`)
     names.set(name, `reserved type ${name}`)
   }
   for (const [definition, node] of Object.entries(definitions)) {

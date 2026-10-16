@@ -9,13 +9,14 @@ use super::{
 use crate::product::{
     conversation::conversation_id,
     event_sequence::EventSequence,
+    method_plan::AdmissionPlan,
     socket::{failure, success, valid_product_request},
     state::{note_limit, ProductRouteState},
 };
 use nessa_auth::application::session::AuthenticatedSession;
 use nessa_protocol::product::generated::{
-    product_method, ConversationSubscribeListParams, ConversationSubscribeParams,
-    ConversationSubscribeResult, ConversationSubscriptionErrorCode, ConversationUnsubscribeParams,
+    ConversationSubscribeListParams, ConversationSubscribeParams, ConversationSubscribeResult,
+    ConversationSubscriptionErrorCode, ConversationUnsubscribeParams,
     MAX_CONNECTION_CONVERSATION_SUBSCRIPTIONS, MAX_CONNECTION_LIST_SUBSCRIPTIONS,
 };
 use nessa_protocol::product_contract::generated::ConversationErrorCode;
@@ -49,33 +50,12 @@ impl ConnectionSubscriptions {
         }
     }
 
-    /// The methods this owns, by their generated names.
-    pub fn method(method: &str) -> bool {
-        matches!(
-            method,
-            product_method::CONVERSATION_SUBSCRIBE
-                | product_method::CONVERSATION_SUBSCRIBE_LIST
-                | product_method::CONVERSATION_UNSUBSCRIBE
-                | product_method::AGENTS_SUBSCRIBE
-                | product_method::AGENTS_UNSUBSCRIBE
-        )
-    }
-
     /// A subscription is live while its task runs or its last frame waits
     /// for the writer; one that has gone frees its place.
     fn collect(&mut self) {
         let deliveries = &self.deliveries;
         self.entries
             .retain(|entry| !entry.task.is_finished() || deliveries.has(&entry.id));
-    }
-
-    /// Whether `method` stops a subscription: the socket admits it before
-    /// [`Self::begin`] is asked (row S29).
-    pub fn stops(method: &str) -> bool {
-        matches!(
-            method,
-            product_method::CONVERSATION_UNSUBSCRIBE | product_method::AGENTS_UNSUBSCRIBE
-        )
     }
 
     /// Begin, or stop, one subscription. The answer for the ordinary lane, or
@@ -89,6 +69,7 @@ impl ConnectionSubscriptions {
         state: &ProductRouteState,
         session: &AuthenticatedSession,
         frame: RequestFrame,
+        admission: AdmissionPlan,
         slot: Arc<OwnedSemaphorePermit>,
         received_at: Instant,
     ) -> Option<OutgoingMessage> {
@@ -97,7 +78,10 @@ impl ConnectionSubscriptions {
             return Some(invalid());
         }
         self.collect();
-        if Self::stops(&frame.method) {
+        if matches!(
+            admission,
+            AdmissionPlan::UnsubscribeConversation | AdmissionPlan::UnsubscribeAgents
+        ) {
             let Ok(params) =
                 serde_json::from_value::<ConversationUnsubscribeParams>(frame.params.clone())
             else {
@@ -106,7 +90,7 @@ impl ConnectionSubscriptions {
             // Each unsubscribe stops only what the subscribe beside it made,
             // whose grant it asks (row AC7).
             let Some(position) = self.entries.iter().position(|entry| {
-                entry.id == params.subscription_id && entry.target.stopped_by() == frame.method
+                entry.id == params.subscription_id && entry.target.stopped_by() == admission
             }) else {
                 return Some(failure(
                     &frame.id,
@@ -125,39 +109,44 @@ impl ConnectionSubscriptions {
                 },
             ));
         }
-        let target = if frame.method == product_method::AGENTS_SUBSCRIBE {
-            // Asked as `agents.list` is: no parameters.
-            if frame.params != json!({}) {
-                return Some(invalid());
+        let target = match admission {
+            AdmissionPlan::FollowAgents => {
+                // Asked as `agents.list` is: no parameters.
+                if frame.params != json!({}) {
+                    return Some(invalid());
+                }
+                Target::Agents
             }
-            Target::Agents
-        } else if frame.method == product_method::CONVERSATION_SUBSCRIBE {
-            let Ok(params) =
-                serde_json::from_value::<ConversationSubscribeParams>(frame.params.clone())
-            else {
-                return Some(invalid());
-            };
-            let Ok(conversation) = conversation_id(&params.conversation_id) else {
-                return Some(invalid());
-            };
-            let after = match params.after.as_ref().map(Cursor::decode) {
-                Some(None) => return Some(invalid()),
-                Some(Some(after)) => Some(after),
-                None => None,
-            };
-            Target::View {
-                conversation,
-                after,
+            AdmissionPlan::FollowConversation => {
+                let Ok(params) =
+                    serde_json::from_value::<ConversationSubscribeParams>(frame.params.clone())
+                else {
+                    return Some(invalid());
+                };
+                let Ok(conversation) = conversation_id(&params.conversation_id) else {
+                    return Some(invalid());
+                };
+                let after = match params.after.as_ref().map(Cursor::decode) {
+                    Some(None) => return Some(invalid()),
+                    Some(Some(after)) => Some(after),
+                    None => None,
+                };
+                Target::View {
+                    conversation,
+                    after,
+                }
             }
-        } else {
-            let Ok(params) =
-                serde_json::from_value::<ConversationSubscribeListParams>(frame.params.clone())
-            else {
-                return Some(invalid());
-            };
-            Target::List {
-                archived: params.archived.unwrap_or(false),
+            AdmissionPlan::FollowList => {
+                let Ok(params) =
+                    serde_json::from_value::<ConversationSubscribeListParams>(frame.params.clone())
+                else {
+                    return Some(invalid());
+                };
+                Target::List {
+                    archived: params.archived.unwrap_or(false),
+                }
             }
+            _ => return Some(invalid()),
         };
         let not_configured = || {
             Some(failure(

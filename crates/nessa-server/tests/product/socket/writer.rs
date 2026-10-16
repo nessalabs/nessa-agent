@@ -1600,3 +1600,40 @@ async fn unwatch_before_writer_selection_sends_no_hint_after_the_acknowledgement
         .unwrap();
     assert_eq!(owners.available_permits(), 1);
 }
+
+/// Unknown names still consume bounded Ordinary/Requests admission before refusal.
+#[tokio::test]
+async fn unknown_method_waits_for_request_capacity_before_refusal() {
+    for saturated in [false, true] {
+        let (mut state, _) = fixture(MembershipRole::Member);
+        if saturated {
+            state.requests = Arc::new(Semaphore::new(0));
+        }
+        let session = authenticate(&state).await;
+        let (socket, mut peer) = test_socket(None);
+        let task = tokio::spawn(run_authenticated(socket, state, session));
+        peer.input
+            .send(Ok(Message::Text(
+                json!({
+                    "type": "req", "id": "unknown", "method": "conversation.unknown", "params": {}
+                })
+                .to_string()
+                .into(),
+            )))
+            .unwrap();
+        let Message::Text(text) = peer.message().await else {
+            panic!("refusal expected")
+        };
+        let value: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(value["id"], "unknown");
+        assert_eq!(
+            value["error"]["code"],
+            if saturated {
+                "temporarily_unavailable"
+            } else {
+                "unknown_method"
+            }
+        );
+        task.abort();
+    }
+}

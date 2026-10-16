@@ -1049,14 +1049,16 @@ writer namespace once. Audited selections, admitted replacements and actual
 wire delivery are distinct facts; the ordering and failure cases are in the
 [conversation ownership map](codebase-structure.md#gateway-conversation-ownership).
 
-Currently the manifest generates method names and requested grants, while the
-gateway independently matches strings for handler routing, response lanes, execution capacity and
-paired-admission shape. [ADR 921](adr/todo/921-close-product-method-classification.md)
-proposes a generated closed method identity and one exhaustive gateway plan. Its
-[source catalogue and migration plan](design/product-method-classification.md)
-records the proposed cutover. It
-is not implemented: current runtime behavior, including unknown-method refusal
-and the separate control lane, is unchanged.
+The manifest generates wire names, requested grants and the closed Rust
+`ProductMethod` identity. The gateway's `product/method_plan.rs` exhaustively
+selects handler, response lane, execution capacity and admission shape. The socket
+carries the parsed identity through held input and dispatch; access and connection
+owners consume the plan. It contains no cached policy verdict or permit. Unknown
+names retain the existing validation, session and bounded Ordinary/Requests
+refusal path. Cedar and physical work remain with their existing owners.
+[ADR 921](adr/todo/921-close-product-method-classification.md) and its
+[implementation companion](design/product-method-classification.md) record the
+71-method catalogue, ordering matrix and verification evidence.
 
 The panel authenticates using its distinct private surface credential loaded by
 the native host; the desktop window connects under the same credential and

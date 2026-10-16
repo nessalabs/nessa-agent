@@ -560,13 +560,17 @@ The local backend, embedded Cedar, and `/session` gateway are implemented.
 providers. See [local authentication](adr/done/0010-local-authentication.md). Hosted
 identity providers remain future adapters.
 
-Today the product socket and read-access adapter classify manifest method strings
-separately for handler routing, response capacity, execution capacity and paired admission, with
-fallbacks for some choices. [ADR 921](adr/todo/921-close-product-method-classification.md)
-proposes generated closed method identity and one exhaustive gateway-owned plan
-([source catalogue and migration](design/product-method-classification.md));
-it is not implemented, and the manifest remains the owner only of wire names,
-parameter shapes and requested grants.
+`product/method_plan.rs` exhaustively classifies generated `ProductMethod`
+identities into handler, response lane, execution capacity and admission shape.
+The socket, paired access, watches and subscriptions consume those selections;
+Cedar and application owners still decide authority and retain physical work.
+Semantic expectations live in `tests/product/method_plan.rs`; identity and
+real-classifier extension tests live in
+`scripts/product-protocol/method-identity.test.mjs`, run by the existing product
+protocol check. The manifest still owns wire names, params and requested grants;
+it contains no server routing or capacity metadata.
+[ADR 921](adr/todo/921-close-product-method-classification.md) and its
+[companion](design/product-method-classification.md) record the contract.
 
 `application/credential_registry.rs` owns the secret-free refusal facts and
 audit port for a registry authority file that cannot be trusted. The local
@@ -2043,11 +2047,12 @@ refuses a stale schema. The adjacent core-contract tests run through the existin
 product protocol check. Cargo's reported target directory owns artifact location;
 the export builds in its `wire-contract` subdirectory.
 
-`protocol/product/manifest.json` currently generates method-name constants, the
-advertised ready-method list and grant lookup. It does not generate a closed Rust
-method identity or prove gateway dispatch. [ADR 921](adr/todo/921-close-product-method-classification.md)
-proposes that identity while keeping routing, response lanes, execution capacity and paired-admission
-shape in the gateway.
+`protocol/product/manifest.json` generates method-name constants, the advertised
+ready-method list, grant lookup and closed Rust `ProductMethod` identity. Exact
+parsing, `as_str` and `ALL` preserve the manifest's wire names. The Rust-name
+validator refuses local or imported collisions with that generated identity.
+Gateway classification and its tests are mapped in the server section above;
+the manifest does not encode those server choices.
 
 ### Shared product contract values
 

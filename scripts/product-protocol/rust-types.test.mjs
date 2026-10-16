@@ -59,3 +59,15 @@ test("external Rust imports cannot shadow generated primitive types", () => {
     )
   }
 })
+
+test("ProductMethod identity cannot be shadowed by schemas or external imports", () => {
+  assert.throws(
+    () => validateExternalRustTypes({ ProductMethod: { type: "string" } }),
+    /Generated type ProductMethod conflicts with reserved type ProductMethod/,
+  )
+  assert.throws(
+    () =>
+      validateExternalRustTypes({ Input: { "x-rust-type": "external::ProductMethod" } }),
+    /reserved type ProductMethod/,
+  )
+})

@@ -3,6 +3,7 @@ use crate::conversation::application::{
     access_refusal, AdmitPassiveRead, CatalogueChangeWatch, CatalogueWatchError,
     CatalogueWatchState, PassiveRead,
 };
+use crate::product::method_plan::AdmissionPlan;
 use crate::product::socket::close_reason;
 use crate::product::state::ProductRouteState;
 use nessa_auth::application::ports::AccessError;
@@ -12,8 +13,8 @@ use nessa_protocol::conversation::{
     read_scope::{CatalogueReadScope, ReadRefusal},
 };
 use nessa_protocol::product::generated::{
-    product_method, ConversationWatchCatalogueParams, ConversationWatchRecordsParams,
-    MAX_CHANGE_WATCH_ID_BYTES, MAX_CONNECTION_CATALOGUE_WATCHES, MAX_CONNECTION_RECORD_WATCHES,
+    ConversationWatchCatalogueParams, ConversationWatchRecordsParams, MAX_CHANGE_WATCH_ID_BYTES,
+    MAX_CONNECTION_CATALOGUE_WATCHES, MAX_CONNECTION_RECORD_WATCHES,
 };
 use nessa_protocol::product::passive_read::decode_epoch;
 use nessa_protocol::product_contract::generated::{
@@ -92,9 +93,9 @@ pub(in crate::product) enum WatchSelector {
 }
 
 impl WatchSelector {
-    pub fn decode(method: &str, params: Value) -> Result<Self, ChangeWatchErrorCode> {
+    pub fn decode(admission: AdmissionPlan, params: Value) -> Result<Self, ChangeWatchErrorCode> {
         let invalid = || ChangeWatchErrorCode::InvalidRequest;
-        if method == product_method::CONVERSATION_WATCH_RECORDS {
+        if admission == AdmissionPlan::WatchRecords {
             let value: ConversationWatchRecordsParams =
                 serde_json::from_value(params).map_err(|_| invalid())?;
             Ok(Self::Records {
@@ -105,7 +106,7 @@ impl WatchSelector {
                     .to_owned(),
                 epoch: decode_epoch(&value.access_epoch).map_err(|_| invalid())?,
             })
-        } else if method == product_method::CONVERSATION_WATCH_CATALOGUE {
+        } else if admission == AdmissionPlan::WatchCatalogue {
             let value: ConversationWatchCatalogueParams =
                 serde_json::from_value(params).map_err(|_| invalid())?;
             Ok(Self::Catalogue {

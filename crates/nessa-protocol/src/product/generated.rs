@@ -3007,6 +3007,381 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "conversation.permissionRules",
     "conversation.revokePermissionRule",
 ];
+/// A method declared by the product manifest; carries no admission verdict.
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+pub enum ProductMethod {
+    /// The `session.authenticate` method.
+    SessionAuthenticate,
+    /// The `auth.session` method.
+    AuthSession,
+    /// The `server.health` method.
+    ServerHealth,
+    /// The `credential.issue` method.
+    CredentialIssue,
+    /// The `credential.list` method.
+    CredentialList,
+    /// The `credential.revoke` method.
+    CredentialRevoke,
+    /// The `conversation.create` method.
+    ConversationCreate,
+    /// The `conversation.read` method.
+    ConversationRead,
+    /// The `conversation.recordsHead` method.
+    ConversationRecordsHead,
+    /// The `conversation.recordsPage` method.
+    ConversationRecordsPage,
+    /// The `conversation.list` method.
+    ConversationList,
+    /// The `conversation.observe` method.
+    ConversationObserve,
+    /// The `conversation.send` method.
+    ConversationSend,
+    /// The `conversation.steer` method.
+    ConversationSteer,
+    /// The `conversation.remove` method.
+    ConversationRemove,
+    /// The `conversation.stop` method.
+    ConversationStop,
+    /// The `conversation.receipt` method.
+    ConversationReceipt,
+    /// The `conversation.message` method.
+    ConversationMessage,
+    /// The `conversation.messageStatus` method.
+    ConversationMessageStatus,
+    /// The `conversation.answer` method.
+    ConversationAnswer,
+    /// The `conversation.answerQuestion` method.
+    ConversationAnswerQuestion,
+    /// The `conversation.cancel` method.
+    ConversationCancel,
+    /// The `conversation.close` method.
+    ConversationClose,
+    /// The `conversation.archive` method.
+    ConversationArchive,
+    /// The `conversation.unarchive` method.
+    ConversationUnarchive,
+    /// The `conversation.delete` method.
+    ConversationDelete,
+    /// The `conversation.reorder` method.
+    ConversationReorder,
+    /// The `artifact.read` method.
+    ArtifactRead,
+    /// The `attachment.begin` method.
+    AttachmentBegin,
+    /// The `agents.list` method.
+    AgentsList,
+    /// The `agents.setNativeHooks` method.
+    AgentsSetNativeHooks,
+    /// The `agents.subscribe` method.
+    AgentsSubscribe,
+    /// The `agents.unsubscribe` method.
+    AgentsUnsubscribe,
+    /// The `conversation.setApprovalMode` method.
+    ConversationSetApprovalMode,
+    /// The `agents.installOptions` method.
+    AgentsInstallOptions,
+    /// The `agents.install` method.
+    AgentsInstall,
+    /// The `conversation.catalogueHead` method.
+    ConversationCatalogueHead,
+    /// The `conversation.catalogueManifest` method.
+    ConversationCatalogueManifest,
+    /// The `conversation.catalogueResolve` method.
+    ConversationCatalogueResolve,
+    /// The `mcp.callTool` method.
+    McpCallTool,
+    /// The `mcp.readResource` method.
+    McpReadResource,
+    /// The `mcp.releaseApp` method.
+    McpReleaseApp,
+    /// The `mcp.sendMessage` method.
+    McpSendMessage,
+    /// The `mcp.updateModelContext` method.
+    McpUpdateModelContext,
+    /// The `mcpServers.list` method.
+    McpServersList,
+    /// The `mcpServers.save` method.
+    McpServersSave,
+    /// The `mcpServers.remove` method.
+    McpServersRemove,
+    /// The `mcpServers.inspect` method.
+    McpServersInspect,
+    /// The `mcpServers.authorize` method.
+    McpServersAuthorize,
+    /// The `mcpServers.revoke` method.
+    McpServersRevoke,
+    /// The `pairing.create` method.
+    PairingCreate,
+    /// The `pairing.pending` method.
+    PairingPending,
+    /// The `pairing.status` method.
+    PairingStatus,
+    /// The `pairing.approve` method.
+    PairingApprove,
+    /// The `pairing.deny` method.
+    PairingDeny,
+    /// The `pairing.cancel` method.
+    PairingCancel,
+    /// The `peer.enroll` method.
+    PeerEnroll,
+    /// The `peer.list` method.
+    PeerList,
+    /// The `peer.forget` method.
+    PeerForget,
+    /// The `peer.relay` method.
+    PeerRelay,
+    /// The `conversation.watchRecords` method.
+    ConversationWatchRecords,
+    /// The `conversation.watchCatalogue` method.
+    ConversationWatchCatalogue,
+    /// The `conversation.unwatch` method.
+    ConversationUnwatch,
+    /// The `conversation.subscribe` method.
+    ConversationSubscribe,
+    /// The `conversation.subscribeList` method.
+    ConversationSubscribeList,
+    /// The `conversation.unsubscribe` method.
+    ConversationUnsubscribe,
+    /// The `conversation.share` method.
+    ConversationShare,
+    /// The `conversation.unshare` method.
+    ConversationUnshare,
+    /// The `conversation.shares` method.
+    ConversationShares,
+    /// The `conversation.permissionRules` method.
+    ConversationPermissionRules,
+    /// The `conversation.revokePermissionRule` method.
+    ConversationRevokePermissionRule,
+}
+impl ProductMethod {
+    /// The complete manifest method catalogue, including authentication.
+    pub const ALL: &'static [Self] = &[
+        Self::SessionAuthenticate,
+        Self::AuthSession,
+        Self::ServerHealth,
+        Self::CredentialIssue,
+        Self::CredentialList,
+        Self::CredentialRevoke,
+        Self::ConversationCreate,
+        Self::ConversationRead,
+        Self::ConversationRecordsHead,
+        Self::ConversationRecordsPage,
+        Self::ConversationList,
+        Self::ConversationObserve,
+        Self::ConversationSend,
+        Self::ConversationSteer,
+        Self::ConversationRemove,
+        Self::ConversationStop,
+        Self::ConversationReceipt,
+        Self::ConversationMessage,
+        Self::ConversationMessageStatus,
+        Self::ConversationAnswer,
+        Self::ConversationAnswerQuestion,
+        Self::ConversationCancel,
+        Self::ConversationClose,
+        Self::ConversationArchive,
+        Self::ConversationUnarchive,
+        Self::ConversationDelete,
+        Self::ConversationReorder,
+        Self::ArtifactRead,
+        Self::AttachmentBegin,
+        Self::AgentsList,
+        Self::AgentsSetNativeHooks,
+        Self::AgentsSubscribe,
+        Self::AgentsUnsubscribe,
+        Self::ConversationSetApprovalMode,
+        Self::AgentsInstallOptions,
+        Self::AgentsInstall,
+        Self::ConversationCatalogueHead,
+        Self::ConversationCatalogueManifest,
+        Self::ConversationCatalogueResolve,
+        Self::McpCallTool,
+        Self::McpReadResource,
+        Self::McpReleaseApp,
+        Self::McpSendMessage,
+        Self::McpUpdateModelContext,
+        Self::McpServersList,
+        Self::McpServersSave,
+        Self::McpServersRemove,
+        Self::McpServersInspect,
+        Self::McpServersAuthorize,
+        Self::McpServersRevoke,
+        Self::PairingCreate,
+        Self::PairingPending,
+        Self::PairingStatus,
+        Self::PairingApprove,
+        Self::PairingDeny,
+        Self::PairingCancel,
+        Self::PeerEnroll,
+        Self::PeerList,
+        Self::PeerForget,
+        Self::PeerRelay,
+        Self::ConversationWatchRecords,
+        Self::ConversationWatchCatalogue,
+        Self::ConversationUnwatch,
+        Self::ConversationSubscribe,
+        Self::ConversationSubscribeList,
+        Self::ConversationUnsubscribe,
+        Self::ConversationShare,
+        Self::ConversationUnshare,
+        Self::ConversationShares,
+        Self::ConversationPermissionRules,
+        Self::ConversationRevokePermissionRule,
+    ];
+    /// Return this identity's unchanged wire name.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::SessionAuthenticate => "session.authenticate",
+            Self::AuthSession => "auth.session",
+            Self::ServerHealth => "server.health",
+            Self::CredentialIssue => "credential.issue",
+            Self::CredentialList => "credential.list",
+            Self::CredentialRevoke => "credential.revoke",
+            Self::ConversationCreate => "conversation.create",
+            Self::ConversationRead => "conversation.read",
+            Self::ConversationRecordsHead => "conversation.recordsHead",
+            Self::ConversationRecordsPage => "conversation.recordsPage",
+            Self::ConversationList => "conversation.list",
+            Self::ConversationObserve => "conversation.observe",
+            Self::ConversationSend => "conversation.send",
+            Self::ConversationSteer => "conversation.steer",
+            Self::ConversationRemove => "conversation.remove",
+            Self::ConversationStop => "conversation.stop",
+            Self::ConversationReceipt => "conversation.receipt",
+            Self::ConversationMessage => "conversation.message",
+            Self::ConversationMessageStatus => "conversation.messageStatus",
+            Self::ConversationAnswer => "conversation.answer",
+            Self::ConversationAnswerQuestion => "conversation.answerQuestion",
+            Self::ConversationCancel => "conversation.cancel",
+            Self::ConversationClose => "conversation.close",
+            Self::ConversationArchive => "conversation.archive",
+            Self::ConversationUnarchive => "conversation.unarchive",
+            Self::ConversationDelete => "conversation.delete",
+            Self::ConversationReorder => "conversation.reorder",
+            Self::ArtifactRead => "artifact.read",
+            Self::AttachmentBegin => "attachment.begin",
+            Self::AgentsList => "agents.list",
+            Self::AgentsSetNativeHooks => "agents.setNativeHooks",
+            Self::AgentsSubscribe => "agents.subscribe",
+            Self::AgentsUnsubscribe => "agents.unsubscribe",
+            Self::ConversationSetApprovalMode => "conversation.setApprovalMode",
+            Self::AgentsInstallOptions => "agents.installOptions",
+            Self::AgentsInstall => "agents.install",
+            Self::ConversationCatalogueHead => "conversation.catalogueHead",
+            Self::ConversationCatalogueManifest => "conversation.catalogueManifest",
+            Self::ConversationCatalogueResolve => "conversation.catalogueResolve",
+            Self::McpCallTool => "mcp.callTool",
+            Self::McpReadResource => "mcp.readResource",
+            Self::McpReleaseApp => "mcp.releaseApp",
+            Self::McpSendMessage => "mcp.sendMessage",
+            Self::McpUpdateModelContext => "mcp.updateModelContext",
+            Self::McpServersList => "mcpServers.list",
+            Self::McpServersSave => "mcpServers.save",
+            Self::McpServersRemove => "mcpServers.remove",
+            Self::McpServersInspect => "mcpServers.inspect",
+            Self::McpServersAuthorize => "mcpServers.authorize",
+            Self::McpServersRevoke => "mcpServers.revoke",
+            Self::PairingCreate => "pairing.create",
+            Self::PairingPending => "pairing.pending",
+            Self::PairingStatus => "pairing.status",
+            Self::PairingApprove => "pairing.approve",
+            Self::PairingDeny => "pairing.deny",
+            Self::PairingCancel => "pairing.cancel",
+            Self::PeerEnroll => "peer.enroll",
+            Self::PeerList => "peer.list",
+            Self::PeerForget => "peer.forget",
+            Self::PeerRelay => "peer.relay",
+            Self::ConversationWatchRecords => "conversation.watchRecords",
+            Self::ConversationWatchCatalogue => "conversation.watchCatalogue",
+            Self::ConversationUnwatch => "conversation.unwatch",
+            Self::ConversationSubscribe => "conversation.subscribe",
+            Self::ConversationSubscribeList => "conversation.subscribeList",
+            Self::ConversationUnsubscribe => "conversation.unsubscribe",
+            Self::ConversationShare => "conversation.share",
+            Self::ConversationUnshare => "conversation.unshare",
+            Self::ConversationShares => "conversation.shares",
+            Self::ConversationPermissionRules => "conversation.permissionRules",
+            Self::ConversationRevokePermissionRule => "conversation.revokePermissionRule",
+        }
+    }
+    /// Parse an exact, case-sensitive manifest wire name; unknown names return `None`.
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "session.authenticate" => Some(Self::SessionAuthenticate),
+            "auth.session" => Some(Self::AuthSession),
+            "server.health" => Some(Self::ServerHealth),
+            "credential.issue" => Some(Self::CredentialIssue),
+            "credential.list" => Some(Self::CredentialList),
+            "credential.revoke" => Some(Self::CredentialRevoke),
+            "conversation.create" => Some(Self::ConversationCreate),
+            "conversation.read" => Some(Self::ConversationRead),
+            "conversation.recordsHead" => Some(Self::ConversationRecordsHead),
+            "conversation.recordsPage" => Some(Self::ConversationRecordsPage),
+            "conversation.list" => Some(Self::ConversationList),
+            "conversation.observe" => Some(Self::ConversationObserve),
+            "conversation.send" => Some(Self::ConversationSend),
+            "conversation.steer" => Some(Self::ConversationSteer),
+            "conversation.remove" => Some(Self::ConversationRemove),
+            "conversation.stop" => Some(Self::ConversationStop),
+            "conversation.receipt" => Some(Self::ConversationReceipt),
+            "conversation.message" => Some(Self::ConversationMessage),
+            "conversation.messageStatus" => Some(Self::ConversationMessageStatus),
+            "conversation.answer" => Some(Self::ConversationAnswer),
+            "conversation.answerQuestion" => Some(Self::ConversationAnswerQuestion),
+            "conversation.cancel" => Some(Self::ConversationCancel),
+            "conversation.close" => Some(Self::ConversationClose),
+            "conversation.archive" => Some(Self::ConversationArchive),
+            "conversation.unarchive" => Some(Self::ConversationUnarchive),
+            "conversation.delete" => Some(Self::ConversationDelete),
+            "conversation.reorder" => Some(Self::ConversationReorder),
+            "artifact.read" => Some(Self::ArtifactRead),
+            "attachment.begin" => Some(Self::AttachmentBegin),
+            "agents.list" => Some(Self::AgentsList),
+            "agents.setNativeHooks" => Some(Self::AgentsSetNativeHooks),
+            "agents.subscribe" => Some(Self::AgentsSubscribe),
+            "agents.unsubscribe" => Some(Self::AgentsUnsubscribe),
+            "conversation.setApprovalMode" => Some(Self::ConversationSetApprovalMode),
+            "agents.installOptions" => Some(Self::AgentsInstallOptions),
+            "agents.install" => Some(Self::AgentsInstall),
+            "conversation.catalogueHead" => Some(Self::ConversationCatalogueHead),
+            "conversation.catalogueManifest" => Some(Self::ConversationCatalogueManifest),
+            "conversation.catalogueResolve" => Some(Self::ConversationCatalogueResolve),
+            "mcp.callTool" => Some(Self::McpCallTool),
+            "mcp.readResource" => Some(Self::McpReadResource),
+            "mcp.releaseApp" => Some(Self::McpReleaseApp),
+            "mcp.sendMessage" => Some(Self::McpSendMessage),
+            "mcp.updateModelContext" => Some(Self::McpUpdateModelContext),
+            "mcpServers.list" => Some(Self::McpServersList),
+            "mcpServers.save" => Some(Self::McpServersSave),
+            "mcpServers.remove" => Some(Self::McpServersRemove),
+            "mcpServers.inspect" => Some(Self::McpServersInspect),
+            "mcpServers.authorize" => Some(Self::McpServersAuthorize),
+            "mcpServers.revoke" => Some(Self::McpServersRevoke),
+            "pairing.create" => Some(Self::PairingCreate),
+            "pairing.pending" => Some(Self::PairingPending),
+            "pairing.status" => Some(Self::PairingStatus),
+            "pairing.approve" => Some(Self::PairingApprove),
+            "pairing.deny" => Some(Self::PairingDeny),
+            "pairing.cancel" => Some(Self::PairingCancel),
+            "peer.enroll" => Some(Self::PeerEnroll),
+            "peer.list" => Some(Self::PeerList),
+            "peer.forget" => Some(Self::PeerForget),
+            "peer.relay" => Some(Self::PeerRelay),
+            "conversation.watchRecords" => Some(Self::ConversationWatchRecords),
+            "conversation.watchCatalogue" => Some(Self::ConversationWatchCatalogue),
+            "conversation.unwatch" => Some(Self::ConversationUnwatch),
+            "conversation.subscribe" => Some(Self::ConversationSubscribe),
+            "conversation.subscribeList" => Some(Self::ConversationSubscribeList),
+            "conversation.unsubscribe" => Some(Self::ConversationUnsubscribe),
+            "conversation.share" => Some(Self::ConversationShare),
+            "conversation.unshare" => Some(Self::ConversationUnshare),
+            "conversation.shares" => Some(Self::ConversationShares),
+            "conversation.permissionRules" => Some(Self::ConversationPermissionRules),
+            "conversation.revokePermissionRule" => Some(Self::ConversationRevokePermissionRule),
+            _ => None,
+        }
+    }
+}
 /// The grant Cedar is asked for before this method is dispatched.
 ///
 /// Generated from `protocol/product/manifest.json`. Writing

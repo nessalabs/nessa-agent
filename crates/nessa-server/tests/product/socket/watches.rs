@@ -1412,6 +1412,7 @@ async fn actual_actor_replaces_unsent_dirty_after_observing_source_terminal_befo
             &fixture.state,
             &fixture.session,
             request,
+            crate::product::method_plan::AdmissionPlan::WatchRecords,
             slot,
             Instant::now() + RECORD_SEND_TIMEOUT
         )
@@ -2114,12 +2115,12 @@ async fn periodic_recheck_asks_admission_once_per_distinct_target_without_identi
     });
     fixture.state.access = access.clone();
     let records = WatchSelector::decode(
-        "conversation.watchRecords",
+        AdmissionPlan::WatchRecords,
         json!({"conversationId": fixture.id.to_string(), "receiverId": "receiver", "accessEpoch": "3"}),
     )
     .unwrap();
     let catalogue = WatchSelector::decode(
-        "conversation.watchCatalogue",
+        AdmissionPlan::WatchCatalogue,
         json!({"receiverId": "receiver", "accessEpoch": "3"}),
     )
     .unwrap();

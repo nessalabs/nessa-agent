@@ -5,8 +5,8 @@
 //! `.shares` commands.
 //!
 //! What a paired party may do is the conversation access policy's
-//! (`ConversationAccessPolicyEvaluator`, ADR 803 step 3): this module names
-//! the action a method is ([`paired_action`]), reads the facts the policy is
+//! (`ConversationAccessPolicyEvaluator`, ADR 803 step 3): this module consumes
+//! the static action selected by `method_plan`, reads the facts the policy is
 //! asked with, and maps its answer to a wire code. It also maps a share's
 //! role and policy between the wire and the domain. `conversation.read`,
 //! `artifact.read` and every view subscription batch
@@ -24,6 +24,7 @@
 //! ```
 use super::{
     conversation::{caller, conversation_id},
+    method_plan::{method_plan, AdmissionPlan, RequestAccess, ShareAction},
     socket::{admit_action, admit_grant, failure, failure_with_details, success},
     state::ProductRouteState,
 };
@@ -40,10 +41,10 @@ use nessa_auth::domain::CredentialId;
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_protocol::conversation::read_scope::ReadRefusal;
 use nessa_protocol::product::generated::{
-    action_for_method, ConversationCapability, ConversationMutationResult, ConversationShare,
-    ConversationShareParams, ConversationShareResult, ConversationSharesCursor,
-    ConversationSharesParams, ConversationSharesResult, ConversationToolPolicy,
-    ConversationToolPreset, ConversationUnshareParams, MAX_SHARE_PAGE,
+    ConversationCapability, ConversationMutationResult, ConversationShare, ConversationShareParams,
+    ConversationShareResult, ConversationSharesCursor, ConversationSharesParams,
+    ConversationSharesResult, ConversationToolPolicy, ConversationToolPreset,
+    ConversationUnshareParams, ProductMethod, MAX_SHARE_PAGE,
 };
 use nessa_protocol::product_contract::generated::ConversationErrorCode;
 use nessa_protocol::protocol::{OutgoingMessage, RequestFrame};
@@ -162,7 +163,7 @@ async fn unpaired_may_see_review(
 }
 
 /// Whether a paired `session` may open or stop one view subscription on
-/// `method`.
+/// the method plan.
 ///
 /// Returns whether this call admitted it. A session that is not paired, and
 /// a method other than `conversation.subscribe` or `conversation.unsubscribe`,
@@ -176,9 +177,12 @@ async fn unpaired_may_see_review(
 pub(super) async fn admit_paired_follow(
     state: &ProductRouteState,
     session: &AuthenticatedSession,
-    method: &str,
+    admission: AdmissionPlan,
 ) -> Result<bool, &'static str> {
-    if method != "conversation.subscribe" && method != "conversation.unsubscribe" {
+    if !matches!(
+        admission,
+        AdmissionPlan::FollowConversation | AdmissionPlan::UnsubscribeConversation
+    ) {
         return Ok(false);
     }
     if paired_binding(state, session).await?.is_none() {
@@ -243,50 +247,13 @@ pub(super) async fn admit_list(
         .map_err(paired_code)
 }
 
-/// The action a paired party's `conversation.write` method is: a Drive
-/// command starts and steers a turn, stops it, answers or cancels its
-/// permission request, answers its question, or looks up those commands'
-/// receipts (row J11); a Comment command leaves a note or reads where the
-/// caller's own note stands (row J17); any other is `conversation.write`
-/// (deleting, archiving, exporting, re-sharing, changing the model, issue
-/// 707), asked on the catalogue the binding reads because not every such
-/// method names a conversation. Which role allows which, and that none
-/// allows the rest, is the policy's.
-fn paired_action(method: &str) -> AccessAction {
-    match method {
-        "conversation.send"
-        | "conversation.steer"
-        | "conversation.stop"
-        | "conversation.answer"
-        | "conversation.answerQuestion"
-        | "conversation.cancel"
-        | "conversation.receipt" => AccessAction::Drive,
-        "conversation.message" | "conversation.messageStatus" => AccessAction::Comment,
-        _ => AccessAction::Write,
-    }
-}
-
-/// The methods behind Cedar's `conversation.write` that a paired session
-/// reaches only to be admitted again by its grants: the read and the view
-/// subscription ask [`admit_conversation`], the lists ask [`admit_list`],
-/// and an unsubscribe ends only what was admitted. Rows G12 and G13.
-const ADMITTED_BY_ITS_OWN_CHECK: [&str; 6] = [
-    "conversation.read",
-    "conversation.list",
-    "conversation.observe",
-    "conversation.subscribe",
-    "conversation.subscribeList",
-    "conversation.unsubscribe",
-];
-
 /// The one admission of a socket request, after its session was found
 /// current. The owner's surfaces, and every method outside Cedar's
 /// `conversation.write`, are admitted by the method's grant as before.
 ///
 /// A paired session holding `conversation.write` would otherwise act as its
-/// owner, so for it every `conversation.write` method that its grants do
-/// not admit again ([`ADMITTED_BY_ITS_OWN_CHECK`]) asks the access policy
-/// for its paired action ([`paired_action`], rows J12, J17). A method no
+/// owner, so the method plan names commands that ask the access policy
+/// for their paired action (rows J12, J17). A method no
 /// role names is asked `conversation.write` on the binding's catalogue, and
 /// refused `forbidden` before anything about a conversation is read. A
 /// Drive or Comment command asks Cedar for the grant pairing mints,
@@ -309,16 +276,18 @@ pub(super) async fn admit_request(
     state: &ProductRouteState,
     session: &AuthenticatedSession,
     frame: &RequestFrame,
+    identity: Option<ProductMethod>,
 ) -> Result<Initiation, &'static str> {
     let method = frame.method.as_str();
     let as_owner = || async {
         admit_action(state, session, method).await?;
         Ok(Initiation::owner())
     };
-    let writes = action_for_method(method) == Some("conversation.write");
-    if !writes || ADMITTED_BY_ITS_OWN_CHECK.contains(&method) {
+    let Some(AdmissionPlan::Request(request)) =
+        identity.map(|method| method_plan(method).admission)
+    else {
         return as_owner().await;
-    }
+    };
     let Some((_, conversations, grants)) = state.passive_read.as_ref() else {
         return as_owner().await;
     };
@@ -329,7 +298,11 @@ pub(super) async fn admit_request(
     // the device's surface. A peer gateway signs in as its own principal
     // and forwards its people's commands in a later slice.
     let access = PairedAccess::new(access_policy(state)?, party(&binding, session));
-    let action = paired_action(method);
+    let action = match request {
+        RequestAccess::Drive => AccessAction::Drive,
+        RequestAccess::Comment => AccessAction::Comment,
+        RequestAccess::CatalogueWrite => AccessAction::Write,
+    };
     if action == AccessAction::Write {
         access.admit_catalogue(action).map_err(paired_code)?;
         // No policy permits it today; one that did would let the party
@@ -351,7 +324,7 @@ pub(super) async fn admit_request(
             action,
             &conversation,
             held.map(|held| held.capabilities),
-            request_shape(frame),
+            request_shape(frame, identity),
         )
         .map_err(paired_code)?;
     // Every paired permit asks for a grant held, so an admitted command
@@ -385,7 +358,7 @@ fn drive_target(frame: &RequestFrame) -> Result<ConversationId, &'static str> {
 /// What a command carries, as far as the policy may care: images named by
 /// a digest in the owner's attachment store, files linked by a path on the
 /// owner's machine, and the operation a receipt lookup names (row J14).
-fn request_shape(frame: &RequestFrame) -> RequestShape<'_> {
+fn request_shape(frame: &RequestFrame, identity: Option<ProductMethod>) -> RequestShape<'_> {
     let non_empty = |name: &str| {
         frame
             .params
@@ -395,7 +368,7 @@ fn request_shape(frame: &RequestFrame) -> RequestShape<'_> {
     RequestShape {
         attachments: non_empty("attachments"),
         files: non_empty("files"),
-        receipt_operation: (frame.method == "conversation.receipt")
+        receipt_operation: (identity == Some(ProductMethod::ConversationReceipt))
             .then(|| {
                 frame
                     .params
@@ -437,6 +410,7 @@ pub(super) async fn dispatch_share(
     state: &ProductRouteState,
     session: &AuthenticatedSession,
     frame: RequestFrame,
+    action: ShareAction,
 ) -> OutgoingMessage {
     let Some((receivers, conversations, grants)) = state.passive_read.as_ref() else {
         return failure(
@@ -463,7 +437,7 @@ pub(super) async fn dispatch_share(
     match paired_binding(state, session).await {
         Ok(None) => {}
         Ok(Some(binding)) => {
-            if let Err(code) = paired_share(state, session, &binding, &frame).await {
+            if let Err(code) = paired_share(state, session, &binding, &frame, action).await {
                 return failure(&frame.id, code);
             }
         }
@@ -471,8 +445,8 @@ pub(super) async fn dispatch_share(
     }
     let now = state.clock.unix_milliseconds();
     let result: Result<OutgoingMessage, ConversationError> = async {
-        match frame.method.as_str() {
-            "conversation.share" => {
+        match action {
+            ShareAction::Share => {
                 let params: ConversationShareParams = serde_json::from_value(frame.params)
                     .map_err(|_| ConversationError::InvalidInput)?;
                 let id = conversation_id(&params.conversation_id)?;
@@ -503,7 +477,7 @@ pub(super) async fn dispatch_share(
                     },
                 ))
             }
-            "conversation.unshare" => {
+            ShareAction::Unshare => {
                 let params: ConversationUnshareParams = serde_json::from_value(frame.params)
                     .map_err(|_| ConversationError::InvalidInput)?;
                 let id = conversation_id(&params.conversation_id)?;
@@ -530,7 +504,7 @@ pub(super) async fn dispatch_share(
                     },
                 ))
             }
-            "conversation.shares" => {
+            ShareAction::Shares => {
                 let params: ConversationSharesParams = serde_json::from_value(frame.params)
                     .map_err(|_| ConversationError::InvalidInput)?;
                 let page_size = usize::try_from(params.page_size)
@@ -558,7 +532,6 @@ pub(super) async fn dispatch_share(
                     },
                 ))
             }
-            _ => Err(ConversationError::InvalidInput),
         }
     }
     .await;
@@ -589,12 +562,12 @@ async fn paired_share(
     session: &AuthenticatedSession,
     binding: &ReceiverBinding,
     frame: &RequestFrame,
+    action: ShareAction,
 ) -> Result<(), &'static str> {
-    let action = match frame.method.as_str() {
-        "conversation.share" => AccessAction::Share,
-        "conversation.unshare" => AccessAction::Unshare,
-        "conversation.shares" => AccessAction::Shares,
-        _ => return Err("forbidden"),
+    let action = match action {
+        ShareAction::Share => AccessAction::Share,
+        ShareAction::Unshare => AccessAction::Unshare,
+        ShareAction::Shares => AccessAction::Shares,
     };
     let (Some((_, conversations, grants)), Some(id)) = (
         state.passive_read.as_ref(),

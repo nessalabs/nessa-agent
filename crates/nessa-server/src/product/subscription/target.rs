@@ -23,18 +23,19 @@ use crate::conversation::application::{
 };
 use crate::product::{
     conversation::{caller, read_list, read_view},
+    method_plan::AdmissionPlan,
     passive_read::deadlines::{PASSIVE_READ_TIMEOUT, RECORD_SEND_TIMEOUT},
     read_access,
-    socket::{admit_now, failure, success},
+    socket::{admit_now_method, failure, success},
     state::{note_limit, ProductRouteState},
 };
 use nessa_auth::application::session::AuthenticatedSession;
 use nessa_protocol::conversation::{domain::ConversationId, projection::CommittedCursor};
 use nessa_protocol::product::generated::{
-    product_event, product_method, ConversationListResult, ConversationListed,
-    ConversationSubscribeResult, ConversationSubscriptionEndReason, ConversationSubscriptionEnded,
+    product_event, ConversationListResult, ConversationListed, ConversationSubscribeResult,
+    ConversationSubscriptionEndReason, ConversationSubscriptionEnded,
     ConversationSubscriptionErrorCode, ConversationView, ConversationViewCursor,
-    ConversationViewed, MAX_PAYLOAD_BYTES, SUBSCRIPTION_DELIVERY_TIMEOUT_MS,
+    ConversationViewed, ProductMethod, MAX_PAYLOAD_BYTES, SUBSCRIPTION_DELIVERY_TIMEOUT_MS,
 };
 use nessa_protocol::product::passive_read::decimal_u64;
 use nessa_protocol::product_contract::generated::ConversationErrorCode;
@@ -160,20 +161,20 @@ impl Target {
         }
     }
 
-    fn method(&self) -> &'static str {
+    fn method(&self) -> ProductMethod {
         match self {
-            Self::View { .. } => product_method::CONVERSATION_SUBSCRIBE,
-            Self::List { .. } => product_method::CONVERSATION_SUBSCRIBE_LIST,
-            Self::Agents => product_method::AGENTS_SUBSCRIBE,
+            Self::View { .. } => ProductMethod::ConversationSubscribe,
+            Self::List { .. } => ProductMethod::ConversationSubscribeList,
+            Self::Agents => ProductMethod::AgentsSubscribe,
         }
     }
 
     /// The method that stops a subscription to this: the one beside the
     /// method that made it, which asks the same grant.
-    pub fn stopped_by(&self) -> &'static str {
+    pub fn stopped_by(&self) -> AdmissionPlan {
         match self {
-            Self::View { .. } | Self::List { .. } => product_method::CONVERSATION_UNSUBSCRIBE,
-            Self::Agents => product_method::AGENTS_UNSUBSCRIBE,
+            Self::View { .. } | Self::List { .. } => AdmissionPlan::UnsubscribeConversation,
+            Self::Agents => AdmissionPlan::UnsubscribeAgents,
         }
     }
 }
@@ -348,7 +349,7 @@ pub(super) async fn authorize_batch(
     session: &AuthenticatedSession,
     target: &Target,
 ) -> Result<AuthenticatedSession, &'static str> {
-    let current = admit_now(state, session, target.method()).await?;
+    let current = admit_now_method(state, session, target.method()).await?;
     match target {
         Target::View { conversation, .. } => {
             read_access::admit_conversation(state, &current, conversation).await?

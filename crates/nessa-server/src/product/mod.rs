@@ -28,6 +28,7 @@ mod attachment;
 pub(crate) mod catalogue_read;
 mod change_watch;
 mod event_sequence;
+mod method_plan;
 mod operational_limits;
 pub(crate) mod passive_read;
 mod read_access;

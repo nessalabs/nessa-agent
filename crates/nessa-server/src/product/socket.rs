@@ -1,6 +1,7 @@
 use super::change_watch::{
     ConnectionWatches, WatchAcknowledgement, WatchDeliveries, WatchFrame, WatchOutcome, WatchReply,
 };
+use super::method_plan::{method_plan, AdmissionPlan, ExecutionCapacity, Handler, ResponseLane};
 use super::passive_read::deadlines::{PASSIVE_READ_TIMEOUT, RECORD_SEND_TIMEOUT};
 use super::read_access::ReviewNoticeVisibility;
 use super::record_read::refusal_code;
@@ -39,8 +40,8 @@ use nessa_protocol::product::generated::wire_shape_product_session_ready;
 use nessa_protocol::product::generated::{
     action_for_method, product_event, CredentialIssueParams, CredentialListParams,
     CredentialListResult, CredentialRevokeParams, CredentialRevokeResult, ExistingCredentialResult,
-    IssuedCredentialResult, PermissionReviewNotice, PermissionReviewWaiting, ProductSessionReady,
-    SessionAuthenticateParams, SessionChallenge, SessionTermination,
+    IssuedCredentialResult, PermissionReviewNotice, PermissionReviewWaiting, ProductMethod,
+    ProductSessionReady, SessionAuthenticateParams, SessionChallenge, SessionTermination,
     MAX_NATIVE_HOOKS_REQUEST_ID_BYTES, MAX_PRODUCT_CLIENT_ID_CHARACTERS,
     MAX_PRODUCT_SURFACE_INSTANCE_CHARACTERS, MAX_RECORD_RESPONSE_BYTES,
     MIN_NATIVE_HOOKS_REQUEST_ID_CHARACTERS, PRODUCT_HANDSHAKE_METHOD, PRODUCT_READY_METHODS,
@@ -530,48 +531,22 @@ fn app_mount_key(params: &serde_json::Value) -> Option<AppMountKey> {
 /// `a_release_is_admitted_while_an_app_refusal_waits`.
 const HELD_INPUT_WHILE_APP_REFUSAL: usize = 16;
 
-#[derive(Clone, Copy)]
-enum ResponseClass {
-    Control,
-    Ordinary,
-    Record,
-    /// An MCP App's call (#348): a destructive one waits minutes on the
-    /// person's review, so app calls have a lane of their own, and held calls
-    /// never take the place of the read and the answer that would end them.
-    App,
+/// A decoded input keeps its one recognized identity through deferred admission.
+struct ParsedRequest {
+    frame: RequestFrame,
+    method: Option<ProductMethod>,
 }
 
-impl ResponseClass {
-    fn for_method(method: &str) -> Self {
-        match method {
-            "conversation.close"
-            | "conversation.stop"
-            | "conversation.archive"
-            | "conversation.unarchive"
-            | "conversation.answer"
-            | "conversation.answerQuestion"
-            | "conversation.cancel"
-            | "conversation.remove"
-            | "conversation.reorder"
-            // Releasing an app ends its held calls, so it is never behind
-            // them on the app lane.
-            | "mcp.releaseApp"
-            // Ending an enrollment is never crowded out by ordinary requests
-            // (design row O7).
-            | "pairing.deny"
-            | "pairing.cancel" => Self::Control,
-            "mcp.callTool"
-            | "mcp.readResource"
-            // A message can wait on the person's review, as a call can.
-            | "mcp.sendMessage"
-            | "mcp.updateModelContext" => Self::App,
-            "conversation.recordsHead"
-            | "conversation.recordsPage"
-            | "conversation.catalogueHead"
-            | "conversation.catalogueManifest"
-            | "conversation.catalogueResolve" => Self::Record,
-            _ => Self::Ordinary,
-        }
+impl ParsedRequest {
+    fn new(frame: RequestFrame) -> Self {
+        let method = ProductMethod::from_name(&frame.method);
+        Self { frame, method }
+    }
+
+    fn response(&self) -> ResponseLane {
+        self.method
+            .map(method_plan)
+            .map_or(ResponseLane::Ordinary, |plan| plan.response)
     }
 }
 
@@ -900,7 +875,7 @@ fn rejected_lane<T>(
 }
 
 enum AuthenticatedInput {
-    Request(RequestFrame),
+    Request(ParsedRequest),
     Refusal(OutgoingMessage),
 }
 
@@ -971,7 +946,7 @@ where
     // App calls read while that refusal waits. A control frame is admitted
     // ahead of them, so a stalled refusal cannot hold a release unread.
     // `a_release_is_admitted_while_an_app_refusal_waits`.
-    let mut held_input: VecDeque<RequestFrame> = VecDeque::new();
+    let mut held_input: VecDeque<ParsedRequest> = VecDeque::new();
     let mut current_state = interval(state.settings.current_state_interval());
     current_state.set_missed_tick_behavior(MissedTickBehavior::Delay);
     current_state.tick().await;
@@ -1005,10 +980,7 @@ where
         let staged_record =
             if app_refusal.is_none() && pending_input.is_none() && input_check.is_none() {
                 held_input.pop_front().and_then(|frame| {
-                    if matches!(
-                        ResponseClass::for_method(&frame.method),
-                        ResponseClass::Record
-                    ) {
+                    if matches!(frame.response(), ResponseLane::Record) {
                         Some(frame)
                     } else {
                         pending_input = Some(AuthenticatedInput::Request(frame));
@@ -1088,15 +1060,15 @@ where
                     _mount: mount,
                 };
                 let rejected = match class {
-                    ResponseClass::Control => rejected_lane(
+                    ResponseLane::Control => rejected_lane(
                         "socket.control_lane",
                         control_send.try_send(ControlOutput::Response(Box::new(queued))),
                     ),
-                    ResponseClass::Ordinary | ResponseClass::App => rejected_lane(
+                    ResponseLane::Ordinary | ResponseLane::App => rejected_lane(
                         "socket.ordinary_lane",
                         ordinary_send.try_send(queued),
                     ),
-                    ResponseClass::Record => rejected_lane(
+                    ResponseLane::Record => rejected_lane(
                         "socket.record_lane",
                         record_send.try_send(QueuedRecordResponse::new(queued)),
                     ),
@@ -1198,15 +1170,16 @@ where
                         continue;
                     },
                 };
+                let frame = ParsedRequest::new(frame);
                 // A further app call would need another refusal place. Hold it
                 // and keep reading so a release behind it is still admitted.
                 if app_refusal.is_some()
-                    && matches!(ResponseClass::for_method(&frame.method), ResponseClass::App)
+                    && matches!(frame.response(), ResponseLane::App)
                 {
                     held_input.push_back(frame);
                     continue;
                 }
-                let record = matches!(ResponseClass::for_method(&frame.method), ResponseClass::Record);
+                let record = matches!(frame.response(), ResponseLane::Record);
                 if record {
                     Some((frame, Instant::now()))
                 } else {
@@ -1224,10 +1197,12 @@ where
             continue;
         };
         let read_deadline = received_at + PASSIVE_READ_TIMEOUT;
-        let class = ResponseClass::for_method(&frame.method);
-        let control = matches!(class, ResponseClass::Control);
-        let record = matches!(class, ResponseClass::Record);
-        let app = matches!(class, ResponseClass::App);
+        let class = frame.response();
+        let ParsedRequest { frame, method } = frame;
+        let plan = method.map(method_plan);
+        let control = matches!(class, ResponseLane::Control);
+        let record = matches!(class, ResponseLane::Record);
+        let app = matches!(class, ResponseLane::App);
         // Before the lane's own slot: a mount at its cap is refused without
         // taking one, so the last slot stays available to another mount
         // (`one_mount_cannot_fill_the_app_lane`).
@@ -1261,10 +1236,10 @@ where
             // (`a_lane_refusal_does_not_stick_to_the_mount`).
             drop(mount_guard);
             note_limit(match class {
-                ResponseClass::Control => "socket.control_slots",
-                ResponseClass::Record => "socket.record_slot",
-                ResponseClass::App => "socket.app_calls",
-                ResponseClass::Ordinary => "socket.ordinary_slots",
+                ResponseLane::Control => "socket.control_slots",
+                ResponseLane::Record => "socket.record_slot",
+                ResponseLane::App => "socket.app_calls",
+                ResponseLane::Ordinary => "socket.ordinary_slots",
             });
             let response = failure(&frame.id, "temporarily_unavailable");
             if app {
@@ -1285,11 +1260,12 @@ where
             continue;
         };
         let slot = Arc::new(slot);
-        if ConnectionWatches::method(&frame.method) {
+        if plan.is_some_and(|plan| plan.handler == Handler::Watch) {
             if let Some(reply) = watches.begin(
                 &state,
                 &session,
                 frame,
+                plan.expect("watch has a method plan").admission,
                 slot,
                 received_at + RECORD_SEND_TIMEOUT,
             ) {
@@ -1302,7 +1278,7 @@ where
             }
             continue;
         }
-        if ConnectionSubscriptions::method(&frame.method) {
+        if plan.is_some_and(|plan| plan.handler == Handler::Subscription) {
             // Admitted as any request is (row S29): an unsubscribe here,
             // before it changes anything; a subscribe in its own task,
             // before it registers anything. The unsubscribe is admitted
@@ -1310,8 +1286,13 @@ where
             // read, so a subscribe to the same target sent after it is begun
             // only once the old one is gone. Moved into a task, a client's
             // close-then-subscribe would race and be refused as a duplicate.
-            let refused = if ConnectionSubscriptions::stops(&frame.method) {
-                admit_now(&state, &session, &frame.method)
+            let refused = if plan.is_some_and(|plan| {
+                matches!(
+                    plan.admission,
+                    AdmissionPlan::UnsubscribeConversation | AdmissionPlan::UnsubscribeAgents
+                )
+            }) {
+                admit_now_method(&state, &session, method.expect("subscription has a method"))
                     .await
                     .err()
                     .map(|code| failure(&frame.id, code))
@@ -1320,7 +1301,14 @@ where
             };
             let reply = match refused {
                 Some(refused) => Some(refused),
-                None => subscriptions.begin(&state, &session, frame, slot.clone(), received_at),
+                None => subscriptions.begin(
+                    &state,
+                    &session,
+                    frame,
+                    plan.expect("subscription has a method plan").admission,
+                    slot.clone(),
+                    received_at,
+                ),
             };
             if let Some(reply) = reply {
                 let queued = QueuedResponse {
@@ -1338,20 +1326,23 @@ where
         // An app call's capacity across sockets is the conversation
         // service's, held by the call's own task until it ends: a permit held
         // here would be let go when the socket went, while the call ran on.
-        let (capacity, limit_id) = if control {
-            (Some(&state.controls), "server.controls")
-        } else if record {
-            (Some(&state.record_reads), "server.record_reads")
-        } else if app {
-            (None, "socket.app_calls")
-        } else if frame.method == "conversation.delete" {
-            (Some(&state.deletions), "server.deletions")
-        } else if frame.method == "attachment.begin" {
-            (Some(&state.upload_begins), "server.upload_begins")
-        } else if frame.method == "artifact.read" {
-            (Some(&state.artifact_reads), "server.artifact_reads")
-        } else {
-            (Some(&state.requests), "server.requests")
+        let (capacity, limit_id) = match plan
+            .map_or(ExecutionCapacity::Requests, |plan| plan.capacity)
+        {
+            ExecutionCapacity::Controls => (Some(&state.controls), "server.controls"),
+            ExecutionCapacity::RecordReads => (Some(&state.record_reads), "server.record_reads"),
+            ExecutionCapacity::AppOwned => (None, "socket.app_calls"),
+            ExecutionCapacity::Deletions => (Some(&state.deletions), "server.deletions"),
+            ExecutionCapacity::UploadBegins => (Some(&state.upload_begins), "server.upload_begins"),
+            ExecutionCapacity::ArtifactReads => {
+                (Some(&state.artifact_reads), "server.artifact_reads")
+            }
+            ExecutionCapacity::Requests | ExecutionCapacity::Authentication => {
+                (Some(&state.requests), "server.requests")
+            }
+            ExecutionCapacity::ConnectionOwned => {
+                unreachable!("connection-owned method dispatched above")
+            }
         };
         let permit = capacity.map(|capacity| capacity.clone().try_acquire_owned());
         let Ok(permit) = permit.transpose() else {
@@ -1384,11 +1375,12 @@ where
         let request_state = state.clone();
         let request_session = session.clone();
         let task = tokio::spawn(async move {
-            if matches!(class, ResponseClass::Record) {
-                let (message, record_work) = dispatch_passive_read(
+            if matches!(class, ResponseLane::Record) {
+                let (message, record_work) = dispatch_passive_read_method(
                     &request_state,
                     &request_session,
                     frame,
+                    method.expect("record lane has a method"),
                     // The same socket admission survives both response delivery
                     // and physical work, even after a delivered read_timeout (R61).
                     RecordReadLease::new((
@@ -1401,7 +1393,8 @@ where
                 (message, class, slot, record_work, mount_guard)
             } else {
                 let _permit = permit;
-                let message = dispatch(&request_state, &request_session, frame).await;
+                let message =
+                    dispatch_method(&request_state, &request_session, frame, method).await;
                 (
                     WireResponse::ordinary(message),
                     class,
@@ -1594,10 +1587,23 @@ pub(super) fn valid_product_request(frame: &RequestFrame) -> bool {
     frame.kind == "req" && !frame.id.is_empty() && frame.id.len() <= 256
 }
 
+#[cfg(test)]
 async fn dispatch_passive_read(
     state: &ProductRouteState,
     session: &AuthenticatedSession,
     frame: RequestFrame,
+    lease: RecordReadLease,
+    deadline: Instant,
+) -> (WireResponse, Option<RecordReadLease>) {
+    let method = ProductMethod::from_name(&frame.method).expect("passive read method");
+    dispatch_passive_read_method(state, session, frame, method, lease, deadline).await
+}
+
+async fn dispatch_passive_read_method(
+    state: &ProductRouteState,
+    session: &AuthenticatedSession,
+    frame: RequestFrame,
+    method: ProductMethod,
     lease: RecordReadLease,
     deadline: Instant,
 ) -> (WireResponse, Option<RecordReadLease>) {
@@ -1617,12 +1623,7 @@ async fn dispatch_passive_read(
             return (passive_access_failure(&frame.id, error), None);
         }
         let request_id = frame.id.clone();
-        let result = if matches!(
-            frame.method.as_str(),
-            "conversation.catalogueHead"
-                | "conversation.catalogueManifest"
-                | "conversation.catalogueResolve"
-        ) {
+        let result = if method_plan(method).handler == Handler::CatalogueRead {
             super::catalogue_read::dispatch(state, &current, frame, lease)
                 .await
                 .map_err(|code| code.as_str())
@@ -1650,10 +1651,21 @@ fn passive_access_failure(request_id: &str, error: AccessError) -> WireResponse 
     WireResponse::ordinary(failure(request_id, code.as_str()))
 }
 
+#[cfg(test)]
 async fn dispatch(
     state: &ProductRouteState,
     session: &AuthenticatedSession,
     frame: RequestFrame,
+) -> OutgoingMessage {
+    let method = ProductMethod::from_name(&frame.method);
+    dispatch_method(state, session, frame, method).await
+}
+
+async fn dispatch_method(
+    state: &ProductRouteState,
+    session: &AuthenticatedSession,
+    frame: RequestFrame,
+    method: Option<ProductMethod>,
 ) -> OutgoingMessage {
     let (session, snapshot) = match current_identity(state, session).await {
         Ok(current) => current,
@@ -1662,10 +1674,10 @@ async fn dispatch(
     if !valid_product_request(&frame) {
         return failure(&frame.id, "invalid_request");
     }
-    if frame.method == PRODUCT_HANDSHAKE_METHOD {
+    if method.is_some_and(|method| method_plan(method).admission == AdmissionPlan::Authentication) {
         return failure(&frame.id, "already_authenticated");
     }
-    if frame.method == "auth.session" {
+    if method.is_some_and(|method| method_plan(method).admission == AdmissionPlan::CurrentSession) {
         if frame.params != json!({}) {
             return failure(&frame.id, "invalid_request");
         }
@@ -1677,8 +1689,17 @@ async fn dispatch(
         }
         return success(&frame.id, &session_ready(state, &session, &snapshot));
     }
-    match super::read_access::admit_request(state, &session, &frame).await {
-        Ok(initiation) => dispatch_authorized(state, &session, frame, initiation).await,
+    match super::read_access::admit_request(state, &session, &frame, method).await {
+        Ok(initiation) => {
+            dispatch_authorized(
+                state,
+                &session,
+                frame,
+                method.expect("admitted method is known"),
+                initiation,
+            )
+            .await
+        }
         Err(code) => failure(&frame.id, code),
     }
 }
@@ -1720,14 +1741,16 @@ pub(super) async fn admit_grant(
 /// are the exception: pairing mints `conversation.read`, and the manifest
 /// asks `conversation.write`, which that credential does not hold. Which
 /// conversation it may follow is still [`read_access::admit_conversation`].
-pub(super) async fn admit_now(
+pub(super) async fn admit_now_method(
     state: &ProductRouteState,
     session: &AuthenticatedSession,
-    method: &str,
+    method: ProductMethod,
 ) -> Result<AuthenticatedSession, &'static str> {
     let current = current_session_now(state, session).await?;
-    if !super::read_access::admit_paired_follow(state, &current, method).await? {
-        admit_action(state, &current, method).await?;
+    if !super::read_access::admit_paired_follow(state, &current, method_plan(method).admission)
+        .await?
+    {
+        admit_action(state, &current, method.as_str()).await?;
     }
     Ok(current)
 }
@@ -1840,10 +1863,11 @@ async fn dispatch_authorized(
     state: &ProductRouteState,
     session: &AuthenticatedSession,
     frame: RequestFrame,
+    method: ProductMethod,
     initiation: Initiation,
 ) -> OutgoingMessage {
-    match frame.method.as_str() {
-        "agents.list" => {
+    match method_plan(method).handler {
+        Handler::AgentsList => {
             if frame.params != json!({}) {
                 return failure(&frame.id, "invalid_request");
             }
@@ -1852,40 +1876,31 @@ async fn dispatch_authorized(
                 None => failure(&frame.id, "conversations_not_configured"),
             }
         }
-        "agents.setNativeHooks" => set_native_hooks(state, session, frame).await,
-        "agents.installOptions" | "agents.install" => {
-            super::agent_install::dispatch(state, session, frame).await
+        Handler::NativeHooks => set_native_hooks(state, session, frame).await,
+        Handler::AgentInstall => super::agent_install::dispatch(state, session, frame).await,
+        Handler::Share => {
+            let AdmissionPlan::ManifestThenShare(action) = method_plan(method).admission else {
+                unreachable!("share handler has a share admission plan")
+            };
+            super::read_access::dispatch_share(state, session, frame, action).await
         }
-        "conversation.share" | "conversation.unshare" | "conversation.shares" => {
-            super::read_access::dispatch_share(state, session, frame).await
-        }
-        method if method.starts_with("conversation.") => {
+        Handler::Conversation => {
             super::conversation::dispatch(state, session, frame, initiation).await
         }
-        method if method.starts_with("attachment.") => {
-            super::attachment::dispatch(state, session, frame).await
-        }
-        "artifact.read" => super::attachment::dispatch_read(state, session, frame).await,
-        method if method.starts_with("mcp.") => {
-            super::mcp_apps::dispatch(state, session, frame).await
-        }
-        method if method.starts_with("mcpServers.") => {
-            super::mcp_servers::dispatch(state, session, frame).await
-        }
-        method if method.starts_with("pairing.") => {
-            super::pairing::dispatch(state, session, frame).await
-        }
-        method if method.starts_with("peer.") => {
-            super::peers::dispatch(state, session, frame).await
-        }
-        "server.health" => {
+        Handler::Attachment => super::attachment::dispatch(state, session, frame).await,
+        Handler::ArtifactRead => super::attachment::dispatch_read(state, session, frame).await,
+        Handler::McpApps => super::mcp_apps::dispatch(state, session, frame).await,
+        Handler::McpServers => super::mcp_servers::dispatch(state, session, frame).await,
+        Handler::Pairing => super::pairing::dispatch(state, session, frame).await,
+        Handler::Peers => super::peers::dispatch(state, session, frame).await,
+        Handler::Health => {
             if frame.params != json!({}) {
                 return failure(&frame.id, "invalid_request");
             }
             health_check_message(&frame.id, state.uptime_clock.elapsed_ms())
                 .unwrap_or_else(|_| failure(&frame.id, "internal_error"))
         }
-        "credential.issue" => {
+        Handler::CredentialIssue => {
             let Some(admin) = state.admin.as_ref() else {
                 return failure(&frame.id, "credential_store_unavailable");
             };
@@ -1952,7 +1967,7 @@ async fn dispatch_authorized(
                 Err(error) => failure(&frame.id, credential_admin_code(error)),
             }
         }
-        "credential.list" => {
+        Handler::CredentialList => {
             let Some(admin) = state.admin.as_ref() else {
                 return failure(&frame.id, "credential_store_unavailable");
             };
@@ -1969,7 +1984,7 @@ async fn dispatch_authorized(
                 Err(error) => failure(&frame.id, credential_admin_code(error)),
             }
         }
-        "credential.revoke" => {
+        Handler::CredentialRevoke => {
             let Some(admin) = state.admin.as_ref() else {
                 return failure(&frame.id, "credential_store_unavailable");
             };
@@ -2018,7 +2033,12 @@ async fn dispatch_authorized(
                 Err(error) => failure(&frame.id, credential_admin_code(error)),
             }
         }
-        _ => failure(&frame.id, "unknown_method"),
+        Handler::Authentication
+        | Handler::CurrentSession
+        | Handler::RecordRead
+        | Handler::CatalogueRead
+        | Handler::Watch
+        | Handler::Subscription => failure(&frame.id, "unknown_method"),
     }
 }
 
@@ -2673,7 +2693,7 @@ mod tests {
     }
 
     #[test]
-    fn every_manifest_method_has_one_runtime_dispatch_path() {
+    fn advertised_methods_match_manifest_and_declare_grants() {
         let manifest: Value = serde_json::from_str(include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../protocol/product/manifest.json"
@@ -2690,12 +2710,15 @@ mod tests {
             .collect::<std::collections::BTreeSet<_>>();
         assert_eq!(advertised, runtime);
         for method in PRODUCT_READY_METHODS {
-            if *method == "auth.session" || ConnectionWatches::method(method) {
+            if matches!(
+                method_plan(ProductMethod::from_name(method).expect("advertised method")).handler,
+                Handler::CurrentSession | Handler::Watch
+            ) {
                 continue;
             }
             assert!(
                 action_for_method(method).is_some(),
-                "advertised method has no authorization/dispatch path: {method}"
+                "advertised method has no manifest grant: {method}"
             );
         }
     }
@@ -3739,7 +3762,12 @@ mod tests {
         let routed = PRODUCT_READY_METHODS
             .iter()
             .copied()
-            .filter(|method| matches!(ResponseClass::for_method(method), ResponseClass::Record))
+            .filter(|method| {
+                matches!(
+                    method_plan(ProductMethod::from_name(method).expect("known method")).response,
+                    ResponseLane::Record
+                )
+            })
             .collect::<std::collections::BTreeSet<_>>();
         let expected = [
             "conversation.recordsHead",
@@ -3865,13 +3893,20 @@ mod tests {
         {
             let control = matches!(*method, "pairing.deny" | "pairing.cancel");
             assert_eq!(
-                matches!(ResponseClass::for_method(method), ResponseClass::Control),
+                matches!(
+                    method_plan(ProductMethod::from_name(method).expect("known method")).response,
+                    ResponseLane::Control
+                ),
                 control,
                 "{method}"
             );
             if !control {
                 assert!(
-                    matches!(ResponseClass::for_method(method), ResponseClass::Ordinary),
+                    matches!(
+                        method_plan(ProductMethod::from_name(method).expect("known method"))
+                            .response,
+                        ResponseLane::Ordinary
+                    ),
                     "{method}"
                 );
             }
@@ -5787,6 +5822,32 @@ mod tests {
         }
     }
 
+    /// Method recognition never outranks envelope or current-authority checks.
+    #[tokio::test]
+    async fn unknown_methods_preserve_envelope_and_authority_refusal_order() {
+        let (state, authority) = fixture(MembershipRole::Member);
+        let session = authenticate(&state).await;
+        assert_eq!(
+            code_of(dispatch(&state, &session, request("unknown", "conversation.unknown")).await),
+            "unknown_method"
+        );
+        let mut invalid = request("invalid", "conversation.unknown");
+        invalid.kind = "res".to_owned();
+        assert_eq!(
+            code_of(dispatch(&state, &session, invalid).await),
+            "invalid_request"
+        );
+        assert_eq!(
+            code_of(dispatch(&state, &session, request("again", PRODUCT_HANDSHAKE_METHOD)).await),
+            "already_authenticated"
+        );
+        authority.snapshot.lock().unwrap().revision = 0;
+        assert_eq!(
+            code_of(dispatch(&state, &session, request("stale", "conversation.unknown")).await),
+            "unauthorized"
+        );
+    }
+
     #[tokio::test]
     async fn health_rejects_caller_supplied_identity_and_invalid_envelopes() {
         let (mut state, _) = fixture(MembershipRole::Member);
@@ -7457,6 +7518,7 @@ mod tests {
     async fn a_full_socket_slot_set_names_that_limit() {
         for (method, held, limit) in [
             ("server.health", 16, "socket.ordinary_slots"),
+            ("conversation.unknown", 16, "socket.ordinary_slots"),
             ("conversation.cancel", 4, "socket.control_slots"),
             ("conversation.recordsHead", 1, "socket.record_slot"),
             ("mcp.callTool", 4, "socket.app_calls"),
