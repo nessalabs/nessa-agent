@@ -89,7 +89,8 @@ pub use artifacts::{ArtifactName, ArtifactRecord, ArtifactValueError, PublishedF
 pub use fetches::{EnvironmentFetchRefusal, EnvironmentPath, FetchOutcome, FetchRefusalReason};
 pub use leases::{CurrentLease, CurrentLeaseState, LeaseRecord};
 pub use manager::{
-    ArtifactRecordError, LeaseCommit, LeaseRecordError, NoteRecordError, SessionManager,
+    ArtifactRecordError, CommittedInvocationStatus, LeaseCommit, LeaseRecordError, NoteRecordError,
+    SessionManager,
 };
 pub(crate) use manager::{AttachedProvider, AttachmentOpenFailureSource, NoteIntake};
 pub use message_commit_clock::{MessageCommitClock, MessageCommitSleep};

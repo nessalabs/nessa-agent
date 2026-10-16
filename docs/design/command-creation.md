@@ -153,6 +153,17 @@ was still reaching the provider (#558).
 | S8 | Deleted target on finished stop, exact retry and read-only lookup, including after restart | Deletion refusal before a returned receipt | `deletion_refuses_stop_lookup_and_retry_after_reopen` |
 | S9 | Read-only lookup | No stream creation, no append, no cancel | `read_only_stop_lookup_writes_nothing` |
 
+Turn status uses `SessionManager::committed_invocation_status`: a fixed-size
+projection of result presence and the last scheduling stage, read under the
+committed-evidence lock. The gateway maps these facts once for both submit
+recovery and Stop classification. A saved result or Settled/Cancelled stage is
+final; Injected remains Injected; the other existing states report Queued.
+Pending observed changes, including a failed save, do not advance this view.
+The query scans up to N invocation IDs in O(N) time and returns O(1) data. It
+replaces an O(S) snapshot copy, where S includes all retained messages, results
+and observations. It adds no history index, cache, persistence format or expiry
+rule. See the SDK lifecycle ordering table for committed/observed tests.
+
 ```mermaid
 sequenceDiagram
     participant C as Caller

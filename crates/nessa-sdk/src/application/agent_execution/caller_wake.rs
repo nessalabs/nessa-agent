@@ -39,6 +39,8 @@ pub(crate) enum CallerWaiter {
     ApprovalModeChange(SessionId),
     /// `SessionManager::snapshot` for this session.
     CommittedSnapshot(SessionId),
+    /// `SessionManager::committed_invocation_status` for this session.
+    CommittedInvocationStatus(SessionId),
     /// `AttachmentWait::wait` for this attachment generation.
     Attachment { generation: u64 },
     /// `Agent::invoke` of this input.
@@ -105,6 +107,13 @@ impl fmt::Display for CallerWaiter {
                 write!(
                     formatter,
                     "committed snapshot of session {}",
+                    session.as_str()
+                )
+            }
+            Self::CommittedInvocationStatus(session) => {
+                write!(
+                    formatter,
+                    "committed invocation status of session {}",
                     session.as_str()
                 )
             }

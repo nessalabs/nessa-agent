@@ -202,6 +202,23 @@ permit belongs to the supervised operation until its evidence and response settl
 dropping the caller's waiter cannot release that ownership. Physical cleanup and
 settlement of accepted work are separate completion boundaries.
 
+### Narrow committed invocation status
+
+`SessionManager::committed_invocation_status` selects only the saved result's
+presence and latest scheduling stage. It uses the same committed evidence as
+`snapshot`, without cloning transcript, prompts, diagnostics or other turns.
+The caller decides how to present these facts; this query grants no execution
+or control authority. It scans invocation identities in O(N) time and returns
+O(1) copied facts; it does not introduce another index or cache.
+
+| Ordering / evidence | Required observation | Regression |
+| --- | --- | --- |
+| Manager has no acknowledged snapshot, or execution identity is absent | No status | `committed_invocation_status_reports_only_the_named_committed_facts` |
+| Saved stage/result facts differ, including absent stage and a failed result | Copy those exact facts without interpreting provider cleanup | `committed_invocation_status_reports_only_the_named_committed_facts` |
+| Observed settlement advances but its save fails | Keep returning the earlier acknowledged facts; after successful retry, match restored storage | `committed_invocation_status_excludes_failed_settlement_until_save_succeeds` |
+| Saved transcript contains message history | Status query copies no message chunks; full snapshot still returns an independent copy | `committed_invocation_status_does_not_clone_message_history` |
+| A caller's status-query waker panics when a save releases the evidence lock | Contain the panic at the public wait, preserving the save task | Caller-waker regression matrix, `CommittedInvocationStatus` case |
+
 ### Live approval control orderings
 
 `Agent::set_approval_mode` uses the existing `SessionLifecycle` control runner.
@@ -352,7 +369,7 @@ of the healthy waiter and exactly one physical close.
 | `AttachmentCancellation::wait` | `close`, while it holds the lifecycle lock | Close returns normally, the lifecycle lock is not poisoned, and the Agent can attach and invoke again | `panicking_attachment_cancellation_waiter_does_not_interrupt_close` |
 | `ProviderOpenControl::wait`, polled by a provider during open | `close`, while it holds the lifecycle lock | Close returns normally and the lifecycle lock is not poisoned | `panicking_provider_open_stop_waiter_does_not_interrupt_close` |
 | `Agent::queued_ids`, `Agent::idle_for_approval_change` | Any task releasing the scheduler lock; the test uses an admission | The admission returns its receipt and the input runs | `panicking_lock_waiter_does_not_fail_the_admission_that_released_it`, one case each |
-| `SessionManager::snapshot` | Any save releasing the evidence lock; the test uses an admission | As above | Same test, `CommittedSnapshot` case |
+| `SessionManager::snapshot` and `SessionManager::committed_invocation_status` | Any save releasing the evidence lock; the test uses an admission | As above | Same test, `CommittedSnapshot` and `CommittedInvocationStatus` cases |
 | `AttachmentWait::wait`, plain panic | The attachment task, as its last action, holding no lock | The attachment is attached and runs work | `panicking_attachment_waiter_leaves_the_attachment_attached`, which also passes without the wrapper |
 | `AttachmentWait::wait`, panic whose payload panics twice when dropped, on a multi-thread runtime | The attachment task, whose `JoinHandle` the Agent does not keep | The runtime keeps running; the attachment is attached and runs work | `twice_panicking_payload_attachment_waiter_does_not_abort_the_runtime`, which runs `triple_fault_attachment_waiter_child` in a child process. Without the wrapper the child aborts with SIGABRT |
 | `close` and the other spawn-and-join operations, plain panic | Tokio's task completion, inside its own `catch_unwind` | Close completes; the Agent can attach and invoke again | `panicking_close_waiter_does_not_interrupt_close`, which also passes without the wrapper |

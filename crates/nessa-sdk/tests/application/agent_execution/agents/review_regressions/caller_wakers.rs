@@ -465,6 +465,7 @@ enum LockWaiter {
     IdleForApprovalChange,
     SetApprovalMode,
     CommittedSnapshot,
+    CommittedInvocationStatus,
 }
 
 #[tokio::test]
@@ -474,6 +475,7 @@ async fn panicking_lock_waiter_does_not_fail_the_admission_that_released_it() {
         LockWaiter::IdleForApprovalChange,
         LockWaiter::SetApprovalMode,
         LockWaiter::CommittedSnapshot,
+        LockWaiter::CommittedInvocationStatus,
     ] {
         for fault in [false, true] {
             let (agent, backend, storage) = probe(false).await;
@@ -503,6 +505,12 @@ async fn panicking_lock_waiter_does_not_fail_the_admission_that_released_it() {
                 }),
                 LockWaiter::CommittedSnapshot => Box::pin(async {
                     agent.session_manager().snapshot().await;
+                }),
+                LockWaiter::CommittedInvocationStatus => Box::pin(async {
+                    agent
+                        .session_manager()
+                        .committed_invocation_status(&ExecutionId::new("queued").unwrap())
+                        .await;
                 }),
             };
             register(&mut waiting, Waker::from(caller.clone()));

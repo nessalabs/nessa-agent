@@ -28,7 +28,7 @@ use crate::application::agent_execution::{
 use crate::domain::agent_execution::{
     executions::{
         ExecutionId, ExecutionOutcome, Initiation, InvocationHistory, InvocationKind,
-        InvocationObservation, QueueMutation, QueueOrderChange, SchedulingCause,
+        InvocationObservation, InvocationStage, QueueMutation, QueueOrderChange, SchedulingCause,
     },
     permissions::PermissionRequest,
     prompts::NoteContext,
@@ -72,6 +72,27 @@ impl AttachmentOpenError {
                 }
             },
         }
+    }
+}
+
+/// Compact facts from one invocation in the last acknowledged session snapshot.
+/// This is evidence, not permission to dispatch, retry or cancel an execution.
+/// Result presence and local scheduling remain separate from provider cleanup.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CommittedInvocationStatus {
+    has_result: bool,
+    stage: Option<InvocationStage>,
+}
+impl CommittedInvocationStatus {
+    /// Whether acknowledged evidence contains a successful or failed local result.
+    pub fn has_result(self) -> bool {
+        self.has_result
+    }
+
+    /// Last acknowledged local scheduling stage, absent for unscheduled inputs.
+    /// A stage alone does not prove that an external provider effect stopped.
+    pub fn stage(self) -> Option<InvocationStage> {
+        self.stage
     }
 }
 
@@ -356,6 +377,51 @@ impl SessionManager {
         })
         .await
     }
+    /// Read compact acknowledged facts for the exact `execution_id`.
+    /// Returns `None` before initialization or when the committed snapshot does
+    /// not name that execution. Observed changes awaiting a successful save are
+    /// excluded, as with [`Self::snapshot`]. This performs no storage I/O or
+    /// dispatch and retains no additional history or index.
+    ///
+    /// The query scans invocation identities in O(N) time and copies O(1) facts,
+    /// without cloning prompts, events, results or the complete snapshot. A caller
+    /// waker panic while waiting for the evidence lock is contained at this wait;
+    /// see the caller-waker regression matrix in the SDK lifecycle guide.
+    ///
+    /// ```no_run
+    /// use nessa_sdk::{
+    ///     application::agent_execution::sessions::SessionManager,
+    ///     domain::agent_execution::executions::ExecutionId,
+    /// };
+    /// # async fn example(manager: &SessionManager, execution: &ExecutionId) {
+    /// if let Some(status) = manager.committed_invocation_status(execution).await {
+    ///     let saved_facts = (status.has_result(), status.stage());
+    ///     // Presentation can use these facts without copying transcript history.
+    ///     # let _ = saved_facts;
+    /// }
+    /// # }
+    /// ```
+    pub async fn committed_invocation_status(
+        &self,
+        execution_id: &ExecutionId,
+    ) -> Option<CommittedInvocationStatus> {
+        let waiter = CallerWaiter::CommittedInvocationStatus(self.id.clone());
+        contain_caller_wake(waiter, async {
+            let evidence = self.evidence.lock().await;
+            let record = evidence
+                .committed
+                .as_ref()?
+                .invocations
+                .iter()
+                .find(|record| &record.request.execution_id == execution_id)?;
+            Some(CommittedInvocationStatus {
+                has_result: record.result.is_some(),
+                stage: record.scheduling.last().map(|event| event.stage),
+            })
+        })
+        .await
+    }
+
     #[cfg(test)]
     pub(crate) async fn pending_message_deadline(
         &self,

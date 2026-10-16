@@ -599,6 +599,125 @@ async fn manager(previous_turns: usize) -> (SessionManager, Arc<FaultLease>, Exe
 }
 
 #[tokio::test]
+async fn committed_invocation_status_reports_only_the_named_committed_facts() {
+    let (manager, _, active) = manager(2).await;
+    let unknown = ExecutionId::new("not-admitted").unwrap();
+    assert_eq!(manager.committed_invocation_status(&unknown).await, None);
+    // This projection fixture selects raw saved fields, not legal transition
+    // histories. The fold/validation suites own which histories can be saved.
+    for (stage, has_result) in [
+        (None, false),
+        (Some(InvocationStage::Queued), false),
+        (Some(InvocationStage::Running), false),
+        (Some(InvocationStage::Injected), false),
+        (Some(InvocationStage::Settled), false),
+        (Some(InvocationStage::Cancelled), false),
+        (None, true),
+        (Some(InvocationStage::Injected), true),
+    ] {
+        {
+            let mut evidence = manager.evidence.lock().await;
+            let record = &mut evidence.committed.as_mut().unwrap().invocations[2];
+            record.result = has_result.then_some(Err(AgentError::AuditFailure));
+            record.scheduling = stage.map_or_else(Vec::new, |stage| {
+                vec![
+                    InvocationSchedulingEvent {
+                        kind: InvocationKind::Queued,
+                        target: None,
+                        before: None,
+                        stage: InvocationStage::Queued,
+                        cause: SchedulingCause::Submitted,
+                        actor: None,
+                    },
+                    InvocationSchedulingEvent {
+                        kind: InvocationKind::Queued,
+                        target: None,
+                        before: Some(InvocationStage::Queued),
+                        stage,
+                        cause: SchedulingCause::Dispatched,
+                        actor: None,
+                    },
+                ]
+            });
+        }
+        let status = manager.committed_invocation_status(&active).await.unwrap();
+        assert_eq!(status.stage(), stage);
+        assert_eq!(status.has_result(), has_result);
+    }
+    // Observed history remains present, but no acknowledged snapshot means
+    // there is no committed evidence to expose.
+    manager.evidence.lock().await.committed = None;
+    assert!(manager.submission(&active).await.is_some());
+    assert_eq!(manager.committed_invocation_status(&active).await, None);
+}
+
+#[tokio::test]
+async fn committed_invocation_status_excludes_failed_settlement_until_save_succeeds() {
+    let (manager, lease, active) = manager(0).await;
+    let before = manager.committed_invocation_status(&active).await.unwrap();
+    assert!(!before.has_result());
+    lease.fail_save.store(true, Ordering::SeqCst);
+    assert!(matches!(
+        manager
+            .settle_submission(0, Err(AgentError::AuditFailure))
+            .await,
+        Err(AgentError::StorageAfterExecution { .. })
+    ));
+    assert!(manager.submission(&active).await.unwrap().result.is_some());
+    assert_eq!(
+        manager.committed_invocation_status(&active).await,
+        Some(before)
+    );
+    let saved = lease.load().await.unwrap();
+    assert!(saved.snapshot().unwrap().invocations[0].result.is_none());
+    lease.fail_save.store(false, Ordering::SeqCst);
+    manager.flush_observed().await.unwrap();
+    let saved = lease.load().await.unwrap();
+    let record = &saved.snapshot().unwrap().invocations[0];
+    let status = manager.committed_invocation_status(&active).await.unwrap();
+    assert!(status.has_result());
+    assert_eq!(status.has_result(), record.result.is_some());
+    assert_eq!(
+        status.stage(),
+        record.scheduling.last().map(|event| event.stage)
+    );
+}
+
+#[tokio::test]
+async fn committed_invocation_status_does_not_clone_message_history() {
+    use crate::domain::agent_execution::executions::MESSAGE_CLONES;
+    let (manager, _, active) = manager(8).await;
+    for _ in 0..8 {
+        manager.event(text(&active)).await.unwrap();
+    }
+    manager.flush_observed().await.unwrap();
+    MESSAGE_CLONES.with(|counter| counter.set((0, 0)));
+    let snapshot = manager.snapshot().await.unwrap();
+    assert!(
+        MESSAGE_CLONES.with(|counter| counter.get().0) >= 8,
+        "the existing clone counter observes full snapshot message copies"
+    );
+    drop(snapshot);
+    MESSAGE_CLONES.with(|counter| counter.set((0, 0)));
+    for _ in 0..32 {
+        let status = manager.committed_invocation_status(&active).await.unwrap();
+        assert!(!status.has_result());
+        assert_eq!(status.stage(), None);
+    }
+    let prior = ExecutionId::new("prior-0").unwrap();
+    assert!(manager
+        .committed_invocation_status(&prior)
+        .await
+        .unwrap()
+        .has_result());
+    assert_eq!(
+        MESSAGE_CLONES.with(|counter| counter.get()),
+        (0, 0),
+        "narrow committed queries do not copy retained message chunks or bytes"
+    );
+}
+
+#[tokio::test]
 async fn failed_observation_save_retries_the_same_decisions_in_order() {
     let (manager, lease, active) = manager(0).await;
     manager.event(text(&active)).await.unwrap();

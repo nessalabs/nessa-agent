@@ -833,6 +833,10 @@ Agent owns sequential queueing, priority boundary steering, native injection,
 withdrawal, and idempotent submission recovery. The domain protects execution,
 tool, and permission invariants; adapters own provider translation and effects.
 Mandatory permission audit remains separate from session snapshots.
+`SessionManager::committed_invocation_status` reads only the named turn's saved
+result-presence and scheduling stage. Send receipt recovery and exact-turn Stop
+use this projection through one gateway disposition mapping. They do not copy
+the full snapshot or read pending observations as committed evidence.
 The host supplies verified attribution and authorizes commands before SDK access.
 
 The first durable creation consumer is `ConversationService::create_command`,

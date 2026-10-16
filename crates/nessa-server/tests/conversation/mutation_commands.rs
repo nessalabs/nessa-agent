@@ -35,6 +35,9 @@ mod admission;
 #[path = "stop_admission.rs"]
 mod stop_admission;
 
+#[path = "submission_status.rs"]
+mod submission_status;
+
 fn caller_on(request: &str, surface: &str) -> ConversationCaller {
     ConversationCaller {
         organization_id: OrganizationId::new("org").unwrap(),

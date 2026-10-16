@@ -144,32 +144,15 @@ impl ConversationService {
         let execution =
             ExecutionId::new(&execution_id).map_err(|_| ConversationError::InvalidInput)?;
         let live = self.resolve(&id, &caller).await?;
-        let snapshot = live
+        let status = live
             .agent
             .session_manager()
-            .snapshot()
+            .committed_invocation_status(&execution)
             .await
             .ok_or(ConversationError::NotFound)?;
-        let record = snapshot
-            .invocations
-            .iter()
-            .find(|record| record.request.execution_id == execution)
-            .ok_or(ConversationError::NotFound)?;
-        let stage = record.scheduling.last().map(|event| event.stage);
-        let disposition = if record.result.is_some()
-            || matches!(
-                stage,
-                Some(InvocationStage::Settled | InvocationStage::Cancelled)
-            ) {
-            ConversationDisposition::Settled
-        } else if matches!(stage, Some(InvocationStage::Injected)) {
-            ConversationDisposition::Injected
-        } else {
-            ConversationDisposition::Queued
-        };
         Ok(SubmissionReceipt {
             execution_id,
-            disposition,
+            disposition: submission_disposition(status.has_result(), status.stage()),
         })
     }
 
@@ -520,19 +503,33 @@ async fn ensure_live(
 }
 
 async fn turn_is_final(live: &super::LiveConversation, turn: &ExecutionId) -> Option<bool> {
-    let snapshot = live.agent.session_manager().snapshot().await?;
-    let record = snapshot
-        .invocations
-        .iter()
-        .find(|record| &record.request.execution_id == turn)?;
-    let stage = record.scheduling.last().map(|event| event.stage);
+    let status = live
+        .agent
+        .session_manager()
+        .committed_invocation_status(turn)
+        .await?;
     Some(
-        record.result.is_some()
-            || matches!(
-                stage,
-                Some(InvocationStage::Settled | InvocationStage::Cancelled)
-            ),
+        submission_disposition(status.has_result(), status.stage())
+            == ConversationDisposition::Settled,
     )
+}
+
+fn submission_disposition(
+    has_result: bool,
+    stage: Option<InvocationStage>,
+) -> ConversationDisposition {
+    if has_result
+        || matches!(
+            stage,
+            Some(InvocationStage::Settled | InvocationStage::Cancelled)
+        )
+    {
+        ConversationDisposition::Settled
+    } else if matches!(stage, Some(InvocationStage::Injected)) {
+        ConversationDisposition::Injected
+    } else {
+        ConversationDisposition::Queued
+    }
 }
 
 fn submit_binding(
