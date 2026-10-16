@@ -17,7 +17,8 @@ use nessa_protocol::product::generated::{
     product_method, ConversationSubscribeEventsParams, ConversationSubscribeListParams,
     ConversationSubscribeParams, ConversationSubscribeResult, ConversationSubscriptionErrorCode,
     ConversationUnsubscribeParams, MAX_CONNECTION_CONVERSATION_SUBSCRIPTIONS,
-    MAX_CONNECTION_LIST_SUBSCRIPTIONS,
+    MAX_CONNECTION_LIST_SUBSCRIPTIONS, MAX_EVENT_SUBSCRIPTION_KINDS, MIN_EVENT_SUBSCRIPTION_KINDS,
+    NON_NULL_EVENT_SUBSCRIPTION_OPTIONS, UNIQUE_EVENT_SUBSCRIPTION_KINDS,
 };
 use nessa_protocol::product_contract::generated::ConversationErrorCode;
 use nessa_protocol::protocol::{OutgoingMessage, RequestFrame};
@@ -134,6 +135,14 @@ impl ConnectionSubscriptions {
             }
             Target::Agents
         } else if frame.method == product_method::CONVERSATION_SUBSCRIBE_EVENTS {
+            if NON_NULL_EVENT_SUBSCRIPTION_OPTIONS.iter().any(|field| {
+                frame
+                    .params
+                    .get(*field)
+                    .is_some_and(serde_json::Value::is_null)
+            }) {
+                return Some(invalid());
+            }
             let Ok(params) =
                 serde_json::from_value::<ConversationSubscribeEventsParams>(frame.params.clone())
             else {
@@ -144,6 +153,18 @@ impl ConnectionSubscriptions {
             };
             if params.after.is_some() && params.replay.is_some() {
                 return Some(invalid());
+            }
+            if let Some(kinds) = &params.kinds {
+                if !(MIN_EVENT_SUBSCRIPTION_KINDS..=MAX_EVENT_SUBSCRIPTION_KINDS)
+                    .contains(&kinds.len())
+                    || (UNIQUE_EVENT_SUBSCRIPTION_KINDS
+                        && kinds
+                            .iter()
+                            .enumerate()
+                            .any(|(index, kind)| kinds[..index].contains(kind)))
+                {
+                    return Some(invalid());
+                }
             }
             Target::Events {
                 conversation,

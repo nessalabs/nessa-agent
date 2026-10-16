@@ -15,6 +15,7 @@ import {
 } from "./product-protocol/pairing-values.mjs"
 import { rustWireShapes } from "./product-protocol/rust-wire-shapes.mjs"
 import { validateExternalRustTypes } from "./product-protocol/rust-types.mjs"
+import { eventMetadataRules } from "./product-protocol/event-metadata.mjs"
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 const pairingDirectory = "crates/nessa-auth/src/domain/pairing/value_objects"
@@ -725,6 +726,10 @@ ts += `${doc(
 ts += `export const eventSubscriptionBounds = ${JSON.stringify({
   maxCursorCharacters: schema.$defs.ConversationEventCursor.maxLength,
   maxBatchEvents: schema.$defs.ConversationEvents.properties.events.maxItems,
+  minKinds: schema.$defs.ConversationSubscribeEventsParams.properties.kinds.minItems,
+  maxKinds: schema.$defs.ConversationSubscribeEventsParams.properties.kinds.maxItems,
+  uniqueKinds:
+    schema.$defs.ConversationSubscribeEventsParams.properties.kinds.uniqueItems,
   ...Object.fromEntries(
     ["executionId", "toolId", "name", "status", "outcome"].map((field) => [
       `max${field[0].toUpperCase()}${field.slice(1)}Characters`,
@@ -732,6 +737,29 @@ ts += `export const eventSubscriptionBounds = ${JSON.stringify({
     ]),
   ),
 })} as const\n`
+const eventKinds = schema.$defs.ConversationSubscribeEventsParams.properties.kinds
+if (
+  !Number.isSafeInteger(eventKinds.minItems) ||
+  eventKinds.minItems < 1 ||
+  !Number.isSafeInteger(eventKinds.maxItems) ||
+  eventKinds.maxItems < eventKinds.minItems ||
+  typeof eventKinds.uniqueItems !== "boolean"
+)
+  throw new Error("Invalid event subscription filter bounds")
+const eventOptions = schema.$defs.ConversationSubscribeEventsParams
+const nonNullEventOptions = Object.entries(eventOptions.properties).flatMap(
+  ([name, node]) => {
+    if (eventOptions.required.includes(name)) return []
+    const owner = node.$ref ? schema.$defs[node.$ref.split("/").at(-1)] : node
+    return owner.type === "null" ||
+      (Array.isArray(owner.type) && owner.type.includes("null"))
+      ? []
+      : [name]
+  },
+)
+rs += `/// Event filter bounds published by the product schema.\npub const MIN_EVENT_SUBSCRIPTION_KINDS: usize = ${eventKinds.minItems};\npub const MAX_EVENT_SUBSCRIPTION_KINDS: usize = ${eventKinds.maxItems};\npub const UNIQUE_EVENT_SUBSCRIPTION_KINDS: bool = ${eventKinds.uniqueItems};\n`
+rs += `/// Optional event subscription fields whose published schema forbids explicit null.\npub const NON_NULL_EVENT_SUBSCRIPTION_OPTIONS: &[&str] = &${JSON.stringify(nonNullEventOptions)};\n`
+ts += `/** Kind/metadata relationships derived from ConversationEvent's JSON Schema conditionals. */\nexport const conversationEventMetadataRules = ${JSON.stringify(eventMetadataRules(schema))} as const\n`
 for (const [kind, entries] of [
   ["Method", productMethods],
   ["Event", manifest.events],
