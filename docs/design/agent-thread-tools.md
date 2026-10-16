@@ -133,6 +133,7 @@ is not a claim that an external effect was rolled back.
 | After checkpoint followed by another incarnation, backwards Page/Idle, duplicate Page, or Page at the retained outer boundary | Shared application EventProgress rejects event_cursor_invalid before projection or cached-cursor replacement; actual follow regressions in `tests/composition/conversation_tools_subscription.rs`. |
 | Now/Beginning first Idle then Preparing and another Page/Idle | First Idle establishes continuity; Preparing retains it. Wrong incarnation and backwards progress refuse, while trailing events and nondecreasing Idle remain valid; same tests. |
 | Now returns its first Page without a prior checkpoint | Accept the source's captured starting position; no prior cursor is fabricated; same tests. |
+| Subscribe supplies after together with replay:true or replay:false | Reject invalid_request by field presence before source admission or reader opening; actual Relay regression in `tests/conversation/agent_tools.rs`. |
 
 The observation loop previously treated permission to start a read as permission
 to publish its eventual result. Separate return paths for page, idle, and deadline

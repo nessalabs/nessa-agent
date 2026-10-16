@@ -381,16 +381,18 @@ async fn agent_tools_relay_create_send_replay_and_refuse_a_foreign_target() {
     assert_eq!(provider.cancel_calls.load(Ordering::SeqCst), 0);
     let no_active = client.call("stop_thread", json!({"threadId":worker})).await;
     assert_eq!(no_active["structuredContent"]["error"], "no_active_turn");
-    let invalid_replay = client
-        .call(
-            "subscribe",
-            json!({"threadId":worker,"after":after,"replay":true}),
-        )
-        .await;
-    assert_eq!(
-        invalid_replay["structuredContent"]["error"],
-        "invalid_request"
-    );
+    for replay in [true, false] {
+        let invalid_replay = client
+            .call(
+                "subscribe",
+                json!({"threadId":worker,"after":after,"replay":replay}),
+            )
+            .await;
+        assert_eq!(
+            invalid_replay["structuredContent"]["error"], "invalid_request",
+            "after and replay:{replay} are mutually exclusive: {invalid_replay}"
+        );
+    }
     let invalid_wait = client
         .call("subscribe", json!({"threadId":worker,"waitMs":30001}))
         .await;

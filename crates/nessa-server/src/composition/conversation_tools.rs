@@ -450,7 +450,7 @@ async fn run(
             let limit = args.limit.unwrap_or(DEFAULT_LIMIT);
             if wait > MAX_WAIT_MS
                 || !(1..=MAX_LIMIT).contains(&limit)
-                || (args.after.is_some() && args.replay.unwrap_or(false))
+                || (args.after.is_some() && args.replay.is_some())
             {
                 return Err("invalid_request".into());
             }

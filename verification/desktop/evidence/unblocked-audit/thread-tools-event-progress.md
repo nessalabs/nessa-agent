@@ -34,3 +34,20 @@ Raw local logs: /tmp/953-progress-mutation.log and .diff,
 /tmp/953-progress-restored-tools.log, -shared.log, -api-auth.log, and
 -agent-tool.log. The coordinator retains assembled strict Clippy, E2E, and
 fresh independent review.
+
+## Replay field-presence follow-up
+
+Based on e5c83352, the subscribe input check now rejects after with either
+replay:true or replay:false, matching the existing mutual-exclusion contract.
+The real Relay regression loops over both boolean values. Design evidence was
+updated first; the production change is the single presence predicate.
+
+A separate verified mutation changed only replay.is_some() back to
+replay.unwrap_or(false). The true case still refused, but the false case returned
+successful empty events and cursor; the Relay assertion failed with exit 101.
+The corrected source was restored with a fresh mtime, then the complete actual
+Relay regression passed. Direct rustfmt and git diff checks passed.
+Logs: /tmp/953-replay-mutation.log, /tmp/953-replay-mutation.diff, and
+/tmp/953-replay-restored.log. Previously passed progress/auth suites were not
+repeated for this isolated input fix; assembled strict Clippy and E2E remain with
+the coordinator.
