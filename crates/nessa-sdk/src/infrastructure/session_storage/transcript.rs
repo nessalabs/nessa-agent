@@ -84,6 +84,8 @@ struct SavedFold<S = snapshot::checkpoint::Snapshot> {
 /// full immutable read publication is a separate operation.
 #[derive(Clone)]
 pub struct TranscriptFold {
+    capture_events: bool,
+    events: Vec<FoldEvent>,
     scope: Scope,
     committed: CommittedTranscript,
     published: Option<Arc<SessionSnapshot>>,
@@ -111,7 +113,27 @@ pub struct TranscriptFold {
     freshness: CommittedFreshness,
 }
 
+#[derive(Clone)]
+pub(super) enum FoldEvent {
+    Change {
+        position: u64,
+        index: u64,
+        change: SessionChange,
+        bytes: usize,
+    },
+    Gap {
+        position: u64,
+    },
+}
+
 impl TranscriptFold {
+    pub(super) fn capture_events(&mut self) {
+        self.capture_events = true;
+    }
+    pub(super) fn take_events(&mut self) -> Vec<FoldEvent> {
+        std::mem::take(&mut self.events)
+    }
+
     /// Start a receiver for the exact scope returned by a source. No record is
     /// read and no empty view is asserted until `confirm_empty` or `apply`.
     ///
@@ -123,6 +145,8 @@ impl TranscriptFold {
         }
         Ok(Self {
             scope,
+            capture_events: false,
+            events: Vec::new(),
             committed: CommittedTranscript::default(),
             published: None,
             published_facts: 0,
@@ -270,6 +294,7 @@ impl TranscriptFold {
     /// ```
     pub fn transaction(&mut self) -> TranscriptTransaction<'_> {
         let backup = ReceiverBackup {
+            events_length: self.events.len(),
             semantic: Some(self.committed.begin_transaction()),
             frames: self.frames.clone(),
             published: self.published.clone(),
@@ -408,6 +433,9 @@ impl TranscriptFold {
         if self.unread.iter().any(|part| part.id() == id) {
             return;
         }
+        if self.capture_events {
+            self.events.push(FoldEvent::Gap { position });
+        }
         if self.unread.len() >= UnreadablePart::MAX_PER_CONVERSATION {
             self.unreadable_truncated = true;
             return;
@@ -534,11 +562,15 @@ impl TranscriptFold {
             .iter()
             .any(|change| matches!(change, SessionChange::Lease(LeaseRecord::Unreadable { .. })));
         let mut applicable = Vec::with_capacity(decoded.len());
-        for change in decoded {
+        let mut original_indices = Vec::new();
+        for (index, change) in decoded.into_iter().enumerate() {
             // A turn this unit already accepted is in the snapshot only after
             // the unit stages. Judge the rest of the unit against that prefix.
             if self.hides_with_gap(&change, &applicable) {
                 continue;
+            }
+            if self.capture_events {
+                original_indices.push(index as u64 + 1);
             }
             applicable.push(change);
         }
@@ -591,6 +623,19 @@ impl TranscriptFold {
         }
         if unknown_lease {
             self.note_unreadable(position);
+        }
+        if self.capture_events {
+            for (index, change) in original_indices.into_iter().zip(applicable) {
+                let bytes = snapshot::encode_semantic_batch(std::slice::from_ref(&change))
+                    .map_err(TranscriptError::Decision)?
+                    .len();
+                self.events.push(FoldEvent::Change {
+                    position,
+                    index,
+                    change,
+                    bytes,
+                });
+            }
         }
         Ok(())
     }
@@ -920,6 +965,7 @@ fn gap_anchor_missing(snapshot: Option<&SessionSnapshot>, unread: &[UnreadablePa
 }
 
 struct ReceiverBackup {
+    events_length: usize,
     semantic: Option<CommittedTransactionState>,
     frames: FrameValidator,
     published: Option<Arc<SessionSnapshot>>,
@@ -956,6 +1002,7 @@ impl Deref for TranscriptTransaction<'_> {
 impl TranscriptTransaction<'_> {
     fn rollback(&mut self) {
         if let Some(backup) = self.backup.take() {
+            self.fold.events.truncate(backup.events_length);
             self.fold
                 .committed
                 .restore_transaction(backup.semantic.expect("transaction semantic backup"));

@@ -2,8 +2,9 @@
 #![deny(missing_docs)]
 
 use super::{
-    ArtifactRecord, CommittedStatus, CommittedViewState, CurrentLease, LeaseRecord, NoteDelivery,
-    NoteId, NoteRecord, NoteRetiredRecord, NoteState,
+    ArtifactRecord, CommittedEventReader, CommittedStatus, CommittedViewState, CurrentLease,
+    EventFuture, EventReadError, EventStart, LeaseRecord, NoteDelivery, NoteId, NoteRecord,
+    NoteRetiredRecord, NoteState,
 };
 use crate::application::agent_execution::agents::{AgentError, DiagnosticTreeLimits};
 use crate::application::agent_execution::executions::{
@@ -711,6 +712,20 @@ impl InvocationSchedulingEvent {
 /// Implementations may serve many sessions. Each returned lease owns the resources
 /// needed to read and write one session independently of this backend's lifetime.
 pub trait SessionStorage: Send + Sync {
+    /// Open an independent semantic observer without acquiring a writer lease.
+    /// Snapshot adapters without retained decisions return Unsupported. Dropping
+    /// the reader does not stop provider work. The host authorizes access first.
+    ///
+    /// # Errors
+    /// Returns unsupported, missing source, invalid cursor or storage failure.
+    fn events(
+        &self,
+        _id: SessionId,
+        _start: EventStart,
+    ) -> EventFuture<'_, Box<dyn CommittedEventReader>> {
+        Box::pin(async { Err(EventReadError::Unsupported) })
+    }
+
     /// Read a committed session without acquiring its exclusive writer lease.
     /// A gateway uses this for replacement views. Missing session returns
     /// `None`; a valid empty stream returns a session with no snapshot.

@@ -833,7 +833,7 @@ impl ReaderState {
     }
 }
 
-fn incarnation_id(stream: &StreamKey) -> Id {
+pub(super) fn incarnation_id(stream: &StreamKey) -> Id {
     let mut value = String::with_capacity(32);
     for byte in stream.incarnation.0 {
         use std::fmt::Write;
@@ -842,7 +842,7 @@ fn incarnation_id(stream: &StreamKey) -> Id {
     Id::new(&value).expect("the fixed-size incarnation is valid")
 }
 
-fn frame_payload(record: &StreamRecord) -> Result<Vec<u8>, SourceError> {
+pub(super) fn frame_payload(record: &StreamRecord) -> Result<Vec<u8>, SourceError> {
     let tag = stream_fact::frame_tag(&record.event).map_err(|_| SourceError::Unavailable)?;
     let mut payload = Vec::with_capacity(record.event.payload.len() + 1);
     payload.push(tag);

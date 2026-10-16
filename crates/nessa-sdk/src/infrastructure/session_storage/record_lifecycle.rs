@@ -23,6 +23,7 @@ pub(super) struct StorageOwner {
 #[derive(Default)]
 struct State {
     leases: HashSet<String>,
+    event_readers: usize,
     reads: Vec<ReadTask>,
     read_failure: Option<StorageError>,
     initialized: bool,
@@ -39,7 +40,29 @@ pub(super) struct ShutdownWork {
     pub read_failure: Option<StorageError>,
     pub initialized: bool,
 }
+pub(super) struct EventReadOwner(Arc<StorageOwner>);
+impl Drop for EventReadOwner {
+    fn drop(&mut self) {
+        self.0
+            .state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .event_readers -= 1;
+    }
+}
 impl StorageOwner {
+    pub(super) fn observe(self: &Arc<Self>) -> Result<EventReadOwner, StorageError> {
+        let mut state = self.state.lock().map_err(poisoned)?;
+        if state.shutdown.is_some() {
+            return Err(StorageError::Closed);
+        }
+        if state.event_readers == MAX_READS {
+            return Err(StorageError::ReadCapacity);
+        }
+        state.event_readers += 1;
+        Ok(EventReadOwner(self.clone()))
+    }
+
     pub fn reserve(&self, id: &str) -> Result<(), StorageError> {
         self.reserve_inner(id, false)
     }
