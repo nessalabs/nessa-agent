@@ -1031,6 +1031,60 @@ conversation's freshly resolved provider always supplies the authoritative
 request result. Tests live under `crates/nessa-server/tests/agent_warm_up/` and
 the composition seam under `crates/nessa-server/tests/composition/`.
 
+## Cloud development preparation
+
+[`scripts/cloud-startup.sh`](../scripts/cloud-startup.sh) owns Cloud setup and
+maintenance. Setup runs `bash scripts/cloud-startup.sh setup "$PWD"` and installs
+that recipe plus the canonical native installer and UI preparation module into
+`/opt/nessa-cloud`.
+Maintenance runs `bash /opt/nessa-cloud/bootstrap.sh maintenance "$PWD"` against
+the task checkout; the cached executable survives a branch that predates its
+source. Installed artifact hashes are checked against their setup record.
+The recipe verifies the owned Node 24 and
+repository pnpm, stable Rust, the UI revision and concrete declared package entries, offline
+pnpm/Cargo dependencies and installed Playwright executables before fetching missing
+capabilities. The native
+package list and installed-package check remain with
+[`install-linux-build-deps.sh`](../scripts/desktop/install-linux-build-deps.sh).
+Its adjacent root-level `cloud-startup.test.mjs` exercises cold preparation, warm
+reconciliation, clean login/child shells, missing components and failed receipts.
+
+The bootstrap persists the selected PATH in one owned helper. It records a
+container-minted identity, preexisting identity/previous receipt, actual entry
+mode, task source, provisioning source/hashes and per-step reuse in
+`/opt/nessa-cloud/preparation.json` only
+after successful verification. A repeated setup can reuse capabilities too;
+`mode=setup` is never relabeled as maintenance. Correlating the identity between
+actual platform invocations distinguishes reused owned state from a fresh run;
+these receipts do not promise that the platform will resume a cache. Toolchain
+updates beyond the required Node line, stable Rust channel and packageManager pin
+are explicit provisioning work rather than an unconditional update on each chat.
+
+Preparation has these ownership and failure boundaries; the bootstrap's colocated
+tests hold the observed outcomes rather than inferring readiness from file presence.
+
+| Starting state | Owner and transition | Evidence after the attempt |
+| --- | --- | --- |
+| No prepared state | Repository recipe installs its runtime artifacts, verifies capabilities, then mints the successful state identity | Setup receipt names the task and provisioning source plus actual outcomes |
+| Verified tools and dependencies already exist | Same recipe checks capabilities and uses offline dependency resolution | Same identity, a new timestamp and recorded reuse; the entry mode stays the mode actually invoked |
+| Task branch predates bootstrap source | Setup-installed, hash-checked bootstrap/native/UI owners supply maintenance; task checkout supplies its pin and manifests | Provisioning identity stays separate from the task commit |
+| One tool, dependency or browser capability is missing | Its existing owner repairs it; Playwright owns both browser executables and their Linux dependency closure | A success receipt follows the capability check, including actual browser launch and local page assertion |
+| Node 24/npm version probes succeed but npm lacks an install-only dependency | Node capability check executes offline, script-free dry-run install and uninstall commands in an isolated empty package before reuse and after extraction | Repair precedes pnpm replacement; failed repair preserves prior success |
+| A private npm/pnpm/Rust probe cannot be allocated or materialised | Fixture setup exits the bootstrap directly; it does not return a missing-capability result to a repair caller | Fixture errors do not initiate tool replacement and previous success stays unchanged; actual tool-command failures retain the existing repair path |
+| Rust metadata lists installed components but compiler, Cargo, formatter or Clippy is unusable | Stable Cargo checks, format-checks and lints an isolated dependency-free crate offline; a failed capability resets and reinstalls the stable toolchain, then repeats the same checks | Only actual capability success records Rust reuse or installation; failed repair preserves the prior receipt |
+| pnpm reports the pinned version but its import worker is missing | Owned pnpm must install a tiny local tarball offline into a private package/store and the imported module must return its known value; failure uninstalls/reinstalls pnpm through owned npm and repeats the probe | Version-only and zero-exit-without-import cases cannot count as reuse or successful repair |
+| Cloud startup sees a ready borrowed UI checkout or vendor parent | Installed canonical UI owner checks `requireOwned`; its one borrowed-root classifier also drives existing preparation, which detaches a checkout link or refuses a borrowed parent | Private readiness is verified again before success; default read-only checks can still inspect borrowed frozen input without effects |
+| Pinned UI checkout lacks a declared package entry file, or that file is empty/not a regular file | UI preparation owner derives required files from package manifests; its offline check refuses reuse and its existing preparation builds them | `ui=prepared` only after the final owner check passes; no arbitrary content-integrity claim |
+| A package declares wildcard exports or typesVersions targets | The concrete-file check skips patterns, retains required direct entries and preserves typesVersions fallback groups | Patterns are not treated as literal files; no wildcard-output completeness claim |
+| A typesVersions substitution lists concrete fallback alternatives | Its ordered alternatives form one requirement; the first existing nonempty regular target satisfies it, while mappings with patterns remain outside the concrete-file check | A valid later target is accepted; a fully concrete group with no ready target is rejected |
+| Browser repair stalls | Bootstrap bounds the Playwright-owned repair to 45 minutes with a 30-second forced-stop grace | Timeout exits unsuccessfully and preserves the prior success receipt |
+| A warm install runs the UI preinstall hook with a missing vendored dependency | Offline configuration is inherited by nested pnpm; missing dependencies force the explicit online fallback | A fetching attempt records `dependencies=fetched`, including nested UI resolution |
+| Checksum, dependency operation or readiness fails | Bootstrap exits unsuccessfully before publishing another success | Earlier receipt keeps its own timestamp; changed tool files are not claimed to be rolled back |
+| UI readiness is lost during dependency preparation | Final check calls the installed UI owner again | No new success receipt; the earlier timestamp remains |
+| Installed recipe or UI owner no longer matches setup hashes | Installed-artifact check refuses maintenance | No new preparation success; setup is the owner that can publish a replacement recipe |
+| A prior receipt lacks an observation field | Receipt projection records that field as unknown; capability checks still decide preparation | Available prior facts are retained; only verified completion publishes a new receipt |
+| Platform invokes setup again | Idempotent setup performs the same capability checks | Reused identity/assets and `mode=setup` remain distinct facts; no maintenance or platform cache claim is invented |
+
 ## MCP tools
 
 `crates/nessa-mcp/src/mcp.rs` owns stdio transport and routing. Nessa-owned tools
@@ -1908,6 +1962,11 @@ shared package registers its components and composites. Backend writes therefore
 do not enter the CSS watch graph. `scripts/tailwind-sources.test.mjs` exercises
 the real Vite/Tailwind pipeline and HMR socket in disposable roots, checking
 backend exclusion and positive app/shared UI updates in the existing script suite.
+The post-hook fence orders Tailwind's direct full document reload; ordinary CSS
+updates preserve document lifetime and are exercised explicitly alongside the
+backend event. The UI-edit assertion matches the Vite-owned event timestamp and imported stylesheet
+identity, so an earlier or unrelated module update cannot substitute for it. The
+original intermittent packet remains unattributed.
 
 Pinned UI preparation is owned by `scripts/ensure-nessa-ui.mjs`, with filesystem
 and subprocess-seam regressions beside it in `scripts/ensure-nessa-ui.test.mjs`.
@@ -1915,7 +1974,10 @@ The calling checkout's `.vendor/nessa_ui` clone owns dependency installation and
 package build artifacts. Preparation replaces a borrowed vendor link without
 changing its target and refuses a symlinked `.vendor` parent before effects;
 `nessa-ui-revision` remains the revision owner. The offline check reads the current
-vendor without preparing it. See [the UI dependency](../README.md#the-nessa-ui-dependency).
+vendor and its nonempty regular package entry files derived from the pinned
+manifests without preparing it. Missing entries direct the caller to the same
+preparation owner; the check does not certify arbitrary content corruption or
+private bundle chunks. See [the UI dependency](../README.md#the-nessa-ui-dependency).
 
 Developer worktree lifecycle is owned by `scripts/worktree.sh`. Manual sibling
 worktrees and Claude Code's nested worktrees use different naming namespaces,

@@ -81,13 +81,14 @@ for (const entry of ["src/styles.css", "src/desktop/styles.css"]) {
             configureServer(starting) {
               watching = once(starting.watcher, "ready")
             },
-            hotUpdate({ file }) {
-              // The same WebSocket orders Tailwind's reload before this fence. No
-              // sleep-based assertion of an event's absence or private hook call.
+            hotUpdate({ file, timestamp }) {
+              // Tailwind sends its direct full-reload inside hotUpdate, before
+              // this fence on the same socket. Ordinary Vite updates may also
+              // arrive; this fence does not attribute or exclude those (#937).
               this.environment.hot.send({
                 type: "custom",
                 event: "watch-event",
-                data: file,
+                data: { file, timestamp },
               })
             },
           },
@@ -99,6 +100,14 @@ for (const entry of ["src/styles.css", "src/desktop/styles.css"]) {
       await watching
       const url = server.resolvedUrls.local[0]
       const packets = []
+      const updates = () =>
+        packets.flatMap((packet) => (packet.type === "update" ? packet.updates : []))
+      // Vite serves ?import CSS as a JavaScript module; its update entry is
+      // js-update. The stylesheet identity, not a css-update label, owns this check.
+      const isStylesheetUpdate = (update) =>
+        update.type === "js-update" &&
+        update.path === `/${entry}` &&
+        update.acceptedPath === `/${entry}`
       socket = new WebSocket(
         `${url.replace("http:", "ws:")}?token=${encodeURIComponent(server.config.webSocketToken)}`,
         "vite-hmr",
@@ -124,23 +133,37 @@ for (const entry of ["src/styles.css", "src/desktop/styles.css"]) {
       const changed = async (file, effect) => {
         packets.length = 0
         await effect()
+        let observed
         while (
-          !packets.some(
+          !(observed = packets.find(
             (packet) =>
               packet.type === "custom" &&
               packet.event === "watch-event" &&
-              packet.data === file,
-          )
+              packet.data.file === file,
+          ))
         )
           await once(socket, "message")
+        return observed.data
       }
       const before = await readFile(backend, "utf8")
-      await changed(backend, () => utimes(backend, new Date(), new Date()))
+      await changed(backend, async () => {
+        // A normal CSS update preserves the document. Exercise it beside the
+        // backend event so the reload assertion cannot reject all HMR packets.
+        const client = server.environments.client
+        const modules = client.moduleGraph.getModulesByFile(join(root, entry))
+        assert.ok(modules?.size, "loaded stylesheet module")
+        for (const module of modules) await client.reloadModule(module)
+        await utimes(backend, new Date(), new Date())
+      })
       assert.equal(await readFile(backend, "utf8"), before)
       assert.deepEqual(
-        packets.filter((packet) => ["full-reload", "update"].includes(packet.type)),
+        packets.filter((packet) => packet.type === "full-reload"),
         [],
         "backend touch must not interrupt the frontend document",
+      )
+      assert.ok(
+        updates().some(isStylesheetUpdate),
+        "ordinary CSS update is compatible with document lifetime",
       )
       assert.ok(
         !initial.includes("z-index: 8199;"),
@@ -149,7 +172,7 @@ for (const entry of ["src/styles.css", "src/desktop/styles.css"]) {
       assert.equal(
         server.environments.client.moduleGraph.getModulesByFile(backend)?.size ?? 0,
         0,
-        "backend files must not invalidate a CSS module after the hook fence",
+        "backend files stay outside the CSS dependency graph",
       )
 
       for (const [file, value] of [
@@ -158,9 +181,19 @@ for (const entry of ["src/styles.css", "src/desktop/styles.css"]) {
         [composite, 8203],
         [sharedFrontend, 8204],
       ]) {
-        await changed(file, () => writeFile(file, `"z-[${value}]"`))
-        while (!packets.some((packet) => ["full-reload", "update"].includes(packet.type)))
+        const event = await changed(file, () => writeFile(file, `"z-[${value}]"`))
+        while (
+          !packets.some((packet) => packet.type === "full-reload") &&
+          !updates().some((update) => update.timestamp === event.timestamp)
+        )
           await once(socket, "message")
+        assert.ok(
+          updates().some(
+            (update) =>
+              update.timestamp === event.timestamp && isStylesheetUpdate(update),
+          ),
+          "registered UI edit must update its imported stylesheet for this event",
+        )
         assert.ok(
           (await css()).includes(`z-index: ${value};`),
           `changed UI class ${value} is compiled`,
