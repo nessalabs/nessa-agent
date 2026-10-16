@@ -98,7 +98,7 @@ const TRANSIENT_BACKOFF_CAP: Duration = Duration::from_millis(1000);
 
 /// A view's place in the committed history, as the wire names it.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct Cursor {
+pub(in crate::product) struct Cursor {
     pub incarnation: String,
     pub position: u64,
 }
