@@ -251,6 +251,141 @@ async fn paired_read_grant_follows_events_only_on_shared_conversations() {
     client.close().await;
 }
 
+/// E21: a pairing-issued read credential can capture and stop its Drive target.
+#[tokio::test]
+async fn paired_read_credential_peeks_then_stops_only_a_current_drive_target() {
+    use crate::conversation::{application::ShareGrantTransition, domain::ShareAccess};
+
+    let fixture = SubscriptionFixture::new().await;
+    fixture.provider.turn_cancel.store(true, Ordering::SeqCst);
+    let (release, gate) = tokio::sync::oneshot::channel();
+    *fixture.provider.execution_gate.lock().unwrap() = Some(gate);
+    fixture.turn("drive-running").await;
+    timeout(EXPECTED, async {
+        loop {
+            if fixture
+                .service
+                .active_execution(
+                    fixture.id.clone(),
+                    caller(&fixture.session, "active".into()),
+                )
+                .await
+                .unwrap()
+                .as_deref()
+                == Some("drive-running")
+                && fixture
+                    .provider
+                    .executions
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|execution| execution == "drive-running")
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    let fixture = fixture.with_devices(this_device(true));
+    grants(&fixture.authority, &["conversation.read", "server.read"]);
+    let mut client = fixture.connect();
+    for (name, access) in [
+        ("unshared", None),
+        ("read", Some(ShareAccess::read())),
+        ("drive", Some(drive_access())),
+    ] {
+        if let Some(access) = access {
+            fixture.grant_to(ShareGrantTransition::Grant(access)).await;
+        }
+        client.send(
+            "peek",
+            "conversation.peek",
+            json!({"conversationId": fixture.id.to_string()}),
+        );
+        let (peek, before) = client.reply("peek").await;
+        assert!(before.is_empty());
+        if name == "unshared" {
+            assert_eq!(peek["error"]["code"], "conversation_not_found", "{peek}");
+        } else {
+            assert_eq!(peek["ok"], true, "{name}: {peek}");
+            assert_eq!(peek["payload"]["executionId"], "drive-running");
+        }
+        let execution = if name == "drive" {
+            peek["payload"]["executionId"].clone()
+        } else {
+            json!("drive-running")
+        };
+        client.send(
+            "stop",
+            "conversation.stop",
+            json!({
+                "conversationId": fixture.id.to_string(),
+                "requestId": format!("stop-{name}"),
+                "executionId": execution,
+            }),
+        );
+        let (stop, before) = client.reply("stop").await;
+        assert!(before.is_empty());
+        match name {
+            "unshared" => assert_eq!(stop["error"]["code"], "conversation_not_found", "{stop}"),
+            "read" => assert_eq!(stop["error"]["code"], "forbidden", "{stop}"),
+            "drive" => {
+                assert_eq!(stop["ok"], true, "{stop}");
+                assert_eq!(stop["payload"]["outcome"], "cancelled", "{stop}");
+            }
+            _ => unreachable!(),
+        }
+        assert_eq!(
+            fixture.provider.cancel_calls.load(Ordering::SeqCst),
+            usize::from(name == "drive")
+        );
+    }
+    assert_eq!(
+        fixture.provider.cancel_turns.lock().unwrap().as_slice(),
+        ["drive-running"]
+    );
+    client.send(
+        "admin",
+        "conversation.create",
+        json!({
+            "conversationId": Uuid::new_v4().to_string(), "requestId": "paired-admin",
+        }),
+    );
+    let (admin, _) = client.reply("admin").await;
+    assert_eq!(admin["error"]["code"], "forbidden", "{admin}");
+    fixture.grant_to(ShareGrantTransition::Revoke).await;
+    client.send(
+        "revoked",
+        "conversation.peek",
+        json!({"conversationId": fixture.id.to_string()}),
+    );
+    let (revoked, _) = client.reply("revoked").await;
+    assert_eq!(
+        revoked["error"]["code"], "conversation_not_found",
+        "{revoked}"
+    );
+    client.close().await;
+    drop(release);
+}
+
+/// E21: the paired-read exception does not change an unpaired surface's grant.
+#[tokio::test]
+async fn unpaired_read_credential_keeps_manifest_peek_admission() {
+    let fixture = SubscriptionFixture::new().await;
+    grants(&fixture.authority, &["conversation.read", "server.read"]);
+    let mut client = fixture.connect();
+    client.send(
+        "peek",
+        "conversation.peek",
+        json!({"conversationId": fixture.id.to_string()}),
+    );
+    let (peek, _) = client.reply("peek").await;
+    assert_eq!(peek["error"]["code"], "forbidden", "{peek}");
+    client.close().await;
+}
+
 /// E14: transient SDK worker contention releases capacity and rechecks admission.
 #[tokio::test(start_paused = true)]
 async fn event_reader_capacity_retries_are_bounded_cancelable_and_reauthorized() {

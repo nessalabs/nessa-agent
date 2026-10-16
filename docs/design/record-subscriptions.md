@@ -429,6 +429,18 @@ results and thinking are not included. Existing owner policy applies to every ba
 | E18 | Terminal frame has both cursor types, or a cursor for another subscription kind, before or after open reply | Reject contradictory cursor combinations at validation; correlate the remaining cursor with the registered kind before terminal callbacks; end invalid_frame and release the handle before exposing wrong evidence |
 | E19 | Invalid event subscribe options arrive before admission | Return a rejected Promise with TypeError, without sending an RPC |
 | E20 | Owner phone peeks while target policy allows Read but denies Act | Use the shared command-target Cedar admission before reading active execution; no lifecycle read after refusal |
+| E21 | Paired credential holds only conversation.read; current share changes from absent to Read to Drive before peek and explicit stop | Absent targets stay hidden; Read may observe the authoritative execution but stop is forbidden; Drive may observe and stop that exact execution. Peek uses the existing paired-read grant owner, then its current target Read check; stop keeps Drive admission. Owner-phone purpose and Act checks, unpaired manifest grants, and administrative refusals remain in force |
+
+Ordinary peek requests and subscription admission use the same paired-read
+credential admission helper. Ordinary requests ask it after owner-phone purpose
+admission and before falling back to the manifest grant; subscription admission
+asks it after refreshing the session. This helper proves only the credential's
+published paired-read grant, with the existing write-grant fallback. It grants no
+target access: peek still asks current target Read admission and owner-phone Act
+admission, while an explicit stop still asks the paired Drive action on that
+target. An unpaired request keeps its manifest grant, and administrative methods
+are outside this paired-read exception. This splits credential and target facts
+between their existing owners rather than introducing a second grant evaluator.
 
 The socket owns subscription tasks; a reconnect recreates a subscription from the
 consumer's cursor. The SDK owns the semantic reader and its bounded storage work.
