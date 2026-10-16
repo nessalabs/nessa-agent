@@ -300,6 +300,22 @@ fact at the save boundary. Streaming text does not trigger a save for every
 chunk. Per-invocation output limits and transport queue bounds protect different
 retained data; neither is a total conversation-size limit.
 
+Record storage keeps the latest completed snapshot and the original baseline of
+its current save generation as immutable shared allocations. A new generation
+shares its baseline with the previous committed snapshot; its staged continuation
+still owns a separate copy. Completion publishes a new allocation and retains the
+original baseline for exact retries and same-generation extensions. Sharing removes
+one full-history copy when a generation starts; plan validation, staged restoration,
+completion publication and public owned loads still copy history.
+
+| Ordering | Required result | Regression evidence |
+| --- | --- | --- |
+| New generation starts from committed evidence | Baseline shares the saved allocation; staged changes do not modify it | `live_save_shares_baseline_and_keeps_owned_loads` |
+| Units are durable but completion is not acknowledged | Keep the previous committed publication and original generation baseline | `record_watch_stays_clean_after_unit_seal_until_original_completion_retry` |
+| Completion succeeds, then the original generation is retried or extended | Retain its original baseline rather than using the newer committed snapshot | `completed_prefix_stays_published_during_same_generation_extension_and_checkpoint_restage` |
+| Process exits with unfinished units | Reopen and validate the retained original retry before publication | `killed_child_retains_original_unpublished_unit_retry` |
+| Caller mutates an owned load | The writer's saved publication stays independent | `live_save_shares_baseline_and_keeps_owned_loads` |
+
 Semantic decoding bounds fields, strings, collection structure and nested diagnostics;
 raw string tokens are limited to six times the selected decoded-byte allowance so
 JSON Unicode escapes remain valid. Each changed invocation has a 160 MiB decoding

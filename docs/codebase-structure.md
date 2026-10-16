@@ -466,6 +466,12 @@ own current lifecycle and API contracts.
 | `infrastructure/clock.rs` | The clock every ACP protocol deadline is measured on: `RuntimeClock` from composition, and `tests/infrastructure/manual_clock.rs` in tests, which moves only when the test moves it. |
 | `tests/{domain,application,infrastructure}/` | Matching invariant, public orchestration, and storage boundaries. SDK ownership publication interleavings use independent audit gates in `tests/application/agent_execution/subagents/publication.rs`; pure targeted-discard and absence-token correlation cases remain in `tests/domain/agent_execution/ownership.rs`, with `ownership/{settlement,settlement_relationships}.rs` children for bounded debt, Completion and retained-history refusals. Public `subagents/{supervision,effects,transfers,settlement,inflight_absence,gate_waiters}.rs` children cover effect faults, Ready capture, immutable generations, live admission exclusion and participation-gate notifications. Public ownership SQLite proof/Completion refusal lives in `tests/infrastructure/session_storage/ownership_settlement.rs`. Public memory binding/retry/reset observations live in `tests/infrastructure/session_storage/memory.rs`; `record.rs` owns public writer/watch/interruption/retry cases, `record_source.rs` owns publication/restored-extension cases, `discovery.rs` owns bounded query ordering/physical faults, and `save_group.rs` owns emitted checkpoint contradictions. Their boundary fixture module constructs exported immutable data and obtains actual producer receipts. All are rooted from the external public storage integration module; the inherited internal discovery fixture remains separate. ACP tests live in `tests/infrastructure/acp/` and are included by the library through a test-only path declaration to exercise crate-private controls; Python handlers stay beside those contracts under `fixtures/`. |
 
+Record writer tests in `tests/infrastructure/session_storage/record_writer.rs`
+are included by the private writer module. They cover immutable committed/baseline
+sharing, owned staged/load isolation and the existing SQLite restart contract.
+The writer retains generation identity and physical publication ownership;
+sharing its baseline adds no cache or additional index.
+
 Composition chooses models, provider configuration, storage, and the required
 permission audit sink. Agent owns admitted work; UI adapters and gateway code call
 its application contracts. Keep provider JSON, clock reads, filesystem access,

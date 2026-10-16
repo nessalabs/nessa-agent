@@ -24,8 +24,8 @@ pub(super) struct RecordWriter {
     id: SessionId,
     stream: StreamKey,
     cursor: Cursor,
-    committed: Option<SessionSnapshot>,
-    baseline: Option<SessionSnapshot>,
+    committed: Option<Arc<SessionSnapshot>>,
+    baseline: Option<Arc<SessionSnapshot>>,
     staged: Continuation,
     progress: GroupProgress,
     binding: Option<SessionSaveGeneration>,
@@ -83,7 +83,7 @@ impl RecordWriter {
                     if writer.binding.is_none() || (!writer.unfinished && key.ordinal() == 0) {
                         writer.binding = Some(writer.next.clone());
                         writer.baseline = writer.committed.clone();
-                        writer.staged = Continuation::restore(writer.baseline.clone())?;
+                        writer.staged = Continuation::restore(writer.baseline.as_deref().cloned())?;
                     }
                     writer.unfinished = true;
                     writer.cursor = cursor;
@@ -105,14 +105,14 @@ impl RecordWriter {
 
     #[cfg(test)]
     pub(super) fn snapshot(&self) -> Option<&SessionSnapshot> {
-        self.committed.as_ref()
+        self.committed.as_deref()
     }
     pub(super) fn readable_snapshot(&self) -> Result<SessionLoad, StorageError> {
         if self.blocked {
             return Err(corrupt("conversation fact conflicts with physical history"));
         }
         Ok(SessionLoad::new(
-            self.committed.clone(),
+            self.committed.as_deref().cloned(),
             if self.unfinished {
                 self.binding.clone().unwrap_or_else(|| self.next.clone())
             } else {
@@ -143,7 +143,7 @@ impl RecordWriter {
         }
         if self.binding.as_ref() != Some(&original) {
             self.baseline = self.committed.clone();
-            self.staged = Continuation::restore(self.baseline.clone())?;
+            self.staged = Continuation::restore(self.baseline.as_deref().cloned())?;
             self.binding = Some(original.clone());
         }
         self.progress.piece(&fact.body)?;
@@ -171,7 +171,7 @@ impl RecordWriter {
                 self.unfinished = true;
             }
             FactKind::SaveComplete => {
-                self.committed = self.staged.snapshot.clone();
+                self.committed = self.staged.snapshot.clone().map(Arc::new);
                 self.next = binding(
                     &self.stream,
                     cursor.offset,
@@ -223,9 +223,9 @@ impl RecordWriter {
             .ok_or_else(|| corrupt("save generation exhausted"))?;
         let identity = SaveIdentity::binding(&original)?;
         let base = if same {
-            self.baseline.as_ref()
+            self.baseline.as_deref()
         } else {
-            self.committed.as_ref()
+            self.committed.as_deref()
         };
         // One continuation owns validation of every explicit checkpoint; no
         // append/reconciliation occurs until all units and the final state pass.
@@ -331,7 +331,7 @@ impl RecordWriter {
         }
         if !same {
             self.baseline = self.committed.clone();
-            self.staged = Continuation::restore(self.baseline.clone())?;
+            self.staged = Continuation::restore(self.baseline.as_deref().cloned())?;
             self.binding = Some(original.clone());
         }
         if self.pending.is_some() {
@@ -530,106 +530,5 @@ fn is_invalid_fact(error: &FactCommitError) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{
-        application::agent_execution::{
-            providers::ProviderIdentity,
-            sessions::{records, SessionChange},
-        },
-        domain::agent_execution::sessions::ExecutionSessionId,
-    };
-    use event_stream::{
-        infrastructure::{SqliteOptions, SqliteStore},
-        EventConfig, EventReader, PersistenceProfile, Runtime, RuntimeConfig, StreamId,
-    };
-    use std::time::Duration;
-
-    #[test]
-    fn retain_next_fact_holds_one_oversized_fact_and_splits_before_a_second() {
-        let ceiling = super::super::MAX_STORED_RECORD_BYTES;
-        assert!(retain_next_fact(0, ceiling + 1));
-        assert!(retain_next_fact(32, 32));
-        assert!(!retain_next_fact(ceiling, 1));
-        assert!(!retain_next_fact(ceiling / 2 + 1, ceiling / 2 + 1));
-    }
-
-    #[tokio::test]
-    async fn sqlite_restart_replays_committed_decisions_without_provider_effects() {
-        let directory = tempfile::tempdir().unwrap();
-        let options = SqliteOptions::new(directory.path().join("records.sqlite3"));
-        let config = RuntimeConfig {
-            events: EventConfig {
-                max_bytes: 1024 * 1024,
-                minimum_persistence: PersistenceProfile::ProcessRestart,
-            },
-            ..RuntimeConfig::default()
-        };
-        let id = SessionId::new("conversation").unwrap();
-        let stream_id = StreamId::new("conversation").unwrap();
-        let runtime = Runtime::<SqliteStore>::open(options.clone(), config.clone())
-            .await
-            .unwrap();
-        let stream = runtime.create_stream(&stream_id).await.unwrap();
-        let mut writer = RecordWriter::replay(&runtime, id.clone(), stream.clone())
-            .await
-            .unwrap();
-        assert!(writer.snapshot().is_none());
-        let opened = SessionChange::Opened {
-            id: id.clone(),
-            provider: ProviderIdentity::new("provider", "model", "workspace").unwrap(),
-            context: ProviderContext::Absent,
-        };
-        let first = records::fold_changes(None, std::slice::from_ref(&opened)).unwrap();
-        writer
-            .save(
-                &runtime,
-                None,
-                writer.readable_snapshot().unwrap().binding().clone(),
-                &first,
-                &[SessionSaveUnit::new(vec![opened]).unwrap()],
-            )
-            .await
-            .unwrap();
-        let next = writer.readable_snapshot().unwrap().binding().clone();
-        let context = SessionChange::ProviderContext {
-            before: ProviderContext::Absent,
-            after: ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap()),
-        };
-        let second = records::fold_changes(Some(&first), std::slice::from_ref(&context)).unwrap();
-        writer
-            .save(
-                &runtime,
-                None,
-                next.clone(),
-                &second,
-                &[SessionSaveUnit::new(vec![context]).unwrap()],
-            )
-            .await
-            .unwrap();
-        assert_eq!(writer.snapshot(), Some(&second));
-        drop(writer);
-        assert!(
-            runtime
-                .shutdown(Duration::from_secs(5))
-                .await
-                .unwrap()
-                .closed
-        );
-
-        let reopened = Runtime::<SqliteStore>::open(options, config).await.unwrap();
-        let same_stream = reopened.create_stream(&stream_id).await.unwrap();
-        assert_eq!(same_stream, stream);
-        let restored = RecordWriter::replay(&reopened, id, same_stream)
-            .await
-            .unwrap();
-        assert_eq!(restored.snapshot(), Some(&second));
-        assert!(
-            reopened
-                .shutdown(Duration::from_secs(5))
-                .await
-                .unwrap()
-                .closed
-        );
-    }
-}
+#[path = "../../../tests/infrastructure/session_storage/record_writer.rs"]
+mod tests;

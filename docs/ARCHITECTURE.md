@@ -860,6 +860,13 @@ use this projection through one gateway disposition mapping. They do not copy
 the full snapshot or read pending observations as committed evidence.
 The host supplies verified attribution and authorizes commands before SDK access.
 
+The record writer shares immutable completed and generation-baseline snapshots;
+its staged continuation stays owned. This removes the redundant baseline copy
+when a save generation starts, including replay. Validation, staging, completion
+publication and owned loads still perform history-sized work. Original baselines
+remain available after publication for exact retry and same-generation extension;
+see the ordering table in the SDK [lifecycle guide](../crates/nessa-sdk/docs/agent_execution/lifecycle.md).
+
 The first durable creation consumer is `ConversationService::create_command`,
 which uses the SDK `commands::CreationCoordinator` with a request-bound claim
 on the shared `RecordStorage` runtime. Its non-content binding and original
