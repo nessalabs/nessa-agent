@@ -816,6 +816,21 @@ impl OwnershipGraph {
         })
     }
 
+    /// Borrow retained spawn rows in request identity order without copying them.
+    pub(crate) fn spawn_rows(&self) -> impl Iterator<Item = &SpawnRow> {
+        self.spawns.values().map(|spawn| &spawn.row)
+    }
+
+    /// Borrow retained settlement rows in root and target identity order.
+    pub(crate) fn settlement_rows(&self) -> impl Iterator<Item = &SettlementRow> {
+        self.settlements.values().map(|settlement| &settlement.row)
+    }
+
+    /// Borrow retained close completion rows in root identity order.
+    pub(crate) fn close_completion_rows(&self) -> impl Iterator<Item = &CloseCompletionRow> {
+        self.close_completions.values()
+    }
+
     /// Copy the rows a store can write.
     pub fn snapshot(&self) -> OwnershipSnapshot {
         OwnershipSnapshot {
@@ -1400,3 +1415,7 @@ fn settlement_summary(proof: &SettlementProof) -> (PhysicalFact, EvidenceFact) {
 fn refresh_summary(row: &mut SettlementRow) {
     (row.physical, row.evidence) = settlement_summary(&row.proof);
 }
+
+#[cfg(test)]
+#[path = "../../../../tests/domain/agent_execution/ownership/read_rows.rs"]
+mod read_rows;

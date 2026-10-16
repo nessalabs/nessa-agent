@@ -547,7 +547,7 @@ impl Shared {
                 Some(BindResourcesRefusal::UnpublishedLifetime)
             }
             Some(LifetimeState::Open)
-                if graph.snapshot().spawns.iter().any(|row| {
+                if graph.spawn_rows().any(|row| {
                     &row.child_lifetime == lifetime
                         && matches!(
                             row.progress,
@@ -573,7 +573,7 @@ impl Shared {
                     .lock()
                     .expect("absence claims")
                     .contains(lifetime)
-                || graph.snapshot().settlements.iter().any(|row| {
+                || graph.settlement_rows().any(|row| {
                     row.target == *lifetime && row.physical == PhysicalFact::Released
                 }) =>
             {
@@ -1215,9 +1215,7 @@ impl Shared {
                 graph.apply_report(root, operation, target, report.physical, report.evidence)?;
             if report.physical == PhysicalFact::Released {
                 let request = graph
-                    .snapshot()
-                    .spawns
-                    .iter()
+                    .spawn_rows()
                     .find(|row| {
                         &row.child_lifetime == target
                             && matches!(
@@ -1297,7 +1295,7 @@ impl Shared {
                 .map_err(|_| OwnershipFailure::Incomplete)
         })?;
         let already_acknowledged = self.with_graph(|graph| {
-            graph.snapshot().close_completions.iter().any(|row| {
+            graph.close_completion_rows().any(|row| {
                 row.record() == token.evidence()
                     && row.acknowledgement() == EvidenceFact::Acknowledged
             })
