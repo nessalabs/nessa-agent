@@ -19,6 +19,9 @@
 //! Public producer/source/discovery acceptance lives under the external storage
 //! integration tests; inherited private codec/allocation fixtures remain limited
 //! implementation observations, not public acceptance.
+//! The event adapter certifies a captured outer publication before replaying
+//! validated decisions through a separate emission fold. It retains one pending
+//! unit rather than a whole save, with four observation registrations per store.
 //! TranscriptFold validates unit checkpoints through the one SDK session fold. A
 //! record that cannot be read is skipped and remembered as one gap, including
 //! a record delivered for another stream; past 32 gaps the fold still skips
@@ -34,6 +37,7 @@
 //! RecordStorage -> transcript fold -> committed gateway view
 //! RecordStorage -> bounded request owners -> shared principal receipts/short writer gate
 //! RecordStorage -> bounded committed-change watches (no read or permission)
+//! RecordStorage -> events certification + emission folds -> semantic pages
 //! OwnershipStore -> ownership.sqlite3 snapshot rows
 //!                -> ownership::settlement strict proof/Completion codec
 //! MessageCommitClock <--------------------- Tokio monotonic clock adapter
@@ -46,6 +50,7 @@
 //! `test-support` feature, or with this crate's own tests.
 
 mod creation;
+mod events;
 #[cfg(any(test, feature = "test-support"))]
 mod fixtures;
 mod memory;

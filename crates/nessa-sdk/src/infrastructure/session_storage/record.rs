@@ -22,7 +22,7 @@ use crate::{
             SessionSaveUnit, SessionSnapshot, SessionStorage, SessionStorageLease, StorageError,
             StorageFuture,
         },
-        ChangeWatchError, CommittedChangeWatch,
+        ChangeWatchError, CommittedChangeWatch, CommittedEventReader, EventFuture, EventStart,
     },
     domain::agent_execution::sessions::SessionId,
 };
@@ -400,6 +400,14 @@ impl RecordStorage {
 }
 
 impl SessionStorage for RecordStorage {
+    fn events(
+        &self,
+        id: SessionId,
+        start: EventStart,
+    ) -> EventFuture<'_, Box<dyn CommittedEventReader>> {
+        Box::pin(self.open_events(id, start))
+    }
+
     fn shutdown(&self) -> StorageFuture<'_, ()> {
         Box::pin(async move {
             // Close interest before storage admission closes; actual writers and

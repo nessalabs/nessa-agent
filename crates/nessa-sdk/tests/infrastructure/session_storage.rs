@@ -11,6 +11,7 @@
 mod caller_wakes;
 mod command_admission;
 mod discovery;
+mod events;
 mod fixtures;
 mod memory;
 mod ownership_settlement;

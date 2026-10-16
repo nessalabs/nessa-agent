@@ -24,6 +24,7 @@ struct State {
     leases: HashSet<String>,
     commands: HashMap<(String, String), CommandAccess>,
     command_reads: usize,
+    event_readers: usize,
     reads: Vec<ReadTask>,
     read_failure: Option<StorageError>,
     initialized: bool,
@@ -60,7 +61,29 @@ impl Drop for CommandReservation {
         }
     }
 }
+pub(super) struct EventReadOwner(Arc<StorageOwner>);
+impl Drop for EventReadOwner {
+    fn drop(&mut self) {
+        self.0
+            .state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .event_readers -= 1;
+    }
+}
 impl StorageOwner {
+    pub(super) fn observe(self: &Arc<Self>) -> Result<EventReadOwner, StorageError> {
+        let mut state = self.state.lock().map_err(poisoned)?;
+        if state.shutdown.is_some() {
+            return Err(StorageError::Closed);
+        }
+        if state.event_readers == MAX_READS {
+            return Err(StorageError::ReadCapacity);
+        }
+        state.event_readers += 1;
+        Ok(EventReadOwner(self.clone()))
+    }
+
     pub fn reserve(&self, id: &str) -> Result<(), StorageError> {
         let mut state = self.state.lock().map_err(poisoned)?;
         if state.shutdown.is_some() {
@@ -231,6 +254,75 @@ fn poisoned<T>(_: PoisonError<T>) -> StorageError {
 mod tests {
     use super::*;
     use std::{sync::mpsc, time::Duration};
+
+    #[test]
+    fn event_observers_and_command_reservations_release_only_their_own_capacity() {
+        let owner = Arc::new(StorageOwner::default());
+        let mut observers: Vec<_> = (0..MAX_READS).map(|_| owner.observe().unwrap()).collect();
+        assert!(matches!(owner.observe(), Err(StorageError::ReadCapacity)));
+
+        let mut commands = [
+            (CommandAccess::Creation, MAX_COMMAND_OWNERS, "ordinary"),
+            (CommandAccess::Stop, MAX_STOP_OWNERS, "stop"),
+            (CommandAccess::ReadOnly, MAX_COMMAND_READS, "passive"),
+        ]
+        .map(|(access, limit, principal)| {
+            let held: Vec<_> = (0..limit)
+                .map(|index| {
+                    owner
+                        .command(principal, &format!("request-{index}"), access)
+                        .unwrap()
+                })
+                .collect();
+            (access, principal, held)
+        });
+        for (access, principal, _) in &commands {
+            assert!(matches!(
+                owner.command(principal, "overflow", *access),
+                Err(StorageError::Busy)
+            ));
+        }
+
+        // Releasing an observer cannot release a command reservation.
+        drop(observers.pop().unwrap());
+        observers.push(owner.observe().unwrap());
+        for (access, principal, _) in &commands {
+            assert!(matches!(
+                owner.command(principal, "overflow", *access),
+                Err(StorageError::Busy)
+            ));
+        }
+
+        // Each command class can release and replace its own reservation while
+        // observers stay at capacity, without releasing an observer's slot.
+        for (access, principal, held) in &mut commands {
+            drop(held.pop().unwrap());
+            held.push(owner.command(principal, "replacement", *access).unwrap());
+            assert!(matches!(owner.observe(), Err(StorageError::ReadCapacity)));
+        }
+        for (access, principal, _) in &commands {
+            assert!(matches!(
+                owner.command(principal, "overflow", *access),
+                Err(StorageError::Busy)
+            ));
+        }
+
+        let (_, work) = owner.close().unwrap();
+        assert!(work.unwrap().reads.is_empty());
+        assert!(matches!(owner.observe(), Err(StorageError::Closed)));
+        for access in [
+            CommandAccess::Creation,
+            CommandAccess::Submit,
+            CommandAccess::Stop,
+            CommandAccess::ReadOnly,
+        ] {
+            assert!(matches!(
+                owner.command("after-close", "new-request", access),
+                Err(StorageError::Closed)
+            ));
+        }
+        drop((observers, commands));
+    }
 
     #[test]
     fn read_admission_remains_bounded_until_join() {
