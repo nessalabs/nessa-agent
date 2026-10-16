@@ -9,9 +9,9 @@ use crate::attachments::{
 };
 use crate::conversation::application::{
     CatalogueReadSource, ConversationAccessPolicyEvaluator, ConversationMetadataReader,
-    ConversationRepository, ConversationService, FenceCapture, McpAppAudit, OwnerPhonePolicyEvaluator,
-    OwnerPhoneReceiverAuthority, ReceiverAuthority, RecordReadSource, ReviewNoticeAuditor,
-    ShareGrants, WatchCatalogue, WatchNamespaces, WatchRecords,
+    ConversationRepository, ConversationService, FenceCapture, McpAppAudit,
+    OwnerPhonePolicyEvaluator, OwnerPhoneReceiverAuthority, ReceiverAuthority, RecordReadSource,
+    ReviewNoticeAuditor, ShareGrants, WatchCatalogue, WatchNamespaces, WatchRecords,
 };
 use crate::conversation::infrastructure::UuidWatchNamespaces;
 pub(crate) use crate::core::limit_log::note_limit;

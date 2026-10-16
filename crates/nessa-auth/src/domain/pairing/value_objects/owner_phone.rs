@@ -1,7 +1,7 @@
 //! Immutable original request; values describe correlation, never current authority.
 use super::{ConsentClass, ConsentIntent, DeviceKey, DisclosedConsent, PairingError};
 use crate::domain::{AudienceId, CredentialId, Grant, MembershipId, PrincipalId, Resource};
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 
 /// Original owner-allocated setup UUID, retained across every lost reply.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -106,8 +106,20 @@ impl OwnerPhoneRequest {
     }
     /// Validate the authenticated advertised numeric destination before a
     /// permanent device key exists. `new` uses this same endpoint owner.
+    /// A unicast host excludes IPv4 this-network/broadcast and IPv6 link-local:
+    /// a gateway's numeric interface scope has no meaning on a remote phone.
+    /// Concrete loopback endpoints remain usable for local clients.
     pub fn validate_endpoint(endpoint: SocketAddr) -> Result<(), PairingError> {
-        if endpoint.port() == 0 || endpoint.ip().is_unspecified() {
+        let address = endpoint.ip().to_canonical();
+        let unicast_host = match address {
+            IpAddr::V4(address) => address.octets()[0] != 0 && !address.is_broadcast(),
+            IpAddr::V6(address) => !address.is_unicast_link_local(),
+        };
+        if endpoint.port() == 0
+            || address.is_unspecified()
+            || address.is_multicast()
+            || !unicast_host
+        {
             return Err(PairingError::Invalid);
         }
         Ok(())

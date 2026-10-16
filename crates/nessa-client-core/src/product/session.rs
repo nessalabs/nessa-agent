@@ -252,29 +252,37 @@ impl Owner {
         let _ = self.observe(|| interrupt.interrupt());
     }
     pub(super) fn finish(&self, cause: ProductFailure) {
-        let (queue, active, cause) = {
+        let tickets = {
             let mut state = lock(&self.state);
             store_failure(&mut state, cause);
             state.drained = true;
             state.interrupt.take();
-            let cause = state.failure.unwrap_or(cause);
-            (
-                state.queue.drain(..).collect::<Vec<_>>(),
-                state.active.take(),
-                cause,
-            )
+            let mut tickets = Vec::new();
+            if let Some(active) = state.active.take() {
+                tickets.push(active);
+            }
+            tickets.extend(state.queue.drain(..).map(|ticket| (ticket, false)));
+            tickets
         };
-        if let Some((ticket, dispatched)) = active {
-            ticket.complete(if dispatched {
-                ProductCompletion::Uncertain(cause)
-            } else {
-                ProductCompletion::NotDispatched(cause)
-            });
-        }
-        for ticket in queue {
-            ticket.complete(ProductCompletion::NotDispatched(cause));
-        }
+        // All tickets share one wake. Keep observers behind their ticket
+        // locks until that callback's outcome has joined the owner's cause;
+        // no injected callback runs after this batch freezes its settlements.
+        let mut states: Vec<_> = tickets
+            .iter()
+            .map(|(ticket, _)| lock(&ticket.state))
+            .collect();
         self.notify();
+        let cause = lock(&self.state).failure.unwrap_or(cause);
+        for ((ticket, dispatched), state) in tickets.iter().zip(&mut states) {
+            ticket.settle(
+                state,
+                if *dispatched {
+                    ProductCompletion::Uncertain(cause)
+                } else {
+                    ProductCompletion::NotDispatched(cause)
+                },
+            );
+        }
     }
 }
 enum Worker {
@@ -563,16 +571,23 @@ pub(super) struct Ticket {
 impl Ticket {
     pub(super) fn complete(&self, completion: ProductCompletion) {
         let mut state = lock(&self.state);
+        if self.settle(&mut state, completion) {
+            if let Some(owner) = self.owner.upgrade() {
+                owner.notify();
+            }
+        }
+    }
+    fn settle(&self, state: &mut TicketState, completion: ProductCompletion) -> bool {
         if state.completion.is_some() {
-            return;
+            return false;
         }
         state.completion = Some(Arc::new(completion));
-        if let Some(owner) = self.owner.upgrade() {
-            if state.external == 0 {
+        if state.external == 0 {
+            if let Some(owner) = self.owner.upgrade() {
                 lock(&owner.state).permits -= 1;
             }
-            owner.notify();
         }
+        true
     }
 }
 /// Immutable original wire ticket; dropping an observer does not cancel dispatch.
@@ -702,3 +717,7 @@ impl Deref for ProductEventBatch {
         self.values()
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/product/settlement.rs"]
+mod settlement_tests;

@@ -132,6 +132,7 @@ impl PreparedNative {
     }
 
     /// Keep `socket` until `bind`. It must already be bound to `address`.
+    #[cfg(test)]
     fn keep_bound_socket(mut self, socket: TcpListener) -> Self {
         self.bound_socket = Some(socket);
         self

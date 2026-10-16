@@ -20,7 +20,7 @@ Auth owns a separate OwnerPhoneReadWrite class, its complete ordered capability 
 
 This table is the order for authorizing an owner phone and for the connection that follows. `SessionCloseReason` stays the wire reason. `connection_outcome` in `crates/nessa-protocol/src/product_contract/outcome.rs` is the only projection of a reason, or of a close that carried none, into what the client does next. `retryable()` stays on the reason and is not copied into that projection. A command that already happened is idempotent success; it is not a close and it does not end the session.
 
-A wildcard listener is published as the configured `native.advertisedAddress` on the configured port. A specific bind is published as itself. An absent listener, a configured port of zero, an unspecified address, or a wildcard with no advertised address discloses nothing. Binding port zero assigns an ephemeral port; that port is not published and is not stored in an authorization. An advertised address is a unicast host a phone can open TCP to. An IPv6 link-local address is refused because the setting has no interface scope. The IPv4 this-network block `0.0.0.0/8` and the IPv4 limited broadcast `255.255.255.255` are refused because a phone cannot open TCP to them. The process does not look up a route.
+A wildcard listener is published as the configured `native.advertisedAddress` on the configured port. A specific bind is published as itself only after the same Auth endpoint validation. An absent listener, a configured port of zero, an unspecified address, or a wildcard with no advertised address discloses nothing. Binding port zero assigns an ephemeral port; that port is not published and is not stored in an authorization. An advertised address is a unicast host a phone can open TCP to. An IPv6 link-local address is refused for both bind paths: its numeric scope is local to the gateway and cannot identify an interface on the phone. Auth owns host validation for discovery, context construction, and signed request construction; composition adds only the wildcard family and non-loopback requirements. The IPv4 this-network block `0.0.0.0/8` and the IPv4 limited broadcast `255.255.255.255` are refused because a phone cannot open TCP to them. The process does not look up a route.
 
 A phone `conversation.answer` may be one shot. Remembering a permission rule (`nessa.remember.allow`, `nessa.remember.deny`) is a separate purpose decision, `conversation.remember`, and this purpose forbids it. The same decision is what a phone send asks before it offers those choices. A desktop owner is not this purpose and keeps the permission-rule catalog.
 
@@ -50,7 +50,7 @@ A phone `conversation.answer` may be one shot. Remembering a permission rule (`n
 | owned conversation | phone `conversation.answer` with `nessa.remember.allow` or `nessa.remember.deny` | phone | refused; no rule is stored and the answerer is not noted | Cedar forbid `owner-phone.remember` on `conversation.remember` |
 | owned conversation | phone `conversation.send` or `conversation.steer` | phone | the turn is not offered a remember choice | the same `conversation.remember` decision |
 | listener | wildcard bind, a fixed port, and a routable `native.advertisedAddress` of that family | configuration | that address and the configured port may be authorized | the signed request stores the endpoint it was shown |
-| listener | a specific bind on a fixed port | configuration | that bound address may be authorized. An advertised address is accepted only for a wildcard of the same family, and only when it is unicast, not loopback, not multicast, not in the IPv4 this-network block, not the IPv4 limited broadcast, and not IPv6 link-local | config parse refusal is the evidence that the setting does not apply |
+| listener | a specific unicast bind on a fixed port | configuration | that bound address may be authorized after Auth endpoint validation. An advertised address is accepted only for a wildcard of the same family, and only when it is unicast, not loopback, not multicast, not in the IPv4 this-network block, not the IPv4 limited broadcast, and not IPv6 link-local | config parse refusal is the evidence that the setting does not apply |
 | listener | no listener, a configured port of zero, or a wildcard with no advertised address | configuration | nothing is disclosed, including after the socket is given an ephemeral port; a new original that names another endpoint conflicts | none |
 
 `authentication_failed`, `credential_revoked`, `credential_expired`, and `authorization_lost` share one next action: stop, and do not retry that authorization. The reason stays the evidence, so a failed proof is not recorded as an owner revoke. A `server_shutdown` frame keeps the authorization and ends this session. This gateway's own process stop is the retryable `temporary_unavailable` close above, not that frame. `protocol_incompatible` keeps the authorization and is not called a shutdown: the process is still up, and a matching client can connect. Plain EOF is retryable because the gateway named no cause. Termination does not delete cached conversations.
@@ -60,6 +60,21 @@ The rejected shapes are a route lookup toward a documentation address (it fails 
 The retained refresh and follow reader uses that same projection. A `session.terminated` on its connection is the close, and a terminal revoke asks status again. It is not a second list of reasons.
 
 `connection_outcome` is the only close-class projection. `connection_outcome_is_the_only_close_class` names every `SessionCloseReason` and a missing reason. The command and endpoint rows stay with `exact_replay_returns_the_stored_original_when_entropy_is_unavailable` (Active, no draw), `owner_phone_delete_retry_returns_the_idempotent_receipt`, `endpoint_publishes_the_configured_address_for_a_wildcard_bind`, `advertised_address_is_a_routable_host_for_a_wildcard_listen`, `owner_phone_remember_is_refused_and_a_once_answer_stays_admitted`, `owner_phone_remember_answer_stores_no_rule`, `session_terminated_is_the_close_reason_and_is_not_queued`, `terminated_session_is_the_close_reason_and_a_malformed_one_is_protocol`, and `plain_eof_stays_an_untyped_close_and_a_bad_termination_is_protocol`.
+
+## Native product settlement ordering
+
+The physical owner settles all unfinished tickets as one batch. Ticket locks
+exclude observers while its single completion wake runs; the owner then reads
+the effective failure and publishes the batch without another injected callback.
+This order lets a completion-wake panic replace cancellation before immutable
+settlements become observable. Previously completed factual responses remain
+facts, and a decoded failure keeps precedence over a later callback panic.
+
+| Ordering | Settlement and close | Regression |
+| --- | --- | --- |
+| Explicit stop, successful stop wake, completion wake panics | Active dispatch is Uncertain(WorkerPanicked); queued work is NotDispatched(WorkerPanicked); close reports WorkerPanicked | `completion_wake_failure_settles_the_whole_batch_with_the_effective_cause` |
+| Decoded failure, later stop, completion wake panics | Pending tickets and close retain the decoded failure | `completion_wake_failure_preserves_a_decoded_failure_and_factual_response` |
+| Factual response before stop and completion-wake panic | Original response remains unchanged; unfinished batch uses WorkerPanicked | `completion_wake_failure_preserves_a_decoded_failure_and_factual_response` |
 
 ## Alternatives considered
 

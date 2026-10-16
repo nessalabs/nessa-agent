@@ -1,6 +1,7 @@
 //! Actual native binding and authenticated socket discovery, without enrollment.
 use super::*;
 use serde_json::json;
+use std::net::IpAddr;
 use tokio::task::JoinHandle;
 
 use super::owner_phone::client::ProductClient;
@@ -234,10 +235,7 @@ async fn endpoint_publishes_the_configured_address_for_a_wildcard_bind() {
     assert!(listener.ip().is_unspecified());
     assert_ne!(listener.port(), 0);
     let expected = commands.native_endpoint().unwrap();
-    assert_eq!(
-        expected.0,
-        std::net::SocketAddr::new(advertised, listener.port())
-    );
+    assert_eq!(expected.0, SocketAddr::new(advertised, listener.port()));
     assert!(!expected.0.ip().is_unspecified());
     assert!(!expected.0.ip().is_loopback());
     let (address, serving) = serve(state).await;
@@ -278,4 +276,45 @@ async fn endpoint_asks_current_socket_policy_before_native_disclosure() {
     serving.abort();
     let _ = serving.await;
     drop(bound);
+}
+
+#[test]
+fn concrete_and_wildcard_binds_share_the_auth_endpoint_rule() {
+    for (host, accepted) in [
+        ("192.0.2.10", true),
+        ("10.0.0.1", true),
+        ("2001:db8::1", true),
+        ("fd00::1", true),
+        ("0.0.0.1", false),
+        ("255.255.255.255", false),
+        ("224.0.0.1", false),
+        ("ff02::1", false),
+        ("fe80::1", false),
+        ("febf::1", false),
+    ] {
+        let ip: IpAddr = host.parse().unwrap();
+        let concrete = SocketAddr::new(ip, 47650);
+        let wildcard = if ip.is_ipv4() {
+            "0.0.0.0:47650"
+        } else {
+            "[::]:47650"
+        }
+        .parse()
+        .unwrap();
+        for (bound, advertised) in [(concrete, None), (wildcard, Some(ip))] {
+            assert_eq!(
+                super::super::advertised_endpoint(bound, advertised),
+                accepted.then_some(concrete),
+                "{bound}, {advertised:?}"
+            );
+        }
+        assert_eq!(
+            super::super::advertised_endpoint(SocketAddr::new(ip, 0), None),
+            None
+        );
+    }
+    assert_eq!(
+        super::super::advertised_endpoint("[fe80::1%3]:47650".parse().unwrap(), None),
+        None
+    );
 }

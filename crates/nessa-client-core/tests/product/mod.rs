@@ -1713,3 +1713,72 @@ fn plain_eof_stays_an_untyped_close_and_a_bad_termination_is_protocol() {
     );
     malformed.join();
 }
+
+#[test]
+fn close_and_pending_tickets_agree_when_the_completion_wake_panics() {
+    struct Wake {
+        armed: AtomicBool,
+        calls: AtomicUsize,
+        stopped: Sender<()>,
+        inner: ThreadProductWake,
+    }
+    impl ProductWake for Wake {
+        fn revision(&self) -> u64 {
+            self.inner.revision()
+        }
+        fn wait(&self, revision: u64, timeout: Duration) {
+            self.inner.wait(revision, timeout);
+        }
+        fn wake(&self) {
+            if self.armed.load(Ordering::SeqCst) {
+                match self.calls.fetch_add(1, Ordering::SeqCst) {
+                    0 => self.stopped.send(()).unwrap(),
+                    1 => panic!("completion wake"),
+                    _ => {}
+                }
+            }
+            self.inner.wake();
+        }
+    }
+    let (sent, seen) = signal();
+    let (endpoint, peer) = peer(move |wire| {
+        wire.request().unwrap();
+        sent.send(()).unwrap();
+        assert!(wire.request().is_none());
+    });
+    let (stopped, stop_seen) = signal();
+    let wake = Arc::new(Wake {
+        armed: AtomicBool::new(false),
+        calls: AtomicUsize::new(0),
+        stopped,
+        inner: ThreadProductWake::default(),
+    });
+    let (session, draining, release) = fixtures::held_cleanup_with_wake(
+        endpoint,
+        limits(2),
+        Arc::new(AtomicBool::new(false)),
+        wake.clone(),
+    );
+    session.start().unwrap();
+    session.wait_ready().unwrap();
+    let active = session.request("conversation.list", "{}").unwrap();
+    receive(&seen);
+    let queued = session.request("conversation.list", "{}").unwrap();
+    session.request_close();
+    receive(&draining);
+    wake.armed.store(true, Ordering::SeqCst);
+    let other = session.clone();
+    let closing = thread::spawn(move || other.close());
+    receive(&stop_seen); // close's stop notification succeeded.
+    drop(release); // The next notification belongs to physical settlement.
+    assert_eq!(closing.join().unwrap(), Err(ProductFailure::WorkerPanicked));
+    assert_eq!(
+        active.wait().value(),
+        &ProductCompletion::Uncertain(ProductFailure::WorkerPanicked)
+    );
+    assert_eq!(
+        queued.wait().value(),
+        &ProductCompletion::NotDispatched(ProductFailure::WorkerPanicked)
+    );
+    peer.join();
+}

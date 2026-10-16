@@ -5,7 +5,7 @@ use crate::{
     core::RunError,
     product::{ConfiguredLimits, OperationalLimits, SessionSettings},
 };
-use nessa_auth::adapters::local::LocalStoreConfig;
+use nessa_auth::{adapters::local::LocalStoreConfig, domain::pairing::OwnerPhoneRequest};
 pub(super) use nessa_protocol::relay::RelayAddress;
 use nessa_sdk::domain::agent_execution::leases::{PeerEnvironment, SshDestination};
 use serde::Deserialize;
@@ -20,13 +20,10 @@ use std::{
 /// IPv4 this-network block `0.0.0.0/8`, the IPv4 limited broadcast, and an
 /// IPv6 link-local address are not that host.
 pub(super) fn routable_advertised_host(address: IpAddr) -> bool {
-    if address.is_unspecified() || address.is_loopback() || address.is_multicast() {
-        return false;
-    }
-    match address {
-        IpAddr::V6(address) => !address.is_unicast_link_local(),
-        IpAddr::V4(address) => address.octets()[0] != 0 && !address.is_broadcast(),
-    }
+    // Validate the host through Auth's endpoint owner. Port 1 is only a
+    // nonzero placeholder: the configured port may intentionally be zero.
+    !address.to_canonical().is_loopback()
+        && OwnerPhoneRequest::validate_endpoint(SocketAddr::new(address, 1)).is_ok()
 }
 
 /// The most bytes `config.json` may have: what startup reads and what a

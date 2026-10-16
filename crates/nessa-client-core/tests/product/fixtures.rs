@@ -1,7 +1,7 @@
 //! A real pinned TLS peer whose product replies are controlled independently.
 use crate::product::{
     ConnectedProduct, LocalProductConnector, ProductConnector, ProductLimits, ProductSession,
-    ProductStream, ThreadProductWake,
+    ProductStream, ProductWake, ThreadProductWake,
 };
 use nessa_auth::adapters::pairing::{NativeIdentity, NativeTransport, OsEntropy};
 use nessa_protocol::clock::Clock;
@@ -282,6 +282,19 @@ pub(super) fn held_cleanup(
     limits: ProductLimits,
     panic_read: Arc<AtomicBool>,
 ) -> (ProductSession, mpsc::Receiver<()>, Release) {
+    held_cleanup_with_wake(
+        endpoint,
+        limits,
+        panic_read,
+        Arc::new(ThreadProductWake::default()),
+    )
+}
+pub(super) fn held_cleanup_with_wake(
+    endpoint: Endpoint,
+    limits: ProductLimits,
+    panic_read: Arc<AtomicBool>,
+    wake: Arc<dyn ProductWake>,
+) -> (ProductSession, mpsc::Receiver<()>, Release) {
     let (entered, seen) = signal();
     let (release, held) = signal();
     let session = ProductSession::prepare(
@@ -296,7 +309,7 @@ pub(super) fn held_cleanup(
             panic_read,
         }),
         Arc::new(Time(Instant::now())),
-        Arc::new(ThreadProductWake::default()),
+        wake,
         limits,
     );
     (session, seen, Release(release))
