@@ -3,6 +3,9 @@
 //! Shared Agent -> SDK session storage/provider.
 //! Service::create_command -> SDK CreationCoordinator -> principal control lease;
 //! service/creation keeps current target deletion and the existing admission guard.
+//! Service::submit_command -> SDK MutationCoordinator -> principal control lease;
+//! service/mutation transfers the original admission guard through enqueue and
+//! terminal receipt persistence (tests/conversation/mutation_admission.rs).
 //! Service -> ConversationSummaries: what a list shows about each conversation,
 //! written when a message is accepted and when a turn completes.
 //! Service -> ConversationListing: one caller's conversations with their

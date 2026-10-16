@@ -15,6 +15,7 @@ use nessa_sdk::application::agent_execution::providers::ProviderSessionState;
 use nessa_sdk::domain::agent_execution::executions::{ExecutionId, Initiation, InvocationStage};
 use sha2::{Digest, Sha256};
 use std::sync::{Arc, Mutex};
+use tokio::sync::OwnedRwLockReadGuard;
 
 impl ConversationService {
     /// Bind the shared principal command store. A second bind is ignored.
@@ -87,12 +88,15 @@ impl ConversationService {
         let delivery = Arc::new(Mutex::new(None));
         let captured = delivery.clone();
         let progress = tokio::spawn(async move {
-            let _admission = service
-                .admit()
-                .await
-                .map_err(ConversationError::from)
-                .map_err(MutationFailure::Target)?;
+            let admission = Arc::new(
+                service
+                    .admit()
+                    .await
+                    .map_err(ConversationError::from)
+                    .map_err(MutationFailure::Target)?,
+            );
             let target = Arc::new(SubmitTarget {
+                admission,
                 service: service.clone(),
                 id,
                 caller,
@@ -254,6 +258,7 @@ pub struct SubmittedCommand {
 }
 
 struct SubmitTarget {
+    admission: Arc<OwnedRwLockReadGuard<()>>,
     service: ConversationService,
     id: ConversationId,
     caller: ConversationCaller,
@@ -296,15 +301,17 @@ impl MutationTarget for SubmitTarget {
         let execution_id = self.execution_id.clone();
         let mode = self.mode;
         let delivery = self.delivery.clone();
+        let admission = self.admission.clone();
         Box::pin(async move {
             let submitted = service
-                .submit_as(
+                .submit_with_admission(
                     id,
                     caller,
                     execution_id,
                     message.map_err(CreationInitializationFailure::Target)?,
                     mode,
                     Writer::Person(initiation, offers_remember),
+                    Some(admission),
                 )
                 .await
                 .map_err(SubmitFailure::into_error);

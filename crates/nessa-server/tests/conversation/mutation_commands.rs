@@ -29,6 +29,9 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 use tokio::sync::oneshot;
 
+#[path = "mutation_admission.rs"]
+mod admission;
+
 fn caller_on(request: &str, surface: &str) -> ConversationCaller {
     ConversationCaller {
         organization_id: OrganizationId::new("org").unwrap(),

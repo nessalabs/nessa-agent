@@ -79,6 +79,17 @@ identity, schema version and payload equality.
 | M3 | Same request with different bytes, target, turn, origin, or a creation receipt | Typed conflict before enqueue | `a_submit_identity_conflicts_with_changed_bytes_or_a_creation_request` |
 | M4 | Crash after durable submit `Attempted` | Restart returns `Interrupted`; no second enqueue | `an_interrupted_submit_does_not_enqueue_again` |
 | M5 | Deleted target on submit or read-only lookup, including after restart | Deletion refusal; control history remains | `deletion_refuses_submit_lookup_after_reopen` |
+| M6 | Export queues its admission writer after submit admission, before enqueue | Submit uses its original read guard, settles its receipt, then releases export; no nested read behind the writer | `admitted_submit_finishes_before_waiting_export` |
+| M7 | Caller disconnects while submit's terminal receipt save is held | Retained command owns admission until the terminal save completes; export cannot cut between enqueue and receipt settlement | `caller_loss_keeps_submit_admission_until_settlement` |
+| M8 | Export already holds admission when a submit starts | Command admission and the ordinary submission task wait until export releases admission | `submit_waits_while_export_holds_admission` |
+| M9 | Retirement is requested after command admission, before enqueue | Recheck retirement using the original guard; refuse before enqueue, retain attempted receipt and do not retry the effect | `retirement_before_submit_effect_preserves_attempted_receipt` |
+| M10 | An internal caller supplies a different service's read guard | Refuse as unavailable before resolving a conversation or enqueueing; the guard must belong to this service | `submission_refuses_another_services_admission` |
+
+Durable submit transfers a shared owned admission guard to the receipt owner
+and submission task. The same guard spans `Accepted`, `Attempted`, enqueue and
+the terminal save, including caller loss. Ordinary submit acquires its guard in
+the supervised submission task. Both paths use the same submission implementation
+and current retirement check; neither uses a second read to recheck retirement.
 
 ## Exact-turn Stop
 

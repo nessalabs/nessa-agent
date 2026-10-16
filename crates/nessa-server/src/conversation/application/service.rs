@@ -101,8 +101,8 @@ use std::{
 
 use tokio::{
     sync::{
-        oneshot, watch, Mutex, Notify, OnceCell, OwnedMutexGuard, OwnedRwLockWriteGuard,
-        OwnedSemaphorePermit, RwLock, RwLockReadGuard, Semaphore,
+        oneshot, watch, Mutex, Notify, OnceCell, OwnedMutexGuard, OwnedRwLockReadGuard,
+        OwnedRwLockWriteGuard, OwnedSemaphorePermit, RwLock, Semaphore,
     },
     task::JoinHandle,
     time::Instant,
@@ -2768,8 +2768,23 @@ impl ConversationService {
         mode: SubmissionMode,
         writer: Writer,
     ) -> Result<SubmissionReceipt, SubmitFailure> {
+        self.submit_with_admission(id, caller, execution_id, message, mode, writer, None)
+            .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn submit_with_admission(
+        &self,
+        id: ConversationId,
+        caller: ConversationCaller,
+        execution_id: String,
+        message: SubmittedMessage,
+        mode: SubmissionMode,
+        writer: Writer,
+        admission: Option<Arc<OwnedRwLockReadGuard<()>>>,
+    ) -> Result<SubmissionReceipt, SubmitFailure> {
         let (asked, submission) =
-            self.submission_future(id, caller, execution_id, message, mode, writer);
+            self.submission_future(id, caller, execution_id, message, mode, writer, admission);
         let outcome = tokio::spawn(submission).await;
         let asked = asked.load(Ordering::SeqCst);
         let failure = match outcome {
@@ -2784,6 +2799,7 @@ impl ConversationService {
     }
     /// The submission task, shared by normal supervision and controlled polling
     /// in the desktop-stop ordering test. Refusal attribution stays on this task.
+    #[allow(clippy::too_many_arguments)]
     fn submission_future(
         &self,
         id: ConversationId,
@@ -2792,6 +2808,7 @@ impl ConversationService {
         message: SubmittedMessage,
         mode: SubmissionMode,
         writer: Writer,
+        admission: Option<Arc<OwnedRwLockReadGuard<()>>>,
     ) -> (
         Arc<AtomicBool>,
         impl Future<Output = Result<SubmissionReceipt, Halt>> + Send + 'static,
@@ -2805,7 +2822,16 @@ impl ConversationService {
         let refused_for = writer.clone();
         let asked_when_refused = asked.clone();
         let submission = async move {
-            let _admission = service.admit().await?;
+            // The durable command retains this same guard through its terminal
+            // receipt save. Reacquiring here can wait behind an export writer
+            // that is itself waiting for the command's original read guard.
+            let _admission = match admission {
+                Some(admission) => {
+                    service.check_admission(&admission)?;
+                    admission
+                }
+                None => Arc::new(service.admit().await?),
+            };
             let _mode = service.inner.mode_changes.lock(&id).await;
             service.recover_mode_change(&id, &caller).await?;
             let actor = caller.actor()?;
@@ -4758,12 +4784,20 @@ impl ConversationService {
         let _ = retired.wait_for(|retired| *retired).await;
     }
     /// Admission, refused only when the gateway is retiring.
-    async fn admit(&self) -> Result<RwLockReadGuard<'_, ()>, Halt> {
-        let permit = self.inner.admission.read().await;
+    async fn admit(&self) -> Result<OwnedRwLockReadGuard<()>, Halt> {
+        let permit = self.inner.admission.clone().read_owned().await;
+        self.check_admission(&permit)?;
+        Ok(permit)
+    }
+
+    fn check_admission(&self, permit: &OwnedRwLockReadGuard<()>) -> Result<(), Halt> {
+        if !Arc::ptr_eq(OwnedRwLockReadGuard::rwlock(permit), &self.inner.admission) {
+            return Err(ConversationError::Unavailable.into());
+        }
         if self.inner.retirement.get().is_some() {
             return Err(Halt::Retired);
         }
-        Ok(permit)
+        Ok(())
     }
 
     /// Join admitted commands and hold admission until the returned guard
