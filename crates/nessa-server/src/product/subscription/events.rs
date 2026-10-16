@@ -13,6 +13,7 @@ use crate::product::conversation::caller;
 use crate::product::socket::{failure, success};
 use crate::product::ProductRouteState;
 use nessa_auth::application::session::AuthenticatedSession;
+use nessa_protocol::conversation::domain::ConversationId;
 use nessa_protocol::product::generated::{
     product_event, ConversationSubscribeResult, MAX_PAYLOAD_BYTES,
 };
@@ -266,13 +267,16 @@ pub(in crate::product) async fn read_event(
                 None => return Err(code.to_owned()),
             },
         };
-        service
-            .authorize_events(conversation, &caller(&current, request.to_owned()))
-            .await
-            .map_err(|error| {
-                event_error_code(&ConversationEventError::Conversation(error)).to_owned()
-            })?;
+        authorize_event_target(service, &current, conversation, request).await?;
         let result = reader.read(limits).await;
+        // E22: source I/O may outlive credential or target authority. Admit the
+        // returned data/checkpoint for publication while capacity is still held.
+        if matches!(&result, Ok(EventRead::Page(_) | EventRead::Idle(_))) {
+            let current = authorize_batch(state, session, target)
+                .await
+                .map_err(str::to_owned)?;
+            authorize_event_target(service, &current, conversation, request).await?;
+        }
         drop(permit);
         match result {
             Err(error) => match backoff(matches!(error, EventReadError::Capacity), attempt) {
@@ -287,6 +291,19 @@ pub(in crate::product) async fn read_event(
             Ok(read) => return Ok(read),
         }
     }
+}
+
+/// Ask the application target owner using the freshly admitted session.
+async fn authorize_event_target(
+    service: &ConversationService,
+    session: &AuthenticatedSession,
+    conversation: &ConversationId,
+    request: &str,
+) -> Result<(), String> {
+    service
+        .authorize_events(conversation, &caller(session, request.to_owned()))
+        .await
+        .map_err(|error| event_error_code(&ConversationEventError::Conversation(error)).to_owned())
 }
 
 /// Correlates otherwise valid adapter outputs with the requested start and

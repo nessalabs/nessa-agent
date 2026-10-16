@@ -430,6 +430,14 @@ results and thinking are not included. Existing owner policy applies to every ba
 | E19 | Invalid event subscribe options arrive before admission | Return a rejected Promise with TypeError, without sending an RPC |
 | E20 | Owner phone peeks while target policy allows Read but denies Act | Use the shared command-target Cedar admission before reading active execution; no lifecycle read after refusal |
 | E21 | Paired credential holds only conversation.read; current share changes from absent to Read to Drive before peek and explicit stop | Absent targets stay hidden; Read may observe the authoritative execution but stop is forbidden; Drive may observe and stop that exact execution. Peek uses the existing paired-read grant owner, then its current target Read check; stop keeps Drive admission. Owner-phone purpose and Act checks, unpaired manifest grants, and administrative refusals remain in force |
+| E22 | An event source read is in flight when credential, paired share, or conversation access is revoked or the target is deleted | Reauthorize Page and Idle through the existing current credential and target policy owners before returning them for publication; refuse without exposing events or a new cursor. Unchanged authority preserves the output. Preparing carries no publication and retains pre-read admission |
+
+Event subscriptions admit publication after a successful Page or Idle read, while
+still holding request capacity. This final admission refreshes the credential,
+paired target grant, and application target access through their existing owners.
+It is the semantic batch's publication admission point, not an atomic check with
+the later socket write; already admitted writes may finish. View and list
+subscriptions retain their existing admission behavior.
 
 Ordinary peek requests and subscription admission use the same paired-read
 credential admission helper. Ordinary requests ask it after owner-phone purpose

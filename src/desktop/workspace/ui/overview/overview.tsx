@@ -716,7 +716,9 @@ export function AgentsOverview({
         className="agents-overview"
         aria-label="Agents"
         data-alt={alt || undefined}
-        data-split={split || undefined}
+        // Beside nothing, the list is the page's one column, centred: with
+        // nothing listed there is no peek to make room for.
+        data-split={(split && rowCount > 0) || undefined}
       >
         <div
           ref={surface}

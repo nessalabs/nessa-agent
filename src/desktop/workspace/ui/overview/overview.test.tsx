@@ -168,6 +168,8 @@ async function mount({
           id: "run-1",
           role: "agent",
           at: 900,
+          // Its turn is still at work, so each step is its own line.
+          working: true,
           parts: [
             { kind: "step", step: "read", label: "Read", detail: "panes.tsx" },
             { kind: "step", step: "edit", label: "Edited", detail: "grid.tsx", added: 4 },
@@ -1377,6 +1379,7 @@ describe("the peek's story is bounded, and scrolls from the keyboard beneath its
           id: `run-${message + 1}`,
           role: "agent" as const,
           at: 900 + message,
+          working: true as const,
           parts: Array.from({ length: 10 }, (_, index) => ({
             kind: "step" as const,
             step: "read" as const,
@@ -2067,6 +2070,37 @@ describe("the frame the overview opens on", () => {
     expect(early).toEqual([])
     for (let frame = 0; frame < 14; frame++) await nextFrame()
     expect(document.activeElement).toBe(card("first"))
+  })
+
+  it("lays nothing listed out as one centred column, however wide its layer", async () => {
+    const observed: ((width: number) => void)[] = []
+    class Observer {
+      constructor(private readonly callback: ResizeObserverCallback) {}
+      observe(target: Element) {
+        if (target.classList.contains("workspace-overview-layer"))
+          observed.push((width) =>
+            this.callback(
+              [{ contentRect: { width } } as ResizeObserverEntry],
+              this as unknown as ResizeObserver,
+            ),
+          )
+      }
+      disconnect() {}
+    }
+    const was = globalThis.ResizeObserver
+    Object.assign(globalThis, { ResizeObserver: Observer })
+    try {
+      await mount({ index: { ...sampleIndex(), sessions: [] } })
+      await act(async () => observed.forEach((report) => report(1200)))
+      await open()
+      expect(host.querySelector(".agents-clear")).not.toBeNull()
+      // No peek can open beside an empty list, so none is made room for.
+      expect(host.querySelector(".agents-overview")?.hasAttribute("data-split")).toBe(
+        false,
+      )
+    } finally {
+      Object.assign(globalThis, { ResizeObserver: was })
+    }
   })
 
   it("opens in the arrangement its layer measured before it opened, and draws the peek beside the list a frame on", async () => {

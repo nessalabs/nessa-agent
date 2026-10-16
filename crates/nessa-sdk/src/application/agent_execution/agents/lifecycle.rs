@@ -438,6 +438,37 @@ impl SessionLifecycle {
             WorkStatus::Open
         )
     }
+    /// Stopped by itself with no way back but its owner's close (see
+    /// `Agent::awaits_close`). A stop that may still reopen it — cleanup not
+    /// yet started, or under way, or confirmed with work left to drain — is
+    /// not, and neither is an explicit close or a sealed lifetime, which its
+    /// owner is already ending.
+    pub(super) fn awaits_close(&self) -> bool {
+        if self.lifetime_sealed() {
+            return false;
+        }
+        let state = self.state.lock().expect("session lifecycle");
+        let stop = match &state.work_status {
+            WorkStatus::Open => return false,
+            WorkStatus::Stopping(stop) | WorkStatus::Blocked(stop) => stop,
+        };
+        if matches!(stop.ticket.request, SessionCloseRequest::Explicit(_)) {
+            return false;
+        }
+        match stop.recovery {
+            RecoveryPolicy::NeedsExplicitClose => true,
+            RecoveryPolicy::CleanupNotStarted | RecoveryPolicy::ExplicitClose => false,
+            RecoveryPolicy::Automatic => {
+                stop.finalized
+                    && !stop
+                        .ticket
+                        .result
+                        .borrow()
+                        .as_ref()
+                        .is_some_and(|report| report.is_confirmed() && report.audit().is_ok())
+            }
+        }
+    }
     pub(super) fn close_notice(&self) -> watch::Receiver<Option<ActionContext>> {
         self.close.subscribe()
     }

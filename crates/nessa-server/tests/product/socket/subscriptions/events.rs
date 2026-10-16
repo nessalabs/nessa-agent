@@ -198,6 +198,168 @@ async fn capacity_wait_rechecks_event_admission() {
     assert_eq!(reads.load(Ordering::SeqCst), 0);
 }
 
+/// E22: a source reply does not retain the authority held before its read.
+#[tokio::test]
+async fn event_read_reauthorizes_page_and_idle_before_publication() {
+    use crate::conversation::application::{conversation_session, ShareGrantTransition};
+    use crate::conversation::domain::ShareAccess;
+    use crate::product::subscription::{read_event, Target};
+    use nessa_sdk::application::agent_execution::sessions::{
+        CommittedEvent, CommittedEventCursor, CommittedEventPage, CommittedEventReader,
+        EventFuture, EventRead, EventReadLimits, SessionChange,
+    };
+    use nessa_sync::replication::domain::Id;
+
+    struct GatedReader {
+        entered: Arc<AtomicBool>,
+        reply: Option<tokio::sync::oneshot::Receiver<EventRead>>,
+    }
+    impl CommittedEventReader for GatedReader {
+        fn read(&mut self, _: EventReadLimits) -> EventFuture<'_, EventRead> {
+            self.entered.store(true, Ordering::SeqCst);
+            let reply = self.reply.take().expect("one source read");
+            Box::pin(async move { Ok(reply.await.expect("release source reply")) })
+        }
+    }
+
+    for page in [false, true] {
+        for change in [
+            "owner-valid",
+            "owner-delete",
+            "paired-valid",
+            "share",
+            "credential",
+            "paired-delete",
+        ] {
+            let fixture = SubscriptionFixture::new().await;
+            let fixture = if change.starts_with("owner-") {
+                fixture
+            } else {
+                let fixture = fixture.with_devices(this_device(true));
+                grants(
+                    &fixture.authority,
+                    &["conversation.read", "conversation.write", "server.read"],
+                );
+                fixture
+                    .grant_to(ShareGrantTransition::Grant(ShareAccess::read()))
+                    .await;
+                fixture
+            };
+            let target = Target::Events {
+                conversation: fixture.id.clone(),
+                after: None,
+                replay: false,
+                kinds: Vec::new(),
+            };
+            let cursor = CommittedEventCursor::new(
+                conversation_session(&fixture.id),
+                Id::new("source").unwrap(),
+                1,
+                if page { Some(1) } else { None },
+            );
+            let output = if page {
+                EventRead::Page(
+                    CommittedEventPage::new(
+                        vec![CommittedEvent::change(
+                            cursor.clone(),
+                            SessionChange::Opened {
+                                id: conversation_session(&fixture.id),
+                                provider: ProviderIdentity::new("gateway-test", "test", "test")
+                                    .unwrap(),
+                                context: ProviderContext::Absent,
+                            },
+                        )],
+                        cursor.clone(),
+                        CommittedEventCursor::new(
+                            conversation_session(&fixture.id),
+                            Id::new("source").unwrap(),
+                            1,
+                            None,
+                        ),
+                    )
+                    .unwrap(),
+                )
+            } else {
+                EventRead::Idle(cursor.clone())
+            };
+            let (release, reply) = tokio::sync::oneshot::channel();
+            let entered = Arc::new(AtomicBool::new(false));
+            let mut reader = GatedReader {
+                entered: entered.clone(),
+                reply: Some(reply),
+            };
+            let read = read_event(
+                &fixture.state,
+                &fixture.service,
+                &fixture.session,
+                &target,
+                "publication",
+                &mut reader,
+                EventReadLimits::new(16, 256 * 1024 * 1024).unwrap(),
+            );
+            tokio::pin!(read);
+            timeout(EXPECTED, async {
+                while !entered.load(Ordering::SeqCst) {
+                    assert!(futures_util::poll!(&mut read).is_pending());
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+            assert_eq!(
+                fixture.state.requests.available_permits(),
+                fixture.state.limits.requests() - 1,
+                "source read retains request capacity"
+            );
+            let expected = match change {
+                "share" => {
+                    fixture.grant_to(ShareGrantTransition::Revoke).await;
+                    Some("conversation_not_found")
+                }
+                "credential" => {
+                    grants(&fixture.authority, &["server.read"]);
+                    Some("forbidden")
+                }
+                "owner-delete" | "paired-delete" => {
+                    let deleted = owner_call(
+                        &fixture,
+                        "conversation.delete",
+                        json!({"conversationId": fixture.id.to_string(), "requestId": "delete-during-read"}),
+                    )
+                    .await;
+                    assert_eq!(deleted["ok"], true, "{deleted}");
+                    Some("conversation_deleted")
+                }
+                "owner-valid" | "paired-valid" => None,
+                _ => unreachable!(),
+            };
+            release.send(output).unwrap();
+            let result = timeout(EXPECTED, read).await.unwrap();
+            if let Some(code) = expected {
+                // No returned Page/Idle means the caller can publish neither
+                // the withheld metadata nor its checkpoint.
+                assert!(
+                    matches!(result, Err(ref actual) if actual == code),
+                    "{change}, page={page}: {result:?}"
+                );
+            } else {
+                match result.unwrap() {
+                    EventRead::Page(batch) if page => {
+                        assert_eq!(batch.next(), &cursor);
+                        assert_eq!(batch.events().len(), 1);
+                    }
+                    EventRead::Idle(actual) if !page => assert_eq!(actual, cursor),
+                    other => panic!("unchanged authority preserves source output: {other:?}"),
+                }
+            }
+            assert_eq!(
+                fixture.state.requests.available_permits(),
+                fixture.state.limits.requests()
+            );
+        }
+    }
+}
+
 /// E3: an explicit replay flag cannot accompany a resume cursor.
 #[tokio::test]
 async fn resume_with_explicit_false_replay_is_invalid() {
