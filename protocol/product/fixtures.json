@@ -201,6 +201,10 @@
       "workspace": "/tmp"
     }
   },
+  "ConversationPeekResult": {
+    "conversationId": "00000000-0000-4000-8000-000000000001",
+    "executionId": null
+  },
   "ConversationReadParams": {
     "conversationId": "00000000-0000-4000-8000-000000000001"
   },
@@ -804,5 +808,73 @@
       "accessEpoch": 1
     },
     "cleanupPending": false
+  },
+  "ConversationSubscribeEventsParams": {
+    "conversationId": "00000000-0000-4000-8000-000000000001",
+    "kinds": ["turn.ended"]
+  },
+  "ConversationEvent": {
+    "id": "ended",
+    "cursor": "ended",
+    "kind": "turn.ended",
+    "executionId": "turn",
+    "status": "settled",
+    "outcome": "completed"
+  },
+  "ConversationEvents": {
+    "subscriptionId": "1",
+    "cursor": "7",
+    "events": [
+      {
+        "id": "1",
+        "cursor": "1",
+        "kind": "turn.accepted",
+        "executionId": "turn",
+        "status": "accepted"
+      },
+      {
+        "id": "2",
+        "cursor": "2",
+        "kind": "turn.started",
+        "executionId": "turn",
+        "status": "running"
+      },
+      {
+        "id": "3",
+        "cursor": "3",
+        "kind": "turn.ended",
+        "executionId": "turn",
+        "status": "settled",
+        "outcome": "completed"
+      },
+      {
+        "id": "4",
+        "cursor": "4",
+        "kind": "tool.updated",
+        "executionId": "turn",
+        "toolId": "tool"
+      },
+      {
+        "id": "5",
+        "cursor": "5",
+        "kind": "state.changed",
+        "status": "opened"
+      },
+      {
+        "id": "6",
+        "cursor": "6",
+        "kind": "state.changed",
+        "executionId": "turn",
+        "status": "waiting_permission"
+      },
+      {
+        "id": "7",
+        "cursor": "7",
+        "kind": "state.changed",
+        "executionId": "turn",
+        "status": "settlement_updated",
+        "outcome": "failed"
+      }
+    ]
   }
 }

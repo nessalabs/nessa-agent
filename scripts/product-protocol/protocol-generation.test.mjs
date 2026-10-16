@@ -31,6 +31,38 @@ const productOutputs = [
   "crates/nessa-protocol/src/product/generated.rs",
   "crates/nessa-protocol/src/product_contract/generated.rs",
 ]
+
+test("event filter bounds and conditional metadata publish from their schema owner", () =>
+  fixture((path) => {
+    edit(path, "protocol/product/v1.json", (schema) => {
+      const kinds = schema.$defs.ConversationSubscribeEventsParams.properties.kinds
+      kinds.minItems = 2
+      kinds.maxItems = 3
+      kinds.uniqueItems = false
+      schema.$defs.ConversationEvent.allOf[0].then.required.push("name")
+    })
+    const result = generate(path, "generate-product-protocol")
+    assert.equal(result.status, 0, result.stderr)
+    const ts = readFileSync(
+      join(path, "packages/nessa-client/src/generated/product.ts"),
+      "utf8",
+    )
+    const rust = readFileSync(
+      join(path, "crates/nessa-protocol/src/product/generated.rs"),
+      "utf8",
+    )
+    assert.match(ts, /minKinds: 2/)
+    assert.match(ts, /maxKinds: 3/)
+    assert.match(ts, /uniqueKinds: false/)
+    assert.match(ts, /required: \["executionId", "status", "name"\]/)
+    assert.match(rust, /MIN_EVENT_SUBSCRIPTION_KINDS: usize = 2;/)
+    assert.match(rust, /MAX_EVENT_SUBSCRIPTION_KINDS: usize = 3;/)
+    assert.match(rust, /UNIQUE_EVENT_SUBSCRIPTION_KINDS: bool = false;/)
+    assert.match(
+      rust,
+      /NON_NULL_EVENT_SUBSCRIPTION_OPTIONS: &\[&str\] = &\["after", "replay", "kinds"\];/,
+    )
+  }))
 function fixture(run) {
   const path = mkdtempSync(join(tmpdir(), "nessa-generation-"))
   try {

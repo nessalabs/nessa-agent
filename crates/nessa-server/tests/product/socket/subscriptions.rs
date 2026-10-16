@@ -31,6 +31,9 @@ const EXPECTED: Duration = Duration::from_secs(10);
 /// How long a test watches for a frame it expects not to come.
 const QUIET: Duration = Duration::from_millis(750);
 
+#[path = "subscriptions/events.rs"]
+mod events;
+
 /// A socket whose writes the test can hold: while the gate is shut, a flush
 /// does not finish, so the connection's one writer is stuck on that frame.
 #[derive(Default)]
@@ -2850,6 +2853,8 @@ async fn a_paired_session_writes_only_what_a_drive_grant_admits() {
     use nessa_protocol::product::generated::{action_for_method, PRODUCT_READY_METHODS};
     let own_checks = [
         "conversation.read",
+        "conversation.peek",
+        "conversation.subscribeEvents",
         "conversation.list",
         "conversation.observe",
         "conversation.subscribe",

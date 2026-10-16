@@ -31,6 +31,91 @@ when retrying an uncertain mutation. `NessaMutationError` retains it on failure.
 
 The generated symbol pages below explain the current methods and individual fields.
 
+## Threads
+
+The same client provides four entry points for integrations. Authority comes from
+the authenticated session; the gateway checks ownership and grants for each action.
+There is no separate plugin SDK.
+
+```ts
+const { conversationId: threadId } = await client.createThread()
+const events = await client.subscribe(threadId)
+try {
+  const receipt = await client.sendMessage(threadId, "Check the build")
+  for await (const batch of events) {
+    for (const event of batch.events) console.log(event.kind, event.executionId)
+    // Save batch.cursor only after applying the whole batch.
+    if (batch.events.some(event =>
+      event.kind === "turn.ended" && event.executionId === receipt.executionId
+    )) break
+  }
+  await client.stopThread(threadId, { executionId: receipt.executionId })
+} finally {
+  await events.close()
+}
+```
+
+`sendMessage` defaults to `mode: "queued"`. `mode: "steering"` asks the provider
+to steer and preserves its receipt, including `disposition: "queued"` when that
+is what happened. `mode: "passive"` saves an attributed record-only note and
+returns its `deliveryState`; it starts no turn and arranges no model delivery.
+These receipts describe admission or storage, not model consumption or completed
+effects. Text is nonblank and at most 8 KiB UTF-8.
+
+IDs are generated for ordinary calls. To repeat one uncertain send deliberately,
+reuse `requestId` with the same thread, text, and mode, or use the existing
+`NessaConversationMutationError.retry()` which retains the original command.
+Do not reuse that ID for another message. The queued/steering execution ID is
+derived from that request ID, so caller-managed retries target the same input.
+Reconnection does not replay commands.
+
+`subscribe` follows ordered committed event batches from the captured head.
+Use `{ replay: true }` to start at the beginning or `{ after: savedCursor }` to
+resume, and optionally `kinds` to filter. An empty batch can advance the cursor
+past filtered facts. Cursors are opaque and belong to this conversation and stream
+incarnation; preserve them unchanged. A subscription opens no agent. Each iterator
+retains at most 16 batches while waiting for its single async consumer. All unanswered
+opens on a connection share a separate 16-batch buffer and an identity bound derived
+from the published conversation/list target limits plus the single agent catalogue.
+Early semantic frames are validated before retention. An invalid early frame or
+buffer overflow ends every affected open explicitly and closes each actual handle
+when its reply arrives; an unanswered open cannot yet attribute unknown identities.
+Overflow
+closes it and iteration throws `NessaThreadSubscriptionError` with reason `lagging`;
+events are not silently coalesced. Gateway termination and disconnection also
+throw that typed error after already buffered batches. Reopen after recovery from
+the last cursor your application applied. A server `lastEventCursor` says what
+reached the socket, not what your application processed. A `for await` break,
+`close()`, or abort signal releases the subscription. Save checkpoints outside
+this client if they must survive process exit.
+
+`stopThread(threadId)` captures the live SDK lifecycle's active execution through
+`conversation.peek`, without opening a provider or scanning a bounded display view. If none runs it returns `{ outcome: "no_active_turn" }` and targets
+no queued work. Pass `executionId` to stop one known queued or running execution
+directly. A newer turn never replaces that captured target; the agent attachment
+stays open. The existing control error reports uncertain acknowledgements: inspect
+current state before another deliberate stop.
+
+### Thread ordering contracts
+
+These are event-batch contracts, separate from replacement-view subscriptions.
+The linked tests force each ordering using controlled callbacks or requests.
+
+| Ordering | Observable result | Regression evidence |
+| --- | --- | --- |
+| Send reply lost; caller retries | Original text, mode, request and execution IDs are reused; no automatic replay | [thread-api.test.ts](src/presentation/thread-api.test.ts), “keeps immutable original inputs and IDs in existing explicit retry” and “reuses the caller request ID” |
+| Passive saved or steering queued | Passive receipt says recorded; a queued steering receipt stays queued | [thread-api.test.ts](src/presentation/thread-api.test.ts), “records passive text” and “keeps provider queue admission truthful” |
+| Stop captures authoritative A; display may omit A, or B may start later | Stop still names A; an idle snapshot targets no queued work | [thread-api.test.ts](src/presentation/thread-api.test.ts), “captures A through passive peek once” and “returns no_active_turn” |
+| Event batches arrive before open reply | Preserve batch order, including empty filtered checkpoints | [subscription-api.test.ts](src/presentation/subscription-api.test.ts), “follows semantic batches in order”; [thread-subscription.test.ts](src/presentation/thread-subscription.test.ts), “retains early batches in order” |
+| Batches precede a terminal frame | Drain retained batches, then throw the typed terminal error | [thread-subscription.test.ts](src/presentation/thread-subscription.test.ts), “drains delivered batches before exposing remote termination evidence” |
+| Slow consumer or early batch overflow | End lagging and release the subscription; never coalesce semantic events | [thread-subscription.test.ts](src/presentation/thread-subscription.test.ts), “fails and closes” and “handles termination or overflow before open resolves”; [subscription-api.test.ts](src/presentation/subscription-api.test.ts), “bounds total early batches” |
+| Many unknown early identities or malformed early payload | Bounded retention; every affected open ends lagging or invalid_frame and releases its actual reply identity | [subscription-api.test.ts](src/presentation/subscription-api.test.ts), “bounds unknown subscription identities” and “validates unknown early event payloads” |
+| Abort before open answers; follow same target again | Close the first actual handle before admitting the next open | [subscription-api.test.ts](src/presentation/subscription-api.test.ts), “closes an open given up on its way once answered”; [subscription-gate.ts](src/presentation/subscription-gate.ts) |
+| Abort during next, repeated close, or for-await break | Complete the wait and release once | [thread-subscription.test.ts](src/presentation/thread-subscription.test.ts), “abort completes”, “retains early batches”, and “for-await break” |
+| Connection lost or server supplies lastEventCursor | End the stream; application resumes from its last applied batch cursor, independent of wire delivery evidence | [subscription-api.test.ts](src/presentation/subscription-api.test.ts), “ends every subscription when its connection is lost”; [thread-subscription.test.ts](src/presentation/thread-subscription.test.ts), “drains delivered batches before exposing remote termination evidence” |
+| Terminal cursor contradicts subscription kind before or after open reply | End invalid_frame and release once before handing cursor evidence to callbacks | [subscription-api.test.ts](src/presentation/subscription-api.test.ts), “rejects terminal cursor evidence” |
+| Invalid event subscribe options | Reject the returned Promise with TypeError before RPC admission | [subscription-api.test.ts](src/presentation/subscription-api.test.ts), “rejects malformed replay options before sending” |
+
 ## Connect
 
 Initialize local access and provision the surface using the repository's

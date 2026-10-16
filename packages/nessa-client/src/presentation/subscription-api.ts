@@ -1,12 +1,19 @@
 import type { RpcRequester } from "../application/session-port.js"
 import type { ConnectionState } from "../application/managed-session.js"
-import { passiveReadTiming, ProductEvent, ProductMethod } from "../generated/product.js"
+import {
+  passiveReadTiming,
+  ProductEvent,
+  ProductMethod,
+  subscriptionLimits,
+} from "../generated/product.js"
 import type {
   AgentsListResult,
   ConversationListResult,
   ConversationSubscriptionEnded,
   ConversationView,
   ConversationViewCursor,
+  ConversationEventKind,
+  ConversationEvents,
 } from "../generated/product.js"
 import { conversationIdPattern } from "../protocol/conversation-validate.js"
 import {
@@ -17,8 +24,13 @@ import {
   subscribeResult,
   validViewCursor,
   viewedFrame,
+  eventsFrame,
+  eventSubscribeOptions,
 } from "../protocol/subscription-validate.js"
 import { createSubscriptionGate } from "./subscription-gate.js"
+
+/** @internal Batches retained while opening or waiting for an async consumer. */
+export const eventSubscriptionBufferBatches = 16
 
 /** Why a subscription ended. The gateway's reasons, and two of this client's:
  * `disconnected` when the connection it lived on was lost (its identity goes
@@ -55,6 +67,14 @@ export type AgentsSubscriptionHandlers = {
   ended(end: SubscriptionEnd): void
 }
 
+/** Ordered event batches and terminal evidence on the connection that opened them. */
+export type EventSubscriptionHandlers = {
+  /** Apply every event before retaining this batch's cursor. */
+  batch(batch: Omit<ConversationEvents, "subscriptionId">): void
+  /** Called once when the subscription ends. */
+  ended(end: SubscriptionEnd): void
+}
+
 /** A live subscription on this connection. */
 export interface Subscription {
   readonly id: string
@@ -72,6 +92,17 @@ export interface Subscription {
  * only after that close (`subscription-gate.ts`), so a follower that stops and
  * follows again is never refused as its own duplicate. */
 export interface SubscriptionApi {
+  /** Follow semantic events without opening an agent. No batch is coalesced. */
+  events(
+    conversationId: string,
+    handlers: EventSubscriptionHandlers,
+    options?: {
+      after?: string
+      replay?: boolean
+      kinds?: readonly ConversationEventKind[]
+      signal?: AbortSignal
+    },
+  ): Promise<Subscription>
   /** Follow one conversation's view. With `after`, nothing behind that cursor is sent. */
   view(
     conversationId: string,
@@ -108,7 +139,11 @@ type Live = {
 }
 
 /** What arrived for an identity before its open registered it. */
-type Unclaimed = { frame?: { event: string; payload: unknown }; end?: SubscriptionEnd }
+type Unclaimed = {
+  frame?: { event: string; payload: unknown }
+  batches?: { event: string; payload: unknown }[]
+  end?: SubscriptionEnd
+}
 
 export function createSubscriptionApi(session: SubscriptionPort): SubscriptionApi {
   // The first read can take the passive delivery budget before the reply.
@@ -120,20 +155,42 @@ export function createSubscriptionApi(session: SubscriptionPort): SubscriptionAp
   // Frames of no live subscription, kept while an open is on its way: the
   // transport may hand over a subscribe's answer and its first frames in one
   // turn, before the open registers the identity the answer names. Its open
-  // claims them; nothing else does. A frame is a replacement, so the last one
-  // of each identity is enough, and its end after it. A late frame of a
+  // claims them; nothing else does. Views are replacements, so the last one
+  // of each identity is enough, and its end after it. Semantic batches retain
+  // their order within eventSubscriptionBufferBatches and end lagging past it.
+  // A late frame of a
   // subscription already closed is kept too, never claimed (the gateway
   // never reuses an identity on a connection: `minted` in
   // `crates/nessa-server/src/product/subscription/connection.rs`): at most one frame for each
   // identity, and all of them let go once no open is on its way.
   let opening = 0
   const unclaimed = new Map<string, Unclaimed>()
+  // Views, lists, and the single agent catalogue share this connection. The
+  // published target limits bound identities even before an open names its own.
+  const maxUnclaimedIdentities =
+    subscriptionLimits.conversationTargets + subscriptionLimits.listTargets + 1
+  let unclaimedBatches = 0
+  let openingFailure: SubscriptionEnd | undefined
+  const failOpening = (reason: "lagging" | "invalid_frame") => {
+    openingFailure ??= { reason }
+    unclaimed.clear()
+    unclaimedBatches = 0
+  }
   const hold = (id: string) => {
-    if (opening === 0) return undefined
+    if (opening === 0 || openingFailure) return undefined
+    if (!unclaimed.has(id) && unclaimed.size >= maxUnclaimedIdentities) {
+      failOpening("lagging")
+      return undefined
+    }
     const held = unclaimed.get(id) ?? {}
     unclaimed.set(id, held)
     return held
   }
+
+  const invalidEnd = (entry: Live, end: SubscriptionEnd) =>
+    (end.lastEventCursor !== undefined &&
+      entry.event !== ProductEvent.ConversationEvents) ||
+    (end.lastDelivered !== undefined && entry.event !== ProductEvent.ConversationView)
 
   const finish = (id: string, end: SubscriptionEnd) => {
     const entry = live.get(id)
@@ -143,6 +200,8 @@ export function createSubscriptionApi(session: SubscriptionPort): SubscriptionAp
       return
     }
     live.delete(id)
+    if (invalidEnd(entry, end)) end = { reason: "invalid_frame" }
+    if (end.reason === "invalid_frame") void unsubscribe(id, entry.stop)
     entry.ended(end)
   }
   const unsubscribe = (id: string, stop: string) =>
@@ -156,8 +215,32 @@ export function createSubscriptionApi(session: SubscriptionPort): SubscriptionAp
     if (id === undefined) return
     const entry = live.get(id)
     if (!entry) {
+      if (event === ProductEvent.ConversationEvents) {
+        if (opening === 0 || openingFailure) return
+        let batch: Omit<ConversationEvents, "subscriptionId">
+        try {
+          // Check before retaining: an unanswered open has no live owner to
+          // validate a frame later, and malformed payloads cannot consume its budget.
+          batch = eventsFrame(payload)
+        } catch {
+          failOpening("invalid_frame")
+          return
+        }
+        const held = hold(id)
+        if (!held || held.end) return
+        if (unclaimedBatches >= eventSubscriptionBufferBatches) {
+          failOpening("lagging")
+          return
+        }
+        held.batches ??= []
+        held.batches.push({ event, payload: { subscriptionId: id, ...batch } })
+        unclaimedBatches += 1
+        return
+      }
       const held = hold(id)
-      if (held && held.end === undefined) held.frame = { event, payload }
+      if (held && held.end === undefined) {
+        held.frame = { event, payload }
+      }
       return
     }
     if (entry.event !== event) return
@@ -175,6 +258,9 @@ export function createSubscriptionApi(session: SubscriptionPort): SubscriptionAp
   session.onEvent(ProductEvent.ConversationView, (payload) =>
     route(ProductEvent.ConversationView, payload),
   )
+  session.onEvent(ProductEvent.ConversationEvents, (payload) =>
+    route(ProductEvent.ConversationEvents, payload),
+  )
   session.onEvent(ProductEvent.ConversationListed, (payload) =>
     route(ProductEvent.ConversationListed, payload),
   )
@@ -186,6 +272,8 @@ export function createSubscriptionApi(session: SubscriptionPort): SubscriptionAp
     try {
       ended = endedFrame(payload)
     } catch {
+      const id = framedSubscription(payload)
+      if (id !== undefined) finish(id, { reason: "invalid_frame" })
       return
     }
     const { subscriptionId, ...end } = ended
@@ -195,6 +283,8 @@ export function createSubscriptionApi(session: SubscriptionPort): SubscriptionAp
     if (state.status === "connected") return
     connection += 1
     unclaimed.clear()
+    unclaimedBatches = 0
+    openingFailure = undefined
     for (const id of [...live.keys()]) finish(id, { reason: "disconnected" })
   })
 
@@ -207,6 +297,7 @@ export function createSubscriptionApi(session: SubscriptionPort): SubscriptionAp
     const on = connection
     let subscriptionId: string
     let held: Unclaimed | undefined
+    let failed: SubscriptionEnd | undefined
     opening += 1
     try {
       ;({ subscriptionId } = subscribeResult(
@@ -214,20 +305,38 @@ export function createSubscriptionApi(session: SubscriptionPort): SubscriptionAp
       ))
       held = unclaimed.get(subscriptionId)
       unclaimed.delete(subscriptionId)
+      unclaimedBatches -= held?.batches?.length ?? 0
+      failed = openingFailure
     } finally {
       opening -= 1
-      if (opening === 0) unclaimed.clear()
+      if (opening === 0) {
+        unclaimed.clear()
+        unclaimedBatches = 0
+        openingFailure = undefined
+      }
     }
     if (on !== connection) {
       // Answered just before that connection was lost.
       queueMicrotask(() => entry.ended({ reason: "disconnected" }))
       return { id: subscriptionId, close: async () => undefined }
     }
+    if (failed) {
+      // An early frame cannot yet be attributed to its unanswered open. End
+      // every affected open honestly and release the actual identity it returns.
+      entry.ended(failed)
+      await unsubscribe(subscriptionId, entry.stop)
+      return { id: subscriptionId, close: async () => undefined }
+    }
     live.set(subscriptionId, entry)
     // What arrived with the answer, in the order it came; nothing of an open
     // given up on its way, which the gate closes next.
     if (signal?.aborted) held = undefined
+    if (held?.end && invalidEnd(entry, held.end)) {
+      finish(subscriptionId, { reason: "invalid_frame" })
+      held = undefined
+    }
     if (held?.frame) route(held.frame.event, held.frame.payload)
+    for (const batch of held?.batches ?? []) route(batch.event, batch.payload)
     // A held frame that failed its checks has ended it already.
     if (held?.end && live.has(subscriptionId)) finish(subscriptionId, held.end)
     return {
@@ -241,6 +350,27 @@ export function createSubscriptionApi(session: SubscriptionPort): SubscriptionAp
   }
 
   return {
+    events: async (conversationId, handlers, options = {}) => {
+      if (!conversationIdPattern.test(conversationId))
+        return Promise.reject(new TypeError("Invalid conversation ID"))
+      const params = eventSubscribeOptions(conversationId, options)
+      return gated(`events:${conversationId}`, options.signal, () =>
+        open(
+          ProductMethod.ConversationSubscribeEvents,
+          params,
+          {
+            event: ProductEvent.ConversationEvents,
+            stop: ProductMethod.ConversationUnsubscribe,
+            check: (payload) => {
+              const batch = eventsFrame(payload)
+              return () => handlers.batch(batch)
+            },
+            ended: (end) => handlers.ended(end),
+          },
+          options.signal,
+        ),
+      )
+    },
     view: (conversationId, handlers, options = {}) => {
       if (!conversationIdPattern.test(conversationId))
         return Promise.reject(new TypeError("Invalid conversation ID"))

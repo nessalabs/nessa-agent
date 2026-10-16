@@ -297,6 +297,14 @@
     "conversation.revokePermissionRule": {
       "params": "ConversationRevokePermissionRuleParams",
       "grant": "conversation.write"
+    },
+    "conversation.subscribeEvents": {
+      "params": "ConversationSubscribeEventsParams",
+      "grant": "conversation.write"
+    },
+    "conversation.peek": {
+      "params": "ConversationReadParams",
+      "grant": "conversation.write"
     }
   },
   "events": {
@@ -308,7 +316,8 @@
     "conversation.listed": "ConversationListed",
     "agents.listed": "AgentsListed",
     "conversation.subscriptionEnded": "ConversationSubscriptionEnded",
-    "permission.reviewWaiting": "PermissionReviewWaiting"
+    "permission.reviewWaiting": "PermissionReviewWaiting",
+    "conversation.events": "ConversationEvents"
   },
   "handshakeMethod": "session.authenticate"
 }
