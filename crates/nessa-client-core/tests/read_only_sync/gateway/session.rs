@@ -910,6 +910,11 @@ fn authentication_temporary_permanent_and_unknown_refusals_consume_the_shared_cl
             "temporarily_unavailable",
             SessionCloseReason::TemporaryUnavailable,
         ),
+        ("handshake_timeout", SessionCloseReason::HandshakeTimeout),
+        (
+            "protocol_incompatible",
+            SessionCloseReason::ProtocolIncompatible,
+        ),
         ("unauthorized", SessionCloseReason::AuthenticationFailed),
         ("unknown", SessionCloseReason::AuthenticationFailed),
     ] {
@@ -926,6 +931,87 @@ fn authentication_temporary_permanent_and_unknown_refusals_consume_the_shared_cl
             matches!(Session::connect(endpoint.address,endpoint.evidence("credential"),"example",&LocalConnector,Arc::new(Time(Instant::now())),Arc::new(Never),policy()),Err(GatewayError::Authentication(reason)) if reason==expected)
         );
         peer.join().unwrap();
+    }
+}
+
+/// Authentication replies reach both public retained entry paths with the
+/// same failure/status policy, after the real pinned native TLS handshake.
+#[test]
+fn retained_refresh_and_follow_preserve_authentication_outcomes() {
+    for (code, expected, status) in [
+        ("temporarily_unavailable", ReadFailure::Unreachable, false),
+        ("handshake_timeout", ReadFailure::Unreachable, false),
+        ("protocol_incompatible", ReadFailure::Protocol, false),
+        ("unauthorized", ReadFailure::Refused, true),
+        ("unknown", ReadFailure::Refused, true),
+    ] {
+        for follow in [false, true] {
+            // Prepare private state before starting a peer that waits on I/O.
+            let root = tempfile::tempdir().unwrap();
+            let private = root.path().join("cache");
+            nessa_local_storage::create_directory(&private).unwrap();
+            let mut cache = RetainedCache::open(
+                &private.join("cache.sqlite3"),
+                Arc::new(Wall),
+                Arc::new(Time(Instant::now())),
+            )
+            .unwrap();
+            let (endpoint, peer) = native_peer(move |socket| {
+                challenge(socket);
+                let auth = request(socket);
+                assert_eq!(auth.method, product_method::SESSION_AUTHENTICATE);
+                send(
+                    socket,
+                    OutgoingMessage::Response(ResponseFrame::failure(&auth.id, code, "sanitized")),
+                );
+                assert!(
+                    socket.ended(),
+                    "authentication failure closes before any read"
+                );
+            });
+            let access = ReaderAccess {
+                role: ReaderRole::DeviceOwner,
+                address: endpoint.address,
+                relay: None,
+                identity: &endpoint.device,
+                pin: endpoint.pin,
+                credential: "credential",
+                receiver: "receiver",
+                access_epoch: 3,
+                client_id: "example",
+            };
+            if follow {
+                let conversation =
+                    ConversationId::new("00000000-0000-4000-8000-000000000001").unwrap();
+                let error = cache
+                    .subscribe(
+                        access,
+                        &conversation,
+                        None,
+                        &ReadStop::new(),
+                        Duration::from_secs(2),
+                    )
+                    .err()
+                    .expect("authentication refused before subscription");
+                assert_eq!(error.failure(), expected, "follow {code}");
+                assert_eq!(error.asks_status(), status, "follow {code}");
+            } else {
+                assert_eq!(
+                    cache.read(
+                        access,
+                        &ReadStop::new(),
+                        Duration::from_secs(2),
+                        8,
+                        &mut Vec::new()
+                    ),
+                    Err(expected),
+                    "refresh {code}"
+                );
+            }
+            assert!(cache.conversation_ids("receiver").unwrap().is_empty());
+            drop(cache);
+            peer.join().unwrap();
+        }
     }
 }
 

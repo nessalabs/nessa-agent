@@ -60,6 +60,7 @@ use nessa_protocol::product::generated::{
     PASSIVE_MIN_REQUEST_TIMEOUT_MS,
 };
 use nessa_protocol::product_contract::generated::RecordReadErrorCode;
+use nessa_protocol::product_contract::ConnectionOutcome;
 use nessa_protocol::relay::{host_port, RelayAddress, RelayRefusal, DIRECT_HEAD_START};
 use nessa_sync::replication::{
     application::{StoreError, SyncError},
@@ -1057,6 +1058,11 @@ enum Conversation {
 /// connection or a stop end the whole read; anything else leaves that one
 /// conversation for next time.
 fn unread(error: GatewayError) -> Result<Conversation, ReadFailure> {
+    // Preserve connection evidence before the per-conversation Protocol bucket
+    // loses the distinction between a close and a source/shape failure.
+    if error.connection_outcome().is_some() {
+        return Err(failure(error));
+    }
     match failure(error) {
         ReadFailure::Protocol => Ok(Conversation::Unread {
             connection_kept: error == GatewayError::Record(RecordReadErrorCode::SourcePreparing),
@@ -1092,15 +1098,23 @@ fn cache_failure(error: &CacheError) -> ReadFailure {
 
 /// A gateway failure as the caller acts on it.
 fn failure(error: GatewayError) -> ReadFailure {
+    if let Some(outcome) = error.connection_outcome() {
+        return match outcome {
+            ConnectionOutcome::Retryable | ConnectionOutcome::TerminalShutdown => {
+                ReadFailure::Unreachable
+            }
+            ConnectionOutcome::TerminalRevoke => ReadFailure::Refused,
+            ConnectionOutcome::TerminalProtocol => ReadFailure::Protocol,
+        };
+    }
     if asks_status(error) {
         return ReadFailure::Refused;
     }
     match error {
         GatewayError::Cancelled => ReadFailure::Stopped,
-        GatewayError::TimedOut
-        | GatewayError::Transport
-        | GatewayError::Closed(_)
-        | GatewayError::NativeHandshake => ReadFailure::Unreachable,
+        GatewayError::TimedOut | GatewayError::Transport | GatewayError::NativeHandshake => {
+            ReadFailure::Unreachable
+        }
         _ => ReadFailure::Protocol,
     }
 }

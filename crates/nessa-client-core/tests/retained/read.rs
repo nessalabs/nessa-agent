@@ -4,6 +4,199 @@
 use super::*;
 use nessa_protocol::relay::RelayFrame;
 
+#[test]
+fn connection_reasons_keep_their_retained_failure_and_status_policy() {
+    use nessa_protocol::product_contract::generated::SessionCloseReason;
+    for (reason, expected, status) in [
+        (
+            SessionCloseReason::HandshakeTimeout,
+            ReadFailure::Unreachable,
+            false,
+        ),
+        (
+            SessionCloseReason::TemporaryUnavailable,
+            ReadFailure::Unreachable,
+            false,
+        ),
+        (
+            SessionCloseReason::GatewayRestarting,
+            ReadFailure::Unreachable,
+            false,
+        ),
+        (
+            SessionCloseReason::GatewayOverloaded,
+            ReadFailure::Unreachable,
+            false,
+        ),
+        (
+            SessionCloseReason::TransportInterrupted,
+            ReadFailure::Unreachable,
+            false,
+        ),
+        (
+            SessionCloseReason::ServerShutdown,
+            ReadFailure::Unreachable,
+            false,
+        ),
+        (
+            SessionCloseReason::ProtocolIncompatible,
+            ReadFailure::Protocol,
+            false,
+        ),
+        (
+            SessionCloseReason::AuthenticationFailed,
+            ReadFailure::Refused,
+            true,
+        ),
+        (
+            SessionCloseReason::CredentialRevoked,
+            ReadFailure::Refused,
+            true,
+        ),
+        (
+            SessionCloseReason::CredentialExpired,
+            ReadFailure::Refused,
+            true,
+        ),
+        (
+            SessionCloseReason::AuthorizationLost,
+            ReadFailure::Refused,
+            true,
+        ),
+    ] {
+        for error in [
+            GatewayError::Authentication(reason),
+            GatewayError::Closed(Some(reason)),
+        ] {
+            assert_eq!(failure(error), expected, "{error:?}");
+            assert_eq!(asks_status(error), status, "{error:?}");
+            assert_eq!(unread(error), Err(expected), "records {error:?}");
+        }
+    }
+    assert_eq!(
+        failure(GatewayError::Closed(None)),
+        ReadFailure::Unreachable
+    );
+    assert!(!asks_status(GatewayError::Closed(None)));
+    assert_eq!(
+        unread(GatewayError::Closed(None)),
+        Err(ReadFailure::Unreachable)
+    );
+    assert_eq!(
+        unread(GatewayError::Record(RecordReadErrorCode::SourcePreparing)),
+        Ok(Conversation::Unread {
+            connection_kept: true
+        }),
+    );
+    assert_eq!(
+        unread(GatewayError::Protocol),
+        Ok(Conversation::Unread {
+            connection_kept: false
+        })
+    );
+}
+
+#[test]
+fn native_protocol_termination_during_records_ends_the_refresh() {
+    use crate::read_only_sync::infrastructure::gateway::tests::session::{
+        connect, peer, request, send,
+    };
+    use nessa_protocol::product::generated::{product_event, product_method, SessionTermination};
+    use nessa_protocol::product::passive_read::wire_scope;
+    use nessa_protocol::product_contract::generated::SessionCloseReason;
+    use nessa_protocol::protocol::{EventFrame, OutgoingMessage, ResponseFrame};
+    use serde_json::json;
+
+    struct Wall;
+    impl WallClock for Wall {
+        fn unix_milliseconds(&self) -> u64 {
+            123_000
+        }
+    }
+    struct Time(Instant);
+    impl MonotonicClock for Time {
+        fn elapsed_ms(&self) -> u64 {
+            self.0.elapsed().as_millis() as u64
+        }
+    }
+    for during_page in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let private = root.path().join("cache");
+        nessa_local_storage::create_directory(&private).unwrap();
+        let mut cache = RetainedCache::open(
+            &private.join("cache.sqlite3"),
+            Arc::new(Wall),
+            Arc::new(Time(Instant::now())),
+        )
+        .unwrap();
+        let conversation = ConversationId::new("8e024fc9-0c9d-4952-8427-bcb2b3b07f8f").unwrap();
+        let scope = Scope::new(
+            Id::new("receiver").unwrap(),
+            Id::new("gateway").unwrap(),
+            Id::new(conversation.to_string()).unwrap(),
+            Id::new("incarnation").unwrap(),
+            nessa_sdk::infrastructure::session_storage::physical_record_schema(),
+            Id::new("epoch-3").unwrap(),
+        );
+        let (endpoint, peer) = peer(move |socket| loop {
+            let reading = request(socket);
+            if during_page && reading.method == product_method::CONVERSATION_RECORDS_HEAD {
+                send(
+                    socket,
+                    OutgoingMessage::Response(
+                        ResponseFrame::success(
+                            &reading.id,
+                            &json!({"scope":wire_scope(&scope),"head":"1"}),
+                        )
+                        .unwrap(),
+                    ),
+                );
+                continue;
+            }
+            assert_eq!(
+                reading.method,
+                if during_page {
+                    product_method::CONVERSATION_RECORDS_PAGE
+                } else {
+                    product_method::CONVERSATION_RECORDS_HEAD
+                }
+            );
+            send(
+                socket,
+                OutgoingMessage::Event(
+                    EventFrame::push(
+                        product_event::SESSION_TERMINATED,
+                        &SessionTermination {
+                            code: SessionCloseReason::ProtocolIncompatible,
+                            retryable: false,
+                            retry_after_ms: None,
+                        },
+                        0,
+                        0,
+                    )
+                    .unwrap(),
+                ),
+            );
+            break;
+        });
+        let connection = GatewayConnection::new(connect(&endpoint));
+        assert_eq!(
+            cache.records(
+                &connection,
+                &Id::new("receiver").unwrap(),
+                3,
+                conversation,
+                false
+            ),
+            Err(ReadFailure::Protocol),
+            "during page: {during_page}"
+        );
+        drop(connection);
+        drop(cache);
+        peer.join().unwrap();
+    }
+}
+
 /// A walk over conversations whose answers the test sets, keeping what the
 /// walk asked of each.
 struct Scripted {
