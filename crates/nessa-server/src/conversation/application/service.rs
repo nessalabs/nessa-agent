@@ -5972,7 +5972,8 @@ pub use environment_tools::{
     CommandAnswer, CommandCall, CommandCallError, EnvironmentListing, HERE,
 };
 pub use event_read::{
-    event_error_code, project_events, validate_event_cursor, ConversationEventError, ThreadEvent,
+    event_error_code, project_events, validate_event_cursor, ConversationEventError, EventProgress,
+    ThreadEvent,
 };
 
 mod app_calls;

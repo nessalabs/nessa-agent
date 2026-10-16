@@ -423,7 +423,7 @@ results and thinking are not included. Existing owner policy applies to every ba
 | E12 | Provider Finished precedes local settlement | No turn.ended until a local settlement is committed |
 | E13 | Paired read credential follows events | Same follow admission and target read grant as views; unshared targets stay hidden |
 | E14 | Reader capacity is exhausted, then released or access revoked | Bounded shared backoff; release request capacity and freshly authorize each retry; cancellation drops the wait |
-| E15 | Adapter returns a page or Idle after a start/prior checkpoint | Same session/incarnation, exclusive page progress, nondecreasing Idle; first valid output establishes continuity for Beginning/Now; contradictions refuse before delivery |
+| E15 | Adapter returns a page or Idle after a start/prior checkpoint | Shared conversation application EventProgress correlates replies with After and prior checkpoints for every event consumer: same session/incarnation, exclusive page progress, nondecreasing Idle; first valid output establishes continuity for Beginning/Now; contradictions refuse before delivery |
 | E16 | Client receives differing event identity and cursor | Reject the batch before invoking its handler |
 | E17 | First-party owner phone uses events or authoritative peek | Canonical purpose policy explicitly permits these read operations; ordinary current target admission still applies, while administrative methods remain denied |
 | E18 | Terminal frame has both cursor types, or a cursor for another subscription kind, before or after open reply | Reject contradictory cursor combinations at validation; correlate the remaining cursor with the registered kind before terminal callbacks; end invalid_frame and release the handle before exposing wrong evidence |
@@ -452,4 +452,9 @@ between their existing owners rather than introducing a second grant evaluator.
 
 The socket owns subscription tasks; a reconnect recreates a subscription from the
 consumer's cursor. The SDK owns the semantic reader and its bounded storage work.
+The conversation application owns cross-read cursor continuity through EventProgress;
+consumers check each successful reader output before projection or retaining an
+Idle checkpoint. SDK page construction validates the page's internal evidence,
+while this shared validator correlates it with the requested start and preceding
+outputs. Its regressions live in `tests/conversation/event_read.rs`.
 No persisted subscription registry, plugin SDK, or workflow engine is introduced.
