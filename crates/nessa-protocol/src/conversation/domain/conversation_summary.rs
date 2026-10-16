@@ -26,15 +26,15 @@ impl ConversationTitle {
     /// of its text, read as plain text the way a preview is — a title is shown
     /// in the same list, where `**3-day**` would be two pairs of asterisks;
     /// with no text, the name of the first file it points at; and with
-    /// neither, [`Self::IMAGE`], since a message is never empty.
+    /// neither, `Self::IMAGE`, since a message is never empty.
     ///
     /// `first_file_name` is the file's own name, as the message's linked file
     /// reports it — this does not take a path apart.
     ///
-    /// Read from the message's [`opening`]: lines with nothing visible once
+    /// Read from the message's `opening`: lines with nothing visible once
     /// their marks are dropped — blank, control characters alone, a bare
     /// quote marker — are passed over however many there are, and a first
-    /// line longer than [`READ_BYTES`] is read only that far
+    /// line longer than `READ_BYTES` is read only that far
     /// (`a_title_and_a_preview_read_the_same_bounded_opening`).
     pub fn for_message(text: &str, first_file_name: Option<&str>) -> Self {
         let plain = opening(text);
@@ -77,7 +77,7 @@ impl ConversationPreview {
         Ok(Self(value.to_owned()))
     }
     /// The preview of `text`, or `None` when nothing is left of it once its
-    /// marks and whitespace are gone. Read from the message's [`opening`], as
+    /// marks and whitespace are gone. Read from the message's `opening`, as
     /// a title is, so leading lines with nothing visible never push what
     /// follows them out of the preview
     /// (`a_title_and_a_preview_read_the_same_bounded_opening`).

@@ -1740,7 +1740,7 @@ pub(super) async fn admit_grant(
 /// A paired device's `conversation.subscribe` and `conversation.unsubscribe`
 /// are the exception: pairing mints `conversation.read`, and the manifest
 /// asks `conversation.write`, which that credential does not hold. Which
-/// conversation it may follow is still [`read_access::admit_conversation`].
+/// conversation it may follow is still [`super::read_access::admit_conversation`].
 pub(super) async fn admit_now_method(
     state: &ProductRouteState,
     session: &AuthenticatedSession,

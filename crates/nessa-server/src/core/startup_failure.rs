@@ -19,7 +19,7 @@
 //! desktop host's next reconciliation is the last route back, and this record
 //! is what authorizes it. A record that could not be published therefore has to
 //! change how the process ends rather than be logged and forgotten — see
-//! [`super::error::report`], which publishes before it chooses an exit status.
+//! `super::ending::report`, which publishes before it chooses an exit status.
 //!
 //! ```text
 //! run gives up ──► published? ──yes──► exit 0, host reads it, retries once

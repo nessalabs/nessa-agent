@@ -14,7 +14,7 @@
 //! leave a step unrecorded: a call already sent finishes and is recorded, and
 //! a review still waiting is withdrawn and recorded as withdrawn. Nothing is
 //! opened or issued for a mount released or a conversation ended: the
-//! conversation's [`AppReviews`](super::super::app_reviews::AppReviews) lock
+//! conversation's [`AppReviews`] lock
 //! decides it.
 use super::super::app_reviews::{
     new_review_id, AppReviews, ContextRefusal, ReviewAnswerer, ReviewAsk, ReviewEnd, ReviewRefusal,
@@ -219,7 +219,7 @@ impl ConversationService {
     /// and open or issue nothing for it again — each recorded as the
     /// caller's. Idempotent; it never opens the conversation. Its context
     /// still held is dropped, and the drop reported as the caller's
-    /// ([`AppReviews::release_app`]); the release answers its own result, not
+    /// (`AppReviews::release_app`); the release answers its own result, not
     /// the drop's record, which the drop recorder writes or logs
     /// (`c14_a_release_whose_drop_cannot_be_recorded_completes`).
     pub async fn release_app(
@@ -1179,7 +1179,7 @@ impl Step {
     }
 
     /// Refuse the call as `error`, on record under the code the wire answers
-    /// it with ([`error_code`], the one mapping), so the record and the answer
+    /// it with ([`error_code()`], the one mapping), so the record and the answer
     /// cannot name two codes.
     async fn refuse_as(&self, error: ConversationError) -> ConversationError {
         self.ended(McpAppAuditPhase::Refused(error_code(&error)), None, error)
@@ -1199,7 +1199,7 @@ impl Step {
     }
 
     /// End the call after it reached the server, as `error`, on record under
-    /// the code the wire answers it with ([`error_code`]).
+    /// the code the wire answers it with ([`error_code()`]).
     async fn fail(&self, error: ConversationError) -> ConversationError {
         self.ended(
             McpAppAuditPhase::Completed(McpAppOutcome::Failed(error_code(&error))),

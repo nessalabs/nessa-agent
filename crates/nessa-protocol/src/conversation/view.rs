@@ -430,7 +430,7 @@ pub struct ConversationMcpTool {
     pub server: String,
     pub tool: String,
     /// The tool's `ui://` resource, filled when the view is read
-    /// ([`McpToolUis`](super::McpToolUis)); absent when the tool has none or
+    /// ([`McpToolUis`](super::tool_uis::McpToolUis)); absent when the tool has none or
     /// it is not known.
     #[serde(rename = "resourceUri", skip_serializing_if = "Option::is_none")]
     pub resource_uri: Option<String>,
@@ -639,8 +639,8 @@ impl From<OperationCapabilities> for ConversationAgentFeatures {
 /// The conversations one list names, and whether they are all of them.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ConversationList {
-    /// Most recently updated first, at most
-    /// [`MAX_LISTED_CONVERSATIONS`](super::MAX_LISTED_CONVERSATIONS).
+    /// Most recently updated first, bounded by the gateway's
+    /// `MAX_LISTED_CONVERSATIONS` limit.
     pub conversations: Vec<ConversationListEntry>,
     /// Whether these are every conversation the caller has under the list's
     /// filter: `false` when the bound left some out, or when a stored record

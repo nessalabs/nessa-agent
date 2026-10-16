@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use crate::backup::application::{AdmissionFailure, AdmissionLease, MutationAdmission};
 use crate::conversation::application::{ConversationService, ExportAdmission, ExportHoldFailure};
 
-/// Holds [`ConversationService::hold_for_export`] for one cut.
+/// Holds `ConversationService::hold_for_export` for one cut.
 pub struct ConversationAdmission {
     service: ConversationService,
 }

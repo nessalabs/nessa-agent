@@ -335,7 +335,7 @@ fn write_outcome<E: Debug>(
 }
 
 /// A report that did not confirm: at least one outcome unknown, failed, or
-/// past its deadline. Only [`ShutdownReport::into_result`] constructs it, so
+/// past its deadline. Only `ShutdownReport::into_result` constructs it, so
 /// an all-confirmed failure cannot exist. Boxed: the report is one outcome
 /// per cleanup owner, too large to carry inline in every `Result`.
 #[derive(Debug)]

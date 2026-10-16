@@ -127,7 +127,7 @@ impl Write for BoundedJsonBuffer {
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 struct InstallationRecord {
     version: String,
-    /// The operating system and architecture, as [`ReleasePlatform`] writes
+    /// The operating system and architecture, as [`crate::agent_install::domain::ReleasePlatform`] writes
     /// them.
     platform: String,
     /// The C library the installed build needs, absent where the platform has
@@ -1808,7 +1808,7 @@ impl ManagedRuntimes {
     /// `publish` directly is what keeps it inside that guard.
     ///
     /// `durable` is how a directory is forced to the disk. It is a parameter
-    /// rather than a call to [`sync_directory`] written inline because the
+    /// rather than a call to [`sync_directory_beneath`] written inline because the
     /// order this walks in is the whole of what this method decides, and on a
     /// real filesystem that order leaves no trace: a directory whose entry was
     /// never synced still reads back exactly the same. Passed in, the walk has

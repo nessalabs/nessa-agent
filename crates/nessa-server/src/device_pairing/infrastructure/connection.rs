@@ -212,7 +212,7 @@ impl NativeEnrollmentConnections {
     /// A permit for one more connection through the relay, or `None` when
     /// the relay pool is full or closed. A gateway takes it before it
     /// accepts a reader the relay announced, and the connection holds it
-    /// once [`Self::start_relayed`] admits it.
+    /// once `Self::start_relayed` admits it.
     pub fn relay_permit(&self) -> Option<RelayPermit> {
         let permit = self.relay.capacity.clone().try_acquire_owned().ok()?;
         Some(RelayPermit {

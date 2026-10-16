@@ -548,7 +548,7 @@ impl PeerCommands {
     /// Enroll this gateway, with its own key, into the peer invitation that
     /// `code` opens at `address`, for `initiator`. The record is saved,
     /// pending, before the claim is confirmed; the peer's owner approves on
-    /// the peer. Audited like every peer command (see [`Self::audited`]): the
+    /// the peer. Audited like every peer command (see `Self::audited`): the
     /// outcome names the peer once it presented its key, and its record as
     /// found and as left.
     pub async fn enroll(
@@ -787,7 +787,7 @@ impl PeerCommands {
     /// which may be saving or removing a record: the record set is one at a
     /// time, because of `MAX_PEERS`. A poller cycle reading this peer is
     /// stopped first. A cycle reading any other peer is not.
-    /// Audited like every peer command (see [`Self::audited`]).
+    /// Audited like every peer command (see `Self::audited`).
     pub async fn forget(
         &self,
         key: DeviceKey,
@@ -875,7 +875,7 @@ impl PeerCommands {
     /// other peer keeps going. A relay that cannot take the record set is
     /// `Busy` and does not stop a read, so it stays beside an enrollment or
     /// a forget the way those stay beside each other. Audited like every
-    /// peer command (see [`Self::audited`]).
+    /// peer command (see `Self::audited`).
     pub async fn relay(
         &self,
         key: DeviceKey,

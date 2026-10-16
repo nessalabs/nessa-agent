@@ -81,7 +81,7 @@ pub async fn capture_inventory(
 ///
 /// Returns the log after the attempt. On [`InventoryFailure::NotStored`] this
 /// attempt did not replace the log. A writer that finds another writer's log
-/// loads it and reads the fences again, up to [`REPLACE_ATTEMPTS`], so that
+/// loads it and reads the fences again, up to `REPLACE_ATTEMPTS`, so that
 /// other log's fences stay.
 pub async fn capture_fences(
     fences: &[&dyn FenceSource],

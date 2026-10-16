@@ -15,7 +15,7 @@ pub struct RevocationFact {
     pub conversation_id: String,
     pub receiver_id: String,
     pub credential_id: String,
-    /// The capabilities the revoke took away, as [`Capabilities::as_str`].
+    /// The capabilities the revoke took away, as [`crate::conversation::domain::Capabilities::as_str`].
     pub capabilities: String,
     pub sequence: u64,
 }

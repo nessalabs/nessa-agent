@@ -230,11 +230,21 @@ inline unsubscribe ordering remain with the same owners.
 Final local verification also passed the complete product protocol check (66 Node
 tests plus schema/fixture/generated-output consistency), seven-crate CI Clippy
 selection across all targets with `-D warnings`, Rust formatting, JavaScript
-formatting and whitespace checks. Protocol documentation builds successfully.
-Warning-denying documentation is blocked by six pre-existing private/unresolved
-links in two conversation files that are byte-identical to the baseline; none
-points to the generated identity. The isolated identity compilation checks its
-public documentation with `deny(missing_docs)`.
+formatting and whitespace checks. Protocol documentation now passes with
+`-D warnings`, both normally and with `--document-private-items`, after correcting
+its conversation links. The isolated identity compilation also checks its public
+documentation with `deny(missing_docs)`.
+
+The companion Rustdoc cleanup corrects server links to their actual owners and
+formats private helpers as code. Server documentation builds in both modes;
+warning-denying builds still fail on ten distinct private links in
+`env_serve/application/mod.rs`. That file's raw bytes feed the runtime lease
+compatibility fingerprint, so changing its comments would change compatibility.
+All 42 inputs to `lease_protocol!` remain byte-identical to the preceding commit;
+all 19 edited Rust files retain byte-identical non-documentation lines. A
+purposefully broken protocol link failed the strict documentation check, and the
+restored tree passed. This cleanup changes documentation only; it does not claim
+a new runtime test run or suppress the remaining warnings.
 
 These are macOS arm64 local results, not a live provider, physical phone or
 cross-platform runtime claim. The cutover preserves the original wire contract,

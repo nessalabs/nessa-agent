@@ -103,7 +103,7 @@ impl LocalAgentProbe {
     /// and said nothing at all about a server started from a plain runtime
     /// config. Composition resolves the agent configurations that would really
     /// be launched and hands in their paths. Their existence is not resolved
-    /// here — see [`Self::installed`].
+    /// here — see `Self::installed`.
     pub fn from_environment(
         launch_files: HashMap<AgentId, AgentLaunchFiles>,
         credentials: Arc<dyn AgentCredentialSource>,

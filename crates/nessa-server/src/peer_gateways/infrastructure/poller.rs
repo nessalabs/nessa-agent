@@ -833,7 +833,7 @@ enum Unread {
     Read(ReadFailure),
 }
 
-/// What [`Poller::ask_status`] learned. `stopped` means a stop won the wait.
+/// What `Shared::ask_status` learned. `stopped` means a stop won the wait.
 /// The worker's answer is still in `status` when it gave one, including
 /// after that stop.
 struct AskedStatus {
