@@ -19,7 +19,7 @@ const tools = Object.freeze([
   Object.freeze({
     name: "nessa_conversation_read",
     description:
-      "Read a conversation's bounded current replacement view, including lifecycle, messages, pending input, tools and permission choices. Inspect truncated and transcriptState for incomplete history. This does not open a provider or send a message.",
+      "Read a conversation's bounded current replacement view, including lifecycle, messages, pending input, tools and permission choices. Inspect truncated and transcriptState for incomplete history. This uses conversation.read, which may open or restore provider state. It does not send a message or answer a permission review.",
     inputSchema: Object.freeze({
       type: "object",
       properties: Object.freeze({

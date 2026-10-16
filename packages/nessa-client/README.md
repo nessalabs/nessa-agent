@@ -122,8 +122,11 @@ the trusted gateway endpoint and authenticate the client in host composition
 using the [Connect prerequisites](#connect) above. Current `conversation.list`
 and `conversation.read` require the existing **`conversation.write`** grant;
 these tools do not enable credentials limited to read-only grants. Each gateway
-request still checks current access. Model arguments contain only the list
-filter or conversation identity; credentials and endpoints belong to the host.
+request still checks current access. `conversation.read` may open or restore
+provider state, including recovery of a pending approval-mode change; these are
+the existing endpoint semantics, not a passive retained-record read. Model
+arguments contain only the list filter or conversation identity; credentials and
+endpoints belong to the host.
 
 ```ts
 import { createConversationReadTools } from "@nessa/client"
