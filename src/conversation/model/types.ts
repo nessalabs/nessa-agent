@@ -312,6 +312,12 @@ export type UserTurn = {
   error?: string
   diagnostic?: SubmissionDiagnostic
   /**
+   * The typed reason this message was refused, kept with it: the
+   * conversation's own `failure` follows whatever failed last, and an older
+   * refusal offered again still needs its own recovery.
+   */
+  failure?: CommandFailure
+  /**
    * This refused message was put back in the draft once. From then on the
    * draft is its only copy to send again: a person who empties it, or sends
    * something else in its place, has let it go, and it is never put back.

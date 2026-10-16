@@ -140,17 +140,19 @@ export function restoreFailedTurn(
 
 /**
  * Whether Send Again on this refused turn can send exactly that message. A
- * draft holding something sends only when it is this turn's own and every
- * file in it is ready: an image uploading again, or one whose upload failed,
- * holds it. An empty one takes the message back only when the message was
+ * draft holding something sends only when it is this turn's own and the send
+ * would take it: the same `declineReason` a send asks, so an image uploading
+ * again, a failed upload, or text a send would refuse holds it. An empty one takes the message back only when the message was
  * never put back before (see `restored`) and is still whole: an image whose
  * original was let go to bound previews survives only as a reference, which a
  * draft cannot send, and the message without it is a different one.
  */
 export function canSendAgain(conv: Conversation, turnId: string): boolean {
   if (conv.draft.length > 0) {
-    // A file that travels as a path has nothing to upload, so it never waits.
-    return conv.draftTurn === turnId && messageImages(conv.draft).ok
+    return (
+      conv.draftTurn === turnId &&
+      declineReason(conv, { content: conv.draft, retryTurnId: turnId }, true) === null
+    )
   }
   const refused = refusedTurn(conv, turnId)
   return (
@@ -456,6 +458,7 @@ export function failSend(
             receipt: uncertain ? "unknown" : "failed",
             error: detail,
             diagnostic,
+            failure,
             ...(recoveredDraft === conv.draft ? {} : { restored: true }),
           }
         : turn,

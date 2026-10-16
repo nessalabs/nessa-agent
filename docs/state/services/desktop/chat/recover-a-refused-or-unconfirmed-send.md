@@ -54,7 +54,7 @@ stateDiagram-v2
 
 ## Several refused messages
 
-Each refused message keeps its own error and diagnostic. The conversation's
+Each refused message keeps its own error, diagnostic and typed reason, so one offered again brings its own recovery (such as setting up the agent). The conversation's
 error belongs to whichever failure happened last, and one notice slot shows
 one failure at a time. A refused message is never lost from the slot: once
 nothing newer holds it, the latest refused message is offered again. Whether
@@ -67,9 +67,9 @@ in `send-draft.ts` is the one rule, read by the notice and by Send Again
 alike:
 
 - A draft that holds something is sent only when it is that message's own
-  (the draft records which refused message it was put back from) and every
-  file in it is ready. An image uploading again, or one whose upload failed,
-  holds it.
+  (the draft records which refused message it was put back from) and a send
+  would take it, by the same `declineReason` a send asks. An image uploading
+  again, a failed upload, or text a send would refuse holds it.
 - An empty draft takes a refused message back only if the message was never
   put back before. Once a refused message is in the draft, the draft is its
   only copy: a person who empties it, or sends something else in its place,
@@ -96,12 +96,14 @@ typing the next, which is the only way it is never put back.
 | 12 | An older refused message with an image, put back in the draft by Send Again | the image uploads again | Send Again is held while it uploads, then live; the next press sends it | unchanged |
 | 13 | A refused message put back in the draft | the person replaces it with another message and sends that | Send Again on the refused message is held, and nothing is sent | cleared |
 | 14 | An older refused message with an image, put back in the draft by Send Again | the image fails to upload again | Send Again is held until the upload is retried from its tile | unchanged |
+| 15 | A refused message put back in the draft | the person edits it down to spaces | Send Again is held, as a send would be | unchanged |
+| 16 | An older refusal because no agent was set up, then a newer message sent | the older is offered again | Error sending for it, with its agent setup recovery | cleared |
 
 Tests: rows 1 to 4 and 7 in `src/conversation/ui/notification.test.ts`; rows
 4 to 7 through the store in `src/conversation/adapters/store/unsent.test.ts`;
 rows 2, 8, 9, 10 and 13's Send Again through the rendered control in
 `src/conversation/ui/conversation-notification.test.ts`, its attachments in
-`src/conversation/application/usecases/attachments.test.ts` (rows 11, 12 and 14 too), and in a real
+`src/conversation/application/usecases/attachments.test.ts` (rows 11, 12 and 14 to 16 too), and in a real
 browser with `verification/desktop/scripts/refused-messages.mjs`.
 
 ## Recovering a lost reply

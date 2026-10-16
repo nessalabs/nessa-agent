@@ -1108,7 +1108,12 @@ describe("an older refused message goes back to the draft that owns its files", 
       to: "stored",
       image: reference(),
     })
-    expect(canSendAgain(tabs.conversations[0] as Conversation, "older")).toBe(true)
+    const done = tabs.conversations[0] as Conversation
+    // Held, as a send would be, until the gateway says the agent takes images.
+    expect(canSendAgain(done, "older")).toBe(false)
+    expect(canSendAgain({ ...done, remote: { ...remote, capabilities } }, "older")).toBe(
+      true,
+    )
   })
   it("holds Send Again while a restored image's upload has failed", () => {
     // Row 14: pressing it could only be turned away.
@@ -1132,6 +1137,45 @@ describe("an older refused message goes back to the draft that owns its files", 
       upload: { status: "failed" },
     })
     expect(canSendAgain(tabs.conversations[0] as Conversation, "older")).toBe(false)
+  })
+  it("holds Send Again on its own draft when a send would turn the draft away", () => {
+    // Row 15: the same rule a send asks, so a draft emptied to spaces holds.
+    const owned = (draft: Conversation["draft"]) => {
+      const conv = olderRefusal(draft).conversations[0]
+      return { ...(conv as Conversation), draftTurn: "older" }
+    }
+    expect(canSendAgain(owned([{ type: "text", text: "   " }]), "older")).toBe(false)
+    expect(canSendAgain(owned([{ type: "text", text: "edited" }]), "older")).toBe(true)
+  })
+  it("keeps each refusal's typed reason for when it is offered again", () => {
+    // Row 16: an older refusal brings back its own recovery, not the last one's.
+    let tabs = stored()
+    tabs = beginSend(tabs, {
+      ...submission,
+      executionId: "e1",
+      content: tabs.conversations[0]!.draft,
+    })
+    tabs = failSend(
+      tabs,
+      "c0",
+      "e1",
+      "No agent is set up.",
+      { kind: "refused", reupload: false },
+      "agent-not-configured",
+    )
+    tabs = beginSend(tabs, {
+      ...submission,
+      executionId: "e2",
+      actionId: "a2",
+      content: tabs.conversations[0]!.draft,
+    })
+    const conv = tabs.conversations[0]!
+    expect(conv.turns).toHaveLength(2)
+    expect(conv.failure).toBeUndefined()
+    expect(conv.turns[0]).toMatchObject({
+      receipt: "failed",
+      failure: "agent-not-configured",
+    })
   })
   it("holds a message whose image survives only as a reference", () => {
     // Row 11: bounding previews let the original go, so Send Again would send

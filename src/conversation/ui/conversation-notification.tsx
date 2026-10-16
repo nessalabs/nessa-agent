@@ -80,8 +80,8 @@ export function ConversationNotification({
           onRetry={() => void dispatch(retryFailedTurn({ id: conversation.id, turnId }))}
           onDiscard={() => dispatch(failedTurnDiscarded({ id: conversation.id, turnId }))}
         />
-        {conversation.failure === "agent-not-configured" &&
-        failed?.from === "user" &&
+        {failed?.from === "user" &&
+        failed.failure === "agent-not-configured" &&
         failed.diagnostic?.agent ? (
           <SelectedAgentSetup agent={failed.diagnostic.agent} recovery />
         ) : null}
