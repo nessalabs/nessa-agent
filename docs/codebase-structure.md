@@ -1031,6 +1031,15 @@ conversation's freshly resolved provider always supplies the authoritative
 request result. Tests live under `crates/nessa-server/tests/agent_warm_up/` and
 the composition seam under `crates/nessa-server/tests/composition/`.
 
+## CI test execution
+
+[`scripts/cargo-test-parallel.mjs`](../scripts/cargo-test-parallel.mjs) owns the
+combined Cargo test build and bounded binary execution. The Windows server
+library runs in a parallel job; its complement owns doctests. Linux/macOS keep
+the complete selection. The [execution map and failure table](../scripts/cargo-test-parallel/README.md)
+link unit, real-process and workflow-contract coverage; `scripts/ci-result.mjs`
+owns the required-check decision.
+
 ## Cloud development preparation
 
 [`scripts/cloud-startup.sh`](../scripts/cloud-startup.sh) owns Cloud setup and
