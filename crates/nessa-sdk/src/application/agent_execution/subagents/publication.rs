@@ -147,13 +147,13 @@ impl OwnershipPublication {
             .or_insert(SpawnProgress::Reserved);
     }
 
-    fn eligible_lifetimes(&self, snapshot: &OwnershipSnapshot) -> HashSet<AgentLifetimeId> {
+    fn eligible_lifetimes(&self, graph: &OwnershipGraph) -> HashSet<AgentLifetimeId> {
         let mut retained = self.roots.clone();
         // Retain identities only with their retained ancestor chain. Admission
         // uses this same authority; graph Open alone does not grant transfer.
         loop {
             let before = retained.len();
-            for row in &snapshot.spawns {
+            for row in graph.spawn_rows() {
                 if self.spawns.contains_key(&row.binding.request_id)
                     && retained.contains(&row.binding.parent_lifetime)
                 {
@@ -172,13 +172,12 @@ impl OwnershipPublication {
         graph: &OwnershipGraph,
         lifetime: &AgentLifetimeId,
     ) -> bool {
-        self.eligible_lifetimes(&graph.snapshot())
-            .contains(lifetime)
+        self.eligible_lifetimes(graph).contains(lifetime)
     }
 
     pub(super) fn project(&self, graph: &OwnershipGraph) -> OwnershipSnapshot {
         let mut snapshot = graph.snapshot();
-        let retained = self.eligible_lifetimes(&snapshot);
+        let retained = self.eligible_lifetimes(graph);
         snapshot
             .lifetimes
             .retain(|r| retained.contains(&r.lifetime_id));
@@ -371,3 +370,7 @@ mod tests {
         assert!(OwnershipGraph::restore(projected).refusal().is_none());
     }
 }
+
+#[cfg(test)]
+#[path = "../../../../tests/application/agent_execution/subagents/publication_rows.rs"]
+mod read_rows;
