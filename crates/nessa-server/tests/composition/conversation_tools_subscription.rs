@@ -13,12 +13,13 @@ use crate::conversation_test_support::{
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_protocol::conversation::domain::{ConversationApprovalMode, ConversationModelId};
 use nessa_sdk::application::agent_execution::sessions::{
-    CommittedEventReader, EventFuture, SessionStorage, SessionStorageLease, StorageError,
-    StorageFuture,
+    CommittedEvent, CommittedEventPage, CommittedEventReader, EventFuture, EventReadError,
+    SessionChange, SessionStorage, SessionStorageLease, StorageError, StorageFuture,
 };
+use nessa_sdk::domain::agent_execution::executions::{ExecutionId, ExecutionOutcome};
 use nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock;
 use nessa_sync::replication::domain::Id;
-use std::sync::Mutex;
+use std::{collections::VecDeque, sync::Mutex};
 use tokio::sync::oneshot;
 
 fn id() -> ConversationId {
@@ -605,4 +606,184 @@ async fn already_observed_cancellation_refuses_delivery_before_polling_authoriza
         .await;
     assert!(matches!(result, Err(SubscriptionEnd::Cancelled)));
     assert!(!polled);
+}
+
+/// Deliberately ignores EventStart so the actual follower must correlate output.
+struct ScriptedStorage {
+    reads: Mutex<Option<VecDeque<EventRead>>>,
+    opened: Mutex<Option<EventStart>>,
+}
+struct ScriptedReader(VecDeque<EventRead>);
+impl SessionStorage for ScriptedStorage {
+    fn open(&self, _: SessionId) -> StorageFuture<'_, Box<dyn SessionStorageLease>> {
+        Box::pin(async { Err(StorageError::CommittedReadUnavailable) })
+    }
+    fn events(
+        &self,
+        _: SessionId,
+        start: EventStart,
+    ) -> EventFuture<'_, Box<dyn CommittedEventReader>> {
+        Box::pin(async move {
+            *self.opened.lock().unwrap() = Some(start);
+            let reads = self.reads.lock().unwrap().take().unwrap();
+            Ok(Box::new(ScriptedReader(reads)) as Box<dyn CommittedEventReader>)
+        })
+    }
+}
+impl CommittedEventReader for ScriptedReader {
+    fn read(&mut self, _: EventReadLimits) -> EventFuture<'_, EventRead> {
+        let read = self.0.pop_front().ok_or(EventReadError::Closed);
+        Box::pin(async move { read })
+    }
+}
+fn progress_cursor(incarnation: &str, position: u64, index: Option<u64>) -> CommittedEventCursor {
+    CommittedEventCursor::new(
+        SessionId::new(id().to_string()).unwrap(),
+        Id::new(incarnation).unwrap(),
+        position,
+        index,
+    )
+}
+fn progress_page(incarnation: &str, position: u64, index: u64) -> EventRead {
+    let next = progress_cursor(incarnation, position, Some(index));
+    let event = CommittedEvent::change(
+        next.clone(),
+        SessionChange::LocalSettlement {
+            execution_id: ExecutionId::new("trailing").unwrap(),
+            before: None,
+            after: Ok(ExecutionOutcome::Completed),
+            local_outcome: None,
+        },
+    );
+    EventRead::Page(
+        CommittedEventPage::new(
+            vec![event],
+            next,
+            progress_cursor(incarnation, position, None),
+        )
+        .unwrap(),
+    )
+}
+async fn scripted_follow(
+    start: EventStart,
+    reads: Vec<EventRead>,
+    wait: u64,
+) -> Result<Value, String> {
+    let metadata = Arc::new(MemoryRepository::default());
+    let storage = Arc::new(ScriptedStorage {
+        reads: Mutex::new(Some(reads.into())),
+        opened: Mutex::new(None),
+    });
+    let service = observing_service(metadata, storage.clone());
+    let (_stop, stopped) = watch::channel(false);
+    let result = follow(
+        &service,
+        id(),
+        caller(),
+        Follow {
+            thread_id: id().to_string(),
+            after: match &start {
+                EventStart::After(cursor) => Some(cursor.encode()),
+                _ => None,
+            },
+            replay: if matches!(start, EventStart::Beginning) {
+                Some(true)
+            } else {
+                None
+            },
+            wait_ms: Some(wait),
+            limit: None,
+        },
+        SubscriptionControl::new(stopped, wait),
+    )
+    .await;
+    assert_eq!(storage.opened.lock().unwrap().as_ref(), Some(&start));
+    service.shutdown().await.unwrap();
+    result
+}
+
+#[tokio::test(start_paused = true)]
+async fn follow_correlates_after_with_page_and_idle_before_returning_any_cursor() {
+    let after = progress_cursor("incarnation", 2, Some(1));
+    for read in [
+        progress_page("replacement", 3, 1),
+        progress_page("incarnation", 1, 1),
+        progress_page("incarnation", 2, 1),
+        EventRead::Idle(progress_cursor("replacement", 3, None)),
+        EventRead::Idle(progress_cursor("incarnation", 1, None)),
+    ] {
+        let result = scripted_follow(EventStart::After(after.clone()), vec![read], 0).await;
+        assert_eq!(result.unwrap_err(), "event_cursor_invalid");
+    }
+    let outer = progress_cursor("incarnation", 2, None);
+    assert_eq!(
+        scripted_follow(
+            EventStart::After(outer),
+            vec![progress_page("incarnation", 2, 1)],
+            0
+        )
+        .await
+        .unwrap_err(),
+        "event_cursor_invalid"
+    );
+    for read in [
+        progress_page("incarnation", 2, 2),
+        progress_page("incarnation", 3, 1),
+        EventRead::Idle(after.clone()),
+    ] {
+        let result = scripted_follow(EventStart::After(after.clone()), vec![read], 0)
+            .await
+            .unwrap();
+        assert!(result["cursor"].is_string());
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn follow_retains_now_idle_progress_through_preparing_and_valid_trailing_events() {
+    for start in [EventStart::Now, EventStart::Beginning] {
+        for read in [
+            progress_page("replacement", 3, 1),
+            progress_page("incarnation", 1, 1),
+            progress_page("incarnation", 2, 1),
+            EventRead::Idle(progress_cursor("replacement", 3, None)),
+            EventRead::Idle(progress_cursor("incarnation", 1, None)),
+        ] {
+            let result = scripted_follow(
+                start.clone(),
+                vec![
+                    EventRead::Idle(progress_cursor("incarnation", 2, None)),
+                    EventRead::Preparing,
+                    read,
+                ],
+                1000,
+            )
+            .await;
+            assert_eq!(result.unwrap_err(), "event_cursor_invalid");
+        }
+        let value = scripted_follow(
+            start,
+            vec![
+                EventRead::Idle(progress_cursor("incarnation", 2, None)),
+                EventRead::Preparing,
+                EventRead::Idle(progress_cursor("incarnation", 2, None)),
+                progress_page("incarnation", 3, 1),
+            ],
+            1000,
+        )
+        .await
+        .unwrap();
+        assert_eq!(value["events"][0]["executionId"], "trailing");
+        assert_eq!(
+            value["cursor"],
+            progress_cursor("incarnation", 3, Some(1)).encode()
+        );
+    }
+    let first = scripted_follow(EventStart::Now, vec![progress_page("captured", 9, 1)], 0)
+        .await
+        .unwrap();
+    assert_eq!(
+        first["cursor"],
+        progress_cursor("captured", 9, Some(1)).encode()
+    );
+    assert_eq!(first["events"][0]["executionId"], "trailing");
 }

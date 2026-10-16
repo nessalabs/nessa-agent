@@ -130,6 +130,9 @@ is not a claim that an external effect was rolled back.
 | Final delivery authorization is blocked while source cancels or its delivery budget expires | Cancellation returns cancelled; ten-second delivery timeout returns unavailable, without events/cursor; same tests. |
 | Read returns a typed storage/capacity refusal after target access changes | Preserve that refusal; no delivery certification or successful output is introduced; same tests. |
 | Access still holds after delayed Page/Idle or observation deadline | Deliver the projected metadata or empty checkpoint after fresh authorization; same tests. |
+| After checkpoint followed by another incarnation, backwards Page/Idle, duplicate Page, or Page at the retained outer boundary | Shared application EventProgress rejects event_cursor_invalid before projection or cached-cursor replacement; actual follow regressions in `tests/composition/conversation_tools_subscription.rs`. |
+| Now/Beginning first Idle then Preparing and another Page/Idle | First Idle establishes continuity; Preparing retains it. Wrong incarnation and backwards progress refuse, while trailing events and nondecreasing Idle remain valid; same tests. |
+| Now returns its first Page without a prior checkpoint | Accept the source's captured starting position; no prior cursor is fabricated; same tests. |
 
 The observation loop previously treated permission to start a read as permission
 to publish its eventual result. Separate return paths for page, idle, and deadline
@@ -139,6 +142,13 @@ the single owner of target access. The source actor is the already admitted
 caller: its supervised source decision/audit is not repeated during observation.
 Source cancellation and provider-token revocation still flow through the relay's
 watch channel; this final gate does not create a new delegation or source lease.
+
+A page constructor validates one page, and cursor/session validation checks one
+identity. Neither certifies a custom adapter's output against the requested start
+or a previously observed Idle. The shared application `EventProgress` owner,
+extracted from the API consumer, supplies that cross-read decision to both socket
+and tool adapters. The tool consumes it before projecting a Page or replacing its
+retained Idle checkpoint; no second comparison implementation is introduced.
 
 Implementation ownership: `composition/conversation_tools.rs` owns MCP parsing,
 serialization and bounded polling; `conversation/application/service/agent_tools.rs`

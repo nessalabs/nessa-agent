@@ -2,7 +2,7 @@
 use crate::conversation::application::{
     error_code, event_error_code, project_events, validate_event_cursor, AgentToolRequest,
     ConversationCaller, ConversationError, ConversationEventError, ConversationService,
-    RequestedAgent, RequestedConversation, SubmissionMode, SubmittedMessage,
+    EventProgress, RequestedAgent, RequestedConversation, SubmissionMode, SubmittedMessage,
 };
 use crate::mcp_servers::application::{BuiltInFuture, BuiltInServer};
 use nessa_protocol::agents::AgentId;
@@ -594,6 +594,7 @@ async fn observe(
         None if args.replay.unwrap_or(false) => EventStart::Beginning,
         None => EventStart::Now,
     };
+    let mut progress = EventProgress::new(&start);
     let limits =
         EventReadLimits::new(limit.min(16), 256 * 1024 * 1024).map_err(|_| "invalid_request")?;
     let opening = service.open_events(target.clone(), caller.clone(), start);
@@ -612,6 +613,9 @@ async fn observe(
             })?,
             Err(ended) => return control.finish(target, ended),
         };
+        progress
+            .accept(&read)
+            .map_err(|error| event_error_code(&ConversationEventError::Events(error)).to_owned())?;
         match read {
             EventRead::Preparing => tokio::task::yield_now().await,
             EventRead::Page(page) => {
