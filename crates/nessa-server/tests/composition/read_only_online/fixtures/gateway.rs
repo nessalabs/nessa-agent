@@ -289,6 +289,7 @@ async fn gateway_child() {
         &NativeConfig {
             listen_address: address,
             relay,
+            advertised_address: None,
         },
         NativeInputs {
             namespace: root.to_path_buf(),
@@ -332,6 +333,11 @@ async fn gateway_child() {
         OrganizationId::new(organization.clone()).unwrap(),
         AudienceId::new(gateway.clone()).unwrap(),
         ProductDependencies {
+            owner_phone_purpose: auth.clone(),
+            owner_phone_policy: Arc::new(
+                crate::conversation::infrastructure::CedarOwnerPhonePolicyEvaluator::new().unwrap(),
+            ),
+            owner_phone_receivers: None,
             verifier: auth.clone(),
             access: auth.clone(),
             clock: Arc::new(SystemClock),

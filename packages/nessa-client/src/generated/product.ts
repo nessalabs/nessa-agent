@@ -2060,6 +2060,93 @@ export const CatalogueReadErrorCode = {
 } as const
 export type CatalogueReadErrorCode =
   (typeof CatalogueReadErrorCode)[keyof typeof CatalogueReadErrorCode]
+/** Discover the native phone endpoint and canonical consent under the current authenticated bootstrap session. */
+export interface PhoneEndpointParams {}
+/** Exact original authenticated bootstrap linkage. These public identifiers describe correlation; the server reconstructs current authority independently. */
+export interface PhoneOwnerSource {
+  /** Original conversation owner. */
+  ownerId: string
+  /** Original organization. */
+  organizationId: string
+  /** Original membership. */
+  membershipId: string
+  /** Original gateway audience. */
+  audience: string
+  /** Original public bootstrap credential identifier; not a token. */
+  credentialId: string
+  /** Composition-resolved original gateway resource. */
+  resourceId: string
+}
+/** Complete ordered consent published by Auth. The envelope admits bounded grants; Auth owns the exact class, actions, order and resource correspondence. */
+export interface PhoneConsent {
+  /** Canonical access class returned by discovery. */
+  class: string
+  /** Complete canonical ordered action/resource set. No singular grant alias. */
+  grants: ProductGrant[]
+}
+/** Authenticated discovery facts for signing one original phone authorization. No endpoint is inferred from a product address. */
+export interface PhoneDiscovery {
+  /** Original bootstrap identity and gateway resource. */
+  source: PhoneOwnerSource
+  /** Explicit usable numeric SocketAddr destination, as composed by the gateway. Auth validates the numeric address; the wire envelope bounds its text. */
+  nativeEndpoint: string
+  /** Exact gateway TLS SPKI bytes; Auth validates its key grammar. */
+  gatewayKey: number[]
+  /** Canonical complete consent returned by Auth. */
+  consent: PhoneConsent
+}
+/** One immutable signed original. Auth validates nonzero request identity, endpoint, pin and canonical consent before effects. */
+export interface PhoneOriginal {
+  /** Original allocated nonzero request UUID bytes, retained through lost replies. */
+  requestId: number[]
+  /** Exact discovery included in the signed original. */
+  discovery: PhoneDiscovery
+  /** Exact permanent device public key. No private key is published. */
+  deviceKey: number[]
+}
+/** Authorize this exact signed original under fresh bootstrap management and complete consent admission. Exact replay rejoins the same original. */
+export interface PhoneAuthorizeParams {
+  /** Original to verify and persist before activation. */
+  original: PhoneOriginal
+  /** Ed25519 signature of the Auth-owned original transcript. */
+  signature: number[]
+}
+/** Find or rejoin only this exact original in the current bootstrap namespace. Digest mismatch or another source cannot disclose or activate it. */
+export interface PhoneStatusParams {
+  /** Original request UUID bytes. */
+  requestId: number[]
+  /** SHA-256 digest computed by the cryptographic owner from the original transcript. */
+  originalDigest: number[]
+}
+/** Complete historical status of one original phone authorization. Auth constructs phase, receiver, credential and cleanup together; historical activation is not current read/write authority. */
+export interface PhoneAuthorizationStatus {
+  /** Exact stored signed original, including complete consent. */
+  original: PhoneOriginal
+  /** Auth-computed digest of this original transcript. */
+  originalDigest: number[]
+  /** Original invitation identity. */
+  invitationId: number[]
+  /** Original immutable consent identity. */
+  consentId: number[]
+  /** Original consent generation. */
+  generation: number
+  /** Original creation time, Unix milliseconds. */
+  createdAtMs: number
+  /** Original exclusive expiry, Unix milliseconds. */
+  expiresAtMs: number
+  /** Auth-owned current enrollment phase. */
+  phase: PairingOwnerPhase
+  /** Public issued or reserved device credential identifier, once known. */
+  credentialId?: string
+  /** Original receiver and access epoch, once known. */
+  receiver?: PairingReceiver
+  /** First terminal cause and initiator, once ended. */
+  terminal?: PairingTerminal
+  /** Whether original physical cleanup remains owed. */
+  cleanupPending: boolean
+  /** Typed activation interruption, when present. */
+  activationStopped?: PairingActivationStop
+}
 /** Who an invitation enrolls. device: one of the owner's own devices; its credential acts as the owner. gateway: a peer gateway that reads; its credential names a principal of kind gateway, identified by the key it pinned at pairing, and holds only the conversation.read grant. environment: a peer gateway or worker that serves as an environment for this gateway's leases; its credential names the same gateway principal for the same key and holds only the environment.serve grant, so it reads nothing. All use the same enrollment and listener; the choice is bound into the enrollment and cannot be changed by the enrolling side. */
 export const PairingEnrollee = {
   Device: "device",
@@ -2711,7 +2798,7 @@ export const mcpServerRules = {
 export const bounds = {
   maxOrdinaryResponseBytes: 65536,
   maxRequestFrameBytes: 65536,
-  maxReadyMethods: 72,
+  maxReadyMethods: 75,
   maxAuthCredentialCharacters: 16384,
   maxProductClientIdCharacters: 256,
   maxProductSurfaceInstanceCharacters: 256,
@@ -2836,6 +2923,9 @@ export const ProductMethod = {
   McpServersInspect: "mcpServers.inspect",
   McpServersAuthorize: "mcpServers.authorize",
   McpServersRevoke: "mcpServers.revoke",
+  PhoneEndpoint: "phone.endpoint",
+  PhoneAuthorize: "phone.authorize",
+  PhoneStatus: "phone.status",
   PairingCreate: "pairing.create",
   PairingPending: "pairing.pending",
   PairingStatus: "pairing.status",
@@ -2862,6 +2952,7 @@ export const ProductMethod = {
 } as const
 export const ProductEvent = {
   SessionChallenge: "session.challenge",
+  SessionTerminated: "session.terminated",
   ConversationChanged: "conversation.changed",
   ConversationWatchEnded: "conversation.watchEnded",
   ConversationView: "conversation.view",
@@ -2922,6 +3013,9 @@ export const productReadyMethods = [
   "mcpServers.inspect",
   "mcpServers.authorize",
   "mcpServers.revoke",
+  "phone.endpoint",
+  "phone.authorize",
+  "phone.status",
   "pairing.create",
   "pairing.pending",
   "pairing.status",
@@ -2998,6 +3092,9 @@ export const productMethodGrants = {
   "mcpServers.inspect": "credential.manage",
   "mcpServers.authorize": "credential.manage",
   "mcpServers.revoke": "credential.manage",
+  "phone.endpoint": "server.read",
+  "phone.authorize": "credential.manage",
+  "phone.status": "credential.manage",
   "pairing.create": "credential.manage",
   "pairing.pending": "credential.manage",
   "pairing.status": "credential.manage",

@@ -161,9 +161,12 @@ mod live_changes;
 mod locks;
 mod mcp_apps;
 mod metadata_target;
+pub(crate) use metadata_target::load_conversation;
+mod owner_phone_policy;
 pub(crate) use metadata_target::ConversationMetadataReader;
 mod passive_read;
 mod permission_rules;
+pub use passive_read::AdmittedCatalogueRead;
 mod placement;
 mod ports;
 mod provider_sessions;
@@ -194,6 +197,10 @@ pub use catalogue::{
 pub use catalogue_read::{
     CatalogueReadError, CatalogueReadFuture, CatalogueReadOperation, CatalogueReadResponse,
     CatalogueReadSource, CatalogueReadValue, ReadCatalogue,
+};
+pub use owner_phone_policy::{
+    AdmitOwnerPhoneReader, OwnerPhoneDecision, OwnerPhoneOperation, OwnerPhonePolicyEvaluator,
+    OwnerPhonePolicyFacts, OwnerPhoneReader, OwnerPhoneReceiverAuthority,
 };
 // The port itself, which placement and the service use on every host.
 pub(crate) use command_environment::CommandEnvironment;

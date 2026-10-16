@@ -3,11 +3,13 @@
 //! Admission owns credential, receiver, owner, and epoch. The injected source
 //! owns physical catalogue identity and I/O; sync-engine owns pass validation.
 
-use crate::conversation::application::{AdmitPassiveRead, PassiveRead, RecordReadLease};
+use crate::conversation::application::{
+    AdmitPassiveRead, AdmittedCatalogueRead, PassiveRead, RecordReadLease,
+};
 use nessa_auth::application::session::AuthenticatedSession;
 use nessa_auth::domain::PrincipalId;
 use nessa_protocol::conversation::read_scope::{
-    passive_read_selector, validate_catalogue_selector, CatalogueReadScope, ReadRefusal,
+    passive_read_selector, validate_catalogue_selector, ReadRefusal,
 };
 use nessa_sync::replication::{
     catalogue::{
@@ -71,7 +73,7 @@ pub type CatalogueReadFuture<'a> =
 pub trait CatalogueReadSource: Send + Sync {
     fn read(
         &self,
-        admitted: CatalogueReadScope,
+        admitted: AdmittedCatalogueRead,
         signed_in_as: PrincipalId,
         operation: CatalogueReadOperation,
         lease: RecordReadLease,
@@ -109,13 +111,14 @@ impl ReadCatalogue<'_> {
         };
         let admitted = self
             .admission
-            .catalogue(session, receiver, epoch, read)
+            .catalogue_admission(session, receiver, epoch, read)
             .await
             .map_err(CatalogueReadError::Admission)?;
-        passive_read_selector(&admitted.receiver_id, admitted.access_epoch)
+        passive_read_selector(&admitted.scope.receiver_id, admitted.scope.access_epoch)
             .map_err(CatalogueReadError::Admission)?;
         if let Some(scope) = operation.scope() {
-            validate_catalogue_selector(&admitted, scope).map_err(CatalogueReadError::Admission)?;
+            validate_catalogue_selector(&admitted.scope, scope)
+                .map_err(CatalogueReadError::Admission)?;
         }
         let expected = operation.clone();
         let response = self
@@ -139,7 +142,8 @@ impl ReadCatalogue<'_> {
             }
             _ => return Err(CatalogueReadError::Admission(ReadRefusal::Unverifiable)),
         };
-        validate_catalogue_selector(&admitted, scope).map_err(CatalogueReadError::Admission)?;
+        validate_catalogue_selector(&admitted.scope, scope)
+            .map_err(CatalogueReadError::Admission)?;
         Ok(response)
     }
 }

@@ -372,7 +372,10 @@
         ]
       }
     ],
-    "nativeHooks": { "claude": "off", "codex": "off" }
+    "nativeHooks": {
+      "claude": "off",
+      "codex": "off"
+    }
   },
   "ConversationSetApprovalModeParams": {
     "conversationId": "00000000-0000-4000-8000-000000000001",
@@ -550,5 +553,260 @@
     "text": "Showing April, zoomed to the second week",
     "structuredContentJson": "{\"month\":4,\"week\":2}"
   },
-  "McpRemoteErrorDetails": { "code": -32602, "message": "Invalid params" }
+  "McpRemoteErrorDetails": {
+    "code": -32602,
+    "message": "Invalid params"
+  },
+  "PhoneEndpointParams": {},
+  "PhoneOwnerSource": {
+    "ownerId": "owner",
+    "organizationId": "organization",
+    "membershipId": "membership",
+    "audience": "gateway",
+    "credentialId": "bootstrap-credential",
+    "resourceId": "gateway"
+  },
+  "PhoneConsent": {
+    "class": "gateway-owner-conversation-read-write",
+    "grants": [
+      {
+        "action": "conversation.read",
+        "resource": {
+          "organizationId": "organization",
+          "id": "gateway"
+        }
+      },
+      {
+        "action": "conversation.write",
+        "resource": {
+          "organizationId": "organization",
+          "id": "gateway"
+        }
+      },
+      {
+        "action": "server.read",
+        "resource": {
+          "organizationId": "organization",
+          "id": "gateway"
+        }
+      }
+    ]
+  },
+  "PhoneDiscovery": {
+    "source": {
+      "ownerId": "owner",
+      "organizationId": "organization",
+      "membershipId": "membership",
+      "audience": "gateway",
+      "credentialId": "bootstrap-credential",
+      "resourceId": "gateway"
+    },
+    "nativeEndpoint": "127.0.0.1:19744",
+    "gatewayKey": [
+      48, 42, 48, 5, 6, 3, 43, 101, 112, 3, 33, 0, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7,
+      7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7
+    ],
+    "consent": {
+      "class": "gateway-owner-conversation-read-write",
+      "grants": [
+        {
+          "action": "conversation.read",
+          "resource": {
+            "organizationId": "organization",
+            "id": "gateway"
+          }
+        },
+        {
+          "action": "conversation.write",
+          "resource": {
+            "organizationId": "organization",
+            "id": "gateway"
+          }
+        },
+        {
+          "action": "server.read",
+          "resource": {
+            "organizationId": "organization",
+            "id": "gateway"
+          }
+        }
+      ]
+    }
+  },
+  "PhoneOriginal": {
+    "requestId": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+    "discovery": {
+      "source": {
+        "ownerId": "owner",
+        "organizationId": "organization",
+        "membershipId": "membership",
+        "audience": "gateway",
+        "credentialId": "bootstrap-credential",
+        "resourceId": "gateway"
+      },
+      "nativeEndpoint": "127.0.0.1:19744",
+      "gatewayKey": [
+        48, 42, 48, 5, 6, 3, 43, 101, 112, 3, 33, 0, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7,
+        7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7
+      ],
+      "consent": {
+        "class": "gateway-owner-conversation-read-write",
+        "grants": [
+          {
+            "action": "conversation.read",
+            "resource": {
+              "organizationId": "organization",
+              "id": "gateway"
+            }
+          },
+          {
+            "action": "conversation.write",
+            "resource": {
+              "organizationId": "organization",
+              "id": "gateway"
+            }
+          },
+          {
+            "action": "server.read",
+            "resource": {
+              "organizationId": "organization",
+              "id": "gateway"
+            }
+          }
+        ]
+      }
+    },
+    "deviceKey": [
+      2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
+      2, 2, 2, 2
+    ]
+  },
+  "PhoneAuthorizeParams": {
+    "original": {
+      "requestId": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+      "discovery": {
+        "source": {
+          "ownerId": "owner",
+          "organizationId": "organization",
+          "membershipId": "membership",
+          "audience": "gateway",
+          "credentialId": "bootstrap-credential",
+          "resourceId": "gateway"
+        },
+        "nativeEndpoint": "127.0.0.1:19744",
+        "gatewayKey": [
+          48, 42, 48, 5, 6, 3, 43, 101, 112, 3, 33, 0, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7,
+          7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7
+        ],
+        "consent": {
+          "class": "gateway-owner-conversation-read-write",
+          "grants": [
+            {
+              "action": "conversation.read",
+              "resource": {
+                "organizationId": "organization",
+                "id": "gateway"
+              }
+            },
+            {
+              "action": "conversation.write",
+              "resource": {
+                "organizationId": "organization",
+                "id": "gateway"
+              }
+            },
+            {
+              "action": "server.read",
+              "resource": {
+                "organizationId": "organization",
+                "id": "gateway"
+              }
+            }
+          ]
+        }
+      },
+      "deviceKey": [
+        2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
+        2, 2, 2, 2, 2
+      ]
+    },
+    "signature": [
+      3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
+      3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
+      3, 3, 3, 3, 3, 3, 3, 3
+    ]
+  },
+  "PhoneStatusParams": {
+    "requestId": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+    "originalDigest": [
+      4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+      4, 4, 4, 4
+    ]
+  },
+  "PhoneAuthorizationStatus": {
+    "original": {
+      "requestId": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+      "discovery": {
+        "source": {
+          "ownerId": "owner",
+          "organizationId": "organization",
+          "membershipId": "membership",
+          "audience": "gateway",
+          "credentialId": "bootstrap-credential",
+          "resourceId": "gateway"
+        },
+        "nativeEndpoint": "127.0.0.1:19744",
+        "gatewayKey": [
+          48, 42, 48, 5, 6, 3, 43, 101, 112, 3, 33, 0, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7,
+          7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7
+        ],
+        "consent": {
+          "class": "gateway-owner-conversation-read-write",
+          "grants": [
+            {
+              "action": "conversation.read",
+              "resource": {
+                "organizationId": "organization",
+                "id": "gateway"
+              }
+            },
+            {
+              "action": "conversation.write",
+              "resource": {
+                "organizationId": "organization",
+                "id": "gateway"
+              }
+            },
+            {
+              "action": "server.read",
+              "resource": {
+                "organizationId": "organization",
+                "id": "gateway"
+              }
+            }
+          ]
+        }
+      },
+      "deviceKey": [
+        2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
+        2, 2, 2, 2, 2
+      ]
+    },
+    "originalDigest": [
+      4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+      4, 4, 4, 4
+    ],
+    "invitationId": [5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5],
+    "consentId": [6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6],
+    "generation": 1,
+    "createdAtMs": 0,
+    "expiresAtMs": 600000,
+    "phase": "active",
+    "credentialId": "device-credential",
+    "receiver": {
+      "receiverId": "receiver",
+      "accessEpoch": 1
+    },
+    "cleanupPending": false
+  }
 }

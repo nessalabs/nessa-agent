@@ -6,17 +6,31 @@
 //! ```
 #![deny(missing_docs)]
 mod admission;
+mod owner_phone_adoption;
+mod owner_phone_private;
+pub use owner_phone_adoption::{
+    OwnerPhoneAdoption, OwnerPhoneAdoptionFailure, OwnerPhoneAdoptionPhase,
+    OwnerPhoneEnrollmentKind, OwnerPhoneEnrollmentStore,
+};
+pub use owner_phone_private::{
+    OwnerPhoneOriginalCreation, OwnerPhoneOriginalStore, OwnerPhonePrivateOriginal,
+    OwnerPhoneReservation,
+};
+mod owner_phone;
+mod owner_phone_purpose;
+pub use owner_phone_purpose::{OwnerPhonePurpose, OwnerPhonePurposeSource};
 mod ports;
 mod private_state;
 mod proof;
 mod receiver;
 mod stage;
 pub use admission::{AuthorizePairing, PairingAdmission};
+pub use owner_phone::{OwnerPhoneOriginalReceipt, OwnerPhoneStore};
 pub use ports::{
     AttemptReservation, OwnerDecision, PairingStore, PairingStoreError, PairingWorkerFault,
     RuntimeEnd,
 };
-pub use proof::{ConfirmedClaim, DeviceConnectionProof};
+pub use proof::{ConfirmedClaim, DeviceConnectionProof, VerifiedOwnerPhoneDeviceProof};
 pub use receiver::ReceiverOutcome;
 
 pub(crate) use stage::StageGate;

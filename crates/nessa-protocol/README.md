@@ -39,7 +39,7 @@ layer may import `nessa_protocol::product_contract::…` but not
 | Path | Responsibility |
 | --- | --- |
 | `src/protocol/` | Wire frames (`frames.rs`), unique-key JSON (`json.rs`), the health response and payload bound (`encode.rs`), default shortcuts, and the generated payload types and method/event catalogue. |
-| `src/product_contract/` | The product contract's generated outcome values and close policy. |
+| `src/product_contract/` | The product contract's generated outcome values and close policy. `outcome.rs` is the one projection of a close reason. |
 | `src/product/generated.rs` | Generated product DTOs, method and event names, bounds, and wire-shape validators. |
 | `src/product/handshake.rs` | Version overlap and the refusal-to-close rule both handshake directions apply. |
 | `src/product/passive_read.rs` | Passive read transport conversion and the capped response encoder. |

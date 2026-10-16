@@ -95,20 +95,21 @@ fn native_refusal_rechecks_pinned_status_without_purging_confirmed_partial_histo
     let state_directory = Path::new(profile["stateDirectory"].as_str().unwrap());
     let native = NativeSession::open(state_root, state_directory, address).unwrap();
     let refresh = native.refresh(ReadStop::new()).unwrap();
-    let initial = refresh.initial().as_ref().unwrap();
+    let initial = refresh.initial();
     assert!(matches!(
-        initial.enrollment(),
-        Ok(NativePairingStatus::Active { .. })
+        initial.observation(),
+        Some(NativePairingStatus::Active { .. })
     ));
     assert!(initial.purge().is_none());
     assert!(refresh.selection_failure().is_none());
     assert_eq!(refresh.read().unwrap().result(), &Err(ReadFailure::Refused));
     let recheck = refresh
         .recheck()
-        .expect("read refusal must capture its own pinned status")
-        .as_ref()
-        .unwrap();
-    assert_eq!(recheck.enrollment(), &Err(NativeClientError::Refused));
+        .expect("read refusal must capture its own pinned status");
+    let nessa_device_client::SessionStatus::ReadOnly(Ok(observation)) = recheck else {
+        panic!("expected completed current read-only enrollment operation");
+    };
+    assert_eq!(observation.enrollment(), &Err(NativeClientError::Refused));
     assert!(recheck.purge().is_none());
     assert!(native.purge_receipt(&setup.receiver).unwrap().is_none());
     let page = native.catalogue_page(None, 16).unwrap().unwrap();
@@ -156,10 +157,10 @@ fn native_session_keeps_paired_records_offline_reopens_and_purges_on_terminal() 
     let native = open();
     let refresh = native.refresh(ReadStop::new()).unwrap();
     assert!(matches!(
-        refresh.initial().as_ref().unwrap().enrollment(),
-        Ok(NativePairingStatus::Active { .. })
+        refresh.initial().observation(),
+        Some(NativePairingStatus::Active { .. })
     ));
-    assert!(refresh.initial().as_ref().unwrap().purge().is_none());
+    assert!(refresh.initial().purge().is_none());
     assert!(refresh.selection_failure().is_none());
     assert!(refresh.read().unwrap().result().as_ref().unwrap().complete);
     assert!(
@@ -216,10 +217,10 @@ fn native_session_keeps_paired_records_offline_reopens_and_purges_on_terminal() 
     drop(restarted);
     let _revoked = Gateway::start_mode(&root, "revoke");
     let terminal = resumed.refresh(ReadStop::new()).unwrap();
-    let status = terminal.initial().as_ref().unwrap();
+    let status = terminal.initial();
     assert!(matches!(
-        status.enrollment(),
-        Ok(NativePairingStatus::Terminal { .. })
+        status.observation(),
+        Some(NativePairingStatus::Terminal { .. })
     ));
     let purge = status.purge().unwrap().as_ref().unwrap();
     assert!(purge.records() > 0);

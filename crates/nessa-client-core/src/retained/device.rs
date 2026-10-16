@@ -1,7 +1,11 @@
 //! Native enrollment composition preserves the existing physical worker and
 //! purge-before-end policy. Status effects are collected inside its admission.
+use super::RetainedOwnerStatus;
 use super::{cache_failure, retained_policy, ReadFailure, RetainedCache};
-use crate::pairing::{NativeClientError, NativeEnrollmentClient, NativeRetryOutcome};
+use crate::pairing::{
+    owner_recovery, NativeClientError, NativeEnrollmentClient, NativeRetryOutcome,
+    OwnerPhonePreparation, OwnerPhoneState,
+};
 use crate::read_only_sync::application::device::{CachePurges, PurgeBeforeEnd, PurgeReceipt};
 use crate::read_only_sync::infrastructure::cache::ReadOnlyCache;
 use nessa_auth::{
@@ -56,7 +60,7 @@ impl RetainedPurge {
 ///     status.purge = None;
 /// }
 /// ```
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RetainedEnrollmentStatus {
     enrollment: Result<NativePairingStatus, NativeClientError>,
     purge: Option<Result<RetainedPurge, ReadFailure>>,
@@ -87,6 +91,7 @@ impl RetainedEnrollmentStatus {
 pub struct RetainedEnrollmentClient {
     client: NativeEnrollmentClient,
     store: Arc<PurgeBeforeEnd>,
+    original: Option<Arc<dyn OwnerPhoneState>>,
 }
 impl RetainedEnrollmentClient {
     /// Compose without opening a socket or cache. `path` names this scope's
@@ -110,7 +115,79 @@ impl RetainedEnrollmentClient {
         Ok(Self {
             client: NativeEnrollmentClient::new(store.clone(), clock),
             store,
+            original: None,
         })
+    }
+
+    /// Compose original recovery and current read-only reads with one combined private owner.
+    /// No separate enrollment/original state can be injected into this scope.
+    pub fn owner_phone(
+        state: Arc<dyn OwnerPhoneState>,
+        path: PathBuf,
+        wall: Arc<dyn WallClock>,
+        clock: Arc<dyn MonotonicClock>,
+    ) -> Result<Self, ReadFailure> {
+        let mut value = Self::new(state.clone(), path, wall, clock)?;
+        value.original = Some(state);
+        Ok(value)
+    }
+
+    /// Read only the exact original over its fresh pinned key channel.
+    /// This performs no adoption, purge, removal or remote mutation.
+    pub async fn recover_owner_phone(
+        &self,
+        stream: TcpStream,
+        expected: Arc<OwnerPhonePreparation>,
+        received: Option<DisclosedConsent>,
+    ) -> Result<RetainedOwnerStatus, NativeClientError> {
+        let state = self.original.clone().ok_or(NativeClientError::NoPending)?;
+        self.client
+            .owner_recovery_completed(
+                stream,
+                state,
+                expected,
+                received,
+                || {},
+                |result, _, _| match result {
+                    Ok(value) => RetainedOwnerStatus::recovered(value, None, None),
+                    Err(error) => RetainedOwnerStatus::recovery_failed(error),
+                },
+            )
+            .await
+    }
+
+    /// Recover and explicitly reconcile owner enrollment within one physical permit.
+    /// Later local failures retain the original remote observation and purge facts.
+    pub async fn status_owner_phone(
+        &self,
+        stream: TcpStream,
+        expected: Arc<OwnerPhonePreparation>,
+        received: Option<DisclosedConsent>,
+    ) -> Result<RetainedOwnerStatus, NativeClientError> {
+        let state = self.original.clone().ok_or(NativeClientError::NoPending)?;
+        let begin = self.store.clone();
+        let finish = self.store.clone();
+        self.client
+            .owner_recovery_completed(
+                stream,
+                state,
+                expected,
+                received,
+                move || begin.begin_status(),
+                move |result, ending, state| match result {
+                    Err(error) => RetainedOwnerStatus::recovery_failed(error),
+                    Ok(value) => {
+                        let settlement = owner_recovery::settle(&value, state, ending);
+                        let purge = finish.finish_status().map(|result| {
+                            result
+                                .map(RetainedPurge)
+                                .map_err(|error| cache_failure(&error))
+                        });
+                        RetainedOwnerStatus::recovered(value, Some(settlement), purge)
+                    }
+                },
+            )
+            .await
     }
 
     /// Enroll with the caller's socket, code and fallible entropy. The existing

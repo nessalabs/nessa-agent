@@ -43,7 +43,7 @@ use nessa_server::{
     device_pairing::{
         application::{
             ActivationError, Approval, CleanupError, PairingReceivers, PublicationGuard,
-            ReceiverError, ReceiverRequest,
+            ReceiverDispatch, ReceiverError, ReceiverRequest,
         },
         infrastructure::{
             ConversationReceivers, NativeConnectionFailure, NativeEnrollmentConnections,
@@ -105,7 +105,7 @@ impl PairingReceivers for Receivers {
         Ok(PublicationGuard::none())
     }
 
-    fn pair(&self, request: &ReceiverRequest) -> Result<ReceiverOutcome, ReceiverError> {
+    fn pair(&self, request: &ReceiverDispatch<'_>) -> Result<ReceiverOutcome, ReceiverError> {
         self.pairs.fetch_add(1, Ordering::SeqCst);
         let outcome = self.real.pair(request)?;
         if let Some((entered, released)) = self.park.lock().unwrap().take() {
@@ -158,7 +158,7 @@ impl PairingReceivers for Receivers {
     }
     fn fence(
         &self,
-        request: &ReceiverRequest,
+        request: &ReceiverDispatch<'_>,
         receiver: &ResourceId,
         paired_epoch: u64,
     ) -> Result<ReceiverOutcome, ReceiverError> {

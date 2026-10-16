@@ -9,6 +9,7 @@ const MAX_ATTEMPTS: u8 = 5;
 const DEVICE_READ_CLASS: &str = "gateway-conversation-read";
 const PEER_READ_CLASS: &str = "peer-gateway-conversation-read";
 const PEER_ENVIRONMENT_CLASS: &str = "peer-gateway-environment-serve";
+const OWNER_PHONE_CLASS: &str = "gateway-owner-conversation-read-write";
 /// Prefix of the principal id a peer gateway's credential names. The
 /// registry reserves it: a principal's id has it exactly when its kind is a
 /// gateway.
@@ -91,7 +92,7 @@ impl DeviceKey {
     }
 }
 
-/// Who an enrollment enrolls, and the one grant the credential it issues
+/// Who an enrollment enrolls, and the capabilities the credential it issues
 /// holds.
 ///
 /// Every class uses the same enrollment and listener. A device's credential
@@ -113,16 +114,24 @@ pub enum ConsentClass {
     /// principal as [`Self::PeerRead`] for the same key, holding
     /// `environment.serve` and no read.
     PeerEnvironment,
+    /// Explicit first-party phone authorization, admitted by signed key proof.
+    OwnerPhoneReadWrite,
 }
 impl ConsentClass {
     /// Every class, in no particular order.
-    pub const ALL: [Self; 3] = [Self::DeviceRead, Self::PeerRead, Self::PeerEnvironment];
+    pub const ALL: [Self; 4] = [
+        Self::DeviceRead,
+        Self::PeerRead,
+        Self::PeerEnvironment,
+        Self::OwnerPhoneReadWrite,
+    ];
     /// The public class name, as the wire and the PAKE transcript carry it.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::DeviceRead => DEVICE_READ_CLASS,
             Self::PeerRead => PEER_READ_CLASS,
             Self::PeerEnvironment => PEER_ENVIRONMENT_CLASS,
+            Self::OwnerPhoneReadWrite => OWNER_PHONE_CLASS,
         }
     }
     /// The class a public name denotes; `None` for any other text.
@@ -133,7 +142,7 @@ impl ConsentClass {
     /// principal of its key rather than the owner.
     pub fn is_peer(self) -> bool {
         match self {
-            Self::DeviceRead => false,
+            Self::DeviceRead | Self::OwnerPhoneReadWrite => false,
             Self::PeerRead | Self::PeerEnvironment => true,
         }
     }
@@ -150,11 +159,11 @@ impl ConsentClass {
             true => peer_principal(key),
         }
     }
-    /// The action of the one grant a credential issued under this class
+    /// The primary action of a credential issued under this class
     /// holds. This is the one place that decides it.
     pub fn grant_action(self) -> &'static str {
         match self {
-            Self::DeviceRead | Self::PeerRead => CONVERSATION_READ,
+            Self::DeviceRead | Self::PeerRead | Self::OwnerPhoneReadWrite => CONVERSATION_READ,
             Self::PeerEnvironment => ENVIRONMENT_SERVE,
         }
     }
@@ -165,7 +174,7 @@ impl ConsentClass {
     /// decides alone.
     pub fn delegates_owner_grant(self) -> bool {
         match self {
-            Self::DeviceRead | Self::PeerRead => true,
+            Self::DeviceRead | Self::PeerRead | Self::OwnerPhoneReadWrite => true,
             Self::PeerEnvironment => false,
         }
     }
@@ -175,6 +184,24 @@ impl ConsentClass {
             Action::new(self.grant_action()).map_err(|_| PairingError::Invalid)?,
             resource,
         ))
+    }
+    /// Complete canonical ordered capabilities. Owner-phone method/resource
+    /// admission remains separate from these coarse Cedar actions.
+    pub fn grants(self, resource: Resource) -> Result<Vec<Grant>, PairingError> {
+        let mut grants = vec![self.grant(resource.clone())?];
+        if self == Self::OwnerPhoneReadWrite {
+            for action in ["conversation.write", "server.read"] {
+                grants.push(Grant::new(
+                    Action::new(action).map_err(|_| PairingError::Invalid)?,
+                    resource.clone(),
+                ));
+            }
+        }
+        Ok(grants)
+    }
+    /// Whether a class can be created through the existing manual PAKE flow.
+    pub fn uses_pake(self) -> bool {
+        self != Self::OwnerPhoneReadWrite
     }
 }
 
@@ -207,6 +234,7 @@ pub struct ConsentIntent {
     owner: PrincipalId,
     membership: MembershipId,
     grant: Grant,
+    additional_grants: Vec<Grant>,
     class: ConsentClass,
 }
 impl ConsentIntent {
@@ -216,7 +244,7 @@ impl ConsentIntent {
     }
 
     /// Build a consent of `class` for an authoritative gateway resource,
-    /// asking for that class's one grant.
+    /// asking for that class's complete canonical capabilities.
     /// Generation zero is invalid; policy evaluation remains with Cedar.
     pub fn new(
         id: ConsentIntentId,
@@ -230,7 +258,8 @@ impl ConsentIntent {
         if generation == 0 {
             return Err(PairingError::Invalid);
         }
-        let grant = class.grant(resource)?;
+        let mut grants = class.grants(resource)?;
+        let grant = grants.remove(0);
         Ok(Self {
             id,
             generation,
@@ -238,6 +267,7 @@ impl ConsentIntent {
             owner,
             membership,
             grant,
+            additional_grants: grants,
             class,
         })
     }
@@ -282,9 +312,13 @@ impl ConsentIntent {
             && gateway == self.resource()
             && gateway.id().as_str() == self.audience().as_str()
     }
-    /// The canonical exact grant this consent's class asks for.
+    /// The primary canonical grant; authority must evaluate the complete `grants` set.
     pub fn grant(&self) -> &Grant {
         &self.grant
+    }
+    /// Full immutable capability set evaluated and issued together.
+    pub fn grants(&self) -> impl Iterator<Item = &Grant> {
+        std::iter::once(&self.grant).chain(self.additional_grants.iter())
     }
 }
 

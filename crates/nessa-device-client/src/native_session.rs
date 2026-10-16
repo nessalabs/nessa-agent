@@ -1,11 +1,16 @@
 //! Synchronous generated session bindings. UI composition owns worker dispatch
 //! and bounded pre-queue admission; this adapter owns no second authority rule.
+use crate::native_owner_phone::{
+    reservation, NativeOwnerPhonePreparation, NativeOwnerPreparationCallError,
+};
+use crate::native_product::NativeProductSession;
 use crate::{
-    failures::{NativeCallError, NativeEnrollmentFailure, NativeReadFailure},
+    failures::{NativeCallError, NativeEnrollmentFailure, NativeReadFailure, NativeSessionFailure},
+    native_owner_recovery::NativeOwnerStatus,
     saved::{NativeScope, NativeTranscript},
     session::{
-        LocalEnrollment, LocalIssuedEnrollment, NativeSession, SessionFailure, SessionFollow,
-        SessionRead, SessionRefresh,
+        LocalEnrollment, LocalIssuedEnrollment, NativeSession, SessionCloseObservation,
+        SessionFailure, SessionFollow, SessionRead, SessionRefresh, SessionStatus,
     },
 };
 use nessa_auth::{
@@ -14,10 +19,7 @@ use nessa_auth::{
 };
 use nessa_client_core::{
     pairing::{NativeClientError, NativeRetryOutcome},
-    retained::{
-        ReadStop, RetainedCatalogueEntry, RetainedCataloguePage, RetainedEnrollmentStatus,
-        RetainedPurge,
-    },
+    retained::{ReadStop, RetainedCatalogueEntry, RetainedCataloguePage, RetainedPurge},
 };
 use nessa_protocol::{
     conversation::domain::ConversationId,
@@ -139,7 +141,7 @@ pub enum NativeAttemptState {
 /// as completed pinned status. Caller mutation cannot supply Active to the driver.
 #[derive(uniffi::Object)]
 pub struct NativeEnrollmentReceipt {
-    value: NativePairingStatus,
+    pub(crate) value: NativePairingStatus,
 }
 #[uniffi::export]
 impl NativeEnrollmentReceipt {
@@ -249,6 +251,8 @@ pub enum NativeConsentClass {
     PeerRead,
     /// A peer environment-serving identity.
     PeerEnvironment,
+    /// Explicit first-party owner phone consent.
+    OwnerPhoneReadWrite,
 }
 impl From<ConsentClass> for NativeConsentClass {
     fn from(value: ConsentClass) -> Self {
@@ -256,13 +260,14 @@ impl From<ConsentClass> for NativeConsentClass {
             ConsentClass::DeviceRead => Self::DeviceRead,
             ConsentClass::PeerRead => Self::PeerRead,
             ConsentClass::PeerEnvironment => Self::PeerEnvironment,
+            ConsentClass::OwnerPhoneReadWrite => Self::OwnerPhoneReadWrite,
         }
     }
 }
 /// Immutable public correlation from the original native receipt, not private state.
 #[derive(uniffi::Object)]
 pub struct NativePublicIntent {
-    value: PublicIntent,
+    pub(crate) value: PublicIntent,
 }
 #[uniffi::export]
 impl NativePublicIntent {
@@ -319,7 +324,7 @@ impl NativeRetry {
 /// Original durable receiver purge; historical lookup does not repeat deletion.
 #[derive(uniffi::Object)]
 pub struct NativePurge {
-    value: RetainedPurge,
+    pub(crate) value: RetainedPurge,
 }
 #[uniffi::export]
 impl NativePurge {
@@ -345,71 +350,66 @@ impl NativePurge {
     }
 }
 /// Immutable compound pinned status, preserving outer completion uncertainty.
-#[derive(uniffi::Object)]
+#[derive(Debug, uniffi::Object)]
 pub struct NativeStatus {
-    value: Result<RetainedEnrollmentStatus, NativeClientError>,
+    pub(crate) value: SessionStatus,
 }
 #[uniffi::export]
 impl NativeStatus {
     /// Whether an admitted physical completion captured its purge effect.
     pub fn completion_captured(&self) -> bool {
-        self.value.is_ok()
+        self.value.completion_captured()
     }
     /// Original successful pinned receipt; failed private removal does not invent one.
     pub fn receipt(&self) -> Option<Arc<NativeEnrollmentReceipt>> {
-        self.value
-            .as_ref()
-            .ok()?
-            .enrollment()
-            .as_ref()
-            .ok()
-            .map(|value| {
-                Arc::new(NativeEnrollmentReceipt {
-                    value: value.clone(),
-                })
+        self.value.observation().map(|value| {
+            Arc::new(NativeEnrollmentReceipt {
+                value: value.clone(),
             })
+        })
     }
+
     /// Original outer or completed enrollment failure, without discarding purge.
     pub fn failure(&self) -> Option<Arc<NativeEnrollmentFailure>> {
+        use nessa_client_core::pairing::OwnerPhoneRecoveryFailure;
         let value = match &self.value {
-            Err(value) => Some(*value),
-            Ok(value) => value.enrollment().as_ref().err().copied(),
+            SessionStatus::ReadOnly(Err(value)) => Some(*value),
+            SessionStatus::ReadOnly(Ok(value)) => value.enrollment().as_ref().err().copied(),
+            SessionStatus::Owner(Err(OwnerPhoneRecoveryFailure::Native(value))) => Some(*value),
+            SessionStatus::Owner(Ok(value)) => match value.recovery() {
+                Err(OwnerPhoneRecoveryFailure::Native(value)) => Some(*value),
+                _ => None,
+            },
+            _ => None,
         };
         value.map(|value| Arc::new(NativeEnrollmentFailure { value }))
+    }
+    /// Complete owner-specific observations and original independent local failures.
+    /// Read-only scopes have no owner aggregate; ordinary failure() cannot flatten it.
+    pub fn owner(&self) -> Option<Arc<NativeOwnerStatus>> {
+        match &self.value {
+            SessionStatus::Owner(value) => Some(Arc::new(NativeOwnerStatus {
+                value: value.clone(),
+            })),
+            SessionStatus::ReadOnly(_) => None,
+        }
     }
     /// Whether this captured physical completion attempted a purge. False with
     /// no captured completion does not establish no physical cleanup.
     pub fn purge_attempted(&self) -> bool {
-        self.value
-            .as_ref()
-            .ok()
-            .and_then(|value| value.purge())
-            .is_some()
+        self.value.purge().is_some()
     }
     /// Original successful purge, independent of enrollment-removal acknowledgement.
     pub fn purge(&self) -> Option<Arc<NativePurge>> {
-        self.value
-            .as_ref()
-            .ok()?
-            .purge()?
-            .as_ref()
-            .ok()
-            .map(|value| {
-                Arc::new(NativePurge {
-                    value: value.clone(),
-                })
+        self.value.purge()?.as_ref().ok().map(|value| {
+            Arc::new(NativePurge {
+                value: value.clone(),
             })
+        })
     }
     /// Original purge refusal that kept the private enrollment record.
     pub fn purge_failure(&self) -> Option<NativeReadFailure> {
-        self.value
-            .as_ref()
-            .ok()?
-            .purge()?
-            .as_ref()
-            .err()
-            .copied()
-            .map(Into::into)
+        self.value.purge()?.as_ref().err().copied().map(Into::into)
     }
 }
 /// One immutable retained read outcome, including withdrawals on failure.
@@ -747,6 +747,27 @@ impl NativeLocalEnrollment {
     }
 }
 
+/// Immutable confirmation from the actual native cleanup owner.
+#[derive(uniffi::Object)]
+pub struct NativeCloseObservation {
+    value: SessionCloseObservation,
+}
+#[uniffi::export]
+impl NativeCloseObservation {
+    /// Physical private-scope release, independent of a retained typed failure.
+    pub fn released(&self) -> bool {
+        self.value.released()
+    }
+    /// Original cleanup outcome; historical Product failure can coexist with release.
+    pub fn failure(&self) -> Option<Arc<NativeSessionFailure>> {
+        self.value
+            .outcome()
+            .as_ref()
+            .err()
+            .cloned()
+            .map(|value| Arc::new(NativeSessionFailure { value }))
+    }
+}
 /// The generated native session handle. Blocking calls run on the caller's
 /// dedicated worker; close must drain there before releasing/replacing scope.
 #[derive(uniffi::Object)]
@@ -871,6 +892,60 @@ impl NativeDeviceSession {
             .purge_receipt(&receiver)
             .map(|value| value.map(|value| Arc::new(NativePurge { value })))
             .map_err(Into::into)
+    }
+    /// Install the original saved-key product child before its worker can dial.
+    /// Returned Ready/settlement/event waits run off-UI on independent waiters.
+    pub fn open_product(
+        &self,
+        instance: String,
+    ) -> Result<Arc<NativeProductSession>, NativeCallError> {
+        self.value
+            .open_product(instance)
+            .map(|value| Arc::new(NativeProductSession { value }))
+            .map_err(Into::into)
+    }
+    /// Initial preparation only for a newly allocated application reservation.
+    /// Captures the exact original and durable key without network or issuance.
+    pub fn prepare_owner_original(
+        &self,
+        request_id: Vec<u8>,
+        discovery_json: String,
+    ) -> Result<Arc<NativeOwnerPhonePreparation>, NativeOwnerPreparationCallError> {
+        let reservation = reservation(request_id, discovery_json)?;
+        self.value
+            .prepare_owner_original(reservation)
+            .map(|value| Arc::new(NativeOwnerPhonePreparation { value }))
+            .map_err(Into::into)
+    }
+    /// Existing reservations restore only; missing history never creates another key.
+    pub fn restore_owner_original(
+        &self,
+        request_id: Vec<u8>,
+        discovery_json: String,
+    ) -> Result<Arc<NativeOwnerPhonePreparation>, NativeOwnerPreparationCallError> {
+        let reservation = reservation(request_id, discovery_json)?;
+        self.value
+            .restore_owner_original(&reservation)
+            .map(|value| Arc::new(NativeOwnerPhonePreparation { value }))
+            .map_err(Into::into)
+    }
+    /// Read the exact prepared original over pinned TLS without adoption or cache effects.
+    /// Blocking work belongs off UI; canceling an observer does not release physical ownership.
+    pub fn recover_owner_original(
+        &self,
+        expected: Arc<NativeOwnerPhonePreparation>,
+    ) -> Result<Arc<NativeOwnerStatus>, NativeCallError> {
+        self.value
+            .recover_owner_original(Arc::new(expected.value.clone()))
+            .map(|value| Arc::new(NativeOwnerStatus { value }))
+            .map_err(Into::into)
+    }
+    /// Await actual cleanup and retain its separate physical release observation.
+    /// This synchronous method belongs on the same cancellation-independent worker.
+    pub fn close_observed(&self) -> Arc<NativeCloseObservation> {
+        Arc::new(NativeCloseObservation {
+            value: self.value.close_observed(),
+        })
     }
     /// Signal closure before queueing drain; stop current core sockets.
     pub fn request_close(&self) -> Result<(), NativeCallError> {

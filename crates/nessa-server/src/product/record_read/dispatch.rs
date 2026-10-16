@@ -81,6 +81,9 @@ pub(crate) async fn dispatch(
         .ok_or(RecordReadErrorCode::TemporarilyUnavailable)?;
     let use_case = ReadRecords {
         admission: AdmitPassiveRead {
+            owner_phone_purposes: state.owner_phone_purpose.as_ref(),
+            owner_phone_receivers: state.owner_phone_receivers.as_deref(),
+            owner_phone_policy: state.owner_phone_policy.clone(),
             authorization: AuthorizeAction {
                 access: state.access.as_ref(),
                 clock: state.clock.as_ref(),
@@ -91,7 +94,7 @@ pub(crate) async fn dispatch(
             conversations: repository.as_ref(),
             grants: &PUBLISHED_PASSIVE_READ_GRANTS,
             share_grants: share_grants.as_ref(),
-            access_policy: access_policy.as_ref(),
+            access_policy: access_policy.clone(),
         },
         source: source.as_ref(),
     };

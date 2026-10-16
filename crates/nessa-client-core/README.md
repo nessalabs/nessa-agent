@@ -9,6 +9,7 @@ gateway process tests enable `cli` to drive that entry point.
 ```text
 example -> composition -> pairing + read_only_sync -> nessa-protocol
 native library ---------> pairing + retained ------> shared drivers/cache/fold
+product child ----------> shared protected channel -> nessa-protocol
 nessa-server ------------> pairing + retained (no cli)
 nessa-server tests -------> public client entry point (cli)
 ```
@@ -20,7 +21,22 @@ gate also rejects desktop frameworks. Domain/application imports are checked by
 `node scripts/check-architecture.mjs`; application code consumes pure protocol
 outcome values through `product_contract`, not transport DTOs through `product`.
 
-The public API is `pairing::{NativeEnrollmentClient, NativeClientError,
+The independent `product::{ProductSession, ProductTicket, ProductSettlement}` API
+owns one bounded physical protected pump. `prepare` captures original private
+identity inputs with no I/O, permitting parent registration before `start`.
+Opening reuses the retained session's canonical pinned OpenProduct handshake,
+with Panel metadata and actual Ready methods. Its injected connector supplies a
+separate interrupt; `request_close` fences/wakes without the sole reader's lock,
+and `close` joins it. Request permits cover queued/in-flight/settled tickets until
+physical settlement and final ticket/settlement-observer release. Completions keep
+correlated gateway success/error separately from not-dispatched or uncertain
+physical failures. A failed injected wake requests stop; ticket observation then
+waits on private synchronization for the physical owner's original settlement,
+without inventing dispatch evidence or declaring drain. Decrypted partial product frames have a total deadline; idle
+TLS control bytes do not. This transport does not grant OwnerPhone permission or
+change retained-cache authority.
+
+The public enrollment/retained API is `pairing::{NativeEnrollmentClient, NativeClientError,
 NativeRetryOutcome}`, `retained::{RetainedCache, ReaderAccess, ReaderRole, ReadStop,
 ReadReport, ReadFailure, ConversationFeed, FeedEvent, SubscribeError}` and its typed saved catalogue/transcript/progress values,
 `outbox::{PhoneOutbox, PhoneIntent, PhoneOutcome, IntentStore, IntentEvent, StoreError, open}`,
@@ -52,6 +68,9 @@ borrowed accessors; its compile-fail example checks that the view cannot be muta
 
 | Path | Responsibility |
 | --- | --- |
+| `src/product.rs`, `src/product/` | Bounded native product pump, injected socket/interrupt/wake ports, actual ready and original ticket/settlement handles. No bootstrap proxy, retry or second method-schema owner. |
+| `src/protected.rs`, `src/protected/deadline_stream.rs` | Shared incremental frame/TLS transport and first typed physical failure; distinct terminal retained deadlines and finite product poll ticks. |
+| `src/pairing/owner_phone.rs` | Nonnetwork original preparation/restoration through Auth private-store/crypto owners; separate initial and restore APIs, no replacement key for missing/incomplete originals. No remote approval or issuance. |
 | `src/outbox/domain/` | One typed phone send, its canonical bytes, and the outcome a gateway answer becomes. No store and no socket. |
 | `src/outbox/application/` | Save the send, ask `conversation.send`, and read `conversation.receipt` before any later send. The store and the gateway are ports. |
 | `src/outbox/infrastructure/` | One private SQLite file for the command and its audit row, and the product frames for those two calls. |
@@ -66,9 +85,12 @@ borrowed accessors; its compile-fail example checks that the view cannot be muta
 | `src/read_only_sync/entrypoint/` | Argument contract and JSON output over supplied handles. |
 | `src/composition/` | Private profile, device/status admission, protected session and cache construction, independent wall/monotonic adapters and the retry pause, `fetch` (an existing output answered before dialling, then one held file into its part), immutable command diagnostic facade, and executable input/output. |
 | `examples/read_only_sync.rs` | Standalone executable using `composition::run_read_only_example`. |
+| `tests/protected/` | Shared physical deadline/first-cause and cancellation evidence for the protected byte stream. |
+| `tests/product/` | Real pinned TLS opening, idle/partial traffic, original request IDs, permit retention, typed deadlines/failures and independent physical drain. |
 | `tests/outbox/` | Phone outbox ordering, canonical bytes, and product-frame evidence, included by the library with `#[path]`. |
 | `tests/read_only_sync/` | Matching domain, application, gateway and private-cache boundary evidence, included by the library with `#[path]`. |
 | `tests/composition/` | Private profile, code-input, command diagnostic, and composed `fetch` (scripted native peer, real files) evidence. Real authenticated online process tests remain in `nessa-server/tests/composition/read_only_online.rs`. |
+| `tests/pairing/owner_phone.rs` | Real private-key publication, exact signed original/digest replay, cold corruption, reserved/missing refusal, before-entropy ordering and concurrent first reservations. |
 | `tests/pairing/completion.rs` | Physical admission through effect capture, rejected Busy admission, caller/shutdown cancellation and last-handle-drop ownership. |
 
 The deterministic five-mode saved-output race is
