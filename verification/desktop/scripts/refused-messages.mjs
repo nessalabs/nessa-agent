@@ -117,6 +117,10 @@ await main(
           await notice.waitFor({ state: "detached" })
           if ((await sent()) !== "first")
             failures.push(`Send Again sent ${JSON.stringify(await sent())}`)
+          const images = await page.evaluate(() => window.__refused.images.at(-1))
+          // The fixture stores the image under this digest.
+          if (JSON.stringify(images) !== JSON.stringify([`sha256:${"ab".repeat(32)}`]))
+            failures.push(`Send Again sent images ${JSON.stringify(images)}, not the one`)
         } catch (error) {
           failures.push(error instanceof Error ? error.message : String(error))
         } finally {

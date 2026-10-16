@@ -22,7 +22,13 @@ import "../../../../src/styles.css"
 
 const withImage = new URLSearchParams(location.search).get("case") === "image"
 const effects = scenarioEffects("echo")
-const state = { armed: !withImage, refusals: 2, submitted: [] as string[] }
+const state = {
+  armed: !withImage,
+  refusals: 2,
+  submitted: [] as string[],
+  // Images sent with each submission, by digest.
+  images: [] as string[][],
+}
 let release = () => {}
 const typed = new Promise<void>((resolve) => {
   release = resolve
@@ -41,6 +47,7 @@ const store = makeStore(
       },
       submit: async (input: Parameters<typeof effects.submit>[0]) => {
         state.submitted.push(input.text)
+        state.images.push(input.attachments.map((image) => image.digest))
         return effects.submit(input)
       },
     },
