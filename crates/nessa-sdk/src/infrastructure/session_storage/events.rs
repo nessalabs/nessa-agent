@@ -257,7 +257,7 @@ impl State {
                     continue;
                 }
                 let event = match change {
-                    Some(change) => CommittedEvent::change(cursor, change),
+                    Some(change) => CommittedEvent::boxed_change(cursor, change),
                     None => CommittedEvent::gap(cursor),
                 };
                 self.pending.push_back((event, bytes));
@@ -271,6 +271,17 @@ impl State {
                 }
             }
         }
+        // Finish fallible source I/O before removing pending delivery. A failed
+        // metadata recheck leaves both payload and delivery cursor retryable.
+        let checked = self.check(runtime, stream).await.map(|_| ());
+        self.publish(limits, checked)
+    }
+    fn publish(
+        &mut self,
+        limits: EventReadLimits,
+        checked: Result<(), EventReadError>,
+    ) -> Result<EventRead, EventReadError> {
+        checked?;
         let mut events = Vec::new();
         let mut bytes = 0usize;
         while events.len() < limits.max_events() {
@@ -288,14 +299,12 @@ impl State {
             self.cursor = event.cursor().clone();
             events.push(event);
         }
-        // Recheck publication identity after decoding and before caller output.
-        self.check(runtime, stream).await?;
         if !events.is_empty() {
             return Ok(EventRead::Page(CommittedEventPage::new(
                 events,
                 self.cursor.clone(),
                 self.boundary(self.certified),
-            )));
+            )?));
         }
         if self.emitter.downloaded() >= self.certified {
             if self.resume.is_some() {
@@ -570,17 +579,20 @@ mod tests {
             drop(guard);
             weak
         };
-        tokio::time::timeout(std::time::Duration::from_secs(5), async {
-            while weak.upgrade().is_some() {
-                tokio::task::yield_now().await;
+        // Arc's strong count reaches zero before State's fields finish dropping.
+        // Admission, rather than a weak-reference observation, owns slot release.
+        let reopened = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                match storage.events(session.clone(), EventStart::Beginning).await {
+                    Ok(reader) => break reader,
+                    Err(EventReadError::Capacity) => tokio::task::yield_now().await,
+                    Err(error) => panic!("reopening after read cancellation: {error:?}"),
+                }
             }
         })
         .await
         .unwrap();
-        let reopened = storage
-            .events(session.clone(), EventStart::Beginning)
-            .await
-            .unwrap();
+        assert!(weak.upgrade().is_none());
         drop(reopened);
         drop(siblings);
         drop(lease);
@@ -589,5 +601,57 @@ mod tests {
             storage.events(session, EventStart::Beginning).await,
             Err(EventReadError::Closed)
         ));
+    }
+    #[tokio::test]
+    async fn failed_final_metadata_check_preserves_pending_payload_and_delivery_cursor() {
+        let directory = tempfile::tempdir().unwrap();
+        let storage = RecordStorage::new(directory.path().join("records")).unwrap();
+        let session = SessionId::new("retry-publication").unwrap();
+        let _lease = storage.open(session.clone()).await.unwrap();
+        let runtime = storage.runtime().await.unwrap();
+        let stream = runtime
+            .find_stream(&StreamId::new(session.as_str()).unwrap())
+            .await
+            .unwrap()
+            .unwrap();
+        let payload = snapshot::encode_semantic_batch(&[opening(&session)]).unwrap();
+        for frame in save_frames(&stream, 0, 0, &[payload]) {
+            runtime.append(&stream, frame).await.unwrap();
+        }
+        let mut reader = storage
+            .open_event_reader(session, EventStart::Beginning)
+            .await
+            .unwrap();
+        // The byte refusal retains real decoded/validated source output, rather
+        // than fabricating a pending event unrelated to its publication head.
+        loop {
+            match reader.read(EventReadLimits::new(1, 1).unwrap()).await {
+                Ok(EventRead::Preparing) => {}
+                Err(EventReadError::ItemTooLarge) => break,
+                other => panic!("expected retained source event: {other:?}"),
+            }
+        }
+        let mut state = reader.state.lock().unwrap();
+        let before = state.cursor.clone();
+        assert_eq!(state.pending.len(), 1);
+        let failure = EventReadError::Storage(StorageError::Unresolved);
+        assert!(
+            matches!(state.publish(EventReadLimits::new(1, 1024 * 1024).unwrap(), Err(failure.clone())), Err(error) if error == failure)
+        );
+        assert_eq!(state.cursor, before);
+        assert_eq!(state.pending.len(), 1);
+        let EventRead::Page(page) = state
+            .publish(EventReadLimits::new(1, 1024 * 1024).unwrap(), Ok(()))
+            .unwrap()
+        else {
+            panic!("a successful recheck must publish the original pending event")
+        };
+        assert_eq!(page.events().len(), 1);
+        assert!(matches!(
+            page.events()[0].data(),
+            CommittedEventData::Change(SessionChange::Opened { .. })
+        ));
+        assert_eq!(&state.cursor, page.next());
+        assert!(state.pending.is_empty());
     }
 }

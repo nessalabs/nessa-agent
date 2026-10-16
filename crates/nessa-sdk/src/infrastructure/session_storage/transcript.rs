@@ -118,7 +118,7 @@ pub(super) enum FoldEvent {
     Change {
         position: u64,
         index: u64,
-        change: SessionChange,
+        change: Box<SessionChange>,
         bytes: usize,
     },
     Gap {
@@ -632,7 +632,7 @@ impl TranscriptFold {
                 self.events.push(FoldEvent::Change {
                     position,
                     index,
-                    change,
+                    change: Box::new(change),
                     bytes,
                 });
             }

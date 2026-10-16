@@ -71,6 +71,8 @@ queue. Slow readers replay history and do not block provider progress.
 | Reset after read / old resume | Typed IdentityChanged; same test |
 | Invalid index, occupied observer slots, drop, shutdown | Refusal and capacity release; `invalid_cursor_and_observer_capacity_are_typed_and_drop_releases_capacity` |
 | Cancel read, then drop handle while worker waits | Registration remains occupied until owned worker completes; `cancelled_read_and_dropped_handle_retain_registration_until_worker_finishes` |
+| Final metadata check fails after decoding | Pending payload and delivery cursor survive for retry; `failed_final_metadata_check_preserves_pending_payload_and_delivery_cursor` |
+| Custom page with mixed identities, wrong next/head, empty/oversized or unordered events | Constructor rejects before publication; `page_constructor_rejects_contradictory_adapter_output` and `page_constructor_accepts_ordered_correlated_changes` |
 | Snapshot adapter or malformed cursor token | Explicit unsupported/invalid outcomes; `unsupported_adapter_and_tokens_fail_without_provider_or_history_side_effects` |
 
 The observer API publishes saved evidence, not provider effect acknowledgements.
@@ -80,7 +82,9 @@ Those meanings remain with the existing session/agent lifecycle authority.
 
 Custom storage adapters can construct immutable `CommittedEvent` and
 `CommittedEventPage` values through their documented constructors. They own
-history validation, cursor correlation, nonempty ordered pages, captured
-publication evidence and requested budgets. DTO construction performs no source
-read or policy decision. These adapter obligations are part of the reader port;
+history validation, captured publication evidence and requested byte budgets.
+The fallible page constructor owns structural correlation: nonempty bounded
+event count, one session/incarnation, strictly ordered event locations, next equal
+to the last event, and an enclosing boundary head. DTO construction performs no
+source read or policy decision. These adapter obligations are part of the reader port;
 a host must still authorize the requested source before consuming it.

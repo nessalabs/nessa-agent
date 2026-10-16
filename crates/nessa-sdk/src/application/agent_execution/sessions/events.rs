@@ -31,6 +31,8 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use nessa_sync::replication::domain::Id;
 use std::{fmt, future::Future, pin::Pin};
 
+const MAX_PAGE_EVENTS: usize = 256;
+
 /// Stable location evidence within one actual storage incarnation.
 /// Construction does not validate that this location exists; reading a source
 /// validates it against retained history. Positions from different incarnations
@@ -161,9 +163,12 @@ impl CommittedEvent {
     /// the cursor's session, incarnation and original change index. This DTO
     /// constructor performs no source read, authorization or history validation.
     pub fn change(cursor: CommittedEventCursor, change: SessionChange) -> Self {
+        Self::boxed_change(cursor, Box::new(change))
+    }
+    pub(crate) fn boxed_change(cursor: CommittedEventCursor, change: Box<SessionChange>) -> Self {
         Self {
             cursor,
-            data: EventData::Change(Box::new(change)),
+            data: EventData::Change(change),
         }
     }
     /// Wrap an adapter-observed unreadable record without executing effects.
@@ -203,7 +208,11 @@ impl EventReadLimits {
     /// # Errors
     /// Returns InvalidCursor for zero or excessive page budgets.
     pub fn new(max_events: usize, max_bytes: usize) -> Result<Self, EventReadError> {
-        if max_events == 0 || max_events > 256 || max_bytes == 0 || max_bytes > 256 * 1024 * 1024 {
+        if max_events == 0
+            || max_events > MAX_PAGE_EVENTS
+            || max_bytes == 0
+            || max_bytes > 256 * 1024 * 1024
+        {
             return Err(EventReadError::InvalidCursor);
         }
         Ok(Self {
@@ -229,20 +238,61 @@ pub struct CommittedEventPage {
 }
 impl CommittedEventPage {
     /// Build immutable adapter output after completing its bounded source read.
-    /// The adapter must supply a nonempty page within the requested count/byte
-    /// budgets, with every event from the captured head's session/incarnation in
-    /// source order, at or before that head, and `next` equal to the final event
-    /// cursor. This DTO constructor does not validate source history or budgets.
+    /// This checks structural cursor correlation and ordering. The adapter owns
+    /// semantic history validation, actual captured publication evidence and the
+    /// caller's byte budget; construction performs no source read or policy check.
+    ///
+    /// # Errors
+    /// Returns InvalidCursor for an empty or over-256-event page, mixed session
+    /// or incarnation, an event cursor inconsistent with its data kind, duplicate
+    /// or unordered event locations, a next cursor other than the last event,
+    /// or a head that is not an enclosing outer-save boundary.
     pub fn new(
         events: Vec<CommittedEvent>,
         next: CommittedEventCursor,
         captured_head: CommittedEventCursor,
-    ) -> Self {
-        Self {
+    ) -> Result<Self, EventReadError> {
+        if events.is_empty()
+            || events.len() > MAX_PAGE_EVENTS
+            || captured_head.change_index().is_some()
+            || next.session() != captured_head.session()
+            || next.incarnation() != captured_head.incarnation()
+            || next.position() > captured_head.position()
+            || !events.last().is_some_and(|event| event.cursor() == &next)
+        {
+            return Err(EventReadError::InvalidCursor);
+        }
+        let mut previous = None;
+        for event in &events {
+            let cursor = event.cursor();
+            if cursor.session() != captured_head.session()
+                || cursor.incarnation() != captured_head.incarnation()
+            {
+                return Err(EventReadError::InvalidCursor);
+            }
+            let Some(index) = cursor.change_index() else {
+                return Err(EventReadError::InvalidCursor);
+            };
+            match event.data() {
+                CommittedEventData::Change(_) if index == 0 => {
+                    return Err(EventReadError::InvalidCursor)
+                }
+                CommittedEventData::Gap(_) if index != 0 => {
+                    return Err(EventReadError::InvalidCursor)
+                }
+                _ => {}
+            }
+            let location = (cursor.position(), index);
+            if previous.is_some_and(|prior| prior >= location) {
+                return Err(EventReadError::InvalidCursor);
+            }
+            previous = Some(location);
+        }
+        Ok(Self {
             events,
             next,
             captured_head,
-        }
+        })
     }
     /// Events in original decision order.
     pub fn events(&self) -> &[CommittedEvent] {
@@ -321,3 +371,7 @@ pub trait CommittedEventReader: Send {
     /// or ItemTooLarge without silently skipping the undelivered event.
     fn read(&mut self, limits: EventReadLimits) -> EventFuture<'_, EventRead>;
 }
+
+#[cfg(test)]
+#[path = "../../../../tests/application/agent_execution/sessions/events.rs"]
+mod tests;
