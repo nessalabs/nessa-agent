@@ -1,0 +1,235 @@
+// @vitest-environment jsdom
+import { act, createElement } from "react"
+import { createRoot, type Root } from "react-dom/client"
+import { Provider } from "react-redux"
+import { afterEach, beforeEach, expect, it, vi } from "vitest"
+import { createDependencies } from "../../composition/dependencies"
+import { makeStore } from "../../store"
+import { scenarioEffects } from "../adapters/scenario/effects"
+import {
+  attachFiles,
+  retryFailedTurn,
+  sendDraft,
+  setDraft,
+} from "../adapters/store/slice"
+import {
+  AttachmentResource,
+  textContent,
+  type Conversation,
+  type MessageContent,
+} from "../model"
+import { ConversationNotification } from "./conversation-notification"
+
+let root: Root
+let host: HTMLDivElement
+beforeEach(() => {
+  ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+  host = document.createElement("div")
+  document.body.append(host)
+  root = createRoot(host)
+})
+afterEach(async () => {
+  await act(async () => root.unmount())
+  host.remove()
+})
+
+type Store = ReturnType<typeof makeStore>
+
+/**
+ * Two messages refused, then the newer one sent again: the older is offered
+ * with an empty draft. The older was refused while the person was already
+ * typing the newer, so it was never put back in the draft.
+ */
+async function refuseTwiceRetryNewer(
+  first: (store: Store, id: string) => MessageContent,
+) {
+  const effects = scenarioEffects("echo")
+  let refusals = 2
+  let release = () => {}
+  const typed = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const create = vi.fn(async (...args: Parameters<typeof effects.create>) => {
+    await typed
+    if (refusals-- > 0) throw new Error("offline")
+    return effects.create(...args)
+  })
+  const submit = vi.fn(effects.submit)
+  const store = makeStore(
+    createDependencies({ conversation: { ...effects, create, submit } }),
+  )
+  const tab = () => {
+    const found = store.getState().conversation.conversations[0]
+    if (!found) throw new Error("missing conversation")
+    return found
+  }
+  const turn = (index: number) => {
+    const found = tab().turns[index]
+    if (!found) throw new Error(`missing turn ${index}`)
+    return found
+  }
+  const id = tab().id
+  const sending = store.dispatch(sendDraft({ id, content: first(store, id) }))
+  store.dispatch(setDraft({ id, draft: textContent("second") }))
+  release()
+  await sending
+  expect(tab().draft).toEqual(textContent("second"))
+  await store.dispatch(sendDraft({ id, content: textContent("second") }))
+  const older = turn(0)
+  const newer = turn(1)
+  await store.dispatch(
+    sendDraft({ id, content: textContent("second"), retryTurnId: newer.id }),
+  )
+  const olderNow = () => tab().turns.find((each) => each.id === older.id)
+  expect(tab().draft).toEqual([])
+  expect(olderNow()).toMatchObject({ receipt: "failed" })
+  return { store, submit, tab, older, olderNow }
+}
+
+/** The notice for `tab()` as rendered, and its Send Again button. */
+async function renderNotice(store: Store, tab: () => Conversation) {
+  await act(async () =>
+    root.render(
+      createElement(Provider, {
+        store,
+        children: createElement(ConversationNotification, {
+          conversation: tab(),
+          connection: { phase: "ready", detail: "", retry: () => {} },
+          gatewayAvailable: true,
+        }),
+      }),
+    ),
+  )
+  const sendAgain = [...host.querySelectorAll("button")].find(
+    (element) => element.textContent === "Send Again",
+  )
+  if (!sendAgain) throw new Error("missing Send Again")
+  return sendAgain
+}
+
+async function sendOlderAgain(first: (store: Store, id: string) => MessageContent) {
+  const refused = await refuseTwiceRetryNewer(first)
+  const sendAgain = await renderNotice(refused.store, refused.tab)
+  expect(sendAgain.disabled).toBe(false)
+  await act(async () => sendAgain.click())
+  await vi.waitFor(() =>
+    expect(refused.olderNow()).not.toMatchObject({ receipt: "failed" }),
+  )
+  return refused
+}
+
+// docs/state/services/desktop/chat/recover-a-refused-or-unconfirmed-send.md,
+// "Several refused messages", row 2: the older message is offered with an empty
+// draft, and Send Again still sends it.
+it("sends an older refused message as it was refused once a newer one was sent again", async () => {
+  const { submit } = await sendOlderAgain(() => textContent("first"))
+  expect(submit.mock.calls.at(-1)?.[0]).toMatchObject({ text: "first" })
+})
+
+// Row 8: a file that travels as a path has nothing to upload, so Send Again
+// does not wait for it.
+it("sends an older refused message that points at a file without waiting for an upload", async () => {
+  const { submit } = await sendOlderAgain((store, id) => {
+    store.dispatch(
+      attachFiles({
+        conversationId: id,
+        files: [
+          AttachmentResource.create({
+            name: "report.pdf",
+            mimeType: "application/pdf",
+            size: 3,
+            previewUrl: "blob:report",
+            path: "/Users/ada/report.pdf",
+          }),
+        ],
+      }),
+    )
+    return store.getState().conversation.conversations[0]?.draft ?? []
+  })
+  expect(submit.mock.calls.at(-1)?.[0]).toMatchObject({
+    files: [{ path: "/Users/ada/report.pdf" }],
+  })
+})
+
+// Row 9: other work in the draft is never sent as the older message.
+it("does not send work of the person's own in place of an older refused message", async () => {
+  const { store, submit, tab, older, olderNow } = await refuseTwiceRetryNewer(() =>
+    textContent("first"),
+  )
+  const work = textContent("new work")
+  store.dispatch(setDraft({ id: tab().id, draft: work }))
+  const sendAgain = await renderNotice(store, tab)
+  expect(sendAgain.disabled).toBe(true)
+  const calls = submit.mock.calls.length
+  await store.dispatch(retryFailedTurn({ id: tab().id, turnId: older.id }))
+  expect(submit.mock.calls).toHaveLength(calls)
+  expect(tab().draft).toEqual(work)
+  expect(olderNow()).toMatchObject({ receipt: "failed" })
+})
+
+// Row 10: a refused message whose draft the person emptied is not sent.
+it("does not send a refused message whose draft the person cleared", async () => {
+  const effects = scenarioEffects("echo")
+  const create = vi.fn(async () => {
+    throw new Error("offline")
+  })
+  const submit = vi.fn(effects.submit)
+  const store = makeStore(
+    createDependencies({ conversation: { ...effects, create, submit } }),
+  )
+  const tab = () => {
+    const found = store.getState().conversation.conversations[0]
+    if (!found) throw new Error("missing conversation")
+    return found
+  }
+  const id = tab().id
+  await store.dispatch(sendDraft({ id, content: textContent("first") }))
+  const refused = tab().turns[0]
+  if (!refused) throw new Error("missing turn")
+  expect(refused).toMatchObject({ receipt: "failed" })
+  expect(tab().draft).toEqual(textContent("first"))
+  store.dispatch(setDraft({ id, draft: [] }))
+  const sendAgain = await renderNotice(store, tab)
+  expect(sendAgain.disabled).toBe(true)
+  await store.dispatch(retryFailedTurn({ id, turnId: refused.id }))
+  expect(create).toHaveBeenCalledTimes(1)
+  expect(submit).not.toHaveBeenCalled()
+  expect(tab().draft).toEqual([])
+})
+
+// Row 13: a refused message put back in the draft, then let go for another
+// message that was sent, is never put back again.
+it("does not bring back a refused message the person replaced and sent past", async () => {
+  const effects = scenarioEffects("echo")
+  let refusals = 1
+  const create = vi.fn(async (...args: Parameters<typeof effects.create>) => {
+    if (refusals-- > 0) throw new Error("offline")
+    return effects.create(...args)
+  })
+  const submit = vi.fn(effects.submit)
+  const store = makeStore(
+    createDependencies({ conversation: { ...effects, create, submit } }),
+  )
+  const tab = () => {
+    const found = store.getState().conversation.conversations[0]
+    if (!found) throw new Error("missing conversation")
+    return found
+  }
+  const id = tab().id
+  await store.dispatch(sendDraft({ id, content: textContent("first") }))
+  const refused = tab().turns[0]
+  if (!refused) throw new Error("missing turn")
+  expect(tab().draft).toEqual(textContent("first"))
+  store.dispatch(setDraft({ id, draft: textContent("other") }))
+  await store.dispatch(sendDraft({ id, content: textContent("other") }))
+  expect(tab().draft).toEqual([])
+  expect(tab().turns.find((each) => each.id === refused.id)).toMatchObject({
+    receipt: "failed",
+  })
+  const sendAgain = await renderNotice(store, tab)
+  expect(sendAgain.disabled).toBe(true)
+  const calls = submit.mock.calls.length
+  await store.dispatch(retryFailedTurn({ id, turnId: refused.id }))
+  expect(submit.mock.calls).toHaveLength(calls)
+  expect(tab().draft).toEqual([])
+})

@@ -1,4 +1,4 @@
-import type { Conversation, ReadFailure } from "../model"
+import type { Conversation, ReadFailure, UserTurn } from "../model"
 
 export type ConversationNotice = {
   title: string
@@ -124,20 +124,12 @@ export function conversationNotice(
         "The gateway may have received your message. Retry checks the same submission; reconnecting does not resend it.",
       retry: { kind: "submission", executionId: unknown.executionId },
     }
-  const unsent = [...conversation.turns]
+  // The refusal that set the conversation's error is current and comes first.
+  const failed = [...conversation.turns]
     .reverse()
-    .find(
-      (turn) =>
-        turn.from === "user" &&
-        turn.receipt === "failed" &&
-        turn.error === conversation.error,
-    )
-  if (unsent)
-    return {
-      title: "Error sending",
-      description: conversation.error ?? "The message could not be sent.",
-      retry: { kind: "draft", turnId: unsent.id },
-    }
+    .filter((turn): turn is UserTurn => turn.from === "user" && turn.receipt === "failed")
+  const current = failed.find((turn) => turn.id === conversation.errorTurn)
+  if (current) return unsentNotice(current)
   const error = conversation.remote?.interactionViewError ?? conversation.error
   const startupFailure = conversation.remote?.lifecycle.failure
   if (startupFailure)
@@ -164,5 +156,16 @@ export function conversationNotice(
       description: error,
       retry: { kind: "refresh" },
     }
+  // A refused turn keeps its own error, so once nothing newer holds the slot (a
+  // retry of a newer turn cleared the error) an older one is still offered.
+  if (failed[0]) return unsentNotice(failed[0])
   return conversation.readError ? readNotice(conversation.readError) : null
+}
+
+function unsentNotice(turn: UserTurn): ConversationNotice {
+  return {
+    title: "Error sending",
+    description: turn.error ?? "The message could not be sent.",
+    retry: { kind: "draft", turnId: turn.id },
+  }
 }

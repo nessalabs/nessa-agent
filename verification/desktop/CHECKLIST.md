@@ -1816,6 +1816,16 @@ surfaces use.
 
 ## Compact send recovery (#914)
 
+`refused-messages.mjs` renders the panel's real refusal notice over a store
+holding two refused messages, the newer one sent again and taken. It checks
+that the older one is offered with Send Again enabled, and that pressing it
+sends the older message's own text and leaves no refusal behind. With
+`?case=image` the older message carries an image: Send Again puts it back, and
+the button stays held while the image waits, uploads, fails and waits again,
+and goes live only once it is stored. Both it and
+`send-failure.mjs` load a source fixture, so `run-all --mode prod` leaves them
+out as dev-server only.
+
 `send-failure.mjs` exercises the real conversation composer and overview reply
 pill at 360px and 1000px in Chromium and WebKit. The failure is above the composer,
 says **Error sending** with the actual code, keeps the full diagnostic off screen

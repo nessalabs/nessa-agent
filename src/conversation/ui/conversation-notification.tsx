@@ -6,8 +6,9 @@ import type { Conversation } from "../model"
 import {
   controlConversation,
   followConversation,
-  sendDraft,
+  retryFailedTurn,
   failedTurnDiscarded,
+  canSendAgain,
 } from "../adapters/store/slice"
 import { useConversationDispatch } from "../adapters/store/hooks"
 import { conversationNotice } from "./notification"
@@ -74,21 +75,13 @@ export function ConversationNotification({
           pending={
             !gatewayAvailable ||
             Boolean(conversation.controlPending) ||
-            conversation.draft.length === 0
+            !canSendAgain(conversation, turnId)
           }
-          onRetry={() =>
-            void dispatch(
-              sendDraft({
-                id: conversation.id,
-                content: conversation.draft,
-                retryTurnId: turnId,
-              }),
-            )
-          }
+          onRetry={() => void dispatch(retryFailedTurn({ id: conversation.id, turnId }))}
           onDiscard={() => dispatch(failedTurnDiscarded({ id: conversation.id, turnId }))}
         />
-        {conversation.failure === "agent-not-configured" &&
-        failed?.from === "user" &&
+        {failed?.from === "user" &&
+        failed.failure === "agent-not-configured" &&
         failed.diagnostic?.agent ? (
           <SelectedAgentSetup agent={failed.diagnostic.agent} recovery />
         ) : null}

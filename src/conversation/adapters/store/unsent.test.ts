@@ -14,6 +14,7 @@ import {
   submissionFailed,
   submissionAccepted,
   failedTurnDiscarded,
+  showError,
 } from "./slice"
 import { followByReading } from "../../testing"
 import {
@@ -383,6 +384,73 @@ it("discard removes only the refused bubble and preserves current draft work", a
   expect(store.getState().conversation.conversations[0]?.draft).toEqual(
     textContent("new work"),
   )
+})
+
+it.each([
+  // docs/state/services/desktop/chat/recover-a-refused-or-unconfirmed-send.md,
+  // "Several refused messages", rows 4 and 5, and row 7: a control failing in
+  // the refusal's own words is still the control's.
+  "Close failed",
+  "offline",
+])(
+  "a control that fails after a refusal keeps its notice (%s), and discarding the refusal does not clear it",
+  async (message) => {
+    const effects = scenarioEffects("echo")
+    const store = makeStore(
+      createDependencies({
+        conversation: {
+          ...effects,
+          create: async () => {
+            throw new Error("offline")
+          },
+        },
+      }),
+    )
+    await store.dispatch(sendDraft({ content: textContent("hello") }))
+    const first = store.getState().conversation.conversations[0]!
+    store.dispatch(showError({ id: first.id, message }))
+    const tab = () => store.getState().conversation.conversations[0]!
+    expect(conversationNotice(tab())).toMatchObject({
+      title: "Conversation needs attention",
+      description: message,
+    })
+    store.dispatch(failedTurnDiscarded({ id: first.id, turnId: first.turns[0]!.id }))
+    expect(tab().turns).toEqual([])
+    expect(conversationNotice(tab())).toMatchObject({
+      title: "Conversation needs attention",
+      description: message,
+    })
+  },
+)
+
+it("discarding the current refusal offers the older one with its own error", async () => {
+  // docs/state/services/desktop/chat/recover-a-refused-or-unconfirmed-send.md,
+  // "Several refused messages", row 6.
+  const effects = scenarioEffects("echo")
+  const errors = ["offline", "busy"]
+  const store = makeStore(
+    createDependencies({
+      conversation: {
+        ...effects,
+        create: async () => {
+          throw new Error(errors.shift() ?? "unexpected")
+        },
+      },
+    }),
+  )
+  await store.dispatch(sendDraft({ content: textContent("first") }))
+  const id = store.getState().conversation.conversations[0]!.id
+  await store.dispatch(sendDraft({ id, content: textContent("second") }))
+  const tab = () => store.getState().conversation.conversations[0]!
+  const [older, newer] = tab().turns
+  expect(conversationNotice(tab())?.retry).toEqual({ kind: "draft", turnId: newer!.id })
+  store.dispatch(failedTurnDiscarded({ id, turnId: newer!.id }))
+  expect(conversationNotice(tab())).toEqual({
+    title: "Error sending",
+    description: tab().error,
+    retry: { kind: "draft", turnId: older!.id },
+  })
+  expect(older).toMatchObject({ receipt: "failed", error: tab().error })
 })
 
 it("retains the default agent actually requested and the original diagnostic for setup and copying", async () => {

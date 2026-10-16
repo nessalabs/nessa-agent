@@ -75,8 +75,10 @@ export function beginSend(
     draft: [],
     phase: "thinking",
     pending: "",
+    draftTurn: undefined,
     error: undefined,
     failure: undefined,
+    errorTurn: undefined,
   })
 }
 
@@ -87,17 +89,77 @@ export function discardFailedTurn(
   turnId: string,
 ): LocalTabs {
   const conv = findConversation(tabs, conversationId)
-  if (!conv || !refusedTurn(conv, turnId)) return tabs
+  const discarded = conv && refusedTurn(conv, turnId)
+  if (!conv || !discarded) return tabs
   const turns = conv.turns.filter((turn) => turn.id !== turnId)
+  // The draft stays as work of its own, no longer this turn's message.
+  const draftTurn = conv.draftTurn === turnId ? undefined : conv.draftTurn
+  // A newer failure, such as a control that failed after this refusal, is not
+  // this turn's to clear.
+  if (conv.errorTurn !== discarded.id)
+    return replaceConversation(tabs, { ...conv, turns, draftTurn })
   const last = [...turns]
     .reverse()
     .find((turn) => turn.from === "user" && turn.receipt === "failed")
   return replaceConversation(tabs, {
     ...conv,
     turns,
+    draftTurn,
     error: last?.from === "user" ? last.error : undefined,
     failure: undefined,
+    errorTurn: last?.id,
   })
+}
+
+/**
+ * Puts a refused message back in an empty draft, the way a refusal does when it
+ * happens. An older refusal offered after a newer one was sent again has no
+ * draft of its own, and Send Again only ever sends the draft, which is where
+ * attachments are owned. Stored files go back as not started, because nothing
+ * here says the gateway still holds them; the panel uploads them again.
+ */
+export function restoreFailedTurn(
+  tabs: LocalTabs,
+  conversationId: string,
+  turnId: string,
+): LocalTabs {
+  const conv = findConversation(tabs, conversationId)
+  const refused = conv && refusedTurn(conv, turnId)
+  if (!conv || !refused || conv.draft.length > 0 || !canSendAgain(conv, turnId))
+    return tabs
+  return replaceConversation(tabs, {
+    ...conv,
+    draft: notUploaded(refused.content),
+    draftReset: (conv.draftReset ?? 0) + 1,
+    draftTurn: turnId,
+    turns: conv.turns.map((turn) =>
+      turn === refused ? { ...refused, restored: true } : turn,
+    ),
+  })
+}
+
+/**
+ * Whether Send Again on this refused turn can send exactly that message. A
+ * draft holding something sends only when it is this turn's own and the send
+ * would take it: the same `declineReason` a send asks, so an image uploading
+ * again, a failed upload, or text a send would refuse holds it. An empty one takes the message back only when the message was
+ * never put back before (see `restored`) and is still whole: an image whose
+ * original was let go to bound previews survives only as a reference, which a
+ * draft cannot send, and the message without it is a different one.
+ */
+export function canSendAgain(conv: Conversation, turnId: string): boolean {
+  if (conv.draft.length > 0) {
+    return (
+      conv.draftTurn === turnId &&
+      declineReason(conv, { content: conv.draft, retryTurnId: turnId }, true) === null
+    )
+  }
+  const refused = refusedTurn(conv, turnId)
+  return (
+    !!refused &&
+    !refused.restored &&
+    refused.content.every((part) => part.type !== "image-reference")
+  )
 }
 
 /** Only a certainly refused local turn may be replaced by an explicit retry. */
@@ -382,7 +444,9 @@ export function failSend(
     ...(uncertain || otherWork ? conv : { ...conv, phase: "idle" as const }),
     error: detail,
     failure,
+    errorTurn: failedTurn.id,
     draft: recoveredDraft,
+    draftTurn: recoveredDraft === conv.draft ? conv.draftTurn : failedTurn.id,
     draftReset:
       recoveredDraft === conv.draft ? conv.draftReset : (conv.draftReset ?? 0) + 1,
     turns: conv.turns.map((turn) =>
@@ -394,6 +458,8 @@ export function failSend(
             receipt: uncertain ? "unknown" : "failed",
             error: detail,
             diagnostic,
+            failure,
+            ...(recoveredDraft === conv.draft ? {} : { restored: true }),
           }
         : turn,
     ),
