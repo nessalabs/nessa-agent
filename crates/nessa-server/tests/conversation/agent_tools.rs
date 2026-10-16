@@ -601,6 +601,30 @@ async fn agent_tools_relay_create_send_replay_and_refuse_a_foreign_target() {
     })
     .await
     .unwrap();
+    let before_null_stop = audit.records.lock().unwrap().len();
+    let before_null_cancel = provider.cancel_calls.load(Ordering::SeqCst);
+    let null_stop = client
+        .call(
+            "stop_thread",
+            json!({"threadId":worker,"executionId":null,"requestId":"null-stop"}),
+        )
+        .await;
+    assert_eq!(
+        null_stop["structuredContent"]["error"], "invalid_request",
+        "{null_stop}"
+    );
+    assert_eq!(audit.records.lock().unwrap().len(), before_null_stop);
+    assert_eq!(
+        provider.cancel_calls.load(Ordering::SeqCst),
+        before_null_cancel
+    );
+    assert_eq!(
+        service
+            .active_execution(worker_id.clone(), caller("null-stop-check"))
+            .await
+            .unwrap(),
+        Some(active_execution.clone())
+    );
     let steering = client.call("send_message",json!({"threadId":worker,"message":"adjust direction","mode":"steering","requestId":"worker-steer"})).await;
     assert_eq!(steering["isError"], false, "{steering}");
     let steering_execution = steering["structuredContent"]["executionId"]

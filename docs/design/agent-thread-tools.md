@@ -132,6 +132,7 @@ is not a claim that an external effect was rolled back.
 | Passive send and retry | RecordOnly note is saved once, changed text conflicts, and provider execution count stays unchanged; actual Relay test in `tests/conversation/agent_tools.rs`. |
 | Steering and queued mode change | SDK retains Steering intent and its non-native queue fallback; queued/steering changed mode conflicts in the command fingerprint; same Relay test. |
 | Default stop on a running worker | Real provider cancellation names the running execution once; explicit retry returns the original stop receipt; same Relay test. |
+| Omitted optional tool argument versus explicit null | Omission alone selects a default. One shared presence-aware Serde decoder rejects null for every published non-null optional scalar before source admission. The schema-driven argument matrix covers all four tools; the actual Relay null-stop case leaves the active execution, cancellation count and source audit unchanged. |
 | Tools before late attachment | Explicit unavailable; same adapter tests. |
 | Multiple built-ins/configured collision | Each server's own name/digest used; `tests/composition/mcp_servers.rs`. |
 | Cancellation/disconnect/revoked grant | Existing relay stops affected calls; `tests/mcp_servers/built_in.rs`. |
@@ -165,6 +166,14 @@ or a previously observed Idle. The shared application `EventProgress` owner,
 extracted from the API consumer, supplies that cross-read decision to both socket
 and tool adapters. The tool consumes it before projecting a Page or replacing its
 retained Idle checkpoint; no second comparison implementation is introduced.
+
+Ordinary Serde `Option<T>` parsing erased the distinction between omission and
+explicit null even though the published tool schemas allow only scalar values.
+The adapter now uses one `supplied` decoder for all optional scalar fields:
+Serde's default applies only when a field is absent, and a present field must
+deserialize as its declared `T`. This preserves the existing typed decoder and
+defaults without a second argument validator or field-specific null checks.
+The argument regression derives its cases from the published tool schemas.
 
 Implementation ownership: `composition/conversation_tools.rs` owns MCP parsing,
 serialization and bounded polling; `conversation/application/service/agent_tools.rs`

@@ -20,7 +20,7 @@ use nessa_sdk::domain::agent_execution::{
     executions::{Initiation, Initiator},
     sessions::SessionId,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
@@ -169,9 +169,13 @@ impl BuiltInServer for ConversationTools {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Create {
+    #[serde(default, deserialize_with = "supplied")]
     request_id: Option<String>,
+    #[serde(default, deserialize_with = "supplied")]
     agent: Option<String>,
+    #[serde(default, deserialize_with = "supplied")]
     model: Option<String>,
+    #[serde(default, deserialize_with = "supplied")]
     environment: Option<String>,
 }
 #[derive(Deserialize)]
@@ -181,6 +185,7 @@ struct Send {
     message: String,
     #[serde(default)]
     mode: SendMode,
+    #[serde(default, deserialize_with = "supplied")]
     request_id: Option<String>,
 }
 #[derive(Clone, Copy, Default, Deserialize)]
@@ -204,17 +209,31 @@ impl SendMode {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Stop {
     thread_id: String,
+    #[serde(default, deserialize_with = "supplied")]
     execution_id: Option<String>,
+    #[serde(default, deserialize_with = "supplied")]
     request_id: Option<String>,
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Follow {
     thread_id: String,
+    #[serde(default, deserialize_with = "supplied")]
     after: Option<String>,
+    #[serde(default, deserialize_with = "supplied")]
     replay: Option<bool>,
+    #[serde(default, deserialize_with = "supplied")]
     wait_ms: Option<u64>,
+    #[serde(default, deserialize_with = "supplied")]
     limit: Option<usize>,
+}
+/// Absence alone selects a default; a supplied value must have its declared type.
+fn supplied<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    T::deserialize(deserializer).map(Some)
 }
 fn parse<T: serde::de::DeserializeOwned>(arguments: Value) -> Result<T, String> {
     serde_json::from_value(arguments).map_err(|_| "invalid_request".into())
@@ -647,6 +666,63 @@ async fn observe(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::Map;
+
+    #[test]
+    fn published_tool_arguments_preserve_omission_and_reject_explicit_null() {
+        fn decode(tool: &str, arguments: Value) -> Result<(), String> {
+            match tool {
+                "create_thread" => parse::<Create>(arguments).map(|_| ()),
+                "send_message" => parse::<Send>(arguments).map(|_| ()),
+                "stop_thread" => parse::<Stop>(arguments).map(|_| ()),
+                "subscribe" => parse::<Follow>(arguments).map(|_| ()),
+                _ => panic!("uncovered published tool: {tool}"),
+            }
+        }
+        fn example(shape: &Value) -> Value {
+            if let Some(value) = shape["enum"].as_array().and_then(|values| values.first()) {
+                return value.clone();
+            }
+            match shape["type"].as_str() {
+                Some("string") => json!("valid"),
+                Some("boolean") => json!(true),
+                Some("integer") => shape.get("minimum").cloned().unwrap_or(json!(0)),
+                _ => panic!("uncovered published scalar: {shape}"),
+            }
+        }
+        for tool in ConversationTools::new().tools() {
+            let name = tool["name"].as_str().unwrap();
+            let schema = &tool["inputSchema"];
+            let properties = schema["properties"].as_object().unwrap();
+            let required = schema["required"].as_array().cloned().unwrap_or_default();
+            let mut base = Map::new();
+            for field in &required {
+                let field = field.as_str().unwrap();
+                base.insert(field.into(), example(&properties[field]));
+            }
+            assert!(decode(name, Value::Object(base.clone())).is_ok(), "{name}");
+            for (field, shape) in properties {
+                let mut arguments = base.clone();
+                arguments.insert(field.clone(), example(shape));
+                assert!(
+                    decode(name, Value::Object(arguments.clone())).is_ok(),
+                    "valid {name}.{field}"
+                );
+                arguments.insert(field.clone(), Value::Null);
+                assert_eq!(
+                    decode(name, Value::Object(arguments.clone())),
+                    Err("invalid_request".into()),
+                    "null {name}.{field}"
+                );
+                arguments.remove(field);
+                assert_eq!(
+                    decode(name, Value::Object(arguments)).is_ok(),
+                    !required.iter().any(|value| value.as_str() == Some(field)),
+                    "omitted {name}.{field}"
+                );
+            }
+        }
+    }
 
     #[test]
     fn default_command_ids_are_stable_and_separate_source_operation_and_request() {
