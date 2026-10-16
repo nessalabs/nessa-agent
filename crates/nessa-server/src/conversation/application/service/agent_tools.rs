@@ -3,7 +3,7 @@ use super::environment_tools::running_turn;
 use super::{load_conversation, ConversationCaller, ConversationError, ConversationService};
 use crate::conversation::application::{
     AccessAction, AccessAsk, AccessDecision, AccessDenial, AccessResource, AccessSubject,
-    AgentToolAudit, AgentToolAuditRecord, AgentToolSource, RequestShape,
+    AgentToolAudit, AgentToolAuditRecord, AgentToolRequest, AgentToolSource, RequestShape,
 };
 use nessa_auth::domain::PrincipalId;
 use nessa_protocol::conversation::domain::ConversationId;
@@ -25,7 +25,7 @@ impl ConversationService {
         call: String,
         tool: String,
         target: Option<ConversationId>,
-        request: String,
+        request: AgentToolRequest,
         stop: watch::Receiver<bool>,
     ) -> Result<AgentToolSource, ConversationError> {
         if *stop.borrow() {
@@ -97,7 +97,8 @@ impl ConversationService {
                     execution: execution.as_str().into(),
                     lease: lease.as_str().into(),
                     call,
-                    request: request.clone(),
+                    request: request.logical,
+                    command: request.command.clone(),
                     tool,
                     target,
                     principal: actor.principal_id().into(),
@@ -118,7 +119,7 @@ impl ConversationService {
                 organization_id: record.organization().clone(),
                 principal_id: principal,
                 surface_id: actor.surface_id().into(),
-                action_id: request,
+                action_id: request.command,
             };
             caller.actor()?;
             Ok(AgentToolSource {

@@ -1,7 +1,9 @@
 //! Source-bound admission shares the real mutation-command fixture and provider.
 use super::*;
 use crate::composition::conversation_tools::ConversationTools;
-use crate::conversation::application::{AgentToolAudit, AgentToolAuditRecord, ConversationFuture};
+use crate::conversation::application::{
+    AgentToolAudit, AgentToolAuditRecord, AgentToolRequest, ConversationFuture,
+};
 use crate::mcp_servers::{
     domain::ConfigurationKey,
     infrastructure::{
@@ -58,7 +60,10 @@ async fn source_admission_preserves_the_running_owner_actor_and_target() {
             "tool-call".into(),
             "send_message".into(),
             Some(target.clone()),
-            "stable-request".into(),
+            AgentToolRequest {
+                logical: "logical-request".into(),
+                command: "stable-request".into(),
+            },
             stop,
         )
         .await
@@ -75,6 +80,8 @@ async fn source_admission_preserves_the_running_owner_actor_and_target() {
         assert_eq!(records[0].source, source);
         assert_eq!(records[0].target, Some(target));
         assert_eq!(records[0].execution, "source-turn");
+        assert_eq!(records[0].request, "logical-request");
+        assert_eq!(records[0].command, "stable-request");
         assert!(records[0].allowed);
         assert_eq!(records[0].policies, ["owner.agent_tools"]);
     }
@@ -99,7 +106,10 @@ async fn source_without_a_running_turn_and_a_cancelled_call_admit_nothing() {
                 "call".into(),
                 "create_thread".into(),
                 None,
-                "request".into(),
+                AgentToolRequest {
+                    logical: "request".into(),
+                    command: "command".into()
+                },
                 stop
             )
             .await
@@ -129,7 +139,10 @@ async fn admission_audit_failure_is_visible_before_a_target_command_can_be_calle
                 "call".into(),
                 "create_thread".into(),
                 Some(id()),
-                "request".into(),
+                AgentToolRequest {
+                    logical: "request".into(),
+                    command: "command".into()
+                },
                 stop
             )
             .await,
@@ -146,6 +159,38 @@ struct McpClient {
     next: u64,
 }
 impl McpClient {
+    async fn connect(
+        relay: Arc<Relay>,
+        digest: String,
+        token: String,
+    ) -> (Self, tokio::task::JoinHandle<()>) {
+        let (client, server) = tokio::io::duplex(1 << 20);
+        let serving = tokio::spawn(async move { relay.serve(server).await });
+        let (input, mut output) = tokio::io::split(client);
+        let mut input = BufReader::new(input);
+        write_line(
+            &mut output,
+            &Hello {
+                server: "nessa-agents".into(),
+                configuration: digest,
+                session: token,
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            read_line::<Answer>(&mut input).await.unwrap(),
+            Answer::Accepted
+        );
+        (
+            Self {
+                input,
+                output,
+                next: 0,
+            },
+            serving,
+        )
+    }
     async fn call(&mut self, tool: &str, arguments: Value) -> Value {
         self.next += 1;
         write_line(&mut self.output, &json!({"jsonrpc":"2.0","id":self.next,"method":"tools/call","params":{"name":tool,"arguments":arguments}})).await.unwrap();
@@ -180,30 +225,13 @@ async fn agent_tools_relay_create_send_replay_and_refuse_a_foreign_target() {
     let grant = grants.grant(&SessionId::new(source.to_string()).unwrap());
     let key = ConfigurationKey::new([9; 32]);
     let digest = built_in_digest(&key, tools.as_ref());
-    let relay = Arc::new(Relay::new(servers, grants, key).with_built_in(tools));
-    let (client, server) = tokio::io::duplex(1 << 20);
-    let serving = tokio::spawn(async move { relay.serve(server).await });
-    let (input, mut output) = tokio::io::split(client);
-    let mut input = BufReader::new(input);
-    write_line(
-        &mut output,
-        &Hello {
-            server: "nessa-agents".into(),
-            configuration: digest,
-            session: grant.environment()[0].1.clone(),
-        },
+    let relay = Arc::new(Relay::new(servers, grants.clone(), key).with_built_in(tools));
+    let (mut client, serving) = McpClient::connect(
+        relay.clone(),
+        digest.clone(),
+        grant.environment()[0].1.clone(),
     )
-    .await
-    .unwrap();
-    assert_eq!(
-        read_line::<Answer>(&mut input).await.unwrap(),
-        Answer::Accepted
-    );
-    let mut client = McpClient {
-        input,
-        output,
-        next: 0,
-    };
+    .await;
     let created = client
         .call("create_thread", json!({"requestId":"worker-create"}))
         .await;
@@ -473,12 +501,93 @@ async fn agent_tools_relay_create_send_replay_and_refuse_a_foreign_target() {
         refused["structuredContent"]["error"],
         "conversation_not_found"
     );
-    assert!(audit
-        .records
-        .lock()
-        .unwrap()
-        .iter()
-        .all(|record| record.source == source && record.execution == "source-turn"));
+    // The same explicit logical request stays scoped to each tool command.
+    let same_request_create = client
+        .call("create_thread", json!({"requestId":"worker-send"}))
+        .await;
+    assert_eq!(
+        same_request_create["isError"], false,
+        "{same_request_create}"
+    );
+    let same_request_stop = client
+        .call(
+            "stop_thread",
+            json!({"threadId":worker,"executionId":execution,"requestId":"worker-send"}),
+        )
+        .await;
+    assert_eq!(same_request_stop["isError"], false, "{same_request_stop}");
+    let same_request_note = client.call("send_message", json!({"threadId":worker,"message":"separate note operation","mode":"passive","requestId":"worker-send"})).await;
+    assert_eq!(same_request_note["isError"], false, "{same_request_note}");
+    {
+        let records = audit.records.lock().unwrap();
+        assert!(records
+            .iter()
+            .all(|record| record.source == source && record.execution == "source-turn"));
+        for (request, tool) in [
+            ("worker-create", "create_thread"),
+            ("worker-send", "send_message"),
+            ("worker-stop", "stop_thread"),
+            ("worker-note", "send_message"),
+            ("worker-steer", "send_message"),
+        ] {
+            let matching: Vec<_> = records
+                .iter()
+                .filter(|record| record.request == request && record.tool == tool)
+                .collect();
+            assert!(
+                !matching.is_empty(),
+                "missing raw request {request} for {tool}"
+            );
+            assert!(matching
+                .iter()
+                .all(|record| record.command == matching[0].command));
+            assert!(uuid::Uuid::parse_str(&matching[0].command).is_ok());
+        }
+        let command = |tool| {
+            records
+                .iter()
+                .find(|record| record.request == "worker-send" && record.tool == tool)
+                .unwrap()
+                .command
+                .clone()
+        };
+        assert_ne!(command("create_thread"), command("send_message"));
+        assert_ne!(command("stop_thread"), command("send_message"));
+        assert_ne!(command("create_thread"), command("stop_thread"));
+    }
+    // A second live source uses the same Relay and raw request, but owns a
+    // different command and created target. No model-facing source argument exists.
+    let other_source = id();
+    opened(&service, &provider, &other_source).await;
+    let release_other = hold_turn(&service, &provider, &other_source, "other-source-turn").await;
+    let other_grant = grants.grant(&SessionId::new(other_source.to_string()).unwrap());
+    let (mut other_client, other_serving) =
+        McpClient::connect(relay, digest, other_grant.environment()[0].1.clone()).await;
+    let other_created = other_client
+        .call("create_thread", json!({"requestId":"worker-create"}))
+        .await;
+    assert_eq!(other_created["isError"], false, "{other_created}");
+    assert_ne!(
+        other_created["structuredContent"]["threadId"],
+        created["structuredContent"]["threadId"]
+    );
+    {
+        let records = audit.records.lock().unwrap();
+        let original = records
+            .iter()
+            .find(|record| record.source == source && record.request == "worker-create")
+            .unwrap();
+        let other = records
+            .iter()
+            .find(|record| record.source == other_source && record.request == "worker-create")
+            .unwrap();
+        assert_ne!(original.command, other.command);
+        assert_eq!(other.execution, "other-source-turn");
+    }
+    drop(other_client);
+    drop(other_grant);
+    other_serving.await.unwrap();
+    drop(release_other);
     drop(client);
     drop(grant);
     serving.await.unwrap();
@@ -529,7 +638,10 @@ async fn admitted_agent_tool_audit_finishes_after_its_response_caller_is_lost() 
                     "call".into(),
                     "create_thread".into(),
                     Some(id()),
-                    "request".into(),
+                    AgentToolRequest {
+                        logical: "request".into(),
+                        command: "command".into(),
+                    },
                     stop,
                 )
                 .await

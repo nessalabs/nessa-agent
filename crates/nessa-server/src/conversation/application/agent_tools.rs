@@ -24,6 +24,13 @@ impl AgentToolSource {
     }
 }
 
+/// Logical caller identity and the scoped identity used by command/note owners.
+/// Keeping both preserves attribution without changing existing retry namespaces.
+pub struct AgentToolRequest {
+    pub logical: String,
+    pub command: String,
+}
+
 /// A decision before an agent tool reaches a target command or read.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AgentToolAuditRecord {
@@ -32,6 +39,7 @@ pub struct AgentToolAuditRecord {
     pub lease: String,
     pub call: String,
     pub request: String,
+    pub command: String,
     pub tool: String,
     pub target: Option<ConversationId>,
     pub principal: String,

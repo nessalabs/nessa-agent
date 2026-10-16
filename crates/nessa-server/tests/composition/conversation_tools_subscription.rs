@@ -11,13 +11,7 @@ use crate::conversation_test_support::{
     TestClock, Unlisted, DELETION_BUDGETS,
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
-use nessa_protocol::conversation::{
-    domain::{ConversationApprovalMode, ConversationModelId},
-    projection::Projection,
-    view::{
-        ConversationCapabilities, ConversationMessage, ConversationPending, ConversationPendingMode,
-    },
-};
+use nessa_protocol::conversation::domain::{ConversationApprovalMode, ConversationModelId};
 use nessa_sdk::application::agent_execution::sessions::{
     CommittedEventReader, EventFuture, SessionStorage, SessionStorageLease, StorageError,
     StorageFuture,
@@ -37,26 +31,6 @@ fn caller() -> ConversationCaller {
         surface_id: "panel".into(),
         action_id: "observe".into(),
     }
-}
-
-#[test]
-fn default_stop_does_not_select_a_queued_turn_in_an_idle_view() {
-    let mut view = Projection::new(
-        id().to_string(),
-        ConversationCapabilities::read_only(),
-        None,
-    )
-    .read();
-    view.pending.push(ConversationPending {
-        execution_id: "future-turn".into(),
-        text: "queued".into(),
-        attachments: Vec::new(),
-        files: Vec::new(),
-        app: None,
-        mode: ConversationPendingMode::Queued,
-    });
-    assert_eq!(active_execution(&view), None);
-    assert_eq!(view.pending[0].execution_id, "future-turn");
 }
 
 #[tokio::test(start_paused = true)]
@@ -273,49 +247,6 @@ async fn reader_open_reauthorization_and_read_obey_cancellation_and_setup_deadli
             service.shutdown().await.unwrap();
         }
     }
-}
-
-fn execution_message(execution: &str, status: ConversationMessageStatus) -> ConversationMessage {
-    ConversationMessage {
-        authentication_required: None,
-        required_work_failed: None,
-        parts: Vec::new(),
-        steering_offset: None,
-        event_count: 0,
-        retained_text: 0,
-        execution_id: execution.into(),
-        user_text: String::new(),
-        attachments: Vec::new(),
-        files: Vec::new(),
-        app: None,
-        steering_target: None,
-        status,
-        error: None,
-    }
-}
-
-#[test]
-fn default_stop_selects_running_parent_before_a_later_injected_steering_child() {
-    let mut view = Projection::new(
-        id().to_string(),
-        ConversationCapabilities::read_only(),
-        None,
-    )
-    .read();
-    view.messages.push(execution_message(
-        "running-parent",
-        ConversationMessageStatus::Running,
-    ));
-    let mut child = execution_message("injected-child", ConversationMessageStatus::Injected);
-    child.steering_target = Some("running-parent".into());
-    view.messages.push(child);
-    assert_eq!(active_execution(&view), Some("running-parent".into()));
-    view.messages[0].status = ConversationMessageStatus::Completed;
-    assert_eq!(
-        active_execution(&view),
-        None,
-        "an injected child alone is not the active turn"
-    );
 }
 
 #[tokio::test(start_paused = true)]

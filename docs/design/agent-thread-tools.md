@@ -15,9 +15,10 @@ repeat the call with `after` to continue. With no cursor it starts from now; `re
 beginning. `replay` and `after` are mutually exclusive. After sending a task,
 use replay when there was no prior checkpoint so a fast completion is included.
 `stop_thread` stops the named execution, or captures the current active execution
-when `executionId` is omitted. Only a Running turn is selected: a later Injected
-steering child does not replace its running parent, and queued work requires an
-explicit execution identity. A stop does not delete or close the conversation.
+when `executionId` is omitted. The application resolves the running execution from its authoritative live
+snapshot, independently of the bounded message view: later Injected steering
+children do not hide their running parent. Queued work requires an explicit
+execution identity. A stop does not delete or close the conversation.
 
 An optional `requestId` makes an intentional command retry recoverable. Creation,
 submission and stop use the existing durable command coordinators. Default
@@ -50,7 +51,10 @@ Existing target Cedar admission still decides access to each target.
 
 The source decision is acknowledged in `audit/agent-tools` before target work.
 It records source conversation/execution/lease, original principal/surface,
-delivery call ID, logical request ID, tool, target and deciding policy IDs. Target
+delivery call ID, raw logical request ID, source/tool scoped command ID, tool,
+target and deciding policy IDs. The scoped command ID remains the action identity
+passed to the existing command or note owner; the logical ID is attribution, not
+a replacement idempotency namespace. Target
 commands retain their ordinary receipts, audit and permission behavior. Audit
 failure is visible and prevents successful admission. Its writer uses the same
 immutable private-file publication and directory sync as other conversation
@@ -102,6 +106,7 @@ is not a claim that an external effect was rolled back.
 | Missing running source or call already cancelled | No source admission/audit or target effects; same tests. |
 | Grant origin or foreign/deleted source | Cedar denies; complete source truth table in `tests/conversation/access_policy.rs`. |
 | Admission audit fails | Typed failure before target dispatch; `tests/conversation/agent_tools.rs`. |
+| Explicit logical request through Relay | Raw request and scoped command identities both reach audit; create/send/stop remain separate and another source derives a different command; `tests/conversation/agent_tools.rs`. |
 | Repeated request | Existing command receipt owns active retry/conflict rules; stable defaults tested in `composition/conversation_tools.rs`. |
 | Passive send and retry | RecordOnly note is saved once, changed text conflicts, and provider execution count stays unchanged; actual Relay test in `tests/conversation/agent_tools.rs`. |
 | Steering and queued mode change | SDK retains Steering intent and its non-native queue fallback; queued/steering changed mode conflicts in the command fingerprint; same Relay test. |
@@ -112,7 +117,7 @@ is not a claim that an external effect was rolled back.
 | Incomplete save, duplicate reads, cursor recovery | SDK committed-event reader owns visibility and replay; SDK record storage events tests. |
 | Slow or oversized observation | Reader permits, step/response budgets and timeout refuse explicitly. |
 | Delayed stop versus newer execution | Existing exact-execution stop coordinator owns cancellation; `tests/conversation/mutation_commands.rs`. |
-| Running parent followed by Injected steering child; idle with queued work | Default selector chooses only the Running parent, otherwise no active turn; `tests/composition/conversation_tools_subscription.rs`. |
+| Running parent followed by enough Injected steering children to leave the message window; idle with queued work | Authoritative application snapshot resolves the parent or no active turn; shared service regression and the Relay active-stop regression in `tests/conversation/agent_tools.rs`. |
 | Repeated observer cancellation during blocked source metadata | Four observation slots return, but eight detached source owners retain separate permits and service admission; the ninth fails before metadata I/O, and shutdown drains only after release; same tests. |
 
 Implementation ownership: `composition/conversation_tools.rs` owns MCP parsing,

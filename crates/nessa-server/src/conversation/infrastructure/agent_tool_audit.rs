@@ -28,7 +28,7 @@ impl AgentToolAudit for DurableAgentToolAudit {
             "recordId": id, "kind": "agent_tool_decision",
             "source": { "conversationId": record.source.to_string(), "executionId": record.execution, "leaseId": record.lease },
             "target": record.target.map(|id| id.to_string()),
-            "call": record.call, "requestId": record.request, "tool": record.tool,
+            "call": record.call, "requestId": record.request, "commandId": record.command, "tool": record.tool,
             "initiator": { "principalId": record.principal, "surfaceId": record.surface, "ownerInitiated": record.owner_initiated },
             "decision": { "allowed": record.allowed, "policies": record.policies, "reason": record.reason },
             "observedAtMs": self.clock.unix_milliseconds(),
@@ -56,6 +56,7 @@ mod tests {
             lease: "source-lease".into(),
             call: "call".into(),
             request: "request".into(),
+            command: "scoped-command".into(),
             tool: "send_message".into(),
             principal: "owner".into(),
             surface: "panel".into(),
@@ -84,11 +85,24 @@ mod tests {
         assert_eq!(value["target"], "00000000-0000-4000-8000-000000000002");
         assert_eq!(value["initiator"]["principalId"], "owner");
         assert_eq!(value["requestId"], "request");
+        assert_eq!(value["commandId"], "scoped-command");
         assert_eq!(value["decision"]["policies"], json!(["owner.agent_tools"]));
         let mut changed = record();
         changed.allowed = false;
         assert!(matches!(
             audit.record(changed).await,
+            Err(ConversationError::Audit)
+        ));
+        let mut changed_request = record();
+        changed_request.request = "another-logical-request".into();
+        assert!(matches!(
+            audit.record(changed_request).await,
+            Err(ConversationError::Audit)
+        ));
+        let mut changed_command = record();
+        changed_command.command = "another-scoped-command".into();
+        assert!(matches!(
+            audit.record(changed_command).await,
             Err(ConversationError::Audit)
         ));
     }

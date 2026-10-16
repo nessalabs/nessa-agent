@@ -1,15 +1,12 @@
 //! Source-bound agent conversation tools over the gateway's existing MCP relay.
 use crate::conversation::application::{
-    error_code, event_error_code, project_events, validate_event_cursor, ConversationCaller,
-    ConversationError, ConversationEventError, ConversationService, ReadOpening, RequestedAgent,
-    RequestedConversation, SubmissionMode, SubmittedMessage,
+    error_code, event_error_code, project_events, validate_event_cursor, AgentToolRequest,
+    ConversationCaller, ConversationError, ConversationEventError, ConversationService,
+    RequestedAgent, RequestedConversation, SubmissionMode, SubmittedMessage,
 };
 use crate::mcp_servers::application::{BuiltInFuture, BuiltInServer};
 use nessa_protocol::agents::AgentId;
-use nessa_protocol::conversation::{
-    domain::ConversationId,
-    view::{ConversationMessageStatus, ConversationView},
-};
+use nessa_protocol::conversation::domain::ConversationId;
 use nessa_sdk::application::agent_execution::{
     commands::{
         CreationFailure, CreationStage, MutationFailure, MutationOutcome, MutationReceipt,
@@ -291,7 +288,17 @@ async fn run(
             let target = thread(&identity(&source, &request, "thread"))?;
             let action = identity(&source, &request, "create");
             let source = service
-                .admit_agent_tool(source, call, tool, Some(target.clone()), action, stop)
+                .admit_agent_tool(
+                    source,
+                    call,
+                    tool,
+                    Some(target.clone()),
+                    AgentToolRequest {
+                        logical: request.clone(),
+                        command: action,
+                    },
+                    stop,
+                )
                 .await
                 .map_err(code)?;
             let storage = service.commands().ok_or("command_unavailable")?;
@@ -336,7 +343,17 @@ async fn run(
             let execution = identity(&source, &request, "execution");
             let action = identity(&source, &request, "send");
             let source = service
-                .admit_agent_tool(source, call, tool, Some(target.clone()), action, stop)
+                .admit_agent_tool(
+                    source,
+                    call,
+                    tool,
+                    Some(target.clone()),
+                    AgentToolRequest {
+                        logical: request.clone(),
+                        command: action,
+                    },
+                    stop,
+                )
                 .await
                 .map_err(code)?;
             let mode = match args.mode {
@@ -390,19 +407,27 @@ async fn run(
             let request = request(args.request_id, &call)?;
             let action = identity(&source, &request, "stop");
             let source = service
-                .admit_agent_tool(source, call, tool, Some(target.clone()), action, stop)
+                .admit_agent_tool(
+                    source,
+                    call,
+                    tool,
+                    Some(target.clone()),
+                    AgentToolRequest {
+                        logical: request.clone(),
+                        command: action,
+                    },
+                    stop,
+                )
                 .await
                 .map_err(code)?;
             let caller = source.caller();
             let execution = match args.execution_id {
                 Some(execution) => execution,
-                None => {
-                    let (view, _) = service
-                        .read_at(target.clone(), caller.clone(), ReadOpening::LiveOnly)
-                        .await
-                        .map_err(code)?;
-                    active_execution(&view).ok_or("no_active_turn")?
-                }
+                None => service
+                    .active_execution(target.clone(), caller.clone())
+                    .await
+                    .map_err(code)?
+                    .ok_or("no_active_turn")?,
             };
             let stopped = service
                 .stop_command(
@@ -432,10 +457,13 @@ async fn run(
             let mut control = SubscriptionControl::new(stop, wait);
             let admission = service.admit_agent_tool(
                 source,
-                call,
+                call.clone(),
                 tool,
                 Some(target.clone()),
-                action,
+                AgentToolRequest {
+                    logical: call,
+                    command: action,
+                },
                 control.stop.clone(),
             );
             let source = match control.step(admission).await {
@@ -457,16 +485,6 @@ fn answer(value: Value) -> Value {
 fn failed(code: &str) -> Value {
     let value = json!({"error":code});
     json!({"content":[{"type":"text","text":value.to_string()}],"structuredContent":value,"isError":true})
-}
-
-/// An omitted execution selects the running parent turn. Queued work requires
-/// an explicit identity; an injected steering child is not the active turn.
-fn active_execution(view: &ConversationView) -> Option<String> {
-    view.messages
-        .iter()
-        .rev()
-        .find(|message| matches!(message.status, ConversationMessageStatus::Running))
-        .map(|message| message.execution_id.clone())
 }
 
 #[derive(Clone, Copy)]
