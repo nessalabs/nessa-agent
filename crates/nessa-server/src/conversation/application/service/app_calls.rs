@@ -255,7 +255,7 @@ impl ConversationService {
         };
         live.agent
             .session_manager()
-            .snapshot()
+            .snapshot_handle()
             .await
             .is_some_and(|snapshot| {
                 snapshot

@@ -833,6 +833,11 @@ Agent owns sequential queueing, priority boundary steering, native injection,
 withdrawal, and idempotent submission recovery. The domain protects execution,
 tool, and permission invariants; adapters own provider translation and effects.
 Mandatory permission audit remains separate from session snapshots.
+Committed snapshots are shared immutable values. Read-only consumers use
+`SessionManager::snapshot_handle` to borrow one acknowledged revision without
+copying its history; `snapshot` still returns an independent owned copy. Saving
+installs a new revision only after the existing acknowledgement checks. A read
+handle retains history data rather than an Agent or storage lease.
 `SessionManager::committed_invocation_status` reads only the named turn's saved
 result-presence and scheduling stage. Send receipt recovery and exact-turn Stop
 use this projection through one gateway disposition mapping. They do not copy

@@ -1716,7 +1716,7 @@ impl ConversationService {
                                     cause: ConversationError::Agent(error),
                                     holds: true,
                                 })?;
-                            let snapshot = agent.session_manager().snapshot().await;
+                            let snapshot = agent.session_manager().snapshot_handle().await;
                             let operation_capabilities = agent.operation_capabilities();
                             let capabilities = ConversationCapabilities {
                                 queue: true,
@@ -1729,8 +1729,9 @@ impl ConversationService {
                                 agent_features: operation_capabilities.into(),
                             };
                             let mut projection =
-                                Projection::new(id.to_string(), capabilities, snapshot.as_ref())
+                                Projection::new(id.to_string(), capabilities, snapshot.as_deref())
                                     .with_tool_uis(service.inner.tool_uis.clone());
+                            drop(snapshot);
                             projection.selection(ConversationSelectionView {
                                 agent: record.agent().expect("agent was resolved"),
                                 model: record.model().as_str().into(),
@@ -2863,7 +2864,7 @@ impl ConversationService {
             let original = live
                 .agent
                 .session_manager()
-                .snapshot()
+                .snapshot_handle()
                 .await
                 .and_then(|snapshot| {
                     snapshot
@@ -3266,8 +3267,10 @@ impl ConversationService {
         // Inspect the actual SDK receipt, not a second admission ledger. A retry
         // can already be settled; dropping this wait never cancels SDK work.
         if let Some(_result) = completion.as_mut().now_or_never() {
-            let snapshot = live.agent.session_manager().snapshot().await;
-            let reply = completed_reply(snapshot.as_ref(), &id).filter(|_| new_submission);
+            let reply = {
+                let snapshot = live.agent.session_manager().snapshot_handle().await;
+                completed_reply(snapshot.as_deref(), &id).filter(|_| new_submission)
+            };
             // Let go of the agent before waiting for the summary lock: a
             // summary is not a reason to keep a stopped agent's history
             // leased (`a_reply_waiting_to_be_summarized_does_not_keep_a_deleted_history_leased`).
@@ -3284,8 +3287,10 @@ impl ConversationService {
         let conversation = conversation.clone();
         tokio::spawn(async move {
             let _result = completion.await;
-            let snapshot = live.agent.session_manager().snapshot().await;
-            let reply = completed_reply(snapshot.as_ref(), &id);
+            let reply = {
+                let snapshot = live.agent.session_manager().snapshot_handle().await;
+                completed_reply(snapshot.as_deref(), &id)
+            };
             live.watched.lock().await.remove(&id);
             // As above: the agent is let go of before the summary lock is
             // waited for, so a watcher cannot hold a stopped agent's history
@@ -3462,7 +3467,13 @@ impl ConversationService {
         };
         let mut running = HashSet::new();
         for (id, live) in live {
-            if turn_in_progress(live.agent.session_manager().snapshot().await) {
+            if turn_in_progress(
+                live.agent
+                    .session_manager()
+                    .snapshot_handle()
+                    .await
+                    .as_deref(),
+            ) {
                 running.insert(id);
             }
         }
@@ -3821,12 +3832,12 @@ impl ConversationService {
                             Ok(_) => true,
                             Err(error) => confirmed_despite(error).is_some(),
                         };
-                        let snapshot = live.agent.session_manager().snapshot().await;
+                        let snapshot = live.agent.session_manager().snapshot_handle().await;
                         // A closed agent runs nothing more, so nothing can still
                         // need the files. An agent that did not close keeps its
                         // saved invocations, and one of those may be a turn that
                         // names images and has not settled.
-                        let may_release = closed || !awaits_images(snapshot.as_ref());
+                        let may_release = closed || !awaits_images(snapshot.as_deref());
                         (
                             result.map(|_| ()).map_err(ConversationError::Agent),
                             may_release,
@@ -5793,7 +5804,7 @@ fn list_entries(
 /// Whether the agent's own record has a turn it selected to run and that has
 /// not settled. The session's committed snapshot, held in memory by the live
 /// agent: nothing is read from storage to answer this.
-fn turn_in_progress(snapshot: Option<SessionSnapshot>) -> bool {
+fn turn_in_progress(snapshot: Option<&SessionSnapshot>) -> bool {
     snapshot.is_some_and(|snapshot| {
         snapshot.invocations.iter().any(|record| {
             record.result.is_none()

@@ -219,6 +219,25 @@ O(1) copied facts; it does not introduce another index or cache.
 | Saved transcript contains message history | Status query copies no message chunks; full snapshot still returns an independent copy | `committed_invocation_status_does_not_clone_message_history` |
 | A caller's status-query waker panics when a save releases the evidence lock | Contain the panic at the public wait, preserving the save task | Caller-waker regression matrix, `CommittedInvocationStatus` case |
 
+### Shared committed snapshot reads
+
+`SessionManager::snapshot_handle` shares the existing acknowledged snapshot as
+an `Arc<SessionSnapshot>`. It adds no cache, index, storage lease or execution
+owner. Saves publish a new immutable handle only at the same acknowledgement
+boundaries as before; handles already held by readers keep their original data.
+The existing `snapshot` API still returns an independent owned copy. Handle
+reads copy a reference in O(1) time and space; copying the owned snapshot and
+publishing saved history retain their existing history-size cost.
+
+| Ordering / evidence | Required observation | Regression |
+| --- | --- | --- |
+| Repeated reads of one acknowledged version | Same shared snapshot allocation; no message-history copies | `shared_snapshot_handles_reuse_immutable_committed_history_without_message_clones` |
+| Settlement is observed but its save fails; a later retry succeeds | Handle identity and facts stay unchanged until acknowledgement; old readers retain their original version afterwards | `shared_snapshot_handles_change_only_after_acknowledged_publication` |
+| Physical SQLite commit is visible but its acknowledgement waiter disappears | Keep the previous handle until retry confirms the original save | `source_visible_commit_before_lost_ack_retries_same_generation_once` |
+| Caller mutates an owned snapshot or uses copy-on-write on its shared handle | Manager and other readers keep the original immutable data | `owned_snapshot_remains_an_independent_copy_of_a_shared_handle` |
+| Manager and the final storage-lease owner are dropped while data is held | The shared data handle retains neither owner | `shared_snapshot_handle_does_not_retain_the_session_writer_lease` |
+| A handle reader's waker panics while queued behind a save | Contain the panic in that public wait; preserve the releasing save | Caller-waker regression matrix, `CommittedSnapshotHandle` case |
+
 ### Live approval control orderings
 
 `Agent::set_approval_mode` uses the existing `SessionLifecycle` control runner.
@@ -369,7 +388,7 @@ of the healthy waiter and exactly one physical close.
 | `AttachmentCancellation::wait` | `close`, while it holds the lifecycle lock | Close returns normally, the lifecycle lock is not poisoned, and the Agent can attach and invoke again | `panicking_attachment_cancellation_waiter_does_not_interrupt_close` |
 | `ProviderOpenControl::wait`, polled by a provider during open | `close`, while it holds the lifecycle lock | Close returns normally and the lifecycle lock is not poisoned | `panicking_provider_open_stop_waiter_does_not_interrupt_close` |
 | `Agent::queued_ids`, `Agent::idle_for_approval_change` | Any task releasing the scheduler lock; the test uses an admission | The admission returns its receipt and the input runs | `panicking_lock_waiter_does_not_fail_the_admission_that_released_it`, one case each |
-| `SessionManager::snapshot` and `SessionManager::committed_invocation_status` | Any save releasing the evidence lock; the test uses an admission | As above | Same test, `CommittedSnapshot` and `CommittedInvocationStatus` cases |
+| `SessionManager::snapshot`, `SessionManager::snapshot_handle` and `SessionManager::committed_invocation_status` | Any save releasing the evidence lock; the test uses an admission | As above | Same test, `CommittedSnapshot`, `CommittedSnapshotHandle` and `CommittedInvocationStatus` cases |
 | `AttachmentWait::wait`, plain panic | The attachment task, as its last action, holding no lock | The attachment is attached and runs work | `panicking_attachment_waiter_leaves_the_attachment_attached`, which also passes without the wrapper |
 | `AttachmentWait::wait`, panic whose payload panics twice when dropped, on a multi-thread runtime | The attachment task, whose `JoinHandle` the Agent does not keep | The runtime keeps running; the attachment is attached and runs work | `twice_panicking_payload_attachment_waiter_does_not_abort_the_runtime`, which runs `triple_fault_attachment_waiter_child` in a child process. Without the wrapper the child aborts with SIGABRT |
 | `close` and the other spawn-and-join operations, plain panic | Tokio's task completion, inside its own `catch_unwind` | Close completes; the Agent can attach and invoke again | `panicking_close_waiter_does_not_interrupt_close`, which also passes without the wrapper |

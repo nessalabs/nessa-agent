@@ -37,7 +37,7 @@ pub(crate) enum CallerWaiter {
     IdleForApprovalChange(SessionId),
     /// `Agent::set_approval_mode` on this session's Agent.
     ApprovalModeChange(SessionId),
-    /// `SessionManager::snapshot` for this session.
+    /// `SessionManager::snapshot` or `snapshot_handle` for this session.
     CommittedSnapshot(SessionId),
     /// `SessionManager::committed_invocation_status` for this session.
     CommittedInvocationStatus(SessionId),

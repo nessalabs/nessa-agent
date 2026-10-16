@@ -47,7 +47,7 @@ impl ConversationService {
         id: &ConversationId,
         live: &LiveConversation,
     ) -> NoteCandidates {
-        let Some(snapshot) = live.agent.session_manager().snapshot().await else {
+        let Some(snapshot) = live.agent.session_manager().snapshot_handle().await else {
             return NoteCandidates::default();
         };
         let waiting: Vec<NoteRecord> = snapshot
@@ -56,6 +56,7 @@ impl ConversationService {
             .filter(|note| snapshot.note_state(note) == NoteState::Pending)
             .cloned()
             .collect();
+        drop(snapshot);
         let owners_only = || NoteCandidates {
             authorized: waiting
                 .iter()
@@ -120,7 +121,7 @@ impl ConversationService {
             })?;
         // Saved before the answer, so the committed records hold it.
         let state = manager
-            .snapshot()
+            .snapshot_handle()
             .await
             .map(|snapshot| snapshot.note_state(&record))
             .ok_or(ConversationError::Unavailable)?;

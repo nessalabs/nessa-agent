@@ -297,7 +297,7 @@ impl ConversationService {
         let Some(live) = self.live(id).await else {
             return refused(FetchCallRefusal::NoTurn);
         };
-        let Some(snapshot) = live.agent.session_manager().snapshot().await else {
+        let Some(snapshot) = live.agent.session_manager().snapshot_handle().await else {
             return refused(FetchCallRefusal::NoTurn);
         };
         let Some((lease, turn, actor, initiation)) =
@@ -305,6 +305,7 @@ impl ConversationService {
         else {
             return refused(FetchCallRefusal::NoTurn);
         };
+        drop(snapshot);
         if &lease != live.lease.id() || !live.lease.is_live() {
             return refused(FetchCallRefusal::NoTurn);
         }

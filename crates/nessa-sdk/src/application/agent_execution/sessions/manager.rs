@@ -289,7 +289,7 @@ struct Evidence {
     // restoration and consequential boundaries still validate complete evidence.
     message_histories: HashMap<ExecutionId, (usize, InvocationHistory)>,
     observed: Option<SessionSnapshot>,
-    committed: Option<SessionSnapshot>,
+    committed: Option<Arc<SessionSnapshot>>,
     // Decisions retained after observation but before a confirmed save. A
     // retry submits the same ordered facts, including earlier failed writes.
     pending: Vec<SessionSaveUnit>,
@@ -371,6 +371,33 @@ impl SessionManager {
     /// logged and does not fail the save. See "Caller wakers" in
     /// docs/agent_execution/lifecycle.md.
     pub async fn snapshot(&self) -> Option<SessionSnapshot> {
+        self.snapshot_handle().await.as_deref().cloned()
+    }
+
+    /// Share the last snapshot acknowledged by storage without copying history.
+    /// Returns `None` until initialization, as with [`Self::snapshot`]. Repeated
+    /// reads share the same immutable allocation until the next acknowledged
+    /// publication. Validated restoration or attachment publication can also
+    /// replace it without a new write. Failed writes retain the previous handle.
+    /// A held handle keeps its original version after later saves; it retains
+    /// data only, not the manager, its writer lease or provider ownership.
+    ///
+    /// Reading clones one `Arc` in O(1) time and space after acquiring the evidence
+    /// lock. Caller waker panics are contained at the same committed-snapshot wait
+    /// as [`Self::snapshot`]. Readers needing an owned mutable copy may continue
+    /// using `snapshot`, or use `Arc::make_mut` on their own handle.
+    ///
+    /// ```no_run
+    /// use nessa_sdk::application::agent_execution::sessions::SessionManager;
+    /// # async fn example(manager: &SessionManager) {
+    /// if let Some(snapshot) = manager.snapshot_handle().await {
+    ///     let invocation_count = snapshot.invocations.len();
+    ///     // The handle keeps this acknowledged version while later saves proceed.
+    ///     # let _ = invocation_count;
+    /// }
+    /// # }
+    /// ```
+    pub async fn snapshot_handle(&self) -> Option<Arc<SessionSnapshot>> {
         let waiter = CallerWaiter::CommittedSnapshot(self.id.clone());
         contain_caller_wake(waiter, async {
             self.evidence.lock().await.committed.clone()
@@ -580,7 +607,7 @@ impl SessionManager {
             event_usage: HashMap::new(),
             message_histories: HashMap::new(),
             observed: Some(snapshot.clone()),
-            committed: Some(snapshot),
+            committed: Some(Arc::new(snapshot)),
             pending: Vec::new(),
             message_commit: None,
         };
@@ -787,7 +814,7 @@ impl SessionManager {
                 }
             };
             if result.is_ok() {
-                evidence.committed = Some(next);
+                evidence.committed = Some(Arc::new(next));
                 evidence.pending.clear();
                 evidence.message_commit = None;
             }
@@ -1008,7 +1035,7 @@ impl SessionManager {
             let next_generation = receipt
                 .next_for(&generation, evidence.pending.len())
                 .map_err(AgentError::Storage)?;
-            evidence.committed = evidence.observed.clone();
+            evidence.committed = evidence.observed.clone().map(Arc::new);
             evidence.pending.clear();
             evidence.message_commit = None;
             evidence.save_generation = Some(next_generation);
@@ -2196,7 +2223,7 @@ impl SessionManager {
             .await
             .map_err(StorageError::bounded)?;
         let next_generation = receipt.next_for(&generation, evidence.pending.len())?;
-        evidence.committed = Some(snapshot);
+        evidence.committed = Some(Arc::new(snapshot));
         evidence.pending.clear();
         evidence.message_commit = None;
         evidence.save_generation = Some(next_generation);

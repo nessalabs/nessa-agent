@@ -12,7 +12,9 @@ use crate::domain::agent_execution::{
     prompts::{PromptText, UserMessage},
     sessions::ExecutionSessionId,
 };
-use crate::infrastructure::session_storage::{InMemoryStorage, RecordStorage};
+use crate::infrastructure::session_storage::{
+    InMemoryStorage, RecordStorage, RuntimeMessageCommitClock,
+};
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::{Barrier, Semaphore};
 
@@ -132,7 +134,7 @@ async fn source_visible_commit_before_lost_ack_retries_same_generation_once() {
         evidence: Arc::new(Mutex::new(Evidence {
             save_generation: Some(pending_generation.clone()),
             observed: Some(observed.clone()),
-            committed: Some(initial),
+            committed: Some(Arc::new(initial)),
             pending: vec![SessionSaveUnit::new(vec![first]).unwrap()],
             message_commit: Some(PendingMessageCommit {
                 generation: pending_generation.clone(),
@@ -147,6 +149,7 @@ async fn source_visible_commit_before_lost_ack_retries_same_generation_once() {
         attachment: Arc::new(AttachmentLease::empty()),
     });
     manager.begin_dispatch(&active_id);
+    let prior_handle = manager.snapshot_handle().await.unwrap();
     let waiting = manager.clone();
     let caller_generation = pending_generation.clone();
     let caller = tokio::spawn(async move { waiting.flush_due_messages(caller_generation).await });
@@ -166,7 +169,7 @@ async fn source_visible_commit_before_lost_ack_retries_same_generation_once() {
         .await
         .expect("cancellation releases manager evidence");
     assert_eq!(evidence.pending.len(), 1);
-    assert_ne!(evidence.committed.as_ref(), Some(&observed));
+    assert_ne!(evidence.committed.as_deref(), Some(&observed));
     assert_eq!(
         evidence
             .message_commit
@@ -175,11 +178,19 @@ async fn source_visible_commit_before_lost_ack_retries_same_generation_once() {
         Some(pending_generation.clone())
     );
     drop(evidence);
+    assert!(Arc::ptr_eq(
+        &prior_handle,
+        &manager.snapshot_handle().await.unwrap()
+    ));
     manager
         .flush_due_messages(pending_generation)
         .await
         .unwrap();
     assert_eq!(lease.load().await.unwrap().snapshot(), Some(&observed));
+    let acknowledged_handle = manager.snapshot_handle().await.unwrap();
+    assert!(!Arc::ptr_eq(&prior_handle, &acknowledged_handle));
+    assert_eq!(acknowledged_handle.as_ref(), &observed);
+    assert_ne!(prior_handle.as_ref(), &observed);
     manager.event(text(&active_id)).await.unwrap();
     manager.flush_observed().await.unwrap();
     let latest = lease.load().await.unwrap().snapshot().cloned().unwrap();
@@ -244,7 +255,7 @@ async fn measure_growing_history_message_commit_latency() {
         evidence: Arc::new(Mutex::new(Evidence {
             save_generation: Some(current_binding),
             observed: Some(initial.clone()),
-            committed: Some(initial),
+            committed: Some(Arc::new(initial)),
             ..Evidence::default()
         })),
         dispatched: RwLock::new(HashMap::new()),
@@ -358,7 +369,7 @@ async fn dense_control_output_flushes_before_the_record_body_limit_and_reopens()
         evidence: Arc::new(Mutex::new(Evidence {
             save_generation: Some(current_binding),
             observed: Some(initial.clone()),
-            committed: Some(initial),
+            committed: Some(Arc::new(initial)),
             ..Evidence::default()
         })),
         dispatched: RwLock::new(HashMap::new()),
@@ -588,7 +599,7 @@ async fn manager(previous_turns: usize) -> (SessionManager, Arc<FaultLease>, Exe
         evidence: Arc::new(Mutex::new(Evidence {
             save_generation: Some(receipt.next().clone()),
             observed: Some(snapshot.clone()),
-            committed: Some(snapshot),
+            committed: Some(Arc::new(snapshot)),
             ..Evidence::default()
         })),
         dispatched: RwLock::new(HashMap::new()),
@@ -596,6 +607,147 @@ async fn manager(previous_turns: usize) -> (SessionManager, Arc<FaultLease>, Exe
     };
     manager.begin_dispatch(&active_id);
     (manager, lease, active_id)
+}
+
+#[tokio::test]
+async fn shared_snapshot_handles_reuse_immutable_committed_history_without_message_clones() {
+    use crate::domain::agent_execution::executions::MESSAGE_CLONES;
+    let (manager, _, active) = manager(8).await;
+    for _ in 0..8 {
+        manager.event(text(&active)).await.unwrap();
+    }
+    manager.flush_observed().await.unwrap();
+    MESSAGE_CLONES.with(|counter| counter.set((0, 0)));
+    let first = manager.snapshot_handle().await.unwrap();
+    assert_eq!(first.invocations.len(), 9);
+    assert_eq!(first.invocations[8].events.len(), 8);
+    for _ in 0..32 {
+        let next = manager.snapshot_handle().await.unwrap();
+        assert!(Arc::ptr_eq(&first, &next));
+    }
+    assert_eq!(MESSAGE_CLONES.with(|counter| counter.get()), (0, 0));
+    // Calibrate the same counter against the preserved owned-copy API.
+    let owned = manager.snapshot().await.unwrap();
+    assert_eq!(owned, *first);
+    assert!(MESSAGE_CLONES.with(|counter| counter.get().0) >= 8);
+}
+
+#[tokio::test]
+async fn shared_snapshot_handles_change_only_after_acknowledged_publication() {
+    let (manager, lease, active) = manager(0).await;
+    let before = manager.snapshot_handle().await.unwrap();
+    assert!(before.invocations[0].result.is_none());
+    lease.fail_save.store(true, Ordering::SeqCst);
+    assert!(matches!(
+        manager
+            .settle_submission(0, Err(AgentError::AuditFailure))
+            .await,
+        Err(AgentError::StorageAfterExecution { .. })
+    ));
+    assert!(manager.submission(&active).await.unwrap().result.is_some());
+    let after_failure = manager.snapshot_handle().await.unwrap();
+    assert!(Arc::ptr_eq(&before, &after_failure));
+    assert!(after_failure.invocations[0].result.is_none());
+    assert_eq!(manager.snapshot().await.as_ref(), Some(before.as_ref()));
+    assert_eq!(
+        lease.load().await.unwrap().snapshot(),
+        Some(before.as_ref())
+    );
+    lease.fail_save.store(false, Ordering::SeqCst);
+    manager.flush_observed().await.unwrap();
+    let after_success = manager.snapshot_handle().await.unwrap();
+    assert!(!Arc::ptr_eq(&before, &after_success));
+    assert!(after_success.invocations[0].result.is_some());
+    assert_eq!(
+        manager.snapshot().await.as_ref(),
+        Some(after_success.as_ref())
+    );
+    assert!(before.invocations[0].result.is_none());
+    assert!(after_failure.invocations[0].result.is_none());
+    assert_eq!(
+        lease.load().await.unwrap().snapshot(),
+        Some(after_success.as_ref())
+    );
+    assert!(Arc::ptr_eq(
+        &after_success,
+        &manager.snapshot_handle().await.unwrap()
+    ));
+}
+
+#[tokio::test]
+async fn owned_snapshot_remains_an_independent_copy_of_a_shared_handle() {
+    let (manager, _, _) = manager(2).await;
+    let shared = manager.snapshot_handle().await.unwrap();
+    let mut owned = manager.snapshot().await.unwrap();
+    assert_eq!(owned, *shared);
+    owned.invocations.clear();
+    assert_eq!(shared.invocations.len(), 3);
+    assert_eq!(manager.snapshot().await.unwrap().invocations.len(), 3);
+    // Public snapshot fields remain mutable through explicit copy-on-write;
+    // another reader and the manager keep their original allocation and facts.
+    let mut private_copy = shared.clone();
+    Arc::make_mut(&mut private_copy).invocations.clear();
+    assert!(!Arc::ptr_eq(&shared, &private_copy));
+    assert_eq!(shared.invocations.len(), 3);
+    assert!(Arc::ptr_eq(
+        &shared,
+        &manager.snapshot_handle().await.unwrap()
+    ));
+}
+
+#[tokio::test]
+async fn shared_snapshot_handle_does_not_retain_the_session_writer_lease() {
+    let directory = tempfile::tempdir().unwrap();
+    let storage = Arc::new(RecordStorage::new(directory.path().join("records")).unwrap());
+    let id = SessionId::new("shared-data-only").unwrap();
+    let manager = SessionManager::open(
+        Some(id.clone()),
+        storage.clone(),
+        Arc::new(RuntimeMessageCommitClock::new()),
+    )
+    .await
+    .unwrap();
+    assert!(manager.snapshot_handle().await.is_none());
+    let opened = SessionChange::Opened {
+        id: id.clone(),
+        provider: ProviderIdentity::new("fixture", "model", "workspace").unwrap(),
+        context: ProviderContext::Absent,
+    };
+    let snapshot =
+        super::super::records::fold_changes(None, std::slice::from_ref(&opened)).unwrap();
+    let saved = manager
+        .storage_lease
+        .save_changes(
+            manager
+                .storage_lease
+                .load()
+                .await
+                .unwrap()
+                .binding()
+                .clone(),
+            snapshot.clone(),
+            vec![SessionSaveUnit::new(vec![opened]).unwrap()],
+        )
+        .await
+        .unwrap();
+    {
+        let mut evidence = manager.evidence.lock().await;
+        evidence.save_generation = Some(saved.next().clone());
+        evidence.observed = Some(snapshot.clone());
+        evidence.committed = Some(Arc::new(snapshot));
+    }
+    let handle = manager.snapshot_handle().await.unwrap();
+    drop(manager);
+    // Reopen the actual SQLite writer while the shared data is still in use.
+    let replacement = storage.open_existing(id.clone()).await.unwrap().unwrap();
+    assert_eq!(
+        replacement.load().await.unwrap().snapshot(),
+        Some(handle.as_ref())
+    );
+    assert_eq!(handle.id, id);
+    drop(replacement);
+    storage.shutdown().await.unwrap();
+    assert_eq!(handle.id, id);
 }
 
 #[tokio::test]
@@ -617,7 +769,7 @@ async fn committed_invocation_status_reports_only_the_named_committed_facts() {
     ] {
         {
             let mut evidence = manager.evidence.lock().await;
-            let record = &mut evidence.committed.as_mut().unwrap().invocations[2];
+            let record = &mut Arc::make_mut(evidence.committed.as_mut().unwrap()).invocations[2];
             record.result = has_result.then_some(Err(AgentError::AuditFailure));
             record.scheduling = stage.map_or_else(Vec::new, |stage| {
                 vec![

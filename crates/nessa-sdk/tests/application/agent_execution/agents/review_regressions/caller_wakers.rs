@@ -465,6 +465,7 @@ enum LockWaiter {
     IdleForApprovalChange,
     SetApprovalMode,
     CommittedSnapshot,
+    CommittedSnapshotHandle,
     CommittedInvocationStatus,
 }
 
@@ -475,6 +476,7 @@ async fn panicking_lock_waiter_does_not_fail_the_admission_that_released_it() {
         LockWaiter::IdleForApprovalChange,
         LockWaiter::SetApprovalMode,
         LockWaiter::CommittedSnapshot,
+        LockWaiter::CommittedSnapshotHandle,
         LockWaiter::CommittedInvocationStatus,
     ] {
         for fault in [false, true] {
@@ -505,6 +507,9 @@ async fn panicking_lock_waiter_does_not_fail_the_admission_that_released_it() {
                 }),
                 LockWaiter::CommittedSnapshot => Box::pin(async {
                     agent.session_manager().snapshot().await;
+                }),
+                LockWaiter::CommittedSnapshotHandle => Box::pin(async {
+                    agent.session_manager().snapshot_handle().await;
                 }),
                 LockWaiter::CommittedInvocationStatus => Box::pin(async {
                     agent

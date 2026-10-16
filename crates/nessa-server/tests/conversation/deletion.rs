@@ -3563,6 +3563,21 @@ async fn a_reply_waiting_to_be_summarized_does_not_keep_a_deleted_history_leased
     .await
     .expect("the second turn completes; its reply now waits for the summary lock");
 
+    let retained_snapshot = {
+        let live = fixture
+            .service
+            .resolve(&id, &caller("snapshot"))
+            .await
+            .unwrap();
+        live.agent
+            .session_manager()
+            .snapshot_handle()
+            .await
+            .unwrap()
+    };
+    assert!(retained_snapshot.invocations.iter().any(|record| {
+        record.request.execution_id.as_str() == "turn-2" && record.result.is_some()
+    }));
     let deleting = tokio::spawn({
         let service = fixture.service.clone();
         let id = id.clone();
@@ -3581,6 +3596,11 @@ async fn a_reply_waiting_to_be_summarized_does_not_keep_a_deleted_history_leased
     drop(held);
     assert!(deleting.await.unwrap().unwrap());
     assert!(history(&fixture.storage, &id).await.is_none());
+    // A retained committed view is data, so it keeps neither the deleted
+    // history's writer lease nor a live agent. The old answer stays readable.
+    assert!(retained_snapshot.invocations.iter().any(|record| {
+        record.request.execution_id.as_str() == "turn-2" && record.result.is_some()
+    }));
     // The reply found the tombstone and wrote nothing back.
     assert_eq!(summary(&fixture, &id), None);
 }

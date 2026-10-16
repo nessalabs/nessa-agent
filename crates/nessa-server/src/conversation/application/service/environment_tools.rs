@@ -150,9 +150,9 @@ impl ConversationService {
         let current = environments.placement(id).await?;
         let initiator = match self.live(id).await {
             Some(live) => {
-                let snapshot = live.agent.session_manager().snapshot().await;
+                let snapshot = live.agent.session_manager().snapshot_handle().await;
                 snapshot
-                    .as_ref()
+                    .as_deref()
                     .and_then(running_invocation)
                     .and_then(|turn| TurnInitiator::of(&live.admitted_policies, &turn.initiation))
             }
@@ -239,7 +239,10 @@ impl ConversationService {
             .map_err(|error| CommandCallError::Invalid(error.to_string()))?;
         let live = self.live(id).await.ok_or(CommandCallError::NoTurn)?;
         let manager = live.agent.session_manager();
-        let snapshot = manager.snapshot().await.ok_or(CommandCallError::NoTurn)?;
+        let snapshot = manager
+            .snapshot_handle()
+            .await
+            .ok_or(CommandCallError::NoTurn)?;
         let (parent, turn, actor, initiation) =
             running_turn(&snapshot, &call.call).ok_or(CommandCallError::NoTurn)?;
         // A Drive grant's turn runs a command only where its policy allows
@@ -312,7 +315,9 @@ impl ConversationService {
                 .refuse(&live, &refused, CommandRefusal::Environment(refusal))
                 .await;
         }
-        if !has_room(snapshot.lease.as_ref(), &parent) {
+        let room_available = has_room(snapshot.lease.as_ref(), &parent);
+        drop(snapshot);
+        if !room_available {
             return self
                 .refuse(&live, &refused, CommandRefusal::BudgetExceeded)
                 .await;
@@ -538,10 +543,14 @@ impl ConversationService {
         let ending = live
             .agent
             .session_manager()
-            .snapshot()
+            .snapshot_handle()
             .await
-            .and_then(|snapshot| snapshot.lease)
-            .and_then(|lease| lease.held().cloned())
+            .and_then(|snapshot| {
+                snapshot
+                    .lease
+                    .as_ref()
+                    .and_then(|lease| lease.held().cloned())
+            })
             .filter(|lease| lease.id() == parent)
             .and_then(|lease| match lease.phase() {
                 LeasePhase::Ending { cause } => Some(cause),
