@@ -426,6 +426,7 @@ export function transcriptFrom(
     }
     parts.push(...(published.byExecution.get(turn.executionId) ?? []).map(publishedPart))
     const terminal = turnTerminal(turn)
+    const working = turn.status === "running" || turn.status === "queued"
     const marked = terminal
       ? {
           terminal,
@@ -437,17 +438,21 @@ export function transcriptFrom(
       : undefined
     if (parts.length > 0) {
       const reply = replyId(turn.executionId)
-      const agent: TurnMessage = { id: reply, role: "agent", at: seen(reply), parts }
+      const agent: TurnMessage = {
+        id: reply,
+        role: "agent",
+        at: seen(reply),
+        parts,
+        // The turn's own status says whether its reply is still being written.
+        ...(working ? { working: true as const } : {}),
+      }
       messages.push(user)
       messages.push(marked ? { ...agent, ...marked } : agent)
     } else messages.push(marked ? { ...user, ...marked } : user)
     pushUnreadable(unreadable.byExecution.get(turn.executionId) ?? [])
     pushNotes(notes.byExecution.get(turn.executionId) ?? [])
     // A turn at work with nothing streaming yet: what it is doing, and since it was asked.
-    if (
-      (turn.status === "running" || turn.status === "queued") &&
-      parts[parts.length - 1]?.kind !== "text"
-    )
+    if (working && parts[parts.length - 1]?.kind !== "text")
       activity = { label: lastTool?.title || "Thinking", since: seen(input) }
   }
   if (published.after.length > 0)

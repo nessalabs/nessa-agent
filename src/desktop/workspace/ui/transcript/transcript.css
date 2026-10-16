@@ -242,12 +242,19 @@
   letter-spacing: -0.003em;
 }
 
-.workspace-message-body p {
+/* The message's own paragraphs; a rendered reply's (`.workspace-prose`) keep the kit's rhythm. */
+.workspace-message-body > p {
   margin: 0;
   text-wrap: pretty;
 }
 
-.workspace-message code {
+/* Inline code only: a code block, maths or a diagram draws its own. */
+.workspace-message
+  code:not(
+    [data-slot="code-block"] *,
+    [data-slot="math-block"] *,
+    [data-slot="mermaid-diagram"] *
+  ) {
   padding: 1px 4px;
   border-radius: var(--desktop-radius-xs);
   background: color-mix(in oklab, var(--foreground) 7%, transparent);
@@ -367,6 +374,24 @@ html:not(.dark) .workspace-diff del {
   color: oklch(0.56 0.17 25);
 }
 
+/*
+ * A settled run of steps: one line that opens to them. The kit draws the line
+ * (`AgentActivityTrigger`); its chevron turns to say the steps are open.
+ */
+.workspace-work {
+  gap: 4px;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.workspace-work [data-slot="agent-activity-trigger"] {
+  margin-left: -4px;
+}
+
+.workspace-work > .workspace-steps {
+  animation: workspace-fade-in var(--desktop-base) ease both;
+}
+
 /* ——— What the agent is doing now ——— */
 
 .workspace-live {
@@ -446,4 +471,42 @@ html:not(.dark) .workspace-diff del {
   animation: none;
   background: none;
   color: var(--desktop-muted);
+}
+
+/* ——— Back to the latest ——— */
+
+/* The scroller and what floats over its foot, just above the composer. */
+.workspace-transcript-frame {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.desktop-icon-button.workspace-jump {
+  position: absolute;
+  bottom: 12px;
+  left: 50%;
+  z-index: 1;
+  translate: -50% 0;
+  border: 1px solid color-mix(in oklab, var(--foreground) 14%, transparent);
+  background: var(--popover);
+  /* A shade under it, not a light around it: it floats over words. */
+  box-shadow: 0 2px 8px rgb(0 0 0 / 35%);
+  color: var(--foreground);
+  transition:
+    opacity var(--desktop-fast) var(--desktop-out),
+    translate var(--desktop-base) var(--desktop-out);
+}
+
+.desktop-icon-button.workspace-jump[data-hidden] {
+  opacity: 0;
+  pointer-events: none;
+  translate: -50% 4px;
+}
+
+/* A carried pane's copy shows one screen of words, not the controls over them. */
+.split-panes-ghost .workspace-jump {
+  display: none;
 }
