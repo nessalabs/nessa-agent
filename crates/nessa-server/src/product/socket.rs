@@ -1723,17 +1723,16 @@ pub(super) async fn admit_grant(
 /// A request's admission outside `dispatch`: the session as it stands now,
 /// then [`admit_action`] for `method`. The session found current.
 ///
-/// A paired device's `conversation.subscribe` and `conversation.unsubscribe`
-/// are the exception: pairing mints `conversation.read`, and the manifest
-/// asks `conversation.write`, which that credential does not hold. Which
-/// conversation it may follow is still [`read_access::admit_conversation`].
+/// Paired reads use [`read_access::admit_paired_read`]: pairing mints
+/// `conversation.read`, while their manifest asks `conversation.write`.
+/// Their target still asks [`read_access::admit_conversation`].
 pub(super) async fn admit_now(
     state: &ProductRouteState,
     session: &AuthenticatedSession,
     method: &str,
 ) -> Result<AuthenticatedSession, &'static str> {
     let current = current_session_now(state, session).await?;
-    if !super::read_access::admit_paired_follow(state, &current, method).await? {
+    if !super::read_access::admit_paired_read(state, &current, method).await? {
         admit_action(state, &current, method).await?;
     }
     Ok(current)

@@ -11,7 +11,7 @@
 //! role and policy between the wire and the domain. `conversation.read`,
 //! `artifact.read` and every view subscription batch
 //! (`subscription::authorize_batch`) ask [`admit_conversation`]; a paired
-//! device is admitted to that batch on [`admit_paired_follow`];
+//! device is admitted to that batch on [`admit_paired_read`];
 //! `conversation.list`, `conversation.observe` and every list batch ask
 //! [`admit_list`]. A gateway that pairs no device has no receiver binding, so
 //! every session is the owner's and reads exactly as before (row G11).
@@ -176,27 +176,25 @@ async fn unpaired_may_see_review(
     })
 }
 
-/// Whether a paired `session` may open or stop one view subscription on
-/// `method`.
+/// Admit a paired credential's peek or subscription read through pairing's grant.
 ///
-/// Returns whether this call admitted it. A session that is not paired, and
-/// a method other than `conversation.subscribe`, `conversation.subscribeEvents`,
-/// or `conversation.unsubscribe`,
-/// returns false so the caller asks the method's own grant. A paired session
-/// is admitted on the grant pairing mints (`conversation.read`). One that
-/// holds `conversation.write` instead is admitted on that grant, as a paired
-/// session holding the owner's write grant already was. The conversation it
-/// may follow is [`admit_conversation`], asked by the subscription task.
-/// `conversation.subscribeList` is not here: a device stays refused it until
-/// the catalogue is grant-scoped.
-pub(super) async fn admit_paired_follow(
+/// Returns false for unpaired sessions or other methods so their caller asks
+/// the manifest grant. Paired credentials ask `conversation.read`, with the
+/// existing `conversation.write` fallback. This admits no target: peek and
+/// subscription tasks still ask [`admit_conversation`]. Unsubscribe retires only
+/// a subscription admitted earlier. Lists remain outside this exception until
+/// their catalogue is grant-scoped.
+pub(super) async fn admit_paired_read(
     state: &ProductRouteState,
     session: &AuthenticatedSession,
     method: &str,
 ) -> Result<bool, &'static str> {
     if !matches!(
         method,
-        "conversation.subscribe" | "conversation.subscribeEvents" | "conversation.unsubscribe"
+        "conversation.peek"
+            | "conversation.subscribe"
+            | "conversation.subscribeEvents"
+            | "conversation.unsubscribe"
     ) {
         return Ok(false);
     }
@@ -396,7 +394,9 @@ const ADMITTED_BY_ITS_OWN_CHECK: [&str; 8] = [
 
 /// The one admission of a socket request, after its session was found
 /// current. The owner's surfaces, and every method outside Cedar's
-/// `conversation.write`, are admitted by the method's grant as before.
+/// `conversation.write`, are admitted by the method's grant as before. Paired
+/// peek asks [`admit_paired_read`] before the manifest fallback, then its handler
+/// still asks current target read admission.
 ///
 /// A paired session holding `conversation.write` would otherwise act as its
 /// owner, so for it every `conversation.write` method that its grants do
@@ -440,6 +440,11 @@ pub(super) async fn admit_request(
         .is_some()
     {
         return as_owner().await;
+    }
+    // Peek is an ordinary request, unlike subscription task admission. Ask the
+    // same paired-read owner here before the manifest's owner-surface fallback.
+    if method == "conversation.peek" && admit_paired_read(state, session, method).await? {
+        return Ok(Initiation::owner());
     }
     let writes = action_for_method(method) == Some("conversation.write");
     if !writes || ADMITTED_BY_ITS_OWN_CHECK.contains(&method) {
