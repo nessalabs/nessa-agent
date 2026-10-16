@@ -1,10 +1,7 @@
 //! Owner-authorized committed event readers and their bounded metadata projection.
 //! Readers own no Agent, writer lease, or callbacks into execution.
 
-use super::{
-    conversation_session, load_conversation, ConversationCaller, ConversationError,
-    ConversationService,
-};
+use super::{conversation_session, ConversationCaller, ConversationError, ConversationService};
 use crate::conversation::application::error_code;
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_sdk::application::agent_execution::{
@@ -85,11 +82,7 @@ impl ConversationService {
         id: &ConversationId,
         caller: &ConversationCaller,
     ) -> Result<(), ConversationError> {
-        let record = load_conversation(self.inner.metadata.as_ref(), id)
-            .await?
-            .ok_or(ConversationError::NotFound)?;
-        self.access().admit(&record, caller)?;
-        Ok(())
+        self.check_view_access(id, caller).await
     }
 
     /// Open an independent bounded semantic reader after owner admission.

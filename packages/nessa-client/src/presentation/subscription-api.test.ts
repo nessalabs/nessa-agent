@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest"
 import { createSubscriptionApi, type SubscriptionPort } from "./subscription-api.js"
 import type { ConnectionState } from "../application/managed-session.js"
+import { endedFrame } from "../protocol/subscription-validate.js"
 import { NessaConnectionClosedError } from "../application/connection-closed-error.js"
 import {
   passiveReadTiming,
@@ -93,6 +94,73 @@ function viewHandlers() {
 }
 
 describe("subscription API", () => {
+  it("rejects terminal frames combining view and event cursors", () => {
+    expect(() =>
+      endedFrame({
+        subscriptionId: "1",
+        reason: "lagging",
+        lastDelivered: cursor,
+        lastEventCursor: "event-cursor",
+      }),
+    ).toThrow(TypeError)
+  })
+
+  for (const kind of ["events", "view", "list", "agents"] as const) {
+    for (const early of [false, true]) {
+      for (const field of ["lastDelivered", "lastEventCursor", "both"] as const) {
+        const valid =
+          (kind === "events" && field === "lastEventCursor") ||
+          (kind === "view" && field === "lastDelivered")
+        it(`${valid ? "accepts" : "rejects"} terminal cursor evidence for ${kind}, ${field}, ${early ? "before" : "after"} open reply`, async () => {
+          const terminal = {
+            subscriptionId: "1",
+            reason: "lagging",
+            ...(field === "lastDelivered" || field === "both"
+              ? { lastDelivered: cursor }
+              : {}),
+            ...(field === "lastEventCursor" || field === "both"
+              ? { lastEventCursor: "event-cursor" }
+              : {}),
+          }
+          const wire = port((method) => {
+            if (early && method !== ProductMethod.ConversationUnsubscribe)
+              wire.emit(ProductEvent.ConversationSubscriptionEnded, terminal)
+            return { subscriptionId: "1" }
+          })
+          const api = createSubscriptionApi(wire.session)
+          const handlers = {
+            batch: vi.fn(),
+            view: vi.fn(),
+            list: vi.fn(),
+            catalog: vi.fn(),
+            ended: vi.fn(),
+          }
+          const opened = await (kind === "events"
+            ? api.events(conversationId, handlers)
+            : kind === "view"
+              ? api.view(conversationId, handlers)
+              : kind === "list"
+                ? api.list(handlers)
+                : api.agents(handlers))
+          if (!early) wire.emit(ProductEvent.ConversationSubscriptionEnded, terminal)
+          const { subscriptionId: _, ...end } = terminal
+          expect(handlers.ended).toHaveBeenCalledExactlyOnceWith(
+            valid ? end : { reason: "invalid_frame" },
+          )
+          wire.emit(ProductEvent.ConversationSubscriptionEnded, terminal)
+          expect(handlers.ended).toHaveBeenCalledOnce()
+          await opened.close()
+          const stops = wire.request.mock.calls.filter(
+            ([method]) =>
+              method === ProductMethod.ConversationUnsubscribe ||
+              method === ProductMethod.AgentsUnsubscribe,
+          )
+          expect(stops).toHaveLength(valid ? 0 : 1)
+        })
+      }
+    }
+  }
+
   it("bounds unknown subscription identities and ends every affected open before releasing its actual handle", async () => {
     const replies: ((reply: { subscriptionId: string }) => void)[] = []
     let admitted!: () => void
@@ -276,12 +344,12 @@ describe("subscription API", () => {
     const wire = port()
     const handlers = { batch: vi.fn(), ended: vi.fn() }
     const api = createSubscriptionApi(wire.session)
-    expect(() =>
+    await expect(
       api.events(conversationId, handlers, { after: "one", replay: true }),
-    ).toThrow(TypeError)
-    expect(() =>
+    ).rejects.toBeInstanceOf(TypeError)
+    await expect(
       api.events(conversationId, handlers, { kinds: ["state.changed", "state.changed"] }),
-    ).toThrow(TypeError)
+    ).rejects.toBeInstanceOf(TypeError)
     expect(wire.request).not.toHaveBeenCalled()
   })
 

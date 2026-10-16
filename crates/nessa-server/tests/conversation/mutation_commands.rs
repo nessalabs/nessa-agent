@@ -1434,8 +1434,11 @@ mod agent_tool_tests;
 #[tokio::test]
 async fn active_execution_ignores_truncated_display_and_opens_no_provider() {
     let directory = tempfile::tempdir().unwrap();
+    // The temporary locator's mode follows umask. Storage owns a private child.
+    let root = directory.path().join("conversations");
+    nessa_local_storage::create_directory(&root).unwrap();
     let provider = Arc::new(ProviderFactory::default());
-    let (service, _, _) = fixture(directory.path(), provider.clone());
+    let (service, _, _) = fixture(&root, provider.clone());
     let target = id();
     opened(&service, &provider, &target).await;
     assert_eq!(

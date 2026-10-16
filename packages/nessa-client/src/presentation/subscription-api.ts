@@ -187,6 +187,11 @@ export function createSubscriptionApi(session: SubscriptionPort): SubscriptionAp
     return held
   }
 
+  const invalidEnd = (entry: Live, end: SubscriptionEnd) =>
+    (end.lastEventCursor !== undefined &&
+      entry.event !== ProductEvent.ConversationEvents) ||
+    (end.lastDelivered !== undefined && entry.event !== ProductEvent.ConversationView)
+
   const finish = (id: string, end: SubscriptionEnd) => {
     const entry = live.get(id)
     if (!entry) {
@@ -195,6 +200,8 @@ export function createSubscriptionApi(session: SubscriptionPort): SubscriptionAp
       return
     }
     live.delete(id)
+    if (invalidEnd(entry, end)) end = { reason: "invalid_frame" }
+    if (end.reason === "invalid_frame") void unsubscribe(id, entry.stop)
     entry.ended(end)
   }
   const unsubscribe = (id: string, stop: string) =>
@@ -265,6 +272,8 @@ export function createSubscriptionApi(session: SubscriptionPort): SubscriptionAp
     try {
       ended = endedFrame(payload)
     } catch {
+      const id = framedSubscription(payload)
+      if (id !== undefined) finish(id, { reason: "invalid_frame" })
       return
     }
     const { subscriptionId, ...end } = ended
@@ -322,6 +331,10 @@ export function createSubscriptionApi(session: SubscriptionPort): SubscriptionAp
     // What arrived with the answer, in the order it came; nothing of an open
     // given up on its way, which the gate closes next.
     if (signal?.aborted) held = undefined
+    if (held?.end && invalidEnd(entry, held.end)) {
+      finish(subscriptionId, { reason: "invalid_frame" })
+      held = undefined
+    }
     if (held?.frame) route(held.frame.event, held.frame.payload)
     for (const batch of held?.batches ?? []) route(batch.event, batch.payload)
     // A held frame that failed its checks has ended it already.
@@ -337,7 +350,7 @@ export function createSubscriptionApi(session: SubscriptionPort): SubscriptionAp
   }
 
   return {
-    events: (conversationId, handlers, options = {}) => {
+    events: async (conversationId, handlers, options = {}) => {
       if (!conversationIdPattern.test(conversationId))
         return Promise.reject(new TypeError("Invalid conversation ID"))
       const params = eventSubscribeOptions(conversationId, options)

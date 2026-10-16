@@ -426,6 +426,9 @@ results and thinking are not included. Existing owner policy applies to every ba
 | E15 | Adapter returns a page or Idle after a start/prior checkpoint | Same session/incarnation, exclusive page progress, nondecreasing Idle; first valid output establishes continuity for Beginning/Now; contradictions refuse before delivery |
 | E16 | Client receives differing event identity and cursor | Reject the batch before invoking its handler |
 | E17 | First-party owner phone uses events or authoritative peek | Canonical purpose policy explicitly permits these read operations; ordinary current target admission still applies, while administrative methods remain denied |
+| E18 | Terminal frame has both cursor types, or a cursor for another subscription kind, before or after open reply | Reject contradictory cursor combinations at validation; correlate the remaining cursor with the registered kind before terminal callbacks; end invalid_frame and release the handle before exposing wrong evidence |
+| E19 | Invalid event subscribe options arrive before admission | Return a rejected Promise with TypeError, without sending an RPC |
+| E20 | Owner phone peeks while target policy allows Read but denies Act | Use the shared command-target Cedar admission before reading active execution; no lifecycle read after refusal |
 
 The socket owns subscription tasks; a reconnect recreates a subscription from the
 consumer's cursor. The SDK owns the semantic reader and its bounded storage work.
