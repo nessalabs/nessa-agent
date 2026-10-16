@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { conversation, type AgentFeatures } from "../model"
+import { conversation, type AgentFeatures, type UserTurn } from "../model"
 import { conversationNotice } from "./notification"
 
 const agentFeatures: AgentFeatures = {
@@ -132,18 +132,43 @@ describe("conversation notification", () => {
       retry: { kind: "draft" },
     })
   })
+  // docs/state/services/desktop/chat/recover-a-refused-or-unconfirmed-send.md,
+  // "Several refused messages": one test per row.
+  const refused = (id: string, error: string): UserTurn => ({
+    id,
+    from: "user",
+    content: [],
+    receipt: "failed",
+    error,
+  })
+  it("offers the refusal that set the conversation's error", () => {
+    const value = conversation("tab")
+    value.error = "busy"
+    value.turns = [refused("older", "offline"), refused("newer", "busy")]
+    expect(conversationNotice(value)?.retry).toEqual({ kind: "draft", turnId: "newer" })
+  })
   it("still offers an older refused turn after a newer one was retried", () => {
     // Retrying the newer turn clears the conversation's error; the older turn
     // is still refused and keeps its own error.
     const value = conversation("tab")
     value.turns = [
-      { id: "older", from: "user", content: [], receipt: "failed", error: "offline" },
+      refused("older", "offline"),
       { id: "newer", from: "user", content: [], receipt: "accepted" },
     ]
     expect(conversationNotice(value)).toEqual({
       title: "Error sending",
       description: "offline",
       retry: { kind: "draft", turnId: "older" },
+    })
+  })
+  it("lets a control that failed after a refusal hold the notice", () => {
+    const value = conversation("tab")
+    value.error = "Close failed"
+    value.turns = [refused("older", "offline")]
+    expect(conversationNotice(value)).toMatchObject({
+      title: "Conversation needs attention",
+      description: "Close failed",
+      retry: { kind: "refresh" },
     })
   })
   it("says the agent was still starting when the gateway rejected the send", () => {

@@ -87,8 +87,12 @@ export function discardFailedTurn(
   turnId: string,
 ): LocalTabs {
   const conv = findConversation(tabs, conversationId)
-  if (!conv || !refusedTurn(conv, turnId)) return tabs
+  const discarded = conv && refusedTurn(conv, turnId)
+  if (!conv || !discarded) return tabs
   const turns = conv.turns.filter((turn) => turn.id !== turnId)
+  // A newer failure, such as a control that failed after this refusal, is not
+  // this turn's to clear.
+  if (discarded.error !== conv.error) return replaceConversation(tabs, { ...conv, turns })
   const last = [...turns]
     .reverse()
     .find((turn) => turn.from === "user" && turn.receipt === "failed")
