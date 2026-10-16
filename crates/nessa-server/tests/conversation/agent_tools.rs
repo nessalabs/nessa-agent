@@ -69,14 +69,15 @@ async fn source_admission_preserves_the_running_owner_actor_and_target() {
     );
     assert_eq!(admitted.caller().surface_id, "panel");
     assert_eq!(admitted.caller().action_id, "stable-request");
-    let records = audit.records.lock().unwrap();
-    assert_eq!(records.len(), 1);
-    assert_eq!(records[0].source, source);
-    assert_eq!(records[0].target, Some(target));
-    assert_eq!(records[0].execution, "source-turn");
-    assert!(records[0].allowed);
-    assert_eq!(records[0].policies, ["owner.agent_tools"]);
-    drop(records);
+    {
+        let records = audit.records.lock().unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].source, source);
+        assert_eq!(records[0].target, Some(target));
+        assert_eq!(records[0].execution, "source-turn");
+        assert!(records[0].allowed);
+        assert_eq!(records[0].policies, ["owner.agent_tools"]);
+    }
     drop(release);
     retire(service, storage, metadata).await;
 }
@@ -176,7 +177,7 @@ async fn agent_tools_relay_create_send_replay_and_refuse_a_foreign_target() {
     tools.attach(service.clone());
     let servers = McpServers::new(Vec::new(), Arc::new(RuntimeClock::new())).unwrap();
     let grants = ConversationGrants::new(servers.clone(), Arc::new(OsTokens));
-    let grant = grants.grant(&SessionId::new(&source.to_string()).unwrap());
+    let grant = grants.grant(&SessionId::new(source.to_string()).unwrap());
     let key = ConfigurationKey::new([9; 32]);
     let digest = built_in_digest(&key, tools.as_ref());
     let relay = Arc::new(Relay::new(servers, grants, key).with_built_in(tools));
@@ -440,7 +441,7 @@ async fn agent_tools_relay_create_send_replay_and_refuse_a_foreign_target() {
     assert_eq!(provider.cancel_calls.load(Ordering::SeqCst), 1);
     assert_eq!(
         provider.cancel_turns.lock().unwrap().as_slice(),
-        [active_execution.clone()]
+        std::slice::from_ref(&active_execution)
     );
     let retry_stop = client
         .call(

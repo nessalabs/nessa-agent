@@ -63,7 +63,7 @@ fn the_built_in_server_is_handed_over_beside_the_configured_and_takes_its_name()
         "/bundle/nessa",
         "/s.sock",
         &key,
-        &[tools.clone()],
+        std::slice::from_ref(&tools),
     );
     let names: Vec<&str> = handed
         .iter()

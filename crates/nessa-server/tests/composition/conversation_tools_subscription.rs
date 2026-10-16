@@ -71,7 +71,7 @@ async fn source_admission_cancel_and_deadline_release_the_tool_reader_slot() {
         tools.attach(service.clone());
         let (stop, stopped) = watch::channel(false);
         let work = tools.call(
-            &SessionId::new(&id().to_string()).unwrap(),
+            &SessionId::new(id().to_string()).unwrap(),
             "call".into(),
             "subscribe".into(),
             json!({"threadId":id().to_string(),"waitMs":30000}),
@@ -330,7 +330,7 @@ async fn repeated_cancelled_observers_cannot_exceed_detached_source_capacity() {
         *metadata.metadata_load_gate.lock().unwrap() = Some((entered, read_release));
         let (stop, stopped) = watch::channel(false);
         let work = tokio::spawn(tools.call(
-            &SessionId::new(&id().to_string()).unwrap(),
+            &SessionId::new(id().to_string()).unwrap(),
             format!("call-{attempt}"),
             "subscribe".into(),
             json!({"threadId":id().to_string(),"waitMs":30000}),
@@ -357,7 +357,7 @@ async fn repeated_cancelled_observers_cannot_exceed_detached_source_capacity() {
     let result = tokio::time::timeout(
         Duration::from_secs(1),
         tools.call(
-            &SessionId::new(&id().to_string()).unwrap(),
+            &SessionId::new(id().to_string()).unwrap(),
             "over-capacity".into(),
             "subscribe".into(),
             json!({"threadId":id().to_string()}),
