@@ -10,6 +10,7 @@ separate proposed work. Local snapshots and submission retry recovery are implem
 | --- | --- |
 | [Creation commands](commands.md) | Principal control receipts, original initialization attempts, recovery and host deletion authority |
 | [Agent](agent.md) | Entry point, identity, model/operation capabilities, automatic storage, and UI flow |
+| [Committed events](events.md) | Bounded semantic replay, stable cursors, adapter support and observation ownership |
 | [Lifecycle](lifecycle.md) | Live sessions, execution boundaries, cleanup, and provider-context restoration |
 | [Scheduling](scheduling.md) | FIFO follow-ups, boundary/native steering, withdrawal, idempotent retries, and retained evidence |
 | [Hooks](hooks.md) | Typed before, permission-review, and after invocation callbacks, the bounded observation window, and failure semantics |
