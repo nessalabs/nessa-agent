@@ -320,16 +320,20 @@ export function AgentsOverview({
   }, [filled, drawn, rowCount, peekDrawn])
 
   const timers = useRef(new Set<number>())
+  const frames = useRef(new Set<number>())
   const watches = useRef(new Set<() => void>())
   // An answer that settles after the overview closed must not start a watch or timer.
   const mounted = useRef(true)
   useEffect(() => {
     const pending = timers.current
+    const departing = frames.current
     const watching = watches.current
     mounted.current = true
     return () => {
       mounted.current = false
       pending.forEach((timer) => window.clearTimeout(timer))
+      departing.forEach((frame) => cancelAnimationFrame(frame))
+      departing.clear()
       watching.forEach((stop) => stop())
     }
   }, [])
@@ -426,9 +430,9 @@ export function AgentsOverview({
         // Taken: what became of it is said to a screen reader, and the row
         // waits, quiet, until the source moves its session on — "sent" can
         // come before the session's own move — so it never springs back into
-        // Needs you. Then it leaves its place as it arrives in the new one,
-        // in the same beat (`leaveInPlace`). An update that never comes lets
-        // it go after `heldAtMost`, shown as the workspace holds it.
+        // Needs you. Once the source moves, departure is queued separately
+        // from the answer task (`leaveInPlace`). An update that never comes
+        // lets it go after `heldAtMost`, shown as the workspace holds it.
         phase("leaving")
         setSaid(`${answeredLabels[choice]}: ${summary.title}`)
         // Still where it was: the session waits on the person (what lists it
@@ -443,17 +447,29 @@ export function AgentsOverview({
           )
         }
         const moveOn = () => {
-          // Its copy is taken as it stands leaving — its answers put away —
-          // not as it stood a moment ago, still answering.
-          flushSync(() => phase("leaving"))
-          const column = list.current
-          const item = column
-            ?.querySelector(`[data-overview-item="${CSS.escape(summary.id)}"]`)
-            ?.closest<HTMLElement>(".agents-row-item")
-          if (column && item) leaveInPlace(column, item)
-          // Taken away in this same task, so the re-flow — the copy going,
-          // the gap closing, the session arriving — starts in the next frame.
-          flushSync(release)
+          // Separate departure geometry from the answer task and its focus
+          // change. Source observation and the held deadline start at once;
+          // only the copy and release wait for these frames (`overview.test.tsx`).
+          const pending = frames.current
+          const first = requestAnimationFrame(() => {
+            pending.delete(first)
+            const second = requestAnimationFrame(() => {
+              pending.delete(second)
+              // Its copy is taken as it stands leaving — its answers put away —
+              // not as it stood a moment ago, still answering.
+              flushSync(() => phase("leaving"))
+              const column = list.current
+              const item = column
+                ?.querySelector(`[data-overview-item="${CSS.escape(summary.id)}"]`)
+                ?.closest<HTMLElement>(".agents-row-item")
+              if (column && item) leaveInPlace(column, item)
+              // Copy and release stay together, so the gap closes as the
+              // session arrives in its new group.
+              flushSync(release)
+            })
+            pending.add(second)
+          })
+          pending.add(first)
         }
         if (!asks()) return moveOn()
         const done = (moved: boolean) => {
@@ -716,7 +732,9 @@ export function AgentsOverview({
         className="agents-overview"
         aria-label="Agents"
         data-alt={alt || undefined}
-        data-split={split || undefined}
+        // Beside nothing, the list is the page's one column, centred: with
+        // nothing listed there is no peek to make room for.
+        data-split={(split && rowCount > 0) || undefined}
       >
         <div
           ref={surface}

@@ -1269,6 +1269,12 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
       try {
         prepared = prepareSubmission({
           conversationId: message.sessionId,
+          // Lost answer -> Send Again: retain both identities. The SDK's
+          // submission recovery compares the saved actor, including request
+          // identity, as well as the execution and input. W2 covers capture
+          // and explicit resend, including replacement of this source.
+          // An unresolved command stays unresolved; another attempt does not
+          // authorize a new command or replay of provider work.
           executionId: message.messageId,
           requestId: message.messageId,
           text: message.text,

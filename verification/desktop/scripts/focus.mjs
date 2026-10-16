@@ -249,6 +249,136 @@ const noFewer = async (page, than) =>
  */
 const withinAnswerPause = 80
 
+/** Hover takes priority over a keyboard row, except for its focused action. */
+async function overviewActionPriority(page) {
+  const failures = []
+  const trail = []
+  await page.keyboard.press(keys.overview)
+  await contentIs(page, content.overview)
+  await onOverviewRow(page)
+  await settled(page)
+  const rows = page.locator(css.overviewNeedsYouList).locator(css.overviewRequest)
+  const ids = await rows.evaluateAll((items) =>
+    items.map((item) => item.dataset.overviewItem),
+  )
+  if (ids.length < 4)
+    throw new CannotRun(`the overview lists ${ids.length} requests; four are needed`)
+  await need(page, css.overviewPeek, "the peek beside the request list")
+
+  const sample = async (step, focused, shown, hovered = null, action = false) => {
+    await frames(page, 2)
+    await settled(page)
+    const measured = await page.evaluate(
+      (sel) => {
+        const active = document.activeElement
+        return [...document.querySelector(sel.list).querySelectorAll(sel.request)].map(
+          (row) => {
+            const actions = row.querySelector(sel.actions)
+            const box = actions?.getBoundingClientRect()
+            const style = actions ? getComputedStyle(actions) : null
+            const time = row.querySelector(sel.time)
+            return {
+              id: row.dataset.overviewItem,
+              shown:
+                actions?.checkVisibility() === true &&
+                style.clipPath === "none" &&
+                Number(style.opacity) > 0 &&
+                box.width > 1 &&
+                box.height > 1,
+              time: time ? Number(getComputedStyle(time).opacity) : null,
+              hovered: row.matches(":hover"),
+              focused: row.contains(active),
+              focusVisible: active?.matches(":focus-visible") === true,
+              actionFocused: actions?.contains(active) === true,
+            }
+          },
+        )
+      },
+      {
+        list: css.overviewNeedsYouList,
+        request: css.overviewRequest,
+        actions: css.overviewRequestActions,
+        time: css.overviewRequestTime,
+      },
+    )
+    trail.push({ step, rows: measured })
+    const visible = measured.filter((row) => row.shown).map((row) => row.id)
+    if (visible.join() !== shown.map((index) => ids[index]).join())
+      failures.push(
+        `${step}: actions show on [${visible}], expected [${shown.map((index) => ids[index])}]`,
+      )
+    const pointed = measured.filter((row) => row.hovered).map((row) => row.id)
+    if (pointed.join() !== (hovered === null ? "" : ids[hovered]))
+      failures.push(
+        `${step}: pointer is on [${pointed}], expected ${hovered === null ? "no request" : ids[hovered]}`,
+      )
+    const held = measured.filter((row) => row.focused)
+    if (
+      held.length !== 1 ||
+      held[0].id !== ids[focused] ||
+      !held[0].focusVisible ||
+      held[0].actionFocused !== action
+    )
+      failures.push(
+        `${step}: visible keyboard focus did not stay on ${action ? "an action in " : ""}${ids[focused]}`,
+      )
+    for (const [index, row] of measured.entries()) {
+      const expected = shown.includes(index) ? 0 : 1
+      if (row.time === null || Math.abs(row.time - expected) > 0.01)
+        failures.push(
+          `${step}: ${row.id}'s time opacity is ${row.time}, expected ${expected}`,
+        )
+    }
+  }
+  const outside = () =>
+    page.locator(css.overviewHeader).hover({ position: { x: 10, y: 5 } })
+  const walkTo = async (index) => {
+    await outside()
+    await page.keyboard.press(keys.home)
+    for (let at = 0; at < index; at++) await page.keyboard.press(keys.down)
+  }
+  const last = ids.length - 1
+  for (const index of [0, Math.floor(ids.length / 2), last]) {
+    await walkTo(index)
+    await sample(`keyboard row ${index}, pointer on header`, index, [index])
+  }
+
+  await walkTo(0)
+  await rows.nth(last).hover({ position: { x: 80, y: 10 } })
+  await sample("keyboard first, pointer last", 0, [last], last)
+  await walkTo(last)
+  await rows.first().hover({ position: { x: 80, y: 10 } })
+  await sample("keyboard last, pointer first", last, [0], 0)
+  await outside()
+  await sample("pointer returns to header", last, [last])
+  await page.locator(css.overviewPeek).hover({ position: { x: 10, y: 10 } })
+  await sample("pointer on beside peek", last, [last])
+
+  // The space between the Needs you heading and its list is inside the
+  // overview but outside every request, including after the list scrolled.
+  const heading = page.locator(css.needsYouHeading)
+  await heading.scrollIntoViewIfNeeded()
+  const head = await heading.boundingBox()
+  const first = await rows.first().boundingBox()
+  if (!head || !first || first.y - head.y - head.height < 2)
+    throw new CannotRun("the Needs you heading/list gap could not be located")
+  await page.mouse.move(first.x + 8, (head.y + head.height + first.y) / 2)
+  await sample("pointer in heading/list gap", last, [last])
+
+  await walkTo(last)
+  const action = rows
+    .nth(last)
+    .locator(css.overviewRequestActions)
+    .getByRole("button")
+    .first()
+  await action.focus()
+  await rows.first().hover({ position: { x: 80, y: 10 } })
+  await sample("focused action in last, pointer first", last, [0, last], 0, true)
+  if (!(await action.evaluate((button) => button === document.activeElement)))
+    failures.push("hovering the first request moved focus off the chosen action button")
+  return { trail, failures }
+}
+
 /**
  * One press answers one request in the overview: a held ⌘↩'s repeats answer
  * nothing more, and a second press straight after the keyboard moved on is
@@ -979,6 +1109,9 @@ Steps (each asserts where the caret is afterwards):
   focus-reply (1440 × 900 and 1000 × 700): ↓ then ⌘R at once, and typing at
   once → the caret and every key are in the next row's reply pill; sending,
   which moves that row to Working → the caret stays in that session's pill
+  focus-overview-action-priority: first/middle/last request focus, nonadjacent
+  hover priority, header/peek/list-gap restoration, and a focused action
+  remaining visible under another request's hover; focus identity stays put
   focus-answers-overview, -card: a held ⌘↩, and ⌘↩ twice 80ms apart, each answer one request;
   a held ↩ on a pane card's Allow Once, and a double click on Deny and on
   Always Allow, each answer one, and the held ↩ sends nothing typed
@@ -1216,6 +1349,7 @@ await main(meta, async ({ options, rep, url }) => {
         },
       )
       for (const [name, answer] of [
+        ["focus-overview-action-priority", overviewActionPriority],
         ["focus-answers-overview", answerOnceInOverview],
         ["focus-answers-card", answerOnceOnCard],
       ])

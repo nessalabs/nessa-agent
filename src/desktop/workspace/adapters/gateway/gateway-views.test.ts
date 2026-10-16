@@ -620,6 +620,23 @@ describe("a conversation view as a transcript", () => {
     ).toBeNull()
   })
 
+  it("marks a reply working while its turn runs or waits, and settled once it ended however it ended", () => {
+    const reply = (status: ConversationMessage["status"]) =>
+      transcriptFrom(
+        view("c", {
+          messages: [turn({ status, parts: [toolPart("t1", 0)] })],
+          tools: [tool({ title: "Reading files" })],
+        }),
+        1,
+        at,
+        GATEWAY_NOW_MS,
+      ).messages.find((message) => message.role === "agent")
+    expect(reply("running")).toMatchObject({ working: true })
+    expect(reply("queued")).toMatchObject({ working: true })
+    for (const ended of ["completed", "failed", "cancelled", "unresolved"] as const)
+      expect(reply(ended), ended).not.toHaveProperty("working")
+  })
+
   it("asks the first pending permission as the approval, under an id that names the review", () => {
     const transcript = transcriptFrom(
       view("c", {

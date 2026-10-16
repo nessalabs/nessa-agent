@@ -13,12 +13,14 @@
  * | phase      | event                                     | then                                  |
  * | ---------- | ----------------------------------------- | ------------------------------------- |
  * | answering  | answer refused, unconfirmed, or not asked | released: the row as the workspace has it |
- * | answering  | sent, the session already moved on        | leaving: copy left in place, released at once |
+ * | answering  | sent, the session already moved on        | leaving: departure queued for two frames later |
  * | answering  | sent, the session still waits             | leaving: held, watching the store     |
- * | leaving    | the source moves the session on           | copy left in place, released          |
- * | leaving    | the source asks something new             | released; the row stays, asking again |
+ * | leaving    | the source moves the session on           | watch stopped immediately; copy and release together two frames later |
+ * | leaving    | the source asks something new             | departure queued; the released row asks the current request |
+ * | leaving    | source moves away and back before departure | first observed move stays queued; release shows current source |
+ * | leaving    | another session also moves on             | each departure keeps its own two-frame callback |
  * | leaving    | `heldAtMost` passes with no move          | released as the workspace has it      |
- * | any        | the overview closes                       | watches and timers stopped; a late answer does nothing |
+ * | any        | the overview closes                       | watches, timers and either pending frame stopped; a late answer does nothing |
  * | any        | reduced motion                            | no copy; the row is simply where it now belongs |
  */
 import type { Approval, ApprovalChoice, ApprovalOption } from "../../model/transcript"

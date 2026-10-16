@@ -1165,9 +1165,25 @@ html:not(.dark) [data-surface] {
 }
 
 .split-panes-grid[data-split-multi]
-  .workspace-pane:not([data-focused])
+  .workspace-pane:not([data-focused]):not([data-split-flying])
   .desktop-header[data-sliver] {
   opacity: 0.24;
+}
+
+/*
+ * Home artwork and a conversation's band wait while their pane travels past
+ * the controls. The workspace scope also overrides a page-mode header's
+ * opacity; its normal transition resumes when the existing flight ends.
+ */
+.workspace .workspace-pane[data-split-flying] .desktop-header {
+  opacity: 0;
+  transition: none;
+  pointer-events: none;
+}
+
+/* Framing normally opts this image back into pointer input. */
+.workspace .workspace-pane[data-split-flying] .desktop-header-image[data-adjusting] {
+  pointer-events: none;
 }
 
 /*
@@ -1175,8 +1191,8 @@ html:not(.dark) [data-surface] {
  * window's controls, as the pane's header does: nothing of it is drawn
  * beneath them, and its left fade starts where they end — and so where a
  * drag's preview would put it (`data-drag-corner`). While panes travel
- * it waits out of sight (`panes.css`), so a pane leaving the corner does not
- * carry the band under the controls on its way.
+ * it waits out of sight (the flight rule above), so a pane leaving the corner
+ * does not carry the band under the controls on its way.
  */
 .workspace[data-panes-alone]
   .workspace-pane:is(

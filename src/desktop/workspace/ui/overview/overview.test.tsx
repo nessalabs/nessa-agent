@@ -168,6 +168,8 @@ async function mount({
           id: "run-1",
           role: "agent",
           at: 900,
+          // Its turn is still at work, so each step is its own line.
+          working: true,
           parts: [
             { kind: "step", step: "read", label: "Read", detail: "panes.tsx" },
             { kind: "step", step: "edit", label: "Edited", detail: "grid.tsx", added: 4 },
@@ -569,9 +571,160 @@ describe("the agents overview", () => {
     await act(async () => settle(10))
     expect(card("first")?.dataset.phase).toBe("leaving")
     await moveOn(source, "first", "Sign the build", "running")
+    // moveOn consumes the first frame; the departure waits for the second.
+    expect(card("first")?.dataset.phase).toBe("leaving")
+    expect(row("first")).toBeNull()
     await nextFrame()
     expect(card("first")).toBeNull()
     expect(row("first")?.dataset.kind).toBe("working")
+  })
+
+  it("queues the same two-frame departure when the source moves before the answer is confirmed", async () => {
+    const { source, store } = await mount()
+    store.dispatch(followWorkspace())
+    await open()
+    source.hold("approve")
+    await press(card("first") as HTMLElement, "Enter", { command: true })
+    await act(async () => {
+      source.emit({
+        kind: "session",
+        session: summary("first", "desktop", 600, "running", {
+          title: "Sign the build",
+          revision: 2,
+        }),
+      })
+      await source.release("approve")
+      await settle(10)
+    })
+    expect(card("first")?.dataset.phase).toBe("leaving")
+    expect(host.querySelector(".agents-overview-said")?.textContent).toBe(
+      "Allowed: Sign the build",
+    )
+    await nextFrame()
+    expect(card("first")?.dataset.phase).toBe("leaving")
+    await nextFrame()
+    expect(card("first")).toBeNull()
+    expect(row("first")?.dataset.kind).toBe("working")
+  })
+
+  it("keeps the first observed departure when the source moves away and back before either frame", async () => {
+    const { source, store } = await mount()
+    store.dispatch(followWorkspace())
+    await open()
+    await press(card("first") as HTMLElement, "Enter", { command: true })
+    await act(async () => {
+      source.emit({
+        kind: "session",
+        session: summary("first", "desktop", 600, "running", { revision: 2 }),
+      })
+      source.emit({
+        kind: "session",
+        session: summary("first", "desktop", 700, "needs-you", {
+          title: "Back from the source",
+          revision: 3,
+        }),
+      })
+      await settle(10)
+    })
+    expect(card("first")?.dataset.phase).toBe("leaving")
+    expect(card("first")?.textContent).toContain("Sign the build")
+    await nextFrame()
+    expect(card("first")?.dataset.phase).toBe("leaving")
+    await nextFrame()
+    expect(card("first")?.dataset.phase).toBeUndefined()
+    expect(card("first")?.textContent).toContain("Back from the source")
+  })
+
+  it("keeps separate two-frame departures for two answered sessions", async () => {
+    const { source, store } = await mount()
+    store.dispatch(followWorkspace())
+    await open()
+    await press(card("first") as HTMLElement, "Enter", { command: true })
+    elapse(answerPause)
+    await press(card("second") as HTMLElement, "Enter", { command: true })
+    await act(async () => {
+      for (const id of ["first", "second"])
+        source.emit({
+          kind: "session",
+          session: summary(id, "desktop", 600, "running", { revision: 2 }),
+        })
+      await settle(10)
+    })
+    await nextFrame()
+    for (const id of ["first", "second"]) expect(card(id)?.dataset.phase).toBe("leaving")
+    await nextFrame()
+    for (const id of ["first", "second"]) {
+      expect(card(id)).toBeNull()
+      expect(row(id)?.dataset.kind).toBe("working")
+    }
+  })
+
+  it.each([0, 1])(
+    "cancels a queued departure when the overview closes after %i departure frames",
+    async (frames) => {
+      const { source, store } = await mount()
+      store.dispatch(followWorkspace())
+      await open()
+      await press(card("first") as HTMLElement, "Enter", { command: true })
+      // Only the source observation below queues the departure. Capture its
+      // handle before React commits any further work, then its nested handle.
+      const requested = vi.spyOn(window, "requestAnimationFrame")
+      const cancelled = vi.spyOn(window, "cancelAnimationFrame")
+      let pendingDeparture = 0
+      await act(async () => {
+        source.emit({
+          kind: "session",
+          session: summary("first", "desktop", 600, "running", { revision: 2 }),
+        })
+        expect(requested).toHaveBeenCalledTimes(1)
+        pendingDeparture = requested.mock.results[0].value as number
+        await settle(10)
+      })
+      if (frames === 1) {
+        requested.mockClear()
+        await nextFrame()
+        expect(requested).toHaveBeenCalledTimes(1)
+        pendingDeparture = requested.mock.results[0].value as number
+      }
+      await act(async () => {
+        store.dispatch(showContent({ content: "panes" }))
+        await settle(10)
+      })
+      expect(cancelled).toHaveBeenCalledWith(pendingDeparture)
+      expect(host.querySelector(".agents-overview")).toBeNull()
+      await nextFrame()
+      await nextFrame()
+      await open()
+      expect(card("first")).toBeNull()
+      expect(row("first")?.dataset.kind).toBe("working")
+      expect(card("second")?.dataset.phase).toBeUndefined()
+    },
+  )
+
+  it("releases an unmoved answer at the existing two-second deadline without waiting for a frame", async () => {
+    const { store } = await mount()
+    store.dispatch(followWorkspace())
+    await open()
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] })
+    try {
+      await press(card("first") as HTMLElement, "Enter", { command: true })
+      expect(card("first")?.dataset.phase).toBe("leaving")
+      const frames = animation.pending()
+      await act(async () => {
+        vi.advanceTimersByTime(1_999)
+        await settle(10)
+      })
+      expect(card("first")?.dataset.phase).toBe("leaving")
+      await act(async () => {
+        vi.advanceTimersByTime(1)
+        await settle(10)
+      })
+      expect(card("first")).not.toBeNull()
+      expect(card("first")?.dataset.phase).toBeUndefined()
+      expect(animation.pending()).toBe(frames)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it("answers one request per press: a held key's repeats, or a press straight after, answer nothing more", async () => {
@@ -1377,6 +1530,7 @@ describe("the peek's story is bounded, and scrolls from the keyboard beneath its
           id: `run-${message + 1}`,
           role: "agent" as const,
           at: 900 + message,
+          working: true as const,
           parts: Array.from({ length: 10 }, (_, index) => ({
             kind: "step" as const,
             step: "read" as const,
@@ -2067,6 +2221,37 @@ describe("the frame the overview opens on", () => {
     expect(early).toEqual([])
     for (let frame = 0; frame < 14; frame++) await nextFrame()
     expect(document.activeElement).toBe(card("first"))
+  })
+
+  it("lays nothing listed out as one centred column, however wide its layer", async () => {
+    const observed: ((width: number) => void)[] = []
+    class Observer {
+      constructor(private readonly callback: ResizeObserverCallback) {}
+      observe(target: Element) {
+        if (target.classList.contains("workspace-overview-layer"))
+          observed.push((width) =>
+            this.callback(
+              [{ contentRect: { width } } as ResizeObserverEntry],
+              this as unknown as ResizeObserver,
+            ),
+          )
+      }
+      disconnect() {}
+    }
+    const was = globalThis.ResizeObserver
+    Object.assign(globalThis, { ResizeObserver: Observer })
+    try {
+      await mount({ index: { ...sampleIndex(), sessions: [] } })
+      await act(async () => observed.forEach((report) => report(1200)))
+      await open()
+      expect(host.querySelector(".agents-clear")).not.toBeNull()
+      // No peek can open beside an empty list, so none is made room for.
+      expect(host.querySelector(".agents-overview")?.hasAttribute("data-split")).toBe(
+        false,
+      )
+    } finally {
+      Object.assign(globalThis, { ResizeObserver: was })
+    }
   })
 
   it("opens in the arrangement its layer measured before it opened, and draws the peek beside the list a frame on", async () => {

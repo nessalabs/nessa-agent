@@ -39,6 +39,149 @@ const scenarios = {
       page.keyboard.press(keys.toggleSessionList),
     )
   },
+  "pane-header-flight-focus": async ({ page, watch, layout }) => {
+    if (layout !== "columns") return "skipped: no session list in this layout"
+    await page.keyboard.press(keys.toggleSidebar)
+    await settled(page)
+    const control = page.locator(`${css.focusedPane} ${css.paneActions}`).first()
+    await control.focus()
+    // Focus reveals the header actions through their existing fade. Establish
+    // the visible hit-test control only after that reveal has settled.
+    await settled(page)
+    await page.evaluate(
+      ([buttonSelector, paneSelector, flightSelector]) => {
+        const button = document.querySelector(buttonSelector)
+        if (!button) throw new Error("the focused pane has no Pane Actions control")
+        const pane = button.closest(paneSelector)
+        const read = () => {
+          const box = button.getBoundingClientRect()
+          const x = box.left + box.width / 2
+          const y = box.top + box.height / 2
+          const valid =
+            box.width > 0 &&
+            box.height > 0 &&
+            x >= 0 &&
+            x < innerWidth &&
+            y >= 0 &&
+            y < innerHeight
+          const hit = valid ? document.elementFromPoint(x, y) : null
+          const visible = button.checkVisibility({
+            checkOpacity: true,
+            checkVisibilityCSS: true,
+          })
+          return {
+            connected: button.isConnected,
+            focused: document.activeElement === button,
+            visible,
+            validHit: valid && hit !== null,
+            buttonHit: hit !== null && button.contains(hit),
+          }
+        }
+        let frame = 0
+        let counts = null
+        window.__headerFlightFocus = {
+          read,
+          start() {
+            counts = {
+              frames: 0,
+              flightFrames: 0,
+              hitSamples: 0,
+              hiddenFrames: 0,
+              invisibleHits: 0,
+              focusLostFrames: 0,
+              disconnectedFrames: 0,
+            }
+            const sample = () => {
+              const state = read()
+              counts.frames++
+              if (!state.connected) counts.disconnectedFrames++
+              if (!state.focused) counts.focusLostFrames++
+              if (pane.matches(flightSelector)) {
+                counts.flightFrames++
+                if (state.validHit) counts.hitSamples++
+                if (!state.visible) {
+                  counts.hiddenFrames++
+                  if (state.buttonHit) counts.invisibleHits++
+                }
+              }
+              frame = requestAnimationFrame(sample)
+            }
+            frame = requestAnimationFrame(sample)
+          },
+          stop() {
+            cancelAnimationFrame(frame)
+            return { ...counts, after: read() }
+          },
+          dispose() {
+            cancelAnimationFrame(frame)
+            delete window.__headerFlightFocus
+          },
+        }
+      },
+      [`${css.focusedPane} ${css.paneActions}`, css.pane, css.flyingPane],
+    )
+    const failures = []
+    const flightFocus = []
+    const reduced = await page.evaluate(
+      () => matchMedia("(prefers-reduced-motion: reduce)").matches,
+    )
+    const checkResting = (where, state) => {
+      if (!state.connected || !state.focused)
+        failures.push(`${where}: the original header control lost focus or was replaced`)
+      if (!state.visible || !state.validHit || !state.buttonHit)
+        failures.push(`${where}: the visible header control is not the pointer target`)
+    }
+    try {
+      const before = await page.evaluate(() => window.__headerFlightFocus.read())
+      checkResting("before flight", before)
+      if (failures.length)
+        return { reducedMotion: reduced, before, flightFocus, failures }
+      for (const step of ["list hides", "list shows"]) {
+        await page.evaluate(() => window.__headerFlightFocus.start())
+        let result
+        try {
+          await watch(`focused header, ${step}`, () =>
+            page.keyboard.press(keys.toggleSessionList),
+          )
+        } finally {
+          result = await page.evaluate(() => window.__headerFlightFocus.stop())
+        }
+        flightFocus.push({ step, ...result })
+        if (result.focusLostFrames || result.disconnectedFrames)
+          failures.push(
+            `${step}: the original header control lost focus or was replaced during motion`,
+          )
+        if (!reduced && (!result.flightFrames || !result.hitSamples))
+          failures.push(
+            `${step}: no flight frames or valid pointer samples were observed`,
+          )
+        if (result.invisibleHits)
+          failures.push(
+            `${step}: an invisible header control remained the pointer target in ${result.invisibleHits} frames`,
+          )
+        checkResting(`after ${step}`, result.after)
+        // Preserve the measured cause: activation with lost focus could open
+        // nothing and replace that evidence with an unrelated menu timeout.
+        if (failures.length)
+          return { reducedMotion: reduced, before, flightFocus, failures }
+      }
+      // A genuine keyboard activation proves that the restored control works;
+      // clicking during flight would itself move focus and spoil that check.
+      await page.keyboard.press(keys.enter)
+      await need(page, css.menu, "the Pane Actions menu after landing")
+      await page.locator(css.menu).first().waitFor({ state: "visible" })
+      await page.keyboard.press(keys.escape)
+      await page.locator(css.menu).first().waitFor({ state: "hidden" })
+      await settled(page)
+      checkResting(
+        "after menu Escape",
+        await page.evaluate(() => window.__headerFlightFocus.read()),
+      )
+      return { reducedMotion: reduced, before, flightFocus, failures }
+    } finally {
+      await page.evaluate(() => window.__headerFlightFocus.dispose())
+    }
+  },
   "edge-peek": async ({ page, watch, size }) => {
     await page.keyboard.press(keys.toggleSidebar)
     await settled(page)
@@ -294,13 +437,20 @@ await main(meta, async ({ options, rep, url }) => {
               held.fresh = false
               const sampler = safeArea(page)
               await sampler.take()
-              const skipped = await scenario({ page, watch: sampler.watch, layout, size })
-              if (typeof skipped === "string") return { note: skipped }
+              const result = await scenario({ page, watch: sampler.watch, layout, size })
+              if (typeof result === "string") return { note: result }
+              const { failures: behavioralFailures = [], ...metrics } = result ?? {}
               const bad = await sampler.take()
               const frames = await sampler.frames()
-              const failures = summarize(bad)
+              const failures = [...summarize(bad), ...behavioralFailures]
               if (frames === 0) failures.push("no frames were sampled")
-              return { frames, violations: bad.length, failures }
+              return {
+                ...metrics,
+                frames,
+                violations: bad.length,
+                offendingFrames: bad,
+                failures,
+              }
             },
           )
         }

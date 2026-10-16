@@ -153,6 +153,13 @@ export interface TurnMessage {
   readonly observedInput?: string | null
   readonly delivery?: Delivery
   /**
+   * Set on the agent's reply while its turn still runs or waits to, as the
+   * source reported the turn. Absent once the turn ended, however it ended:
+   * a settled reply folds each run of its steps into one line
+   * (`workSummary`, `ui/transcript/tool-steps.tsx`).
+   */
+  readonly working?: true
+  /**
    * How this turn ended, when the gateway said it ended other than by
    * finishing. On the agent's reply when there is one, otherwise on the
    * input, so a turn that said nothing still shows it.
@@ -431,6 +438,19 @@ export function groupSteps(
     } else groups.push(part)
   }
   return groups
+}
+
+/**
+ * What a settled run of steps is called when it is one line: how many tools
+ * it ran and, first, whether it touched the person's files. Only the kinds a
+ * step says are counted; a search or a command is a tool, not a read.
+ */
+export function workSummary(steps: readonly StepPart[]): string {
+  const count = `Ran ${steps.length} tool${steps.length === 1 ? "" : "s"}`
+  const read = steps.filter((step) => step.step === "read").length
+  const edited = steps.filter((step) => step.step === "edit").length
+  const bits = [read && `${read} read`, edited && `${edited} edited`].filter(Boolean)
+  return bits.length ? `${count} · ${bits.join(", ")}` : count
 }
 
 export type InlineRun =

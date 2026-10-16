@@ -126,6 +126,17 @@ controls — text, icons, images, code, or decorative art — in any frame.
   transcript, and the Agents overview — at 1440 × 900 and 1000 × 700.
   _Check:_ `safe-area.mjs`. It first proves the sampler catches a label placed
   at (8, 8) (`sampler-control`).
+- [ ] **A focused pane-header control keeps its identity and focus while the
+  session list moves its pane**, including entering and leaving the window's
+  corner with the sidebar hidden. A control that is invisible during the move
+  is not a pointer target; after landing it is visible, receives pointer hits,
+  and Enter opens its menu, whose Escape returns focus to the same control.
+  _Check:_ `safe-area.mjs --only pane-header-flight-focus` in Chrome and WebKit,
+  columns layout at 1440 × 900 and 1000 × 700. It reports sampled flight frames,
+  valid hit tests, hidden frames, invisible hits and focus losses; ordinary
+  motion requires actual flight samples. Reduced motion retains the focus and
+  restored-interaction checks without requiring a flight. The same scenario's
+  paint sampler still rejects any ink under the traffic lights.
 - [ ] **The titlebar's controls and the traffic lights share one row**: the
   controls are centred 24px below the window's top in every frame of ⌘B, rail
   open and closed, and the host centres the native buttons on that same line.
@@ -377,6 +388,22 @@ _ADR 238 › What fills the content region_ (the overview is workspace state).
   answers carry no tooltip; each names its chord (`aria-keyshortcuts`);
   labels ≥ 4.5:1. _Check:_ `responsive.mjs --only overview-row-answers`
   (Chromium and WebKit); unit tests `overview.test.tsx`.
+- [ ] **Request hover takes priority over row focus within Needs you**, with
+  the focused action button as the exception. _Check:_ `focus.mjs`
+  (`focus-overview-action-priority`, Chromium and WebKit, both layouts).
+  The seeded overview supplies the rows; this case checks presentation and
+  retained focus identity. Answer dispatch remains covered separately by
+  `focus-answers-overview`; expanded and settling overrides remain covered by
+  `responsive.mjs --only overview-row-answers,overview-leave`.
+
+  | Keyboard focus | Pointer | Actions and time | Focus after pointer move |
+  | --- | --- | --- | --- |
+  | First, middle, then last request row | Header, outside requests | Only focused row's actions show; its time hides | Same request, visibly focused |
+  | First request row | Last request, nonadjacent | Only hovered row's actions show; its time hides | First request remains focused |
+  | Last request row | First request, nonadjacent | Only hovered row's actions show; its time hides | Last request remains focused |
+  | Last request row | Header, beside peek, then heading/list gap | Focused row's actions return; its time hides | Last request remains focused |
+  | Action button in last request | First request | Both rows' actions show and times hide | Same action button remains visibly focused |
+
 - [ ] **An answered request moves to where it now belongs in one beat**: no
   label on the row and nothing drawn around it — no ring, box or line — in
   any frame. Taken, the row waits, quiet, until the source moves its session
@@ -1221,6 +1248,28 @@ mounts, `index.html` shows the fallback on that stage.
 
 ## The window's gateway
 
+### Reading tool steps through the gateway
+
+`mcp-apps-gateway.mjs` (`renders`) and `scripted-scenarios.mjs` (`allow`)
+read the actual steps in the agent message that owns their evidence. Settled
+work is deliberately collapsed; opening its summary is part of the reader's flow.
+The component's `ToolSteps.test.tsx` owns its ARIA disclosure contract.
+
+| Flow | Required evidence |
+| --- | --- |
+| Live work already lists its steps | Read those steps without requiring a settled summary. |
+| Settled work is collapsed | Open its actual summary, then read the actual tool titles in that message. |
+| The message is already expanded | Read again without closing it or changing the labels. |
+| One message contains several activities | Open its collapsed activities; count actual requested tool steps, not summaries. |
+| Zero or several agent messages match | Refuse an ambiguous owner; never pick the first message. |
+| Another message has valid tool steps | They cannot stand in for a unique wrong owner with no steps. |
+| The requested tool title is missing | The calling flow fails its exact tool count/title check. |
+
+_Check:_ `transcript-reading.mjs --only scoped-tool-evidence` covers the helper
+against real transcript DOM: collapsed, already open, zero owners, all 36 owners,
+and a unique saved paragraph with no tools. The gateway scripts retain their
+actual tool count, inline mount, result, origin and permission checks.
+
 The desktop app's window reads the local gateway over the panel's credential,
 which its host serves it once the gateway is ready (#419). When it cannot, it
 says why where the conversations would be.
@@ -1849,3 +1898,38 @@ and layouts: a nonzero column offset remains on its pane root, while all eight
 placement properties have their independent initial values in conversation
 content. Existing drag checks verify the resulting geometry and identities;
 `perf-budget.mjs` measures the actual drop at 4× CPU.
+
+
+## Reading a desktop reply
+
+`transcript-reading.mjs` drives the production `Transcript` and `Message` in a
+bounded 560px fixture, through the production workspace reducer. Its two source
+buttons publish a live reply and its final chunk; no production test API is used.
+Run in Chromium and WebKit (both layout labels; this isolated transcript has no
+layout-specific shell). Contracts for `ui/transcript/{message,tool-steps,transcript}.tsx`:
+
+- [ ] **Markdown keeps structure and safe links.** `markdown`: heading, two
+  separate positive-size paragraph boxes with no overlap, two bullets, two
+  ordered items and a fenced code surface. Agent HTML produces no executable
+  link, target, download or script element.
+- [ ] **Finished tools stay accessible.** `tools`: zero step rows before
+  disclosure; a named button reports two tools and opens exactly two original
+  step rows with `aria-expanded=true`.
+- [ ] **A final chunk does not go backwards.** `stream`: sample real animation
+  frames until the expected final words remain for 1.5s (the kit's fade is 1s),
+  within an 8s safety bound; no decreasing text length or leftover fade spans.
+- [ ] **The reader can return or interrupt.** `jump`, `interrupt`, `wheel` and
+  `reduced` use separate fresh pages: overflow is actual DOM
+  geometry, return has at least one measured position strictly between its
+  starting position and bottom (more than 1px from either), proceeds
+  monotonically within 1px rounding tolerance, and ends within 1px of the bottom;
+  synthetic wheel control-event interruption leaves at most 1px drift over
+  400ms, isolating cancellation from native displacement. A separate trusted
+  `page.mouse.wheel` over the real scroller must arrive before the return ends,
+  move upward, and finish at least 24px from the bottom after 500ms. Native wheel
+  kinetics are allowed; this check does not assert zero drift for user input.
+  With the window's published `data-motion=reduced` state, actual computed
+  `--desktop-slow` is 0ms and click reaches within 1px synchronously.
+
+These are functional geometry/order checks. Production frame budgets remain
+`perf-budget.mjs`; this fixture does not establish a performance budget.

@@ -309,6 +309,7 @@ describe("run-all's sum", () => {
       "published-files",
       "transcript-notes",
       "transcript-unreadable",
+      "transcript-reading",
       "user-attachments",
       "turn-outcomes",
       "clock-snapshots",

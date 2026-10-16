@@ -58,6 +58,7 @@ export const css = {
   // Panes (data-pane-key is the pane's identity; data-pane-focused marks the focused one)
   pane: "[data-pane-key]",
   cornerPane: "[data-pane-key][data-split-corner]", // the top-left pane, whose header clears the window's controls when no side column is beside it
+  flyingPane: "[data-pane-key][data-split-flying]", // a pane owned by the current FLIP animation
   panesAlone: "[data-workspace][data-panes-alone]", // both side columns closed: the corner pane's header steps past the controls
   focusedPane: "[data-pane-key][data-pane-focused]",
   paneGrid: "[data-split-grid]", // the grid the panes are laid out in — the box the drag measures
@@ -191,6 +192,8 @@ export const css = {
   overviewListed: "[data-overview-listed]",
   overviewRequest: ".agents-request", // class
   overviewCommand: ".agents-request-command", // class: the command on a request row
+  overviewRequestTime: ".agents-row-time", // class: a request row's time, replaced by its visible answers
+  overviewNeedsYouList: "#agents-needs-you + .agents-overview-list", // the single list containing waiting requests
   overviewRequestActions: ".agents-request-actions", // class: a request row's answers, at its end while pointed at or the keyboard is visibly on it
   overviewRowItem: ".agents-row-item", // class: a listed row's item
   overviewEdge: ".agents-overview-edge", // class: the resize edge between the list and the peek beside it (role=separator)
@@ -210,6 +213,9 @@ export const css = {
   peekCommand: ".agents-peek .workspace-approval-command", // class: the command in the peek, beside the list or under the row
   peekStory: ".agents-peek-story", // class: the turn's story, top to bottom
   peekEarlier: ".agents-peek-earlier", // class: says the turn holds more above what the peek draws
+  agentMessage: '.workspace-message[data-role="agent"]', // class: one agent reply
+  transcriptWorkTrigger: '.workspace-work [data-slot="agent-activity-trigger"]', // opens that run inline
+  transcriptStepLabel: ".workspace-step-label", // class: the actual tool title
   transcriptStep: ".workspace-steps li", // class: one step the agent took, in a message
   overviewColumn: ".agents-overview-column", // class: the list the arrow keys walk
   overviewResting: ".agents-overview-resting", // class: a group shown alone that lists nothing ("Nothing needs you"), the kit's EmptyState
@@ -934,4 +940,28 @@ export const userAttachments = {
   text: ".workspace-bubble p",
   pictures: "img",
   controls: "button",
+}
+
+/** Bounded production transcript with fixture-owned source publication buttons. */
+export const transcriptReading = {
+  page: "/verification/desktop/fixtures/transcript-reading/index.html",
+  title: "Nessa: transcript reading",
+  ready: "[data-transcript-reading]",
+  controls: "nav button",
+  forbidden: "script, a[target], a[download]",
+  scroller: ".workspace-transcript",
+  prose: ".workspace-prose",
+  heading: ".workspace-prose h2",
+  paragraphs: ".workspace-prose p",
+  bullets: ".workspace-prose ul > li",
+  numbered: ".workspace-prose ol > li",
+  code: "[data-slot=code-block]",
+  codeText: "[data-content]",
+  link: ".workspace-prose a",
+  work: ".workspace-work button",
+  steps: ".workspace-steps li",
+  jump: ".workspace-jump",
+  live: ".workspace-message[data-new] .workspace-prose",
+  start: "Start reply",
+  finish: "Finish reply",
 }

@@ -200,3 +200,83 @@ async fn current_submission_and_stop_agree_on_running_queued_cancelled_and_finis
     ));
     retire(service, storage, metadata).await;
 }
+
+/// The SDK's saved actor includes the transport request identity. Keeping the
+/// execution and body while changing that request is a conflict, not a retry.
+/// An orderly cold reopen retains that distinction and the original delivery.
+#[tokio::test]
+async fn a_submit_retry_keeps_its_request_identity_live_and_after_cold_reopen() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("data");
+    let target = id();
+    let mut original_delivery = None;
+    for reopened in [false, true] {
+        let provider = Arc::new(ProviderFactory::default());
+        let (service, storage, metadata) = fixture(&root, provider.clone());
+        if !reopened {
+            opened(&service, &provider, &target).await;
+            let accepted = service
+                .submit(
+                    target.clone(),
+                    caller("original-request"),
+                    "same-turn".into(),
+                    message("same body"),
+                    SubmissionMode::Queue,
+                )
+                .await
+                .unwrap();
+            assert_eq!(accepted.execution_id, "same-turn");
+            tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    let status = service
+                        .current_submission(target.clone(), caller("read"), "same-turn".into())
+                        .await
+                        .unwrap();
+                    if status.disposition == ConversationDisposition::Settled {
+                        break;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("the original turn settles before retry and reopen");
+        }
+        assert!(matches!(
+            service
+                .submit(
+                    target.clone(),
+                    caller("another-request"),
+                    "same-turn".into(),
+                    message("same body"),
+                    SubmissionMode::Queue,
+                )
+                .await,
+            Err(ConversationError::Agent(AgentError::SubmissionConflict))
+        ));
+        let recovered = service
+            .submit(
+                target.clone(),
+                caller("original-request"),
+                "same-turn".into(),
+                message("same body"),
+                SubmissionMode::Queue,
+            )
+            .await
+            .expect("the original request recovers its saved delivery");
+        assert_eq!(recovered.execution_id, "same-turn");
+        assert_eq!(recovered.disposition, ConversationDisposition::Settled);
+        let delivered = (recovered.execution_id, recovered.disposition);
+        if let Some(original) = &original_delivery {
+            assert_eq!(&delivered, original);
+        } else {
+            original_delivery = Some(delivered);
+        }
+        let executions = provider.executions.lock().unwrap().clone();
+        if reopened {
+            assert!(executions.is_empty(), "restored retries execute nothing");
+        } else {
+            assert_eq!(executions, ["same-turn"]);
+        }
+        retire(service, storage, metadata).await;
+    }
+}

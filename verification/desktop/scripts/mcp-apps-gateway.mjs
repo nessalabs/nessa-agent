@@ -81,6 +81,7 @@ import { agentTurn, startGatewayStack, waitFor } from "./lib/gateway-stack.mjs"
 import { main } from "./lib/run.mjs"
 import { writeView } from "./lib/scripted-evidence.mjs"
 import { css, names, offeredLabel, selectorFor } from "./lib/selectors.mjs"
+import { readTranscriptSteps } from "./lib/transcript.mjs"
 import {
   paneCount,
   paneCountIs,
@@ -727,13 +728,23 @@ const checks = {
     // transcript, every inline frame is its mount, and only one may be, or a
     // later step's review may be another's.
     await settled(page)
+    const message = page.locator(css.agentMessage).filter({
+      has: page.locator(selectorFor.appFrameIn("inline")),
+    })
+    const steps = await readTranscriptSteps(message)
+    failures.push(...steps.failures)
+    const ownedCards = steps.labels.filter((label) => label.includes(APP_TOOL)).length
+    if (ownedCards !== 1)
+      failures.push(
+        `the inline app's agent message has ${ownedCards} steps for ${APP_TOOL}, not one`,
+      )
     const cards = await page.locator(css.transcriptStep, { hasText: APP_TOOL }).count()
     const frames = (await page.$$(selectorFor.appFrameIn("inline"))).length
     const drawnOnce = [oneCard(cards), oneMount(frames)].filter(Boolean)
-    if (drawnOnce.length > 0) {
+    if (drawnOnce.length > 0 || failures.length > 0) {
       if (shot) await page.screenshot({ path: shot })
       failures.push(...drawnOnce)
-      return { seen: { cards, frames }, failures }
+      return { seen: { cards, ownedCards, frames, steps }, failures }
     }
     const seen = await app.evaluate(() => ({
       state: document.body.getAttribute("data-review-state"),
@@ -743,6 +754,8 @@ const checks = {
       url: location.href,
     }))
     seen.cards = cards
+    seen.ownedCards = ownedCards
+    seen.steps = steps
     seen.frames = frames
     seen.result = await output(app, "result")
     const pageOrigin = new URL(page.url()).origin

@@ -368,6 +368,29 @@ it("does not paint a carried pane's conversation on the frame it lifts", () => {
   expect(slot).toMatch(/transition:\s*none/)
 })
 
+/** Header ink may wait for landing; layout, conversation ink and focus may not. */
+function movingRuleKeepsContentAndFocus(rule: string): boolean {
+  const [selector, declarations = ""] = rule.split("{")
+  // An exact selector also rejects a comma group that adds the whole pane or
+  // its conversation. No broad header substring exemption may hide those.
+  const onlyFlightHeader =
+    selector?.replace(/\s+/g, " ").trim() ===
+    `.workspace-pane[${marks.flying}] > .workspace-pane-header`
+  // Parse every opacity declaration numerically instead of spelling CSS's
+  // zero forms here (0%, 00 and exponent notation all have the same value).
+  const hidesInk = declarations.split(";").some((declaration) => {
+    const [property, value = ""] = declaration.split(":")
+    return property?.trim() === "opacity" && Number.parseFloat(value) === 0
+  })
+  return (
+    !/content-visibility:\s*hidden|visibility:\s*hidden|display:\s*none/.test(
+      declarations,
+    ) &&
+    (onlyFlightHeader || !hidesInk) &&
+    !/background:\s*var\(--background\)/.test(declarations)
+  )
+}
+
 it("keeps conversation content and pane fill visible while a layout moves", () => {
   const sheet = readFileSync(
     new URL("./workspace/ui/panes/panes.css", import.meta.url),
@@ -378,12 +401,43 @@ it("keeps conversation content and pane fill visible while a layout moves", () =
     /data-(?:split-(?:measuring|flying|restoring)|drag-(?:reflow|settling))/.test(rule),
   )
   expect(moving.length).toBeGreaterThan(0)
-  for (const rule of moving) {
-    expect(rule).not.toMatch(
-      /content-visibility:\s*hidden|visibility:\s*hidden|opacity:\s*0|display:\s*none/,
-    )
-    expect(rule).not.toMatch(/background:\s*var\(--background\)/)
-  }
+  for (const rule of moving) expect(movingRuleKeepsContentAndFocus(rule), rule).toBe(true)
+})
+
+it.each<[string, string]>([
+  ["the whole pane", `.workspace-pane[${marks.flying}] { opacity: 0;`],
+  [
+    "the whole pane with percentage opacity",
+    `.workspace-pane[${marks.flying}] { opacity: 0%;`,
+  ],
+  [
+    "the whole pane with padded zero opacity",
+    `.workspace-pane[${marks.flying}] { opacity: 00;`,
+  ],
+  [
+    "the whole pane with exponent zero opacity",
+    `.workspace-pane[${marks.flying}] { opacity: 0e0;`,
+  ],
+  [
+    "the conversation",
+    `.workspace-pane[${marks.flying}] .workspace-transcript { opacity: 0;`,
+  ],
+  [
+    "a mixed header and pane group",
+    `.workspace-pane[${marks.flying}] > .workspace-pane-header, .workspace-pane[${marks.flying}] { opacity: 0;`,
+  ],
+  [
+    "a mixed header and conversation group",
+    `.workspace-pane[${marks.flying}] > .workspace-pane-header, .workspace-pane[${marks.flying}] .workspace-transcript { opacity: 0.0 !important;`,
+  ],
+  ...["visibility: hidden", "display: none", "content-visibility: hidden"].map(
+    (declaration): [string, string] => [
+      `header ${declaration}`,
+      `.workspace-pane[${marks.flying}] > .workspace-pane-header { ${declaration};`,
+    ],
+  ),
+])("rejects moving CSS that hides %s", (_name, rule) => {
+  expect(movingRuleKeepsContentAndFocus(rule)).toBe(false)
 })
 
 it("keeps the list and the panes under the Agents overview laid out", () => {

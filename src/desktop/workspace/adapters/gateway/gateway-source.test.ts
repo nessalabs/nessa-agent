@@ -2177,7 +2177,7 @@ describe("writes", () => {
     ])
   })
 
-  it("W2: a message sent again goes under the same ids, so the gateway takes it once", async () => {
+  it("W2: Send Again retains the command and turn identities after a lost answer", async () => {
     const { gateway, source } = started()
     gateway.views.set(conversationS, view(conversationS))
     const message = {
@@ -2193,11 +2193,58 @@ describe("writes", () => {
     // A later message sends no create: the gateway resolves the conversation itself.
     expect(gateway.count("create")).toBe(0)
     const sends = gateway.calls.filter((call) => call.method === "send")
+    // The real SDK compares the saved actor's request identity too. This
+    // adapter test checks what is sent, not whether the server deduplicates it.
     expect(sends.map((call) => call.args[4])).toEqual([
       { executionId: "m", requestId: "m" },
       { executionId: "m", requestId: "m" },
     ])
   })
+
+  it.each(["lost answer", "conversation_closed"] as const)(
+    "W2: replacing the source retains the pending command identity after %s",
+    async (failure) => {
+      const first = started()
+      const message = {
+        sessionId: conversationS,
+        messageId: "pending-turn",
+        text: "Hello",
+        model,
+        initiator: "person" as const,
+      }
+      const error =
+        failure === "lost answer"
+          ? new NessaConnectionClosedError(1006, "")
+          : new NessaConversationMutationError(
+              conversationS,
+              message.messageId,
+              message.messageId,
+              rpcCode("conversation_closed"),
+              () => Promise.resolve(undefined),
+            )
+      if (error instanceof NessaConversationMutationError)
+        expect(error.uncertain).toBe(true)
+      first.gateway.once("send", () => Promise.reject(error))
+      await expect(first.source.send(message)).rejects.toMatchObject({
+        reason: "unavailable",
+      })
+      first.source.dispose()
+
+      // The caller still owns the same outbox message after its source is
+      // replaced. No source-local cache is needed to recover its identities.
+      const next = started()
+      next.gateway.views.set(conversationS, view(conversationS))
+      await next.source.send(message)
+      const identity = (gateway: FakeGateway) =>
+        gateway.calls.find((call) => call.method === "send")?.args[4]
+      expect(identity(first.gateway)).toEqual({
+        executionId: "pending-turn",
+        requestId: "pending-turn",
+      })
+      expect(identity(next.gateway)).toEqual(identity(first.gateway))
+      next.source.dispose()
+    },
+  )
 
   it("W3, D12: approving once answers the option the gateway says allows, asks for no read, and the next frame says the conversation", async () => {
     const { gateway, source, updates, follow } = started()

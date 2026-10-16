@@ -1379,6 +1379,19 @@ impl ConversationService {
             .await
             .map(|(_, live)| live)?)
     }
+    #[cfg(test)]
+    pub(super) async fn agent_awaits_close_for_test(
+        &self,
+        id: &ConversationId,
+        caller: &ConversationCaller,
+    ) -> Result<bool, ConversationError> {
+        let live = self.resolve(id, caller).await?;
+        let awaits_close = live.agent.awaits_close();
+        // The caller observes readiness without retaining this handle's history
+        // lease across the follow-up submission that closes and opens again.
+        drop(live);
+        Ok(awaits_close)
+    }
     /// [`Self::resolve`]; with `open` false, only a conversation live now:
     /// one with none is refused `mcp_cancelled`, and not opened. The gateway
     /// retiring is [`Halt::Retired`]; an opening that failed is its own
@@ -2843,9 +2856,25 @@ impl ConversationService {
             // An app's message is for a live opening, and opens none: one
             // ended by the desktop stopping the agent is refused below, not
             // opened again for it.
-            let (owner, live) = service
+            let (mut owner, mut live) = service
                 .resolve_opening(&id, &caller, !writer.is_app())
                 .await?;
+            // An agent that stopped itself and waits for its owner's close
+            // takes nothing more (`Agent::awaits_close`): the conversation is
+            // stopped, not gone, so a person's message closes it and opens
+            // the conversation again, as a desktop stop would have. An app's
+            // message opens nothing, and is refused below as before.
+            if !writer.is_app()
+                && live.agent.awaits_close()
+                && !owner.stopping.load(Ordering::SeqCst)
+            {
+                // The ended agent holds its history's lease until the last
+                // handle goes, so this one goes before the conversation
+                // opens again.
+                drop(live);
+                service.reopen_ended(&id, owner).await;
+                (owner, live) = service.resolve_opening(&id, &caller, true).await?;
+            }
             // A submission the agent already has is the agent's to answer: the
             // same message recovers its original delivery and any other is a
             // conflict, whatever this conversation holds today. Its images were
@@ -4523,6 +4552,33 @@ impl ConversationService {
         tokio::spawn(async move { live.lease.close(&live.agent, cause, actor, deadline).await })
             .await
             .unwrap_or(Err(AgentError::CleanupUncertain))
+    }
+
+    /// Close the agent `slot` holds, which stopped itself and waits for that
+    /// close, and let the slot go so the next resolve opens the conversation
+    /// again. A close that cannot be confirmed keeps the slot, stopping, and
+    /// the message that asked is refused as closed.
+    async fn reopen_ended(&self, id: &ConversationId, slot: Arc<Slot>) {
+        let Ok(actor) = ActionContext::new(
+            "gateway",
+            "agent_ended",
+            format!("ended-{}", Uuid::new_v4()),
+        ) else {
+            return;
+        };
+        tracing::warn!(conversation_id = %id, "the agent stopped itself; closing it to open the conversation again");
+        if let Err(stop) = self
+            .stop_and_release(
+                id,
+                slot,
+                &actor,
+                &McpAppInitiator::System,
+                LeaseEndCause::Stopped,
+            )
+            .await
+        {
+            tracing::warn!(conversation_id = %id, ?stop, "an ended agent's close did not confirm cleanup");
+        }
     }
 
     async fn release_slot(&self, id: &ConversationId, slot: &Arc<Slot>) {

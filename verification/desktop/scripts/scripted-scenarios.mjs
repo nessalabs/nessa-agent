@@ -37,6 +37,7 @@ import {
 import { main } from "./lib/run.mjs"
 import { writeView } from "./lib/scripted-evidence.mjs"
 import { css, offeredLabel } from "./lib/selectors.mjs"
+import { readTranscriptSteps } from "./lib/transcript.mjs"
 import { unofferedAnswers } from "./lib/workspace.mjs"
 
 const steps = ["permission", "allow", "fail", "cancel"]
@@ -252,11 +253,23 @@ const checks = {
     const shown = text ?? (await pageText(page))
     if (!shown.includes(stack.script.allowed))
       failures.push(`the window does not show ${JSON.stringify(stack.script.allowed)}`)
-    const labels = await page.locator(css.transcriptStep).allTextContents()
-    if (!labels.some((label) => fold(label).includes(stack.script.title)))
-      failures.push(`no step titled ${JSON.stringify(stack.script.title)}`)
+    const message = page
+      .locator(css.agentMessage)
+      .filter({ hasText: stack.script.allowed })
+    const steps = await readTranscriptSteps(message)
+    failures.push(...steps.failures)
+    const { labels } = steps
+    const matching = labels.filter((label) => fold(label) === stack.script.title).length
+    if (matching !== 1)
+      failures.push(
+        `${matching} steps titled ${JSON.stringify(stack.script.title)} in the allowed reply, not one`,
+      )
     if ((await card.count()) !== 0) failures.push("the approval card is still shown")
-    return { seen: { status: turn?.status ?? null, labels }, failures, view }
+    return {
+      seen: { status: turn?.status ?? null, labels, disclosures: steps.disclosures },
+      failures,
+      view,
+    }
   },
 
   fail: async (page, stack, run) => {

@@ -17,7 +17,7 @@ import { safeAreaExempt, safeAreaTokens, css } from "./selectors.mjs"
  * the step has run `least` ms after its act and nothing finite is animating —
  * or at `cap` — so a step lasts as long as its motion, not a fixed wait.
  */
-function sampler([exempt, tokens, surfaceSel]) {
+function sampler([exempt, tokens, surfaceSel, panes]) {
   window.__safeBad = []
   window.__safeFrames = 0
   // The corner's size, read once per surface: a probe added and removed every
@@ -111,6 +111,8 @@ function sampler([exempt, tokens, surfaceSel]) {
           const inWidth = Math.min(box.r, safe) - Math.max(box.l, 0)
           const inHeight = Math.min(box.b, bar) - Math.max(box.t, 0)
           if (inWidth > 1 && inHeight > 1) {
+            const pane = e.closest(panes.all)
+            const paneRect = pane?.getBoundingClientRect()
             const label = (e.textContent || e.getAttribute("aria-label") || "")
               .trim()
               .slice(0, 24)
@@ -128,6 +130,13 @@ function sampler([exempt, tokens, surfaceSel]) {
               ],
               safe: Math.round(safe),
               bar: Math.round(bar),
+              paneFlying: pane?.matches(panes.flying) ?? false,
+              paneBox: paneRect
+                ? [paneRect.x, paneRect.y, paneRect.width, paneRect.height].map(
+                    Math.round,
+                  )
+                : null,
+              paneTransform: pane ? getComputedStyle(pane).transform : null,
             })
           }
         }
@@ -149,7 +158,15 @@ function sampler([exempt, tokens, surfaceSel]) {
 }
 
 /** The init script and its argument, for `openPage({ initScripts })`. */
-export const safeAreaInit = [sampler, [safeAreaExempt, safeAreaTokens, css.surface]]
+export const safeAreaInit = [
+  sampler,
+  [
+    safeAreaExempt,
+    safeAreaTokens,
+    css.surface,
+    { all: css.pane, flying: css.flyingPane },
+  ],
+]
 
 /**
  * Returns `watch(name, act, ms)`: samples every frame while `act` runs and

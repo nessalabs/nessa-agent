@@ -22,6 +22,7 @@ import {
   type QuestionChoice,
   type Transcript,
   type TranscriptQuestion,
+  type TurnMessage,
 } from "../../model/transcript"
 import {
   failureReason,
@@ -249,6 +250,19 @@ export function inMemorySource(
   const stopScript = (sessionId: string) => {
     for (const cancel of scripts.get(sessionId) ?? []) cancel()
     scripts.delete(sessionId)
+    // A reply cut off where it got to has ended with its turn: it is no
+    // longer being written.
+    const current = transcriptOf(sessionId)
+    const writing = (message: Message) => "working" in message && message.working
+    if (current.messages.some(writing))
+      putTranscript({
+        ...current,
+        messages: current.messages.map((message) => {
+          if (!writing(message)) return message
+          const { working: _working, ...settled } = message as TurnMessage
+          return settled
+        }),
+      })
   }
 
   /** Runs `run` after `ms` as part of a session's script. */
@@ -262,7 +276,7 @@ export function inMemorySource(
     timers.add(cancel)
   }
 
-  const agentMessage = (sessionId: string, parts: readonly Part[]): Message => ({
+  const agentMessage = (sessionId: string, parts: readonly Part[]): TurnMessage => ({
     id: `${sessionId}-${transcriptOf(sessionId).messages.length + 1}`,
     role: "agent",
     at: schedule.now(),
@@ -295,12 +309,17 @@ export function inMemorySource(
     now: string,
   ) => {
     const words = reply.split(/(?<=\s)/)
-    const message = agentMessage(sessionId, [...steps, { kind: "text", text: "" }])
+    // Being written until its last words are: then its turn has ended.
+    const message: TurnMessage = {
+      ...agentMessage(sessionId, [...steps, { kind: "text", text: "" }]),
+      working: true,
+    }
     const base = transcriptOf(sessionId)
     const write = (shown: number) => {
       const current = transcriptOf(sessionId)
+      const { working: _working, ...settled } = message
       const written: Message = {
-        ...message,
+        ...(shown === words.length ? settled : message),
         parts: [...steps, { kind: "text", text: words.slice(0, shown).join("") }],
       }
       const others = current.messages.filter((other) => other.id !== message.id)

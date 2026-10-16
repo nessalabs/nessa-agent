@@ -16,7 +16,7 @@ import {
   type MessageApp,
   type TurnTerminal,
 } from "../../model/transcript"
-import { RichText } from "./rich-text"
+import { AgentProse, RichText } from "./rich-text"
 import { named, Saying, type Said } from "./said"
 import { ToolSteps } from "./tool-steps"
 
@@ -121,12 +121,21 @@ export const Message = memo(function Message({
     <div className="workspace-message" data-role="agent" data-new={isNew || undefined}>
       <div className="workspace-message-body">
         {groups.map((group, index) => {
-          if (Array.isArray(group)) return <ToolSteps key={index} steps={group} />
+          if (Array.isArray(group))
+            return (
+              <ToolSteps key={index} steps={group} settled={message.working !== true} />
+            )
+          // What the agent said is Markdown, whitespace and all: its line
+          // breaks and blank lines are structure, so it is parsed, not set in
+          // one paragraph (`AgentProse`).
           if (group.kind === "text")
-            return group.text ? (
-              <p key={index}>
-                <RichText text={group.text} />
-              </p>
+            return group.text.trim() ? (
+              <AgentProse
+                key={index}
+                text={group.text}
+                streaming={message.working}
+                fresh={isNew}
+              />
             ) : null
           if (group.kind === "code")
             return (

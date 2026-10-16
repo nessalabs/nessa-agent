@@ -136,6 +136,7 @@ export const devServerOnlyChecks = [
   "published-files",
   "transcript-notes",
   "transcript-unreadable",
+  "transcript-reading",
   "user-attachments",
   "turn-outcomes",
   "clock-snapshots",

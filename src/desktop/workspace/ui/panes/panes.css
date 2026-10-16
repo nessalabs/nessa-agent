@@ -183,9 +183,21 @@ html:not(.dark) .workspace-pane[data-focused] {
 }
 
 .split-panes-grid[data-split-multi]
-  .workspace-pane:not([data-focused])
+  .workspace-pane:not([data-focused]):not([data-split-flying])
   .workspace-pane-header {
   opacity: 0.72;
+}
+
+/*
+ * A flight changes the corner inset before the pane reaches its new place.
+ * Keep its header out of the paint until it lands, without replacing the
+ * focused control (`safe-area.mjs --only pane-header-flight-focus`). Pointer
+ * input waits too; the normal opacity transition resumes after landing.
+ */
+.workspace-pane[data-split-flying] > .workspace-pane-header {
+  opacity: 0;
+  transition: none;
+  pointer-events: none;
 }
 
 .workspace-pane-name {

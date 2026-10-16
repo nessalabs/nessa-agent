@@ -25,8 +25,8 @@ use nessa_sdk::application::agent_execution::executions::{
 };
 use nessa_sdk::application::agent_execution::permissions::ActionContext;
 use nessa_sdk::application::agent_execution::providers::{
-    ExecutionReport, ObservationFailure, ObservationFailureCause, OperationCapabilities,
-    ProviderExecutionReply, ProviderIdentity, ProviderSessionState,
+    CleanupReport, ExecutionReport, ObservationFailure, ObservationFailureCause,
+    OperationCapabilities, ProviderExecutionReply, ProviderIdentity, ProviderSessionState,
 };
 use nessa_sdk::application::agent_execution::sessions::{
     CommittedCompleteness, CommittedFreshness, CommittedSession, CommittedStatus, InvocationRecord,
@@ -528,6 +528,110 @@ async fn protocol_failure_after_partial_tool_preserves_observation_across_termin
         true,
     )
     .await;
+}
+
+/// A provider that ended its own session — a failed turn whose cleanup the
+/// agent ran itself and could not confirm — leaves an agent that takes no
+/// more work until it is closed. The conversation is stopped, not gone: the
+/// next message closes that agent, opens the conversation again and is sent,
+/// where it used to be refused as `conversation_closed` for as long as the
+/// gateway ran.
+#[tokio::test]
+async fn a_message_after_the_agent_ended_its_own_session_opens_it_again() {
+    let (service, provider, _repository, _storage) = fixture(ConversationLimits::default());
+    provider
+        .close_reports
+        .lock()
+        .unwrap()
+        .push_back(CleanupReport::unconfirmed(AgentError::CleanupUncertain));
+    let failure = AgentError::Protocol("session torn down".into());
+    *provider.execution_reply.lock().unwrap() =
+        Some(ProviderExecutionReply::Finished(ExecutionReport::new(
+            Some(Err(failure.clone())),
+            None,
+            ProviderSessionState::CleanupRequired,
+        )));
+    *provider.execution_observation_failure.lock().unwrap() = Some(ObservationFailure::new(
+        failure,
+        ObservationFailureCause::ExecutionFailed,
+    ));
+    let id = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
+    service
+        .create(
+            id.clone(),
+            caller("create"),
+            RequestedConversation::default(),
+        )
+        .await
+        .unwrap();
+    let message = |text: &str| SubmittedMessage {
+        text: text.into(),
+        images: Vec::new(),
+        files: Vec::new(),
+    };
+    service
+        .submit(
+            id.clone(),
+            caller("send"),
+            "first".into(),
+            message("Hello"),
+            SubmissionMode::Queue,
+        )
+        .await
+        .unwrap();
+    // The provider counts a close before lifecycle finalization; that count
+    // alone does not mean the agent is ready for its owner's close. Observe
+    // the same lifecycle predicate as submission, without retaining a live
+    // handle across the follow-up that must acquire the history's lease.
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        loop {
+            let view = service.read(id.clone(), caller("read")).await.unwrap();
+            let awaits_close = service
+                .agent_awaits_close_for_test(&id, &caller("read"))
+                .await
+                .unwrap();
+            if awaits_close
+                && view
+                    .messages
+                    .first()
+                    .is_some_and(|message| message.status == ConversationMessageStatus::Failed)
+                && provider
+                    .close_calls
+                    .load(std::sync::atomic::Ordering::SeqCst)
+                    == 1
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the failed turn ends the agent's session");
+
+    service
+        .submit(
+            id.clone(),
+            caller("follow-up"),
+            "second".into(),
+            message("Again"),
+            SubmissionMode::Queue,
+        )
+        .await
+        .expect("a message after the agent ended its session is sent");
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        while !provider
+            .executions
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|execution| execution == "second")
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the follow-up reaches the provider");
+    service.shutdown().await.unwrap();
 }
 
 /// The tools a server listed, as the view's lookup sees them: `charts`'

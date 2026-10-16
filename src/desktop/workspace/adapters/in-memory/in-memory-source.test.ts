@@ -540,6 +540,35 @@ describe("the in-memory source", () => {
     expect(updates.length).toBeGreaterThan(0)
   })
 
+  it("ends a reply cut off by the next message, so it is no longer being written", async () => {
+    const { source, advance } = started()
+    const model = { provider: "anthropic", modelId: "claude-opus-5" }
+    const writing = async () =>
+      (await source.transcript("frost")).messages.filter(
+        (message) => "working" in message && message.working,
+      )
+    await source.send({
+      initiator: "person",
+      sessionId: "frost",
+      messageId: "m1",
+      text: "one",
+      model,
+    })
+    advance(scriptTiming.answerMs + scriptTiming.stepMs)
+    expect(await writing()).toHaveLength(1)
+    await source.send({
+      initiator: "person",
+      sessionId: "frost",
+      messageId: "m2",
+      text: "two",
+      model,
+    })
+    // Only the new reply, once it begins, is being written; the cut-off one has ended.
+    expect(await writing()).toHaveLength(0)
+    advance(20_000)
+    expect(await writing()).toHaveLength(0)
+  })
+
   it("takes a message sent again under the same id once", async () => {
     const { source, pending, updates } = started()
     const model = { provider: "anthropic", modelId: "claude-opus-5" }
