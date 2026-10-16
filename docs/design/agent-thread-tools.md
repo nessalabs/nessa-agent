@@ -89,7 +89,13 @@ for retained service admission, or reports its existing bounded drain failure.
 Initial source certification has a ten-second preparation bound beginning before
 source admission; setup, reauthorization and reads share cancellation and their
 current phase deadline. Idle reads poll at up to 250 ms for at most `waitMs` (maximum
-30 seconds), and each read rechecks current target access. SDK cursor progression
+30 seconds), and each read rechecks current target access. All successful replies,
+including an empty cached cursor at the wait deadline, pass one final current
+target access check after observation. That delivery check shares source
+cancellation and has its own ten-second bound: an expired observation deadline
+cannot certify access. Refusal, cancellation, or an unavailable delivery check
+returns an error without events or cursor; a successful delivery check can add up
+to ten seconds beyond the observation wait. SDK cursor progression
 makes coalesced notices harmless; the tool keeps no subscription registry.
 
 Call cancellation, disconnect and source token revocation signal the pending
@@ -119,6 +125,20 @@ is not a claim that an external effect was rolled back.
 | Delayed stop versus newer execution | Existing exact-execution stop coordinator owns cancellation; `tests/conversation/mutation_commands.rs`. |
 | Running parent followed by enough Injected steering children to leave the message window; idle with queued work | Authoritative application snapshot resolves the parent or no active turn; shared service regression and the Relay active-stop regression in `tests/conversation/agent_tools.rs`. |
 | Repeated observer cancellation during blocked source metadata | Four observation slots return, but eight detached source owners retain separate permits and service admission; the ninth fails before metadata I/O, and shutdown drains only after release; same tests. |
+| Target deleted or policy revoked while Page/Idle read is blocked | The final delivery check refuses before any event or cursor is returned; `tests/composition/conversation_tools_subscription.rs`. |
+| Prior Idle checkpoint, then target revoked during another read, reauthorization, or idle sleep as deadline expires | The cached checkpoint still passes final delivery admission; refusal returns no prior cursor; same tests. |
+| Final delivery authorization is blocked while source cancels or its delivery budget expires | Cancellation returns cancelled; ten-second delivery timeout returns unavailable, without events/cursor; same tests. |
+| Read returns a typed storage/capacity refusal after target access changes | Preserve that refusal; no delivery certification or successful output is introduced; same tests. |
+| Access still holds after delayed Page/Idle or observation deadline | Deliver the projected metadata or empty checkpoint after fresh authorization; same tests. |
+
+The observation loop previously treated permission to start a read as permission
+to publish its eventual result. Separate return paths for page, idle, and deadline
+then allowed a cached checkpoint to bypass later authority. Delivery is now one
+boundary around the observation result, with the application service remaining
+the single owner of target access. The source actor is the already admitted
+caller: its supervised source decision/audit is not repeated during observation.
+Source cancellation and provider-token revocation still flow through the relay's
+watch channel; this final gate does not create a new delegation or source lease.
 
 Implementation ownership: `composition/conversation_tools.rs` owns MCP parsing,
 serialization and bounded polling; `conversation/application/service/agent_tools.rs`

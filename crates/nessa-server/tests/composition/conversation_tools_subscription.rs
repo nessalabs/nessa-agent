@@ -326,3 +326,283 @@ async fn repeated_cancelled_observers_cannot_exceed_detached_source_capacity() {
         .unwrap()
         .unwrap();
 }
+
+#[derive(Clone, Copy)]
+enum DeliveryPhase {
+    Page,
+    Capacity,
+    Idle,
+    ReadDeadline,
+    AuthorizeDeadline,
+    SleepDeadline,
+    FinalAuthorize,
+}
+struct DeliveryStorage {
+    phase: DeliveryPhase,
+    gate: Arc<Mutex<Option<Gate>>>,
+    metadata: Arc<MemoryRepository>,
+}
+struct DeliveryReader {
+    phase: DeliveryPhase,
+    cursor: CommittedEventCursor,
+    gate: Arc<Mutex<Option<Gate>>>,
+    metadata: Arc<MemoryRepository>,
+    first: bool,
+}
+impl SessionStorage for DeliveryStorage {
+    fn open(&self, _: SessionId) -> StorageFuture<'_, Box<dyn SessionStorageLease>> {
+        Box::pin(async { Err(StorageError::CommittedReadUnavailable) })
+    }
+    fn events(
+        &self,
+        id: SessionId,
+        _: EventStart,
+    ) -> EventFuture<'_, Box<dyn CommittedEventReader>> {
+        Box::pin(async move {
+            Ok(Box::new(DeliveryReader {
+                phase: self.phase,
+                cursor: CommittedEventCursor::new(id, Id::new("incarnation").unwrap(), 1, None),
+                gate: self.gate.clone(),
+                metadata: self.metadata.clone(),
+                first: true,
+            }) as Box<dyn CommittedEventReader>)
+        })
+    }
+}
+impl CommittedEventReader for DeliveryReader {
+    fn read(&mut self, _: EventReadLimits) -> EventFuture<'_, EventRead> {
+        let first = std::mem::replace(&mut self.first, false);
+        Box::pin(async move {
+            let block_read = matches!(
+                self.phase,
+                DeliveryPhase::Page | DeliveryPhase::Idle | DeliveryPhase::Capacity
+            ) || (!first && matches!(self.phase, DeliveryPhase::ReadDeadline));
+            if block_read {
+                let gate = self.gate.lock().unwrap().take();
+                if let Some(gate) = gate {
+                    let _ = gate.entered.send(());
+                    let _ = gate.release.await;
+                }
+            } else if first && !matches!(self.phase, DeliveryPhase::ReadDeadline) {
+                let gate = self.gate.lock().unwrap().take();
+                if let Some(gate) = gate {
+                    if matches!(self.phase, DeliveryPhase::SleepDeadline) {
+                        let _ = gate.entered.send(());
+                    } else if matches!(
+                        self.phase,
+                        DeliveryPhase::AuthorizeDeadline | DeliveryPhase::FinalAuthorize
+                    ) {
+                        *self.metadata.metadata_load_gate.lock().unwrap() =
+                            Some((gate.entered, gate.release));
+                    } else {
+                        *self.gate.lock().unwrap() = Some(gate);
+                    }
+                }
+            }
+            if matches!(self.phase, DeliveryPhase::Capacity) {
+                return Err(
+                    nessa_sdk::application::agent_execution::sessions::EventReadError::Capacity,
+                );
+            }
+            if matches!(
+                self.phase,
+                DeliveryPhase::Page | DeliveryPhase::FinalAuthorize
+            ) {
+                use nessa_sdk::application::agent_execution::sessions::{
+                    CommittedEvent, CommittedEventPage, SessionChange,
+                };
+                use nessa_sdk::domain::agent_execution::executions::{
+                    ExecutionId, ExecutionOutcome,
+                };
+                let next = CommittedEventCursor::new(
+                    self.cursor.session().clone(),
+                    Id::new("incarnation").unwrap(),
+                    1,
+                    Some(1),
+                );
+                let event = CommittedEvent::change(
+                    next.clone(),
+                    SessionChange::LocalSettlement {
+                        execution_id: ExecutionId::new("finished").unwrap(),
+                        before: None,
+                        after: Ok(ExecutionOutcome::Completed),
+                        local_outcome: None,
+                    },
+                );
+                Ok(EventRead::Page(
+                    CommittedEventPage::new(vec![event], next, self.cursor.clone()).unwrap(),
+                ))
+            } else {
+                Ok(EventRead::Idle(self.cursor.clone()))
+            }
+        })
+    }
+}
+fn delete_target(metadata: &MemoryRepository) {
+    use crate::conversation::domain::ConversationDeletion;
+    let mut records = metadata.records.lock().unwrap();
+    let deleted = records
+        .get(&id())
+        .unwrap()
+        .clone()
+        .deleted(
+            ConversationDeletion::new(
+                caller().organization_id,
+                caller().principal_id,
+                "panel".into(),
+                "delete".into(),
+                2,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    records.insert(id(), deleted);
+}
+fn delivery_call(
+    service: ConversationService,
+    phase: DeliveryPhase,
+    stop: watch::Receiver<bool>,
+) -> tokio::task::JoinHandle<Result<Value, String>> {
+    tokio::spawn(async move {
+        let wait = if matches!(
+            phase,
+            DeliveryPhase::Page
+                | DeliveryPhase::Idle
+                | DeliveryPhase::Capacity
+                | DeliveryPhase::FinalAuthorize
+        ) {
+            0
+        } else {
+            1000
+        };
+        follow(
+            &service,
+            id(),
+            caller(),
+            Follow {
+                thread_id: id().to_string(),
+                after: None,
+                replay: None,
+                wait_ms: Some(wait),
+                limit: None,
+            },
+            SubscriptionControl::new(stop, wait),
+        )
+        .await
+    })
+}
+
+#[tokio::test(start_paused = true)]
+async fn delivery_reauthorizes_page_idle_and_cached_deadline_after_target_deletion() {
+    for phase in [
+        DeliveryPhase::Page,
+        DeliveryPhase::Idle,
+        DeliveryPhase::Capacity,
+        DeliveryPhase::ReadDeadline,
+        DeliveryPhase::AuthorizeDeadline,
+        DeliveryPhase::SleepDeadline,
+    ] {
+        for deleted in [false, true] {
+            let metadata = Arc::new(MemoryRepository::default());
+            let (entered, read_entered) = oneshot::channel();
+            let (release, read_release) = oneshot::channel();
+            let service = observing_service(
+                metadata.clone(),
+                Arc::new(DeliveryStorage {
+                    phase,
+                    metadata: metadata.clone(),
+                    gate: Arc::new(Mutex::new(Some(Gate {
+                        entered,
+                        release: read_release,
+                    }))),
+                }),
+            );
+            let (_stop, stopped) = watch::channel(false);
+            let work = delivery_call(service.clone(), phase, stopped);
+            read_entered.await.unwrap();
+            if deleted {
+                delete_target(&metadata);
+            }
+            if matches!(
+                phase,
+                DeliveryPhase::Page | DeliveryPhase::Idle | DeliveryPhase::Capacity
+            ) {
+                release.send(()).unwrap();
+            } else {
+                tokio::time::advance(Duration::from_secs(1)).await;
+                drop(release);
+            }
+            let result = work.await.unwrap();
+            if matches!(phase, DeliveryPhase::Capacity) {
+                assert_eq!(result.unwrap_err(), "subscription_capacity");
+            } else if deleted {
+                assert_eq!(result.unwrap_err(), "conversation_deleted");
+            } else {
+                let value = result.unwrap();
+                assert!(value["cursor"].is_string());
+                if matches!(phase, DeliveryPhase::Page) {
+                    assert_eq!(value["events"][0]["executionId"], "finished");
+                } else {
+                    assert_eq!(value["events"], json!([]));
+                }
+            }
+            service.shutdown().await.unwrap();
+        }
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn blocked_delivery_authorization_cancels_or_times_out_without_cursor() {
+    for cancel in [true, false] {
+        let metadata = Arc::new(MemoryRepository::default());
+        let (entered, read_entered) = oneshot::channel();
+        let (_release, read_release) = oneshot::channel();
+        let service = observing_service(
+            metadata.clone(),
+            Arc::new(DeliveryStorage {
+                phase: DeliveryPhase::FinalAuthorize,
+                metadata: metadata.clone(),
+                gate: Arc::new(Mutex::new(Some(Gate {
+                    entered,
+                    release: read_release,
+                }))),
+            }),
+        );
+        let (stop, stopped) = watch::channel(false);
+        let work = delivery_call(service.clone(), DeliveryPhase::FinalAuthorize, stopped);
+        read_entered.await.unwrap();
+        if cancel {
+            stop.send_replace(true);
+        } else {
+            tokio::time::advance(Duration::from_secs(10)).await;
+        }
+        assert_eq!(
+            work.await.unwrap().unwrap_err(),
+            if cancel {
+                "cancelled"
+            } else {
+                "temporarily_unavailable"
+            }
+        );
+        service.shutdown().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn already_observed_cancellation_refuses_delivery_before_polling_authorization() {
+    let (stop, mut stopped) = watch::channel(false);
+    stop.send_replace(true);
+    assert!(*stopped.borrow_and_update());
+    let mut control = SubscriptionControl::new(stopped, 0);
+    let mut polled = false;
+    let result = control
+        .step_until(
+            async {
+                polled = true;
+            },
+            Instant::now() + Duration::from_secs(10),
+        )
+        .await;
+    assert!(matches!(result, Err(SubscriptionEnd::Cancelled)));
+    assert!(!polled);
+}

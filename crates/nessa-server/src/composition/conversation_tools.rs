@@ -38,6 +38,7 @@ const MAX_WAIT_MS: u64 = 30_000;
 const DEFAULT_LIMIT: usize = 50;
 const MAX_LIMIT: usize = 100;
 const MAX_EVENT_READERS: usize = 4;
+const SUBSCRIPTION_SETUP_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub(crate) struct ConversationTools {
     service: OnceLock<ConversationService>,
@@ -506,17 +507,24 @@ impl SubscriptionControl {
     fn new(stop: watch::Receiver<bool>, wait_ms: u64) -> Self {
         Self {
             stop,
-            prepare_by: Instant::now() + Duration::from_secs(10),
+            prepare_by: Instant::now() + SUBSCRIPTION_SETUP_TIMEOUT,
             wait_by: None,
             wait_ms,
             idle: None,
         }
     }
     async fn step<T>(&mut self, work: impl Future<Output = T>) -> Result<T, SubscriptionEnd> {
+        self.step_until(work, self.wait_by.unwrap_or(self.prepare_by))
+            .await
+    }
+    async fn step_until<T>(
+        &mut self,
+        work: impl Future<Output = T>,
+        by: Instant,
+    ) -> Result<T, SubscriptionEnd> {
         if *self.stop.borrow() {
             return Err(SubscriptionEnd::Cancelled);
         }
-        let by = self.wait_by.unwrap_or(self.prepare_by);
         tokio::select! {
             biased;
             _ = self.stop.changed() => Err(SubscriptionEnd::Cancelled),
@@ -552,6 +560,31 @@ async fn follow(
     args: Follow,
     mut control: SubscriptionControl,
 ) -> Result<Value, String> {
+    let value = observe(service, &target, &caller, args, &mut control).await?;
+    // This is the publication admission point for Page, Idle, and a retained
+    // checkpoint at the observation deadline. An expired wait cannot certify
+    // current access; final authorization has a separate bounded attempt.
+    match control
+        .step_until(
+            service.authorize_events(&target, &caller),
+            Instant::now() + SUBSCRIPTION_SETUP_TIMEOUT,
+        )
+        .await
+    {
+        Ok(result) => result.map_err(code)?,
+        Err(SubscriptionEnd::Cancelled) => return Err("cancelled".into()),
+        Err(SubscriptionEnd::Deadline) => return Err(code(ConversationError::Unavailable)),
+    }
+    Ok(value)
+}
+
+async fn observe(
+    service: &ConversationService,
+    target: &ConversationId,
+    caller: &ConversationCaller,
+    args: Follow,
+    control: &mut SubscriptionControl,
+) -> Result<Value, String> {
     let limit = args.limit.unwrap_or(DEFAULT_LIMIT);
     let session = SessionId::new(target.to_string()).map_err(|_| "invalid_request")?;
     let start = match args.after {
@@ -566,44 +599,41 @@ async fn follow(
     let opening = service.open_events(target.clone(), caller.clone(), start);
     let mut reader = match control.step(opening).await {
         Ok(result) => result.map_err(|error| event_error_code(&error).to_owned())?,
-        Err(ended) => return control.finish(&target, ended),
+        Err(ended) => return control.finish(target, ended),
     };
     loop {
-        match control
-            .step(service.authorize_events(&target, &caller))
-            .await
-        {
+        match control.step(service.authorize_events(target, caller)).await {
             Ok(result) => result.map_err(code)?,
-            Err(ended) => return control.finish(&target, ended),
+            Err(ended) => return control.finish(target, ended),
         }
         let read = match control.step(reader.read(limits)).await {
             Ok(result) => result.map_err(|error| {
                 event_error_code(&ConversationEventError::Events(error)).to_owned()
             })?,
-            Err(ended) => return control.finish(&target, ended),
+            Err(ended) => return control.finish(target, ended),
         };
         match read {
             EventRead::Preparing => tokio::task::yield_now().await,
             EventRead::Page(page) => {
-                validate_event_cursor(&target, page.next())
+                validate_event_cursor(target, page.next())
                     .map_err(|error| event_error_code(&error).to_owned())?;
-                validate_event_cursor(&target, page.captured_head())
+                validate_event_cursor(target, page.captured_head())
                     .map_err(|error| event_error_code(&error).to_owned())?;
-                let events = project_events(&target, page.events())
+                let events = project_events(target, page.events())
                     .map_err(|error| event_error_code(&error).to_owned())?;
                 return Ok(
                     json!({"threadId":target.to_string(),"events":events,"cursor":page.next().encode(),"more":page.next()!=page.captured_head(),"timedOut":false}),
                 );
             }
             EventRead::Idle(cursor) => {
-                validate_event_cursor(&target, &cursor)
+                validate_event_cursor(target, &cursor)
                     .map_err(|error| event_error_code(&error).to_owned())?;
                 control.idle(cursor);
                 if Instant::now() >= control.wait_by.expect("idle sets its deadline") {
-                    return control.finish(&target, SubscriptionEnd::Deadline);
+                    return control.finish(target, SubscriptionEnd::Deadline);
                 }
                 if let Err(ended) = control.step(sleep(Duration::from_millis(250))).await {
-                    return control.finish(&target, ended);
+                    return control.finish(target, ended);
                 }
             }
         }
