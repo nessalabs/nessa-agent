@@ -14,7 +14,9 @@
  * its own process, so the semaphore would admit every contract test at once,
  * and doctests would need a second mechanism. Doctests are not part of
  * `--no-run`'s executable list; they run here with `cargo test --doc` after the
- * binaries, once cargo is no longer writing the target directory.
+ * binaries, once cargo is no longer writing the target directory. Windows may
+ * select server-lib or remaining after the same full build; remaining owns
+ * doctests. See cargo-test-parallel/README.md for the partition contract.
  *
  * A build that reports no test binaries fails. An empty list is indistinguishable
  * from a parser that understood nothing, and the run that skips the suite must
@@ -29,6 +31,8 @@ import { spawn } from "node:child_process"
 import path from "node:path"
 import { pathToFileURL } from "node:url"
 
+const PARTITIONS = ["all", "server-lib", "remaining"]
+
 const TEST_KINDS = new Set(["lib", "rlib", "cdylib", "staticlib", "bin", "test"])
 const SKIPPED_KINDS = new Set(["custom-build", "example", "bench"])
 
@@ -39,12 +43,20 @@ export function parseArgs(argv) {
   const flags = argv.slice(0, separator)
   const cargoArgs = argv.slice(separator + 1)
   if (cargoArgs.length === 0) throw new Error("cargo test package arguments are required")
-  if (flags.length !== 2 || flags[0] !== "--concurrency")
-    throw new Error("usage: cargo-test-parallel.mjs --concurrency N -- <cargo test args>")
+  if (
+    ![2, 4].includes(flags.length) ||
+    flags[0] !== "--concurrency" ||
+    (flags.length === 4 && flags[2] !== "--partition")
+  )
+    throw new Error(
+      "usage: cargo-test-parallel.mjs --concurrency N [--partition all|server-lib|remaining] -- <cargo test args>",
+    )
   const concurrency = Number(flags[1])
   if (!Number.isInteger(concurrency) || concurrency < 1)
     throw new Error("concurrency must be a positive integer")
-  return { concurrency, cargoArgs }
+  const partition = flags[3] ?? "all"
+  if (!PARTITIONS.includes(partition)) throw new Error("unknown test partition")
+  return { concurrency, cargoArgs, partition }
 }
 
 /**
@@ -79,9 +91,39 @@ export function testExecutables(stdout) {
       typeof message.manifest_path === "string" ? message.manifest_path : ""
     const crate = path.basename(path.dirname(manifest))
     const name = typeof target.name === "string" ? target.name : path.basename(executable)
-    executables.push({ label: `${crate} ${name}`, executable })
+    executables.push({
+      label: `${crate} ${name}`,
+      executable,
+      packageId: message.package_id,
+      targetName: target.name,
+      targetKinds: target.kind,
+    })
   }
   return executables
+}
+
+/** Resolve the server library by Cargo package/target identity, then partition once.
+ * partition tests assert the union and intersection, including Windows paths.
+ */
+export function partitionExecutables(executables, metadata) {
+  const packages = metadata.packages.filter((pkg) => pkg.name === "nessa-server")
+  if (packages.length !== 1) throw new Error("expected one nessa-server package")
+  const server = packages[0]
+  const libraries = server.targets.filter((target) => target.kind.includes("lib"))
+  if (libraries.length !== 1) throw new Error("expected one nessa-server library target")
+  const library = libraries[0]
+  const serverLib = executables.filter(
+    (item) =>
+      item.packageId === server.id &&
+      item.targetName === library.name &&
+      item.targetKinds.includes("lib"),
+  )
+  if (serverLib.length !== 1)
+    throw new Error(
+      `expected one nessa-server library test executable, found ${serverLib.length}`,
+    )
+  const remaining = executables.filter((item) => item !== serverLib[0])
+  return { "server-lib": serverLib, remaining }
 }
 
 /** Compiler diagnostics buried in `cargo --message-format=json` stdout. */
@@ -159,6 +201,7 @@ function secondsSince(start) {
 export async function runParallelCargoTests({
   cargoArgs,
   concurrency,
+  partition = "all",
   run,
   cwd,
   stdout = process.stdout,
@@ -168,6 +211,8 @@ export async function runParallelCargoTests({
     throw new Error("cargo test package arguments are required")
   if (!Number.isInteger(concurrency) || concurrency < 1)
     throw new Error("concurrency must be a positive integer")
+
+  if (!PARTITIONS.includes(partition)) throw new Error("unknown test partition")
 
   const buildStarted = Date.now()
   let buildStdout = ""
@@ -193,30 +238,50 @@ export async function runParallelCargoTests({
     `test build finished in ${secondsSince(buildStarted)}s and produced ${executables.length} binaries\n`,
   )
 
-  const executionStarted = Date.now()
-  const failures = await runPool(
-    executables,
-    concurrency,
-    async ({ label, executable }) => {
-      stderr.write(`starting ${label}\n`)
-      const started = Date.now()
-      const prefixed = linePrefix(label, (line) => stdout.write(line))
-      const code = await run(executable, [], {
+  let selected = executables
+  if (partition !== "all") {
+    let metadata = ""
+    const metadataCode = await run(
+      "cargo",
+      ["metadata", "--no-deps", "--format-version=1"],
+      {
         cwd,
-        onStdout: (chunk) => prefixed.push(chunk),
-        onStderr: (chunk) => prefixed.push(chunk),
-      })
-      prefixed.end()
-      stderr.write(`${label} finished in ${secondsSince(started)}s with exit ${code}\n`)
-      if (code !== 0) throw new Error(`${label} exited with ${code}`)
-    },
-  )
+        onStdout: (chunk) => {
+          metadata += chunk
+        },
+        onStderr: (chunk) => stderr.write(chunk),
+      },
+    )
+    if (metadataCode !== 0) throw new Error(`cargo metadata exited with ${metadataCode}`)
+    const partitions = partitionExecutables(executables, JSON.parse(metadata))
+    selected = partitions[partition]
+    stderr.write(
+      `partition ${partition}: ${selected.length}/${executables.length} binaries; doctests ${partition === "remaining" ? "included" : "owned by remaining"}\n`,
+    )
+  }
+
+  const executionStarted = Date.now()
+  const failures = await runPool(selected, concurrency, async ({ label, executable }) => {
+    stderr.write(`starting ${label}\n`)
+    const started = Date.now()
+    const prefixed = linePrefix(label, (line) => stdout.write(line))
+    const code = await run(executable, [], {
+      cwd,
+      onStdout: (chunk) => prefixed.push(chunk),
+      onStderr: (chunk) => prefixed.push(chunk),
+    })
+    prefixed.end()
+    stderr.write(`${label} finished in ${secondsSince(started)}s with exit ${code}\n`)
+    if (code !== 0) throw new Error(`${label} exited with ${code}`)
+  })
   if (failures.length > 0) {
     throw new Error(failures.map((failure) => failure.message).join("\n"))
   }
   stderr.write(
     `test execution finished in ${secondsSince(executionStarted)}s with concurrency ${concurrency}\n`,
   )
+
+  if (partition === "server-lib") return
 
   const doctests = linePrefix("doctests", (line) => stdout.write(line))
   const doctestCode = await run("cargo", ["test", "--doc", ...cargoArgs], {
@@ -247,10 +312,11 @@ function spawnProcess(command, args, io) {
 const invoked = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href
 if (invoked) {
   try {
-    const { concurrency, cargoArgs } = parseArgs(process.argv.slice(2))
+    const { concurrency, cargoArgs, partition } = parseArgs(process.argv.slice(2))
     await runParallelCargoTests({
       cargoArgs,
       concurrency,
+      partition,
       run: spawnProcess,
       cwd: process.cwd(),
     })

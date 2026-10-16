@@ -312,3 +312,70 @@ fn each_class_discloses_only_its_own_grant() {
     assert_eq!(ConsentClass::PeerRead.grant_action(), "conversation.read");
     assert_eq!(ConsentClass::DeviceRead.grant_action(), "conversation.read");
 }
+
+#[test]
+fn owner_phone_disclosure_requires_full_same_resource_ordered_capabilities() {
+    let gateway = resource("org-1", "gateway-1");
+    let class = ConsentClass::OwnerPhoneReadWrite;
+    let public = PublicIntent::new(
+        InvitationId::new([1; 16]),
+        AttemptId::new([2; 16]),
+        ConsentIntentId::new([3; 16]),
+        1,
+        600_000,
+        class,
+    )
+    .unwrap();
+    let audience = AudienceId::new("gateway-1").unwrap();
+    let grants = class.grants(gateway.clone()).unwrap();
+    assert_eq!(
+        grants
+            .iter()
+            .map(|g| g.action().as_str())
+            .collect::<Vec<_>>(),
+        ["conversation.read", "conversation.write", "server.read"]
+    );
+    assert!(DisclosedConsent::with_grants(public, audience.clone(), grants.clone()).is_ok());
+    for omitted in 0..grants.len() {
+        let mut input = grants.clone();
+        input.remove(omitted);
+        assert_eq!(
+            DisclosedConsent::with_grants(public, audience.clone(), input),
+            Err(PairingError::Invalid)
+        );
+    }
+    let mut extra = grants.clone();
+    extra.push(Grant::new(
+        Action::new("credential.manage").unwrap(),
+        gateway,
+    ));
+    let mut reordered = grants.clone();
+    reordered.swap(1, 2);
+    let mut foreign = grants.clone();
+    foreign[1] = Grant::new(
+        Action::new("conversation.write").unwrap(),
+        resource("org-1", "gateway-2"),
+    );
+    for input in [extra, reordered, foreign] {
+        assert_eq!(
+            DisclosedConsent::with_grants(public, audience.clone(), input),
+            Err(PairingError::Invalid)
+        );
+    }
+    assert_eq!(
+        DisclosedConsent::new(public, audience, grants[0].clone()),
+        Err(PairingError::Invalid)
+    );
+    assert!(!class.uses_pake());
+    for legacy in [
+        ConsentClass::DeviceRead,
+        ConsentClass::PeerRead,
+        ConsentClass::PeerEnvironment,
+    ] {
+        assert!(legacy.uses_pake());
+        assert_eq!(
+            legacy.grants(resource("org-1", "gateway-1")).unwrap().len(),
+            1
+        );
+    }
+}

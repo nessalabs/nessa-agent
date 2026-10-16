@@ -130,12 +130,14 @@ impl CatalogueEntryAccess {
         organization: &'a OrganizationId,
         owner: &'a PrincipalId,
         receiver: &'a str,
+        reader: &'a Reader,
     ) -> CatalogueEntryAdmission<'a> {
         CatalogueEntryAdmission {
             access: self,
             organization,
             owner,
             receiver,
+            reader,
             decided: HashMap::new(),
         }
     }
@@ -164,6 +166,7 @@ pub struct CatalogueEntryAdmission<'a> {
     organization: &'a OrganizationId,
     owner: &'a PrincipalId,
     receiver: &'a str,
+    reader: &'a Reader,
     decided: HashMap<(bool, Option<Capabilities>), CatalogueEntryAnswer>,
 }
 
@@ -195,13 +198,24 @@ impl CatalogueEntryAdmission<'_> {
 
     fn decide(&self, entry: &CatalogueDescriptor) -> CatalogueEntryAnswer {
         let ask = AccessAsk {
-            subject: AccessSubject::PairedReader {
-                organization: self.organization,
-                signed_in_as: &self.access.signed_in_as,
-                binding_owner: self.owner,
-                receiver: self.receiver,
+            subject: if matches!(self.reader, Reader::OwnerPhone(_)) {
+                AccessSubject::Person {
+                    organization: self.organization,
+                    principal: &self.access.signed_in_as,
+                }
+            } else {
+                AccessSubject::PairedReader {
+                    organization: self.organization,
+                    signed_in_as: &self.access.signed_in_as,
+                    binding_owner: self.owner,
+                    receiver: self.receiver,
+                }
             },
-            action: AccessAction::CatalogueEntry,
+            action: if matches!(self.reader, Reader::OwnerPhone(_)) {
+                AccessAction::Locate
+            } else {
+                AccessAction::CatalogueEntry
+            },
             resource: AccessResource::Conversation {
                 organization: self.organization,
                 owner: self.owner,

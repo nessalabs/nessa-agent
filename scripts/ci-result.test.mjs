@@ -20,6 +20,7 @@ const compileJobs = {
   "desktop-release-profile": "success",
   frontend: "success",
   "local-auth": "success",
+  "windows-server-tests": "success",
   "sdk-domain-coverage": "success",
 }
 
@@ -146,4 +147,87 @@ test("the aggregate job names every other job, and only the unguarded jobs alway
     .filter((block) => !block.text.includes("needs.changes.outputs.code"))
     .map((block) => block.id)
   assert.deepEqual(unguarded.toSorted(), [...ALWAYS_RUN].toSorted())
+})
+
+test("the Windows split preserves full build flags, platform coverage, guards, caches and permissions", () => {
+  const workflow = readFileSync(
+    new URL("../.github/workflows/local-auth.yml", import.meta.url),
+    "utf8",
+  )
+  for (const checkout of [workflow, workflow.replace(/\r?\n/g, "\r\n")]) {
+    const blocks = jobBlocks(checkout)
+    const local = blocks.find((block) => block.id === "local-auth").text
+    const server = blocks.find((block) => block.id === "windows-server-tests").text
+    const command =
+      /run: node scripts\/cargo-test-parallel\.mjs --concurrency (\d+) --partition (.+?) -- (.+)\r?$/m
+    const localCommand = local.match(command)
+    const serverCommand = server.match(command)
+    assert.ok(localCommand)
+    assert.ok(serverCommand)
+    assert.equal(localCommand[1], "2")
+    assert.equal(serverCommand[1], "2")
+    assert.equal(localCommand[2], "${{ matrix.partition }}")
+    assert.equal(serverCommand[2], "server-lib")
+    assert.equal(localCommand[3], serverCommand[3])
+    assert.equal(
+      localCommand[3],
+      "-p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk",
+    )
+    assert.match(local, /fail-fast: false/)
+    assert.match(local, /os: \[windows-latest, ubuntu-latest, macos-latest\]/)
+    for (const [os, partition] of [
+      ["windows", "remaining"],
+      ["ubuntu", "all"],
+      ["macos", "all"],
+    ])
+      assert.match(local, new RegExp(`- os: ${os}-latest\\s+partition: ${partition}`))
+    assert.match(server, /runs-on: windows-latest/)
+    for (const block of [local, server]) {
+      assert.match(block, /needs: changes/)
+      assert.match(
+        block,
+        /if: \$\{\{ !cancelled\(\) && needs\.changes\.outputs\.code != 'false' \}\}/,
+      )
+      assert.match(
+        block,
+        /github\.event_name != 'workflow_dispatch' \|\| github\.event\.inputs\.rust-cache != 'cold'/,
+      )
+      assert.match(block, /components: clippy,rustfmt/)
+      assert.match(block, /node-version: 24/)
+      assert.doesNotMatch(block, /permissions:|continue-on-error:|--test-threads|--skip/)
+    }
+    assert.match(local, /save-if: \$\{\{ github\.ref == 'refs\/heads\/main' \}\}/)
+    assert.match(server, /shared-key: local-auth\r?\n\s+save-if: false/)
+    assert.match(checkout, /permissions:\r?\n  contents: read\r?\n/)
+    assert.match(
+      checkout,
+      /cancel-in-progress: \$\{\{ github\.event_name == 'pull_request' \}\}/,
+    )
+    assert.match(
+      blocks.find((block) => block.id === "gateway-contract").text,
+      /node --test scripts\/cargo-test-parallel\/e2e\.test\.mjs/,
+    )
+    assert.doesNotMatch(
+      server,
+      /--doc|clippy -p|check-desktop|smoke-auth|check-windows-task-scheduler/,
+    )
+    for (const check of [
+      "cargo clippy -p nessa-local-storage",
+      "node scripts/check-desktop.mjs",
+      "check-windows-task-scheduler.ps1",
+      "scripts/smoke-auth.mjs",
+      "scripts/smoke-windows-private-files.ts",
+    ])
+      assert.ok(local.includes(check), check)
+  }
+})
+
+test("either Windows partition failure or unexpected skip fails the aggregate", () => {
+  for (const job of ["windows-server-tests", "local-auth"]) {
+    for (const result of ["failure", "cancelled", "skipped"]) {
+      const evaluated = evaluateChecks(needs("true", { ...compileJobs, [job]: result }))
+      assert.equal(evaluated.ok, false)
+      assert.equal(evaluated.failures[0].job, job)
+    }
+  }
 })

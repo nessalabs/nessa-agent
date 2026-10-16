@@ -17,6 +17,10 @@
 export {
   NessaClient,
   createSubscriptionGate,
+  createConversationReadTools,
+  type ConversationReadToolDescriptor,
+  type ConversationReadTools,
+  type ConversationReadToolsOptions,
   type SubscriptionGate,
   type AuthApi,
   type CredentialApi,

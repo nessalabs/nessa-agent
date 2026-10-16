@@ -42,6 +42,13 @@ impl Unavailable {
 }
 
 impl CedarConversationAccessPolicy {
+    /// Immutable inputs to the composed receiver read-policy fingerprint.
+    /// The receiver profile owner hashes these exact enforcing sources; no
+    /// caller copies this bundle or derives authorization from the digest.
+    pub fn profile_sources() -> [&'static str; 4] {
+        [SCHEMA, POLICIES[0], POLICIES[1], POLICIES[2]]
+    }
+
     /// Load and strictly validate the checked-in bundle.
     ///
     /// # Errors

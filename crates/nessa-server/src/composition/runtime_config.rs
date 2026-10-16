@@ -5,11 +5,26 @@ use crate::{
     core::RunError,
     product::{ConfiguredLimits, OperationalLimits, SessionSettings},
 };
-use nessa_auth::adapters::local::LocalStoreConfig;
+use nessa_auth::{adapters::local::LocalStoreConfig, domain::pairing::OwnerPhoneRequest};
 pub(super) use nessa_protocol::relay::RelayAddress;
 use nessa_sdk::domain::agent_execution::leases::{PeerEnvironment, SshDestination};
 use serde::Deserialize;
-use std::{io::Read, net::SocketAddr, path::Path, time::Duration};
+use std::{
+    io::Read,
+    net::{IpAddr, SocketAddr},
+    path::Path,
+    time::Duration,
+};
+
+/// A host a phone can open TCP to. Unspecified, loopback, multicast, the
+/// IPv4 this-network block `0.0.0.0/8`, the IPv4 limited broadcast, and an
+/// IPv6 link-local address are not that host.
+pub(super) fn routable_advertised_host(address: IpAddr) -> bool {
+    // Validate the host through Auth's endpoint owner. Port 1 is only a
+    // nonzero placeholder: the configured port may intentionally be zero.
+    !address.to_canonical().is_loopback()
+        && OwnerPhoneRequest::validate_endpoint(SocketAddr::new(address, 1)).is_ok()
+}
 
 /// The most bytes `config.json` may have: what startup reads and what a
 /// change to the stored MCP servers may write (`mcp_servers::settings`).
@@ -87,6 +102,10 @@ pub(super) struct NativeConfig {
     /// gateway serves only directly.
     #[serde(default)]
     pub relay: Option<RelayAddress>,
+    /// Host a wildcard listen address is published as. The bound port is the
+    /// listener's. Absent, a wildcard listener is not disclosed.
+    #[serde(default)]
+    pub advertised_address: Option<IpAddr>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -174,7 +193,29 @@ impl RuntimeConfig {
         config.limits()?;
         config.ssh_hosts()?;
         config.command_policy()?;
+        config.advertised_address()?;
         Ok(config)
+    }
+
+    /// A wildcard listener publishes `advertisedAddress` on the configured
+    /// port. The address is configuration, not a route-table probe: it has to
+    /// be a routable host of the listen family, and it applies only to a wildcard.
+    fn advertised_address(&self) -> Result<(), RunError> {
+        let Some(native) = &self.native else {
+            return Ok(());
+        };
+        let Some(address) = native.advertised_address else {
+            return Ok(());
+        };
+        if native.listen_address.ip().is_unspecified()
+            && routable_advertised_host(address)
+            && address.is_ipv4() == native.listen_address.is_ipv4()
+        {
+            return Ok(());
+        }
+        Err(refused(
+            "native.advertisedAddress must be a routable address of the wildcard listen family",
+        ))
     }
 
     /// The agent's command policy; `None` when its environment tools are not
@@ -433,6 +474,50 @@ mod tests {
             assert!(relay(bytes.as_bytes()).is_err(), "{address:?} is refused");
         }
         assert!(relay(br#"{"native":{"listenAddress":"127.0.0.1:1","relay":443}}"#).is_err());
+    }
+
+    #[test]
+    fn advertised_address_is_a_routable_host_for_a_wildcard_listen() {
+        let address = |bytes: &[u8]| {
+            RuntimeConfig::parse(bytes).map(|config| config.native.unwrap().advertised_address)
+        };
+        assert_eq!(
+            address(
+                br#"{"native":{"listenAddress":"0.0.0.0:47650","advertisedAddress":"192.0.2.10"}}"#
+            )
+            .unwrap(),
+            Some("192.0.2.10".parse().unwrap())
+        );
+        assert_eq!(
+            address(
+                br#"{"native":{"listenAddress":"[::]:47650","advertisedAddress":"2001:db8::1"}}"#
+            )
+            .unwrap(),
+            Some("2001:db8::1".parse().unwrap())
+        );
+        assert_eq!(
+            address(br#"{"native":{"listenAddress":"127.0.0.1:47650"}}"#).unwrap(),
+            None
+        );
+        for bytes in [
+            br#"{"native":{"listenAddress":"127.0.0.1:47650","advertisedAddress":"192.0.2.10"}}"#
+                .as_slice(),
+            br#"{"native":{"listenAddress":"0.0.0.0:47650","advertisedAddress":"127.0.0.1"}}"#,
+            br#"{"native":{"listenAddress":"0.0.0.0:47650","advertisedAddress":"0.0.0.0"}}"#,
+            br#"{"native":{"listenAddress":"0.0.0.0:47650","advertisedAddress":"224.0.0.1"}}"#,
+            br#"{"native":{"listenAddress":"0.0.0.0:47650","advertisedAddress":"2001:db8::1"}}"#,
+            br#"{"native":{"listenAddress":"[::]:47650","advertisedAddress":"fe80::1"}}"#,
+            br#"{"native":{"listenAddress":"[::]:47650","advertisedAddress":"::ffff:127.0.0.1"}}"#,
+            br#"{"native":{"listenAddress":"0.0.0.0:47650","advertisedAddress":"0.0.0.1"}}"#,
+            br#"{"native":{"listenAddress":"0.0.0.0:47650","advertisedAddress":"255.255.255.255"}}"#,
+            br#"{"native":{"listenAddress":"0.0.0.0:47650","advertisedAddress":"not-an-address"}}"#,
+        ] {
+            assert!(
+                address(bytes).is_err(),
+                "{}",
+                String::from_utf8_lossy(bytes)
+            );
+        }
     }
     /// Design rows S1 and S2: native pairing is off unless named, and a
     /// malformed native section refuses startup before anything is opened.

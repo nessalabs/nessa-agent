@@ -1,6 +1,6 @@
 use super::super::{
-    AttemptId, ConsentIntent, DeviceKey, InvitationId, PairingError, PairingInitiator,
-    PairingPolicy,
+    AttemptId, ConsentClass, ConsentIntent, DeviceKey, InvitationId, OwnerPhoneRequestId,
+    PairingError, PairingInitiator, PairingPolicy,
 };
 use crate::domain::{
     CredentialId, CredentialTransition, PrincipalId, ResourceId, RevocationCause, TransitionCause,
@@ -92,6 +92,7 @@ pub(crate) enum Event {
     Fail(AttemptId, DeviceKey, AttemptFailure),
     Claim(AttemptId, DeviceKey),
     Approve(DeviceKey, u64),
+    OwnerPhoneApproved(OwnerPhoneRequestId, DeviceKey, [u8; 32]),
     Stage(CredentialId, AttemptId, u64),
     Receiver(CredentialId, AttemptId, ResourceId, u64, u64),
     Activate(u64),
@@ -122,6 +123,15 @@ impl PairingEvent {
     /// Consent to the exact claimed key and immutable intent generation.
     pub fn approve(key: DeviceKey, generation: u64) -> Self {
         Self(Event::Approve(key, generation))
+    }
+    /// Record separately verified original device signature and current owner approval.
+    /// The application and registry establish those proofs; this is pure causal evidence.
+    pub fn owner_phone_approved(
+        request: OwnerPhoneRequestId,
+        key: DeviceKey,
+        digest: [u8; 32],
+    ) -> Self {
+        Self(Event::OwnerPhoneApproved(request, key, digest))
     }
     /// Save dispatch identity before ensuring a receiver for this reserved credential.
     pub fn stage(credential: CredentialId, request: AttemptId, generation: u64) -> Self {
@@ -179,12 +189,37 @@ pub struct PairingRecord {
     phase: PairingPhase,
     attempts: Box<[Attempt]>,
     claim: Option<(AttemptId, DeviceKey)>,
+    owner_phone: Option<(OwnerPhoneRequestId, DeviceKey, [u8; 32])>,
     stage: Option<ReceiverStage>,
     terminal: Option<(TerminalCause, PairingInitiator)>,
 }
 impl PairingRecord {
     /// Create a finite invitation using time supplied by the injected application clock.
     pub fn new(
+        id: InvitationId,
+        intent: ConsentIntent,
+        created_at_ms: u64,
+        policy: PairingPolicy,
+    ) -> Result<Self, PairingError> {
+        if !intent.class().uses_pake() {
+            return Err(PairingError::Invalid);
+        }
+        Self::initial(id, intent, created_at_ms, policy)
+    }
+    /// Create the separate signed-owner consistency boundary. It admits no PAKE attempts.
+    /// This initial value publishes no authority until the original approval is committed.
+    pub fn new_owner_phone(
+        id: InvitationId,
+        intent: ConsentIntent,
+        created_at_ms: u64,
+        policy: PairingPolicy,
+    ) -> Result<Self, PairingError> {
+        if intent.class() != ConsentClass::OwnerPhoneReadWrite {
+            return Err(PairingError::Invalid);
+        }
+        Self::initial(id, intent, created_at_ms, policy)
+    }
+    fn initial(
         id: InvitationId,
         intent: ConsentIntent,
         created_at_ms: u64,
@@ -202,6 +237,7 @@ impl PairingRecord {
             phase: PairingPhase::Available,
             attempts: Box::new([]),
             claim: None,
+            owner_phone: None,
             stage: None,
             terminal: None,
         })
@@ -244,6 +280,10 @@ impl PairingRecord {
     /// Winning claim; no key is published before its attempt is accepted.
     pub fn claim_binding(&self) -> Option<(AttemptId, DeviceKey)> {
         self.claim
+    }
+    /// Original signed-owner proof correlation, distinct from charged PAKE attempts.
+    pub fn owner_phone_approval(&self) -> Option<(OwnerPhoneRequestId, DeviceKey, [u8; 32])> {
+        self.owner_phone
     }
     /// Check an immutable reservation replay before consulting admission capacity.
     pub fn reservation_status(
@@ -366,6 +406,9 @@ impl PairingRecord {
             }
 
             Event::Reserve(id, key, input) => {
+                if !self.intent.class().uses_pake() {
+                    return Err(PairingError::Ineligible);
+                }
                 if self.reservation_status(*id, *key, *input)?.is_some() {
                     return Err(PairingError::Conflict); // Receipt replay is a read, not another transition.
                 }
@@ -427,6 +470,20 @@ impl PairingRecord {
                 {
                     return Err(PairingError::Conflict);
                 }
+                next.phase = PairingPhase::Approved;
+            }
+            Event::OwnerPhoneApproved(request, key, digest) => {
+                self.owner(&actor)?;
+                self.before_expiry(at_ms)?;
+                if self.intent.class() != ConsentClass::OwnerPhoneReadWrite
+                    || self.phase != PairingPhase::Available
+                    || !self.attempts.is_empty()
+                    || self.owner_phone.is_some()
+                {
+                    return Err(PairingError::Ineligible);
+                }
+                next.owner_phone = Some((*request, *key, *digest));
+                next.claim = Some((AttemptId::new(*request.bytes()), *key));
                 next.phase = PairingPhase::Approved;
             }
             Event::Stage(credential, request, generation) => {

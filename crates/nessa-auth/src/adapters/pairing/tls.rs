@@ -300,62 +300,104 @@ impl<S: Read + Write> NativeTransport<S> {
         identity: &NativeIdentity,
         trust: GatewayTrust,
     ) -> Result<Self, PairingCryptoError> {
-        let pin = match trust {
-            GatewayTrust::ManualBootstrap => None,
-            GatewayTrust::Pinned(pin) => {
-                parse_spki(&pin).map_err(|_| PairingCryptoError::InvalidContext)?;
-                Some(pin)
+        Self::connect_observed(stream, identity, trust, |_| {})
+    }
+    /// Observe the canonical typed failure before dropping the owned physical
+    /// stream, so its owner can retain the first cause while cleanup drains.
+    /// Successful connections emit no failure. The synchronous observer must
+    /// return promptly without panicking; it receives no credential or key.
+    pub fn connect_observed(
+        stream: S,
+        identity: &NativeIdentity,
+        trust: GatewayTrust,
+        mut observer: impl FnMut(PairingCryptoError),
+    ) -> Result<Self, PairingCryptoError> {
+        let configured = (|| {
+            let pin = match trust {
+                GatewayTrust::ManualBootstrap => None,
+                GatewayTrust::Pinned(pin) => {
+                    parse_spki(&pin).map_err(|_| PairingCryptoError::InvalidContext)?;
+                    Some(pin)
+                }
+            };
+            let mut config = ClientConfig::builder_with_provider(Arc::new(default_provider()))
+                .with_protocol_versions(&[&rustls::version::TLS13])
+                .map_err(|_| PairingCryptoError::Unavailable)?
+                .dangerous()
+                .with_custom_certificate_verifier(Arc::new(RawVerifier { pin }))
+                .with_client_cert_resolver(Arc::new(AlwaysResolvesClientRawPublicKeys::new(
+                    identity.certified_key()?,
+                )));
+            config.alpn_protocols = vec![ALPN.to_vec()];
+            config.resumption = Resumption::disabled();
+            config.enable_early_data = false;
+            let name = ServerName::try_from("nessa.invalid")
+                .map_err(|_| PairingCryptoError::Unavailable)?;
+            let connection = ClientConnection::new(Arc::new(config), name)
+                .map_err(|_| PairingCryptoError::Unavailable)?;
+            Ok(Connection::Client(connection))
+        })();
+        match configured {
+            Ok(connection) => {
+                Self::complete_observed(connection, stream, identity.spki, false, observer)
             }
-        };
-        let mut config = ClientConfig::builder_with_provider(Arc::new(default_provider()))
-            .with_protocol_versions(&[&rustls::version::TLS13])
-            .map_err(|_| PairingCryptoError::Unavailable)?
-            .dangerous()
-            .with_custom_certificate_verifier(Arc::new(RawVerifier { pin }))
-            .with_client_cert_resolver(Arc::new(AlwaysResolvesClientRawPublicKeys::new(
-                identity.certified_key()?,
-            )));
-        config.alpn_protocols = vec![ALPN.to_vec()];
-        config.resumption = Resumption::disabled();
-        config.enable_early_data = false;
-        let name =
-            ServerName::try_from("nessa.invalid").map_err(|_| PairingCryptoError::Unavailable)?;
-        let connection = ClientConnection::new(Arc::new(config), name)
-            .map_err(|_| PairingCryptoError::Unavailable)?;
-        Self::complete(Connection::Client(connection), stream, identity.spki, false)
+            Err(error) => {
+                observer(error);
+                Err(error)
+            }
+        }
     }
     fn complete(
+        connection: Connection,
+        stream: S,
+        local: [u8; 44],
+        server: bool,
+    ) -> Result<Self, PairingCryptoError> {
+        Self::complete_observed(connection, stream, local, server, |_| {})
+    }
+    fn complete_observed(
         mut connection: Connection,
         mut stream: S,
         local: [u8; 44],
         server: bool,
+        mut observer: impl FnMut(PairingCryptoError),
     ) -> Result<Self, PairingCryptoError> {
-        connection.set_buffer_limit(Some(TLS_BUFFER_BYTES));
-        let mut budget = HandshakeBudget {
-            stream: &mut stream,
-            read: 0,
-            written: 0,
-        };
-        while connection.is_handshaking() {
-            connection
-                .complete_io(&mut budget)
+        let validated = (|| {
+            connection.set_buffer_limit(Some(TLS_BUFFER_BYTES));
+            let mut budget = HandshakeBudget {
+                stream: &mut stream,
+                read: 0,
+                written: 0,
+            };
+            while connection.is_handshaking() {
+                connection
+                    .complete_io(&mut budget)
+                    .map_err(|_| PairingCryptoError::InvalidProof)?;
+            }
+            if connection.alpn_protocol() != Some(ALPN) {
+                return Err(PairingCryptoError::InvalidContext);
+            }
+            let certificates = connection
+                .peer_certificates()
+                .ok_or(PairingCryptoError::InvalidProof)?;
+            let peer = certificates
+                .first()
+                .ok_or(PairingCryptoError::InvalidProof)?;
+            let peer = parse_spki(peer.as_ref()).map_err(|_| PairingCryptoError::InvalidProof)?;
+            let exporter = connection
+                .export_keying_material([0; 32], b"EXPORTER-Channel-Binding", Some(&[]))
                 .map_err(|_| PairingCryptoError::InvalidProof)?;
-        }
-        if connection.alpn_protocol() != Some(ALPN) {
-            return Err(PairingCryptoError::InvalidContext);
-        }
-        let certificates = connection
-            .peer_certificates()
-            .ok_or(PairingCryptoError::InvalidProof)?;
-        let peer = certificates
-            .first()
-            .ok_or(PairingCryptoError::InvalidProof)?;
-        let peer = parse_spki(peer.as_ref()).map_err(|_| PairingCryptoError::InvalidProof)?;
-        let exporter = connection
-            .export_keying_material([0; 32], b"EXPORTER-Channel-Binding", Some(&[]))
-            .map_err(|_| PairingCryptoError::InvalidProof)?;
-        let (gateway, device) = if server { (local, peer) } else { (peer, local) };
-        let device_proof = DeviceConnectionProof::from_tls(device_key(&device));
+            let (gateway, device) = if server { (local, peer) } else { (peer, local) };
+            let device_proof = DeviceConnectionProof::from_tls(device_key(&device));
+            Ok((gateway, device, exporter, device_proof))
+        })();
+        let (gateway, device, exporter, device_proof) = match validated {
+            Ok(facts) => facts,
+            Err(error) => {
+                observer(error);
+                return Err(error);
+            }
+        };
         Ok(Self {
             device_proof,
             tls: match connection {
@@ -401,6 +443,13 @@ impl<S: Read + Write> NativeTransport<S> {
     /// Exact observed gateway key. Bootstrap callers persist it only after valid KE2.
     pub fn gateway_spki(&self) -> [u8; 44] {
         self.gateway
+    }
+    /// Request TLS traffic-key rotation through rustls and flush its control record.
+    /// Permanent identity, possession proof and enrollment authority do not change.
+    /// The supplied stream retains responsibility for I/O deadlines and cancellation.
+    pub fn request_key_update(&mut self) -> io::Result<()> {
+        self.tls.request_key_update()?;
+        self.tls.flush()
     }
 }
 // Complete-message framing belongs to the native server codec. These operations
@@ -453,6 +502,15 @@ impl<S: Write> Write for HandshakeBudget<'_, S> {
 enum NativeStream<S: Read + Write> {
     Client(StreamOwned<ClientConnection, S>),
     Server(StreamOwned<ServerConnection, S>),
+}
+impl<S: Read + Write> NativeStream<S> {
+    fn request_key_update(&mut self) -> io::Result<()> {
+        let result = match self {
+            Self::Client(stream) => stream.conn.refresh_traffic_keys(),
+            Self::Server(stream) => stream.conn.refresh_traffic_keys(),
+        };
+        result.map_err(io::Error::other)
+    }
 }
 impl<S: Read + Write> Read for NativeStream<S> {
     fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {

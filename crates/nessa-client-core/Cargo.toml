@@ -33,12 +33,13 @@ tokio = { version = "1", features = ["rt", "sync", "time", "net"] }
 tracing = "0.1"
 tungstenite = "0.29"
 uuid = { version = "1", features = ["v4"] }
+# Bounded native-only key correlation keeps its temporary seed copy zeroizing.
+zeroize = "=1.9.0"
+
 [dev-dependencies]
 # The unmarked checkpoint fixture. A production build of this crate does not
 # enable it.
 nessa-sdk = { path = "../nessa-sdk", features = ["test-support"] }
-# Existing private-key fixtures need this test-only value.
-zeroize = "=1.9.0"
 tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "test-util"] }
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt"] }

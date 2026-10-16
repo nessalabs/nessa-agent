@@ -6,6 +6,7 @@ import {
   buildDiagnostics,
   linePrefix,
   parseArgs,
+  partitionExecutables,
   runParallelCargoTests,
   testExecutables,
 } from "./cargo-test-parallel.mjs"
@@ -74,10 +75,19 @@ test("the harness list keeps test binaries and drops the plain program", () => {
   ].join("\n")
 
   assert.deepEqual(testExecutables(stdout), [
-    { label: "nessa-sdk nessa_sdk", executable: "/repo/target/debug/deps/nessa_sdk-abc" },
+    {
+      label: "nessa-sdk nessa_sdk",
+      executable: "/repo/target/debug/deps/nessa_sdk-abc",
+      packageId: "path+file:///repo/crates/nessa-sdk#0.1.0",
+      targetName: "nessa_sdk",
+      targetKinds: ["lib"],
+    },
     {
       label: "nessa-sdk infrastructure",
       executable: "/repo/target/debug/deps/infrastructure-def",
+      packageId: "path+file:///repo/crates/nessa-sdk#0.1.0",
+      targetName: "infrastructure",
+      targetKinds: ["test"],
     },
   ])
   assert.equal(buildDiagnostics(stdout), "warning: unused\nnot json\n")
@@ -115,6 +125,9 @@ test("a multi-format native library keeps its actual unit-test executable", () =
     {
       label: "nessa-device-client nessa_device_client",
       executable: "/repo/target/debug/deps/nessa_device_client-abc",
+      packageId: "path+file:///repo/crates/nessa-sdk#0.1.0",
+      targetName: "nessa_device_client",
+      targetKinds: ["rlib", "cdylib", "staticlib"],
     },
   ])
   assert.deepEqual(
@@ -139,6 +152,7 @@ test("a line prefix keeps a fragment that arrives split", () => {
 test("the command requires a positive concurrency and cargo arguments", () => {
   assert.deepEqual(parseArgs(["--concurrency", "2", "--", "-p", "nessa-sdk"]), {
     concurrency: 2,
+    partition: "all",
     cargoArgs: ["-p", "nessa-sdk"],
   })
   assert.throws(() => parseArgs(["-p", "nessa-sdk"]), /must follow --/)
@@ -361,4 +375,159 @@ test("concurrency is a bound, not a thread-count increase", async () => {
   })
   assert.equal(max, 2)
   assert.doesNotMatch(io.text().err, /--test-threads/)
+})
+
+const metadata = {
+  packages: [
+    {
+      name: "nessa-server",
+      id: "server-id",
+      targets: [{ name: "nessa_server", kind: ["lib"] }],
+    },
+  ],
+}
+function splitArtifacts() {
+  const server = JSON.parse(
+    artifact({
+      manifest: "C:\\repo\\crates\\nessa-server\\Cargo.toml",
+      name: "nessa_server",
+      executable: "C:\\repo\\target\\unpredictable.exe",
+    }),
+  )
+  server.package_id = "server-id"
+  return [server, JSON.parse(artifact({ name: "nessa_server", kind: ["test"] }))]
+    .map((item) => JSON.stringify(item))
+    .join("\n")
+}
+
+test("Cargo identity partitions exhaustively and disjointly, including Windows paths and colliding names", () => {
+  const all = testExecutables(splitArtifacts())
+  const split = partitionExecutables(all, metadata)
+  assert.equal(split["server-lib"].length, 1)
+  assert.equal(split.remaining.length, 1)
+  assert.equal(split["server-lib"][0].executable, "C:\\repo\\target\\unpredictable.exe")
+  assert.deepEqual(new Set([...split["server-lib"], ...split.remaining]), new Set(all))
+  assert.ok(split.remaining.every((item) => !split["server-lib"].includes(item)))
+  for (const candidates of [
+    [],
+    split.remaining,
+    [...all, { ...split["server-lib"][0], executable: "other.exe" }],
+  ])
+    assert.throws(
+      () => partitionExecutables(candidates, metadata),
+      /expected one.*executable/,
+    )
+  for (const packages of [[], [...metadata.packages, ...metadata.packages]])
+    assert.throws(
+      () => partitionExecutables(all, { packages }),
+      /expected one nessa-server package/,
+    )
+  for (const targets of [
+    [],
+    [{ name: "nessa_server", kind: ["bin"] }],
+    [...metadata.packages[0].targets, ...metadata.packages[0].targets],
+  ])
+    assert.throws(
+      () =>
+        partitionExecutables(all, { packages: [{ ...metadata.packages[0], targets }] }),
+      /expected one.*library target/,
+    )
+})
+
+test("partition arguments reject misspellings before building", () => {
+  assert.equal(
+    parseArgs([
+      "--concurrency",
+      "2",
+      "--partition",
+      "server-lib",
+      "--",
+      "-p",
+      "nessa-server",
+    ]).partition,
+    "server-lib",
+  )
+  assert.throws(
+    () =>
+      parseArgs([
+        "--concurrency",
+        "2",
+        "--partition",
+        "other",
+        "--",
+        "-p",
+        "nessa-server",
+      ]),
+    /unknown test partition/,
+  )
+})
+
+test("both split modes build the full selection, and remaining alone owns doctests", async () => {
+  for (const partition of ["server-lib", "remaining"]) {
+    const calls = []
+    const io = streams()
+    await runParallelCargoTests({
+      cargoArgs: packages,
+      concurrency: 2,
+      partition,
+      ...io,
+      async run(command, args, invocation) {
+        calls.push({ command, args })
+        if (args.includes("--no-run")) invocation.onStdout(splitArtifacts())
+        if (args[0] === "metadata") invocation.onStdout(JSON.stringify(metadata))
+        return 0
+      },
+    })
+    assert.deepEqual(calls[0].args, [
+      "test",
+      "--no-run",
+      "--message-format=json",
+      ...packages,
+    ])
+    assert.equal(
+      calls.filter((call) => call.args.includes("--doc")).length,
+      partition === "remaining" ? 1 : 0,
+    )
+    assert.equal(calls.filter((call) => call.command !== "cargo").length, 1)
+  }
+})
+
+test("split discovery failures start no executable or doctest", async () => {
+  for (const mode of ["metadata-failure", "bad-json", "missing-library"]) {
+    const calls = []
+    const io = streams()
+    await assert.rejects(
+      runParallelCargoTests({
+        cargoArgs: packages,
+        concurrency: 2,
+        partition: "remaining",
+        ...io,
+        async run(command, args, invocation) {
+          calls.push(command)
+          if (args.includes("--no-run"))
+            invocation.onStdout(
+              mode === "missing-library" ? artifact({}) : splitArtifacts(),
+            )
+          if (args[0] === "metadata") {
+            invocation.onStdout(mode === "bad-json" ? "{" : JSON.stringify(metadata))
+            return mode === "metadata-failure" ? 1 : 0
+          }
+          return 0
+        },
+      }),
+    )
+    assert.deepEqual(calls, ["cargo", "cargo"])
+  }
+})
+
+test("each part of Cargo identity excludes an otherwise matching executable", () => {
+  const server = testExecutables(splitArtifacts())[0]
+  const nearMatches = [
+    { ...server, executable: "another-package.exe", packageId: "another-package" },
+    { ...server, executable: "another-target.exe", targetName: "another_target" },
+    { ...server, executable: "binary-target.exe", targetKinds: ["bin"] },
+  ]
+  const split = partitionExecutables([server, ...nearMatches], metadata)
+  assert.deepEqual(split["server-lib"], [server])
+  assert.deepEqual(split.remaining, nearMatches)
 })

@@ -198,6 +198,7 @@ impl Fixture {
         let gateway = Arc::new(
             GatewayPairing::open(PairingRuntimeDependencies {
                 enrollments: enrollments(registry.clone()),
+                originals: registry.clone(),
                 access: registry.clone(),
                 policy: Arc::new(CedarPolicyEvaluator::new().unwrap()),
                 receivers: receivers(authority.clone()),
@@ -266,6 +267,7 @@ impl Fixture {
         let gateway = Arc::new(
             GatewayPairing::open(PairingRuntimeDependencies {
                 enrollments: registry.clone(),
+                originals: registry.clone(),
                 access: registry.clone(),
                 policy: Arc::new(CedarPolicyEvaluator::new().unwrap()),
                 receivers: Arc::new(ConversationReceivers::new(authority.clone())),

@@ -46,6 +46,6 @@ pub use receivers::ConversationReceivers;
 pub use registration::{RegisteredInvitation, RegistrationError, RegistrationWorker};
 pub use runtime::{
     BeginPairing, CreatedInvitation, GatewayPairing, PairingRuntimeDependencies,
-    PairingRuntimeError, ServerHandshake,
+    PairingRuntimeError, PhoneAuthorization, ServerHandshake,
 };
 pub use tls_stream::{TlsCloser, TlsStream};

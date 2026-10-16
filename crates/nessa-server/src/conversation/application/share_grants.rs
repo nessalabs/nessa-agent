@@ -68,6 +68,9 @@ use nessa_sdk::domain::agent_execution::executions::Initiator;
 pub enum Reader {
     /// One of the owner's own surfaces: reads what the owner owns.
     Owner,
+    /// First-party purpose with current original holding; target policy is
+    /// independent of per-conversation share grants and is never owner fallback.
+    OwnerPhone(Box<super::OwnerPhoneReader>),
     /// A paired device: reads only the conversations granted to it.
     PairedDevice { receiver_id: String },
 }

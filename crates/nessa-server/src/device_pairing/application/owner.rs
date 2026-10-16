@@ -27,6 +27,9 @@ pub enum OwnerError {
     Enrollment(PairingStoreError),
     /// Generated immutable identity/policy or collection admission refused.
     Domain(PairingError),
+    /// The generator could not supply identities for a new original or an
+    /// approved record that still has no stage.
+    Entropy,
 }
 /// Current admission held across code registration. It creates no durable
 /// invitation, and its private fields mean only `PairingOwner::prepare` makes one.
@@ -204,7 +207,7 @@ impl PairingOwner<'_> {
     /// enrollment it ends after staging has its receiver settled here, by the
     /// path that ended it (design row A13); if that cannot complete now, the
     /// record keeps `cleanup_pending` for the next path or reconciliation.
-    async fn expire(&self, id: InvitationId) -> Result<PairingRecord, OwnerError> {
+    pub(super) async fn expire(&self, id: InvitationId) -> Result<PairingRecord, OwnerError> {
         let record = self
             .enrollments
             .expire_pairing_if_due(id, self.clock)
