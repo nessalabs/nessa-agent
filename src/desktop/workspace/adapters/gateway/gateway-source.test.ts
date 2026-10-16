@@ -2171,13 +2171,19 @@ describe("writes", () => {
       },
       {
         method: "send",
-        args: [conversationS, "Hello", [], [], { executionId: "m", requestId: "m" }],
+        args: [
+          conversationS,
+          "Hello",
+          [],
+          [],
+          { executionId: "m", requestId: expect.any(String) },
+        ],
       },
       { method: "subscribe", args: [conversationS, {}] },
     ])
   })
 
-  it("W2: a message sent again goes under the same ids, so the gateway takes it once", async () => {
+  it("W2: a message sent again goes under its turn's id, so the gateway takes it once, as a command of its own", async () => {
     const { gateway, source } = started()
     gateway.views.set(conversationS, view(conversationS))
     const message = {
@@ -2193,10 +2199,13 @@ describe("writes", () => {
     // A later message sends no create: the gateway resolves the conversation itself.
     expect(gateway.count("create")).toBe(0)
     const sends = gateway.calls.filter((call) => call.method === "send")
-    expect(sends.map((call) => call.args[4])).toEqual([
-      { executionId: "m", requestId: "m" },
-      { executionId: "m", requestId: "m" },
-    ])
+    const ids = sends.map(
+      (call) => call.args[4] as { executionId: string; requestId: string },
+    )
+    expect(ids.map((sent) => sent.executionId)).toEqual(["m", "m"])
+    // A command whose answer was lost reads as unresolved for good, and one
+    // refused keeps its refusal: under the same request it could never send.
+    expect(ids[0]!.requestId).not.toBe(ids[1]!.requestId)
   })
 
   it("W3, D12: approving once answers the option the gateway says allows, asks for no read, and the next frame says the conversation", async () => {
@@ -3346,7 +3355,7 @@ it("PS16: captures immutable workspace intent before creation can await", async 
     "original",
     [],
     [],
-    { executionId: "original-turn", requestId: "original-turn" },
+    { executionId: "original-turn", requestId: expect.any(String) },
   ])
   expect(gateway.live(conversationS)).toBe(1)
   expect(gateway.live(conversationB)).toBe(0)

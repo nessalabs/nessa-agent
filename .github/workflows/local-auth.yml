@@ -206,6 +206,9 @@ jobs:
           product.mkdir(parents=True)
           shutil.copy2('crates/nessa-protocol/src/product/generated.rs', product / 'generated.rs')
           shutil.copy2('vitest.config.ts', root / 'vitest.config.ts')
+          # The config's setup file: every run loads it, this harness's included.
+          (root / 'src/test').mkdir(parents=True)
+          shutil.copy2('src/test/match-media.ts', root / 'src/test/match-media.ts')
           shutil.copy2('prettier.config.js', root / 'prettier.config.js')
           shutil.copy2('.prettierignore', root / '.prettierignore')
           package = json.loads(pathlib.Path('package.json').read_text())
