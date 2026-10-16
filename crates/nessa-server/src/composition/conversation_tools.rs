@@ -171,8 +171,8 @@ impl BuiltInServer for ConversationTools {
 struct Create {
     #[serde(default, deserialize_with = "supplied")]
     request_id: Option<String>,
-    #[serde(default, deserialize_with = "supplied")]
-    agent: Option<String>,
+    #[serde(default, deserialize_with = "supplied_agent")]
+    agent: Option<AgentId>,
     #[serde(default, deserialize_with = "supplied")]
     model: Option<String>,
     #[serde(default, deserialize_with = "supplied")]
@@ -188,13 +188,23 @@ struct Send {
     #[serde(default, deserialize_with = "supplied")]
     request_id: Option<String>,
 }
+/// Decoded only from its published string, never serde's map form of a variant.
 #[derive(Clone, Copy, Default, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(try_from = "String")]
 enum SendMode {
     #[default]
     Queued,
     Steering,
     Passive,
+}
+impl TryFrom<String> for SendMode {
+    type Error = &'static str;
+    fn try_from(name: String) -> Result<Self, Self::Error> {
+        [Self::Queued, Self::Steering, Self::Passive]
+            .into_iter()
+            .find(|mode| mode.name() == name)
+            .ok_or("unknown send mode")
+    }
 }
 impl SendMode {
     fn name(self) -> &'static str {
@@ -235,7 +245,18 @@ where
 {
     T::deserialize(deserializer).map(Some)
 }
+/// The published agent enum is a decode constraint, refused before admission.
+fn supplied_agent<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<AgentId>, D::Error> {
+    let name = String::deserialize(deserializer)?;
+    AgentId::parse(&name)
+        .map(Some)
+        .ok_or_else(|| serde::de::Error::custom("unknown agent"))
+}
+/// Published input schemas are objects; serde would also decode a struct from an array.
 fn parse<T: serde::de::DeserializeOwned>(arguments: Value) -> Result<T, String> {
+    if !arguments.is_object() {
+        return Err("invalid_request".into());
+    }
     serde_json::from_value(arguments).map_err(|_| "invalid_request".into())
 }
 fn thread(id: &str) -> Result<ConversationId, String> {
@@ -322,22 +343,13 @@ async fn run(
                 .await
                 .map_err(code)?;
             let storage = service.commands().ok_or("command_unavailable")?;
-            let agent = args
-                .agent
-                .as_deref()
-                .map(|name| {
-                    AgentId::parse(name)
-                        .map(RequestedAgent::Known)
-                        .ok_or_else(|| "invalid_request".to_owned())
-                })
-                .transpose()?;
             let receipt = service
                 .create_command(
                     storage,
                     target.clone(),
                     source.caller(),
                     RequestedConversation {
-                        agent,
+                        agent: args.agent.map(RequestedAgent::Known),
                         model: args.model,
                         approval_mode: None,
                         environment: args.environment,
@@ -669,7 +681,7 @@ mod tests {
     use serde_json::Map;
 
     #[test]
-    fn published_tool_arguments_preserve_omission_and_reject_explicit_null() {
+    fn published_tool_arguments_preserve_omission_and_reject_null_and_unpublished_values() {
         fn decode(tool: &str, arguments: Value) -> Result<(), String> {
             match tool {
                 "create_thread" => parse::<Create>(arguments).map(|_| ()),
@@ -701,6 +713,14 @@ mod tests {
                 base.insert(field.into(), example(&properties[field]));
             }
             assert!(decode(name, Value::Object(base.clone())).is_ok(), "{name}");
+            let positional = Value::Array(base.values().cloned().collect());
+            for shape in [positional, Value::Null, json!("arguments")] {
+                assert_eq!(
+                    decode(name, shape.clone()),
+                    Err("invalid_request".into()),
+                    "non-object {name}: {shape}"
+                );
+            }
             for (field, shape) in properties {
                 let mut arguments = base.clone();
                 arguments.insert(field.clone(), example(shape));
@@ -708,6 +728,25 @@ mod tests {
                     decode(name, Value::Object(arguments.clone())).is_ok(),
                     "valid {name}.{field}"
                 );
+                // Serde's map form of a valid value, e.g. {"steering": null}.
+                let valid = example(shape);
+                let key = valid
+                    .as_str()
+                    .map_or_else(|| valid.to_string(), str::to_owned);
+                arguments.insert(field.clone(), json!({ key: null }));
+                assert_eq!(
+                    decode(name, Value::Object(arguments.clone())),
+                    Err("invalid_request".into()),
+                    "object-shaped {name}.{field}"
+                );
+                if shape.get("enum").is_some() {
+                    arguments.insert(field.clone(), json!("not-a-published-value"));
+                    assert_eq!(
+                        decode(name, Value::Object(arguments.clone())),
+                        Err("invalid_request".into()),
+                        "unpublished {name}.{field}"
+                    );
+                }
                 arguments.insert(field.clone(), Value::Null);
                 assert_eq!(
                     decode(name, Value::Object(arguments.clone())),

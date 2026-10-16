@@ -418,6 +418,18 @@ async fn agent_tools_relay_create_send_replay_and_refuse_a_foreign_target() {
         grant.environment()[0].1.clone(),
     )
     .await;
+    let before_unknown_agent = audit.records.lock().unwrap().len();
+    let unknown_agent = client
+        .call(
+            "create_thread",
+            json!({"requestId":"unknown-agent","agent":"not-an-agent"}),
+        )
+        .await;
+    assert_eq!(
+        unknown_agent["structuredContent"]["error"], "invalid_request",
+        "{unknown_agent}"
+    );
+    assert_eq!(audit.records.lock().unwrap().len(), before_unknown_agent);
     let created = client
         .call("create_thread", json!({"requestId":"worker-create"}))
         .await;
