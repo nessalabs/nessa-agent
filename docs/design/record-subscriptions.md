@@ -431,6 +431,15 @@ results and thinking are not included. Existing owner policy applies to every ba
 | E20 | Owner phone peeks while target policy allows Read but denies Act | Use the shared command-target Cedar admission before reading active execution; no lifecycle read after refusal |
 | E21 | Paired credential holds only conversation.read; current share changes from absent to Read to Drive before peek and explicit stop | Absent targets stay hidden; Read may observe the authoritative execution but stop is forbidden; Drive may observe and stop that exact execution. Peek uses the existing paired-read grant owner, then its current target Read check; stop keeps Drive admission. Owner-phone purpose and Act checks, unpaired manifest grants, and administrative refusals remain in force |
 | E22 | An event source read is in flight when credential, paired share, or conversation access is revoked or the target is deleted | Reauthorize Page and Idle through the existing current credential and target policy owners before returning them for publication; refuse without exposing events or a new cursor. Unchanged authority preserves the output. Preparing carries no publication and retains pre-read admission |
+| E23 | A raw event subscribe supplies empty, duplicate, excessive, unknown or wrongly typed kinds, or an explicit null optional parameter | Refuse invalid_request before source registration/admission. Schema-owned filter bounds/uniqueness and non-null optional field names are generated for transport validation; omitted or a unique bounded subset remains valid |
+| E24 | A semantic kind has missing or contradictory metadata, live or buffered before open reply | The canonical event schema owns required/forbidden metadata and status/outcome values; generated client rules refuse the batch before callbacks or retaining checkpoint evidence. Sparse tool updates may omit name/status; state changes retain their distinct lifecycle, permission, and settlement-correction shapes |
+
+The event transport contract owns both subscription filter cardinality and the
+relationships between event kind and metadata. JSON Schema conditionals describe
+the supported semantic shapes; generation publishes those same declarations for
+client validation, rather than maintaining a second kind table. Gateway
+projection and valid fixtures cover every projected shape. Invalid frames end
+the client subscription and release its actual handle without publishing a batch.
 
 Event subscriptions admit publication after a successful Page or Idle read, while
 still holding request capacity. This final admission refreshes the credential,

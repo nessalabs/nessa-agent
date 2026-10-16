@@ -338,7 +338,14 @@ describe("NessaClient", () => {
               payload: {
                 subscriptionId: "1",
                 cursor: "cursor-1",
-                events: [{ id: "cursor-1", cursor: "cursor-1", kind: "state.changed" }],
+                events: [
+                  {
+                    id: "cursor-1",
+                    cursor: "cursor-1",
+                    kind: "state.changed",
+                    status: "opened",
+                  },
+                ],
               },
               seq: ++seq,
               stateVersion: 0,
@@ -470,7 +477,7 @@ describe("NessaClient", () => {
         const iterator = stream[Symbol.asyncIterator]()
         expect((await iterator.next()).value).toMatchObject({
           cursor: "cursor-1",
-          events: [{ kind: "state.changed" }],
+          events: [{ kind: "state.changed", status: "opened" }],
         })
         expect(
           await client.stopThread(conversationId, { executionId: receipt.executionId }),

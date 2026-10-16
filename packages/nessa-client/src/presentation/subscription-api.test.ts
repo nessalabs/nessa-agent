@@ -94,6 +94,39 @@ function viewHandlers() {
 }
 
 describe("subscription API", () => {
+  for (const early of [false, true]) {
+    for (const kind of ["turn.ended", "tool.updated"]) {
+      it(`E24 rejects incomplete ${kind} metadata ${early ? "before" : "after"} open reply without publishing a checkpoint`, async () => {
+        const malformed = {
+          subscriptionId: "1",
+          cursor: "checkpoint",
+          events: [{ id: "one", cursor: "one", kind }],
+        }
+        const wire = port((method) => {
+          if (early && method === ProductMethod.ConversationSubscribeEvents)
+            wire.emit(ProductEvent.ConversationEvents, malformed)
+          return { subscriptionId: "1" }
+        })
+        const handlers = { batch: vi.fn(), ended: vi.fn() }
+        const handle = await createSubscriptionApi(wire.session).events(
+          conversationId,
+          handlers,
+        )
+        if (!early) wire.emit(ProductEvent.ConversationEvents, malformed)
+        expect(handlers.batch).not.toHaveBeenCalled()
+        expect(handlers.ended).toHaveBeenCalledExactlyOnceWith({
+          reason: "invalid_frame",
+        })
+        await handle.close()
+        expect(
+          wire.request.mock.calls.filter(
+            ([method]) => method === ProductMethod.ConversationUnsubscribe,
+          ),
+        ).toHaveLength(1)
+      })
+    }
+  }
+
   it("rejects terminal frames combining view and event cursors", () => {
     expect(() =>
       endedFrame({
@@ -224,6 +257,7 @@ describe("subscription API", () => {
             id: "one",
             cursor: "one",
             kind: "state.changed",
+            status: "opened",
             name: "x".repeat(eventSubscriptionBounds.maxNameCharacters + 1),
           },
         ],
@@ -265,7 +299,7 @@ describe("subscription API", () => {
         wire.emit(ProductEvent.ConversationEvents, {
           subscriptionId: "1",
           cursor,
-          events: [{ id: cursor, cursor, kind: "state.changed" }],
+          events: [{ id: cursor, cursor, kind: "state.changed", status: "opened" }],
         })
       return { subscriptionId: "1" }
     })
@@ -295,7 +329,14 @@ describe("subscription API", () => {
       subscriptionId: "1",
       cursor: "one",
       events: [
-        { id: "one", cursor: "one", kind: "tool.updated", name: "x".repeat(1025) },
+        {
+          id: "one",
+          cursor: "one",
+          kind: "tool.updated",
+          executionId: "turn",
+          toolId: "tool",
+          name: "x".repeat(1025),
+        },
       ],
     })
     expect(handlers.batch).not.toHaveBeenCalled()
@@ -312,7 +353,9 @@ describe("subscription API", () => {
     wire.emit(ProductEvent.ConversationEvents, {
       subscriptionId: "1",
       cursor: "checkpoint",
-      events: [{ id: "identity", cursor: "different", kind: "state.changed" }],
+      events: [
+        { id: "identity", cursor: "different", kind: "state.changed", status: "opened" },
+      ],
     })
     expect(handlers.batch).not.toHaveBeenCalled()
     expect(handlers.ended).toHaveBeenCalledExactlyOnceWith({ reason: "invalid_frame" })

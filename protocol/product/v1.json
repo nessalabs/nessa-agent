@@ -6564,7 +6564,15 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 256,
-          "description": "Local settlement outcome; this is not a provider acknowledgement."
+          "description": "Local settlement outcome; this is not a provider acknowledgement.",
+          "enum": [
+            "completed",
+            "output_limit",
+            "request_limit",
+            "refused",
+            "cancelled",
+            "failed"
+          ]
         }
       },
       "required": [
@@ -6572,7 +6580,271 @@
         "cursor",
         "kind"
       ],
-      "description": "Metadata projected from one complete committed semantic fact. No prompt, thinking, tool arguments or results are included."
+      "description": "Metadata projected from one complete committed semantic fact. No prompt, thinking, tool arguments or results are included.",
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "turn.accepted"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "executionId",
+              "status"
+            ],
+            "properties": {
+              "status": {
+                "const": "accepted"
+              }
+            },
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "toolId"
+                  ]
+                },
+                {
+                  "required": [
+                    "name"
+                  ]
+                },
+                {
+                  "required": [
+                    "outcome"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "turn.started"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "executionId",
+              "status"
+            ],
+            "properties": {
+              "status": {
+                "const": "running"
+              }
+            },
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "toolId"
+                  ]
+                },
+                {
+                  "required": [
+                    "name"
+                  ]
+                },
+                {
+                  "required": [
+                    "outcome"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "turn.ended"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "executionId",
+              "status",
+              "outcome"
+            ],
+            "properties": {
+              "status": {
+                "const": "settled"
+              }
+            },
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "toolId"
+                  ]
+                },
+                {
+                  "required": [
+                    "name"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "tool.updated"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "executionId",
+              "toolId"
+            ],
+            "properties": {
+              "status": {
+                "enum": [
+                  "pending",
+                  "running",
+                  "completed",
+                  "failed"
+                ]
+              }
+            },
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "outcome"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "state.changed"
+              }
+            }
+          },
+          "then": {
+            "oneOf": [
+              {
+                "required": [
+                  "status"
+                ],
+                "properties": {
+                  "status": {
+                    "const": "opened"
+                  }
+                },
+                "not": {
+                  "anyOf": [
+                    {
+                      "required": [
+                        "executionId"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "toolId"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "name"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "outcome"
+                      ]
+                    }
+                  ]
+                }
+              },
+              {
+                "required": [
+                  "executionId",
+                  "status",
+                  "outcome"
+                ],
+                "properties": {
+                  "status": {
+                    "const": "settlement_updated"
+                  }
+                },
+                "not": {
+                  "anyOf": [
+                    {
+                      "required": [
+                        "toolId"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "name"
+                      ]
+                    }
+                  ]
+                }
+              },
+              {
+                "required": [
+                  "executionId",
+                  "status"
+                ],
+                "properties": {
+                  "status": {
+                    "enum": [
+                      "queued",
+                      "injected",
+                      "settled",
+                      "cancelled",
+                      "waiting_permission",
+                      "permission_cancelled",
+                      "permission_declined",
+                      "permission_deadline_answered",
+                      "waiting_question",
+                      "question_closed",
+                      "stop_requested"
+                    ]
+                  }
+                },
+                "not": {
+                  "anyOf": [
+                    {
+                      "required": [
+                        "toolId"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "name"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "outcome"
+                      ]
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ]
     },
     "ConversationSubscribeEventsParams": {
       "type": "object",
@@ -6607,6 +6879,7 @@
       "required": [
         "conversationId"
       ],
+      "not": { "required": ["after", "replay"] },
       "description": "Follow committed semantic events without opening an Agent. Replay uses complete saved facts and explicit gap refusals; default is future events. Stop with conversation.unsubscribe."
     },
     "ConversationEvents": {

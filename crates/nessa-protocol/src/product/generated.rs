@@ -2786,6 +2786,12 @@ pub const PASSIVE_DELIVERY_TIMEOUT_MS: u64 = 30000;
 pub const PASSIVE_CLIENT_ALLOWANCE_MS: u64 = 5000;
 /// Published passive read timing from the product schema, in milliseconds.
 pub const PASSIVE_MIN_REQUEST_TIMEOUT_MS: u64 = 45000;
+/// Event filter bounds published by the product schema.
+pub const MIN_EVENT_SUBSCRIPTION_KINDS: usize = 1;
+pub const MAX_EVENT_SUBSCRIPTION_KINDS: usize = 5;
+pub const UNIQUE_EVENT_SUBSCRIPTION_KINDS: bool = true;
+/// Optional event subscription fields whose published schema forbids explicit null.
+pub const NON_NULL_EVENT_SUBSCRIPTION_OPTIONS: &[&str] = &["after", "replay", "kinds"];
 pub mod product_method {
     pub const SESSION_AUTHENTICATE: &str = "session.authenticate";
     pub const AUTH_SESSION: &str = "auth.session";

@@ -2716,7 +2716,8 @@ export interface ConversationEvent {
   /** Observed lifecycle or tool status. */
   status?: string
   /** Local settlement outcome; this is not a provider acknowledgement. */
-  outcome?: string
+  outcome?:
+    "completed" | "output_limit" | "request_limit" | "refused" | "cancelled" | "failed"
 }
 /** Follow committed semantic events without opening an Agent. Replay uses complete saved facts and explicit gap refusals; default is future events. Stop with conversation.unsubscribe. */
 export interface ConversationSubscribeEventsParams {
@@ -2866,12 +2867,142 @@ export const bounds = {
 export const eventSubscriptionBounds = {
   maxCursorCharacters: 4096,
   maxBatchEvents: 64,
+  minKinds: 1,
+  maxKinds: 5,
+  uniqueKinds: true,
   maxExecutionIdCharacters: 256,
   maxToolIdCharacters: 256,
   maxNameCharacters: 1024,
   maxStatusCharacters: 256,
   maxOutcomeCharacters: 256,
 } as const
+/** Kind/metadata relationships derived from ConversationEvent's JSON Schema conditionals. */
+export const conversationEventMetadataRules = [
+  {
+    kind: "turn.accepted",
+    required: ["executionId", "status"],
+    forbidden: ["toolId", "name", "outcome"],
+    values: {
+      status: ["accepted"],
+      outcome: [
+        "completed",
+        "output_limit",
+        "request_limit",
+        "refused",
+        "cancelled",
+        "failed",
+      ],
+    },
+  },
+  {
+    kind: "turn.started",
+    required: ["executionId", "status"],
+    forbidden: ["toolId", "name", "outcome"],
+    values: {
+      status: ["running"],
+      outcome: [
+        "completed",
+        "output_limit",
+        "request_limit",
+        "refused",
+        "cancelled",
+        "failed",
+      ],
+    },
+  },
+  {
+    kind: "turn.ended",
+    required: ["executionId", "status", "outcome"],
+    forbidden: ["toolId", "name"],
+    values: {
+      status: ["settled"],
+      outcome: [
+        "completed",
+        "output_limit",
+        "request_limit",
+        "refused",
+        "cancelled",
+        "failed",
+      ],
+    },
+  },
+  {
+    kind: "tool.updated",
+    required: ["executionId", "toolId"],
+    forbidden: ["outcome"],
+    values: {
+      status: ["pending", "running", "completed", "failed"],
+      outcome: [
+        "completed",
+        "output_limit",
+        "request_limit",
+        "refused",
+        "cancelled",
+        "failed",
+      ],
+    },
+  },
+  {
+    kind: "state.changed",
+    required: ["status"],
+    forbidden: ["executionId", "toolId", "name", "outcome"],
+    values: {
+      status: ["opened"],
+      outcome: [
+        "completed",
+        "output_limit",
+        "request_limit",
+        "refused",
+        "cancelled",
+        "failed",
+      ],
+    },
+  },
+  {
+    kind: "state.changed",
+    required: ["executionId", "status", "outcome"],
+    forbidden: ["toolId", "name"],
+    values: {
+      status: ["settlement_updated"],
+      outcome: [
+        "completed",
+        "output_limit",
+        "request_limit",
+        "refused",
+        "cancelled",
+        "failed",
+      ],
+    },
+  },
+  {
+    kind: "state.changed",
+    required: ["executionId", "status"],
+    forbidden: ["toolId", "name", "outcome"],
+    values: {
+      status: [
+        "queued",
+        "injected",
+        "settled",
+        "cancelled",
+        "waiting_permission",
+        "permission_cancelled",
+        "permission_declined",
+        "permission_deadline_answered",
+        "waiting_question",
+        "question_closed",
+        "stop_requested",
+      ],
+      outcome: [
+        "completed",
+        "output_limit",
+        "request_limit",
+        "refused",
+        "cancelled",
+        "failed",
+      ],
+    },
+  },
+] as const
 export const ProductMethod = {
   SessionAuthenticate: "session.authenticate",
   AuthSession: "auth.session",

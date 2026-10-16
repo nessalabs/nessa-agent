@@ -9,7 +9,7 @@ import {
 const id = "00000000-0000-4000-8000-000000000001"
 const batch = (cursor: string): ThreadEventBatch => ({
   cursor,
-  events: [{ id: cursor, cursor, kind: "state.changed" }],
+  events: [{ id: cursor, cursor, kind: "state.changed", status: "opened" }],
 })
 
 function source(early?: (handlers: EventSubscriptionHandlers) => void) {

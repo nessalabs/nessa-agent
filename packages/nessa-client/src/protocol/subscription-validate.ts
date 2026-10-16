@@ -4,6 +4,7 @@ import {
   maxViewCursorIncarnationLength,
   ConversationEventKind,
   eventSubscriptionBounds,
+  conversationEventMetadataRules,
 } from "../generated/product.js"
 import type {
   AgentsListResult,
@@ -48,16 +49,16 @@ export function eventSubscribeOptions(
   if (
     options.kinds !== undefined &&
     (!Array.isArray(options.kinds) ||
-      options.kinds.length === 0 ||
-      options.kinds.length > EVENT_KINDS.length)
+      options.kinds.length < eventSubscriptionBounds.minKinds ||
+      options.kinds.length > eventSubscriptionBounds.maxKinds)
   )
     throw new TypeError("Invalid event kinds")
   const kinds = options.kinds === undefined ? undefined : [...options.kinds]
   if (
     kinds !== undefined &&
-    (kinds.length === 0 ||
-      kinds.length > EVENT_KINDS.length ||
-      new Set(kinds).size !== kinds.length ||
+    (kinds.length < eventSubscriptionBounds.minKinds ||
+      kinds.length > eventSubscriptionBounds.maxKinds ||
+      (eventSubscriptionBounds.uniqueKinds && new Set(kinds).size !== kinds.length) ||
       kinds.some((kind) => !EVENT_KINDS.includes(kind)))
   )
     throw new TypeError("Invalid event kinds")
@@ -109,6 +110,20 @@ export function eventsFrame(value: unknown): Omit<ConversationEvents, "subscript
       if (Object.hasOwn(event, key) && !boundedCharacters(event[key], max))
         throw new TypeError("Invalid semantic event metadata")
     }
+    if (
+      !conversationEventMetadataRules.some(
+        (rule) =>
+          rule.kind === event.kind &&
+          rule.required.every((field) => Object.hasOwn(event, field)) &&
+          rule.forbidden.every((field) => !Object.hasOwn(event, field)) &&
+          Object.entries(rule.values).every(
+            ([field, values]) =>
+              !Object.hasOwn(event, field) ||
+              (values as readonly unknown[]).includes(event[field]),
+          ),
+      )
+    )
+      throw new TypeError("Contradictory semantic event metadata")
     return { ...event } as unknown as ConversationEvent
   })
   return { cursor: value.cursor, events }
