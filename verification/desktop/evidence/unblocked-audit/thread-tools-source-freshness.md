@@ -1,0 +1,39 @@
+# Agent tool source facts at admission
+
+Implementation base: 77ae675a52ca6d4b97e844a5dafe71f845025e2b, isolated branch
+codex/thread-tools-source-freshness. The initial metadata read remains an early
+existence diagnostic, preserving the existing source capacity and cancellation
+seams. After awaited live lookup and snapshot capture, source metadata is read
+again directly before synchronous Cedar evaluation. No new policy comparison,
+global lock, or deletion-cleanup serialization is introduced. Actor, source
+execution, and lease remain those captured in the one snapshot; no later turn is
+selected to explain this call. The design orderings were updated before code.
+
+Regression: source_admission_reloads_metadata_after_waiting_for_live_evidence.
+It captures the initial metadata reply using the existing repository gate, holds
+the real service conversation map to prevent live lookup, then commits the real
+service deletion fence. The Agent remains running and its original execution
+is still active. Releasing the map lets admission gather live evidence, but the
+new last metadata read must present the tombstone to Cedar and return NotFound.
+A target service.create is executed only if admission succeeded; the test checks
+no target record or provider dispatch after refusal. The denied audit preserves
+source, target, original execution/lease, delivery call, raw logical request,
+scoped command, actor, surface, initiation, and default-deny reason/policy ids.
+
+Neighbor cases in that same deterministic test: unchanged source admits and
+creates its target; a source cancelled after initial lookup retains its existing
+allowed-decision audit and starts no target; a late metadata error returns the
+original typed Metadata error without inventing a policy decision or dispatch.
+Existing tests retain missing-source, pre-cancelled-source, audit failure, and
+caller-loss coverage.
+
+Direct rustfmt and git diff whitespace checks passed. Cargo was deliberately not
+run in this isolated checkout because the coordinator owns active protocol/build
+verification. Compilation, regression execution, independent review, and mutation
+proof remain with the coordinator after integration.
+
+Suggested mutation: restore the early load's `let record =` binding and remove
+only the late reload before Cedar. Keep the new regression unchanged. Its fenced
+case should fail with successful target creation instead of NotFound; restore
+fresh source and rerun green. Relevant filters: the new exact regression,
+agent_tool, and composition::conversation_tools::subscription_tests.

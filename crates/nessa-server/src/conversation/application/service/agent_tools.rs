@@ -44,7 +44,9 @@ impl ConversationService {
         tokio::spawn(async move {
             let _physical = physical;
             let _admission = service.admit().await?;
-            let record = load_conversation(service.inner.metadata.as_ref(), &source)
+            // Preserve an early existence diagnostic; this record is not the
+            // source authority used after waiting for runtime evidence.
+            load_conversation(service.inner.metadata.as_ref(), &source)
                 .await?
                 .ok_or(ConversationError::NotFound)?;
             let live = service
@@ -62,6 +64,12 @@ impl ConversationService {
             let principal = PrincipalId::new(actor.principal_id())
                 .map_err(|_| ConversationError::InvalidInput)?;
             let owner_initiated = matches!(initiation.initiator(), Initiator::Owner);
+            // The snapshot fixes provenance; current metadata fixes resource
+            // authority. In particular, a fence may have landed during live()
+            // or snapshot(). Read it last, directly before synchronous Cedar.
+            let record = load_conversation(service.inner.metadata.as_ref(), &source)
+                .await?
+                .ok_or(ConversationError::NotFound)?;
             let decision = service.inner.access_policy.evaluate(&AccessAsk {
                 subject: AccessSubject::AgentTurn {
                     organization: record.organization(),

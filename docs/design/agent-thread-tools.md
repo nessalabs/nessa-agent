@@ -49,6 +49,19 @@ initiations on their own live conversation and denies grant-origin turns. A Driv
 grant allowing a tool does not acquire owner-wide authority over other threads.
 Existing target Cedar admission still decides access to each target.
 
+Source execution, lease, actor, and initiation are captured once from the live
+snapshot. After any wait for the live map or snapshot, the service reloads source
+metadata immediately before synchronous Cedar evaluation. That metadata read
+supplies current owner/organization/deletion facts; the earlier existence read
+is diagnostic only. A deletion fence committed during those waits is therefore
+presented to Cedar rather than replaced by the earlier un-deleted record. The
+snapshot's execution and actor are not selected again after the metadata read:
+a later turn must not inherit this call's attribution. No conversation-wide or
+deletion-cleanup lock is retained for source admission. The policy decision is
+its admission point; admitted audit supervision and post-audit cancellation keep
+their existing semantics.
+
+
 The source decision is acknowledged in `audit/agent-tools` before target work.
 It records source conversation/execution/lease, original principal/surface,
 delivery call ID, raw logical request ID, source/tool scoped command ID, tool,
@@ -109,6 +122,8 @@ is not a claim that an external effect was rolled back.
 | Order or failure | Behavior and test home |
 | --- | --- |
 | Source running owner asks for target | Original actor and source/target attribution preserved; `tests/conversation/agent_tools.rs`. |
+| Source tombstone commits while initial metadata reply/live snapshot acquisition is delayed | Fresh metadata reaches Cedar after source snapshot capture; deny before target dispatch and audit the original source execution/lease/actor/call/logical/scoped-command/target; `tests/conversation/agent_tools.rs`. |
+| Same delayed source stays unchanged, cancels, or latest metadata read fails | Unchanged source remains admitted; cancellation retains its existing allowed decision audit but starts no target; metadata failure returns its typed error without inventing an authority decision; same tests. |
 | Missing running source or call already cancelled | No source admission/audit or target effects; same tests. |
 | Grant origin or foreign/deleted source | Cedar denies; complete source truth table in `tests/conversation/access_policy.rs`. |
 | Admission audit fails | Typed failure before target dispatch; `tests/conversation/agent_tools.rs`. |

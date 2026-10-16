@@ -95,6 +95,180 @@ async fn source_admission_preserves_the_running_owner_actor_and_target() {
     retire(service, storage, metadata).await;
 }
 
+#[derive(Clone, Copy, Debug)]
+enum SourceChange {
+    Unchanged,
+    Fenced,
+    Cancelled,
+    MetadataFailure,
+}
+
+/// The initial metadata reply is stale while live() waits; a real deletion
+/// fence commits without stopping the retained Agent or changing its snapshot.
+#[tokio::test]
+async fn source_admission_reloads_metadata_after_waiting_for_live_evidence() {
+    for change in [
+        SourceChange::Unchanged,
+        SourceChange::Fenced,
+        SourceChange::Cancelled,
+        SourceChange::MetadataFailure,
+    ] {
+        let (service, provider, metadata, _storage) =
+            crate::conversation_test_support::fixture(ConversationLimits::default());
+        let source = id();
+        let target = id();
+        opened(&service, &provider, &source).await;
+        let release_turn = hold_turn(&service, &provider, &source, "source-turn").await;
+        let live = service.resolve(&source, &caller("capture")).await.unwrap();
+        let snapshot = live.agent.session_manager().snapshot().await.unwrap();
+        let lease = snapshot
+            .lease
+            .as_ref()
+            .unwrap()
+            .held()
+            .unwrap()
+            .id()
+            .as_str()
+            .to_owned();
+        let opens = provider.open_calls.load(Ordering::SeqCst);
+        let audit = Arc::new(Audit::default());
+        service.bind_agent_tool_audit(audit.clone());
+        let (entered, initial_read) = oneshot::channel();
+        let (release, initial_release) = oneshot::channel();
+        *metadata.metadata_load_gate.lock().unwrap() = Some((entered, initial_release));
+        let (stop, stopped) = tokio::sync::watch::channel(false);
+        let pending = {
+            let service = service.clone();
+            let source = source.clone();
+            let target = target.clone();
+            tokio::spawn(async move {
+                let admitted = service
+                    .admit_agent_tool(
+                        source,
+                        "delivery-call".into(),
+                        "create_thread".into(),
+                        Some(target.clone()),
+                        AgentToolRequest {
+                            logical: "raw-logical".into(),
+                            command: "scoped-command".into(),
+                        },
+                        stopped,
+                    )
+                    .await?;
+                service
+                    .create(target, admitted.caller(), RequestedConversation::default())
+                    .await
+            })
+        };
+        initial_read.await.unwrap();
+        // The captured initial reply cannot become source authority merely
+        // because live() was delayed behind an unrelated map holder.
+        let map = service.inner.conversations.lock().await;
+        release.send(()).unwrap();
+        let fence = match change {
+            SourceChange::Fenced => {
+                let fence = service
+                    .fence(&source, &caller("delete-source"))
+                    .await
+                    .unwrap();
+                assert!(metadata
+                    .records
+                    .lock()
+                    .unwrap()
+                    .get(&source)
+                    .unwrap()
+                    .deletion()
+                    .is_some());
+                assert_eq!(
+                    live.agent.active_execution_id().unwrap().as_str(),
+                    "source-turn"
+                );
+                Some(fence)
+            }
+            SourceChange::Cancelled => {
+                stop.send_replace(true);
+                None
+            }
+            SourceChange::MetadataFailure => {
+                *metadata.metadata_load_failure.lock().unwrap() = Some(ConversationError::Metadata);
+                None
+            }
+            SourceChange::Unchanged => None,
+        };
+        drop(map);
+        let result = tokio::time::timeout(TURN_HOLD_HANG, pending)
+            .await
+            .unwrap()
+            .unwrap();
+        match change {
+            SourceChange::Unchanged => assert!(result.is_ok(), "{result:?}"),
+            SourceChange::Fenced => assert!(
+                matches!(&result, Err(ConversationError::NotFound)),
+                "{result:?}"
+            ),
+            SourceChange::Cancelled => {
+                assert!(
+                    matches!(&result, Err(ConversationError::Unavailable)),
+                    "{result:?}"
+                )
+            }
+            SourceChange::MetadataFailure => {
+                assert!(
+                    matches!(&result, Err(ConversationError::Metadata)),
+                    "{result:?}"
+                )
+            }
+        }
+        let created = metadata.records.lock().unwrap().contains_key(&target);
+        assert_eq!(
+            created,
+            matches!(change, SourceChange::Unchanged),
+            "{change:?}"
+        );
+        if !created {
+            assert_eq!(
+                provider.open_calls.load(Ordering::SeqCst),
+                opens,
+                "no target provider dispatch: {change:?}"
+            );
+        }
+        {
+            let records = audit.records.lock().unwrap();
+            if matches!(change, SourceChange::MetadataFailure) {
+                assert!(
+                    records.is_empty(),
+                    "an unreadable source cannot invent a policy decision"
+                );
+            } else {
+                assert_eq!(records.len(), 1);
+                let record = &records[0];
+                assert_eq!(record.source, source);
+                assert_eq!(record.target, Some(target));
+                assert_eq!(record.execution, "source-turn");
+                assert_eq!(record.lease, lease);
+                assert_eq!(record.call, "delivery-call");
+                assert_eq!(record.request, "raw-logical");
+                assert_eq!(record.command, "scoped-command");
+                assert_eq!(record.tool, "create_thread");
+                assert_eq!(record.principal, "person");
+                assert_eq!(record.surface, "panel");
+                assert!(record.owner_initiated);
+                assert_eq!(record.allowed, !matches!(change, SourceChange::Fenced));
+                if record.allowed {
+                    assert_eq!(record.policies, ["owner.agent_tools"]);
+                    assert_eq!(record.reason, None);
+                } else {
+                    assert!(record.policies.is_empty());
+                    assert_eq!(record.reason.as_deref(), Some("not_permitted"));
+                }
+            }
+        }
+        drop(fence);
+        drop(release_turn);
+        service.shutdown().await.unwrap();
+    }
+}
+
 #[tokio::test]
 async fn source_without_a_running_turn_and_a_cancelled_call_admit_nothing() {
     let directory = tempfile::tempdir().unwrap();
