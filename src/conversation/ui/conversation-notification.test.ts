@@ -6,8 +6,8 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import { createDependencies } from "../../composition/dependencies"
 import { makeStore } from "../../store"
 import { scenarioEffects } from "../adapters/scenario/effects"
-import { sendDraft } from "../adapters/store/slice"
-import { textContent } from "../model"
+import { attachFiles, sendDraft, setDraft } from "../adapters/store/slice"
+import { AttachmentResource, textContent, type MessageContent } from "../model"
 import { ConversationNotification } from "./conversation-notification"
 
 let root: Root
@@ -23,10 +23,13 @@ afterEach(async () => {
   host.remove()
 })
 
-it("sends an older refused message as it was refused once a newer one was sent again", async () => {
-  // docs/state/services/desktop/chat/recover-a-refused-or-unconfirmed-send.md,
-  // "Several refused messages", row 2: the older message is offered with an
-  // empty draft, and Send Again still sends it.
+/**
+ * Two messages refused, then the newer one sent again: the older is offered
+ * with an empty draft, and its Send Again is pressed.
+ */
+type Store = ReturnType<typeof makeStore>
+
+async function sendOlderAgain(first: (store: Store, id: string) => MessageContent) {
   const effects = scenarioEffects("echo")
   let refusals = 2
   const create = vi.fn(async (...args: Parameters<typeof effects.create>) => {
@@ -47,8 +50,9 @@ it("sends an older refused message as it was refused once a newer one was sent a
     if (!found) throw new Error(`missing turn ${index}`)
     return found
   }
-  await store.dispatch(sendDraft({ content: textContent("first") }))
   const id = tab().id
+  await store.dispatch(sendDraft({ id, content: first(store, id) }))
+  store.dispatch(setDraft({ id, draft: [] }))
   await store.dispatch(sendDraft({ id, content: textContent("second") }))
   const older = turn(0)
   const newer = turn(1)
@@ -78,5 +82,38 @@ it("sends an older refused message as it was refused once a newer one was sent a
   expect(sendAgain.disabled).toBe(false)
   await act(async () => sendAgain.click())
   await vi.waitFor(() => expect(olderNow()).not.toMatchObject({ receipt: "failed" }))
+  return { store, submit, tab }
+}
+
+// docs/state/services/desktop/chat/recover-a-refused-or-unconfirmed-send.md,
+// "Several refused messages", row 2: the older message is offered with an empty
+// draft, and Send Again still sends it.
+it("sends an older refused message as it was refused once a newer one was sent again", async () => {
+  const { submit } = await sendOlderAgain(() => textContent("first"))
   expect(submit.mock.calls.at(-1)?.[0]).toMatchObject({ text: "first" })
+})
+
+// Row 8: a file that travels as a path has nothing to upload, so Send Again
+// does not wait for it.
+it("sends an older refused message that points at a file without waiting for an upload", async () => {
+  const { submit } = await sendOlderAgain((store, id) => {
+    store.dispatch(
+      attachFiles({
+        conversationId: id,
+        files: [
+          AttachmentResource.create({
+            name: "report.pdf",
+            mimeType: "application/pdf",
+            size: 3,
+            previewUrl: "blob:report",
+            path: "/Users/ada/report.pdf",
+          }),
+        ],
+      }),
+    )
+    return store.getState().conversation.conversations[0]?.draft ?? []
+  })
+  expect(submit.mock.calls.at(-1)?.[0]).toMatchObject({
+    files: [{ path: "/Users/ada/report.pdf" }],
+  })
 })

@@ -24,6 +24,7 @@ import {
   conversationSelectionOpen,
   MAX_SENT_PREVIEW_BYTES,
   messageFiles,
+  messageImages,
   storedImages,
   type CommandFailure,
   type ConversationSelection,
@@ -298,8 +299,11 @@ export const retryFailedTurn = createAsyncThunk<
   dispatch(failedTurnRestored({ id, turnId }))
   const conv = getState().conversation.conversations.find((item) => item.id === id)
   if (!conv || conv.draft.length === 0) return
-  if (conv.draft.some((part) => part.type === "file" && part.upload.status !== "stored"))
-    return
+  // A restored image goes back to the gateway before the message can name it,
+  // and the composer uploads it; Send Again is pressed once that finishes. A
+  // file that travels as a path has nothing to upload, so it never waits.
+  const images = messageImages(conv.draft)
+  if (!images.ok && images.refusal.kind === "upload-in-flight") return
   await dispatch(sendDraft({ id, content: conv.draft, retryTurnId: turnId }))
 })
 
@@ -957,6 +961,7 @@ const conversationSlice = createSlice({
       if (current) {
         current.error = action.payload.message
         current.failure = action.payload.failure
+        current.errorTurn = undefined
       }
     },
     readStarted(state, action: PayloadAction<{ id: string; requestId: string }>) {
@@ -1008,6 +1013,7 @@ const conversationSlice = createSlice({
         current.readRequest = undefined
         current.error = undefined
         current.failure = undefined
+        current.errorTurn = undefined
       }
     },
     controlFinished(state, action: PayloadAction<string>) {

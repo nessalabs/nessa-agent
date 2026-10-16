@@ -128,7 +128,7 @@ export function conversationNotice(
   const failed = [...conversation.turns]
     .reverse()
     .filter((turn): turn is UserTurn => turn.from === "user" && turn.receipt === "failed")
-  const current = failed.find((turn) => turn.error === conversation.error)
+  const current = failed.find((turn) => turn.id === conversation.errorTurn)
   if (current) return unsentNotice(current)
   const error = conversation.remote?.interactionViewError ?? conversation.error
   const startupFailure = conversation.remote?.lifecycle.failure

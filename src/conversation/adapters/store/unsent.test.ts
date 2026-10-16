@@ -386,32 +386,42 @@ it("discard removes only the refused bubble and preserves current draft work", a
   )
 })
 
-it("a control that fails after a refusal keeps its notice, and discarding the refusal does not clear it", async () => {
+it.each([
   // docs/state/services/desktop/chat/recover-a-refused-or-unconfirmed-send.md,
-  // "Several refused messages", rows 4 and 5.
-  const effects = scenarioEffects("echo")
-  const store = makeStore(
-    createDependencies({
-      conversation: {
-        ...effects,
-        create: async () => {
-          throw new Error("offline")
+  // "Several refused messages", rows 4 and 5, and row 7: a control failing in
+  // the refusal's own words is still the control's.
+  "Close failed",
+  "offline",
+])(
+  "a control that fails after a refusal keeps its notice (%s), and discarding the refusal does not clear it",
+  async (message) => {
+    const effects = scenarioEffects("echo")
+    const store = makeStore(
+      createDependencies({
+        conversation: {
+          ...effects,
+          create: async () => {
+            throw new Error("offline")
+          },
         },
-      },
-    }),
-  )
-  await store.dispatch(sendDraft({ content: textContent("hello") }))
-  const first = store.getState().conversation.conversations[0]!
-  store.dispatch(showError({ id: first.id, message: "Close failed" }))
-  const tab = () => store.getState().conversation.conversations[0]!
-  expect(conversationNotice(tab())).toMatchObject({
-    title: "Conversation needs attention",
-    description: "Close failed",
-  })
-  store.dispatch(failedTurnDiscarded({ id: first.id, turnId: first.turns[0]!.id }))
-  expect(tab().turns).toEqual([])
-  expect(conversationNotice(tab())).toMatchObject({ description: "Close failed" })
-})
+      }),
+    )
+    await store.dispatch(sendDraft({ content: textContent("hello") }))
+    const first = store.getState().conversation.conversations[0]!
+    store.dispatch(showError({ id: first.id, message }))
+    const tab = () => store.getState().conversation.conversations[0]!
+    expect(conversationNotice(tab())).toMatchObject({
+      title: "Conversation needs attention",
+      description: message,
+    })
+    store.dispatch(failedTurnDiscarded({ id: first.id, turnId: first.turns[0]!.id }))
+    expect(tab().turns).toEqual([])
+    expect(conversationNotice(tab())).toMatchObject({
+      title: "Conversation needs attention",
+      description: message,
+    })
+  },
+)
 
 it("discarding the current refusal offers the older one with its own error", async () => {
   // docs/state/services/desktop/chat/recover-a-refused-or-unconfirmed-send.md,

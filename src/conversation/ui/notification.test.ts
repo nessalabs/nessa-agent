@@ -123,6 +123,7 @@ describe("conversation notification", () => {
   it("retries the preserved draft only for a known failed admission", () => {
     const value = conversation("tab")
     value.error = "offline"
+    value.errorTurn = "turn"
     value.draft = [{ type: "text", text: "draft" }]
     value.turns = [
       { id: "turn", from: "user", content: [], receipt: "failed", error: "offline" },
@@ -144,6 +145,7 @@ describe("conversation notification", () => {
   it("offers the refusal that set the conversation's error", () => {
     const value = conversation("tab")
     value.error = "busy"
+    value.errorTurn = "newer"
     value.turns = [refused("older", "offline"), refused("newer", "busy")]
     expect(conversationNotice(value)?.retry).toEqual({ kind: "draft", turnId: "newer" })
   })
@@ -171,10 +173,22 @@ describe("conversation notification", () => {
       retry: { kind: "refresh" },
     })
   })
+  it("lets a control that failed in the same words as a refusal hold the notice", () => {
+    // Row 7: whose error it is is recorded, not read from the text.
+    const value = conversation("tab")
+    value.error = "offline"
+    value.turns = [refused("older", "offline")]
+    expect(conversationNotice(value)).toMatchObject({
+      title: "Conversation needs attention",
+      description: "offline",
+      retry: { kind: "refresh" },
+    })
+  })
   it("says the agent was still starting when the gateway rejected the send", () => {
     const value = conversation("tab")
     value.error = "The agent was still starting and ran out of time, so nothing was sent."
     value.failure = "agent-startup-deadline"
+    value.errorTurn = "turn"
     value.draft = [{ type: "text", text: "draft" }]
     value.turns = [
       {

@@ -363,6 +363,12 @@ type ConversationState = {
    */
   failure?: CommandFailure
   /**
+   * The user turn whose refusal set `error`, if one did. A control or another
+   * command that fails later replaces `error` and clears this, so whether the
+   * error is a turn's own is read here, never by comparing the two texts.
+   */
+  errorTurn?: string
+  /**
    * Why the last read of this conversation failed, in the panel's own words.
    * Set only while the view on screen is older than the gateway's: any view
    * that arrives clears it, and it says nothing about `error`, which belongs to

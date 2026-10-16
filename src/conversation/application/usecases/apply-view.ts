@@ -107,15 +107,13 @@ export function applyView(current: Conversation, view: ConversationView): Conver
     )
       projected.push(turn)
   }
-  const retainedError = current.turns.some(
-    (turn) =>
-      turn.from === "user" &&
-      turn.executionId &&
-      seen.has(turn.executionId) &&
-      turn.error === current.error,
-  )
-    ? undefined
-    : current.error
+  // A refusal the gateway now shows as received is no longer an error; any
+  // other error is not a turn's, so a view says nothing about it.
+  const owner = current.turns.find((turn) => turn.id === current.errorTurn)
+  const retainedError =
+    owner?.from === "user" && owner.executionId && seen.has(owner.executionId)
+      ? undefined
+      : current.error
   const busy =
     view.pending.length > 0 ||
     view.messages.some((message) => ["queued", "running"].includes(message.status))
@@ -149,6 +147,7 @@ export function applyView(current: Conversation, view: ConversationView): Conver
     // The reason describes `error`; clearing one without the other would leave
     // a notice branching on a failure the conversation no longer reports.
     failure: retainedError === undefined ? undefined : current.failure,
+    errorTurn: retainedError === undefined ? undefined : current.errorTurn,
     remote: {
       latestInputId: [...seen].at(-1),
       runtime: view.runtime,

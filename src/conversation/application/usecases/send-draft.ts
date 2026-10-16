@@ -77,6 +77,7 @@ export function beginSend(
     pending: "",
     error: undefined,
     failure: undefined,
+    errorTurn: undefined,
   })
 }
 
@@ -92,7 +93,8 @@ export function discardFailedTurn(
   const turns = conv.turns.filter((turn) => turn.id !== turnId)
   // A newer failure, such as a control that failed after this refusal, is not
   // this turn's to clear.
-  if (discarded.error !== conv.error) return replaceConversation(tabs, { ...conv, turns })
+  if (conv.errorTurn !== discarded.id)
+    return replaceConversation(tabs, { ...conv, turns })
   const last = [...turns]
     .reverse()
     .find((turn) => turn.from === "user" && turn.receipt === "failed")
@@ -101,6 +103,7 @@ export function discardFailedTurn(
     turns,
     error: last?.from === "user" ? last.error : undefined,
     failure: undefined,
+    errorTurn: last?.id,
   })
 }
 
@@ -408,6 +411,7 @@ export function failSend(
     ...(uncertain || otherWork ? conv : { ...conv, phase: "idle" as const }),
     error: detail,
     failure,
+    errorTurn: failedTurn.id,
     draft: recoveredDraft,
     draftReset:
       recoveredDraft === conv.draft ? conv.draftReset : (conv.draftReset ?? 0) + 1,

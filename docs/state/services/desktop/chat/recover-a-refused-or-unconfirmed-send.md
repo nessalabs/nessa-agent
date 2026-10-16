@@ -57,7 +57,10 @@ stateDiagram-v2
 Each refused message keeps its own error and diagnostic. The conversation's
 error belongs to whichever failure happened last, and one notice slot shows
 one failure at a time. A refused message is never lost from the slot: once
-nothing newer holds it, the latest refused message is offered again.
+nothing newer holds it, the latest refused message is offered again. Whether
+the conversation's error is a refused message's own is recorded with it, as
+the turn that set it, and never read from the text: a control can fail in the
+same words.
 
 | # | State | Event | Notice shows | Conversation error |
 |---|-------|-------|--------------|--------------------|
@@ -67,10 +70,12 @@ nothing newer holds it, the latest refused message is offered again.
 | 4 | A refused message | a control (Close, an answer) fails afterwards | the control failure | the control's error |
 | 5 | A refused message and a later control failure | Discard the refused message | the control failure | unchanged |
 | 6 | Two refused messages, the newer's error current | Discard the newer | Error sending for the older | the older's error |
+| 7 | A refused message | a control fails afterwards in the same words | the control failure | the control's error |
+| 8 | Two refused messages, the older pointing at a file by path | Send Again on the newer, accepted; then Send Again on the older | the older is sent at once, since a file sent by path has nothing to upload | cleared |
 
-Tests: rows 1 to 4 in `src/conversation/ui/notification.test.ts`; rows 4
-to 6 through the store in `src/conversation/adapters/store/unsent.test.ts`;
-row 2's Send Again through the rendered control in
+Tests: rows 1 to 4 and 7 in `src/conversation/ui/notification.test.ts`; rows
+4 to 7 through the store in `src/conversation/adapters/store/unsent.test.ts`;
+rows 2 and 8's Send Again through the rendered control in
 `src/conversation/ui/conversation-notification.test.ts`, its attachments in
 `src/conversation/application/usecases/attachments.test.ts`, and in a real
 browser with `verification/desktop/scripts/refused-messages.mjs`.
