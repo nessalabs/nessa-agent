@@ -69,6 +69,7 @@ pub(super) enum AdmissionPlan {
     Manifest,
     Request(RequestAccess),
     ManifestThenConversationRead,
+    ManifestThenPeek,
     ManifestThenList,
     ManifestThenArtifactRead,
     PassiveRecord,
@@ -78,6 +79,7 @@ pub(super) enum AdmissionPlan {
     WatchCatalogue,
     Unwatch,
     FollowConversation,
+    FollowEvents,
     FollowList,
     FollowAgents,
     UnsubscribeConversation,
@@ -141,6 +143,12 @@ pub(super) const fn method_plan(method: ProductMethod) -> MethodPlan {
             response: ResponseLane::Ordinary,
             capacity: ExecutionCapacity::Requests,
             admission: AdmissionPlan::ManifestThenConversationRead,
+        },
+        ProductMethod::ConversationPeek => MethodPlan {
+            handler: Handler::Conversation,
+            response: ResponseLane::Ordinary,
+            capacity: ExecutionCapacity::Requests,
+            admission: AdmissionPlan::ManifestThenPeek,
         },
         ProductMethod::ConversationRecordsHead => MethodPlan {
             handler: Handler::RecordRead,
@@ -495,6 +503,12 @@ pub(super) const fn method_plan(method: ProductMethod) -> MethodPlan {
             response: ResponseLane::Ordinary,
             capacity: ExecutionCapacity::ConnectionOwned,
             admission: AdmissionPlan::FollowConversation,
+        },
+        ProductMethod::ConversationSubscribeEvents => MethodPlan {
+            handler: Handler::Subscription,
+            response: ResponseLane::Ordinary,
+            capacity: ExecutionCapacity::ConnectionOwned,
+            admission: AdmissionPlan::FollowEvents,
         },
         ProductMethod::ConversationSubscribeList => MethodPlan {
             handler: Handler::Subscription,

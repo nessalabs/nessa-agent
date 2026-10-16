@@ -137,6 +137,24 @@ pub(crate) async fn dispatch(
                     },
                 ))
             }
+            "conversation.peek" => {
+                let params = target_params!(ConversationReadParams);
+                let id = conversation_id(&params.conversation_id)?;
+                if let Err(code) = super::read_access::admit_conversation(state, session, &id).await
+                {
+                    return Ok(failure(&frame.id, code));
+                }
+                let execution = service
+                    .active_execution(id, caller(frame.id.clone()))
+                    .await?;
+                Ok(success(
+                    &frame.id,
+                    &json!({
+                        "conversationId": params.conversation_id,
+                        "executionId": execution,
+                    }),
+                ))
+            }
             "conversation.read" => {
                 let params = target_params!(ConversationReadParams);
                 let id = conversation_id(&params.conversation_id)?;

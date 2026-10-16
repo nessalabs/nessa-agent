@@ -16,6 +16,7 @@ import {
 import { methodIdentityRust } from "./product-protocol/method-identity.mjs"
 import { rustWireShapes } from "./product-protocol/rust-wire-shapes.mjs"
 import { validateExternalRustTypes } from "./product-protocol/rust-types.mjs"
+import { eventMetadataRules } from "./product-protocol/event-metadata.mjs"
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 const pairingDirectory = "crates/nessa-auth/src/domain/pairing/value_objects"
@@ -296,12 +297,12 @@ for (const [name, def] of Object.entries(schema.$defs)) {
   if (def.enum) {
     const pascal = (value) =>
       value
-        .split("_")
+        .split(/[_.-]/)
         .map((p) => p[0].toUpperCase() + p.slice(1))
         .join("")
     ts += `export const ${name} = ${JSON.stringify(Object.fromEntries(def.enum.map((v) => [pascal(v), v])))} as const\nexport type ${name} = typeof ${name}[keyof typeof ${name}]\n`
     let enumRs = ""
-    enumRs += `#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]\n#[serde(rename_all = "snake_case")]\npub enum ${name} {${def.enum.map(pascal).join(",")}}\n`
+    enumRs += `#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]\n#[serde(rename_all = "snake_case")]\npub enum ${name} {${def.enum.map((v) => `${/[.-]/.test(v) ? `#[serde(rename = ${JSON.stringify(v)})] ` : ""}${pascal(v)}`).join(",")}}\n`
     // Shared payload outcomes need no separate string-code API.
     if (!sharedOutcomes.has(name) || !payloadOutcomes.has(name) || def["x-close-policy"])
       enumRs += `impl ${name} { pub fn as_str(self) -> &'static str { match self {${def.enum.map((v) => `Self::${pascal(v)} => ${JSON.stringify(v)}`).join(",")} } } }\n`
@@ -723,6 +724,43 @@ ts += `${doc(
 ts += `${doc(
   "Bounds the product schema puts on attachments and conversations, generated from it so no copy of a number can drift.",
 )}export const bounds = ${JSON.stringify(bounds)} as const\n`
+ts += `export const eventSubscriptionBounds = ${JSON.stringify({
+  maxCursorCharacters: schema.$defs.ConversationEventCursor.maxLength,
+  maxBatchEvents: schema.$defs.ConversationEvents.properties.events.maxItems,
+  minKinds: schema.$defs.ConversationSubscribeEventsParams.properties.kinds.minItems,
+  maxKinds: schema.$defs.ConversationSubscribeEventsParams.properties.kinds.maxItems,
+  uniqueKinds:
+    schema.$defs.ConversationSubscribeEventsParams.properties.kinds.uniqueItems,
+  ...Object.fromEntries(
+    ["executionId", "toolId", "name", "status", "outcome"].map((field) => [
+      `max${field[0].toUpperCase()}${field.slice(1)}Characters`,
+      schema.$defs.ConversationEvent.properties[field].maxLength,
+    ]),
+  ),
+})} as const\n`
+const eventKinds = schema.$defs.ConversationSubscribeEventsParams.properties.kinds
+if (
+  !Number.isSafeInteger(eventKinds.minItems) ||
+  eventKinds.minItems < 1 ||
+  !Number.isSafeInteger(eventKinds.maxItems) ||
+  eventKinds.maxItems < eventKinds.minItems ||
+  typeof eventKinds.uniqueItems !== "boolean"
+)
+  throw new Error("Invalid event subscription filter bounds")
+const eventOptions = schema.$defs.ConversationSubscribeEventsParams
+const nonNullEventOptions = Object.entries(eventOptions.properties).flatMap(
+  ([name, node]) => {
+    if (eventOptions.required.includes(name)) return []
+    const owner = node.$ref ? schema.$defs[node.$ref.split("/").at(-1)] : node
+    return owner.type === "null" ||
+      (Array.isArray(owner.type) && owner.type.includes("null"))
+      ? []
+      : [name]
+  },
+)
+rs += `/// Event filter bounds published by the product schema.\npub const MIN_EVENT_SUBSCRIPTION_KINDS: usize = ${eventKinds.minItems};\npub const MAX_EVENT_SUBSCRIPTION_KINDS: usize = ${eventKinds.maxItems};\npub const UNIQUE_EVENT_SUBSCRIPTION_KINDS: bool = ${eventKinds.uniqueItems};\n`
+rs += `/// Optional event subscription fields whose published schema forbids explicit null.\npub const NON_NULL_EVENT_SUBSCRIPTION_OPTIONS: &[&str] = &${JSON.stringify(nonNullEventOptions)};\n`
+ts += `/** Kind/metadata relationships derived from ConversationEvent's JSON Schema conditionals. */\nexport const conversationEventMetadataRules = ${JSON.stringify(eventMetadataRules(schema))} as const\n`
 for (const [kind, entries] of [
   ["Method", productMethods],
   ["Event", manifest.events],

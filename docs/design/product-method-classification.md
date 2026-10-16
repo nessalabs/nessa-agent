@@ -93,12 +93,14 @@ admission, not downstream application policies inside a successful handler.
 | Manifest | `read_access::admit_request` asks the generated grant; no extra socket-level paired action for this method |
 | Request(Drive / Comment / CatalogueWrite) | `read_access::admit_request` consumes this typed static shape; preserves owner fallback, paired facts and current pairing-grant substitution for Drive/Comment; Cedar decides the result |
 | ManifestThenConversationRead | Request owner admits generated grant, then conversation handler calls `admit_conversation` |
+| ManifestThenPeek | Request owner admits the generated grant, or the pairing-issued read grant for a paired party; the handler admits the current target before the live read, including owner-phone Act admission |
 | ManifestThenList | Request owner admits generated grant, then conversation handler calls `admit_list` |
 | ManifestThenArtifactRead | Request owner admits generated grant, then attachment reader calls `admit_conversation` before artifact effects |
 | PassiveRecord / PassiveCatalogue | Record/catalogue read facade constructs `AdmitPassiveRead`: generated passive grant, current identity/binding, metadata/grant and policy checks before source work |
 | ManifestThenShare(Share / Unshare / Shares) | Request owner admits generated grant, then `dispatch_share` asks paired-share admission with the typed action before effects; transactional share checks remain in application/storage |
 | WatchRecords / WatchCatalogue | Connection watch owner uses the corresponding passive-read admission; catalogue watch additionally asks `catalogue_watch`; refresh and teardown retain connection ownership |
 | Unwatch | Connection watch owner verifies its own watch token and stops it |
+| FollowEvents | Subscription owner retains View+Events connection capacity; paired read admission and current target admission precede registration and each batch, and Page/Idle results recheck authority before publication |
 | FollowConversation / FollowList / FollowAgents | Subscription owner calls `authorize_batch` before registration and before each batch; conversation follow retains pairing-grant substitution, list follow calls `admit_list`, and agents follow asks its manifest grant |
 | UnsubscribeConversation / UnsubscribeAgents | Socket calls `admit_now` inline before connection-owned stop; conversation unsubscribe retains paired-follow grant substitution and token ownership |
 
@@ -125,7 +127,7 @@ admitted-command proposal in #797 remains outside this migration.
 ## Complete current method catalogue
 
 Catalogue: the original 71 methods reviewed at `9812c3c`, plus the three owner-phone
-methods from upstream `4913fd3`; path labels refer to the owners above.
+methods from upstream `4913fd3` and the two thread-event methods from `4b94c0f`; path labels refer to the owners above.
 The cutover's tests should encode reviewed expectations, not derive expected
 values from the new classifier under test. `Authentication` is phase-sensitive
 as described above; unknown names are absent and retain Requests/Ordinary refusal.
@@ -140,6 +142,7 @@ as described above; unknown names are absent and retain Requests/Ordinary refusa
 | `credential.revoke` | `socket` | Ordinary | Requests | Manifest |
 | `conversation.create` | `conversation` | Ordinary | Requests | Request(CatalogueWrite) |
 | `conversation.read` | `conversation` | Ordinary | Requests | ManifestThenConversationRead |
+| `conversation.peek` | `conversation` | Ordinary | Requests | ManifestThenPeek |
 | `conversation.recordsHead` | `record_read` | Record | RecordReads | PassiveRecord |
 | `conversation.recordsPage` | `record_read` | Record | RecordReads | PassiveRecord |
 | `conversation.list` | `conversation` | Ordinary | Requests | ManifestThenList |
@@ -199,6 +202,7 @@ as described above; unknown names are absent and retain Requests/Ordinary refusa
 | `conversation.watchCatalogue` | `change_watch` | Ordinary | ConnectionOwned | WatchCatalogue |
 | `conversation.unwatch` | `change_watch` | Ordinary | ConnectionOwned | Unwatch |
 | `conversation.subscribe` | `subscription` | Ordinary | ConnectionOwned | FollowConversation |
+| `conversation.subscribeEvents` | `subscription` | Ordinary | ConnectionOwned | FollowEvents |
 | `conversation.subscribeList` | `subscription` | Ordinary | ConnectionOwned | FollowList |
 | `conversation.unsubscribe` | `subscription` | Ordinary | ConnectionOwned | UnsubscribeConversation |
 | `conversation.share` | `read_access::dispatch_share` | Ordinary | Requests | ManifestThenShare(Share) |
@@ -207,14 +211,14 @@ as described above; unknown names are absent and retain Requests/Ordinary refusa
 | `conversation.permissionRules` | `conversation` | Ordinary | Requests | Request(CatalogueWrite) |
 | `conversation.revokePermissionRule` | `conversation` | Ordinary | Requests | Request(CatalogueWrite) |
 
-Catalogue membership checked against all **74** current manifest methods (73 advertised in Ready;
+Catalogue membership checked against all **76** current manifest methods (75 advertised in Ready;
 `session.authenticate` belongs to the handshake).
 
 ## Branch implementation and verification status
 
 `ProductMethod` is generated from the existing manifest with exact `from_name`,
 `as_str` and `ALL`. `product/method_plan.rs` exhaustively chooses the handler,
-response lane, execution capacity and admission shape for all 74 current methods.
+response lane, execution capacity and admission shape for all 76 current methods.
 Unknown names stay outside the exhaustive function and retain their existing
 bounded Ordinary/Requests refusal path.
 
@@ -227,7 +231,8 @@ inline unsubscribe ordering remain with the same owners.
 
 The cutover evidence below records the earlier 71-method tree. It is historical
 evidence, not a test result for the later owner-phone integration. The integration
-retains those 71 literal expectations and adds three independently reviewed rows.
+retains those 71 literal expectations and adds three independently reviewed owner-phone rows
+and two thread-event rows.
 Ordinary requests from an owner phone ask the canonical method policy before handler effects;
 `ordinary_native_request_asks_method_once_and_denial_has_zero_handler_effects`
 checks both the single evaluation and refusal ordering. Subscription and passive
@@ -329,6 +334,7 @@ adds exact test names to the PR, rather than treating this design as executed pr
 | Paired Drive, Comment, catalogue Write and own-check method | Same target, initiator and Cedar question before effects; unchanged policy verdict authority | Paired-access and socket tests |
 | Record head/page or artifact read with manifest grant refused, then with grant admitted but conversation read refused | Either stage prevents source/handler effects; valid grant plus admitted read succeeds | Passive-read and artifact socket tests |
 | Share/unshare/shares from a paired party, including a credential holding the manifest grant | Preserve both the manifest grant and the distinct paired Share/Unshare/Shares question before effects; refusing either stage prevents handler effects | Paired share admission and socket tests |
+| Peek is admitted and waits for an existing provider opening, then share or read credential is revoked | The admitted request may finish; a subsequent Peek asks current authority and refuses without a payload | `admitted_peek_finishes_after_revocation_and_next_peek_is_refused` |
 | Watch/subscription starts, refreshes and ends | Existing connection ownership, per-batch authority checks and teardown | Watch/subscription socket tests |
 
 Each slice updates generated output and consumers together. There is one current

@@ -99,7 +99,7 @@ const TRANSIENT_BACKOFF_CAP: Duration = Duration::from_millis(1000);
 
 /// A view's place in the committed history, as the wire names it.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct Cursor {
+pub(in crate::product) struct Cursor {
     pub incarnation: String,
     pub position: u64,
 }
@@ -128,7 +128,13 @@ impl Cursor {
 
 /// What a subscription follows.
 #[derive(Clone, PartialEq, Eq)]
-pub(super) enum Target {
+pub(in crate::product) enum Target {
+    Events {
+        conversation: ConversationId,
+        after: Option<String>,
+        replay: bool,
+        kinds: Vec<String>,
+    },
     View {
         conversation: ConversationId,
         after: Option<Cursor>,
@@ -147,6 +153,13 @@ impl Target {
     pub fn same(&self, other: &Self) -> bool {
         match (self, other) {
             (
+                Self::Events { conversation, .. },
+                Self::Events {
+                    conversation: other,
+                    ..
+                },
+            ) => conversation == other,
+            (
                 Self::View { conversation, .. },
                 Self::View {
                     conversation: other,
@@ -163,6 +176,7 @@ impl Target {
 
     fn method(&self) -> ProductMethod {
         match self {
+            Self::Events { .. } => ProductMethod::ConversationSubscribeEvents,
             Self::View { .. } => ProductMethod::ConversationSubscribe,
             Self::List { .. } => ProductMethod::ConversationSubscribeList,
             Self::Agents => ProductMethod::AgentsSubscribe,
@@ -173,7 +187,9 @@ impl Target {
     /// method that made it, which asks the same grant.
     pub fn stopped_by(&self) -> AdmissionPlan {
         match self {
-            Self::View { .. } | Self::List { .. } => AdmissionPlan::UnsubscribeConversation,
+            Self::View { .. } | Self::List { .. } | Self::Events { .. } => {
+                AdmissionPlan::UnsubscribeConversation
+            }
             Self::Agents => AdmissionPlan::UnsubscribeAgents,
         }
     }
@@ -181,7 +197,7 @@ impl Target {
 
 /// Everything a change can come from, registered before the first read.
 /// A source a target does not follow is `None`, and never wakes it.
-struct Sources {
+pub(super) struct Sources {
     records: Option<CommittedChangeWatch>,
     catalogue: Option<CatalogueChangeWatch>,
     live: Option<watch::Receiver<u64>>,
@@ -191,7 +207,7 @@ struct Sources {
     hooks: Option<watch::Receiver<u64>>,
 }
 
-enum Wake {
+pub(super) enum Wake {
     Changed,
     /// The owner's catalogue changed: a row the list frame left out may
     /// have changed too (row L5).
@@ -200,7 +216,7 @@ enum Wake {
 }
 
 impl Sources {
-    fn register(
+    pub(super) fn register(
         state: &ProductRouteState,
         service: Option<&ConversationService>,
         session: &AuthenticatedSession,
@@ -215,6 +231,13 @@ impl Sources {
             ChangeWatchError::Closed => unavailable(),
         };
         Ok(match target {
+            Target::Events { conversation, .. } => Self {
+                records: Some(records()?.watch(conversation).map_err(capacity)?),
+                catalogue: None,
+                live: None,
+                environments: None,
+                hooks: None,
+            },
             Target::View { conversation, .. } => Self {
                 records: Some(records()?.watch(conversation).map_err(capacity)?),
                 catalogue: None,
@@ -279,7 +302,7 @@ impl Sources {
         catalogue
     }
 
-    async fn changed(&mut self) -> Wake {
+    pub(super) async fn changed(&mut self) -> Wake {
         let records = async {
             match self.records.as_mut() {
                 Some(records) => records.changed().await,
@@ -351,7 +374,7 @@ pub(super) async fn authorize_batch(
 ) -> Result<AuthenticatedSession, &'static str> {
     let current = admit_now_method(state, session, target.method()).await?;
     match target {
-        Target::View { conversation, .. } => {
+        Target::View { conversation, .. } | Target::Events { conversation, .. } => {
             read_access::admit_conversation(state, &current, conversation).await?
         }
         Target::List { .. } => read_access::admit_list(state, &current).await?,
@@ -399,7 +422,7 @@ fn retry_after(error: &ConversationError, attempt: u32) -> Option<Duration> {
 }
 
 /// The wait before attempt `attempt + 1` of something `transient`, or `None`.
-fn backoff(transient: bool, attempt: u32) -> Option<Duration> {
+pub(super) fn backoff(transient: bool, attempt: u32) -> Option<Duration> {
     if !transient || attempt >= TRANSIENT_RETRIES {
         return None;
     }
@@ -452,6 +475,7 @@ async fn read_batch(
             },
         };
         let read = match (target, service) {
+            (Target::Events { .. }, _) => return Err("invalid_request".to_owned()),
             (Target::Agents, _) => {
                 // Read under the permit, as `agents.list` is: one change
                 // wakes every follower at once.
@@ -620,6 +644,7 @@ impl Sent {
             reason,
             code,
             last_delivered: self.floor.as_ref().map(Cursor::wire),
+            last_event_cursor: None,
         })
         .expect("generated payload serializes");
         drop(self.deliveries.offer(
@@ -821,6 +846,9 @@ fn fitted(mut list: ConversationListResult, id: &str) -> ConversationListResult 
 
 /// Run one subscription until it ends or its connection lets it go.
 pub(super) async fn run(run: Run) {
+    if matches!(run.target, Target::Events { .. }) {
+        return super::events::run(run).await;
+    }
     let Run {
         state,
         service,
@@ -852,7 +880,7 @@ pub(super) async fn run(run: Run) {
     };
     let after = match &target {
         Target::View { after, .. } => after.clone(),
-        Target::List { .. } | Target::Agents => None,
+        Target::List { .. } | Target::Agents | Target::Events { .. } => None,
     };
     let mut sent = Sent {
         deliveries: deliveries.clone(),

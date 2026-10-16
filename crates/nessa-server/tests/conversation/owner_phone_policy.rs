@@ -278,6 +278,8 @@ async fn owner_phone_cedar_admits_published_chat_methods_and_default_denies_admi
         "conversation.delete",
         "conversation.subscribe",
         "conversation.subscribeList",
+        "conversation.subscribeEvents",
+        "conversation.peek",
         "attachment.begin",
         "artifact.read",
         "agents.list",

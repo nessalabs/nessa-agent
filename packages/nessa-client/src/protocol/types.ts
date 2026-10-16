@@ -39,5 +39,6 @@ export type ClientEventMap = {
   "conversation.watchEnded": import("../generated/product.js").ConversationWatchEnded
   "conversation.view": import("../generated/product.js").ConversationViewed
   "conversation.listed": import("../generated/product.js").ConversationListed
+  "conversation.events": import("../generated/product.js").ConversationEvents
   "conversation.subscriptionEnded": import("../generated/product.js").ConversationSubscriptionEnded
 }

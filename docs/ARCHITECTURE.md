@@ -911,6 +911,12 @@ boundaries and mandatory audit records independently. Unfinished streaming text
 can be lost on crash. Reads are bounded current views, not a durable cursor stream.
 The shared record database is opened before the gateway listens.
 
+Committed semantic event consumers share the conversation application's
+`EventProgress` validator: SDK page construction validates one page, and the
+application correlates each reply with its requested start and prior checkpoint
+before projection or checkpoint retention. Socket subscriptions and agent tools
+use that same continuity owner.
+
 Authorized physical history uses `conversation.recordsHead` and
 `conversation.recordsPage` on that same authenticated `/session` socket. Each
 request passes current credential, receiver-binding and conversation-owner
@@ -1063,7 +1069,7 @@ names retain the existing validation, session and bounded Ordinary/Requests
 refusal path. Cedar and physical work remain with their existing owners.
 [ADR 921](adr/todo/921-close-product-method-classification.md) and its
 [implementation companion](design/product-method-classification.md) record the
-74-method catalogue, ordering matrix and verification evidence.
+76-method catalogue, ordering matrix and verification evidence.
 
 The panel authenticates using its distinct private surface credential loaded by
 the native host; the desktop window connects under the same credential and

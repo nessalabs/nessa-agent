@@ -15,9 +15,11 @@ use crate::product::{
 };
 use nessa_auth::application::session::AuthenticatedSession;
 use nessa_protocol::product::generated::{
-    ConversationSubscribeListParams, ConversationSubscribeParams, ConversationSubscribeResult,
-    ConversationSubscriptionErrorCode, ConversationUnsubscribeParams,
-    MAX_CONNECTION_CONVERSATION_SUBSCRIPTIONS, MAX_CONNECTION_LIST_SUBSCRIPTIONS,
+    ConversationSubscribeEventsParams, ConversationSubscribeListParams,
+    ConversationSubscribeParams, ConversationSubscribeResult, ConversationSubscriptionErrorCode,
+    ConversationUnsubscribeParams, MAX_CONNECTION_CONVERSATION_SUBSCRIPTIONS,
+    MAX_CONNECTION_LIST_SUBSCRIPTIONS, MAX_EVENT_SUBSCRIPTION_KINDS, MIN_EVENT_SUBSCRIPTION_KINDS,
+    NON_NULL_EVENT_SUBSCRIPTION_OPTIONS, UNIQUE_EVENT_SUBSCRIPTION_KINDS,
 };
 use nessa_protocol::product_contract::generated::ConversationErrorCode;
 use nessa_protocol::protocol::{OutgoingMessage, RequestFrame};
@@ -117,6 +119,50 @@ impl ConnectionSubscriptions {
                 }
                 Target::Agents
             }
+            AdmissionPlan::FollowEvents => {
+                if NON_NULL_EVENT_SUBSCRIPTION_OPTIONS.iter().any(|field| {
+                    frame
+                        .params
+                        .get(*field)
+                        .is_some_and(serde_json::Value::is_null)
+                }) {
+                    return Some(invalid());
+                }
+                let Ok(params) = serde_json::from_value::<ConversationSubscribeEventsParams>(
+                    frame.params.clone(),
+                ) else {
+                    return Some(invalid());
+                };
+                let Ok(conversation) = conversation_id(&params.conversation_id) else {
+                    return Some(invalid());
+                };
+                if params.after.is_some() && params.replay.is_some() {
+                    return Some(invalid());
+                }
+                if let Some(kinds) = &params.kinds {
+                    if !(MIN_EVENT_SUBSCRIPTION_KINDS..=MAX_EVENT_SUBSCRIPTION_KINDS)
+                        .contains(&kinds.len())
+                        || (UNIQUE_EVENT_SUBSCRIPTION_KINDS
+                            && kinds
+                                .iter()
+                                .enumerate()
+                                .any(|(index, kind)| kinds[..index].contains(kind)))
+                    {
+                        return Some(invalid());
+                    }
+                }
+                Target::Events {
+                    conversation,
+                    after: params.after,
+                    replay: params.replay.unwrap_or(false),
+                    kinds: params
+                        .kinds
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|kind| kind.as_str().to_owned())
+                        .collect(),
+                }
+            }
             AdmissionPlan::FollowConversation => {
                 let Ok(params) =
                     serde_json::from_value::<ConversationSubscribeParams>(frame.params.clone())
@@ -159,7 +205,9 @@ impl ConnectionSubscriptions {
         let service = state.conversations.clone();
         match target {
             Target::Agents if state.agents_catalog.is_none() => return not_configured(),
-            Target::View { .. } | Target::List { .. } if service.is_none() => {
+            Target::View { .. } | Target::List { .. } | Target::Events { .. }
+                if service.is_none() =>
+            {
                 return not_configured()
             }
             _ => {}
@@ -179,11 +227,13 @@ impl ConnectionSubscriptions {
         // The agent catalog is one target, so the duplicate refusal above is
         // its bound: one per connection.
         let bound = match target {
-            Target::View { .. } => Some((
+            Target::View { .. } | Target::Events { .. } => Some((
                 MAX_CONNECTION_CONVERSATION_SUBSCRIPTIONS,
                 self.entries
                     .iter()
-                    .filter(|entry| matches!(entry.target, Target::View { .. }))
+                    .filter(|entry| {
+                        matches!(entry.target, Target::View { .. } | Target::Events { .. })
+                    })
                     .count(),
                 "socket.conversation_subscriptions",
             )),

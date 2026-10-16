@@ -61,6 +61,13 @@ fn every_current_method_has_its_reviewed_route_capacity_and_admission() {
             AdmissionPlan::ManifestThenConversationRead,
         ),
         (
+            "conversation.peek",
+            Handler::Conversation,
+            ResponseLane::Ordinary,
+            ExecutionCapacity::Requests,
+            AdmissionPlan::ManifestThenPeek,
+        ),
+        (
             "conversation.recordsHead",
             Handler::RecordRead,
             ResponseLane::Record,
@@ -472,6 +479,13 @@ fn every_current_method_has_its_reviewed_route_capacity_and_admission() {
             ResponseLane::Ordinary,
             ExecutionCapacity::ConnectionOwned,
             AdmissionPlan::FollowConversation,
+        ),
+        (
+            "conversation.subscribeEvents",
+            Handler::Subscription,
+            ResponseLane::Ordinary,
+            ExecutionCapacity::ConnectionOwned,
+            AdmissionPlan::FollowEvents,
         ),
         (
             "conversation.subscribeList",

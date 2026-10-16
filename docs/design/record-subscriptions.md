@@ -389,3 +389,81 @@ The rows of #248 and #419 that do not depend on a timer read keep their ids
 (round counts, read pacing, foreground polling of #532) went with the poller.
 `W6` gained a case: a list frame that arrives while an archive is on its way
 may have been read before it, and does not list the archived session again.
+
+## Committed event subscriptions
+
+`conversation.subscribeEvents` follows semantic facts for SDK consumers. It is
+separate from replacement views: observations are delivered in source order,
+never collapsed into the latest state. The default start is the captured committed
+head; `after` resumes a saved event cursor and `replay: true` starts at the beginning.
+The SDK reader certifies complete saves before publishing their changes. Neither
+reading nor following starts a provider. Callbacks run in the consuming application,
+not in the Agent's transition or storage task.
+
+An event cursor is opaque, binds the exact session/incarnation/change, and doubles
+as a stable event identity. Consumers checkpoint only applied batches; socket
+write acknowledgement does not prove application processing. Replay can duplicate
+an event. Event-derived command request IDs recover original receipts; uncertain
+restored work is not redispatched. `kinds` filters metadata on the gateway; arguments,
+results and thinking are not included. Existing owner policy applies to every batch.
+
+| Row | Ordering | Required result |
+| --- | --- | --- |
+| E1 | Save units exist without SaveComplete | No event from that save |
+| E2 | Subscribe, commit during initial read, then live | Ordered replay followed by new events, no missed committed fact |
+| E3 | Consumer reconnects with applied cursor | Resume strictly after its event; duplicate-safe IDs |
+| E4 | Cursor invalid, foreign, reset, or pruned | Typed refusal; no silent replacement or trigger loss |
+| E5 | Writer/client is slow | Bounded batch and one frame offered; lag ends only this subscription |
+| E6 | Access revoked while waiting for read capacity | Refused before the next read |
+| E7 | Unsubscribe/disconnect races an offer | Same retirement and physical write ordering as view subscriptions |
+| E8 | Source contains a semantic gap | Ended refused with event_history_gap; consumer chooses recovery |
+| E9 | Filter matches nothing in a committed batch | Advance its safe cursor without exposing hidden payload |
+| E10 | Source absent or closed | Following opens no Agent; source closure ends the subscription |
+| E11 | Handler issues another command | It uses ordinary admission/scheduling; handlers cannot mutate a transition |
+| E12 | Provider Finished precedes local settlement | No turn.ended until a local settlement is committed |
+| E13 | Paired read credential follows events | Same follow admission and target read grant as views; unshared targets stay hidden |
+| E14 | Reader capacity is exhausted, then released or access revoked | Bounded shared backoff; release request capacity and freshly authorize each retry; cancellation drops the wait |
+| E15 | Adapter returns a page or Idle after a start/prior checkpoint | Shared conversation application EventProgress correlates replies with After and prior checkpoints for every event consumer: same session/incarnation, exclusive page progress, nondecreasing Idle; first valid output establishes continuity for Beginning/Now; contradictions refuse before delivery |
+| E16 | Client receives differing event identity and cursor | Reject the batch before invoking its handler |
+| E17 | First-party owner phone uses events or authoritative peek | Canonical purpose policy explicitly permits these read operations; ordinary current target admission still applies, while administrative methods remain denied |
+| E18 | Terminal frame has both cursor types, or a cursor for another subscription kind, before or after open reply | Reject contradictory cursor combinations at validation; correlate the remaining cursor with the registered kind before terminal callbacks; end invalid_frame and release the handle before exposing wrong evidence |
+| E19 | Invalid event subscribe options arrive before admission | Return a rejected Promise with TypeError, without sending an RPC |
+| E20 | Owner phone peeks while target policy allows Read but denies Act | Use the shared command-target Cedar admission before reading active execution; no lifecycle read after refusal |
+| E21 | Paired credential holds only conversation.read; current share changes from absent to Read to Drive before peek and explicit stop | Absent targets stay hidden; Read may observe the authoritative execution but stop is forbidden; Drive may observe and stop that exact execution. Peek uses the existing paired-read grant owner, then its current target Read check; stop keeps Drive admission. Owner-phone purpose and Act checks, unpaired manifest grants, and administrative refusals remain in force |
+| E22 | An event source read is in flight when credential, paired share, or conversation access is revoked or the target is deleted | Reauthorize Page and Idle through the existing current credential and target policy owners before returning them for publication; refuse without exposing events or a new cursor. Unchanged authority preserves the output. Preparing carries no publication and retains pre-read admission |
+| E23 | A raw event subscribe supplies empty, duplicate, excessive, unknown or wrongly typed kinds, or an explicit null optional parameter | Refuse invalid_request before source registration/admission. Schema-owned filter bounds/uniqueness and non-null optional field names are generated for transport validation; omitted or a unique bounded subset remains valid |
+| E24 | A semantic kind has missing or contradictory metadata, live or buffered before open reply | The canonical event schema owns required/forbidden metadata and status/outcome values; generated client rules refuse the batch before callbacks or retaining checkpoint evidence. Sparse tool updates may omit name/status; state changes retain their distinct lifecycle, permission, and settlement-correction shapes |
+
+The event transport contract owns both subscription filter cardinality and the
+relationships between event kind and metadata. JSON Schema conditionals describe
+the supported semantic shapes; generation publishes those same declarations for
+client validation, rather than maintaining a second kind table. Gateway
+projection and valid fixtures cover every projected shape. Invalid frames end
+the client subscription and release its actual handle without publishing a batch.
+
+Event subscriptions admit publication after a successful Page or Idle read, while
+still holding request capacity. This final admission refreshes the credential,
+paired target grant, and application target access through their existing owners.
+It is the semantic batch's publication admission point, not an atomic check with
+the later socket write; already admitted writes may finish. View and list
+subscriptions retain their existing admission behavior.
+
+Ordinary peek requests and subscription admission use the same paired-read
+credential admission helper. Ordinary requests ask it after owner-phone purpose
+admission and before falling back to the manifest grant; subscription admission
+asks it after refreshing the session. This helper proves only the credential's
+published paired-read grant, with the existing write-grant fallback. It grants no
+target access: peek still asks current target Read admission and owner-phone Act
+admission, while an explicit stop still asks the paired Drive action on that
+target. An unpaired request keeps its manifest grant, and administrative methods
+are outside this paired-read exception. This splits credential and target facts
+between their existing owners rather than introducing a second grant evaluator.
+
+The socket owns subscription tasks; a reconnect recreates a subscription from the
+consumer's cursor. The SDK owns the semantic reader and its bounded storage work.
+The conversation application owns cross-read cursor continuity through EventProgress;
+consumers check each successful reader output before projection or retaining an
+Idle checkpoint. SDK page construction validates the page's internal evidence,
+while this shared validator correlates it with the requested start and preceding
+outputs. Its regressions live in `tests/conversation/event_read.rs`.
+No persisted subscription registry, plugin SDK, or workflow engine is introduced.
