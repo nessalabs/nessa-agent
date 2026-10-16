@@ -725,6 +725,7 @@ struct Inner {
     limits: ConversationLimits,
     conversations: Mutex<HashMap<ConversationId, Arc<Slot>>>,
     creation: Mutex<()>,
+    creation_commands: ConversationLocks,
     retirement: OnceLock<ActionContext>,
     admission: Arc<RwLock<()>>,
     // Counts stop passes, bumped the moment one is decided and before it waits
@@ -1106,6 +1107,7 @@ impl ConversationService {
                 limits,
                 conversations: Mutex::new(HashMap::new()),
                 creation: Mutex::new(()),
+                creation_commands: ConversationLocks::default(),
                 retirement: OnceLock::new(),
                 admission: Arc::new(RwLock::new(())),
                 stops: watch::channel(0).0,

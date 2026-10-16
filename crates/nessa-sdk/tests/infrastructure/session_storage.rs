@@ -5,9 +5,11 @@
 //!                 -> discovery public bounded query ordering / physical faults
 //!                 -> save_group public leases / emitted records / checkpoints
 //!                 -> ownership_settlement public SQLite proof / Completion refusal
+//!                 -> command_admission scoped requests / shared receipts / Stop capacity
 //!                 -> fixtures public immutable data / actual emitted donor output
 
 mod caller_wakes;
+mod command_admission;
 mod discovery;
 mod fixtures;
 mod memory;

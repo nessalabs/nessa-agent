@@ -1,13 +1,12 @@
 //! Admission and full storage shutdown share one owner.
 
-use super::creation::CONTROL_STREAM_PREFIX;
 use crate::application::agent_execution::caller_wake::contain_caller_wake;
 use crate::application::agent_execution::{
-    commands::MAX_CREATION_OWNERS,
+    commands::{CommandAccess, MAX_COMMAND_OWNERS, MAX_COMMAND_READS, MAX_STOP_OWNERS},
     sessions::{StorageError, StorageShutdownFailure},
 };
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     sync::{Arc, Mutex, PoisonError},
     thread,
 };
@@ -23,6 +22,8 @@ pub(super) struct StorageOwner {
 #[derive(Default)]
 struct State {
     leases: HashSet<String>,
+    commands: HashMap<(String, String), CommandAccess>,
+    command_reads: usize,
     reads: Vec<ReadTask>,
     read_failure: Option<StorageError>,
     initialized: bool,
@@ -39,32 +40,79 @@ pub(super) struct ShutdownWork {
     pub read_failure: Option<StorageError>,
     pub initialized: bool,
 }
+
+pub(super) struct CommandReservation {
+    owner: Arc<StorageOwner>,
+    key: Option<(String, String)>,
+}
+impl Drop for CommandReservation {
+    fn drop(&mut self) {
+        let mut state = self
+            .owner
+            .state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        match &self.key {
+            Some(key) => {
+                state.commands.remove(key);
+            }
+            None => state.command_reads -= 1,
+        }
+    }
+}
 impl StorageOwner {
     pub fn reserve(&self, id: &str) -> Result<(), StorageError> {
-        self.reserve_inner(id, false)
-    }
-    pub fn reserve_creation(&self, id: &str) -> Result<(), StorageError> {
-        self.reserve_inner(id, true)
-    }
-    fn reserve_inner(&self, id: &str, creation: bool) -> Result<(), StorageError> {
         let mut state = self.state.lock().map_err(poisoned)?;
         if state.shutdown.is_some() {
             return Err(StorageError::Closed);
-        }
-        if creation
-            && state
-                .leases
-                .iter()
-                .filter(|id| id.starts_with(CONTROL_STREAM_PREFIX))
-                .count()
-                >= MAX_CREATION_OWNERS
-        {
-            return Err(StorageError::Busy);
         }
         if !state.leases.insert(id.into()) {
             return Err(StorageError::Busy);
         }
         Ok(())
+    }
+
+    pub fn command(
+        self: &Arc<Self>,
+        principal: &str,
+        request: &str,
+        access: CommandAccess,
+    ) -> Result<CommandReservation, StorageError> {
+        let mut state = self.state.lock().map_err(poisoned)?;
+        if state.shutdown.is_some() {
+            return Err(StorageError::Closed);
+        }
+        let key = if access == CommandAccess::ReadOnly {
+            if state.command_reads == MAX_COMMAND_READS {
+                return Err(StorageError::Busy);
+            }
+            state.command_reads += 1;
+            None
+        } else {
+            let key = (principal.to_owned(), request.to_owned());
+            let stop = access == CommandAccess::Stop;
+            let limit = if stop {
+                MAX_STOP_OWNERS
+            } else {
+                MAX_COMMAND_OWNERS
+            };
+            if state.commands.contains_key(&key)
+                || state
+                    .commands
+                    .values()
+                    .filter(|value| (**value == CommandAccess::Stop) == stop)
+                    .count()
+                    == limit
+            {
+                return Err(StorageError::Busy);
+            }
+            state.commands.insert(key.clone(), access);
+            Some(key)
+        };
+        Ok(CommandReservation {
+            owner: self.clone(),
+            key,
+        })
     }
     pub fn release(&self, id: &str) {
         self.state

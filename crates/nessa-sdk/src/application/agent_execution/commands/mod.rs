@@ -2,7 +2,7 @@
 //!
 //! ```text
 //! verified host -> CreationCoordinator / MutationCoordinator
-//!                     |-> principal control lease (one request namespace)
+//!                     |-> request owner + shared principal receipt writer
 //!                     |-> host current access/deletion + one original effect
 //! creation: Accepted -> Attempted -> Ready
 //! submit/stop: Accepted -> Attempted -> Settled
@@ -28,6 +28,30 @@ pub use mutation::{
     MutationPlan, MutationReceipt, MutationStage, MutationTarget,
 };
 
-/// Maximum simultaneous principal creation leases on the shared record adapter.
-/// A seventeenth owner receives `StorageError::Busy` without a waiting queue.
-pub const MAX_CREATION_OWNERS: usize = 16;
+/// Resource class of a request-bound command handle; this grants no permission.
+/// Writable variants claim the same principal/request key across command families.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CommandAccess {
+    /// Observe one request without creating a missing stream or admitting effects.
+    ReadOnly,
+    /// Own creation progress and its original initialization using ordinary capacity.
+    Creation,
+    /// Own submit progress and its original dispatch using ordinary capacity.
+    Submit,
+    /// Own exact-turn Stop progress using capacity reserved for control commands.
+    Stop,
+}
+
+/// Maximum simultaneous ordinary command owners on one record-storage adapter.
+/// Creation and submit share these sixteen slots; retained operations keep their
+/// slot until completion. Admission beyond the bound returns `StorageError::Busy`.
+pub const MAX_COMMAND_OWNERS: usize = 16;
+
+/// Maximum simultaneous Stop owners on one record-storage adapter.
+/// These four slots are independent of ordinary command capacity. A duplicate
+/// principal/request cannot acquire a second owner through another resource class.
+pub const MAX_STOP_OWNERS: usize = 4;
+
+/// Maximum simultaneous observational command handles on one record adapter.
+/// These four slots admit no effect and create no missing command stream.
+pub const MAX_COMMAND_READS: usize = 4;

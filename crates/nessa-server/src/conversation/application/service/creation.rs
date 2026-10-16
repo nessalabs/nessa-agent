@@ -5,10 +5,11 @@ use super::{
     ConversationError, ConversationId, ConversationService, RequestedAgent, RequestedConversation,
 };
 use nessa_sdk::application::agent_execution::commands::{
-    CreationBinding, CreationCoordinator, CreationFailure, CreationFuture,
+    CommandAccess, CreationBinding, CreationCoordinator, CreationFailure, CreationFuture,
     CreationInitializationFailure, CreationReceipt, CreationStage, CreationStorage,
     CreationStorageError, CreationTarget, CreationTaskFault,
 };
+use nessa_sdk::application::agent_execution::sessions::StorageError;
 use sha2::{Digest, Sha256};
 use std::sync::{Arc, Mutex};
 
@@ -32,14 +33,25 @@ impl ConversationService {
         requested: RequestedConversation,
     ) -> Result<CreationReceipt, CreationFailure<ConversationError>> {
         let binding = binding(&id, &caller, &requested).map_err(CreationFailure::Target)?;
-        if let Some(reopened) = self
-            .reopen_owned(storage.clone(), &id, &caller, &requested, &binding)
-            .await?
-        {
-            return Ok(reopened);
-        }
         let service = self.clone();
         tokio::spawn(async move {
+            // Receipt ownership is per request; target creation remains one
+            // decision even when different request IDs arrive together. Stop
+            // and creation of another target do not take this lock.
+            let _target =
+                service
+                    .inner
+                    .creation_commands
+                    .try_lock(&id)
+                    .ok_or(CreationFailure::Storage(CreationStorageError::Storage(
+                        StorageError::Busy,
+                    )))?;
+            if let Some(reopened) = service
+                .reopen_owned(storage.clone(), &id, &caller, &requested, &binding)
+                .await?
+            {
+                return Ok(reopened);
+            }
             let _admission = service
                 .admit()
                 .await
@@ -95,17 +107,21 @@ impl ConversationService {
         requested: &RequestedConversation,
         binding: &CreationBinding,
     ) -> Result<Option<CreationReceipt>, CreationFailure<ConversationError>> {
-        let saved = match storage
-            .open_creation(binding.actor().principal_id().into(), false)
+        let lease = storage
+            .open_command(
+                binding.actor().principal_id().into(),
+                binding.actor().request_id().into(),
+                CommandAccess::Creation,
+            )
             .await
-        {
-            Ok(Some(lease)) => match lease.load(binding.actor().request_id()).await {
+            .map_err(CreationFailure::Storage)?;
+        let saved = match &lease {
+            Some(lease) => match lease.load(binding.actor().request_id()).await {
                 Ok(saved) => saved,
                 Err(CreationStorageError::ForeignRequest) => return Err(CreationFailure::Conflict),
                 Err(error) => return Err(CreationFailure::Storage(error)),
             },
-            Ok(None) => None,
-            Err(error) => return Err(CreationFailure::Storage(error)),
+            None => None,
         };
         if saved.is_some() {
             return Ok(None);
@@ -132,6 +148,7 @@ impl ConversationService {
         )
         .await
         .map_err(CreationFailure::Target)?;
+        drop(lease);
         let accepted = CreationReceipt::accepted(binding.clone());
         let attempted = accepted
             .advance(CreationStage::Attempted)

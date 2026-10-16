@@ -1,7 +1,9 @@
 //! Admission belongs to the retained submit owner, including receipt persistence.
 use super::super::super::Halt;
 use super::*;
-use nessa_sdk::application::agent_execution::commands::{CreationReceipt, CreationStorageLease};
+use nessa_sdk::application::agent_execution::commands::{
+    CommandAccess, CreationReceipt, CreationStorageLease,
+};
 use std::future::{poll_fn, Future};
 use std::task::Poll;
 use tokio::sync::{Notify, RwLock};
@@ -37,15 +39,16 @@ struct GatedLease {
     gate: Arc<ReceiptGate>,
 }
 impl CreationStorage for GatedCommands {
-    fn open_creation(
+    fn open_command(
         &self,
         principal: String,
-        create: bool,
+        request_id: String,
+        access: CommandAccess,
     ) -> CreationFuture<'_, Option<Arc<dyn CreationStorageLease>>> {
         Box::pin(async move {
             Ok(self
                 .real
-                .open_creation(principal, create)
+                .open_command(principal, request_id, access)
                 .await?
                 .map(|real| {
                     Arc::new(GatedLease {
@@ -244,7 +247,7 @@ async fn retirement_before_submit_effect_preserves_attempted_receipt() {
         .unwrap();
     assert!(provider.executions.lock().unwrap().is_empty());
     let lease = storage
-        .open_creation("person".into(), false)
+        .open_command("person".into(), "submit".into(), CommandAccess::ReadOnly)
         .await
         .unwrap()
         .unwrap();

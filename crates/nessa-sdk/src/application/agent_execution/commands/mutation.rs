@@ -3,6 +3,7 @@ use super::creation::{
     CreationFuture, CreationInitializationFailure, CreationStorage, CreationStorageError,
     CreationTaskFault,
 };
+use super::CommandAccess;
 use crate::application::agent_execution::{permissions::ActionContext, sessions::StorageError};
 use crate::domain::agent_execution::{executions::ExecutionId, sessions::SessionId};
 use std::sync::Arc;
@@ -262,7 +263,14 @@ impl MutationCoordinator {
         let storage = self.storage.clone();
         tokio::spawn(async move {
             let lease = storage
-                .open_creation(binding.actor().principal_id().into(), true)
+                .open_command(
+                    binding.actor().principal_id().into(),
+                    binding.actor().request_id().into(),
+                    match binding.operation() {
+                        MutationOperation::Submit => CommandAccess::Submit,
+                        MutationOperation::Stop => CommandAccess::Stop,
+                    },
+                )
                 .await
                 .map_err(MutationFailure::Storage)?
                 .ok_or_else(|| {
@@ -374,7 +382,11 @@ impl MutationCoordinator {
     ) -> Result<Option<MutationReceipt>, MutationFailure<T::Error>> {
         let lease = self
             .storage
-            .open_creation(binding.actor().principal_id().into(), false)
+            .open_command(
+                binding.actor().principal_id().into(),
+                binding.actor().request_id().into(),
+                CommandAccess::ReadOnly,
+            )
             .await
             .map_err(MutationFailure::Storage)?;
         let saved = match lease {

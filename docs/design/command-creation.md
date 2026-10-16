@@ -32,12 +32,12 @@ stream nor writes progress.
 | C4 | Crash or process restart after durable `Attempted`, before acknowledged `Ready` | Original target and binding remain; restart/retry returns `Interrupted`, no second initialization. Caller loss while the owner is still running is C7, not this row | `an_interrupted_creation_preserves_its_target_without_reinitialization`, `a_crash_after_provider_open_reopens_the_original_interrupted_receipt` (child publishes its complete effect marker atomically before parent kill) |
 | C5 | `Accepted` saved but no `Attempted` | Exact explicit retry may make the first attempt; read-only lookup performs no writes | `an_accepted_creation_can_make_its_first_attempt_after_reopen` |
 | C6 | Deleted target on new, accepted, attempted, ready or read-only lookup, including after shutdown and reopen of a finished creation | Current host deletion refusal before initialization or returned readiness; control history remains non-content | `deletion_refuses_each_creation_state_and_read_only_lookup`, `deletion_refuses_finished_creation_lookup_and_retry_after_reopen` |
-| C7 | Caller stops waiting while initialization runs | One supervised operation retains its original principal lease and initializer; duplicate request is Busy until completion, then returns the same receipt. Busy is the initializer still publishing, not a lost lease. Lookup waits until that publish is Ready; a five-second bound expired on Windows while the publish was still running (#558) | `caller_loss_keeps_the_original_creation_owner_until_completion`, `direct_sdk_caller_loss_retains_the_original_initializer_and_lease` |
+| C7 | Caller stops waiting while initialization runs | One supervised operation retains its original request claim and initializer; duplicate execution is Busy until completion, then returns the same receipt. Passive lookup may observe Accepted/Attempted while initialization is still running, and Ready once publication completes; it cannot initialize anything | `caller_loss_keeps_the_original_creation_owner_until_completion`, `direct_sdk_caller_loss_retains_the_original_initializer_and_lease` |
 | C8 | Commit acknowledgement is uncertain | No initialization without acknowledged `Attempted`; exact event retry/replay establishes the retained fact, without an alternate ID | `an_uncertain_creation_commit_cannot_authorize_initialization` |
 | C9 | Target deleted while initialization or terminal save runs | Check current target again before returning the receipt; do not erase the original attempted/ready history | `deletion_during_initialization_refuses_the_returned_receipt` |
 | C12 | A second creation request names an already-owned target | Existing creation owner reopens it: no second provider open, original creator retained, and no second creation receipt. A stored receipt would skip the attach a later restart needs | `a_second_creation_request_cannot_reinitialize_the_original_target`, `a_new_request_reopens_an_owned_conversation_and_attaches_after_restart` |
 | C13 | Retirement begins while creation is initializing or saving its terminal | Existing host admission guard spans the complete supervised command, including caller loss; the actual admission writer is excluded while the original terminal save is held, and retirement joins it before storage shutdown | `retirement_joins_the_original_creation_receipt_owner` |
-| C14 | Sixteen principal control owners already hold their original leases | New owner receives typed Busy without a queue; releasing one permits a new owner | `creation_owner_capacity_releases_only_with_the_original_lease` |
+| C14 | Sixteen ordinary command owners already hold their original request claims | New ordinary owner receives typed Busy without a queue; releasing one permits a new owner. Stop uses its separate bounded pool | `creation_owner_capacity_releases_only_with_the_original_lease` |
 | C15 | Ready control receipt survives but current target metadata is absent | Host reports NotFound, rather than returning saved readiness as current target existence | `a_ready_receipt_does_not_invent_missing_target_metadata` |
 | C16 | Supervised command or control I/O task panics or is unexpectedly cancelled, including before/after Accepted, Attempted and Ready saves | Preserve a typed task fault, separately from backend refusal; retain saved original progress and original provider ownership without replaying an attempted effect | `a_panicked_creation_task_keeps_original_progress_and_a_typed_fault`, `a_panicked_creation_save_preserves_original_phase_and_provider_ownership` |
 | C17 | Preparation publishes a live conversation before its asynchronous provider attachment finishes; an ordinary join waiter or lost caller competes with the creation waiter, or existing close cancels authorization before attachment | Original attachment owner retains its typed completion for every waiter; `Ready` requires successful attachment/publication, and a failure retains `Attempted` | `creation_waits_for_original_attachment_before_saving_ready`, `an_interrupted_creation_preserves_its_target_without_reinitialization`, `competing_attachment_waiters_share_original_completion_and_fault`, `dropping_an_attachment_join_waiter_keeps_the_original_running_owner`, `caller_loss_keeps_the_original_creation_owner_until_completion`, `close_before_attachment_keeps_creation_attempted_after_original_task_completion` |
@@ -48,9 +48,10 @@ Both command and target streams use the same `RecordStorage` runtime; there is n
 cross-stream transaction. Principal control streams use the common command namespace, not one stream per
 operation. Their IDs contain `:`, which the
 SDK `SessionId` type cannot hold, so conversation stream identities cannot alias
-control streams. At most sixteen principal control owners hold leases at once; existing storage
-lease accounting owns that limit. A principal's original exclusive lease serializes creation and
-survives caller loss. The process-local lease shares the existing storage owner;
+control streams. At most sixteen ordinary command owners, four Stop owners and four passive
+read handles are admitted at once; storage ownership accounts for those limits.
+Each writable handle claims one principal/request through caller loss. Shared
+receipt writes use a short principal gate. The process-local claims share the existing storage owner;
 the runtime's SQLite lock supplies cross-process exclusion. Creation records are
 small atomic events rather than the conversation's potentially oversized semantic
 facts. Replay pages accommodate the shared runtime's published
@@ -58,6 +59,38 @@ facts. Replay pages accommodate the shared runtime's published
 smaller, and retain at most 4,096 receipt bindings per principal. Full retained
 control-history scan cost is separate from page bounds.
 The first implementation does not garbage-collect those bindings.
+
+## Request ownership and the receipt writer
+
+Commands retain exclusion for `(principal, request ID)`, across creation, submit
+and Stop. Different requests share one principal receipt map and serialize only
+receipt replay/validation/append, not provider work. Ordinary creation/submit
+owners have sixteen slots; Stop has four reserved slots, and passive lookup has
+four read slots. These are resource budgets, not authorization decisions.
+The gateway admission and existing SDK control/lifecycle checks still apply.
+
+| Ordering | Required behavior | Regression |
+| --- | --- | --- |
+| Creation B waits for provider opening; Stop A names a different request | Stop records its attempt and cancels A before B is released | `stop_completes_while_unrelated_creation_is_opening` |
+| Same principal/request arrives under another command family while original runs | One effect owner; Busy until release, then immutable saved binding decides conflict or retry | Public `command_admission` suite |
+| Distinct requests interleave appends | Shared validated receipt head; preserve both histories and the common 4,096 binding cap | Public `command_admission` suite |
+| Sixteen ordinary owners are held | Reserved Stop slots remain available; four held Stops bound further controls | Public `command_admission` suite |
+| Read-only lookup overlaps an effect owner, or targets an absent stream | Observe committed progress without effect ownership; do not create an absent stream or permit writes | Public `command_admission` suite |
+| An append commits but its acknowledgement is lost, or the append task faults | Mark shared state dirty before append. Before the next read/write decision, replay the actual tail under the same gate. No unacknowledged attempt authorizes an effect | `uncertain_command_append_reconciles_shared_receipts` |
+| A caller disappears during open/replay/append | Retained storage task owns the original request/read slot until that work finishes | `same_stop_retry_has_only_one_live_effect_owner`, existing caller-loss tests |
+| Last handle for a principal drops; later open sees altered history | Weak registry evicts idle state; replay and validate history again | Existing malformed-history tests |
+| A handle is cloned or its caller disappears while a receipt operation is pending | One in-flight operation per handle, shared by clones; further calls return Busy. The retained operation keeps that slot through append and publication | `command_handle_operation_capacity_survives_caller_loss`, `command_owner_survives_caller_loss_after_physical_append` |
+| A new creation request reopens an existing target while another command owns that request ID | Reopen claims Creation access, observes the original binding under the claim, and retains it through supervised reopen. It still writes no second receipt | `existing_target_reopen_refuses_a_live_stop_request_before_acceptance` |
+| Different creation request IDs race for the same target before ownership is published | A target-scoped try-lock rejects the competing creation as Busy before adding a receipt. Different targets and Stop do not take this lock | `competing_creation_requests_for_one_target_do_not_add_a_second_receipt` |
+
+Each handle binds its principal, request and access class. Access is checked on
+the handle, not shared state, so creation cannot borrow a reserved Stop slot.
+The bounded registry contains weak principal-state references and prunes idle
+entries on admission. A retained storage task holds the whole handle, including
+its reservation. Storage shutdown retains its existing contract: close admission
+and drain physical runtime work; provider owners are joined by gateway shutdown.
+This change keeps the event format, receipt stages and finite retained-identity
+limit. It does not expire or delete old request identities.
 
 ## Shared request identity
 

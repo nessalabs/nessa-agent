@@ -1,3 +1,4 @@
+use super::CommandAccess;
 use crate::application::agent_execution::{permissions::ActionContext, sessions::StorageError};
 use crate::domain::agent_execution::sessions::SessionId;
 use std::{future::Future, pin::Pin, sync::Arc};
@@ -142,20 +143,33 @@ impl CreationReceipt {
 }
 
 /// Durable principal control stream, implemented by the existing record runtime.
-/// Opening serializes principal commands without a waiting queue. A read-only
-/// open must not create an absent stream. The returned lease owns exclusion until
-/// drop; its outstanding operations retain that ownership through completion.
+/// Opens request-bound command history after the host verifies the principal.
+/// Writable access excludes another effect owner for the same principal/request,
+/// across command families, until the handle and its outstanding work finish.
+/// Unrelated requests may proceed while the original performs external work.
 pub trait CreationStorage: Send + Sync {
-    /// Open the host-verified principal namespace. `create` selects writable
-    /// admission or read-only lookup; absent lookup returns `None`.
-    fn open_creation(
+    /// Open `request_id` in the verified `principal` namespace with bounded access.
+    /// Read-only access creates no absent stream, appends nothing and returns
+    /// `None` for an absent namespace. Writable access reserves one request owner.
+    /// Access selects resource accounting, not authorization; host checks still
+    /// own permission. Dropping a caller's wait does not release retained work.
+    ///
+    /// # Errors
+    /// Invalid identities, exhausted capacity, a live duplicate writable owner,
+    /// closed storage, or failed history validation return typed storage errors.
+    fn open_command(
         &self,
         principal: String,
-        create: bool,
+        request_id: String,
+        access: CommandAccess,
     ) -> CreationFuture<'_, Option<Arc<dyn CreationStorageLease>>>;
 }
 
-/// Exclusive access to one principal's immutable command history.
+/// Request-bound access to a principal's shared immutable command history.
+/// Loads and saves are restricted to the opened request. A writable handle may
+/// save only its declared command family; read-only handles cannot save.
+/// Clones share one in-flight operation slot. Overlapping loads/saves return
+/// `StorageError::Busy`; a retained operation keeps that slot after caller loss.
 pub trait CreationStorageLease: Send + Sync {
     /// Return the existing creation binding/progress for `request_id`, without writing.
     ///
@@ -272,7 +286,11 @@ impl CreationCoordinator {
         let storage = self.storage.clone();
         tokio::spawn(async move {
             let lease = storage
-                .open_creation(binding.actor().principal_id().into(), true)
+                .open_command(
+                    binding.actor().principal_id().into(),
+                    binding.actor().request_id().into(),
+                    CommandAccess::Creation,
+                )
                 .await
                 .map_err(CreationFailure::Storage)?
                 .ok_or_else(|| {
@@ -349,7 +367,11 @@ impl CreationCoordinator {
     ) -> Result<Option<CreationReceipt>, CreationFailure<T::Error>> {
         let lease = self
             .storage
-            .open_creation(binding.actor().principal_id().into(), false)
+            .open_command(
+                binding.actor().principal_id().into(),
+                binding.actor().request_id().into(),
+                CommandAccess::ReadOnly,
+            )
             .await
             .map_err(CreationFailure::Storage)?;
         let saved = match lease {

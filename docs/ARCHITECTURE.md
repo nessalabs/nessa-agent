@@ -836,7 +836,7 @@ Mandatory permission audit remains separate from session snapshots.
 The host supplies verified attribution and authorizes commands before SDK access.
 
 The first durable creation consumer is `ConversationService::create_command`,
-which uses the SDK `commands::CreationCoordinator` with a principal control lease
+which uses the SDK `commands::CreationCoordinator` with a request-bound claim
 on the shared `RecordStorage` runtime. Its non-content binding and original
 attempt precede initialization; attempted recovery stays interrupted without
 provider reopening. Current target access/deletion remains in the conversation
@@ -844,6 +844,10 @@ service. The existing host admission guard spans the full command and terminal
 commit. The product socket creates, sends, steers, stops, and reads those
 receipts through the same command store; see
 [command creation](design/command-creation.md).
+Different requests share short receipt writes and can perform provider work
+concurrently. Stop has reserved command capacity; duplicate request identities
+retain one effect owner across command families. The record format and conservative
+interrupted recovery are unchanged.
 
 Behavior belongs in the [SDK guides](../crates/nessa-sdk/docs/agent_execution/README.md),
 especially [Agent/storage](../crates/nessa-sdk/docs/agent_execution/agent.md),

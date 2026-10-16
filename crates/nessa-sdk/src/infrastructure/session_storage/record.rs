@@ -5,6 +5,7 @@
 #[cfg(test)]
 use super::record_source::CommittedReadGate;
 use super::{
+    creation::Controls,
     paths::SessionPaths,
     record_changes::RecordChanges,
     record_lifecycle::{join, shutdown_result, StorageOwner},
@@ -25,6 +26,8 @@ use crate::{
     },
     domain::agent_execution::sessions::SessionId,
 };
+#[cfg(test)]
+use event_stream::infrastructure::SqliteFailureInjection;
 #[cfg(any(test, feature = "test-support"))]
 use event_stream::EventSink;
 use event_stream::{
@@ -37,6 +40,7 @@ use sha2::{Digest, Sha256};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::{
     collections::HashMap,
+    future::Future,
     io,
     path::PathBuf,
     sync::{Arc, Mutex},
@@ -56,6 +60,7 @@ pub struct RecordStorage {
     saves: Arc<SaveCommits>,
     runtime: Arc<OnceCell<RecordRuntime>>,
     pub(super) owner: Arc<StorageOwner>,
+    pub(super) controls: Arc<Controls>,
     changes: RecordChanges,
     pub(super) committed_views: Arc<Mutex<HashMap<Scope, Arc<CachedCommittedRead>>>>,
     pub(super) terminal_cache: Arc<TerminalCache>,
@@ -79,6 +84,7 @@ impl RecordStorage {
             saves: Arc::new(SaveCommits::new()),
             runtime: Arc::new(OnceCell::new()),
             owner: Arc::default(),
+            controls: Arc::default(),
             changes: RecordChanges::default(),
             committed_views: Arc::new(Mutex::new(HashMap::new())),
             terminal_cache: Arc::default(),
@@ -176,6 +182,32 @@ impl RecordStorage {
             initialize_runtime(&self.runtime, &self.options, &self.saves),
         )
         .await
+    }
+
+    /// Owned opening future for a retained command task. The request reservation
+    /// must outlive runtime initialization as well as replay and receipt I/O.
+    pub(super) fn runtime_owner(
+        &self,
+    ) -> impl Future<Output = Result<RecordRuntime, StorageError>> + Send + 'static {
+        let owner = self.owner.clone();
+        let cell = self.runtime.clone();
+        let options = self.options.clone();
+        let saves = self.saves.clone();
+        async move {
+            owner.initialize()?;
+            contain_caller_wake(
+                "record storage runtime",
+                initialize_runtime(&cell, &options, &saves),
+            )
+            .await
+            .cloned()
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn with_failure_injection(mut self, failure: SqliteFailureInjection) -> Self {
+        self.options.failure_injection = Some(failure);
+        self
     }
 
     async fn open_inner(
@@ -470,16 +502,6 @@ pub(super) struct Reservation {
     owner: Arc<StorageOwner>,
 }
 impl Reservation {
-    pub(super) fn acquire_creation(
-        owner: Arc<StorageOwner>,
-        id: &str,
-    ) -> Result<Self, StorageError> {
-        owner.reserve_creation(id)?;
-        Ok(Self {
-            id: id.into(),
-            owner,
-        })
-    }
     pub(super) fn acquire(owner: Arc<StorageOwner>, id: &str) -> Result<Self, StorageError> {
         owner.reserve(id)?;
         Ok(Self {

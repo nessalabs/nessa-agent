@@ -32,7 +32,7 @@
 //!                                      |-> units + completion -> SQLite runtime
 //! RecordStorage -> identity metadata -> expected bounded read source -> sync engine
 //! RecordStorage -> transcript fold -> committed gateway view
-//! RecordStorage -> creation control stream -> principal command lease/receipts
+//! RecordStorage -> bounded request owners -> shared principal receipts/short writer gate
 //! RecordStorage -> bounded committed-change watches (no read or permission)
 //! OwnershipStore -> ownership.sqlite3 snapshot rows
 //!                -> ownership::settlement strict proof/Completion codec

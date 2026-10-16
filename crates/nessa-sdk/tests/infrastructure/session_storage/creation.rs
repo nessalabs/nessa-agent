@@ -1,6 +1,7 @@
 use super::*;
 use crate::application::agent_execution::{
-    commands::CreationInitializationFailure, sessions::SessionStorage,
+    commands::{CommandAccess, CreationInitializationFailure},
+    sessions::SessionStorage,
 };
 
 fn binding(request: &str) -> CreationBinding {
@@ -21,7 +22,7 @@ async fn creation_replay_refuses_impossible_history() {
         .advance(CreationStage::Ready)
         .unwrap();
     let lease = storage
-        .open_creation("person".into(), true)
+        .open_command("person".into(), "request".into(), CommandAccess::Creation)
         .await
         .unwrap()
         .unwrap();
@@ -47,7 +48,9 @@ async fn creation_replay_refuses_impossible_history() {
         .await
         .unwrap();
     assert!(matches!(
-        storage.open_creation("person".into(), false).await,
+        storage
+            .open_command("person".into(), "request".into(), CommandAccess::ReadOnly)
+            .await,
         Err(CreationStorageError::Storage(StorageError::Corrupt(_)))
     ));
     storage.shutdown().await.unwrap();
@@ -56,31 +59,49 @@ async fn creation_replay_refuses_impossible_history() {
 async fn creation_capacity_preserves_existing_receipts() {
     let directory = tempfile::tempdir().unwrap();
     let storage = RecordStorage::new(directory.path().join("records")).unwrap();
-    let lease = storage
-        .open_creation("person".into(), true)
+    // Keep the first request alive so the shared principal state is retained;
+    // every other handle is still restricted to its own immutable request.
+    let first_lease = storage
+        .open_command("person".into(), "0".into(), CommandAccess::Creation)
         .await
         .unwrap()
         .unwrap();
-    for index in 0..MAX_RECEIPTS {
+    first_lease
+        .save(CreationReceipt::accepted(binding("0")))
+        .await
+        .unwrap();
+    for index in 1..MAX_RECEIPTS {
+        let request = index.to_string();
+        let lease = storage
+            .open_command("person".into(), request.clone(), CommandAccess::Creation)
+            .await
+            .unwrap()
+            .unwrap();
         lease
-            .save(CreationReceipt::accepted(binding(&index.to_string())))
+            .save(CreationReceipt::accepted(binding(&request)))
             .await
             .unwrap();
     }
+    let overflow = storage
+        .open_command("person".into(), "overflow".into(), CommandAccess::Creation)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(
-        lease
+        overflow
             .save(CreationReceipt::accepted(binding("overflow")))
             .await,
         Err(CreationStorageError::Storage(StorageError::TooLarge))
     );
-    let first = lease.load("0").await.unwrap().unwrap();
-    lease
+    drop(overflow);
+    let first = first_lease.load("0").await.unwrap().unwrap();
+    first_lease
         .save(first.advance(CreationStage::Attempted).unwrap())
         .await
         .unwrap();
-    drop(lease);
+    drop(first_lease);
     let lease = storage
-        .open_creation("person".into(), false)
+        .open_command("person".into(), "0".into(), CommandAccess::ReadOnly)
         .await
         .unwrap()
         .unwrap();
@@ -88,6 +109,12 @@ async fn creation_capacity_preserves_existing_receipts() {
         lease.load("0").await.unwrap().unwrap().stage(),
         CreationStage::Attempted
     );
+    drop(lease);
+    let lease = storage
+        .open_command("person".into(), "overflow".into(), CommandAccess::ReadOnly)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(lease.load("overflow").await.unwrap(), None);
     drop(lease);
     storage.shutdown().await.unwrap();
@@ -97,12 +124,12 @@ async fn read_only_creation_lookup_does_not_create_a_stream_or_change_progress()
     let directory = tempfile::tempdir().unwrap();
     let storage = RecordStorage::new(directory.path().join("records")).unwrap();
     assert!(storage
-        .open_creation("person".into(), false)
+        .open_command("person".into(), "request".into(), CommandAccess::ReadOnly)
         .await
         .unwrap()
         .is_none());
     let lease = storage
-        .open_creation("person".into(), true)
+        .open_command("person".into(), "request".into(), CommandAccess::Creation)
         .await
         .unwrap()
         .unwrap();
@@ -111,7 +138,7 @@ async fn read_only_creation_lookup_does_not_create_a_stream_or_change_progress()
     lease.save(accepted.clone()).await.unwrap();
     drop(lease);
     let lease = storage
-        .open_creation("person".into(), false)
+        .open_command("person".into(), "request".into(), CommandAccess::ReadOnly)
         .await
         .unwrap()
         .unwrap();
@@ -176,33 +203,41 @@ fn creation_codec_bounds_fields_and_preserves_exact_non_content_identity() {
 
 #[tokio::test]
 async fn creation_owner_capacity_releases_only_with_the_original_lease() {
-    use crate::application::agent_execution::commands::MAX_CREATION_OWNERS;
+    use crate::application::agent_execution::commands::MAX_COMMAND_OWNERS;
     let directory = tempfile::tempdir().unwrap();
     let storage = RecordStorage::new(directory.path().join("records")).unwrap();
     let mut leases = Vec::new();
-    for index in 0..MAX_CREATION_OWNERS {
+    for index in 0..MAX_COMMAND_OWNERS {
         leases.push(
             storage
-                .open_creation(format!("principal-{index}"), true)
+                .open_command(
+                    format!("principal-{index}"),
+                    "request".into(),
+                    CommandAccess::Creation,
+                )
                 .await
                 .unwrap()
                 .unwrap(),
         );
     }
     assert!(matches!(
-        storage.open_creation("overflow".into(), true).await,
+        storage
+            .open_command("overflow".into(), "request".into(), CommandAccess::Creation)
+            .await,
         Err(CreationStorageError::Storage(StorageError::Busy))
     ));
     let held = leases.pop().unwrap();
     let clone = held.clone();
     drop(held);
     assert!(matches!(
-        storage.open_creation("overflow".into(), true).await,
+        storage
+            .open_command("overflow".into(), "request".into(), CommandAccess::Creation)
+            .await,
         Err(CreationStorageError::Storage(StorageError::Busy))
     ));
     drop(clone);
     let replacement = storage
-        .open_creation("overflow".into(), true)
+        .open_command("overflow".into(), "request".into(), CommandAccess::Creation)
         .await
         .unwrap()
         .unwrap();
@@ -255,7 +290,7 @@ async fn a_panicked_creation_task_keeps_original_progress_and_a_typed_fault() {
             Err(CreationFailure::TaskFault(CreationTaskFault::Panicked))
         ));
         let lease = storage
-            .open_creation("person".into(), false)
+            .open_command("person".into(), request.into(), CommandAccess::ReadOnly)
             .await
             .unwrap()
             .unwrap();
@@ -287,7 +322,7 @@ async fn creation_save_refuses_another_principal_or_original_binding() {
     let root = directory.path().join("records");
     let storage = RecordStorage::new(&root).unwrap();
     let lease = storage
-        .open_creation("person".into(), true)
+        .open_command("person".into(), "request".into(), CommandAccess::Creation)
         .await
         .unwrap()
         .unwrap();
@@ -326,7 +361,7 @@ async fn creation_save_refuses_another_principal_or_original_binding() {
     drop(storage);
     let storage = RecordStorage::new(&root).unwrap();
     let lease = storage
-        .open_creation("person".into(), false)
+        .open_command("person".into(), "request".into(), CommandAccess::ReadOnly)
         .await
         .unwrap()
         .unwrap();
@@ -344,7 +379,7 @@ async fn creation_replay_refuses_foreign_or_forged_control_evidence() {
         let root = directory.path().join("records");
         let storage = RecordStorage::new(&root).unwrap();
         let lease = storage
-            .open_creation("person".into(), true)
+            .open_command("person".into(), "request".into(), CommandAccess::Creation)
             .await
             .unwrap()
             .unwrap();
@@ -386,7 +421,9 @@ async fn creation_replay_refuses_foreign_or_forged_control_evidence() {
         storage.shutdown().await.unwrap();
         drop(storage);
         let storage = RecordStorage::new(&root).unwrap();
-        let outcome = storage.open_creation("person".into(), false).await;
+        let outcome = storage
+            .open_command("person".into(), "request".into(), CommandAccess::ReadOnly)
+            .await;
         if violation == "principal" {
             assert!(matches!(
                 outcome,
@@ -480,15 +517,31 @@ async fn direct_sdk_caller_loss_retains_the_original_initializer_and_lease() {
     caller.abort();
     assert!(caller.await.unwrap_err().is_cancelled());
     assert!(matches!(
-        storage.open_creation("person".into(), true).await,
+        storage
+            .open_command(
+                "person".into(),
+                "direct-request".into(),
+                CommandAccess::Creation
+            )
+            .await,
         Err(CreationStorageError::Storage(StorageError::Busy))
     ));
+    let unrelated = storage
+        .open_command("person".into(), "unrelated".into(), CommandAccess::Creation)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(unrelated.load("unrelated").await.unwrap(), None);
+    drop(unrelated);
     release.send(()).unwrap();
     let coordinator = CreationCoordinator::new(storage.clone());
     let ready = tokio::time::timeout(INITIALIZER_HANG, async {
         loop {
             match coordinator.lookup(&original, target.as_ref()).await {
                 Ok(Some(receipt)) if receipt.stage() == CreationStage::Ready => break receipt,
+                Ok(Some(receipt)) if receipt.stage() == CreationStage::Attempted => {
+                    tokio::task::yield_now().await;
+                }
                 Err(CreationFailure::Storage(CreationStorageError::Storage(
                     StorageError::Busy,
                 ))) => tokio::time::sleep(Duration::from_millis(10)).await,

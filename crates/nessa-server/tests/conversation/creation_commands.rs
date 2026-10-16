@@ -22,7 +22,7 @@ use nessa_protocol::conversation::domain::{ConversationApprovalMode, Conversatio
 use nessa_sdk::application::agent_execution::{
     agents::AgentError,
     commands::{
-        CreationReceipt, CreationStage, CreationStorage, CreationStorageError,
+        CommandAccess, CreationReceipt, CreationStage, CreationStorage, CreationStorageError,
         CreationStorageLease, CreationTaskFault,
     },
     sessions::{SessionSnapshot, SessionStorage, StorageError},
@@ -739,7 +739,7 @@ async fn an_accepted_creation_can_make_its_first_attempt_after_reopen() {
     let target = id();
     let (service, storage, metadata) = fixture(&root, provider.clone());
     let lease = storage
-        .open_creation("person".into(), true)
+        .open_command("person".into(), "request".into(), CommandAccess::Creation)
         .await
         .unwrap()
         .unwrap();
@@ -822,7 +822,7 @@ async fn deletion_refuses_each_creation_state_and_read_only_lookup() {
             .unwrap();
         if let Some(stage) = stage {
             let lease = storage
-                .open_creation("person".into(), true)
+                .open_command("person".into(), request.clone(), CommandAccess::Creation)
                 .await
                 .unwrap()
                 .unwrap();
@@ -1018,6 +1018,7 @@ async fn caller_loss_keeps_the_original_creation_owner_until_completion() {
                 .await
             {
                 Ok(Some(receipt)) if receipt.stage() == CreationStage::Ready => break receipt,
+                Ok(Some(_)) => tokio::task::yield_now().await,
                 Err(CreationFailure::Storage(CreationStorageError::Storage(
                     StorageError::Busy,
                 ))) => tokio::task::yield_now().await,
@@ -1078,7 +1079,7 @@ async fn deletion_during_initialization_refuses_the_returned_receipt() {
         Err(CreationFailure::Target(ConversationError::Deleted))
     ));
     let lease = storage
-        .open_creation("person".into(), false)
+        .open_command("person".into(), "request".into(), CommandAccess::ReadOnly)
         .await
         .unwrap()
         .unwrap();
@@ -1113,15 +1114,16 @@ struct LoseReplyLease {
     remaining: Arc<AtomicBool>,
 }
 impl CreationStorage for LoseReply {
-    fn open_creation(
+    fn open_command(
         &self,
         principal: String,
-        create: bool,
+        request_id: String,
+        access: CommandAccess,
     ) -> CreationFuture<'_, Option<Arc<dyn CreationStorageLease>>> {
         Box::pin(async move {
             Ok(self
                 .storage
-                .open_creation(principal, create)
+                .open_command(principal, request_id, access)
                 .await?
                 .map(|original| {
                     Arc::new(LoseReplyLease {
@@ -1160,15 +1162,16 @@ struct PanicSaveLease {
     after_commit: bool,
 }
 impl CreationStorage for PanicSave {
-    fn open_creation(
+    fn open_command(
         &self,
         principal: String,
-        create: bool,
+        request_id: String,
+        access: CommandAccess,
     ) -> CreationFuture<'_, Option<Arc<dyn CreationStorageLease>>> {
         Box::pin(async move {
             Ok(self
                 .storage
-                .open_creation(principal, create)
+                .open_command(principal, request_id, access)
                 .await?
                 .map(|original| {
                     Arc::new(PanicSaveLease {
@@ -1403,7 +1406,7 @@ async fn a_second_creation_request_cannot_reinitialize_the_original_target() {
         .await
         .unwrap();
     let lease = storage
-        .open_creation("person".into(), false)
+        .open_command("person".into(), "another".into(), CommandAccess::ReadOnly)
         .await
         .unwrap()
         .unwrap();
@@ -1448,7 +1451,11 @@ async fn a_new_request_reopens_an_owned_conversation_and_attaches_after_restart(
         .unwrap();
     assert_eq!(provider.open_calls.load(Ordering::SeqCst), 2);
     let lease = storage
-        .open_creation("person".into(), false)
+        .open_command(
+            "person".into(),
+            "request-reopen".into(),
+            CommandAccess::ReadOnly,
+        )
         .await
         .unwrap()
         .unwrap();
@@ -1483,15 +1490,16 @@ struct GateReadyLease {
     gate: Arc<AsyncMutex<Option<oneshot::Receiver<()>>>>,
 }
 impl CreationStorage for GateReady {
-    fn open_creation(
+    fn open_command(
         &self,
         principal: String,
-        create: bool,
+        request_id: String,
+        access: CommandAccess,
     ) -> CreationFuture<'_, Option<Arc<dyn CreationStorageLease>>> {
         Box::pin(async move {
             Ok(self
                 .storage
-                .open_creation(principal, create)
+                .open_command(principal, request_id, access)
                 .await?
                 .map(|original| {
                     Arc::new(GateReadyLease {
@@ -1729,7 +1737,7 @@ async fn a_ready_receipt_does_not_invent_missing_target_metadata() {
     let (service, storage, metadata) = fixture(&directory.path().join("data"), provider.clone());
     let target = id();
     let lease = storage
-        .open_creation("person".into(), true)
+        .open_command("person".into(), "request".into(), CommandAccess::Creation)
         .await
         .unwrap()
         .unwrap();

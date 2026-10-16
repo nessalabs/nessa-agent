@@ -1,14 +1,15 @@
 //! Principal creation control records on the existing SQLite runtime.
 use super::{
-    record::{store_error, RecordStorage, Reservation},
+    record::{store_error, RecordStorage},
+    record_lifecycle::CommandReservation,
     save_batch::RecordRuntime,
     MAX_STORED_RECORD_BYTES,
 };
 use crate::application::agent_execution::{
     commands::{
-        CreationBinding, CreationFuture, CreationReceipt, CreationStage, CreationStorage,
-        CreationStorageError, CreationStorageLease, CreationTaskFault, MutationBinding,
-        MutationOperation, MutationOutcome, MutationReceipt, MutationStage,
+        CommandAccess, CreationBinding, CreationFuture, CreationReceipt, CreationStage,
+        CreationStorage, CreationStorageError, CreationStorageLease, CreationTaskFault,
+        MutationBinding, MutationOperation, MutationOutcome, MutationReceipt, MutationStage,
     },
     permissions::ActionContext,
     sessions::StorageError,
@@ -19,8 +20,13 @@ use event_stream::{
     StreamId, StreamKey,
 };
 use sha2::{Digest, Sha256};
-use std::{collections::HashMap, sync::Arc};
-use tokio::sync::Mutex;
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex as RegistryMutex, Weak},
+};
+#[cfg(test)]
+use tokio::sync::{oneshot, Notify};
+use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore};
 
 pub(super) const CONTROL_STREAM_PREFIX: &str = "nessa:commands:";
 const SCHEMA: &str = "nessa.creation";
@@ -36,58 +42,154 @@ const PAGE: PageLimits = PageLimits {
     max_bytes: MAX_STORED_RECORD_BYTES,
 };
 
-struct Control {
-    inner: Arc<ControlInner>,
+/// Idle principal states are weak, and pruned before inserting another state.
+/// Owner/read admission bounds the live entries before this registry is touched.
+#[derive(Default)]
+pub(super) struct Controls {
+    states: RegistryMutex<HashMap<String, Weak<ControlInner>>>,
 }
+impl Controls {
+    fn get(
+        &self,
+        runtime: RecordRuntime,
+        principal: String,
+    ) -> Result<Arc<ControlInner>, StorageError> {
+        let mut states = self
+            .states
+            .lock()
+            .map_err(|_| corrupt("command registry poisoned"))?;
+        states.retain(|_, state| state.strong_count() > 0);
+        if let Some(state) = states.get(&principal).and_then(Weak::upgrade) {
+            return Ok(state);
+        }
+        let state = Arc::new(ControlInner {
+            runtime,
+            principal: principal.clone(),
+            state: Mutex::new(None),
+            #[cfg(test)]
+            publication_fault: RegistryMutex::new(None),
+        });
+        states.insert(principal, Arc::downgrade(&state));
+        Ok(state)
+    }
+}
+
+#[derive(Clone)]
+struct Control {
+    // Detached reads and writes clone this entire handle, retaining its exact
+    // request/read reservation rather than only the shared principal state.
+    _reservation: Arc<CommandReservation>,
+    inner: Arc<ControlInner>,
+    request: String,
+    access: CommandAccess,
+    operations: Arc<Semaphore>,
+}
+#[derive(Clone)]
 enum Held {
     Creation(CreationReceipt),
     Mutation(MutationReceipt),
 }
 struct ControlInner {
-    _reservation: Reservation,
     runtime: RecordRuntime,
-    stream: StreamKey,
     principal: String,
-    receipts: Mutex<HashMap<String, Held>>,
-    writable: bool,
+    // None is an uninitialized or absent stream, upgradeable by a writer.
+    state: Mutex<Option<ControlState>>,
+    #[cfg(test)]
+    publication_fault: RegistryMutex<Option<PublicationFault>>,
+}
+#[cfg(test)]
+enum PublicationFault {
+    LoseReply,
+    Panic,
+    Gate(Arc<Notify>, oneshot::Receiver<()>),
+}
+#[cfg(test)]
+impl ControlInner {
+    async fn before_publication(&self) -> Result<(), CreationStorageError> {
+        let fault = self.publication_fault.lock().unwrap().take();
+        match fault {
+            Some(PublicationFault::LoseReply) => {
+                Err(StorageError::Io("injected command acknowledgement loss".into()).into())
+            }
+            Some(PublicationFault::Panic) => panic!("injected command publication panic"),
+            Some(PublicationFault::Gate(entered, release)) => {
+                entered.notify_one();
+                let _ = release.await;
+                Ok(())
+            }
+            None => Ok(()),
+        }
+    }
+}
+struct ControlState {
+    stream: StreamKey,
+    receipts: HashMap<String, Held>,
+    dirty: bool,
+}
+impl ControlState {
+    async fn reconcile(&mut self, inner: &ControlInner) -> Result<(), StorageError> {
+        if self.dirty {
+            self.receipts = replay(&inner.runtime, &self.stream, &inner.principal).await?;
+            self.dirty = false;
+        }
+        Ok(())
+    }
 }
 impl CreationStorage for RecordStorage {
-    fn open_creation(
+    fn open_command(
         &self,
         principal: String,
-        create: bool,
+        request_id: String,
+        access: CommandAccess,
     ) -> CreationFuture<'_, Option<Arc<dyn CreationStorageLease>>> {
         Box::pin(async move {
-            // Validate identity before hashing it or retaining caller capacity.
-            let actor = ActionContext::new(&principal, "control", "lookup")
-                .map_err(|_| corrupt("invalid creation principal"))?;
+            let actor = ActionContext::new(&principal, "control", &request_id)
+                .map_err(|_| corrupt("invalid command identity"))?;
             let principal = actor.principal_id().to_owned();
-            let id = format!(
-                "{CONTROL_STREAM_PREFIX}{:x}",
-                Sha256::digest(principal.as_bytes())
-            );
-            let reservation = Reservation::acquire_creation(self.owner.clone(), &id)?;
-            let runtime = self.runtime().await?.clone();
+            let request = actor.request_id().to_owned();
+            let reservation = Arc::new(self.owner.command(&principal, &request, access)?);
+            let runtime = self.runtime_owner();
+            let controls = self.controls.clone();
             tokio::spawn(async move {
-                let id = StreamId::new(&id).map_err(|_| corrupt("invalid control stream ID"))?;
-                let stream = if create {
-                    runtime.create_stream(&id).await.map_err(store_error)?
-                } else {
-                    match runtime.find_stream(&id).await.map_err(store_error)? {
-                        Some(stream) => stream,
-                        None => return Ok::<_, CreationStorageError>(None),
-                    }
-                };
-                let receipts = replay(&runtime, &stream, &principal).await?;
-                Ok(Some(Arc::new(Control {
-                    inner: Arc::new(ControlInner {
-                        _reservation: reservation,
-                        runtime,
+                let inner = controls.get(runtime.await?, principal)?;
+                let mut state = inner.state.lock().await;
+                if state.is_none() {
+                    let id = StreamId::new(format!(
+                        "{CONTROL_STREAM_PREFIX}{:x}",
+                        Sha256::digest(inner.principal.as_bytes())
+                    ))
+                    .map_err(|_| corrupt("invalid control stream ID"))?;
+                    let stream = if access != CommandAccess::ReadOnly {
+                        inner
+                            .runtime
+                            .create_stream(&id)
+                            .await
+                            .map_err(store_error)?
+                    } else {
+                        match inner.runtime.find_stream(&id).await.map_err(store_error)? {
+                            Some(stream) => stream,
+                            None => return Ok(None),
+                        }
+                    };
+                    let receipts = replay(&inner.runtime, &stream, &inner.principal).await?;
+                    *state = Some(ControlState {
                         stream,
-                        principal,
-                        receipts: Mutex::new(receipts),
-                        writable: create,
-                    }),
+                        receipts,
+                        dirty: false,
+                    });
+                }
+                state
+                    .as_mut()
+                    .ok_or_else(|| corrupt("command stream not initialized"))?
+                    .reconcile(&inner)
+                    .await?;
+                drop(state);
+                Ok(Some(Arc::new(Control {
+                    _reservation: reservation,
+                    inner,
+                    request,
+                    access,
+                    operations: Arc::new(Semaphore::new(1)),
                 }) as Arc<dyn CreationStorageLease>))
             })
             .await
@@ -97,90 +199,133 @@ impl CreationStorage for RecordStorage {
         })
     }
 }
-impl CreationStorageLease for Control {
-    fn load(&self, request_id: &str) -> CreationFuture<'_, Option<CreationReceipt>> {
-        let request_id = request_id.to_owned();
-        let inner = self.inner.clone();
+impl Control {
+    fn operation(&self) -> Result<OwnedSemaphorePermit, CreationStorageError> {
+        self.operations
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| StorageError::Busy.into())
+    }
+    fn load_held(&self, request: &str) -> CreationFuture<'_, Option<Held>> {
+        if request != self.request {
+            return Box::pin(async { Err(StorageError::IdentityMismatch.into()) });
+        }
+        let operation = match self.operation() {
+            Ok(operation) => operation,
+            Err(error) => return Box::pin(async move { Err(error) }),
+        };
+        let control = self.clone();
         Box::pin(async move {
-            match inner.receipts.lock().await.get(&request_id) {
-                Some(Held::Creation(receipt)) => Ok(Some(receipt.clone())),
+            tokio::spawn(async move {
+                let _operation = operation;
+                // Capture the claim explicitly: field-precise closure capture
+                // otherwise keeps only inner/request, releasing ownership early.
+                let _reservation = control._reservation;
+                let mut guard = control.inner.state.lock().await;
+                let state = guard
+                    .as_mut()
+                    .ok_or_else(|| corrupt("command stream not initialized"))?;
+                state.reconcile(&control.inner).await?;
+                Ok(state.receipts.get(&control.request).cloned())
+            })
+            .await
+            .map_err(|error| {
+                CreationStorageError::TaskFault(CreationTaskFault::from_join_error(error))
+            })?
+        })
+    }
+    fn save_held(&self, receipt: Held) -> CreationFuture<'_, ()> {
+        let operation = match self.operation() {
+            Ok(operation) => operation,
+            Err(error) => return Box::pin(async move { Err(error) }),
+        };
+        let control = self.clone();
+        Box::pin(async move {
+            tokio::spawn(async move {
+                let _operation = operation;
+                let _reservation = control._reservation;
+                let (actor, class) = match &receipt {
+                    Held::Creation(receipt) => (receipt.binding().actor(), CommandAccess::Creation),
+                    Held::Mutation(receipt) => (
+                        receipt.binding().actor(),
+                        match receipt.binding().operation() {
+                            MutationOperation::Submit => CommandAccess::Submit,
+                            MutationOperation::Stop => CommandAccess::Stop,
+                        },
+                    ),
+                };
+                if actor.principal_id() != control.inner.principal
+                    || actor.request_id() != control.request
+                {
+                    return Err(StorageError::IdentityMismatch.into());
+                }
+                if class != control.access {
+                    return Err(corrupt("command handle does not permit this write").into());
+                }
+                let mut guard = control.inner.state.lock().await;
+                let state = guard
+                    .as_mut()
+                    .ok_or_else(|| corrupt("command stream not initialized"))?;
+                state.reconcile(&control.inner).await?;
+                let event = match &receipt {
+                    Held::Creation(receipt) => {
+                        check_creation(&state.receipts, receipt)?;
+                        encode(receipt)?
+                    }
+                    Held::Mutation(receipt) => {
+                        check_mutation(&state.receipts, receipt)?;
+                        encode_mutation(receipt)?
+                    }
+                };
+                // A failure or panic can follow a physical commit. Leave dirty
+                // until publication succeeds, so no later decision uses stale
+                // receipt state. Outstanding work retains this request's claim.
+                state.dirty = true;
+                control
+                    .inner
+                    .runtime
+                    .append(&state.stream, event)
+                    .await
+                    .map_err(store_error)?;
+                #[cfg(test)]
+                control.inner.before_publication().await?;
+                state.receipts.insert(control.request.clone(), receipt);
+                state.dirty = false;
+                Ok::<_, CreationStorageError>(())
+            })
+            .await
+            .map_err(|error| {
+                CreationStorageError::TaskFault(CreationTaskFault::from_join_error(error))
+            })?
+        })
+    }
+}
+impl CreationStorageLease for Control {
+    fn load(&self, request: &str) -> CreationFuture<'_, Option<CreationReceipt>> {
+        let loaded = self.load_held(request);
+        Box::pin(async move {
+            match loaded.await? {
+                Some(Held::Creation(receipt)) => Ok(Some(receipt)),
                 Some(Held::Mutation(_)) => Err(CreationStorageError::ForeignRequest),
                 None => Ok(None),
             }
         })
     }
     fn save(&self, receipt: CreationReceipt) -> CreationFuture<'_, ()> {
-        let inner = self.inner.clone();
-        Box::pin(async move {
-            tokio::spawn(async move {
-                if !inner.writable {
-                    return Err(corrupt("read-only creation lease").into());
-                }
-                if receipt.binding().actor().principal_id() != inner.principal {
-                    return Err(StorageError::IdentityMismatch.into());
-                }
-                let mut receipts = inner.receipts.lock().await;
-                check_creation(&receipts, &receipt)?;
-                let event = encode(&receipt)?;
-                // Outstanding append keeps this same principal reservation even
-                // when its caller stops waiting. Event identity stays unchanged.
-                inner
-                    .runtime
-                    .append(&inner.stream, event)
-                    .await
-                    .map_err(store_error)?;
-                receipts.insert(
-                    receipt.binding().actor().request_id().into(),
-                    Held::Creation(receipt),
-                );
-                Ok::<_, CreationStorageError>(())
-            })
-            .await
-            .map_err(|error| {
-                CreationStorageError::TaskFault(CreationTaskFault::from_join_error(error))
-            })?
-        })
+        self.save_held(Held::Creation(receipt))
     }
-    fn load_mutation(&self, request_id: &str) -> CreationFuture<'_, Option<MutationReceipt>> {
-        let request_id = request_id.to_owned();
-        let inner = self.inner.clone();
+    fn load_mutation(&self, request: &str) -> CreationFuture<'_, Option<MutationReceipt>> {
+        let loaded = self.load_held(request);
         Box::pin(async move {
-            match inner.receipts.lock().await.get(&request_id) {
-                Some(Held::Mutation(receipt)) => Ok(Some(receipt.clone())),
+            match loaded.await? {
+                Some(Held::Mutation(receipt)) => Ok(Some(receipt)),
                 Some(Held::Creation(_)) => Err(CreationStorageError::ForeignRequest),
                 None => Ok(None),
             }
         })
     }
     fn save_mutation(&self, receipt: MutationReceipt) -> CreationFuture<'_, ()> {
-        let inner = self.inner.clone();
-        Box::pin(async move {
-            tokio::spawn(async move {
-                if !inner.writable {
-                    return Err(corrupt("read-only creation lease").into());
-                }
-                if receipt.binding().actor().principal_id() != inner.principal {
-                    return Err(StorageError::IdentityMismatch.into());
-                }
-                let mut receipts = inner.receipts.lock().await;
-                check_mutation(&receipts, &receipt)?;
-                let event = encode_mutation(&receipt)?;
-                inner
-                    .runtime
-                    .append(&inner.stream, event)
-                    .await
-                    .map_err(store_error)?;
-                receipts.insert(
-                    receipt.binding().actor().request_id().into(),
-                    Held::Mutation(receipt),
-                );
-                Ok::<_, CreationStorageError>(())
-            })
-            .await
-            .map_err(|error| {
-                CreationStorageError::TaskFault(CreationTaskFault::from_join_error(error))
-            })?
-        })
+        self.save_held(Held::Mutation(receipt))
     }
 }
 fn check_creation(
@@ -516,3 +661,7 @@ fn corrupt(message: &str) -> StorageError {
 #[cfg(test)]
 #[path = "../../../tests/infrastructure/session_storage/creation.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../../../tests/infrastructure/session_storage/command_recovery.rs"]
+mod recovery_tests;

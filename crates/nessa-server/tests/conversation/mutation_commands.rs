@@ -2,8 +2,8 @@
 use super::*;
 use crate::conversation::{
     application::{
-        ConversationAccessPolicyEvaluator, ConversationDependencies, ConversationLimits,
-        ConversationRepository, ProviderSessionErasers, RequestedConversation,
+        ConversationAccessPolicyEvaluator, ConversationCreationAudit, ConversationDependencies,
+        ConversationLimits, ConversationRepository, ProviderSessionErasers, RequestedConversation,
     },
     domain::ConversationDeletion,
     infrastructure::LocalConversationStore,
@@ -31,6 +31,9 @@ use tokio::sync::oneshot;
 
 #[path = "mutation_admission.rs"]
 mod admission;
+
+#[path = "stop_admission.rs"]
+mod stop_admission;
 
 fn caller_on(request: &str, surface: &str) -> ConversationCaller {
     ConversationCaller {
@@ -108,6 +111,44 @@ fn fixture_admitted_by(
     Arc<RecordStorage>,
     Arc<LocalConversationStore>,
 ) {
+    fixture_audited_by(
+        root,
+        provider,
+        environment,
+        policy,
+        Arc::new(AcceptingCreationAudit),
+    )
+}
+
+fn fixture_with_creation_audit(
+    root: &Path,
+    provider: Arc<ProviderFactory>,
+    audit: Arc<dyn ConversationCreationAudit>,
+) -> (
+    ConversationService,
+    Arc<RecordStorage>,
+    Arc<LocalConversationStore>,
+) {
+    fixture_audited_by(
+        root,
+        provider,
+        crate::conversation::infrastructure::in_process_environment().into(),
+        crate::conversation_test_support::access_policy(),
+        audit,
+    )
+}
+
+fn fixture_audited_by(
+    root: &Path,
+    provider: Arc<ProviderFactory>,
+    environment: crate::conversation::application::Environments,
+    policy: Arc<dyn ConversationAccessPolicyEvaluator>,
+    audit: Arc<dyn ConversationCreationAudit>,
+) -> (
+    ConversationService,
+    Arc<RecordStorage>,
+    Arc<LocalConversationStore>,
+) {
     nessa_local_storage::create_directory(root).unwrap();
     let storage = Arc::new(RecordStorage::new(root.join("records")).unwrap());
     let metadata = Arc::new(
@@ -122,7 +163,7 @@ fn fixture_admitted_by(
             storage: storage.clone(),
             metadata: metadata.clone(),
             mode_audit: Arc::new(AcceptingModeAudit),
-            creation_audit: Arc::new(AcceptingCreationAudit),
+            creation_audit: audit,
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
             summaries: metadata.clone(),
