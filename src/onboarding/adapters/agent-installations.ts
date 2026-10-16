@@ -7,19 +7,22 @@ import type {
 
 /** Uses the composition-owned authenticated session; no URL or path comes from UI. */
 export function gatewayAgentInstallations(
-  agents: () => AgentsApi | undefined,
+  agents: () => AgentsApi | undefined | Promise<AgentsApi | undefined>,
   requestId: () => string,
   subscribe: (listener: () => void) => () => void,
 ): AgentInstallations {
   return {
     subscribe,
     async offers() {
-      const api = agents()
+      const api = await agents()
       if (!api) throw new Error("Gateway is not connected")
       return (await api.installOptions()).agents
     },
     async install(agent): Promise<InstallationOutcome> {
-      const api = agents()
+      // No session means no request was sent, so nothing can still be running.
+      const api = await Promise.resolve()
+        .then(agents)
+        .catch(() => undefined)
       if (!api) return { status: "failed", reason: "unavailable" }
       try {
         const result = await api.install(agent, requestId())

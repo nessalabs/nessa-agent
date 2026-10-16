@@ -1,3 +1,4 @@
+import { WorkspaceSendFailure } from "../../../../src/desktop/workspace/ui/send-failure"
 /** The real transcript over typed auth-required evidence and a controllable login port. */
 import { createRef } from "react"
 import { createRoot } from "react-dom/client"
@@ -276,6 +277,7 @@ createRoot(container).render(
   <Provider store={store}>
     <ClockProvider now={() => 1000}>
       <Transcript sessionId="b" scrollRef={createRef()} onHeadingVisible={() => {}} />
+      <WorkspaceSendFailure sessionId="b" />
     </ClockProvider>
   </Provider>,
 )

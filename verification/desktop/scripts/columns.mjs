@@ -24,6 +24,10 @@
  *                    between where they were and where they land: still, in a
  *                    window whose controls are placed from its edge (macOS),
  *                    and never under its traffic lights.
+ *   titlebar-row     the titlebar's controls are centred 24px below the window's
+ *                    top, the line the host centres the traffic lights on
+ *                    (`src-tauri/src/platform/macos/traffic_lights.rs`), in
+ *                    every frame of a sidebar toggle, with the rail open and closed.
  *   rail-off         the rail is a preview, off until Settings › Advanced ›
  *                    Experimental turns it on: off, there is no rail and no
  *                    toggle, nothing sits where the rail would, and "nessa
@@ -35,13 +39,17 @@ import { attempt, CannotRun } from "./lib/cli.mjs"
 import { need, openPage, withEngines } from "./lib/browser.mjs"
 import { main } from "./lib/run.mjs"
 import { css, keys, selectorFor, storage } from "./lib/selectors.mjs"
-import { frames, settled } from "./lib/workspace.mjs"
+import { frames, settled, openPanes } from "./lib/workspace.mjs"
 
 const checks = [
   "no-overlap",
+  "content-visible",
+  "pane-level",
   "rail-corner",
   "rail-view-inert",
+  "rail-loading",
   "titlebar-steady",
+  "titlebar-row",
   "rail-off",
   "overview-covers",
   "rail-fold-focus",
@@ -62,6 +70,8 @@ Usage: node verification/desktop/scripts/columns.mjs [options]
   --sizes <list>   Window sizes (default 1440x900,1000x700,760x700; --quick: the first).
 
 Checks, per engine, layout and size:
+  pane-level      focus changes only the rim, not pane fill or elevation, in both themes
+  content-visible pane bodies and fill stay visible through sidebar/list toggles
   no-overlap       every combination of the rail, the sidebar, the session list
                    (columns layout) and the overview leaves the drawn columns in
                    order, none overlapping the next, none past the window's edges
@@ -69,8 +79,12 @@ Checks, per engine, layout and size:
                    both closed; "nessa Studio" holds its place between Agents
                    and a full view and is never under the toggle
   rail-view-inert  ⌘B, ⌘0 and ⌥⌘S under a full view change nothing behind it
+  rail-loading     an item's view opens empty; still loading at 3 s it shows
+                   only the kit's sweeping text, with no panel or border
   titlebar-steady  through a rail toggle the titlebar's controls stay between
                    where they were and where they land, every frame
+  titlebar-row     the titlebar's controls are centred 24px down, on the traffic
+                   lights' line, in every frame of ⌘B closing and opening the sidebar
   rail-off         with the preview off (the default): no rail, no toggle
   overview-covers  with the Agents overview open, the session list and the
                    panes under it are inert
@@ -324,6 +338,217 @@ const body = {
     return { runs, failures }
   },
 
+  "pane-level": async ({ page }) => {
+    await openPanes(page, 2)
+    const failures = []
+    const runs = []
+    for (const theme of ["dark", "light"]) {
+      await page.evaluate(
+        (theme) => document.documentElement.classList.toggle("dark", theme === "dark"),
+        theme,
+      )
+      for (const focused of [0, 1]) {
+        await page.locator(css.composer).nth(focused).focus()
+        await settled(page)
+        const surfaces = await page.evaluate(
+          (selector) =>
+            [...document.querySelectorAll(selector)].map((element) => {
+              const style = getComputedStyle(element)
+              return {
+                fill: style.backgroundColor,
+                shadow: style.boxShadow
+                  .split(/,(?![^()]*\))/)
+                  .filter((part) => !part.includes("inset"))
+                  .map((part) => part.trim())
+                  .join(","),
+              }
+            }),
+          css.pane,
+        )
+        runs.push({ theme, focused, surfaces })
+        if (
+          surfaces.length !== 2 ||
+          surfaces[0].fill !== surfaces[1].fill ||
+          surfaces[0].shadow !== surfaces[1].shadow
+        )
+          failures.push(
+            `${theme}, focus ${focused}: panes have different fill or elevation`,
+          )
+      }
+    }
+    return { runs, failures }
+  },
+
+  "content-visible": async ({ page, layout }) => {
+    const runs = []
+    const failures = []
+    const actions = [keys.toggleSidebar, keys.toggleSidebar]
+    if (layout === "columns") actions.push(keys.toggleSessionList, keys.toggleSessionList)
+    for (const key of actions) {
+      await settled(page)
+      await page.evaluate(
+        ({ pane, body }) => {
+          // Each pane with the opacity of every box from its body up to it, so a
+          // partial dim fails as surely as a blackout.
+          const observed = [...document.querySelectorAll(pane)].map((element) => {
+            const chain = []
+            for (
+              let at = element.querySelector(body);
+              at && at !== element.parentElement;
+              at = at.parentElement
+            )
+              chain.push({ at, opacity: Number(getComputedStyle(at).opacity) })
+            return { element, fill: getComputedStyle(element).backgroundColor, chain }
+          })
+          const chrome = document.querySelector("[data-sidebar]")
+          window.__contentFrames = {
+            running: true,
+            frames: 0,
+            failures: [],
+            before: `${chrome?.dataset.sidebar}/${document.querySelector("[data-list]")?.dataset.list}`,
+            geometry: new Set(),
+          }
+          const sample = () => {
+            const result = window.__contentFrames
+            if (!result.running) return
+            result.frames++
+            const first = observed[0]?.element.getBoundingClientRect()
+            if (first)
+              result.geometry.add(`${first.left.toFixed(1)},${first.width.toFixed(1)}`)
+            for (const { element, fill, chain } of observed) {
+              if (!element.isConnected) {
+                result.failures.push("pane was replaced during a chrome toggle")
+                continue
+              }
+              const contents = element.querySelector(body)
+              if (!contents) {
+                result.failures.push("pane body disappeared")
+                continue
+              }
+              for (
+                let at = contents;
+                at && at !== element.parentElement;
+                at = at.parentElement
+              ) {
+                const style = getComputedStyle(at)
+                if (
+                  style.contentVisibility === "hidden" ||
+                  style.visibility === "hidden" ||
+                  style.display === "none" ||
+                  Number(style.opacity) === 0
+                )
+                  result.failures.push(
+                    `${at.className}: content hidden during transition`,
+                  )
+              }
+              for (const { at, opacity } of chain)
+                if (at.isConnected && Number(getComputedStyle(at).opacity) < opacity)
+                  result.failures.push(
+                    `${at.className}: content dimmed during transition`,
+                  )
+              if (getComputedStyle(element).backgroundColor !== fill)
+                result.failures.push("pane fill changed during transition")
+            }
+            requestAnimationFrame(sample)
+          }
+          sample()
+        },
+        { pane: css.pane, body: css.paneBody },
+      )
+      try {
+        await page.keyboard.press(key)
+        await settled(page)
+        await frames(page)
+        const result = await page.evaluate(() => {
+          const result = window.__contentFrames
+          result.running = false
+          const chrome = document.querySelector("[data-sidebar]")
+          return {
+            frames: result.frames,
+            failures: result.failures,
+            before: result.before,
+            after: `${chrome?.dataset.sidebar}/${document.querySelector("[data-list]")?.dataset.list}`,
+            positions: result.geometry.size,
+          }
+        })
+        runs.push({ key, frames: result.frames, positions: result.positions })
+        if (result.frames < 2) failures.push(`${key}: no transition frames sampled`)
+        // The toggle took effect and the pane travelled through at least one
+        // place between where it was and where it ended.
+        if (result.before === result.after)
+          failures.push(`${key}: the toggle changed nothing`)
+        else if (result.positions < 3)
+          failures.push(`${key}: the pane jumped to its new place without moving`)
+        failures.push(
+          ...[...new Set(result.failures)].map((message) => `${key}: ${message}`),
+        )
+      } finally {
+        await page.evaluate(() => {
+          window.__contentFrames.running = false
+        })
+      }
+    }
+    return { runs, failures }
+  },
+
+  "titlebar-row": async ({ page, size }) => {
+    const failures = []
+    const runs = []
+    for (const rail of [true, false]) {
+      await arrange(page, size, { rail, sidebar: true })
+      for (const step of ["close", "open"]) {
+        await page.evaluate(
+          (sel) => {
+            window.__titlebarRows = []
+            const start = performance.now()
+            const tick = () => {
+              const titlebar = document.querySelector(sel.titlebar)
+              const half = titlebar ? titlebar.getBoundingClientRect().height / 2 : null
+              const centres = [...document.querySelectorAll(sel.controls)]
+                .filter((button) => getComputedStyle(button).visibility !== "hidden")
+                .map((button) => {
+                  const box = button.getBoundingClientRect()
+                  return {
+                    name: button.getAttribute("aria-label"),
+                    y: box.top + box.height / 2,
+                  }
+                })
+              window.__titlebarRows.push({ half, centres })
+              if (performance.now() - start < 700) requestAnimationFrame(tick)
+            }
+            requestAnimationFrame(tick)
+          },
+          { titlebar: css.titlebar, controls: `${css.titlebar} .desktop-icon-button` },
+        )
+        await page.keyboard.press(keys.toggleSidebar)
+        await rest(page, size)
+        const frames = await page.evaluate(() => window.__titlebarRows)
+        if (!frames.length || frames.some((frame) => frame.centres.length === 0))
+          throw new Error(
+            `rail ${rail ? "open" : "closed"}, ${step}: no titlebar control measured`,
+          )
+        runs.push({ rail, step, frames: frames.length })
+        // 24px is the native row centre too: the host reads the same height
+        // from styles.css (`src-tauri/titlebar_geometry.rs`).
+        for (const frame of frames) {
+          if (frame.half !== 24)
+            failures.push(
+              `rail ${rail ? "open" : "closed"}, ${step}: ` +
+                (frame.half === null
+                  ? "no titlebar"
+                  : `the titlebar is ${frame.half * 2}px tall, not 48`),
+            )
+          for (const { name, y } of frame.centres)
+            if (Math.abs(y - 24) > 0.5)
+              failures.push(
+                `rail ${rail ? "open" : "closed"}, ${step}: ${name} centred at ${y.toFixed(1)}px, not 24`,
+              )
+        }
+      }
+    }
+    return { runs, failures: [...new Set(failures)] }
+  },
+
   "rail-off": async ({ page }) => {
     const seen = await page.evaluate(
       ({ rail, toggle, frame, workspace, identity }) => ({
@@ -450,6 +675,63 @@ const body = {
         failures.push(`back in Agents, ${name} is ${after[name]} (was ${value})`)
     }
     return { before, under, after, failures }
+  },
+
+  "rail-loading": async ({ page, size }) => {
+    await arrange(page, size, { rail: true, sidebar: true })
+    const railDrawn = await page.evaluate(
+      (frame) => document.querySelector(frame)?.dataset.rail === "open",
+      css.workspaceWindow,
+    )
+    if (!railDrawn) throw new CannotRun("no room for the side rail at this size")
+    const loader = () =>
+      page.evaluate(() => {
+        const view = document.querySelector(".rail-view")
+        const text = view?.querySelector(".rail-view-loading")
+        if (!view || !text) return { view: view !== null, text: null }
+        // Every box from the text up to the view: none may draw a frame.
+        const framed = []
+        for (let el = text; el && el !== view; el = el.parentElement) {
+          const style = getComputedStyle(el)
+          if (
+            parseFloat(style.borderTopWidth) > 0 ||
+            style.backgroundColor !== "rgba(0, 0, 0, 0)"
+          )
+            framed.push(el.className || el.tagName)
+        }
+        const sweep = text.firstElementChild
+        return {
+          view: true,
+          text: text.textContent,
+          slot: text.getAttribute("data-slot"),
+          panel: view.querySelector('[data-slot="generating-surface"]') !== null,
+          framed,
+          sweeping: sweep ? sweep.getAnimations().length > 0 : false,
+          reduced: matchMedia("(prefers-reduced-motion: reduce)").matches,
+        }
+      })
+    await page.locator(selectorFor.railItem("files")).click()
+    const opened = await loader()
+    await page.waitForTimeout(3300)
+    const late = await loader()
+    // Back to Agents, so the sweep stops before the next check.
+    await page.locator(selectorFor.railItem("agents")).click()
+    const failures = []
+    if (!opened.view) failures.push("choosing Files drew no view")
+    if (opened.text !== null)
+      failures.push(`the view opened with a loader already: "${opened.text}"`)
+    if (late.text === null) failures.push("no loader 3.3 s after choosing Files")
+    else {
+      if (late.slot !== "loading-text")
+        failures.push(`the loader is ${late.slot}, not the kit's LoadingText`)
+      if (!late.text.includes("Loading Files"))
+        failures.push(`the loader reads "${late.text}"`)
+      if (late.panel) failures.push("a generating-surface panel is drawn")
+      if (late.framed.length)
+        failures.push(`boxes around the text: ${late.framed.join(", ")}`)
+      if (!late.reduced && !late.sweeping) failures.push("the text is not sweeping")
+    }
+    return { opened, late, failures }
   },
 }
 

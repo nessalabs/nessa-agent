@@ -37,6 +37,7 @@ change retained-cache authority.
 The public enrollment/retained API is `pairing::{NativeEnrollmentClient, NativeClientError,
 NativeRetryOutcome}`, `retained::{RetainedCache, ReaderAccess, ReaderRole, ReadStop,
 ReadReport, ReadFailure, ConversationFeed, FeedEvent, SubscribeError}` and its typed saved catalogue/transcript/progress values,
+`outbox::{PhoneOutbox, PhoneIntent, PhoneOutcome, IntentStore, IntentEvent, StoreError, open}`,
 and, with `cli`, `composition::{execute, run_read_only_example}`.
 Gateway enrollment tests use the former; gateway online tests/child fixtures use
 `execute`; the example uses `run_read_only_example`. The crate root publishes an
@@ -68,6 +69,9 @@ borrowed accessors; its compile-fail example checks that the view cannot be muta
 | `src/product.rs`, `src/product/` | Bounded native product pump, injected socket/interrupt/wake ports, actual ready and original ticket/settlement handles. No bootstrap proxy, retry or second method-schema owner. |
 | `src/protected.rs`, `src/protected/deadline_stream.rs` | Shared incremental frame/TLS transport and first typed physical failure; distinct terminal retained deadlines and finite product poll ticks. |
 | `src/pairing/owner_phone.rs` | Nonnetwork original preparation/restoration through Auth private-store/crypto owners; separate initial and restore APIs, no replacement key for missing/incomplete originals. No remote approval or issuance. |
+| `src/outbox/domain/` | One typed phone send, its canonical bytes, and the outcome a gateway answer becomes. No store and no socket. |
+| `src/outbox/application/` | Save the send, ask `conversation.send`, and read `conversation.receipt` before any later send. The store and the gateway are ports. |
+| `src/outbox/infrastructure/` | One private SQLite file for the command and its audit row, and the product frames for those two calls. |
 | `src/pairing/client.rs` | Native enrollment, strict pinned status and retry, pending-state publication and one retained physical worker. Shared framing and enrollment socket policy come from `nessa-protocol::pairing`. |
 | `src/retained/device.rs` | Library composition of that physical worker and the existing purge policy; immutable admission-scoped status/purge results and durable purge receipt lookup. No CLI or second worker. |
 | `src/retained.rs`, `src/retained/saved.rs`, `src/retained/subscribe.rs` | Public bounded owner/granted checkpoint read over the existing driver, plus typed saved scope/page/transcript/progress projections delegating to the same SQLite and passive-view owners. `subscribe` follows one conversation with `conversation.subscribe` on a new pinned session to the same gateway and does not write a checkpoint. No CLI or additional receiver. |
@@ -81,6 +85,7 @@ borrowed accessors; its compile-fail example checks that the view cannot be muta
 | `examples/read_only_sync.rs` | Standalone executable using `composition::run_read_only_example`. |
 | `tests/protected/` | Shared physical deadline/first-cause and cancellation evidence for the protected byte stream. |
 | `tests/product/` | Real pinned TLS opening, idle/partial traffic, original request IDs, permit retention, typed deadlines/failures and independent physical drain. |
+| `tests/outbox/` | Phone outbox ordering, canonical bytes, and product-frame evidence, included by the library with `#[path]`. |
 | `tests/read_only_sync/` | Matching domain, application, gateway and private-cache boundary evidence, included by the library with `#[path]`. |
 | `tests/composition/` | Private profile, code-input, command diagnostic, and composed `fetch` (scripted native peer, real files) evidence. Real authenticated online process tests remain in `nessa-server/tests/composition/read_only_online.rs`. |
 | `tests/pairing/owner_phone.rs` | Real private-key publication, exact signed original/digest replay, cold corruption, reserved/missing refusal, before-entropy ordering and concurrent first reservations. |

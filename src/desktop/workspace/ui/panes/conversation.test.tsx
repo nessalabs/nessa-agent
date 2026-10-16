@@ -93,7 +93,7 @@ async function sentWith(store: Store, source: FakeSource, sessionId: string) {
 }
 
 describe("a pane's composer shows the model the next message is sent with", () => {
-  it("follows a model an agent chooses, with the composer still mounted", async () => {
+  it("keeps the established model when an agent asks for an unsupported local switch", async () => {
     const { store, source } = await conversation()
     expect(shownModel()).toContain("Claude Opus 5")
     const mounted = field()
@@ -101,8 +101,13 @@ describe("a pane's composer shows the model the next message is sent with", () =
       store.dispatch(chooseModel({ sessionId: "a", model: astra }))
     })
     expect(field()).toBe(mounted)
-    expect(shownModel()).toContain("GPT-6 Astra")
-    expect(await sentWith(store, source, "a")).toEqual(astra)
+    expect(shownModel()).toContain("Claude Opus 5")
+    expect(
+      host.querySelector(".desktop-chip-model")?.getAttribute("disabled"),
+    ).not.toBeNull()
+    expect(await sentWith(store, source, "a")).toEqual(
+      store.getState().workspace.sessions.a.model,
+    )
   })
 
   it("follows a newer summary that moves the session to another model", async () => {

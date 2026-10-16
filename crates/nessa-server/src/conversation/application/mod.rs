@@ -18,8 +18,16 @@
 //! Service -> ConversationAttachments: a message may refer only to images this
 //! conversation uploaded, and closing the conversation lets them go.
 //! Passive read admission -> current auth, durable receiver binding, then
-//! metadata_target -> ownership repository. It refuses another target before
+//! metadata_target -> ownership repository. Product review notices receive its
+//! ConversationMetadataReader, which exposes checked loads without the repository.
+//! It refuses another target before
 //! ownership, grant/source or selection is consumed. It never opens an Agent.
+//! SelectReviewNotice owns checked metadata -> current recipient -> Cedar ->
+//! ReviewNoticeAuditor -> ReviewNoticeAudit. Only durable acknowledgement returns
+//! an opaque AuditedReviewSelection. Product owns whole-candidate revalidation
+//! and UI admission; it does not reconstruct policy evidence. Composition closes
+//! the auditor's admission and observes its drain in ShutdownReport; that drain
+//! spans pre-policy selection and independently transferred acknowledgement.
 //! `record_read` admits each physical head or page against fresh authority
 //! before resolving SDK identity or opening a source.
 //! Service -> ConversationFileLinkAudit: a message may also point at files on
@@ -155,6 +163,7 @@ mod mcp_apps;
 mod metadata_target;
 pub(crate) use metadata_target::load_conversation;
 mod owner_phone_policy;
+pub(crate) use metadata_target::ConversationMetadataReader;
 mod passive_read;
 mod permission_rules;
 pub use passive_read::AdmittedCatalogueRead;
@@ -163,6 +172,13 @@ mod ports;
 mod provider_sessions;
 mod record_read;
 mod retries;
+mod review_notice_audit;
+pub use review_notice_audit::{
+    ReviewNoticeAudit, ReviewNoticeAuditCause, ReviewNoticeAuditFailure, ReviewNoticeAuditRecord,
+    ReviewNoticeAuditor, ReviewNoticeClock, ReviewNoticeSleep,
+};
+mod review_notice_selection;
+pub(crate) use review_notice_selection::{AuditedReviewSelection, SelectReviewNotice};
 mod service;
 mod session_key;
 mod share_grants;

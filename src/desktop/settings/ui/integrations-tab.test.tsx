@@ -211,6 +211,9 @@ describe("Integrations", () => {
       ["Edit", "Inspect", "Remove"].map((text) => Boolean(button(text, row))),
     ).toEqual([true, true, true])
     expect(managed.textContent).toContain("Managed by Nessa")
+    expect(managed.querySelector("code")).toBeNull()
+    expect(managed.textContent).not.toContain(nessa.command)
+    expect(managed.textContent).toContain("Nessa")
     expect(managed.querySelectorAll("button:not([role=switch])").length).toBe(0)
     expect((managed.querySelector('[role="switch"]') as HTMLButtonElement).disabled).toBe(
       true,

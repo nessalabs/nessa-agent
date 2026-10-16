@@ -8,10 +8,10 @@ use crate::attachments::{
     entrypoint::http::UploadRoute,
 };
 use crate::conversation::application::{
-    CatalogueReadSource, ConversationAccessPolicyEvaluator, ConversationRepository,
-    ConversationService, FenceCapture, McpAppAudit, OwnerPhonePolicyEvaluator,
-    OwnerPhoneReceiverAuthority, ReceiverAuthority, RecordReadSource, ShareGrants, WatchCatalogue,
-    WatchNamespaces, WatchRecords,
+    CatalogueReadSource, ConversationAccessPolicyEvaluator, ConversationMetadataReader,
+    ConversationRepository, ConversationService, FenceCapture, McpAppAudit, OwnerPhonePolicyEvaluator,
+    OwnerPhoneReceiverAuthority, ReceiverAuthority, RecordReadSource, ReviewNoticeAuditor,
+    ShareGrants, WatchCatalogue, WatchNamespaces, WatchRecords,
 };
 use crate::conversation::infrastructure::UuidWatchNamespaces;
 pub(crate) use crate::core::limit_log::note_limit;
@@ -126,6 +126,11 @@ pub struct ProductRouteState {
     /// The read grants are also what every socket read asks for a paired
     /// device (`read_access`).
     pub(crate) passive_read: Option<PassiveReadAuthorities>,
+    /// Checked metadata dependency for review notices; composed with passive reads.
+    pub(crate) review_metadata: Option<ConversationMetadataReader>,
+    /// Admitted policy evidence outlives its publisher and precedes UI disclosure.
+    /// Host cleanup fences this shared owner and observes its admitted selections.
+    pub(crate) review_auditor: Option<Arc<ReviewNoticeAuditor>>,
     /// What decides a paired party's access to a conversation or a
     /// catalogue; set with `passive_read`.
     pub(crate) conversation_access: Option<Arc<dyn ConversationAccessPolicyEvaluator>>,
@@ -311,6 +316,8 @@ impl ProductRouteState {
             conversations: None,
             permission_rules: None,
             passive_read: None,
+            review_metadata: None,
+            review_auditor: None,
             conversation_access: None,
             record_source: None,
             catalogue_source: None,
@@ -422,8 +429,16 @@ impl ProductRouteState {
         share_grants: Arc<dyn ShareGrants>,
         access: Arc<dyn ConversationAccessPolicyEvaluator>,
     ) -> Self {
+        self.review_metadata = Some(ConversationMetadataReader::new(conversations.clone()));
         self.passive_read = Some((receivers, conversations, share_grants));
         self.conversation_access = Some(access);
+        self
+    }
+
+    /// Bind the shared application owner of unpaired review-policy audit attempts.
+    /// A route with metadata but without this dependency refuses review publication.
+    pub fn with_review_notice_auditor(mut self, auditor: Arc<ReviewNoticeAuditor>) -> Self {
+        self.review_auditor = Some(auditor);
         self
     }
 

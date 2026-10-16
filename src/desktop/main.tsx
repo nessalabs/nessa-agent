@@ -1,15 +1,20 @@
+import { nativeAgentApiKeys } from "../onboarding/adapters/agent-api-key"
+import { AgentSetupProvider } from "../onboarding"
+import { assignedAgentReadiness } from "../onboarding/adapters/agents"
 import type { NessaClient } from "@nessa/client"
 import * as React from "react"
 import { createRoot } from "react-dom/client"
 import { Provider } from "react-redux"
 import {
   host,
+  loadAssignedGatewayEndpoint,
   sandboxSchemeRegistered,
   signInToProvider,
   providerLoginAvailable,
   saveFile,
+  writeClipboardText,
 } from "../host"
-import { HeldFilesProvider } from "../conversation"
+import { ClipboardProvider, HeldFilesProvider } from "../conversation"
 import { ClockProvider } from "../clock"
 import { environmentFromVite } from "../env/vite"
 import { connectBrowserSession, createBrowserAuth } from "../session"
@@ -92,6 +97,18 @@ const dependencies = createDesktopDependencies({
     platform: platformFor(host.kind),
   },
 })
+const agentSetup =
+  backend === "host" && dependencies.agentInstallations
+    ? {
+        readiness: assignedAgentReadiness({
+          endpoint: () => loadAssignedGatewayEndpoint(environment.stage),
+        }),
+        installations: dependencies.agentInstallations,
+        apiKeys: nativeAgentApiKeys,
+        signIn: signInToProvider,
+        loginAvailable: providerLoginAvailable,
+      }
+    : undefined
 const store = makeDesktopStore(dependencies)
 bindConversationTitles((conversationId) => {
   const sessions = store.getState().workspace.sessions
@@ -108,31 +125,35 @@ if (!container) throw new Error("missing #root")
 createRoot(container).render(
   <React.StrictMode>
     <StartupMounted />
-    <Provider store={store}>
-      <WidgetRegistryProvider registry={dependencies.widgets}>
-        <ClockProvider now={dependencies.now}>
-          <SubagentsProvider source={dependencies.subagents}>
-            {/* Every icon in the window resolves through the family chosen in Settings. */}
-            <DesktopIconFamilyProvider>
-              <McpServersProvider gateway={dependencies.mcpServers}>
-                <LinkedDevicesProvider gateway={dependencies.linkedDevices}>
-                  <HeldFilesProvider read={dependencies.heldFiles} save={saveFile}>
-                    <NativeHooksProvider gateway={dependencies.nativeHooks}>
-                      <PermissionRulesProvider gateway={dependencies.permissionRules}>
-                        <DesktopWindow
-                          hostKind={host.kind}
-                          browserSurface={host.kind === "browser"}
-                          inspectable={import.meta.env.DEV}
-                        />
-                      </PermissionRulesProvider>
-                    </NativeHooksProvider>
-                  </HeldFilesProvider>
-                </LinkedDevicesProvider>
-              </McpServersProvider>
-            </DesktopIconFamilyProvider>
-          </SubagentsProvider>
-        </ClockProvider>
-      </WidgetRegistryProvider>
-    </Provider>
+    <AgentSetupProvider source={agentSetup}>
+      <Provider store={store}>
+        <WidgetRegistryProvider registry={dependencies.widgets}>
+          <ClockProvider now={dependencies.now}>
+            <SubagentsProvider source={dependencies.subagents}>
+              {/* Every icon in the window resolves through the family chosen in Settings. */}
+              <DesktopIconFamilyProvider>
+                <McpServersProvider gateway={dependencies.mcpServers}>
+                  <LinkedDevicesProvider gateway={dependencies.linkedDevices}>
+                    <ClipboardProvider write={writeClipboardText}>
+                      <HeldFilesProvider read={dependencies.heldFiles} save={saveFile}>
+                        <NativeHooksProvider gateway={dependencies.nativeHooks}>
+                          <PermissionRulesProvider gateway={dependencies.permissionRules}>
+                            <DesktopWindow
+                              hostKind={host.kind}
+                              browserSurface={host.kind === "browser"}
+                              inspectable={import.meta.env.DEV}
+                            />
+                          </PermissionRulesProvider>
+                        </NativeHooksProvider>
+                      </HeldFilesProvider>
+                    </ClipboardProvider>
+                  </LinkedDevicesProvider>
+                </McpServersProvider>
+              </DesktopIconFamilyProvider>
+            </SubagentsProvider>
+          </ClockProvider>
+        </WidgetRegistryProvider>
+      </Provider>
+    </AgentSetupProvider>
   </React.StrictMode>,
 )

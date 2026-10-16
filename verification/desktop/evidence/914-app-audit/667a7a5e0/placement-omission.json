@@ -1,0 +1,145 @@
+{
+  "check": "drag",
+  "ok": false,
+  "started": "2026-10-15T05:38:54.781Z",
+  "finished": "2026-10-15T05:38:58.379Z",
+  "target": {
+    "url": "http://127.0.0.1:1498/desktop.html",
+    "mode": "given"
+  },
+  "results": [
+    {
+      "ok": true,
+      "failures": [],
+      "engine": "chromium",
+      "layout": "columns",
+      "name": "console",
+      "harmless": [
+        "console.error: Failed to load resource: the server responded with a status of 404 (Not Found) (http://127.0.0.1:1498/favicon.ico)"
+      ]
+    },
+    {
+      "ok": false,
+      "failures": [
+        "pane 1 content inherited --cw: 0.5",
+        "pane 1 content inherited --cn: 3",
+        "pane 2 content inherited --cx: 0.5",
+        "pane 2 content inherited --cw: 0.25",
+        "pane 2 content inherited --ci: 1",
+        "pane 2 content inherited --cn: 3",
+        "pane 4 content inherited --cx: 0.75",
+        "pane 4 content inherited --cw: 0.25",
+        "pane 4 content inherited --ci: 2",
+        "pane 4 content inherited --cn: 3",
+        "pane 4 content inherited --rh: 0.5",
+        "pane 4 content inherited --rn: 2",
+        "pane 6 content inherited --cx: 0.75",
+        "pane 6 content inherited --cw: 0.25",
+        "pane 6 content inherited --ci: 2",
+        "pane 6 content inherited --cn: 3",
+        "pane 6 content inherited --ry: 0.5",
+        "pane 6 content inherited --rh: 0.5",
+        "pane 6 content inherited --ri: 1",
+        "pane 6 content inherited --rn: 2"
+      ],
+      "name": "pane-placement-local",
+      "engine": "chromium",
+      "layout": "columns",
+      "width": "1440x900",
+      "values": [
+        {
+          "key": "1",
+          "root": {
+            "cx": "0",
+            "cw": "0.5",
+            "ci": "0",
+            "cn": "3",
+            "ry": "0",
+            "rh": "1",
+            "ri": "0",
+            "rn": "1"
+          },
+          "child": {
+            "cx": "0",
+            "cw": "0.5",
+            "ci": "0",
+            "cn": "3",
+            "ry": "0",
+            "rh": "1",
+            "ri": "0",
+            "rn": "1"
+          }
+        },
+        {
+          "key": "2",
+          "root": {
+            "cx": "0.5",
+            "cw": "0.25",
+            "ci": "1",
+            "cn": "3",
+            "ry": "0",
+            "rh": "1",
+            "ri": "0",
+            "rn": "1"
+          },
+          "child": {
+            "cx": "0.5",
+            "cw": "0.25",
+            "ci": "1",
+            "cn": "3",
+            "ry": "0",
+            "rh": "1",
+            "ri": "0",
+            "rn": "1"
+          }
+        },
+        {
+          "key": "4",
+          "root": {
+            "cx": "0.75",
+            "cw": "0.25",
+            "ci": "2",
+            "cn": "3",
+            "ry": "0",
+            "rh": "0.5",
+            "ri": "0",
+            "rn": "2"
+          },
+          "child": {
+            "cx": "0.75",
+            "cw": "0.25",
+            "ci": "2",
+            "cn": "3",
+            "ry": "0",
+            "rh": "0.5",
+            "ri": "0",
+            "rn": "2"
+          }
+        },
+        {
+          "key": "6",
+          "root": {
+            "cx": "0.75",
+            "cw": "0.25",
+            "ci": "2",
+            "cn": "3",
+            "ry": "0.5",
+            "rh": "0.5",
+            "ri": "1",
+            "rn": "2"
+          },
+          "child": {
+            "cx": "0.75",
+            "cw": "0.25",
+            "ci": "2",
+            "cn": "3",
+            "ry": "0.5",
+            "rh": "0.5",
+            "ri": "1",
+            "rn": "2"
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -100,6 +100,21 @@ async function runOn(browser, rep, url, engine, width) {
       await attempt(rep, { engine, width, name: `run-on-${name}` }, async () => {
         const { page } = opened
         const failures = []
+        const geometry = await page.locator(css.runOnFixture).evaluate((node) => ({
+          height: node.getBoundingClientRect().height,
+          bottom: node.getBoundingClientRect().bottom,
+          viewport: document.documentElement.clientHeight,
+        }))
+        if (
+          Math.abs(geometry.height - geometry.viewport) > 1 ||
+          Math.abs(geometry.bottom - geometry.viewport) > 1
+        )
+          return {
+            geometry,
+            failures: [
+              `Run on fixture does not fill the viewport: ${JSON.stringify(geometry)}`,
+            ],
+          }
         const plus = page.getByRole("button", { name: /More options|Add attachment/ })
         await plus.click()
         const row = page.getByRole("button", { name: /^Run on/ })
@@ -107,6 +122,7 @@ async function runOn(browser, rep, url, engine, width) {
           const rows = await row.count()
           return {
             rows,
+            geometry,
             failures: [...(rows ? ["Run on is offered with no host"] : []), ...failures],
           }
         }
@@ -158,7 +174,7 @@ async function runOn(browser, rep, url, engine, width) {
             document.documentElement.scrollWidth > document.documentElement.clientWidth,
         )
         if (overflow) failures.push("the page scrolls horizontally")
-        return { texts, chosen, after, failures }
+        return { texts, chosen, after, geometry, failures }
       })
     } finally {
       await opened.close()

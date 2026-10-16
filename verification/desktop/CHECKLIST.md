@@ -126,6 +126,12 @@ controls — text, icons, images, code, or decorative art — in any frame.
   transcript, and the Agents overview — at 1440 × 900 and 1000 × 700.
   _Check:_ `safe-area.mjs`. It first proves the sampler catches a label placed
   at (8, 8) (`sampler-control`).
+- [ ] **The titlebar's controls and the traffic lights share one row**: the
+  controls are centred 24px below the window's top in every frame of ⌘B, rail
+  open and closed, and the host centres the native buttons on that same line.
+  _Check:_ `columns.mjs --only titlebar-row` for the page;
+  `cargo test -p nessa-app --no-default-features --test traffic_lights` for the
+  buttons in a real AppKit window (macOS) and the row height the two share.
 - [ ] **Column titles sit inline after the controls when they fit, below when
   they do not**, and an inline title never overlaps a titlebar control.
   _ADR 238 › The titlebar's safe area_ (`titlePlacement`).
@@ -278,6 +284,13 @@ Experimental turns it on; the rail stands beside the workspace in
   workspace at the window's edge. _Check:_ `columns.mjs --only rail-off`;
   `smoke.mjs` (Experimental offers the side rail's switch, off).
 
+- [ ] **Focused panes keep the same fill and elevation as their neighbors.**
+  A subtle rim identifies focus in both themes. _Check:_ `columns.mjs --only pane-level`.
+- [ ] **Conversation content stays visible during sidebar and session-list toggles.**
+  Pane bodies, including the composer, do not disappear and their fill does not
+  darken during motion. _Check:_ `columns.mjs --only content-visible` in both engines
+  and layouts. Drag previews and split flights must also retain content; verify
+  these with the drag and focus checks when changing their motion.
 - [ ] **No two columns overlap**, and nothing sits under the rail, in any
   combination of the rail, the sidebar, the session list and the Agents
   overview, at 1440, 1000 and 760 wide. _Check:_ `columns.mjs --only no-overlap`
@@ -289,6 +302,10 @@ Experimental turns it on; the rail stands beside the workspace in
   _Check:_ `columns.mjs --only rail-corner`.
 - [ ] **Under an item's full view the workspace takes no keys**: ⌘B, ⌘0 and
   ⌥⌘S change nothing behind it. _Check:_ `columns.mjs --only rail-view-inert`.
+- [ ] **An item's view opens empty, and a slow load shows only text**: no
+  loader before 3 s; still loading at 3 s, the kit's `LoadingText` sweeps
+  "Loading Files" with no panel or border around it. _Check:_
+  `columns.mjs --only rail-loading`.
 - [ ] **The titlebar's controls never pass under the window's controls while
   the rail opens or closes**: every frame draws them between where they were
   and where they land — still, in the macOS window. _Check:_
@@ -1385,7 +1402,10 @@ says why where the conversations would be.
   of its key, marked Paired; a choice is reported by its full name and shown
   on the row, and nothing scrolls sideways. The tray is the only place a host
   is chosen; the gateway refuses a host its `config.json` does not name, and a
-  paired machine that is not connected.
+  paired machine that is not connected. The fixture owns its viewport height;
+  the same checks measure its height and bottom against the viewport (within
+  1 px), keeping the tray at its foot without scanning test utilities into the
+  production CSS (#929).
 
 ## Restored local tab lifetimes
 
@@ -1793,3 +1813,39 @@ surfaces use.
 ## User attachments in desktop reads — #682
 
 `user-attachments.mjs` drives the production gateway projection and desktop message renderer at 360, 600 and 1440 pixels in Chromium and WebKit. Committed, pending and serialized/reopened image-only, linked-file-only and mixed inputs retain the exact image encoding/size and linked path, a labelled attachment list and adjacent text. The reference placeholders show no preview or action when bytes are unavailable and fit the surface within 1 pixel of overflow. Reloading the fixture preserves the same metadata. The mapper and browser regressions hold this contract; agent-published file reads/saves remain covered separately by `published-files.mjs`.
+
+## Compact send recovery (#914)
+
+`refused-messages.mjs` renders the panel's real refusal notice over a store
+holding two refused messages, the newer one sent again and taken. It checks
+that the older one is offered with Send Again enabled, and that pressing it
+sends the older message's own text and leaves no refusal behind. With
+`?case=image` the older message carries an image: Send Again puts it back, and
+the button stays held while the image waits, uploads, fails and waits again,
+and goes live only once it is stored. Both it and
+`send-failure.mjs` load a source fixture, so `run-all --mode prod` leaves them
+out as dev-server only.
+
+`send-failure.mjs` exercises the real conversation composer and overview reply
+pill at 360px and 1000px in Chromium and WebKit. The failure is above the composer,
+says **Error sending** with the actual code, keeps the full diagnostic off screen
+and sends it unchanged to the injected clipboard port on Copy. Send Again reuses
+the refused message; Discard removes it. Clipboard permission failures and panel
+retry/unknown-admission identities are also covered by application/component tests.
+Native first-use and refused-agent setup use the existing selected-agent readiness,
+installer and authentication controls, without automatic message replay. Both
+engines exercise download → sign-in → ready on first use; successful setup retires
+the ordinary hint, while independent audit failures remain visible.
+At 360px the setup card, with a production-sized **Download Claude · 117 MB**
+beside **Retry**, keeps both buttons whole inside the card and the
+card inside the viewport, within 1 pixel.
+The fixture’s `?clipboard=native` path uses the real host writer for isolated
+native window Copy verification rather than the browser test capture.
+
+## Pane placement ownership (#914)
+
+`drag.mjs --only pane-placement-local` checks four real panes in both engines
+and layouts: a nonzero column offset remains on its pane root, while all eight
+placement properties have their independent initial values in conversation
+content. Existing drag checks verify the resulting geometry and identities;
+`perf-budget.mjs` measures the actual drop at 4× CPU.

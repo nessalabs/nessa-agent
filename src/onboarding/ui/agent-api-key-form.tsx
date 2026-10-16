@@ -29,6 +29,7 @@ export function AgentApiKeyForm({
   onSave: (agent: ApiKeyAgent, key: string) => Promise<AgentApiKeySave>
   onSaved: () => void | Promise<void>
 }) {
+  const inputId = React.useId()
   const [key, setKey] = React.useState("")
   const [saving, setSaving] = React.useState(false)
   const [outcome, setOutcome] = React.useState<
@@ -80,17 +81,17 @@ export function AgentApiKeyForm({
 
   return (
     <form onSubmit={submit} className="flex flex-col gap-2 rounded-xl border p-3">
-      <label htmlFor={`${agent}-api-key`} className="nessa-text-2 font-medium">
+      <label htmlFor={inputId} className="nessa-text-2 font-medium">
         {agentName} API key
       </label>
       {hint ? (
-        <p id={`${agent}-api-key-hint`} className="nessa-text-2 text-muted-foreground">
+        <p id={`${inputId}-hint`} className="nessa-text-2 text-muted-foreground">
           {hint}
         </p>
       ) : null}
       <input
-        id={`${agent}-api-key`}
-        aria-describedby={hint ? `${agent}-api-key-hint` : undefined}
+        id={inputId}
+        aria-describedby={hint ? `${inputId}-hint` : undefined}
         name="apiKey"
         type="password"
         autoComplete="off"

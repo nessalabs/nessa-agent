@@ -280,7 +280,7 @@ describe("sending", () => {
 })
 
 describe("what the person changes", () => {
-  it("chooses the model of a draft, or of a session's next turn beside its summary", () => {
+  it("chooses a draft model and keeps an established conversation on its source-owned model", () => {
     const drafted = createDraft(loaded(), { draftId: "new" })
     const draftChosen = chooseModel(drafted, { sessionId: "new", model: astra })
     expect(draftChosen.drafts.new.model).toEqual(astra)
@@ -288,11 +288,12 @@ describe("what the person changes", () => {
     const state = loaded()
     const chosen = chooseModel(state, { sessionId: "a", model: astra })
     expect(chosen.sessions.a).toBe(state.sessions.a)
-    expect(modelForNextTurn(chosen, "a")).toEqual(astra)
+    expect(chosen).toBe(state)
+    expect(modelForNextTurn(chosen, "a")).toEqual(state.sessions.a.model)
     expect(modelForNextTurn(state, "a")).toEqual(state.sessions.a.model)
     expect(modelForNextTurn(state, "missing")).toBeUndefined()
     expect(chooseModel(state, { sessionId: "missing", model: astra })).toBe(state)
-    // No summary speaks for the person, whichever model it names.
+    // A newer authoritative summary owns the established model.
     const same = updateReceived(chosen, {
       update: {
         kind: "session",
@@ -305,7 +306,7 @@ describe("what the person changes", () => {
         session: summary("a", "desktop", 901, "running", { revision: 3 }),
       },
     })
-    expect(modelForNextTurn(other, "a")).toEqual(astra)
+    expect(modelForNextTurn(other, "a")).toEqual(other.sessions.a.model)
   })
 
   it("holds an answer beside the approval while it is on its way, and why it failed", () => {
@@ -424,14 +425,18 @@ describe("what the person changes", () => {
       reason: "unavailable",
     })
     const chosen = chooseModel(refused, { sessionId: "new", model: astra })
+    expect(chosen).toBe(refused)
     const discarded = unsentDiscarded(chosen, { sessionId: "new", messageId: "m1" })
     expect(discarded.sessions.new).toBeUndefined()
     expect(discarded.chosenModels).toEqual({})
     expect(discarded.drafts.new).toEqual({
       id: "new",
       channelId: "desktop",
-      model: astra,
+      model: refused.sessions.new.model,
     })
+    expect(
+      chooseModel(discarded, { sessionId: "new", model: astra }).drafts.new.model,
+    ).toEqual(astra)
     expect(shown(discarded)).toEqual(["new"])
   })
 

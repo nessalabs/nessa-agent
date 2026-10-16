@@ -6,6 +6,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -493,4 +494,165 @@ test("prepare only builds when the clone is already at the pin", (context) => {
   })
   assert.equal(calls[0][0], "pnpm")
   assert.equal(calls[0][1], "install")
+})
+
+for (const damage of ["missing", "empty", "directory"]) {
+  test(`check refuses ${damage} declared workspace outputs at the correct pin`, (context) => {
+    const root = makeRoot(context)
+    for (const directory of linkedWorkspacePackages) {
+      const pkg = join(root, ".vendor/nessa_ui", directory)
+      const exports = {
+        ".": { types: "./dist/index.d.ts", import: "./dist/index.js" },
+        "./styles.css": "./dist/styles.css",
+      }
+      writeFileSync(
+        join(pkg, "package.json"),
+        JSON.stringify({
+          name: directory,
+          main: "./dist/index.js",
+          module: "./dist/index.js",
+          types: "./dist/index.d.ts",
+          exports,
+        }),
+      )
+      mkdirSync(join(pkg, "dist"), { recursive: true })
+      for (const output of ["index.js", "index.d.ts", "styles.css"])
+        writeFileSync(join(pkg, "dist", output), "built output")
+    }
+    assert.equal(checkVendor({ root, git: fakeGit({ head: PIN }) }), null)
+    for (const directory of linkedWorkspacePackages) {
+      for (const output of ["index.js", "index.d.ts", "styles.css"]) {
+        const file = join(root, ".vendor/nessa_ui", directory, "dist", output)
+        rmSync(file)
+        if (damage === "empty") writeFileSync(file, "")
+        if (damage === "directory") mkdirSync(file)
+        const problem = checkVendor({ root, git: fakeGit({ head: PIN }) })
+        assert.match(problem, /pnpm ui:types/)
+        assert.match(problem, new RegExp(output.replaceAll(".", "\\.")))
+        rmSync(file, { recursive: true, force: true })
+        writeFileSync(file, "rebuilt output")
+        assert.equal(checkVendor({ root, git: fakeGit({ head: PIN }) }), null)
+      }
+    }
+  })
+}
+
+for (const field of ["main", "module", "types", "typesVersions"]) {
+  test(`check follows the package-owned ${field} entry`, (context) => {
+    const root = makeRoot(context)
+    const pkg = join(root, ".vendor/nessa_ui", linkedWorkspacePackages[0])
+    const target = "./entry.js"
+    writeFileSync(
+      join(pkg, "package.json"),
+      JSON.stringify({
+        name: "fixture",
+        [field]: field === "typesVersions" ? { "*": { entry: [target] } } : target,
+      }),
+    )
+    writeFileSync(join(pkg, target), "built output")
+    assert.equal(checkVendor({ root, git: fakeGit({ head: PIN }) }), null)
+    rmSync(join(pkg, target))
+    assert.match(
+      checkVendor({ root, git: fakeGit({ head: PIN }) }),
+      /entry.js.*pnpm ui:types/,
+    )
+  })
+}
+
+for (const field of ["exports", "typesVersions"]) {
+  test(`check skips patterned ${field} targets while enforcing concrete entries`, (context) => {
+    const root = makeRoot(context)
+    const pkg = join(root, ".vendor/nessa_ui", linkedWorkspacePackages[0])
+    const target = "./dist/index.js"
+    writeFileSync(
+      join(pkg, "package.json"),
+      JSON.stringify({
+        name: "fixture",
+        [field]:
+          field === "exports"
+            ? { ".": target, "./*": "./dist/*.js" }
+            : { "*": { index: [target], "*": ["./dist/*.js"] } },
+      }),
+    )
+    mkdirSync(join(pkg, "dist"))
+    writeFileSync(join(pkg, target), "built output")
+    assert.equal(checkVendor({ root, git: fakeGit({ head: PIN }) }), null)
+    rmSync(join(pkg, target))
+    assert.match(
+      checkVendor({ root, git: fakeGit({ head: PIN }) }),
+      /index.js.*pnpm ui:types/,
+    )
+  })
+}
+
+for (const ready of [0, 1]) {
+  test(`typesVersions accepts concrete fallback ${ready} and rejects no ready alternative`, (context) => {
+    const root = makeRoot(context)
+    const pkg = join(root, ".vendor/nessa_ui", linkedWorkspacePackages[0])
+    const targets = ["./legacy.d.ts", "./current.d.ts"]
+    writeFileSync(
+      join(pkg, "package.json"),
+      JSON.stringify({ name: "fixture", typesVersions: { "*": { index: targets } } }),
+    )
+    writeFileSync(join(pkg, targets[ready]), "export declare const ready: true")
+    assert.equal(checkVendor({ root, git: fakeGit({ head: PIN }) }), null)
+    rmSync(join(pkg, targets[ready]))
+    assert.match(checkVendor({ root, git: fakeGit({ head: PIN }) }), /pnpm ui:types/)
+  })
+}
+
+test("typesVersions pattern alternatives remain outside concrete-file completeness", (context) => {
+  const root = makeRoot(context)
+  const pkg = join(root, ".vendor/nessa_ui", linkedWorkspacePackages[0])
+  writeFileSync(
+    join(pkg, "package.json"),
+    JSON.stringify({
+      name: "fixture",
+      typesVersions: { "*": { index: ["./missing.d.ts", "./dist/*.d.ts"] } },
+    }),
+  )
+  assert.equal(checkVendor({ root, git: fakeGit({ head: PIN }) }), null)
+})
+
+for (const borrowed of ["parent", "checkout"]) {
+  test(`private readiness rejects a borrowed ${borrowed} while read-only checks preserve it`, (context) => {
+    const root = makeRoot(context)
+    const vendorParent = join(root, ".vendor")
+    const vendor = join(vendorParent, "nessa_ui")
+    const target = join(root, "borrowed-ready")
+    if (borrowed === "parent") {
+      renameSync(vendorParent, target)
+      symlinkSync(target, vendorParent, "junction")
+    } else {
+      renameSync(vendor, target)
+      symlinkSync(target, vendor, "junction")
+    }
+    const git = fakeGit({ head: PIN })
+    assert.equal(checkVendor({ root, git }), null)
+    assert.match(checkVendor({ root, git, requireOwned: true }), /borrowed root/)
+    assert.equal(
+      lstatSync(borrowed === "parent" ? vendorParent : vendor).isSymbolicLink(),
+      true,
+    )
+    assert.equal(
+      readFileSync(
+        join(
+          target,
+          borrowed === "parent" ? "nessa_ui" : ".",
+          linkedWorkspacePackages[0],
+          "package.json",
+        ),
+        "utf8",
+      ),
+      JSON.stringify({ name: linkedWorkspacePackages[0] }),
+    )
+  })
+}
+
+test("private readiness accepts an owned prepared workspace", (context) => {
+  const root = makeRoot(context)
+  assert.equal(
+    checkVendor({ root, git: fakeGit({ head: PIN }), requireOwned: true }),
+    null,
+  )
 })

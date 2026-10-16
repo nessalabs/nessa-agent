@@ -290,6 +290,13 @@ export type ReadFailure =
 export type Receipt =
   "sending" | "accepted" | "queued" | "unknown" | "failed" | "delivered"
 
+/** Source diagnostic and selected agent captured by the refused operation. */
+export interface SubmissionDiagnostic {
+  readonly message: string
+  readonly code?: string
+  readonly agent?: string
+}
+
 export type UserTurn = {
   id: string
   from: "user"
@@ -303,6 +310,19 @@ export type UserTurn = {
   observedInput?: string | null
   mode?: "queued" | "steering"
   error?: string
+  diagnostic?: SubmissionDiagnostic
+  /**
+   * The typed reason this message was refused, kept with it: the
+   * conversation's own `failure` follows whatever failed last, and an older
+   * refusal offered again still needs its own recovery.
+   */
+  failure?: CommandFailure
+  /**
+   * This refused message was put back in the draft once. From then on the
+   * draft is its only copy to send again: a person who empties it, or sends
+   * something else in its place, has let it go, and it is never put back.
+   */
+  restored?: boolean
 }
 
 export type AgentPart = {
@@ -343,6 +363,12 @@ type ConversationState = {
   draft: MessageContent
   /** Increments only when a failed send restores the draft, resetting the uncontrolled editor. */
   draftReset?: number
+  /**
+   * The refused turn whose message the draft was put back from, kept while the
+   * person edits it. Send Again on a refusal sends the draft only when the
+   * draft is that refusal's own; other work in it is never sent in its place.
+   */
+  draftTurn?: string
   /** Stable gateway identity; local tab closure does not close shared work. */
   serverConversationId?: string
   serverReady?: boolean
@@ -354,6 +380,12 @@ type ConversationState = {
    * a control's outcome was decided before this was stored.
    */
   failure?: CommandFailure
+  /**
+   * The user turn whose refusal set `error`, if one did. A control or another
+   * command that fails later replaces `error` and clears this, so whether the
+   * error is a turn's own is read here, never by comparing the two texts.
+   */
+  errorTurn?: string
   /**
    * Why the last read of this conversation failed, in the panel's own words.
    * Set only while the view on screen is older than the gateway's: any view

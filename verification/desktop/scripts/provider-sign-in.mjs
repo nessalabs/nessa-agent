@@ -4,7 +4,7 @@ import { mkdirSync } from "node:fs"
 import { resolve } from "node:path"
 import { openPage, withEngines } from "./lib/browser.mjs"
 import { main } from "./lib/run.mjs"
-import { providerSignIn as selectors } from "./lib/selectors.mjs"
+import { css, providerSignIn as selectors } from "./lib/selectors.mjs"
 
 const OAUTH_DIAGNOSTIC = "Internal error: OAuth session expired"
 const REQUIRED_WORK = "The turn could not complete all required work."
@@ -119,7 +119,7 @@ await main(
                   })
                 }
                 await page.evaluate(() => window.__providerSignIn.failRetry())
-                await page.locator(".workspace-message-failed").waitFor()
+                await page.locator(css.sendFailure).waitFor()
                 if ((await oauth.count()) !== 1)
                   throw new Error(
                     "failed local retry dropped the authentication terminal",

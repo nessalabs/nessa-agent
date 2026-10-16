@@ -1,3 +1,9 @@
+import type { SubmissionDiagnostic } from "../../model"
+import {
+  canSendAgain,
+  discardFailedTurn,
+  restoreFailedTurn,
+} from "../../application/usecases/send-draft"
 import {
   prepareSubmission,
   preparedSubmissionFields,
@@ -87,6 +93,8 @@ type ThunkConfig = {
 export type SendDraftArg = {
   content: MessageContent
   id?: string
+  /** Explicitly replace this refused local bubble, keeping fresh wire attempt IDs. */
+  retryTurnId?: string
   steering?: boolean
   /**
    * What the caller knows about the session, which this slice cannot see. False
@@ -228,7 +236,14 @@ export const sendDraft = createAsyncThunk<void, SendDraftArg, ThunkConfig>(
     operations.set(id, executionId, operation)
     // The operation exists before the one publication that makes it stoppable.
     // Subscribers can synchronously Stop/close; this promise still owns it (PS25–26).
-    dispatch(submissionStarted({ content, conversationId: id, prepared }))
+    dispatch(
+      submissionStarted({
+        content,
+        conversationId: id,
+        prepared,
+        retryTurnId: input.retryTurnId,
+      }),
+    )
     let admissionAttempted = false
     try {
       const created = await extra.conversation.create(serverId, conv.selection)
@@ -258,12 +273,35 @@ export const sendDraft = createAsyncThunk<void, SendDraftArg, ThunkConfig>(
           message: refusalDetail(error),
           outcome: sendOutcome(error, admissionAttempted),
           failure: commandFailure(error),
+          diagnostic: {
+            message: detail(error),
+            code: error instanceof SubmissionRefusedError ? error.code : undefined,
+            agent: error instanceof SubmissionRefusedError ? error.agent : undefined,
+          },
         }),
       )
       throw error
     }
   },
 )
+
+/**
+ * Send Again on a refused message. It always sends the draft, which owns the
+ * message's attachments. A draft left empty (an older refusal offered after a
+ * newer one was sent again) first gets the message back; one whose files must
+ * be uploaded again waits in the composer for the next Send Again.
+ */
+export const retryFailedTurn = createAsyncThunk<
+  void,
+  { id: string; turnId: string },
+  ThunkConfig
+>("conversation/retryFailedTurn", async ({ id, turnId }, { dispatch, getState }) => {
+  dispatch(failedTurnRestored({ id, turnId }))
+  const conv = getState().conversation.conversations.find((item) => item.id === id)
+  // Restored images upload first; Send Again is pressed again once they have.
+  if (!conv || conv.draft.length === 0 || !canSendAgain(conv, turnId)) return
+  await dispatch(sendDraft({ id, content: conv.draft, retryTurnId: turnId }))
+})
 
 /**
  * Put one draft image's original bytes on the gateway, and record how that went
@@ -847,6 +885,7 @@ const conversationSlice = createSlice({
         content: MessageContent
         conversationId: string
         prepared: PreparedSubmission
+        retryTurnId?: string
       }>,
     ) {
       const { content, conversationId } = action.payload
@@ -859,6 +898,7 @@ const conversationSlice = createSlice({
           executionId: prepared.executionId,
           actionId: prepared.requestId,
           mode: prepared.mode,
+          retryTurnId: action.payload.retryTurnId,
         },
       )
     },
@@ -882,6 +922,12 @@ const conversationSlice = createSlice({
       }
       if (current) current.readRequest = undefined
     },
+    failedTurnDiscarded(state, action: PayloadAction<{ id: string; turnId: string }>) {
+      return discardFailedTurn(state, action.payload.id, action.payload.turnId)
+    },
+    failedTurnRestored(state, action: PayloadAction<{ id: string; turnId: string }>) {
+      return restoreFailedTurn(state, action.payload.id, action.payload.turnId)
+    },
     submissionFailed(
       state,
       action: PayloadAction<{
@@ -889,6 +935,7 @@ const conversationSlice = createSlice({
         executionId: string
         message: string
         outcome: SendOutcome
+        diagnostic?: SubmissionDiagnostic
         failure?: CommandFailure
       }>,
     ) {
@@ -899,6 +946,7 @@ const conversationSlice = createSlice({
         action.payload.message,
         action.payload.outcome,
         action.payload.failure,
+        action.payload.diagnostic,
       )
     },
     showError(
@@ -909,6 +957,7 @@ const conversationSlice = createSlice({
       if (current) {
         current.error = action.payload.message
         current.failure = action.payload.failure
+        current.errorTurn = undefined
       }
     },
     readStarted(state, action: PayloadAction<{ id: string; requestId: string }>) {
@@ -960,6 +1009,7 @@ const conversationSlice = createSlice({
         current.readRequest = undefined
         current.error = undefined
         current.failure = undefined
+        current.errorTurn = undefined
       }
     },
     controlFinished(state, action: PayloadAction<string>) {
@@ -995,6 +1045,8 @@ export const {
   submissionAccepted,
   submissionReattempted,
   submissionFailed,
+  failedTurnDiscarded,
+  failedTurnRestored,
   showError,
   readStarted,
   invalidateRead,
@@ -1015,5 +1067,6 @@ export { conversationHistoryReducer } from "./history"
 
 // Narrow composition entry: the store mounts reducers without loading UI barrels.
 export { attachmentResourceUsage } from "../../application/queries/attachment-resources"
+export { canSendAgain } from "../../application/usecases/send-draft"
 
 export { AttachmentResource } from "../../model"

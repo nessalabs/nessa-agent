@@ -4,7 +4,8 @@
  * layout's fractions, so one keeps its identity when it moves, and a change
  * of layout lands at once, each pane then travelling from where it was by
  * transform alone (`split-panes/adapters/dom/flip.tsx`), so no frame of the
- * motion reflows text. What a pane looks like is here.
+ * motion reflows text. The workspace uses zero-duration layout flights (#914).
+ * What a pane looks like is here.
  */
 .workspace-chat {
   display: flex;
@@ -55,22 +56,14 @@ html:not(.dark) .workspace-pane {
 .workspace-pane[data-focused] {
   box-shadow:
     inset 0 0 0 1px color-mix(in oklab, var(--foreground) 13%, transparent),
-    inset 0 1px 0 color-mix(in oklab, var(--foreground) 8%, transparent),
-    0 16px 48px -18px rgb(0 0 0 / 55%);
+    inset 0 1px 0 color-mix(in oklab, var(--foreground) 5%, transparent),
+    0 12px 40px -18px rgb(0 0 0 / 45%);
 }
 
 html:not(.dark) .workspace-pane[data-focused] {
   box-shadow:
     inset 0 0 0 1px color-mix(in oklab, var(--foreground) 16%, transparent),
-    0 16px 40px -18px rgb(0 0 0 / 24%);
-}
-
-.split-panes-grid[data-split-multi] .workspace-pane:not([data-focused]) {
-  background: color-mix(in oklab, var(--foreground) 2%, transparent);
-}
-
-html:not(.dark) .split-panes-grid[data-split-multi] .workspace-pane:not([data-focused]) {
-  background: color-mix(in oklab, var(--background) 30%, white);
+    0 12px 32px -18px rgb(0 0 0 / 18%);
 }
 
 /*
@@ -120,38 +113,6 @@ html:not(.dark) .split-panes-grid[data-split-multi] .workspace-pane:not([data-fo
 .workspace-pane[data-split-flying] {
   box-shadow: inset 0 0 0 1px var(--desktop-rim);
   transition: none;
-  /* Opaque while it travels. The resting tint composites the blurred ambient
-     on every frame of the move (`styles.test.ts`). */
-  background: var(--background);
-}
-
-/* The conversation is not painted while a drag's preview moves the pane.
-   Rastering it at each new size misses the frame budget (`styles.test.ts`).
-   The scroller's box stays, so a preview still measures the transcript
-   (`drag.mjs`). The fade at its edges is a mask; it waits until the pane
-   has landed. */
-.workspace[data-drag-reflow] .workspace-transcript {
-  mask-image: none;
-}
-
-.workspace[data-drag-reflow] .workspace-transcript-inner {
-  content-visibility: hidden;
-}
-
-/* A layout that lands — the drop's commit, or the preview letting go — would
-   lay every transcript out on that frame. Bodies wait, and come back one a
-   frame (`styles.test.ts`, `drag.test.tsx`). */
-.workspace-pane[data-drag-settling] > .workspace-pane-body {
-  content-visibility: hidden;
-}
-
-/* The root hold collects final geometry within the commit and never reaches
-   paint. Only moving panes keep their bodies held through the flight and
-   restore one per frame; stationary chats remain visible. */
-.workspace[data-split-measuring] .workspace-pane > .workspace-pane-body,
-.workspace-pane[data-split-flying] > .workspace-pane-body,
-.workspace-pane[data-split-restoring] > .workspace-pane-body {
-  content-visibility: hidden;
 }
 
 .workspace:is([data-split-measuring], [data-drag-reflow])
@@ -161,18 +122,6 @@ html:not(.dark) .split-panes-grid[data-split-multi] .workspace-pane:not([data-fo
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
   box-shadow: none;
-}
-
-/*
- * The picture's band waits out of sight while panes travel, and fades back
- * once they land: it begins after the window's controls only where a pane
- * rests in the corner (`styles.css`), so a pane sliding out of the corner, or
- * into it, would carry it beneath them.
- */
-.workspace:is([data-split-measuring], [data-drag-reflow]) .desktop-header[data-sliver],
-.workspace-pane[data-split-flying] .desktop-header[data-sliver] {
-  opacity: 0;
-  transition: none;
 }
 
 /* ——— The pane's header ——— */

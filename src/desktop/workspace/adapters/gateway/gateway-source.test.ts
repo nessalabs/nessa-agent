@@ -1413,10 +1413,13 @@ describe("a connection that could not be made says why (#419)", () => {
     )
     expect(outcome).toBe("refused")
     expect(gateway.count("send")).toBe(0)
-    expect(store.getState().workspace.outbox[conversationA]?.[0]?.delivery).toEqual({
-      state: "failed",
-      reason: "signed-out",
-    })
+    expect(store.getState().workspace.outbox[conversationA]?.[0]?.delivery).toMatchObject(
+      {
+        state: "failed",
+        reason: "signed-out",
+        model: store.getState().workspace.sessions[conversationA]?.model,
+      },
+    )
     warn.mockRestore()
   })
 
@@ -2769,8 +2772,11 @@ describe("refusals are typed (F)", () => {
   // A bare NessaRpcError comes only from a subscription or an observe page,
   // which the client wraps in nothing: certain, since a read takes no effect.
   it("F3: a subscription refused for good is not supported", () => {
+    expect(refusalOf(rpc("agent_not_configured"))).toMatchObject({
+      reason: "agent-not-configured",
+      diagnostic: { code: "agent_not_configured" },
+    })
     for (const code of [
-      "agent_not_configured",
       "agent_unsupported",
       "conversations_not_configured",
       "model_unavailable",
@@ -2826,7 +2832,7 @@ describe("refusals are typed (F)", () => {
           () => Promise.resolve(),
         ),
       ),
-    ).toMatchObject({ reason: "not-supported" })
+    ).toMatchObject({ reason: "agent-not-configured" })
     // Where the target stands holds whatever the command did.
     expect(
       refusalOf(

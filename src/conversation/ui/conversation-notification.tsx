@@ -1,10 +1,14 @@
+import { SelectedAgentSetup } from "../../onboarding/ui/selected-agent-setup"
+import { SendFailure } from "./send-failure"
 import { executionTargets } from "@nessa/client"
 import { AgentNotification } from "@nessa-ui/react/agent-notification"
 import type { Conversation } from "../model"
 import {
   controlConversation,
   followConversation,
-  sendDraft,
+  retryFailedTurn,
+  failedTurnDiscarded,
+  canSendAgain,
 } from "../adapters/store/slice"
 import { useConversationDispatch } from "../adapters/store/hooks"
 import { conversationNotice } from "./notification"
@@ -52,7 +56,39 @@ export function ConversationNotification({
       })
     : []
   const notice = conversationNotice(conversation)
-  if (!notice) return null
+  if (!notice)
+    return conversation.turns.length === 0 && conversation.selection?.agent ? (
+      <SelectedAgentSetup agent={conversation.selection.agent} />
+    ) : null
+  if (notice.retry?.kind === "draft") {
+    const turnId = notice.retry.turnId
+    const failed = conversation.turns.find((turn) => turn.id === turnId)
+    return (
+      <>
+        <SendFailure
+          details={
+            failed?.from === "user"
+              ? (failed.diagnostic?.message ?? failed.error ?? notice.description)
+              : notice.description
+          }
+          code={failed?.from === "user" ? failed.diagnostic?.code : undefined}
+          pending={
+            !gatewayAvailable ||
+            Boolean(conversation.controlPending) ||
+            !canSendAgain(conversation, turnId)
+          }
+          onRetry={() => void dispatch(retryFailedTurn({ id: conversation.id, turnId }))}
+          onDiscard={() => dispatch(failedTurnDiscarded({ id: conversation.id, turnId }))}
+        />
+        {failed?.from === "user" &&
+        failed.failure === "agent-not-configured" &&
+        failed.diagnostic?.agent ? (
+          <SelectedAgentSetup agent={failed.diagnostic.agent} recovery />
+        ) : null}
+      </>
+    )
+  }
+
   return (
     <AgentNotification
       className="mb-2"
@@ -86,10 +122,6 @@ export function ConversationNotification({
                     id: conversation.id,
                     control: { kind: "retry", target },
                   }),
-                )
-              } else if (notice.retry?.kind === "draft") {
-                void dispatch(
-                  sendDraft({ id: conversation.id, content: conversation.draft }),
                 )
               } else {
                 void dispatch(followConversation(conversation.id))

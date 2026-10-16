@@ -11,7 +11,9 @@ use crate::conversation::application::{
     AccessAction, OwnerAccess, PairedAccess, PairedParty, PairedRefusal,
 };
 use crate::conversation::domain::{Conversation, ConversationDeletion, ConversationRefusal};
-use nessa_auth::domain::{Action, Grant, OrganizationId, PrincipalId, Resource, ResourceId};
+use nessa_auth::domain::{
+    Action, Grant, MembershipRole, OrganizationId, PrincipalId, Resource, ResourceId,
+};
 use nessa_protocol::agents::AgentId;
 use nessa_protocol::conversation::domain::{
     ConversationApprovalMode, ConversationId, ConversationModelId,
@@ -185,6 +187,11 @@ fn the_checked_in_bundle_validates_and_names_every_action() {
             _ => on(&live),
         };
         let subject = match action {
+            AccessAction::ReviewNotice => AccessSubject::ReviewRecipient {
+                organization: &org,
+                principal: &owner,
+                membership: MembershipRole::Member,
+            },
             AccessAction::NoteDeliver => AccessSubject::GrantHolder {
                 receiver: "receiver-1",
             },
@@ -1297,5 +1304,39 @@ fn paired_access_lists_and_shares_nothing_and_fails_closed() {
             undecided.admit_catalogue(action),
             Err(PairedRefusal::Unavailable)
         );
+    }
+}
+
+/// Role, organization, owner and deletion remain separate policy facts.
+/// Paired readers have their grant-specific read path instead of this action.
+#[test]
+fn review_notices_use_current_membership_and_live_organization_ownership() {
+    let policy = policy();
+    for membership in [MembershipRole::Admin, MembershipRole::Member] {
+        for same_organization in [false, true] {
+            for owns in [false, true] {
+                for deleted in [false, true] {
+                    let org = organization(if same_organization { "org" } else { "other" });
+                    let who = principal(if owns { "owner" } else { "surface" });
+                    let conversation = conversation("org", "owner", deleted);
+                    let decision = policy.evaluate(&AccessAsk {
+                        subject: AccessSubject::ReviewRecipient {
+                            organization: &org,
+                            principal: &who,
+                            membership,
+                        },
+                        action: AccessAction::ReviewNotice,
+                        resource: on(&conversation),
+                        held: None,
+                        request: RequestShape::default(),
+                        target: None,
+                    });
+                    assert_ne!(decision, AccessDecision::Deny(AccessDenial::Unavailable));
+                    assert_eq!(allowed(&decision), same_organization && !deleted &&
+                        (owns || membership == MembershipRole::Admin),
+                        "{membership:?}, same org={same_organization}, owns={owns}, deleted={deleted}");
+                }
+            }
+        }
     }
 }

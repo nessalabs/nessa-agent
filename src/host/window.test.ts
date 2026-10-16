@@ -4,17 +4,20 @@ import { createSessionHandle } from "../session/adapters/client/handle"
 import type { EstablishedDevSession } from "../session/adapters/client/dev-session"
 import invalidCredentialAuditFailed from "../../src-tauri/src/agent_credentials/infrastructure/fixtures/invalid-credential-audit-failed.json"
 
-const { invoke, listen, close } = vi.hoisted(() => ({
+const { invoke, listen, close, writeText } = vi.hoisted(() => ({
+  writeText: vi.fn(),
   invoke: vi.fn(),
   listen: vi.fn(),
   close: vi.fn(),
 }))
+vi.mock("@tauri-apps/plugin-clipboard-manager", () => ({ writeText }))
 vi.mock("@tauri-apps/api/core", () => ({ invoke }))
 vi.mock("@tauri-apps/api/event", () => ({ listen }))
 vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => ({ close }) }))
 
 beforeEach(() => {
   vi.resetModules()
+  writeText.mockReset()
   invoke.mockReset()
   listen.mockReset()
   close.mockReset()
@@ -567,5 +570,45 @@ describe("saving a file", () => {
     expect(host.names).toEqual(["a\uFFFDb\uFFFD.txt"])
     // Nothing the host's JSON reader would refuse.
     expect(() => JSON.parse(JSON.stringify(host.names[0]))).not.toThrow()
+  })
+})
+
+describe("clipboard writes", () => {
+  const diagnostic =
+    "Error sending (AGENT_NOT_CONFIGURED)\nFull diagnostic: runtime missing."
+
+  it("writes the complete diagnostic through the native clipboard without browser support", async () => {
+    vi.stubGlobal("navigator", {})
+    writeText.mockResolvedValue(undefined)
+    const { writeClipboardText } = await import("./window")
+    await expect(writeClipboardText(diagnostic)).resolves.toBeUndefined()
+    expect(writeText).toHaveBeenCalledExactlyOnceWith(diagnostic)
+  })
+
+  it("propagates native clipboard refusal", async () => {
+    const failure = new Error("Clipboard refused")
+    writeText.mockRejectedValue(failure)
+    const { writeClipboardText } = await import("./window")
+    await expect(writeClipboardText(diagnostic)).rejects.toBe(failure)
+  })
+
+  it("uses the browser clipboard outside the desktop host", async () => {
+    vi.stubGlobal("window", {})
+    const browserWrite = vi.fn().mockResolvedValue(undefined)
+    vi.stubGlobal("navigator", { clipboard: { writeText: browserWrite } })
+    const { writeClipboardText } = await import("./window")
+    await writeClipboardText(diagnostic)
+    expect(browserWrite).toHaveBeenCalledExactlyOnceWith(diagnostic)
+    expect(writeText).not.toHaveBeenCalled()
+  })
+
+  it("reports an unavailable browser clipboard", async () => {
+    vi.stubGlobal("window", {})
+    vi.stubGlobal("navigator", {})
+    const { writeClipboardText } = await import("./window")
+    await expect(writeClipboardText(diagnostic)).rejects.toThrow(
+      "Clipboard is unavailable.",
+    )
+    expect(writeText).not.toHaveBeenCalled()
   })
 })

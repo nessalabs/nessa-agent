@@ -5,7 +5,9 @@ import type {
 import { AGENT_CHOICES } from "../model/onboarding"
 import { useAgentDownloads } from "./use-agent-downloads"
 
-function outcomeText(outcome: InstallationOutcome | undefined): string | undefined {
+export function installationOutcomeText(
+  outcome: InstallationOutcome | undefined,
+): string | undefined {
   if (!outcome) return undefined
   if (outcome.status === "installed")
     return outcome.cleanupPending
@@ -70,7 +72,7 @@ export function AgentDownloadsView({
           ? "Downloading and verifying the runtime. You can leave this view; installation will continue."
           : unavailable
             ? "Cannot check downloads. Connect to Nessa and try again."
-            : outcomeText(outcome)}
+            : installationOutcomeText(outcome)}
       </p>
       <button
         type="button"
@@ -85,11 +87,11 @@ export function AgentDownloadsView({
 
 export function AgentDownloads({
   source,
-  onInstalled,
+  onChanged,
 }: {
   source: AgentInstallations
-  onInstalled?: () => void
+  onChanged?: () => void
 }) {
-  const state = useAgentDownloads(source, onInstalled)
+  const state = useAgentDownloads(source, onChanged)
   return <AgentDownloadsView {...state} />
 }

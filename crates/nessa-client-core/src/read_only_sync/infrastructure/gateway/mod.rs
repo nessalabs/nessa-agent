@@ -7,6 +7,7 @@
 //! `held_files` reads `artifact.read` ranges on the same connection, one
 //! operation per range.
 mod held_files;
+mod phone;
 mod session;
 pub(crate) use session::{
     subscription_refusal, DeviceEvidence, LocalConnector, Session, SubscriptionDelivery,

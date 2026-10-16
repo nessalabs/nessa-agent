@@ -144,7 +144,7 @@ export const SplitPanes = memo(function SplitPanes({
 })
 
 /**
- * The gutter between two columns, or two stacked panes, lit near the pointer.
+ * The gutter between two columns, or two stacked panes, lit on hover or focus.
  * A drag takes the two sides' sizes when it starts — from the room as laid
  * out, never a pane mid-flight — and asks for the share the pointer implies;
  * the layout holds each side at its readable minimum.

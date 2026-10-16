@@ -64,6 +64,8 @@ const functional = [
   "transcript-unreadable",
   "user-attachments",
   "turn-outcomes",
+  "send-failure",
+  "refused-messages",
 ]
 
 const options = cli({

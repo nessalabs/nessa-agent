@@ -10,7 +10,8 @@ use crate::conversation::application::{
     ConversationModeApplication, ConversationModeRequest, ConversationModeRequestState,
     ConversationRepository, ConversationService, ConversationSummaries, ListedConversation,
     ListedConversations, ObservationCursor, ObservedConversations, ProviderSessionEraser,
-    ProviderSessionErasers, PublishedArtifact, UnfinishedDeletions,
+    ProviderSessionErasers, PublishedArtifact, ReviewNoticeAudit, ReviewNoticeAuditFailure,
+    ReviewNoticeAuditRecord, UnfinishedDeletions,
 };
 use crate::conversation::domain::{Conversation, ConversationDeletion, ProviderSessionErasure};
 use crate::conversation::infrastructure::CedarConversationAccessPolicy;
@@ -55,6 +56,7 @@ use nessa_sdk::infrastructure::session_storage::InMemoryStorage;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::{future::Future, pin::Pin};
 use tokio::sync::oneshot::Receiver;
 use tokio::sync::{mpsc, oneshot, Notify};
 use uuid::Uuid;
@@ -65,6 +67,21 @@ impl ExecutionAudit for AcceptingAudit {
         &self,
         _record: ExecutionAuditRecord,
     ) -> nessa_sdk::application::agent_execution::agents::AgentFuture<'_, ()> {
+        Box::pin(async { Ok(()) })
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct RecordingReviewNoticeAudit {
+    pub records: Mutex<Vec<Arc<ReviewNoticeAuditRecord>>>,
+}
+
+impl ReviewNoticeAudit for RecordingReviewNoticeAudit {
+    fn record(
+        &self,
+        record: Arc<ReviewNoticeAuditRecord>,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ReviewNoticeAuditFailure>> + Send + '_>> {
+        self.records.lock().unwrap().push(record);
         Box::pin(async { Ok(()) })
     }
 }
@@ -188,6 +205,10 @@ pub(crate) struct MemoryRepository {
     pub(crate) mode_application_change: Mutex<Option<ModeRecordChange>>,
     pub(crate) mode_lookup_reply: Mutex<Option<ConversationModeRequest>>,
     pub(crate) mode_loaded_reply: Mutex<Option<Conversation>>,
+    /// Fail one metadata read without changing the stored conversation.
+    pub(crate) metadata_load_failure: Mutex<Option<ConversationError>>,
+    /// Pauses a metadata reply after reading it, before its caller's policy admission.
+    pub(crate) metadata_load_gate: Mutex<Option<(oneshot::Sender<()>, Receiver<()>)>>,
     /// Override one create acknowledgement after its proposed target is stored.
     pub(crate) creation_reply: Mutex<Option<ConversationCreation>>,
     /// A concurrent creator establishes this row after the initial load, before create.
@@ -510,7 +531,18 @@ impl ConversationRepository for MemoryRepository {
     fn load(&self, id: &ConversationId) -> ConversationFuture<'_, Option<Conversation>> {
         let value = self.records.lock().unwrap().get(id).cloned();
         let value = self.mode_loaded_reply.lock().unwrap().take().or(value);
-        Box::pin(async move { Ok(value) })
+        let value = match self.metadata_load_failure.lock().unwrap().take() {
+            Some(error) => Err(error),
+            None => Ok(value),
+        };
+        let gate = self.metadata_load_gate.lock().unwrap().take();
+        Box::pin(async move {
+            if let Some((entered, release)) = gate {
+                let _ = entered.send(());
+                let _ = release.await;
+            }
+            value
+        })
     }
     fn unfinished_deletions(&self) -> ConversationFuture<'_, UnfinishedDeletions> {
         let mut conversations: Vec<ConversationId> = self

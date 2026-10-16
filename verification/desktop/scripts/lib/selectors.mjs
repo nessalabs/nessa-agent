@@ -67,6 +67,7 @@ export const css = {
   titleText: ".workspace-pane-title", // class: a pane's title, in a pane or in the drag's copy of it
   paneBody: ".workspace-pane-body", // class: a pane's conversation and composer, below its header
   composer: "[data-pane-key] textarea",
+  sendFailure: "[data-send-failure]", // compact composer recovery, separate from transcript turns
   transcript: ".workspace-transcript", // class
   message: ".workspace-message[data-role]", // class: one message in a transcript; data-role is user, agent or note
   dock: ".workspace-dock", // class: a conversation's composer, at its pane's foot — and a new session's home's, docked there in a small pane
@@ -154,6 +155,7 @@ export const css = {
   chat: ".workspace-chat", // class: the chat area, the panes' column
   sideRail: ".side-rail", // class: the rail beside the workspace
   workspaceWindow: ".workspace-window", // class: the frame holding the rail and the workspace; data-rail, data-sidebar
+  titlebar: ".workspace-titlebar", // class: the window's titlebar row, 48px tall
   titlebarSidebarToggle: '.workspace-titlebar [aria-controls="workspace-sidebar"]', // the titlebar's Show/Hide Sidebar
   sideRailToggle: ".side-rail-toggle", // class: shows or hides the rail; aria-expanded
   studio: ".workspace-identity .desktop-identity-button", // class: "nessa Studio", which opens Settings

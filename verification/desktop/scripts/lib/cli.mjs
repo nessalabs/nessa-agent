@@ -142,6 +142,9 @@ export const devServerOnlyChecks = [
   // The sandbox proxy is provided by the dev server, not vite preview.
   "mcp-apps",
   "approval-deadline",
+  // Source fixtures: the production build carries only index.html and desktop.html.
+  "send-failure",
+  "refused-messages",
 ]
 
 /**

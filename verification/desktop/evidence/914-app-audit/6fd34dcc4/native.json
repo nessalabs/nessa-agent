@@ -1,0 +1,107 @@
+{
+  "head": "1e72d3cddaac866ebe77fd2994f0a0ebac400205",
+  "source": "explicit dirty PR914 native clipboard changes and root recovery fixes, no source edits by this verification helper",
+  "source_sha256": {
+    "src-tauri/src/main.rs": "82da9d221f73736d5eb250d831aad419d31770e5ba1650d6c14facfe7bf403d7",
+    "src-tauri/Cargo.toml": "68f61d2c74d6a9990bc907b2690701305f11a88b627d2c1614d623690601c5a8",
+    "Cargo.lock": "3a0ad80dfff52c2d1f876b0355fd507108613fc8e3f8717e735b8f7b29c6b55c",
+    "package.json": "1394e363f7966acbeec12f7bb4cd895bcc2763e46f1f7c7429d1403a29f7fa4e",
+    "pnpm-lock.yaml": "80225b7c96889b9710d6553fdd02a562c5b6e49038d37a215616538ca0a7babd",
+    "src-tauri/capabilities/default.json": "fc361bc4e7a8bc8ed8d6db62c1f3a09b5a2888791964f344af3aba15658c47b0",
+    "src-tauri/capabilities/desktop.json": "0b182a7ac6839aad94dc56bf1d8adf9391d9cac3f8c9c6b03a36eed49bdb5f22",
+    "scripts/desktop/clipboard-permission.test.mjs": "027c92065cb92a17756e72c4bfed4fcc12cb1dabd5059d5c371b25e3ef74804b",
+    "src/host/window.ts": "e61cb4b6c57f42df7a54c8c1499e21e95e2f04fc910f399b5aed802e08b0a2e6",
+    "verification/desktop/fixtures/send-failure/main.tsx": "0df673ac30d6a171334ceea0ab09417a03bc0c4e3ebcd2dc70eac239d2ae32a7"
+  },
+  "environment": {
+    "platform": "macOS-26.6-arm64-arm-64bit",
+    "architecture": "arm64",
+    "native_renderer": "macOS WKWebView through compiled Tauri host",
+    "js_clipboard": "2.3.3",
+    "rust_clipboard": "2.3.3"
+  },
+  "native_check": {
+    "command": "pnpm desktop:check",
+    "log": "/tmp/nessa-914-native-host-final.log",
+    "node": {
+      "total": 292,
+      "passed": 290,
+      "failed": 0,
+      "skipped": 2
+    },
+    "clippy": "-p nessa-app --no-default-features --all-targets -- -D warnings passed",
+    "rust": [
+      {
+        "passed": 748,
+        "ignored": 2,
+        "failed": 0
+      },
+      {
+        "passed": 6,
+        "failed": 0
+      },
+      {
+        "passed": 9,
+        "failed": 0
+      }
+    ],
+    "qualification": "final run after desktop capability/test; earlier pre-change pass retained separately"
+  },
+  "launch": {
+    "directory": "/var/folders/1w/wp9n0wwd22qgrf0zkhb2fk6r0000gn/T/nessa-914-native-xd9zfs4m",
+    "identifier": "so.nessa.verify914.a4a32dba9",
+    "settings": "/Users/nessa/Library/Application Support/so.nessa.verify914.a4a32dba9/ci/settings.json",
+    "stage": "ci",
+    "config": "/var/folders/1w/wp9n0wwd22qgrf0zkhb2fk6r0000gn/T/nessa-914-native-xd9zfs4m/tauri-check.json",
+    "url": "http://127.0.0.1:1498/verification/desktop/fixtures/send-failure/index.html?clipboard=native",
+    "isolation": "unique app config identifier; debug profile no managed gateway registration; private settings.service namespace; fake workspace fixture only; no provider prompts",
+    "native_origin": "http://127.0.0.1:1420",
+    "proxy_upstream": "http://127.0.0.1:1498",
+    "wrapper": "/var/folders/1w/wp9n0wwd22qgrf0zkhb2fk6r0000gn/T/nessa-914-native-xd9zfs4m/Nessa Clipboard QA914.app",
+    "binary_sha256": "f50892a7b58d6e4e308ec1995dba45d77728e263794c241bef3d149c58600dff",
+    "wrapper_qualification": "private test packaging only, byte-identical debug executable; not release bundle or signing proof",
+    "both_windows_initially_visible": true
+  },
+  "controls": [
+    {
+      "context": "desktop",
+      "ui_action": "CUA actual Copy error details button",
+      "baseline": "distinct owned sentinel before click",
+      "exact_full_payload_matches": true,
+      "expected_utf8_bytes": 98,
+      "launch_record": "/tmp/nessa-914-native-launch-record.json",
+      "final_visibility_config": true
+    },
+    {
+      "context": "main",
+      "ui_action": "CUA actual Copy error details button",
+      "baseline": "distinct owned sentinel before click",
+      "exact_full_payload_matches": true,
+      "expected_utf8_bytes": 98,
+      "launch_record": "/tmp/nessa-914-native-launch-record.json",
+      "final_visibility_config": true
+    }
+  ],
+  "screenshots": {
+    "/tmp/nessa-914-native-desktop-copy.png": "381e6e464e11b50eec4d21be6c1deac4588b6484051ca86dde5fe7d90613abec",
+    "/tmp/nessa-914-native-main-copy.png": "526ff1ba4ee467d47c9ea538ff8090864c930c3c34cf971af735bc1d0f2e6893"
+  },
+  "limits": [
+    "Native data uses in-memory scripted workspace, no provider prompt or production chat. Same real host.writeClipboardText and plugin/capability path as product.",
+    "Private debug .app packaging with byte-identical copied executable and temporary URL/visibility/identifier config; not signed release bundle proof.",
+    "Main screenshot clips desktop-oriented fixture at420px; do not present as product panel layout verification. Actual AX Copy action and system clipboard comparison establish native main capability delivery.",
+    "Two initial1498 origin launch attempts failed: links policy admits only1420, refused navigation left nil WKWebView URL; page_load diagnostic url() panicked. Backtrace retained, unchanged source; corrected1420 proxy control loaded both pages. No product fix claimed."
+  ],
+  "retained_setup_failures": [
+    "/tmp/nessa-914-native-app-visible-setup-failure.log",
+    "/tmp/nessa-914-native-app-hidden-origin-failure.log"
+  ],
+  "cleanup": {
+    "all_owned_processes_retired": true,
+    "qa_app_quit": "normal own menu",
+    "proxy": "owned PID2219 SIGTERM, exit143",
+    "four_refused_fixture_browser_tabs": "exact1498 URLs verified and closed individually; unrelated tabs preserved",
+    "production_app_data": "unchanged",
+    "local_test_settings_and_wrapper": "retained in private temp/unique identifier for evidence; no managed gateway registered"
+  }
+}

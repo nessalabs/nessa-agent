@@ -53,3 +53,50 @@ it("does not mistake a transport failure or another agent's answer for confirmed
     reason: "not-confirmed",
   })
 })
+
+it("waits for the composed gateway before making the captured installation request", async () => {
+  const api: AgentsApi = {
+    list: vi.fn(),
+    installOptions: vi.fn(),
+    setNativeHooks: vi.fn(),
+    install: vi.fn().mockResolvedValue({
+      agent: "claude",
+      version: "pinned",
+      downloaded: true,
+      cleanupPending: false,
+    }),
+  }
+  let connect!: (api: AgentsApi) => void
+  const connected = new Promise<AgentsApi>((resolve) => {
+    connect = resolve
+  })
+  const source = gatewayAgentInstallations(
+    () => connected,
+    () => "captured-request",
+    () => () => {},
+  )
+  const installing = source.install("claude")
+  expect(api.install).not.toHaveBeenCalled()
+  connect(api)
+  expect(await installing).toEqual({ status: "installed", cleanupPending: false })
+  expect(api.install).toHaveBeenCalledExactlyOnceWith("claude", "captured-request")
+})
+
+it("reports a session that could not connect as unavailable, since nothing was sent", async () => {
+  for (const agents of [
+    () => {
+      throw new Error("no session")
+    },
+    () => Promise.reject(new Error("no session")),
+  ]) {
+    const source = gatewayAgentInstallations(
+      agents,
+      () => "request",
+      () => () => {},
+    )
+    expect(await source.install("claude")).toEqual({
+      status: "failed",
+      reason: "unavailable",
+    })
+  }
+})

@@ -273,10 +273,10 @@ describe("what goes with a session", () => {
       update: { kind: "session", session: summary("new", "desktop", 900, "running") },
     })
     expect(listed.drafts).toEqual({})
-    expect(listed.chosenModels.new).toEqual(astra)
+    expect(listed.chosenModels.new).toBeUndefined()
   })
 
-  it("keeps the model chosen in a home once its first message starts it, whatever the source's summary names", () => {
+  it("follows the model published by the source after the first message starts a draft", () => {
     const drafted = chooseModel(createDraft(loaded(), { draftId: "new" }), {
       sessionId: "new",
       model: astra,
@@ -290,7 +290,7 @@ describe("what goes with a session", () => {
       update: { kind: "session", session: summary("new", "desktop", 900, "running") },
     })
     expect(listed.sessions.new.model).not.toEqual(astra)
-    expect(modelForNextTurn(listed, "new")).toEqual(astra)
+    expect(modelForNextTurn(listed, "new")).toEqual(listed.sessions.new.model)
   })
 
   it("lists a summary the same way whether the index read or the stream brings it", () => {
@@ -330,8 +330,8 @@ describe("what goes with a session", () => {
       { ...loaded(), chosenModels: { a: astra } },
       { sessionId: "a", revision: 3, draftId: "fresh" },
     )
-    // The model the person chose for its next turn carries over to the new home.
-    expect(chosen.drafts.fresh.model).toEqual(astra)
+    // An obsolete local override does not change the established model carried into a new home.
+    expect(chosen.drafts.fresh.model).toEqual(loaded().sessions.a.model)
     const elsewhere = sessionRemoved(
       { ...loaded(), view: { channelId: "gateway" } },
       { sessionId: "a", revision: 3, draftId: "fresh" },

@@ -368,7 +368,7 @@ their rows; the fold's are named for what they show.
 | L5 | yes | | yes: a person's close and a desktop stop each record their cause first; an opening whose lease cannot be saved holds nothing and opens again, and a stop whose cleanup record cannot be saved still lets the conversation open again (see below); a paired environment whose credential is revoked while it runs a lease has it recorded ending as revoked, by the system, then ended with the environment's cleanup or interrupted past the cleanup bound, and the environment records the same cause (`an_environment_revocation_is_recorded_ending_then_ended_with_its_cleanup`, `a_revocation_whose_end_goes_unanswered_is_interrupted`; row I8 in `docs/design/auth/peer-gateways.md`) |
 | L6 | yes | | yes, as far as it can arise: a stop during a close waits behind it and records nothing more; the join is the aggregate's |
 | L7 | yes | yes | yes: a close whose cleanup record cannot be saved says so, and the next opening accounts for the lease (see below) |
-| L8 | yes | yes | yes: a close past its deadline, with or without a turn running, and a close that fails, interrupt; late confirmation accounts once |
+| L8 | yes | yes | yes: a close past its deadline, with or without a turn running, and a close that fails, interrupt; late confirmation accounts once. The running-turn regression observes the handed-off Interrupted record before releasing the provider and awaits close completion under the CI step bound. Its later shared snapshot reader retains its existing five-second read timeout (#935). |
 | L9 | yes | yes | fence: events settle while Ending and are dropped with lease, turn and cursor once closed (see below) |
 | L10 | yes | | not reachable: in process there is no control channel to lose |
 | L11 | | | yes, at the next opening: a lease an earlier run left is accounted for before the next is issued (see below) |
@@ -1015,6 +1015,9 @@ stored by the gateway, evaluated by Cedar on every command and every
 subscription batch, and recorded as a semantic record with the owner as
 initiator. Nothing is granted by conversation list, by folder or by
 default; a peer with no grant on an id cannot tell it exists.
+The proposal to make this the one grant for a directory, a live subscribe,
+and a webhook is [access grants](access-grants.md). This section is what
+is built.
 
 Where it stands: grants per conversation id are built (slice G,
 [read grants](read-grants.md)), and each grant has its role and, for Drive,

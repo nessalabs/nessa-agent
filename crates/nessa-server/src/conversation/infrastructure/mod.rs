@@ -42,6 +42,9 @@
 //! summary is removed, and its deletion record joins the other audit records,
 //! which nothing removes. `BindingSessionEraser` carries an agent binding's
 //! answer about its own record of a session into the deletion, unchanged.
+//! `DurableExecutionAudit` serializes admitted physical writes through the shared
+//! local-storage Worker; its injected `ExecutionAuditFileWriter` owns private-file
+//! commit/sync. Observer loss retains the physical slot through input cleanup.
 //! `DurableConversationModeAudit` keeps application and recovery evidence in
 //! separate immutable files keyed by the conversation, request and phase.
 //! `DurableMcpAppAudit` does the same for each step of an MCP App's call, keyed
@@ -64,8 +67,13 @@
 //! MCP App reach a server, call a tool on it).
 //! `CedarConversationAccessPolicy` answers `ConversationAccessPolicyEvaluator`
 //! (`access_policy/cedar/`): who may locate, act on, read, comment in, drive
-//! or share a conversation, and watch a catalogue. The store asks it inside
+//! or share a conversation, receive its review notices, and watch a catalogue. The store asks it inside
 //! the transaction that writes a share grant.
+//! `DurableReviewNoticeAudit` acknowledges private immutable selection records
+//! after file sync and create-only publication, with directory sync where
+//! supported (the adapter module documents platform durability). Its one physical
+//! worker retains submitted writes when async observers disappear; UI queues
+//! never own that evidence.
 //! `DurableDriveToolAudit` keeps each of the tool policy's decisions on the
 //! gateway's own tools for a Drive turn, one immutable file per conversation,
 //! call, tool and outcome.
@@ -155,10 +163,12 @@ pub use permission_rules::{PermissionMemory, PublishedReview, RulesOpenError};
 
 mod deletion_audit;
 pub use deletion_audit::DurableConversationDeletionAudit;
+mod review_notice_audit;
+pub use review_notice_audit::{DurableReviewNoticeAudit, MonotonicReviewNoticeClock};
 
 mod audit;
 mod audit_mapping;
-pub use audit::DurableExecutionAudit;
+pub use audit::{DurableExecutionAudit, ExecutionAuditFileWriter};
 
 #[cfg(test)]
 #[path = "../../../tests/conversation/store.rs"]
