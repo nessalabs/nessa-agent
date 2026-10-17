@@ -315,14 +315,25 @@ async fn a_pending_mcp_report_survives_a_conflicting_target_retry() {
         .await;
     assert_eq!(retried["isError"], false, "{retried}");
     assert_eq!(reports_in(&service, &source, 1).await.len(), 1);
-    assert!(store.pending().await.unwrap().is_empty());
+    assert_eq!(
+        store.pending().await.unwrap().len(),
+        1,
+        "ownership keeps a queued report durable until the parent report turn settles"
+    );
+    drop(release_source);
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !store.pending().await.unwrap().is_empty() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("settled parent report releases its durable row");
     // Recreate the durable state of a crash after parent delivery but before row cleanup.
     assert!(store.save(&before[0]).await.unwrap());
     drop(client);
     drop(grant);
     serving.await.unwrap();
     drop(release_child);
-    drop(release_source);
     retire(service, storage, metadata).await;
     drop(store);
     let provider = Arc::new(ProviderFactory::default());
