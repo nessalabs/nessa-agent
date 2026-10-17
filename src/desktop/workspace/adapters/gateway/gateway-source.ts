@@ -97,6 +97,7 @@ import {
   executionTargets,
   prepareSubmission,
   permissionTargets,
+  questionDetails,
   questionTargets,
   reviewDetails,
   ConversationErrorCode,
@@ -116,6 +117,8 @@ import {
   type ConversationSummary,
   type ConversationView,
   type ConversationViewCursor,
+  type QuestionDetail,
+  type QuestionDetails,
   type ReviewDetail,
   type ReviewDetails,
   type Subscription,
@@ -157,6 +160,7 @@ export interface GatewayClient {
     | "submit"
     | "answer"
     | "permissionReview"
+    | "questionReview"
     | "answerQuestion"
     | "stop"
     | "setApprovalMode"
@@ -275,13 +279,18 @@ interface Read {
  * content anew. `serverNowMs` moves on every read. The gateway sends a frame
  * when this changes (`view_key`, row S9), so it is what decides here.
  */
-function viewKey(view: ConversationView, details: readonly ReviewDetail[]): string {
+function viewKey(
+  view: ConversationView,
+  details: readonly ReviewDetail[],
+  questions: readonly QuestionDetail[],
+): string {
   return JSON.stringify({
     ...view,
     revision: undefined,
     serverNowMs: undefined,
-    // A review's content, once read, never changes under its key.
+    // A review's or question's content, once read, never changes under its key.
     reviews: details.map((detail) => [detail.entry.review, detail.state]),
+    asked: questions.map((detail) => [detail.entry.question, detail.state]),
   })
 }
 
@@ -386,9 +395,29 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
   const firstSeen = new Map<string, Map<string, number>>()
   // What each conversation's listed reviews show, read from their live owner.
   const reviews = new Map<string, ReviewDetails>()
-  const dropReviews = (sessionId: string) => {
+  // And what each of its listed questions asks, read the same way.
+  const questions = new Map<string, QuestionDetails>()
+  // The keys of what a conversation's window had read whole when it let the
+  // conversation go: an answer to one of them answers what the person saw.
+  const readBefore = new Map<string, ReadonlySet<string>>()
+  const dropReviews = (sessionId: string, remember = false) => {
+    if (remember)
+      readBefore.set(
+        sessionId,
+        new Set([
+          ...(reviews.get(sessionId)?.details() ?? []).flatMap((detail) =>
+            detail.state === "loaded" ? [detail.entry.review] : [],
+          ),
+          ...(questions.get(sessionId)?.details() ?? []).flatMap((detail) =>
+            detail.state === "loaded" ? [detail.entry.question] : [],
+          ),
+        ]),
+      )
+    else readBefore.delete(sessionId)
     reviews.get(sessionId)?.dispose()
     reviews.delete(sessionId)
+    questions.get(sessionId)?.dispose()
+    questions.delete(sessionId)
   }
 
   // Nothing is said after `dispose`, which lets every listener go and admits no new one.
@@ -984,6 +1013,11 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     // A view lists each waiting review by its key; what it shows is read
     // from its live owner, and the frame applied again as each arrives,
     // before the review offers any answer (`Approval.loading`).
+    const changed = () => {
+      const latest = reads.get(sessionId)
+      if (!disposed && latest)
+        applyRead(sessionId, latest.sent, latest.cursor, latest.receivedAtMs)
+    }
     let loader = reviews.get(sessionId)
     if (!loader) {
       loader = reviewDetails({
@@ -991,18 +1025,27 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
           client("person").then((connected) =>
             connected.conversation.permissionReview(sessionId, review, { signal }),
           ),
-        changed: () => {
-          const latest = reads.get(sessionId)
-          if (!disposed && latest)
-            applyRead(sessionId, latest.sent, latest.cursor, latest.receivedAtMs)
-        },
+        changed,
       })
       reviews.set(sessionId, loader)
     }
     loader.follow(sent.permissions)
     const details = loader.details()
+    let asking = questions.get(sessionId)
+    if (!asking) {
+      asking = questionDetails({
+        read: (question, signal) =>
+          client("person").then((connected) =>
+            connected.conversation.questionReview(sessionId, question, { signal }),
+          ),
+        changed,
+      })
+      questions.set(sessionId, asking)
+    }
+    asking.follow(sent.questions)
+    const asked = asking.details()
     const held = reads.get(sessionId)
-    const key = viewKey(view, details)
+    const key = viewKey(view, details, asked)
     if (held && held.key === key) {
       reads.set(sessionId, { ...held, sent, cursor, receivedAtMs })
       return held.transcript
@@ -1015,6 +1058,7 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
       seenIn(sessionId),
       receivedAtMs,
       details,
+      asked,
     )
     reads.set(sessionId, { sent, view, receivedAtMs, key, transcript, cursor })
     tellApps(() => options.apps?.observe(sent))
@@ -1144,7 +1188,7 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
                 throw error
               // The client is ahead of the history the gateway holds: start over.
               reads.delete(sessionId)
-              dropReviews(sessionId)
+              dropReviews(sessionId, true)
               if (!live() || !current()) throw new WorkspaceSourceError("unavailable")
               return subscribe(connected, undefined)
             },
@@ -1206,7 +1250,7 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
         unfollow(oldest, new WorkspaceSourceError("unavailable"))
         // Not followed, it says only what its row says (`needs-you` is a frame's).
         reads.delete(oldest)
-        dropReviews(oldest)
+        dropReviews(oldest, true)
         publish(oldest)
       }
     }
@@ -1257,19 +1301,22 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
   const waitingReview = async (sessionId: string, approvalId: string) => {
     const key = reviewOf(approvalId)
     if (!key) throw new WorkspaceSourceError("not-waiting")
-    // A review this window holds is answered as it holds it. One it does not
-    // hold yet — its conversation not followed — is read whole first.
-    const heldBefore = reviews.get(sessionId)?.get(key)
+    // Only a review this window holds, or read whole before it let its
+    // conversation go: one first read now is one the person was never shown.
+    // One let go of is read again, and its key says it is the same review.
+    const held = reviews.get(sessionId)?.get(key)
+    if (!held && !readBefore.get(sessionId)?.has(key))
+      throw new WorkspaceSourceError("not-waiting")
     await transcriptOf(sessionId, "person")
     const listed = reads
       .get(sessionId)
       ?.sent.permissions.some((entry) => entry.review === key)
     const loader = reviews.get(sessionId)
-    const detail = heldBefore ? loader?.get(key) : await loader?.settled(key)
+    const detail = held ? loader?.get(key) : await loader?.settled(key)
     if (!listed || !detail) throw new WorkspaceSourceError("not-waiting")
     // No answer before the person could see the whole of what it allows.
     if (detail.state !== "loaded") throw new WorkspaceSourceError("not-supported")
-    const permission = detail.permission
+    const permission = detail.shown
     const [target] = permissionTargets({
       conversationId: sessionId,
       permissions: [permission],
@@ -1407,17 +1454,32 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     retryReview: (sessionId, approvalId) => {
       const key = reviewOf(approvalId)
       if (key) reviews.get(sessionId)?.retry(key)
+      if (key) questions.get(sessionId)?.retry(key)
     },
-    answerQuestion: (sessionId, executionId, questionId, choices, _initiator) =>
+    answerQuestion: (sessionId, executionId, questionId, choices, _initiator, key) =>
       within(async (live) => {
+        // Only the question shown under `key`, held as `waitingReview` holds
+        // a review: one asked again under the same identities has another
+        // key, and one first read now was never shown.
+        const held = key === undefined ? undefined : questions.get(sessionId)?.get(key)
+        if (key === undefined || (!held && !readBefore.get(sessionId)?.has(key)))
+          throw new WorkspaceSourceError("not-waiting")
         await transcriptOf(sessionId, "person")
-        const view = reads.get(sessionId)?.view
+        const listed = reads
+          .get(sessionId)
+          ?.sent.questions.some((entry) => entry.question === key)
+        const asking = questions.get(sessionId)
+        const detail = held ? asking?.get(key) : await asking?.settled(key)
         const target =
-          view &&
-          questionTargets(view).find(
-            (asked) =>
-              asked.executionId === executionId && asked.questionId === questionId,
-          )
+          listed && detail?.state === "loaded"
+            ? questionTargets({
+                conversationId: sessionId,
+                questions: [detail.shown],
+              }).find(
+                (asked) =>
+                  asked.executionId === executionId && asked.questionId === questionId,
+              )
+            : undefined
         if (!target) throw new WorkspaceSourceError("not-waiting")
         await dispatch(live, (connected) => {
           try {
