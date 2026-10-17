@@ -1854,6 +1854,121 @@ async fn permission_consumption_case(
     finish.send(()).unwrap();
     service.shutdown().await.unwrap();
 }
+#[tokio::test]
+async fn settled_permission_answers_wake_readers_and_expose_the_next_review() {
+    for (succeeds, abandon) in [(true, false), (false, false), (false, true)] {
+        let (service, provider, _, _) = fixture(ConversationLimits::default());
+        provider.request_permission.store(2, Ordering::SeqCst);
+        provider.answer_succeeds.store(succeeds, Ordering::SeqCst);
+        *provider.answer_failure.lock().unwrap() =
+            Some((AgentError::AuditFailure, PermissionSelectionState::Consumed));
+        let (finish, gate) = oneshot::channel();
+        *provider.permission_gate.lock().unwrap() = Some(gate);
+        let id = id();
+        service
+            .create(
+                id.clone(),
+                caller("panel", "create"),
+                RequestedConversation::default(),
+            )
+            .await
+            .unwrap();
+        service
+            .submit(
+                id.clone(),
+                caller("panel", "send"),
+                "reviews".into(),
+                SubmittedMessage {
+                    text: "change files".into(),
+                    images: Vec::new(),
+                    files: Vec::new(),
+                },
+                SubmissionMode::Queue,
+            )
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if service
+                    .read(id.clone(), caller("panel", "read"))
+                    .await
+                    .unwrap()
+                    .permissions
+                    .len()
+                    == 2
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        let mut changes = service.live_changes(&id);
+        let release = abandon.then(|| {
+            provider
+                .consume_before_answer_gate
+                .store(true, Ordering::SeqCst);
+            let (release, gate) = oneshot::channel();
+            *provider.answer_gate.lock().unwrap() = Some(gate);
+            release
+        });
+        let answer = tokio::spawn({
+            let service = service.clone();
+            let id = id.clone();
+            async move {
+                service
+                    .answer(
+                        id,
+                        caller("panel", "answer"),
+                        "reviews".into(),
+                        "permission".into(),
+                        "allow".into(),
+                        PermissionCaller::Owner,
+                    )
+                    .await
+            }
+        });
+        if let Some(release) = release {
+            provider.answer_started.notified().await;
+            answer.abort();
+            release.send(()).unwrap();
+            assert!(answer.await.unwrap_err().is_cancelled());
+            tokio::time::timeout(Duration::from_secs(2), async {
+                while !changes.has_changed().unwrap() {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+        } else if succeeds {
+            answer.await.unwrap().unwrap();
+        } else {
+            assert!(matches!(
+                answer.await.unwrap(),
+                Err(ConversationError::PermissionAnswer {
+                    error: AgentError::AuditFailure,
+                    selection: PermissionSelectionState::Consumed,
+                })
+            ));
+        }
+        assert!(
+            changes.has_changed().unwrap(),
+            "settled permission must wake its conversation reader"
+        );
+        changes.borrow_and_update();
+        let view = service
+            .read(id.clone(), caller("panel", "after-answer"))
+            .await
+            .unwrap();
+        assert_eq!(view.permissions.len(), 1);
+        assert_eq!(view.permissions[0].permission_id, "permission-1");
+        assert_eq!(provider.permission_answers.lock().unwrap().len(), 1);
+        finish.send(()).unwrap();
+        service.shutdown().await.unwrap();
+    }
+}
+
 #[test]
 fn ownership_and_creation_context_are_domain_state() {
     let record = Conversation::new(
