@@ -238,6 +238,7 @@ impl ProviderSessionBackend for WorkflowBackend {
         &'a self,
         target: ExecutionId,
         input: ExecutionRequest,
+        _capabilities: &'a EffectiveCapabilities,
         started: &'a (dyn Fn() + Send + Sync),
     ) -> ProviderOperationFuture<'a, SteeringOutcome> {
         Box::pin(async move {

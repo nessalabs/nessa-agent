@@ -625,6 +625,7 @@ async fn same_poll_policy_drift_prevents_prompt_and_native_steering_writes() {
                         .send(Command::Steer(
                             ExecutionId::new("active").unwrap(),
                             steered(&*worker.config.clock, request()),
+                            Box::new(worker.capabilities.clone()),
                             steer_reply,
                         ))
                         .await
@@ -875,6 +876,7 @@ async fn selected_operation_deadline_includes_ready_policy_validation() {
                 .send(Command::Steer(
                     ExecutionId::new("active").unwrap(),
                     steered(&*worker.config.clock, request()),
+                    Box::new(worker.capabilities.clone()),
                     steer_reply,
                 ))
                 .await
@@ -957,7 +959,12 @@ async fn ready_completion_keeps_native_steering_prompt_fallback() {
     let operation = worker
         .command(
             &mut execution,
-            Command::Steer(ExecutionId::new("active").unwrap(), steering, reply),
+            Command::Steer(
+                ExecutionId::new("active").unwrap(),
+                steering,
+                Box::new(worker.capabilities.clone()),
+                reply,
+            ),
         )
         .await;
     worker
@@ -1008,7 +1015,12 @@ async fn interrupted_dispatch_receipt_retains_deadline_and_consumer_failure() {
         assert_eq!(
             promptly(worker.command(
                 &mut execution,
-                Command::Steer(ExecutionId::new("active").unwrap(), steering, reply)
+                Command::Steer(
+                    ExecutionId::new("active").unwrap(),
+                    steering,
+                    Box::new(worker.capabilities.clone()),
+                    reply
+                )
             ))
             .await
             .map_err(WorkerFailure::into_error),

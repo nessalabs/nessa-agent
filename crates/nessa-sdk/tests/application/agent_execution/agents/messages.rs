@@ -284,7 +284,11 @@ impl ProviderSessionBackend for ImageBackend {
     fn operation_capabilities(&self) -> ProviderOperationCapabilities {
         self.agent
     }
-    fn validate_input(&self, _: &ExecutionRequest) -> Result<(), AgentError> {
+    fn validate_input(
+        &self,
+        _: &ExecutionRequest,
+        _: &EffectiveCapabilities,
+    ) -> Result<(), AgentError> {
         self.refuses.clone().map_or(Ok(()), Err)
     }
     fn prepare_invocation(&self) -> ProviderOperationFuture<'_, ()> {

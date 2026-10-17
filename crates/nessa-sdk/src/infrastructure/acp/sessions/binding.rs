@@ -955,19 +955,16 @@ impl<P: AcpProfile + Clone + Sync> ProviderSessionBackend for AcpSession<P> {
     fn operation_capabilities(&self) -> ProviderOperationCapabilities {
         *self.factory.operation_capabilities.borrow()
     }
-    fn validate_input(&self, input: &ExecutionRequest) -> Result<(), AgentError> {
+    fn validate_input(
+        &self,
+        input: &ExecutionRequest,
+        capabilities: &EffectiveCapabilities,
+    ) -> Result<(), AgentError> {
         self.factory
             .profile
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .validate_execution(
-                input,
-                &self
-                    .factory
-                    .capabilities
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner),
-            )?;
+            .validate_execution(input, capabilities)?;
         fits_one_frame(&input.user_message, self.factory.config.max_frame_bytes)
     }
     fn prepare_invocation(&self) -> ProviderOperationFuture<'_, ()> {
@@ -1061,6 +1058,7 @@ impl<P: AcpProfile + Clone + Sync> ProviderSessionBackend for AcpSession<P> {
         &'a self,
         target: ExecutionId,
         input: ExecutionRequest,
+        capabilities: &'a EffectiveCapabilities,
         started: &'a (dyn Fn() + Send + Sync),
     ) -> ProviderOperationFuture<'a, SteeringOutcome> {
         Box::pin(async move {
@@ -1100,7 +1098,11 @@ impl<P: AcpProfile + Clone + Sync> ProviderSessionBackend for AcpSession<P> {
                 images,
                 deadline: Some(deadline),
             };
-            enqueue(&commands, Command::Steer(target, prompt, sender)).map_err(|error| {
+            enqueue(
+                &commands,
+                Command::Steer(target, prompt, Box::new(capabilities.clone()), sender),
+            )
+            .map_err(|error| {
                 started();
                 ProviderOperationFailure::new(error, ProviderSessionState::Usable)
             })?;
@@ -1361,10 +1363,11 @@ pub(crate) enum Command {
     SetApprovalMode(ApprovalMode, oneshot::Sender<Result<(), AgentError>>),
     /// A reasoning effort level the application has already checked is offered.
     SetEffortLevel(EffortLevel, oneshot::Sender<Result<(), AgentError>>),
-    /// Native steering for the identified execution.
+    /// Native steering for the identified execution with its admission binding.
     Steer(
         ExecutionId,
         DispatchedPrompt,
+        Box<EffectiveCapabilities>,
         oneshot::Sender<ProviderOperationResult<SteeringOutcome>>,
     ),
     /// One prompt.

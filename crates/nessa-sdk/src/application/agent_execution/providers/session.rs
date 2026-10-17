@@ -33,7 +33,7 @@ use std::sync::{Arc, RwLock};
 /// Adapters construct this handle; runtime controls are crate-private so callers
 /// go through Agent storage, hooks, and scheduling.
 /// A provider context client. Clones share its execution, shutdown, and restoration lifecycle.
-/// Admission uses the shared acknowledged model capability snapshot,
+/// Admission uses the operation-selected model capability snapshot,
 /// the connected agent's negotiated answer on images when that is known, and the
 /// backend's own `validate_input`.
 /// The backend owns execution concurrency and cleanup; the host authorizes answers.
@@ -167,7 +167,7 @@ impl ProviderSession {
                 ));
             }
         }
-        self.backend.validate_input(input)
+        self.backend.validate_input(input, capabilities)
     }
     /// Dispatch `input` after checking actual message bytes and caller-estimated tokens.
     /// This adapter operation does not persist evidence or run Agent hooks.
@@ -206,7 +206,9 @@ impl ProviderSession {
                     ProviderSessionState::Usable,
                 ));
             }
-            self.backend.steer(target, input, started).await
+            self.backend
+                .steer(target, input, capabilities, started)
+                .await
         })
     }
     /// Delegate the exact reviewed choice and actor to the backend's audit and

@@ -106,10 +106,12 @@ pub trait ProviderSessionBackend: Send + Sync {
     ///
     /// [`ProviderSession`] calls this at every admission, after its own checks
     /// and before anything is saved, queued, or sent. It must be synchronous
-    /// and pure: no I/O, no restoration, no bytes read, and the same answer for
-    /// the same input under an unchanged acknowledged model configuration.
-    /// An SDK-owned acknowledged model change may replace that configuration
-    /// and its validation limits. Rules that depend on the live connection
+    /// and pure: no I/O, no restoration, no bytes read. Model-dependent checks
+    /// use the operation-selected `capabilities`, which can retain an active
+    /// turn's configuration after a next-turn model acknowledgement. Do not
+    /// substitute the attachment's current selection. The same input and
+    /// supplied binding have the same answer. Rules that depend on the live
+    /// connection
     /// belong in [`Self::operation_capabilities`] instead.
     /// The default accepts everything.
     ///
@@ -117,7 +119,11 @@ pub trait ProviderSessionBackend: Send + Sync {
     ///
     /// The typed reason the input is refused, such as
     /// [`AgentError::MessageTooLarge`].
-    fn validate_input(&self, _input: &ExecutionRequest) -> Result<(), AgentError> {
+    fn validate_input(
+        &self,
+        _input: &ExecutionRequest,
+        _capabilities: &EffectiveCapabilities,
+    ) -> Result<(), AgentError> {
         Ok(())
     }
 
@@ -127,6 +133,10 @@ pub trait ProviderSessionBackend: Send + Sync {
     /// Deliver input only to the target execution. An ambiguous delivery failure
     /// is an error, never permission to replay the input as a fresh invocation.
     ///
+    /// `capabilities` is the same operation-selected binding used for admission.
+    /// Carry it through deferred model-dependent dispatch checks, rather than
+    /// resolving the attachment's current selection again.
+    ///
     /// Call `started` once the steer has been handed to the harness, and on
     /// every path that returns without handing it over, before this future
     /// waits for the harness's response. The host releases what it held until
@@ -135,6 +145,7 @@ pub trait ProviderSessionBackend: Send + Sync {
         &'a self,
         _target: ExecutionId,
         _input: ExecutionRequest,
+        _capabilities: &'a EffectiveCapabilities,
         started: &'a (dyn Fn() + Send + Sync),
     ) -> ProviderOperationFuture<'a, SteeringOutcome> {
         Box::pin(async move {

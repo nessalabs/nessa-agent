@@ -1857,6 +1857,7 @@ impl ProviderSessionBackend for Backend {
         &'a self,
         _: nessa_sdk::domain::agent_execution::executions::ExecutionId,
         _: ExecutionRequest,
+        _: &'a EffectiveCapabilities,
         started: &'a (dyn Fn() + Send + Sync),
     ) -> ProviderOperationFuture<'a, SteeringOutcome> {
         Box::pin(async move {

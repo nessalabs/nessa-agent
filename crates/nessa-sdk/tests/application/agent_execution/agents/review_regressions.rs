@@ -200,6 +200,7 @@ impl ProviderSessionBackend for Probe {
         &'a self,
         _: ExecutionId,
         _: ExecutionRequest,
+        _: &'a EffectiveCapabilities,
         started: &'a (dyn Fn() + Send + Sync),
     ) -> ProviderOperationFuture<'a, SteeringOutcome> {
         Box::pin(async move {

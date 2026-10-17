@@ -399,8 +399,10 @@ but a new active turn cannot replace it. This existing admission owner is the
 barrier; binding publication adds no separate generation or execution-ID rule.
 `dropped_model_caller_keeps_owned_settlement_and_original_actor` covers the
 retained control and later-control serialization; it does not independently
-claim a public replacement-invocation race witness. Both configured
-admission and connected-provider validation consume the same chosen binding.
+claim a public replacement-invocation race witness. Configured admission, backend preflight and worker profile validation must consume
+the same operation-selected binding; a mutable attachment selection is not that
+authority. The profile validates the supplied capabilities, without resolving the
+current model again.
 
 | Fresh or retained operation | Configuration owner | Required regression |
 | --- | --- | --- |
@@ -409,6 +411,7 @@ admission and connected-provider validation consume the same chosen binding.
 | No active target, or a different initiator | Current selection B for its own queued invocation | No native dispatch; B admission limits apply |
 | Native `PromptRequired` explicitly confirms nonconsumption | Current selection B before acquiring queued ownership | Input accepted for native A but invalid for queued B is refused, never queued or dispatched as B; input valid for both queues once with original identity and B audit provenance |
 | Exact saved steering retry / changed same-ID request | Original receipt / `SubmissionConflict`, before either current-model check | Native injected retry remains identical with zero additional native calls or admission writes |
+| Operation-selected native binding crosses adapter validation | The same selected capabilities pass through ProviderSession, backend preflight and the ACP steering command/worker; model-dependent profile checks use that supplied binding, while frame and negotiated checks remain intact | Model-aware custom backend plus actual ACP transport: unequal A/B output ceilings with NextTurn native A, SubsequentResponses native B and queued B. The fixture records both native delivery and successor prompts before shutdown; explicit retirement after a refused before-probe confirms cleanup and retains the transport-closed active receipt. Actual before: both NextTurn output cases refused with InvalidInput while both SubsequentResponses cases passed. Fixed ACP four and model-aware public ten pass. Independently substituting backend B or worker B reproduces two failures with two positive counterparts, and each exact restoration passes all four |
 
 The public regressions in `tests/application/agent_execution/agents/models/steering.rs`
 cover these cases, including exact injected retries and conflicting identities.

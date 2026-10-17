@@ -10,7 +10,9 @@ mode = "default" if profile == "claude" else "read-only"
 session = "held-native-context"
 active = None
 prompts = 0
-adjust = len(sys.argv) > 2
+adjust = "adjust" in sys.argv[2:]
+steering = "steer" in sys.argv[2:]
+steers = 0
 effort = "high" if adjust else None
 
 def send(value):
@@ -25,6 +27,11 @@ def options():
         values.append({"id": "effort" if profile == "claude" else "reasoning_effort", "category": "thought_level", "currentValue": effort, "options": [{"value": x} for x in ("medium", "high")]})
     return {"configOptions": values}
 
+def observed():
+    if steering:
+        with open("model-steering-observed", "w") as record:
+            json.dump({"steers": steers, "prompts": prompts}, record)
+
 def text(value):
     send({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": session, "update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": value}}}})
 
@@ -34,7 +41,7 @@ for line in sys.stdin:
     params = message.get("params", {})
     id = message.get("id")
     if method == "initialize":
-        result(id, {"protocolVersion": 1, "agentInfo": {"name": "claude-code-acp" if profile == "claude" else "@agentclientprotocol/codex-acp", "version": version}, "agentCapabilities": {"sessionCapabilities": {"resume": {}}}})
+        result(id, {"_meta": {"steering": {"supported": steering}}, "protocolVersion": 1, "agentInfo": {"name": "claude-code-acp" if profile == "claude" else "@agentclientprotocol/codex-acp", "version": version}, "agentCapabilities": {"sessionCapabilities": {"resume": {}}}})
     elif method in ("session/new", "session/resume"):
         session = params.get("sessionId", session)
         result(id, {"sessionId": session, **options()})
@@ -52,18 +59,27 @@ for line in sys.stdin:
         else:
             raise AssertionError(params)
         result(id, options())
-        if active is not None:
+        if active is not None and not steering:
             # The existing native prompt settles after the configuration receipt.
             text("old turn preserved")
             result(active, {"stopReason": "end_turn"})
             active = None
     elif method == "session/prompt":
         prompts += 1
+        observed()
         text("native turn running")
         if prompts == 1:
             active = id
         else:
             result(id, {"stopReason": "end_turn"})
+    elif method == "_session/steering":
+        assert steering and active is not None
+        steers += 1
+        observed()
+        result(id, {"outcome": "injected"})
+        text("native steer accepted")
+        result(active, {"stopReason": "end_turn"})
+        active = None
     elif method == "session/close":
         result(id, {})
     elif method == "shutdown":
@@ -72,3 +88,5 @@ for line in sys.stdin:
         break
     else:
         raise AssertionError(message)
+
+observed()

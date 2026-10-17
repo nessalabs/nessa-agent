@@ -38,6 +38,22 @@ struct Backend {
     audit: Arc<Mutex<Vec<ExecutionAuditRecord>>>,
 }
 impl ProviderSessionBackend for Backend {
+    fn validate_input(
+        &self,
+        input: &ExecutionRequest,
+        capabilities: &EffectiveCapabilities,
+    ) -> Result<(), AgentError> {
+        if input.estimated_input_tokens + u64::from(input.reserved_output_tokens)
+            > u64::from(capabilities.limits().max_context_window())
+            || input.reserved_output_tokens > capabilities.limits().max_output()
+        {
+            return Err(AgentError::InvalidInput(
+                "model-aware backend input limits".into(),
+            ));
+        }
+        Ok(())
+    }
+
     fn operation_capabilities(&self) -> ProviderOperationCapabilities {
         ProviderOperationCapabilities {
             negotiated: true,
@@ -135,6 +151,7 @@ impl ProviderSessionBackend for Backend {
         &'a self,
         target: ExecutionId,
         input: ExecutionRequest,
+        _capabilities: &'a EffectiveCapabilities,
         started: &'a (dyn Fn() + Send + Sync),
     ) -> ProviderOperationFuture<'a, SteeringOutcome> {
         Box::pin(async move {

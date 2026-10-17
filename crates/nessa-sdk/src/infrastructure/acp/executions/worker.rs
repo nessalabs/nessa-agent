@@ -1579,7 +1579,7 @@ impl<P: AcpProfile> Worker<P> {
                 Command::ExecutionRequest(_, reply) => {
                     let _ = reply.send(ProviderExecutionReply::Rejected(AgentError::Closed));
                 }
-                Command::Steer(_, _, reply) => {
+                Command::Steer(_, _, _, reply) => {
                     let _ = reply.send(Err(ProviderOperationFailure::new(
                         AgentError::Closed,
                         ProviderSessionState::CleanupRequired,
@@ -1727,8 +1727,8 @@ impl<P: AcpProfile> Worker<P> {
             Command::ExecutionRequest(prompt, reply) => {
                 self.dispatch_execution(execution, prompt, reply).await
             }
-            Command::Steer(target, prompt, reply) => {
-                self.dispatch_steering(execution, target, prompt, reply)
+            Command::Steer(target, prompt, capabilities, reply) => {
+                self.dispatch_steering(execution, target, prompt, *capabilities, reply)
                     .await
             }
             Command::CancelPermission(input, reply) => {
@@ -2054,6 +2054,7 @@ impl<P: AcpProfile> Worker<P> {
         execution: &mut ExecutionController,
         target: ExecutionId,
         prompt: DispatchedPrompt,
+        capabilities: EffectiveCapabilities,
         reply: SteeringReply,
     ) -> Result<(), WorkerFailure> {
         let readiness = self
@@ -2073,7 +2074,7 @@ impl<P: AcpProfile> Worker<P> {
         if reply.is_closed() {
             return Ok(());
         }
-        if let Some(answer) = self.steering_without_sending(&target, &prompt.input) {
+        if let Some(answer) = self.steering_without_sending(&target, &prompt.input, &capabilities) {
             let _ = reply.send(answer);
             return Ok(());
         }
@@ -2146,6 +2147,7 @@ impl<P: AcpProfile> Worker<P> {
         &self,
         target: &ExecutionId,
         input: &ExecutionRequest,
+        capabilities: &EffectiveCapabilities,
     ) -> Option<ProviderOperationResult<SteeringOutcome>> {
         if self.close_requested.borrow().is_some() {
             return Some(Err(ProviderOperationFailure::new(
@@ -2168,7 +2170,7 @@ impl<P: AcpProfile> Worker<P> {
                 ProviderSessionState::Usable,
             )));
         }
-        match self.profile.validate_execution(input, &self.capabilities) {
+        match self.profile.validate_execution(input, capabilities) {
             Ok(()) => None,
             Err(error) => Some(Err(ProviderOperationFailure::new(
                 error,

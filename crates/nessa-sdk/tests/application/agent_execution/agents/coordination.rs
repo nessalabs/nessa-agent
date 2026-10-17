@@ -279,6 +279,7 @@ impl ProviderSessionBackend for Backend {
         &'a self,
         _target: ExecutionId,
         _input: ExecutionRequest,
+        _capabilities: &'a EffectiveCapabilities,
         started: &'a (dyn Fn() + Send + Sync),
     ) -> ProviderOperationFuture<'a, SteeringOutcome> {
         Box::pin(async move {
