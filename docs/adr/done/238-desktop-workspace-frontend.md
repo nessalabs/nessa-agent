@@ -309,8 +309,9 @@ owner (`focus.ts`, `transcript.tsx`):
 
 | event | view and effect |
 | --- | --- |
-| first send pending | draft home remains while the source creates the session |
-| source lists the session | home is replaced by the conversation; the focus adapter follows a lost field after its target paint |
+| first send from a home | capture arrival geometry while the home is mounted; the focus adapter retires only focus inside that current home, before arrival or store changes |
+| `messageSent` admits the draft | the same session is listed optimistically and its draft home is replaced before the source replies; the existing focus adapter follows the lost field after its target paint |
+| first send is `not-asked` | restore the retired field synchronously only while that same home, field and session remain current and connected and focus is still on the page; keep deliberate focus elsewhere |
 | arrival awaits destination boxes | one conversation composer; its composer, first bubble and heading wait unpainted; the browser observer owns their boxes |
 | observer supplies all destination boxes | reveal and animate the composer and first bubble from their captured origins; settle the heading; no geometry read follows a write |
 | reduced motion | replace directly, without a waiting mark or flight |

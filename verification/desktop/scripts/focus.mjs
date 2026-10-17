@@ -770,8 +770,39 @@ async function firstMessageHandoff(page, reduced = false) {
   )
   if (!ready) return { failures: ["new-session home did not receive the caret"] }
   await page.evaluate(
-    ([pane, composer]) => {
+    ([pane, composer, home, field]) => {
       const current = document.querySelector(pane)
+      const originalHome = current.querySelector(home)
+      const originalField = originalHome.querySelector(field)
+      let retirement = null
+      let mutations = 0
+      const beforeRetirement = new MutationObserver((records) => {
+        mutations += records.length
+      })
+      // Observe only this native Enter's commit, not preceding typing or clocks.
+      const onKeyDown = (event) => {
+        if (event.target !== originalField || event.key !== "Enter" || event.repeat)
+          return
+        mutations = 0
+        beforeRetirement.observe(current, {
+          attributes: true,
+          childList: true,
+          characterData: true,
+          subtree: true,
+        })
+      }
+      const onFocusOut = (event) => {
+        if (event.target !== originalField) return
+        retirement = {
+          priorMutations: mutations + beforeRetirement.takeRecords().length,
+          homeConnected: originalHome.isConnected,
+          fieldConnected: originalField.isConnected,
+          trusted: event.isTrusted,
+        }
+        beforeRetirement.disconnect()
+      }
+      document.addEventListener("keydown", onKeyDown, true)
+      document.addEventListener("focusout", onFocusOut, true)
       const counts = []
       const flights = new Map()
       const seen = new Set()
@@ -793,16 +824,25 @@ async function firstMessageHandoff(page, reduced = false) {
       window.__focusHomeHandoff = () => {
         sample()
         observer.disconnect()
+        beforeRetirement.disconnect()
+        document.removeEventListener("keydown", onKeyDown, true)
+        document.removeEventListener("focusout", onFocusOut, true)
         cancelAnimationFrame(frame)
         delete window.__focusHomeHandoff
-        return { counts, flights: Object.fromEntries(flights), motionCount: seen.size }
+        return {
+          counts,
+          flights: Object.fromEntries(flights),
+          motionCount: seen.size,
+          retirement,
+        }
       }
     },
-    [css.focusedPane, css.composerCard],
+    [css.focusedPane, css.composerCard, css.paneHome, css.field],
   )
   let counts
   let flights
   let motionCount
+  let retirement
   const failures = []
   try {
     await page.keyboard.type(prompt)
@@ -864,7 +904,17 @@ async function firstMessageHandoff(page, reduced = false) {
     counts = observed.counts
     flights = observed.flights
     motionCount = observed.motionCount
+    retirement = observed.retirement
   }
+  if (
+    !retirement?.trusted ||
+    retirement.priorMutations !== 0 ||
+    !retirement.homeConnected ||
+    !retirement.fieldConnected
+  )
+    failures.push(
+      `home focus was not retired before its commit: ${JSON.stringify(retirement)}`,
+    )
   if (counts.length === 0) failures.push("handoff had no observed composer counts")
   if (counts.some((count) => count > 1))
     failures.push(`overlapping composers during handoff: ${counts.join(" ")}`)
@@ -882,7 +932,7 @@ async function firstMessageHandoff(page, reduced = false) {
         failures.push(`${id} did not glide from its origin`)
     }
   }
-  return { counts, flights, motionCount, after: await state(page), failures }
+  return { counts, flights, motionCount, retirement, after: await state(page), failures }
 }
 
 /** A retired workspace cannot start a new focus search from its held frame. */

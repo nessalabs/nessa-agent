@@ -839,6 +839,8 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   home replaces it without overlapping composer instances; the reply receives
   the caret and keeps the next draft. The composer glides into its dock and
   the sent words rise into their bubble; reduced motion performs neither flight.
+  The native home field's focusout precedes that Enter's pane DOM mutations
+  while the original home and field are still connected (ADR 238's handoff order).
   _Check:_ `focus.mjs` (`focus-home-handoff`, `focus-home-handoff-reduced`).
 - [ ] **Focus on Customize survives the home becoming small.** Customize
   focused in a new session's home, the window shortened until the home takes
