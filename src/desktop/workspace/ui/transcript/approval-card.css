@@ -290,11 +290,6 @@
   font-family: var(--nessa-font-mono);
 }
 
-.workspace-approval-copy {
-  height: 22px;
-  font-size: var(--desktop-text-caption);
-}
-
 /*
  * The command (`approval-request.tsx`): it breaks only between words, each
  * word kept whole; lines after the first hang under the first word, clear of

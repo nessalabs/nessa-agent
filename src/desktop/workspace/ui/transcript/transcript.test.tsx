@@ -1070,7 +1070,7 @@ describe("a transcript", () => {
     const card = host.querySelector<HTMLElement>(".workspace-approval")
     // A title that only names the tool is not repeated as a reason.
     expect(card?.querySelector(".workspace-approval-reason")).toBeNull()
-    expect(card?.querySelector('[aria-label="Sites"]')?.textContent).toBe(
+    expect(card?.querySelector('[aria-label="Sites named"]')?.textContent).toBe(
       "tad2026.eventive.org",
     )
     expect(card?.querySelector('[aria-label="Programs"]')?.textContent).toBe("curl×2head")
@@ -1093,6 +1093,23 @@ describe("a transcript", () => {
     )
     expect(details?.querySelector(".workspace-approval-meta dd")?.textContent).toBe(
       "mcp__nessa__shell",
+    )
+  })
+
+  it("opens the whole command at once where the gist cannot read every program it runs", async () => {
+    const approval = conversation.approval
+    if (!approval) throw new Error("the sample asks for nothing")
+    await shown(fakeSource(), {
+      ...conversation,
+      approval: { ...approval, command: 'echo "$(rm -rf ~)"' },
+    })
+    const details = host.querySelector<HTMLElement>(".workspace-approval-details")
+    expect(
+      host.querySelector(".workspace-approval-disclose")?.getAttribute("aria-expanded"),
+    ).toBe("true")
+    expect(details?.hasAttribute("inert")).toBe(false)
+    expect(details?.querySelector(".workspace-approval-command")?.textContent).toBe(
+      '$ echo "$(rm -rf ~)"',
     )
   })
 

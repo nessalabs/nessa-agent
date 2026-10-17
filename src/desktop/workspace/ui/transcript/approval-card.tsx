@@ -178,13 +178,15 @@ function DeadlineRing({ deadline }: { deadline: ApprovalDeadline }) {
 }
 
 /**
- * An agent's command at a glance, and whole under Details: the sites it
- * reaches, each by its own icon where the site has one, and the programs it
+ * An agent's command at a glance, and whole under Details — opened at once
+ * when the gist cannot read every program the command runs (`plain`): the
+ * sites it names, each by its own icon where the site has one, and the programs it
  * runs; opened, its script one step per line, the tool it calls and that
  * tool's other input, and a way to copy the command exactly as it came.
  */
 function ApprovalDetails({ command, gist }: { command: string; gist: CommandGist }) {
-  const [open, setOpen] = useState(false)
+  // A command the gist cannot read whole opens whole: the summary never stands for it.
+  const [open, setOpen] = useState(!gist.plain)
   const details = useId()
   const hosts = gist.hosts.slice(0, shownHosts)
   const programs = gist.programs.slice(0, shownPrograms)
@@ -195,7 +197,7 @@ function ApprovalDetails({ command, gist }: { command: string; gist: CommandGist
       <div className="workspace-approval-gist" data-open={open ? "" : undefined}>
         <div className="workspace-approval-facts">
           {hosts.length > 0 ? (
-            <span className="workspace-approval-fact" aria-label="Sites">
+            <span className="workspace-approval-fact" aria-label="Sites named">
               {hosts.map((host) => (
                 <span key={host} className="workspace-approval-site">
                   <Favicon
