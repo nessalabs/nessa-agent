@@ -1818,13 +1818,16 @@ impl Agent {
         let mut events = attached.events.lock().await;
         let mut execution = Box::pin(async {
             self.inner.manager.begin_dispatch(&input.execution_id);
-            let _active =
-                match ActiveInvocation::new(&self.inner.lifecycle, input.execution_id.clone()) {
-                    Ok(active) => active,
-                    Err(error) => {
-                        return (ProviderExecutionReply::Rejected(error), work.cancellation());
-                    }
-                };
+            let _active = match ActiveInvocation::new(
+                &self.inner.lifecycle,
+                input.execution_id.clone(),
+                self.current_provider(),
+            ) {
+                Ok(active) => active,
+                Err(error) => {
+                    return (ProviderExecutionReply::Rejected(error), work.cancellation());
+                }
+            };
             work.mark_execution_started();
             let outcome = attached.session.execute(dispatched).await;
             // Capture the existing stop authority with the reply. A later Stop

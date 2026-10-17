@@ -330,6 +330,9 @@ impl Agent {
                 ProviderSessionState::CleanupRequired,
             ));
         }
+        self.inner
+            .lifecycle
+            .acknowledge_active_model(normalized.clone(), effect.timing());
         *self.inner.provider.write().expect("current model binding") = normalized;
         Ok(effect)
     }

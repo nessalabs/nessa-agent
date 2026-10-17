@@ -150,8 +150,15 @@ impl ProviderSession {
     /// restored agent takes no images. A closed context keeps its last
     /// negotiation, because the same agent is what a restoration would start.
     pub(crate) fn validate(&self, input: &ExecutionRequest) -> Result<(), AgentError> {
+        self.validate_with_capabilities(&self.capabilities(), input)
+    }
+    fn validate_with_capabilities(
+        &self,
+        capabilities: &EffectiveCapabilities,
+        input: &ExecutionRequest,
+    ) -> Result<(), AgentError> {
         let images = input.user_message.images();
-        validate_configured_input(&self.capabilities(), input)?;
+        validate_configured_input(capabilities, input)?;
         if !images.is_empty() {
             let agent = self.operation_capabilities();
             if agent.negotiated() && !agent.image_input() {
@@ -178,7 +185,9 @@ impl ProviderSession {
             }
         })
     }
-    /// Steer an identified active invocation after the usual input admission checks.
+    /// Steer an identified active invocation using its selected admission binding.
+    /// The caller retains that immutable binding across admission and delivery;
+    /// the attachment's current selection may govern a later native turn.
     /// Provider acknowledgements distinguish injection from unconsumed idle input.
     /// `started` is the host's handoff, forwarded to the backend: see
     /// [`ProviderSessionBackend::steer`](super::ports::ProviderSessionBackend::steer).
@@ -186,10 +195,11 @@ impl ProviderSession {
         &'a self,
         target: ExecutionId,
         input: ExecutionRequest,
+        capabilities: &'a EffectiveCapabilities,
         started: &'a (dyn Fn() + Send + Sync),
     ) -> ProviderOperationFuture<'a, SteeringOutcome> {
         Box::pin(async move {
-            if let Err(error) = self.validate(&input) {
+            if let Err(error) = self.validate_with_capabilities(capabilities, &input) {
                 started();
                 return Err(ProviderOperationFailure::new(
                     error,

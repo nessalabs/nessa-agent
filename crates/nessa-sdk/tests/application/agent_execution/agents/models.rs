@@ -1,5 +1,6 @@
 //! Public same-provider control preserves an active execution and exact saved context.
 mod admission;
+mod steering;
 use nessa_sdk::application::agent_execution::traces::LocalTraceStore;
 use nessa_sdk::application::dto::ImageInputLimitsDto;
 use nessa_sdk::domain::common::value_objects::{ImageMediaType, Sha256Digest};
@@ -25,6 +26,9 @@ struct Backend {
     fail_approval: Mutex<Option<AgentError>>,
     replayed_failure: Mutex<Option<ProviderOperationFailure>>,
     model_mode: Mutex<ApprovalMode>,
+    model_timing: Mutex<ModelChangeTiming>,
+    steering: Mutex<Option<SteeringOutcome>>,
+    steered: Mutex<Vec<(ExecutionId, ExecutionRequest)>>,
     model_effort: Mutex<Option<EffortLevel>>,
     model_calls: AtomicUsize,
     model_gate: Mutex<Option<(oneshot::Sender<()>, oneshot::Receiver<()>)>>,
@@ -38,6 +42,7 @@ impl ProviderSessionBackend for Backend {
         ProviderOperationCapabilities {
             negotiated: true,
             image_input: self.image_input,
+            native_steering: self.steering.lock().unwrap().is_some(),
             effort_levels: capabilities_for("small", 200)
                 .effort_levels()
                 .unwrap()
@@ -77,7 +82,7 @@ impl ProviderSessionBackend for Backend {
                 capabilities,
                 Some(*self.model_mode.lock().unwrap()),
                 self.model_effort.lock().unwrap().clone(),
-                ModelChangeTiming::NextTurn,
+                *self.model_timing.lock().unwrap(),
             ))
         })
     }
@@ -124,6 +129,27 @@ impl ProviderSessionBackend for Backend {
                     .unwrap();
             }
             self.inner.execute(input).await
+        })
+    }
+    fn steer<'a>(
+        &'a self,
+        target: ExecutionId,
+        input: ExecutionRequest,
+        started: &'a (dyn Fn() + Send + Sync),
+    ) -> ProviderOperationFuture<'a, SteeringOutcome> {
+        Box::pin(async move {
+            started();
+            let outcome = *self.steering.lock().unwrap();
+            match outcome {
+                Some(outcome) => {
+                    self.steered.lock().unwrap().push((target, input));
+                    Ok(outcome)
+                }
+                None => Err(ProviderOperationFailure::new(
+                    AgentError::Unsupported("fixture native steering".into()),
+                    ProviderSessionState::Usable,
+                )),
+            }
         })
     }
     fn answer_question(&self, answer: QuestionAnswer) -> ProviderOperationFuture<'_, ()> {
@@ -378,6 +404,9 @@ async fn prepared_with_capabilities(
         fail_approval: Mutex::new(None),
         replayed_failure: Mutex::new(None),
         model_mode: Mutex::new(ApprovalMode::Ask),
+        model_timing: Mutex::new(ModelChangeTiming::NextTurn),
+        steering: Mutex::new(None),
+        steered: Mutex::new(Vec::new()),
         model_effort: Mutex::new(None),
         model_calls: AtomicUsize::new(0),
         model_gate: Mutex::new(None),

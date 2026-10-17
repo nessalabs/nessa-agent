@@ -17,8 +17,8 @@ use crate::application::agent_execution::{
     },
     permissions::ActionContext,
     providers::{
-        validate_configured_input, CloseOutcome, ProviderOperationFailure, ProviderSessionState,
-        SessionCloseRequest, SteeringOutcome,
+        validate_configured_input, AgentProvider, CloseOutcome, ProviderOperationFailure,
+        ProviderSessionState, SessionCloseRequest, SteeringOutcome,
     },
     sessions::{
         InvocationSchedulingEvent, NoteCandidates, NoteIntake, StorageError,
@@ -288,10 +288,11 @@ impl<'a> ActiveInvocation<'a> {
     pub(super) fn new(
         lifecycle: &'a SessionLifecycle,
         id: ExecutionId,
+        configured: Arc<dyn AgentProvider>,
     ) -> Result<Self, AgentError> {
         Ok(Self {
             lifecycle,
-            work_generation: lifecycle.start_execution(id)?,
+            work_generation: lifecycle.start_execution(id, configured)?,
         })
     }
 }
@@ -1456,12 +1457,16 @@ impl Agent {
     /// with: a turn is never steered by anyone but who started it. Unsupported native
     /// steering returns Unsupported; callers can explicitly choose enqueue_steering.
     ///
-    /// A message the selected model cannot take is refused before anything is
-    /// saved or steered. Input that passes that check is saved before
+    /// Native input is checked against the active invocation's model binding:
+    /// NextTurn acknowledgement retains that binding, while SubsequentResponses
+    /// advances it. Independent queued input uses the current selection. A
+    /// message its binding cannot take is refused before anything is saved or
+    /// steered. Input that passes that check is saved before
     /// contacting the provider. If its target settles during that save, the
     /// undispatched input enters the boundary queue. Once native
     /// delivery starts, only an explicit PromptRequired response allows queuing it
-    /// as a new invocation. Timeouts, malformed replies and transport errors are
+    /// as a new invocation, after checking the current selection's limits again.
+    /// Timeouts, malformed replies and transport errors are
     /// never retried automatically.
     /// When `submitter` carries [`Submitter::with_after_save`](crate::application::agent_execution::executions::Submitter::with_after_save),
     /// that check runs after the input is saved and before this injects into
@@ -1529,7 +1534,7 @@ impl Agent {
         work_owner: &mut Option<WorkPermit>,
     ) -> Result<SteeringDelivery, AgentError> {
         // Resolve saved submission identity before validating genuinely new
-        // input against the current model. A retry only retrieves its receipt.
+        // input against its operation's binding. A retry only retrieves its receipt.
         let mut scheduler = self.inner.scheduler.lock().await;
         if let Some(recovered) = submissions::recover(
             &self.inner.manager,
@@ -1542,15 +1547,8 @@ impl Agent {
         {
             return recovered;
         }
-        validate_configured_input(&self.capabilities(), &input)?;
-        let close_notice = self.inner.lifecycle.close_notice();
-        *work_owner = Some(self.inner.lifecycle.accept_waiting_work()?);
-        let approval_mode = self.approval_mode();
-        scheduler
-            .queue
-            .validate_enqueue(&input.execution_id)
-            .map_err(AgentError::Scheduling)?;
-        let target = self.inner.lifecycle.active();
+        let active = self.inner.lifecycle.active_configuration();
+        let target = active.as_ref().map(|active| active.id.clone());
         // A turn's calls are judged under the initiation its record saved, so
         // input from anyone else is never injected into it: it waits for a
         // turn of its own. A target whose record cannot be read is not joined.
@@ -1563,6 +1561,20 @@ impl Agent {
                 .is_some_and(|saved| saved.initiator() == submitter.initiation.initiator()),
             None => true,
         };
+        // Choose once for this operation: native input belongs to the active
+        // response/turn; an independent queued invocation belongs to selection.
+        let configured = active
+            .filter(|_| joins_target)
+            .map(|active| active.configured)
+            .unwrap_or_else(|| self.current_provider());
+        validate_configured_input(configured.capabilities(), &input)?;
+        let close_notice = self.inner.lifecycle.close_notice();
+        *work_owner = Some(self.inner.lifecycle.accept_waiting_work()?);
+        let approval_mode = self.approval_mode();
+        scheduler
+            .queue
+            .validate_enqueue(&input.execution_id)
+            .map_err(AgentError::Scheduling)?;
         // Cloned before the save consumes its own copy. The host's check
         // stays alive across that save and is asked once it has committed,
         // before this task waits on the provider.
@@ -1620,14 +1632,28 @@ impl Agent {
                         return Err(error);
                     }
                     activated = true;
-                    self.deliver_native_steering(target.clone(), input.clone(), after_save.as_ref())
-                        .await
+                    self.deliver_native_steering(
+                        target.clone(),
+                        input.clone(),
+                        configured.as_ref(),
+                        after_save.as_ref(),
+                    )
+                    .await
                 }
                 None => {
                     release_saved(after_save.as_ref());
                     Ok(SteeringOutcome::PromptRequired)
                 }
             }
+        };
+        // Nonconsumption changes the owner: B must admit its own new turn
+        // before any queue receipt, queue effect, or queue-admission audit.
+        let outcome = match outcome {
+            Ok(SteeringOutcome::PromptRequired) => {
+                validate_configured_input(&self.capabilities(), &input)
+                    .map(|()| SteeringOutcome::PromptRequired)
+            }
+            outcome => outcome,
         };
         let outcome = match outcome {
             Ok(SteeringOutcome::PromptRequired) if activated => work_owner
@@ -1903,6 +1929,7 @@ impl Agent {
         &self,
         target: ExecutionId,
         input: ExecutionRequest,
+        configured: &dyn AgentProvider,
         after_save: Option<&Arc<dyn AfterSaveCheck>>,
     ) -> Result<SteeringOutcome, AgentError> {
         let started = || {
@@ -1925,7 +1952,12 @@ impl Agent {
             }
         };
         let mut cleanup_needed = false;
-        let mut delivery = Box::pin(attached.session.steer(target, input, &started));
+        let mut delivery = Box::pin(attached.session.steer(
+            target,
+            input,
+            configured.capabilities(),
+            &started,
+        ));
         // The future exists and has not been polled. A close that lands here
         // makes `run_control` return without polling it, so the provider never
         // calls `started`. Release on the way out, below.
