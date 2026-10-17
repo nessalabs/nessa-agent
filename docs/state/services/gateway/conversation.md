@@ -9,6 +9,10 @@ sources:
   - "crates/nessa-server/src/conversation/application/service.rs"
   - "crates/nessa-server/src/conversation/application/service/model_changes.rs"
   - "crates/nessa-server/src/conversation/infrastructure/store/model_changes.rs"
+  - "crates/nessa-server/src/conversation/infrastructure/audit_mapping.rs"
+  - "crates/nessa-server/tests/conversation/audit.rs"
+  - "crates/nessa-server/tests/conversation/local_golden.rs"
+  - "crates/nessa-server/tests/conversation/golden/local_conversation.txt"
   - "crates/nessa-server/tests/conversation/model_changes.rs"
   - "crates/nessa-server/tests/conversation/store/model_changes.rs"
   - "crates/nessa-server/src/conversation/domain/value_objects/conversation_deletion.rs"
@@ -166,6 +170,9 @@ controls; pending construction and final same-owner publication remain separate.
 | Original owner stops during pending title read | `a_pending_mode_view_rechecks_its_owner_after_the_title_wait`: no stale publication after retained stop or confirmed release |
 | Unknown result and failed cleanup | `failed_session_retirement_keeps_mode_recovery_pending_without_a_second_open`: intent retained, no second open while blocked, explicit Open retries after cleanup is released |
 | Known SDK acknowledgement and failed cleanup | `acknowledged_model_recovery_retries_the_stopped_owner` and `acknowledged_preset_recovery_retries_the_stopped_owner`: exact original fact settles without repeating native control |
+| Queued input or PromptRequired steering from a distinct checked share-grant initiation admitted under model A, then model B selected | SDK captures the admission identity under the shared scheduler/control lock; durable queue-admitted JSON retains A's name/modelId/context independently of the later selection; `durable_queue_admission_keeps_the_admitted_model_after_selection_changes` |
+| Real local conversation writes its queue-admission audit | The generated golden evidence retains the captured model object with unchanged actor, ordering and other facts; `a_local_conversation_leaves_the_golden_records_audit_and_cleanup_evidence` |
+| Generic admission record has no captured model | Durable JSON retains an explicit null model, without inferring one; `audit_maps_attachment_and_admission_evidence_without_losing_correlation` |
 | Native review still held during model control | `a_pending_model_control_keeps_the_original_review_answerable_after_caller_loss`: same turn/review, no request replay |
 | Retained stopping owner on the wire | `retained_stopping_publication_refuses_wire_and_subscription_until_cleanup`: no replacement publication until cleanup confirms |
 
