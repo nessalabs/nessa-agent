@@ -87,7 +87,7 @@ borrowed accessors; its compile-fail example checks that the view cannot be muta
 | `examples/read_only_sync.rs` | Standalone executable using `composition::run_read_only_example`. |
 | `tests/protected/` | Shared physical deadline/first-cause and cancellation evidence for the protected byte stream. |
 | `tests/product/` | Real pinned TLS opening, idle/partial traffic, original request IDs, permit retention, typed deadlines/failures and independent physical drain. |
-| `tests/outbox/` | Phone outbox ordering, canonical bytes, and product-frame evidence, included by the library with `#[path]`. |
+| `tests/outbox/` | Phone outbox ordering, canonical bytes, and product-frame evidence, included by the library with `#[path]`. `departure.rs` selects initial-read and lease orderings; `lease_wait.rs` tests real SQLite bounded lock refusal. |
 | `tests/read_only_sync/` | Matching domain, application, gateway and private-cache boundary evidence, included by the library with `#[path]`. |
 | `tests/composition/` | Private profile, code-input, command diagnostic, and composed `fetch` (scripted native peer, real files) evidence. Real authenticated online process tests remain in `nessa-server/tests/composition/read_only_online.rs`. |
 | `tests/pairing/owner_phone.rs` | Real private-key publication, exact signed original/digest replay, cold corruption, reserved/missing refusal, before-entropy ordering and concurrent first reservations. |
