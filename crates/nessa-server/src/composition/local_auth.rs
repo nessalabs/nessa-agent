@@ -348,6 +348,14 @@ pub(super) async fn product_state(
                 None,
             ),
         };
+    // Offline recovery and surface rotation commit without a running gateway.
+    // Reconcile after receiver adoption and metadata migrations, before routes
+    // are returned for serving (export-cut integrity ordering, #901).
+    inventory.capture().await.map_err(|error| {
+        setup_error(format!(
+            "the deletion inventory could not be reconciled at startup: {error:?}"
+        ))
+    })?;
     let admin = Arc::new(LocalAdmin {
         store: store.clone(),
         inventory: Some(inventory.clone()),

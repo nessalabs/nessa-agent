@@ -2,7 +2,7 @@
 //!
 //! ```text
 //! pin (admission still held)
-//!   outbox.lock shared, for the whole read
+//!   create the lock parent if absent, then outbox.lock shared for the whole read
 //!   directory absent ──▶ watermark absent, no rows
 //!   not a directory, a symlink, a short read, a file past the artifact
 //!   bound, more files or bytes than one lease may keep, or a name this
@@ -29,13 +29,17 @@ use std::io::{self, Read};
 use std::path::{Component, Path, PathBuf};
 
 use async_trait::async_trait;
-use nessa_local_storage::{open, OpenMode};
+use nessa_local_storage::{create_directory, open, OpenMode};
 use nessa_protocol::lease::MAX_ARTIFACT_BYTES;
 
 use super::gateway::content_is_secret;
 use crate::backup::application::{CopiedStore, ExportSource, PinnedStore};
 use crate::backup::domain::{outbox_watermark, CapturedRecord, Sensitivity, SourceCut, StoreKind};
 use crate::conversation::application::ArtifactBudget;
+
+#[cfg(test)]
+#[path = "../../../tests/backup/outbox_lock.rs"]
+mod lock_tests;
 
 /// One outbox directory. `kind` is the device outbox or the environment outbox.
 pub(crate) struct OutboxDirectory {
@@ -155,25 +159,25 @@ fn count_toward_budget(counted: usize, total: &mut u64, len: u64) -> Result<(), 
 
 /// `outbox.lock` beside `root`, shared for as long as the returned file lives.
 ///
-/// `Ok(None)` is a directory whose parent is not there: no writer can have
-/// created the lock yet. Any other failure refuses the source.
-fn shared_outbox_lock(root: &Path) -> Result<Option<File>, ()> {
+/// Establish the lock even before the first writer creates the outbox.
+/// `absent_parent_outbox_cut_excludes_first_writer` covers both orderings.
+fn shared_outbox_lock(root: &Path) -> Result<File, ()> {
     let Some(parent) = root
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
     else {
         return Err(());
     };
-    if !parent.is_dir() {
-        return if fs::symlink_metadata(root).is_ok() {
-            Err(())
-        } else {
-            Ok(None)
-        };
+    match fs::symlink_metadata(parent) {
+        Ok(meta) if meta.is_dir() => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            create_directory(parent).map_err(|_| ())?;
+        }
+        _ => return Err(()),
     }
     let file = open(&root.with_extension("lock"), OpenMode::OpenOrCreate).map_err(|_| ())?;
     file.lock_shared().map_err(|_| ())?;
-    Ok(Some(file))
+    Ok(file)
 }
 
 /// Open `path` without following a final link.

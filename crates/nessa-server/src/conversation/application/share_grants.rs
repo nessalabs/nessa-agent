@@ -470,7 +470,7 @@ pub struct ShareConversation<'a> {
     pub gateway: &'a Resource,
     /// The access policy, asked whether the caller may share, and with whom.
     pub policy: &'a dyn ConversationAccessPolicyEvaluator,
-    /// The deletion inventory, reconciled after an applied share and after
+    /// The deletion inventory, reconciled after a successful share and after
     /// any unshare. Absent, the grant is still written and the inventory is
     /// unchanged. A capture that fails after a revoke is logged and the
     /// revoke stays (`a_failed_inventory_capture_leaves_the_revoke`).
@@ -637,15 +637,15 @@ impl ShareConversation<'_> {
             .await?;
         // The grant is already committed. Capture reconciles the deletion
         // inventory, including a receiver the grant moved off. A failure is
-        // logged and does not undo the grant.
-        if receipt.applied {
-            if let Some(inventory) = self.inventory {
-                if let Err(error) = inventory.capture().await {
-                    tracing::warn!(
-                        ?error,
-                        "the deletion inventory was not updated after a share"
-                    );
-                }
+        // logged and does not undo the grant. An equivalent no-op request
+        // retries capture too, so a failed capture can be reconciled
+        // (`a_retried_share_reconciles_after_a_failed_capture`).
+        if let Some(inventory) = self.inventory {
+            if let Err(error) = inventory.capture().await {
+                tracing::warn!(
+                    ?error,
+                    "the deletion inventory was not updated after a share"
+                );
             }
         }
         // A grant always holds a revision once it is made; a store that

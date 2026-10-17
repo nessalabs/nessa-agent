@@ -12,6 +12,10 @@
 //! is not the next `inventory-decision-N`, or a file that does not end on a
 //! complete line, is refused and left as it is.
 //!
+//! Publication shares the inventory's directory lock so temporary cleanup
+//! cannot remove the other publisher's replacement or rollback copy
+//! (`a_decision_write_waits_for_inventory_rollback`).
+//!
 //! The decision and the deletion log are two files. A crash after this sync
 //! and before the log sync leaves an allow whose fences are not in the log
 //! yet. The next capture stores another decision and reconciles.
@@ -22,10 +26,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use nessa_auth::application::ports::Clock;
-use nessa_local_storage::{open, OpenMode};
 use serde_json::json;
 
-use super::log::persist;
+use super::log::{exclusive, persist};
 use crate::backup::application::{
     DecisionAuditError, InventoryDecision, InventoryDecisionAudit, InventoryDenial, InventoryFacts,
 };
@@ -120,18 +123,6 @@ fn denial_name(denial: &InventoryDenial) -> &'static str {
         InventoryDenial::NotPermitted => "not-permitted",
         InventoryDenial::Unavailable => "unavailable",
     }
-}
-
-/// One writer at a time, including another opener of this directory. The
-/// lock lasts until the file is dropped. Threads in this process also take
-/// `gate`: a file lock does not exclude them.
-fn exclusive(directory: &Path) -> io::Result<std::fs::File> {
-    let file = open(
-        &directory.join("inventory-decisions.lock"),
-        OpenMode::OpenOrCreate,
-    )?;
-    file.lock()?;
-    Ok(file)
 }
 
 /// The next `inventory-decision-N`. A missing file is 1. A line that is not

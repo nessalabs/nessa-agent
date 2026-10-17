@@ -190,6 +190,131 @@ fn namespace_with_registry() -> (tempfile::TempDir, std::path::PathBuf, LocalCre
     (directory, namespace, store)
 }
 
+struct StartupClock;
+
+impl ServerClock for StartupClock {
+    fn elapsed_ms(&self) -> u64 {
+        0
+    }
+}
+
+fn startup_environment(namespace: &Path) -> Environment {
+    let mut config =
+        Environment::load(&crate::env::MockEnv::new().set("NESSA_STAGE", "ci")).unwrap();
+    config.auth_directory = Some(namespace.join("auth"));
+    config
+}
+
+/// Offline owner recovery and panel rotation commit revocations while the
+/// gateway is stopped. Startup reconciles both into the inventory before
+/// returning routes, while the replacement credentials remain active.
+#[tokio::test]
+async fn startup_records_offline_credential_rotations_once() {
+    use crate::backup::application::DeletionLogStore;
+    use crate::backup::infrastructure::{read_credentials, FileDeletionLog};
+
+    let (_directory, namespace, store) = namespace_with_registry();
+    let now = SystemClock.unix_seconds();
+    for (request, credential) in [("panel-first", "panel-old"), ("panel-next", "panel-new")] {
+        store
+            .provision_surface(
+                "panel",
+                request.into(),
+                credential.into(),
+                vec!["server.read".into()],
+                now,
+                None,
+            )
+            .unwrap();
+    }
+    store
+        .recover_owner("owner-new".into(), &["credential.manage"], now, None)
+        .unwrap();
+    drop(store);
+    // The shared receiver fixture uses a custom registry name. Serving opens
+    // the current product registry name instead.
+    std::fs::rename(
+        namespace.join("auth/credentials.json"),
+        namespace.join("auth/credentials.v1.json"),
+    )
+    .unwrap();
+    nessa_local_storage::create_directory(&namespace.join("receiver-access")).unwrap();
+    let log = FileDeletionLog::open(namespace.join("backup")).unwrap();
+    assert!(log.load().await.unwrap().entries().is_empty());
+
+    let config = startup_environment(&namespace);
+    drop(
+        product_state(&config, Arc::new(StartupClock), None)
+            .await
+            .unwrap(),
+    );
+    let captured = log.load().await.unwrap();
+    let keys: Vec<_> = captured
+        .entries()
+        .iter()
+        .map(|entry| entry.fence().key())
+        .collect();
+    assert_eq!(keys.len(), 2, "{keys:?}");
+    assert!(keys.contains(&"credential:device:credential"));
+    assert!(keys.contains(&"credential:device:panel-old"));
+    let credentials =
+        read_credentials(&std::fs::read(namespace.join("auth/credentials.v1.json")).unwrap())
+            .unwrap();
+    for id in ["owner-new", "panel-new"] {
+        assert!(
+            !credentials
+                .credentials
+                .iter()
+                .find(|row| row.id == id)
+                .unwrap()
+                .revoked
+        );
+    }
+
+    drop(
+        product_state(&config, Arc::new(StartupClock), None)
+            .await
+            .unwrap(),
+    );
+    assert_eq!(log.load().await.unwrap(), captured);
+}
+
+/// Startup cannot report reconciled deletion evidence while a committed
+/// source is unreadable. The authenticated prior inventory remains intact.
+#[tokio::test]
+async fn startup_refuses_an_unreadable_committed_fence_source() {
+    use crate::backup::application::DeletionLogStore;
+    use crate::backup::infrastructure::FileDeletionLog;
+
+    let (_directory, namespace, store) = namespace_with_registry();
+    drop(store);
+    std::fs::rename(
+        namespace.join("auth/credentials.json"),
+        namespace.join("auth/credentials.v1.json"),
+    )
+    .unwrap();
+    nessa_local_storage::create_directory(&namespace.join("receiver-access")).unwrap();
+    nessa_local_storage::create_directory(&namespace.join("conversations")).unwrap();
+    std::fs::write(
+        namespace.join("conversations/metadata.sqlite3"),
+        b"broken synthetic database",
+    )
+    .unwrap();
+    let log = FileDeletionLog::open(namespace.join("backup")).unwrap();
+    let empty = log.load().await.unwrap();
+    let (before, _) = empty
+        .append(crate::backup::domain::DeletionFence::conversation("previously-deleted").unwrap());
+    log.store(&empty, &before).await.unwrap();
+    let result = product_state(
+        &startup_environment(&namespace),
+        Arc::new(StartupClock),
+        None,
+    )
+    .await;
+    assert!(matches!(result, Err(RunError::Authentication(_))));
+    assert_eq!(log.load().await.unwrap(), before);
+}
+
 /// Native pairing opens the receiver journal. That must not create
 /// `conversations/`, which retirement reads as conversation data still there.
 #[cfg(any(target_os = "macos", target_os = "linux"))]

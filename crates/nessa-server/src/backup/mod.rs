@@ -14,12 +14,15 @@
 //! committed fence ──▶ FenceCapture::capture
 //!                       ├── Cedar: who may write
 //!                       ├── decision audit
-//!                       └── DeletionLog.append    no admission, no bundle
+//!                       └── reconciliation lease  no admission, no bundle
+//!                             ├── load and read current fences
+//!                             └── no-op or DeletionLog replacement
 //! ```
 //!
 //! Arrows are calls, in order. The export path is one capture. The fence
 //! path is a deletion, unshare, credential revocation, or pairing
-//! cancellation that has already committed: it asks Cedar, stores that
+//! cancellation, a successful share retry, or startup after offline rotation:
+//! it asks Cedar, stores that
 //! decision, then reconciles the log. It does not take admission and does
 //! not publish a bundle. The domain decides what a cut
 //! may contain. The application runs that order. Infrastructure reads
