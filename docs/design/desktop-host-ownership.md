@@ -41,6 +41,50 @@ same-account program ignoring it, cannot be retroactively excluded by this lock.
 No live service, installed bundle, Login Items setting or user data is changed by
 cloud verification.
 
+## Legacy-host release boundary
+
+The original #943 incident included a binary predating this lease. That exact
+mixed-version scenario is not fixed by this cooperative protocol. A legacy host
+can ignore `desktop-host.lock` and still recover, publish configuration, reconcile
+or stop the shared service. #943 stays open until the transition procedure and
+residual risk below are accepted and native verification is recorded.
+
+There is no scoped automatic exclusion using the current legacy protocol:
+
+- Keeping `gateway-upgrade.lock` for a desktop lifetime would make legacy
+  registration wait up to its existing 120-second deadline, while legacy recovery,
+  settings and stop paths remain outside that transaction lock. It also requires
+  changing the current host's ordinary registration locking; it is not complete
+  host exclusion. See `macos/control.rs::lock_namespace` and the `GatewayHost`
+  implementation in `macos.rs`.
+- A process-list snapshot can support a warning, but cannot fence a later legacy
+  launch. A missing legacy process at one instant is not a migration proof.
+- A different launchd label alone does not isolate shared product ports, data,
+  settings and clients. A new namespace/protocol would require a separately
+  designed migration rather than silently splitting users' state here.
+
+The smallest release decision is a one-time coordinated upgrade. Before the
+first participating build manages this namespace, the user/operator must let
+active turns settle and gracefully quit every legacy Nessa desktop host. They
+then update the installed bundle and retained developer launch paths, ensure old
+copies will not be launched manually or automatically, and launch one
+participating build. Ordinary audited reconciliation remains responsible for
+service upgrades; this procedure does not reset data, forcibly terminate
+processes, or automatically alter Login Items or provider settings. Review of old
+launch paths is a release prerequisite, not an operation performed by this PR.
+
+If that boundary cannot be established, a same-namespace upgrade cannot be
+advertised as safe: hold the rollout, or explicitly restrict alpha to a
+coordinated clean installation and retain this legacy-upgrade blocker. An old
+copy launched afterward reintroduces the original risk. Product acceptance of
+that residual risk does not constitute a technical exclusion guarantee.
+
+Native acceptance must distinguish the legacy-to-participating transition from
+two participating hosts. Verify the coordinated transition, competing
+participating bundles and restart/updater overlap independently. Signed installed
+launch/Login Items (#562) and startup timing (#109) are separate unrun gates.
+No native acceptance or release decision is claimed by the cloud checks.
+
 ## Ordering and evidence
 
 | Row | Ordering | Required result |

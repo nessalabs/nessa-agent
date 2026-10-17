@@ -37,3 +37,24 @@ production/test source and its qualification hashes are unchanged.
 
 R1 is not relabeled clean. Full native/platform compilation, Mac-only adapter
 test, browser E2E and installed-Mac acceptance remain separate gates.
+
+## Fresh FULL R3 and current-main integration
+
+A fresh independent FULL review at `5ac5fe6bfae58b26ab8ff98b74eb579473ba2fbd`
+found no new actionable code defects. It independently passed all157 tests and
+strict headless Clippy, matched all eight source hashes and checked the complete
+production/test diff, H1–H14, ownership across failures/drop/deferred work/quit,
+journal/settings ordering, lock identity, process release, platform gating and
+retirement/audit agreement. No source changed in response.
+
+It explicitly found the legacy transition unresolved: holding the legacy
+transaction lock or observing a process snapshot cannot fence all legacy effects
+or later launches. The design now documents that original-incident gap, rejected
+mechanisms and the minimum coordinated-upgrade release decision. Native two-host,
+updater, installed launch, timing and WebKit remain separate unrun/blocked gates.
+
+The branch rebased cleanly onto main `cf551b6a922b9b95b7f5f98b8d9720d7f3138c80`
+after #957. #957 changes SDK/server permission behavior and browser verification;
+only the codebase map overlaps and merged cleanly. Desktop production/test sources
+and all eight qualification hashes remain unchanged. Exact-head platform and
+assembled browser checks still need their current results recorded on the PR.
