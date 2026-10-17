@@ -69,7 +69,7 @@ async fn parent_stop_default_override_grandchildren_and_unrelated_execution() {
         let p = hold_turn(&service, &provider, &parent, "parent").await;
         let c_id = child(&service, &parent, "parent", "create-child").await;
         assert_eq!(provider.executions.lock().unwrap().as_slice(), ["parent"]);
-        let c = hold_turn(&service, &provider, &c_id, "child").await;
+        let mut c = Some(hold_turn(&service, &provider, &c_id, "child").await);
         let g_id = child(&service, &c_id, "child", "create-grandchild").await;
         let g = hold_turn(&service, &provider, &g_id, "grandchild").await;
         if idle_intermediate {
@@ -82,6 +82,18 @@ async fn parent_stop_default_override_grandchildren_and_unrelated_execution() {
                 )
                 .await
                 .unwrap();
+            drop(c.take());
+            let live = service
+                .resolve(&c_id, &caller("inspect-idle"))
+                .await
+                .unwrap();
+            tokio::time::timeout(Duration::from_secs(5), async {
+                while !live.agent.is_idle().await {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .expect("the intermediate child is idle before root Stop");
             provider.cancel_turns.lock().unwrap().clear();
         }
         let unrelated = id();
