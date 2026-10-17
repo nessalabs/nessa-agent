@@ -1,8 +1,8 @@
 import { useId, useState } from "react"
 import { AgentActivity, AgentActivityTrigger } from "@nessa-ui/react/agent-activity"
-import { Favicon } from "@nessa-ui/react/favicon"
 import { DesktopIcon, type DesktopIconRole } from "../../../ui/icons"
 import { workSummary, type StepKind, type StepPart } from "../../model/transcript"
+import { useSiteIcon } from "./site-icon"
 
 const stepIcons: Record<StepKind, DesktopIconRole> = {
   read: "file",
@@ -69,13 +69,13 @@ function StepList({ id, steps }: { id?: string; steps: readonly StepPart[] }) {
 /**
  * A step's icon: its kind's, or — for a step on a web page, such as a fetch
  * — that site's own icon once it has loaded, the kind's standing in until
- * then and wherever the site has none.
+ * then and wherever the site has none. The site's icon comes from the
+ * composed `SiteIcon`; without one, the kind's icon is all there is.
  */
 function StepIcon({ step }: { step: StepPart }) {
+  const siteIcon = useSiteIcon()
   const icon = <DesktopIcon name={stepIcons[step.step]} />
-  return step.detail && /^https?:\/\//i.test(step.detail) ? (
-    <Favicon href={step.detail} fallback={icon} className="workspace-step-favicon" />
-  ) : (
-    icon
-  )
+  return siteIcon && step.detail && /^https?:\/\//i.test(step.detail)
+    ? siteIcon({ href: step.detail, fallback: icon })
+    : icon
 }
