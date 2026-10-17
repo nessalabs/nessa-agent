@@ -13,6 +13,7 @@ use std::{
 };
 #[cfg(unix)]
 use std::{
+    fs::Permissions,
     io::ErrorKind,
     os::unix::fs::{symlink as symlink_directory, PermissionsExt},
 };
@@ -144,7 +145,7 @@ fn retained_root_keeps_caller_trust_under_a_publicly_writable_parent() {
     let temporary = tempfile::tempdir().unwrap();
     let public = temporary.path().join("public");
     std::fs::create_dir(&public).unwrap();
-    std::fs::set_permissions(&public, std::fs::Permissions::from_mode(0o777)).unwrap();
+    std::fs::set_permissions(&public, Permissions::from_mode(0o777)).unwrap();
     let root = public.join("private");
     create_directory(&root).unwrap();
     create_directory(&root.join("child")).unwrap();
@@ -162,17 +163,15 @@ fn retained_root_keeps_caller_trust_under_a_publicly_writable_parent() {
 #[cfg(unix)]
 #[test]
 fn retained_root_and_child_refuse_links_and_unsafe_permissions_without_repair() {
-    use std::os::unix::fs::symlink;
-
     let (_temporary, root, original) = fixture();
     let root_link = root.with_file_name("root-link");
-    symlink(&root, &root_link).unwrap();
+    symlink_directory(&root, &root_link).unwrap();
     assert!(PrivateDirectory::open_root(&root_link).is_err());
     let parent = PrivateDirectory::open_root(&root).unwrap();
-    symlink("records", root.join("child-link")).unwrap();
+    symlink_directory("records", root.join("child-link")).unwrap();
     assert!(parent.open_directory(OsStr::new("child-link")).is_err());
     assert!(parent.open_directory(OsStr::new("child-link/")).is_err());
-    std::fs::set_permissions(root.join("records"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::set_permissions(root.join("records"), Permissions::from_mode(0o755)).unwrap();
     assert!(parent.open_directory(OsStr::new("records")).is_err());
     assert!(original.verify_binding().is_err());
     assert_eq!(
@@ -183,7 +182,7 @@ fn retained_root_and_child_refuse_links_and_unsafe_permissions_without_repair() 
             & 0o777,
         0o755
     );
-    std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::set_permissions(&root, Permissions::from_mode(0o755)).unwrap();
     assert!(PrivateDirectory::open_root(&root).is_err());
     assert!(parent.verify_binding().is_err());
     assert_eq!(
@@ -278,14 +277,12 @@ fn retained_child_pins_root_and_child_names_after_parent_drop() {
 #[cfg(windows)]
 #[test]
 fn retained_root_and_child_refuse_reparse_points() {
-    use std::os::windows::fs::symlink_dir;
-
     let (_temporary, root, original) = fixture();
     drop(original);
     let linked_root = root.with_file_name("root-link");
-    symlink_dir(&root, &linked_root).unwrap();
+    symlink_directory(&root, &linked_root).unwrap();
     assert!(PrivateDirectory::open_root(&linked_root).is_err());
-    symlink_dir("records", root.join("child-link")).unwrap();
+    symlink_directory("records", root.join("child-link")).unwrap();
     let retained = PrivateDirectory::open_root(&root).unwrap();
     assert!(retained.open_directory(OsStr::new("child-link")).is_err());
 }

@@ -2,6 +2,8 @@
 
 use std::collections::HashSet;
 
+use self::ManifestReadError::Malformed;
+
 use super::encoding::{decode_bounded, encode_identity};
 use super::record::{checked_identity, MAX_NAME_BYTES};
 use super::{
@@ -78,7 +80,6 @@ impl ManifestListing {
     /// records, redactions, deferred entries and skips; the fixed inventory's
     /// watermarks are excluded. The limit is checked before adding an entry.
     pub fn parse(text: &str, max_entries: usize) -> Result<Self, ManifestReadError> {
-        use ManifestReadError::Malformed;
         let mut lines = text.split_terminator('\n').peekable();
         match lines.next() {
             Some(header) if header == EXPORT_HEADER => {}

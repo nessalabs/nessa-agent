@@ -5,7 +5,9 @@ use std::io::Write;
 
 use serde::Serialize;
 
-use crate::backup::application::{verify_bundle, VerificationLimits, VerificationReport};
+use crate::backup::application::{
+    verify_bundle, VerificationFailure, VerificationLimits, VerificationReport,
+};
 use crate::backup::entrypoint::{
     parse_verification, VerificationCommand, VerificationUsageError, VERIFY_HELP,
 };
@@ -14,12 +16,8 @@ use crate::backup::infrastructure::{read_verification_key, DirectoryVerification
 #[derive(Serialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 enum VerificationOutput {
-    Verified {
-        report: VerificationReport,
-    },
-    Failed {
-        reason: crate::backup::application::VerificationFailure,
-    },
+    Verified { report: VerificationReport },
+    Failed { reason: VerificationFailure },
     Usage,
 }
 

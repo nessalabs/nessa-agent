@@ -221,6 +221,7 @@ async fn command_requires_explicit_absolute_inputs_and_refuses_duplicate_unknown
 #[cfg(unix)]
 mod unix {
     use std::ffi::CString;
+    use std::io::ErrorKind;
     use std::os::unix::ffi::OsStrExt;
     use std::os::unix::fs::FileTypeExt;
     use std::os::unix::net::UnixListener;
@@ -260,9 +261,6 @@ mod unix {
         listener.set_nonblocking(true).unwrap();
         let result = json(&run(&arguments(&fixture), fixture.parent.path()), 1);
         assert_eq!(result["reason"], "unsafe_object");
-        assert_eq!(
-            listener.accept().unwrap_err().kind(),
-            std::io::ErrorKind::WouldBlock
-        );
+        assert_eq!(listener.accept().unwrap_err().kind(), ErrorKind::WouldBlock);
     }
 }

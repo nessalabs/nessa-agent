@@ -133,13 +133,14 @@ fn key_reads_do_not_create_or_repair_missing_short_or_oversized_keys() {
 
 #[cfg(unix)]
 mod unix {
+    use std::fs::Permissions;
     use std::io::{Cursor, Read};
     use std::os::unix::fs::{symlink, PermissionsExt};
 
     use nessa_local_storage::create_directory;
 
-    use crate::backup::application::VerificationSource;
-    use crate::backup::domain::StoreKind;
+    use crate::backup::application::{ManifestMacVerifier, VerificationSource};
+    use crate::backup::domain::{Fingerprint, StoreKind};
 
     use super::*;
 
@@ -158,19 +159,14 @@ mod unix {
         change: RootChange,
     }
 
-    impl crate::backup::application::ManifestMacVerifier for ChangeRootAfterAuthentication<'_> {
-        fn verify(
-            &self,
-            canonical: &str,
-            mac: crate::backup::domain::Fingerprint,
-        ) -> Result<(), VerificationFailure> {
+    impl ManifestMacVerifier for ChangeRootAfterAuthentication<'_> {
+        fn verify(&self, canonical: &str, mac: Fingerprint) -> Result<(), VerificationFailure> {
             self.fixture.key.verify(canonical, mac)?;
             if matches!(self.change, RootChange::Unchanged) {
                 return Ok(());
             }
             if matches!(self.change, RootChange::UnsafeMode) {
-                fs::set_permissions(&self.fixture.bundle, fs::Permissions::from_mode(0o777))
-                    .unwrap();
+                fs::set_permissions(&self.fixture.bundle, Permissions::from_mode(0o777)).unwrap();
                 return Ok(());
             }
             let manifest = fs::read(self.fixture.bundle.join("manifest.txt")).unwrap();
@@ -190,11 +186,8 @@ mod unix {
                     create_directory(&self.fixture.bundle).unwrap();
                     private_file(&self.fixture.bundle.join("manifest.txt"), &manifest);
                     if matches!(self.change, RootChange::SharedDirectory) {
-                        fs::set_permissions(
-                            &self.fixture.bundle,
-                            fs::Permissions::from_mode(0o777),
-                        )
-                        .unwrap();
+                        fs::set_permissions(&self.fixture.bundle, Permissions::from_mode(0o777))
+                            .unwrap();
                     }
                 }
                 RootChange::Missing => {}
@@ -584,7 +577,7 @@ mod unix {
             } else {
                 fixture.bundle.join(relative)
             };
-            fs::set_permissions(&path, fs::Permissions::from_mode(0o777)).unwrap();
+            fs::set_permissions(&path, Permissions::from_mode(0o777)).unwrap();
             assert_eq!(
                 verify(&fixture).unwrap_err(),
                 VerificationFailure::UnsafeObject
@@ -595,7 +588,7 @@ mod unix {
             );
         }
         let fixture = Fixture::published().await;
-        fs::set_permissions(&fixture.key_file, fs::Permissions::from_mode(0o644)).unwrap();
+        fs::set_permissions(&fixture.key_file, Permissions::from_mode(0o644)).unwrap();
         assert_eq!(
             read_verification_key(&fixture.key_file),
             Err(VerificationFailure::UnsafeObject)
