@@ -263,7 +263,7 @@ impl FilePairingState {
     }
     fn reopen_for_acknowledgement(&self, name: &str) -> Result<File, PrivateStateError> {
         self.directory
-            .open_file(OsStr::new(name), OpenMode::Read)
+            .open_file(OsStr::new(name), OpenMode::ReadWrite)
             .map_err(|_| PrivateStateError::Uncertain)
     }
 }

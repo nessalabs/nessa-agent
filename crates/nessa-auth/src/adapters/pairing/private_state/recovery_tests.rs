@@ -116,14 +116,11 @@ fn restart_reconciliation_reflushes_existing_record() {
     let store = FilePairingState::open(&anchor, Path::new("private")).unwrap();
     // Exercise the actual restart helper's access rights, including native
     // FlushFileBuffers on Windows, rather than opening a separate test handle.
-    let reflush = store
+    store
         .reopen_for_acknowledgement(ENROLLMENT_FILE)
         .unwrap()
-        .sync_all();
-    if let Err(error) = &reflush {
-        eprintln!("::error title=C324-4 native reflush assertion::C324_REFLUSH_ASSERTION_FAILED: restart_reconciliation_reflushes_existing_record expected Ok(()) from the reopened original file; actual {error:?}");
-    }
-    reflush.unwrap();
+        .sync_all()
+        .unwrap();
     store
         .save_pending(&key(7), &[5; 44], intent(4), Some(intent(2)))
         .unwrap();
@@ -140,7 +137,6 @@ fn restart_reconciliation_reflushes_existing_record() {
         bytes
     );
     assert_eq!(fs::read_dir(anchor.join("private")).unwrap().count(), 2);
-    eprintln!("::notice title=C324-4 native recovery passed::C324_REFLUSH_AND_RETRY_PASSED: exact original key/pin/attempt and stale-CAS refusal verified after restart");
 }
 
 #[test]
