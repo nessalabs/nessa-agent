@@ -1,7 +1,8 @@
 //! Producer-owned registrations; publication never waits for a reader.
 //!
 //! Interest is indexed by owner, so a commit wakes only that owner's
-//! registrations, however many are open. There is no gateway-wide count:
+//! registrations, however many are open, and a registration leaves in
+//! constant time. There is no gateway-wide count:
 //! each registration belongs to a live list subscription, which its socket's
 //! own published limit already bounds.
 
@@ -29,29 +30,36 @@ struct Registry {
 }
 #[derive(Default)]
 struct State {
-    by_owner: HashMap<Owner, Vec<Arc<CatalogueChangeSignal>>>,
+    next: u64,
+    // Each registration's signal under its own id, so one leaves in constant time.
+    by_owner: HashMap<Owner, HashMap<u64, Arc<CatalogueChangeSignal>>>,
 }
 struct Registration {
     registry: Weak<Registry>,
     target: Owner,
-    signal: Arc<CatalogueChangeSignal>,
+    id: u64,
 }
 
 impl CatalogueChanges {
     pub fn watch(&self, target: Owner) -> CatalogueChangeWatch {
         let signal = Arc::new(CatalogueChangeSignal::default());
-        self.inner
+        let mut state = self
+            .inner
             .state
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .unwrap_or_else(PoisonError::into_inner);
+        let id = state.next;
+        state.next += 1;
+        state
             .by_owner
             .entry(target.clone())
             .or_default()
-            .push(signal.clone());
+            .insert(id, signal.clone());
+        drop(state);
         let registration = Registration {
             registry: Arc::downgrade(&self.inner),
             target,
-            signal: signal.clone(),
+            id,
         };
         CatalogueChangeWatch::new(signal, Box::new(registration))
     }
@@ -65,7 +73,7 @@ impl CatalogueChanges {
             .unwrap_or_else(PoisonError::into_inner)
             .by_owner
             .get(target)
-            .cloned()
+            .map(|bucket| bucket.values().cloned().collect::<Vec<_>>())
             .unwrap_or_default();
         for signal in signals {
             signal.publish();
@@ -86,7 +94,7 @@ impl Drop for Registration {
         let Some(bucket) = state.by_owner.get_mut(&self.target) else {
             return;
         };
-        bucket.retain(|signal| !Arc::ptr_eq(signal, &self.signal));
+        bucket.remove(&self.id);
         // An emptied owner's entry goes with its last registration.
         if bucket.is_empty() {
             state.by_owner.remove(&self.target);
@@ -101,7 +109,7 @@ impl Drop for Registry {
             .unwrap_or_else(PoisonError::into_inner)
             .by_owner
             .values()
-            .flatten()
+            .flat_map(HashMap::values)
         {
             signal.close();
         }
@@ -207,7 +215,7 @@ mod tests {
         pending(&mut watches[0]);
         producer.publish(&key);
         assert_eq!(ready(&mut watches[0]), CatalogueWatchState::Dirty);
-        let signal = Arc::downgrade(&producer.inner.state.lock().unwrap().by_owner[&key][0]);
+        let signal = Arc::downgrade(&producer.inner.state.lock().unwrap().by_owner[&key][&0]);
         drop(watches.remove(0));
         assert!(
             signal.upgrade().is_none(),

@@ -203,7 +203,7 @@ value, and reads happen in the subscription's own task under the server-wide
 
 `product/subscription/target.rs::authorize_batch` is the one place a batch is
 admitted. A subscription's task asks it before it registers any wake source,
-so a session that may not follow takes nothing from the shared watch pools,
+so a session that may not follow registers no watch,
 and again before every read, once the batch holds its `requests` permit: a
 request holds its capacity before it is admitted (`dispatch` does the same), so
 nothing revoked while a batch waits for a permit is read (row S30). An unsubscribe is admitted by the socket before
@@ -274,7 +274,7 @@ guarantee (#935).
 | S26 | A followed conversation is closed or stopped (its agent let go) | One frame: the same history, read-only, lifecycle `absent`; the agent is not opened again until a send opens it | `a_closed_conversation_is_shown_let_go_and_not_opened_again` |
 | S27 | A followed conversation has an unfinished approval-mode change | The view shows the change pending; recovery is not run and the agent is not opened | `a_pending_mode_change_is_shown_not_recovered_by_a_follower` |
 | S28 | The agent's opening fails while a follower waits on it (or failed and holds its slot) | The follower is shown the committed history, read-only; `conversation.read` and a send report the failure | `a_failed_opening_holding_its_slot_is_read_by_a_follower_as_its_history` (`tests/conversation/desktop_stop.rs`) |
-| S29 | A subscribe or unsubscribe the session may not make (grant, presence, or no longer current) | Refused with the admission's code; a subscribe takes no watch from the shared pools first | `a_forbidden_subscribe_is_refused_before_it_takes_a_watch`, `a_forbidden_unsubscribe_is_refused` |
+| S29 | A subscribe or unsubscribe the session may not make (grant, presence, or no longer current) | Refused with the admission's code; a subscribe leaves no watch registered | `a_forbidden_subscribe_is_refused_before_it_takes_a_watch`, `a_forbidden_unsubscribe_is_refused` |
 | S30 | Every request permit taken when a batch is woken; the grant is revoked while it waits for one | Ended `refused` with `forbidden`; no frame is read under the old grant, because a batch is admitted only once it holds its capacity, as `dispatch` admits a request | `a_grant_revoked_while_a_batch_waits_for_capacity_ends_it_before_the_read` |
 | S31 | The subscribe reply is not written by the request's reply deadline (the writer held behind other traffic) | The socket closes; the client reconnects and subscribes again, never left with a live subscription it cannot name | `a_subscribe_reply_not_written_by_its_deadline_closes_the_socket`; `the_reply_and_the_last_frame_carry_a_deadline_through_their_write` (unit, `product/subscription/delivery.rs`) |
 | L1 | List subscription; a catalogue change | A new list frame | `a_list_subscription_follows_the_catalogue` |

@@ -1328,6 +1328,11 @@ async fn review_notice_audit_failure_with_full_control_lane_ends_connection() {
     acknowledge
         .send(Err(ReviewNoticeAuditFailure::Unavailable))
         .unwrap();
+    // The writer is still held, so nothing leaves the lane while the owner
+    // takes the failure and ends: give it those turns before the release.
+    for _ in 0..64 {
+        tokio::task::yield_now().await;
+    }
     assert!(
         !peer.input.is_closed(),
         "the peer input remains live during the held physical write"

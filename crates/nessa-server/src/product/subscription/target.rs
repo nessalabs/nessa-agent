@@ -859,7 +859,7 @@ pub(super) async fn run(run: Run) {
         ));
     };
     // Admitted before anything is registered: a session that may not follow
-    // takes nothing from the shared watch pools (row S29).
+    // registers no watch (row S29).
     if let Err(code) = authorize_batch(&state, &session, &target).await {
         return refuse(code, slot);
     }

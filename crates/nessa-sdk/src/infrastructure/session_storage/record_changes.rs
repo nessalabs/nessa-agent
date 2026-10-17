@@ -1,7 +1,8 @@
 //! Producer-owned registrations; publication never waits for a reader.
 //!
 //! Interest is indexed by session, so a commit wakes only the registrations
-//! on its own session and those on every session, however many are open.
+//! on its own session and those on every session, however many are open,
+//! and a registration leaves in constant time.
 //! There is no gateway-wide count: each registration belongs to a live
 //! subscription, which its socket's own published limits already bound.
 
@@ -27,31 +28,34 @@ pub(super) struct RecordChanges {
 struct Registry {
     state: Mutex<State>,
 }
+// Each registration's signal under its own id, so one leaves in constant time.
+type Bucket = HashMap<u64, Arc<CommittedChangeSignal>>;
 #[derive(Default)]
 struct State {
     closed: bool,
-    by_session: HashMap<SessionId, Vec<Arc<CommittedChangeSignal>>>,
+    next: u64,
+    by_session: HashMap<SessionId, Bucket>,
     // Interest in every session's commits.
-    any: Vec<Arc<CommittedChangeSignal>>,
+    any: Bucket,
 }
 impl State {
-    fn bucket(
-        &mut self,
-        target: &Option<SessionId>,
-    ) -> Option<&mut Vec<Arc<CommittedChangeSignal>>> {
+    fn bucket(&mut self, target: &Option<SessionId>) -> Option<&mut Bucket> {
         match target {
             Some(target) => self.by_session.get_mut(target),
             None => Some(&mut self.any),
         }
     }
     fn every(&self) -> impl Iterator<Item = &Arc<CommittedChangeSignal>> {
-        self.by_session.values().flatten().chain(&self.any)
+        self.by_session
+            .values()
+            .flat_map(HashMap::values)
+            .chain(self.any.values())
     }
 }
 struct Registration {
     registry: Weak<Registry>,
     target: Option<SessionId>,
-    signal: Arc<CommittedChangeSignal>,
+    id: u64,
 }
 
 impl RecordChanges {
@@ -75,15 +79,17 @@ impl RecordChanges {
             return Err(ChangeWatchError::Closed);
         }
         let signal = Arc::new(CommittedChangeSignal::default());
+        let id = state.next;
+        state.next += 1;
         match &target {
             Some(session) => state.by_session.entry(session.clone()).or_default(),
             None => &mut state.any,
         }
-        .push(signal.clone());
+        .insert(id, signal.clone());
         let registration = Registration {
             registry: Arc::downgrade(&self.inner),
             target,
-            signal: signal.clone(),
+            id,
         };
         Ok(CommittedChangeWatch::new(signal, Box::new(registration)))
     }
@@ -109,8 +115,8 @@ impl RecordChanges {
                 .by_session
                 .get(target)
                 .into_iter()
-                .flatten()
-                .chain(&state.any)
+                .flat_map(HashMap::values)
+                .chain(state.any.values())
                 .cloned()
                 .collect::<Vec<_>>()
         };
@@ -147,7 +153,7 @@ impl Drop for Registration {
         let Some(bucket) = state.bucket(&self.target) else {
             return;
         };
-        bucket.retain(|signal| !Arc::ptr_eq(signal, &self.signal));
+        bucket.remove(&self.id);
         // An emptied session's entry goes with its last registration.
         if bucket.is_empty() {
             if let Some(target) = &self.target {
@@ -302,7 +308,7 @@ mod tests {
         pending(&mut watches[0]);
         producer.publish(&key);
         assert_eq!(ready(&mut watches[0]), ChangeWatchState::Dirty);
-        let signal = Arc::downgrade(&producer.inner.state.lock().unwrap().by_session[&key][0]);
+        let signal = Arc::downgrade(&producer.inner.state.lock().unwrap().by_session[&key][&0]);
         drop(watches.remove(0));
         assert!(
             signal.upgrade().is_none(),
