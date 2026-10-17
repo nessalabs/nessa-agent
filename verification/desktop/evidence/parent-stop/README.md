@@ -25,10 +25,11 @@ The actual gateway executable used Cargo's dev profile, SHA256
   WebKit: **16/16 passed**.
 
 The checks cover recursive default, explicit override, grandchildren, unrelated
-active and queued executions, no immediate parent restart, and exactly one
+active and queued executions, no immediate parent restart, and
 retained report delivery after later person input. Commands use the existing
 `verification/desktop/scripts/scripted-e2e.mjs --mode prod`,
-`parent-stop.mjs --mode prod`, and `mcp-apps-gateway.mjs --mode dev` entry points.
+`parent-stop.mjs --mode prod --agent codex`, and
+`mcp-apps-gateway.mjs --scripted --mode dev` entry points.
 The pull request includes their short result lines and final source provenance.
 
 All gateway configurations and provider fixtures used isolated temporary CI
