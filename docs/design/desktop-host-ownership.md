@@ -108,3 +108,10 @@ Cloud checks establish the portable retained-lease owner and real Unix private-f
 lock/process semantics. Actual two-host macOS registration, explicit updater restart,
 Login Items, signed launch and installed-window behavior still need coordinated
 native acceptance; synthetic tests do not close #562/#109.
+
+The Unix process fixtures request mode 0700 when creating their temporary service
+directories. `tempfile::tempdir()` otherwise uses 0777 masked by the process umask;
+a restrictive local umask must not hide an unsafe fixture on ordinary CI accounts.
+H9 also verifies that an existing 0755 service leaf is refused without permission
+repair or lock-file creation. Qualification runs the same assertions under umasks
+000, 022 and 077; it does not change the production private-storage boundary.

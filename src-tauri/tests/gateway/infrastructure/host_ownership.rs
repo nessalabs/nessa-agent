@@ -1,9 +1,19 @@
 use super::*;
 use std::{
     io::{BufRead, BufReader, Write},
+    os::unix::fs::PermissionsExt,
     process::{Child, Command, Stdio},
 };
-use tempfile::tempdir;
+use tempfile::{Builder, TempDir};
+
+fn private_directory() -> TempDir {
+    // tempdir() defaults to 0777 masked by the caller's umask. The service
+    // requires a private leaf; request it at creation instead of repairing it.
+    Builder::new()
+        .permissions(std::fs::Permissions::from_mode(0o700))
+        .tempdir()
+        .unwrap()
+}
 
 fn acquired(directory: &Path) -> DesktopHostLease {
     match try_claim(directory).unwrap() {
@@ -14,7 +24,7 @@ fn acquired(directory: &Path) -> DesktopHostLease {
 
 #[test]
 fn competing_bundle_cannot_claim_the_same_service_until_final_release() {
-    let root = tempdir().unwrap();
+    let root = private_directory();
     let first = acquired(root.path());
     let worker = first.clone();
     assert!(matches!(
@@ -33,7 +43,7 @@ fn competing_bundle_cannot_claim_the_same_service_until_final_release() {
 
 #[test]
 fn different_service_labels_do_not_contend() {
-    let root = tempdir().unwrap();
+    let root = private_directory();
     let _prod = acquired(&root.path().join("so.nessa.gateway.prod"));
     let _ci = acquired(&root.path().join("so.nessa.gateway.ci"));
     let _instance = acquired(&root.path().join("so.nessa.gateway.prod.other"));
@@ -41,7 +51,7 @@ fn different_service_labels_do_not_contend() {
 
 #[test]
 fn a_symlink_lock_is_refused_without_mutating_its_target() {
-    let root = tempdir().unwrap();
+    let root = private_directory();
     let outside = root.path().join("outside");
     std::fs::write(&outside, b"preserve").unwrap();
     let directory = root.path().join("service");
@@ -49,6 +59,25 @@ fn a_symlink_lock_is_refused_without_mutating_its_target() {
     std::os::unix::fs::symlink(&outside, directory.join("desktop-host.lock")).unwrap();
     assert!(try_claim(&directory).is_err());
     assert_eq!(std::fs::read(outside).unwrap(), b"preserve");
+}
+
+#[test]
+fn a_shared_service_directory_is_refused_without_repair_or_lock_creation() {
+    let root = private_directory();
+    let shared = root.path().join("shared");
+    std::fs::create_dir(&shared).unwrap();
+    // Construct an unsafe owned fixture, independent of the process umask.
+    std::fs::set_permissions(&shared, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let error = match try_claim(&shared) {
+        Err(error) => error,
+        Ok(_) => panic!("shared directory must not grant ownership"),
+    };
+    assert!(nessa_local_storage::is_unsafe_file(&error));
+    assert_eq!(
+        std::fs::metadata(&shared).unwrap().permissions().mode() & 0o777,
+        0o755
+    );
+    assert!(!shared.join("desktop-host.lock").exists());
 }
 
 struct HeldChild(Child);
@@ -119,7 +148,7 @@ fn ownership_process_child() {
 
 #[test]
 fn process_death_releases_the_original_stable_lock() {
-    let root = tempdir().unwrap();
+    let root = private_directory();
     let mut owner = child(root.path(), "claim");
     assert!(matches!(
         try_claim(root.path()).unwrap(),
@@ -132,7 +161,7 @@ fn process_death_releases_the_original_stable_lock() {
 
 #[test]
 fn an_exec_child_does_not_keep_the_lease_after_its_parent_releases() {
-    let root = tempdir().unwrap();
+    let root = private_directory();
     let lease = acquired(root.path());
     let mut observer = child(root.path(), "observe");
     drop(lease);
@@ -142,7 +171,7 @@ fn an_exec_child_does_not_keep_the_lease_after_its_parent_releases() {
 
 #[test]
 fn explicit_unlock_releases_an_inherited_fork_description() {
-    let root = tempdir().unwrap();
+    let root = private_directory();
     let lease = acquired(root.path());
     let mut descriptors = [0; 2];
     assert_eq!(unsafe { libc::pipe(descriptors.as_mut_ptr()) }, 0);

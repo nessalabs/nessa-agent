@@ -1,0 +1,53 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.02s
+     Running unittests src/lib.rs (/workspace/scratch/nessa-943-unix-probe-target/debug/deps/nessa_unix_ownership_compile_probe-c9d218abc6f0bee6)
+
+running 12 tests
+test gateway::application::host_ownership::tests::bounded_restart_wait_can_acquire_after_predecessor_releases ... ok
+test gateway::application::host_ownership::tests::busy_claim_has_no_resource_and_can_be_retried_after_owner_exit ... ok
+test gateway::application::host_ownership::tests::failed_or_panicking_acquisition_does_not_publish_a_lease ... ok
+test gateway::application::host_ownership::tests::admitted_worker_retains_lease_after_foreground_owner_disappears ... ok
+test gateway::infrastructure::host_ownership::tests::a_symlink_lock_is_refused_without_mutating_its_target ... ok
+test gateway::infrastructure::host_ownership::tests::an_exec_child_does_not_keep_the_lease_after_its_parent_releases ... FAILED
+test gateway::infrastructure::host_ownership::tests::competing_bundle_cannot_claim_the_same_service_until_final_release ... FAILED
+test gateway::infrastructure::host_ownership::tests::different_service_labels_do_not_contend ... ok
+test gateway::application::host_ownership::tests::acquisition_is_shared_across_concurrent_host_operations ... ok
+test gateway::infrastructure::host_ownership::tests::ownership_process_child ... ok
+test gateway::infrastructure::host_ownership::tests::explicit_unlock_releases_an_inherited_fork_description ... FAILED
+
+thread 'gateway::infrastructure::host_ownership::tests::ownership_process_child' (38096) panicked at /workspace/nessa-943-desktop-owner/src-tauri/src/gateway/infrastructure/../../../tests/gateway/infrastructure/host_ownership.rs:9:32:
+called `Result::unwrap()` on an `Err` value: Custom { kind: PermissionDenied, error: UnsafeFile }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test gateway::infrastructure::host_ownership::tests::process_death_releases_the_original_stable_lock ... FAILED
+
+failures:
+
+---- gateway::infrastructure::host_ownership::tests::an_exec_child_does_not_keep_the_lease_after_its_parent_releases stdout ----
+
+thread 'gateway::infrastructure::host_ownership::tests::an_exec_child_does_not_keep_the_lease_after_its_parent_releases' (38088) panicked at /workspace/nessa-943-desktop-owner/src-tauri/src/gateway/infrastructure/../../../tests/gateway/infrastructure/host_ownership.rs:9:32:
+called `Result::unwrap()` on an `Err` value: Custom { kind: PermissionDenied, error: UnsafeFile }
+
+---- gateway::infrastructure::host_ownership::tests::competing_bundle_cannot_claim_the_same_service_until_final_release stdout ----
+
+thread 'gateway::infrastructure::host_ownership::tests::competing_bundle_cannot_claim_the_same_service_until_final_release' (38089) panicked at /workspace/nessa-943-desktop-owner/src-tauri/src/gateway/infrastructure/../../../tests/gateway/infrastructure/host_ownership.rs:9:32:
+called `Result::unwrap()` on an `Err` value: Custom { kind: PermissionDenied, error: UnsafeFile }
+
+---- gateway::infrastructure::host_ownership::tests::explicit_unlock_releases_an_inherited_fork_description stdout ----
+
+thread 'gateway::infrastructure::host_ownership::tests::explicit_unlock_releases_an_inherited_fork_description' (38091) panicked at /workspace/nessa-943-desktop-owner/src-tauri/src/gateway/infrastructure/../../../tests/gateway/infrastructure/host_ownership.rs:9:32:
+called `Result::unwrap()` on an `Err` value: Custom { kind: PermissionDenied, error: UnsafeFile }
+
+---- gateway::infrastructure::host_ownership::tests::process_death_releases_the_original_stable_lock stdout ----
+
+thread 'gateway::infrastructure::host_ownership::tests::process_death_releases_the_original_stable_lock' (38093) panicked at /workspace/nessa-943-desktop-owner/src-tauri/src/gateway/infrastructure/../../../tests/gateway/infrastructure/host_ownership.rs:97:9:
+child did not publish readiness: Err(Disconnected)
+
+
+failures:
+    gateway::infrastructure::host_ownership::tests::an_exec_child_does_not_keep_the_lease_after_its_parent_releases
+    gateway::infrastructure::host_ownership::tests::competing_bundle_cannot_claim_the_same_service_until_final_release
+    gateway::infrastructure::host_ownership::tests::explicit_unlock_releases_an_inherited_fork_description
+    gateway::infrastructure::host_ownership::tests::process_death_releases_the_original_stable_lock
+
+test result: FAILED. 8 passed; 4 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--lib`

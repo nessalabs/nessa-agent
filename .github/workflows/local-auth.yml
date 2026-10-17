@@ -440,21 +440,6 @@ jobs:
         run: bash scripts/desktop/install-linux-build-deps.sh webkit2gtk-driver xvfb
         timeout-minutes: 65
       - run: node scripts/check-desktop.mjs
-        if: runner.os == 'Windows'
-      # Temporary #943 reproduction: retain the existing command and exit status,
-      # and publish only a bounded diagnostic from this fresh execution.
-      - name: Check desktop and publish a fresh native diagnostic
-        if: runner.os != 'Windows'
-        shell: bash
-        run: |
-          set +e
-          diagnostic_path="${RUNNER_TEMP}/nessa-desktop-fresh-diagnostic.txt"
-          node scripts/check-desktop.mjs 2>&1 | tee "$diagnostic_path"
-          native_status=${PIPESTATUS[0]}
-          if [ "$native_status" -ne 0 ]; then
-            python3 scripts/desktop/fresh-native-diagnostic.py "$diagnostic_path"
-          fi
-          exit "$native_status"
       # Hosted Windows runners are administrators with UAC off, so this leg can
       # prove the Task Scheduler identity and cleanup agreement only for an
       # elevated caller, and declares that. The product's standard-user model
