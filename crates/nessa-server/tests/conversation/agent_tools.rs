@@ -6,6 +6,8 @@ use crate::conversation::application::{
     AgentToolAudit, AgentToolAuditRecord, AgentToolRequest, ConversationFuture,
 };
 #[cfg(unix)]
+use crate::conversation::application::{ReportRegistration, ThreadReport};
+#[cfg(unix)]
 use crate::mcp_servers::{
     domain::ConfigurationKey,
     infrastructure::{
@@ -13,11 +15,14 @@ use crate::mcp_servers::{
     },
 };
 #[cfg(unix)]
+use nessa_sdk::application::agent_execution::providers;
+#[cfg(unix)]
 use nessa_sdk::{
     application::agent_execution::executions::{
         ExecutionUpdate, SubmissionMode as InvocationSubmissionMode,
     },
     domain::agent_execution::{
+        executions::MessageChunk,
         sessions::SessionId,
         tools::{McpTool, ToolCallId, ToolCallUpdate, ToolStatus},
     },
@@ -717,6 +722,15 @@ async fn agent_tools_relay_create_send_replay_and_refuse_a_foreign_target() {
     })
     .await
     .expect("queued steering settles before another source uses the provider gate");
+    // The sends above report back into the source. Let those land, so the
+    // refusal below meets no other command of the same person.
+    tokio::time::timeout(TURN_HOLD_HANG, async {
+        while service.inner.thread_reports.waiting() > 0 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("reports of the earlier sends were queued");
     let foreign = id();
     let mut stranger = caller("foreign-create");
     stranger.principal_id = PrincipalId::new("stranger").unwrap();
@@ -913,5 +927,567 @@ async fn admitted_agent_tool_audit_finishes_after_its_response_caller_is_lost() 
     .await
     .unwrap();
     drop(release_turn);
+    retire(service, storage, metadata).await;
+}
+
+/// The source's saved turns whose message is a thread report, once there are
+/// `count` of them and no report waits.
+#[cfg(unix)]
+async fn reports_in(
+    service: &ConversationService,
+    source: &ConversationId,
+    count: usize,
+) -> Vec<String> {
+    tokio::time::timeout(TURN_HOLD_HANG, async {
+        loop {
+            let live = service.resolve(source, &caller("reports")).await.unwrap();
+            let snapshot = live.agent.session_manager().snapshot().await.unwrap();
+            let reports: Vec<_> = snapshot
+                .invocations
+                .iter()
+                .map(|record| record.request.user_message.text_str().to_owned())
+                .filter(|text| text.starts_with("[Thread report]"))
+                .collect();
+            if reports.len() >= count && service.inner.thread_reports.waiting() == 0 {
+                return reports;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the reports were queued into the source")
+}
+
+/// A turn an agent sends to another thread reports back when it ends: its
+/// outcome and final reply are queued into the sender as a new turn, once,
+/// however often the send is retried; a steering send reports as well.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_thread_turn_reports_its_outcome_and_reply_back_to_the_sender() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("data");
+    let provider = Arc::new(ProviderFactory::default());
+    provider.turn_cancel.store(true, Ordering::SeqCst);
+    let (service, storage, metadata) = fixture(&root, provider.clone());
+    service.bind_commands(storage.clone());
+    service.bind_agent_tool_audit(Arc::new(Audit::default()));
+    let source = id();
+    opened(&service, &provider, &source).await;
+    let release = hold_turn(&service, &provider, &source, "source-turn").await;
+    let tools = ConversationTools::new();
+    tools.attach(service.clone());
+    let servers = McpServers::new(Vec::new(), Arc::new(RuntimeClock::new())).unwrap();
+    let grants = ConversationGrants::new(servers.clone(), Arc::new(OsTokens));
+    let grant = grants.grant(&SessionId::new(source.to_string()).unwrap());
+    let key = ConfigurationKey::new([9; 32]);
+    let digest = built_in_digest(&key, tools.as_ref());
+    let relay = Arc::new(Relay::new(servers, grants.clone(), key).with_built_in(tools));
+    let (mut client, serving) =
+        McpClient::connect(relay, digest, grant.environment()[0].1.clone()).await;
+    let created = client
+        .call("create_thread", json!({"requestId":"report-create"}))
+        .await;
+    assert_eq!(created["isError"], false, "{created}");
+    let worker = created["structuredContent"]["threadId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let worker_id = ConversationId::new(&worker).unwrap();
+    provider.execution_updates.lock().unwrap().extend([
+        ExecutionUpdate::Message(MessageChunk::thought("weighing it")),
+        ExecutionUpdate::Message(MessageChunk::text("Let me look that up.")),
+        ExecutionUpdate::Tool(ToolCallUpdate::new(
+            ToolCallId::new("lookup").unwrap(),
+            None,
+            None,
+            Some(ToolStatus::Completed),
+            None,
+            None,
+        )),
+        ExecutionUpdate::Message(MessageChunk::text("The answer ")),
+        ExecutionUpdate::Message(MessageChunk::text("is 42.")),
+    ]);
+    let sent = client
+        .call(
+            "send_message",
+            json!({"threadId":worker,"message":"work","requestId":"report-send"}),
+        )
+        .await;
+    assert_eq!(sent["isError"], false, "{sent}");
+    assert_eq!(sent["structuredContent"]["reportsBack"], true);
+    let execution = sent["structuredContent"]["executionId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let reports = reports_in(&service, &source, 1).await;
+    assert_eq!(reports.len(), 1, "{reports:?}");
+    assert!(reports[0].contains(&worker), "{}", reports[0]);
+    assert!(reports[0].contains(&execution), "{}", reports[0]);
+    assert!(reports[0].contains(": completed."), "{}", reports[0]);
+    assert!(
+        reports[0].contains("Its reply:\nThe answer is 42."),
+        "the final visible answer is carried: {}",
+        reports[0]
+    );
+    assert!(
+        !reports[0].contains("Let me look") && !reports[0].contains("weighing"),
+        "text before the last tool step and thinking stay out: {}",
+        reports[0]
+    );
+    // A retry of the finished send answers from the same report.
+    let retried = client
+        .call(
+            "send_message",
+            json!({"threadId":worker,"message":"work","requestId":"report-send"}),
+        )
+        .await;
+    assert_eq!(retried["structuredContent"]["executionId"], execution);
+    assert_eq!(reports_in(&service, &source, 1).await.len(), 1);
+    // A refused retry of the same request leaves nothing waiting.
+    let conflict = client
+        .call(
+            "send_message",
+            json!({"threadId":worker,"message":"changed","requestId":"report-send"}),
+        )
+        .await;
+    assert_eq!(conflict["structuredContent"]["error"], "request_conflict");
+    assert_eq!(reports_in(&service, &source, 1).await.len(), 1);
+
+    // A steer taken into a running turn reports that turn's outcome and
+    // reply once it settles, though a queued turn admitted in between is
+    // still waiting.
+    provider.native_steering.store(true, Ordering::SeqCst);
+    provider.inject_steers.store(true, Ordering::SeqCst);
+    let release_worker = hold_turn(&service, &provider, &worker_id, "worker-active").await;
+    send(&service, &worker_id, "worker-queued", "after").await;
+    let steered = client
+        .call(
+            "send_message",
+            json!({"threadId":worker,"message":"also this","mode":"steering","requestId":"report-steer"}),
+        )
+        .await;
+    assert_eq!(steered["isError"], false, "{steered}");
+    assert_eq!(steered["structuredContent"]["reportsBack"], true);
+    let steer = steered["structuredContent"]["executionId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(service.inner.thread_reports.waiting(), 1);
+    provider
+        .execution_updates
+        .lock()
+        .unwrap()
+        .push(ExecutionUpdate::Message(MessageChunk::text("Host answer.")));
+    drop(release_worker);
+    let reports = reports_in(&service, &source, 2).await;
+    assert_eq!(reports.len(), 2, "{reports:?}");
+    assert!(reports[1].contains(&steer), "{}", reports[1]);
+    assert!(reports[1].contains(": completed."), "{}", reports[1]);
+    assert!(
+        reports[1].contains("Its reply:\nHost answer."),
+        "the host turn's reply is the steer's: {}",
+        reports[1]
+    );
+    let worker_turns = service
+        .resolve(&worker_id, &caller("reports"))
+        .await
+        .unwrap()
+        .agent
+        .session_manager()
+        .snapshot()
+        .await
+        .unwrap();
+    let steer_record = worker_turns
+        .invocations
+        .iter()
+        .find(|record| record.request.execution_id.as_str() == steer)
+        .unwrap();
+    assert_eq!(
+        steer_record.scheduling.last().map(|event| event.stage),
+        Some(InvocationStage::Injected),
+        "the steer was taken into the running turn"
+    );
+    // The queued turn after it runs and adds no second report.
+    tokio::time::timeout(TURN_HOLD_HANG, async {
+        while !provider
+            .executions
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|execution| execution == "worker-queued")
+        {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the queued turn ran");
+    assert_eq!(reports_in(&service, &source, 2).await.len(), 2);
+
+    // A queued turn the thread drops because the turn ahead of it failed
+    // reports as cancelled, though no invocation follows the drop.
+    *provider.execution_reply.lock().unwrap() = Some(providers::ProviderExecutionReply::Finished(
+        providers::ExecutionReport::new(
+            Some(Err(AgentError::Unsupported("worker failed".into()))),
+            None,
+            ProviderSessionState::Usable,
+        ),
+    ));
+    *provider.execution_observation_failure.lock().unwrap() =
+        Some(providers::ObservationFailure::new(
+            AgentError::Unsupported("worker failed".into()),
+            providers::ObservationFailureCause::ExecutionFailed,
+        ));
+    let release_failing = hold_turn(&service, &provider, &worker_id, "worker-fails").await;
+    let dropped = client
+        .call(
+            "send_message",
+            json!({"threadId":worker,"message":"after the failure","requestId":"report-dropped"}),
+        )
+        .await;
+    assert_eq!(dropped["isError"], false, "{dropped}");
+    let dropped = dropped["structuredContent"]["executionId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    drop(release_failing);
+    let reports = reports_in(&service, &source, 3).await;
+    assert_eq!(reports.len(), 3, "{reports:?}");
+    assert!(reports[2].contains(&dropped), "{}", reports[2]);
+    assert!(reports[2].contains(": cancelled."), "{}", reports[2]);
+    assert!(
+        reports[2].contains("It gave no reply text."),
+        "{}",
+        reports[2]
+    );
+
+    // A queued turn withdrawn while the turn ahead still runs reports as
+    // cancelled, though no invocation ends.
+    let release_ahead = hold_turn(&service, &provider, &worker_id, "worker-ahead").await;
+    let withdrawn = client
+        .call(
+            "send_message",
+            json!({"threadId":worker,"message":"withdraw me","requestId":"report-withdrawn"}),
+        )
+        .await;
+    assert_eq!(withdrawn["isError"], false, "{withdrawn}");
+    let withdrawn = withdrawn["structuredContent"]["executionId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let stopped = client
+        .call(
+            "stop_thread",
+            json!({"threadId":worker,"executionId":withdrawn,"requestId":"report-withdraw"}),
+        )
+        .await;
+    assert_eq!(stopped["isError"], false, "{stopped}");
+    let reports = reports_in(&service, &source, 4).await;
+    assert_eq!(reports.len(), 4, "{reports:?}");
+    assert!(reports[3].contains(&withdrawn), "{}", reports[3]);
+    assert!(reports[3].contains(": cancelled."), "{}", reports[3]);
+    drop(release_ahead);
+
+    // The same request id sent to another thread is refused before anything
+    // is sent or waits, so two threads never share one report.
+    let other = client
+        .call("create_thread", json!({"requestId":"report-create-other"}))
+        .await;
+    assert_eq!(other["isError"], false, "{other}");
+    let other = other["structuredContent"]["threadId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let elsewhere = client
+        .call(
+            "send_message",
+            json!({"threadId":other,"message":"work","requestId":"report-send"}),
+        )
+        .await;
+    assert_eq!(elsewhere["structuredContent"]["error"], "request_conflict");
+    assert_eq!(reports_in(&service, &source, 4).await.len(), 4);
+
+    // A thread cannot report to itself.
+    assert_eq!(
+        service
+            .report_thread_turn(
+                source.clone(),
+                "own".into(),
+                ThreadReport {
+                    parent: source.clone(),
+                    caller: caller("own"),
+                    execution: "own-report".into(),
+                },
+            )
+            .await,
+        ReportRegistration::Refused
+    );
+    drop(client);
+    drop(grant);
+    serving.await.unwrap();
+    drop(release);
+    retire(service, storage, metadata).await;
+}
+
+/// Reports saved by one run of the gateway are delivered by the next: a turn
+/// that finished before the restart reports its outcome, and one the earlier
+/// run never finished reports that it was interrupted. Each leaves the store
+/// once its parent has it.
+#[cfg(unix)]
+#[tokio::test]
+async fn saved_thread_reports_are_delivered_after_a_restart() {
+    use crate::conversation::application::ThreadReportStore;
+    use crate::conversation::infrastructure::LocalThreadReports;
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("data");
+    let private = directory.path().join("reports");
+    nessa_local_storage::create_directory(&private).unwrap();
+    let saved = private.join("thread-reports.sqlite3");
+    let source = id();
+    let worker = id();
+    let report = |execution: &str| ThreadReport {
+        parent: source.clone(),
+        caller: caller(&format!("{execution}-action")),
+        execution: format!("{execution}-report"),
+    };
+    {
+        let provider = Arc::new(ProviderFactory::default());
+        let (service, storage, metadata) = fixture(&root, provider.clone());
+        service.bind_commands(storage.clone());
+        service.bind_thread_reports(Arc::new(LocalThreadReports::open(&saved).unwrap()));
+        opened(&service, &provider, &source).await;
+        opened(&service, &provider, &worker).await;
+        finish_turn(&service, &provider, &worker, "done").await;
+        // Registered with no look after it, as a run that stopped before
+        // it could deliver leaves them.
+        for execution in ["done", "never"] {
+            assert_eq!(
+                service
+                    .report_thread_turn(worker.clone(), execution.into(), report(execution))
+                    .await,
+                ReportRegistration::Registered
+            );
+        }
+        retire(service, storage, metadata).await;
+    }
+    let provider = Arc::new(ProviderFactory::default());
+    let (service, storage, metadata) = fixture(&root, provider.clone());
+    service.bind_commands(storage.clone());
+    let store = Arc::new(LocalThreadReports::open(&saved).unwrap());
+    service.bind_thread_reports(store.clone());
+    // A retry of the send before the start reads its report keeps it the
+    // earlier run's.
+    assert_eq!(
+        service
+            .report_thread_turn(worker.clone(), "never".into(), report("never"))
+            .await,
+        ReportRegistration::Registered
+    );
+    assert_eq!(service.resume_thread_reports().await.unwrap(), 2);
+    let reports = reports_in(&service, &source, 2).await;
+    assert_eq!(reports.len(), 2, "{reports:?}");
+    let done = reports
+        .iter()
+        .find(|text| text.contains("execution done)"))
+        .unwrap();
+    assert!(done.contains(": completed."), "{done}");
+    let never = reports
+        .iter()
+        .find(|text| text.contains("execution never)"))
+        .unwrap();
+    assert!(never.contains(": interrupted."), "{never}");
+    assert!(
+        never.contains("The gateway restarted before the turn finished."),
+        "{never}"
+    );
+    tokio::time::timeout(TURN_HOLD_HANG, async {
+        while !store.pending().await.unwrap().is_empty() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("delivered reports leave the store");
+    retire(service, storage, metadata).await;
+}
+
+/// A report is whole within the parent's input limit, however long the reply.
+#[test]
+fn a_long_reply_is_cut_so_the_whole_report_fits_the_input_limit() {
+    let limit = ConversationLimits::default().max_input_bytes;
+    let text = crate::conversation::application::service::report_text_for_test(
+        &id(),
+        "turn",
+        "completed",
+        "é".repeat(limit),
+        limit,
+    );
+    assert!(text.len() <= limit, "{} > {limit}", text.len());
+    assert!(text.ends_with("\n[cut to fit]"));
+    // A limit smaller than the report's own heading still holds.
+    for limit in [0, 5, 40] {
+        let text = crate::conversation::application::service::report_text_for_test(
+            &id(),
+            "turn",
+            "completed",
+            "reply".into(),
+            limit,
+        );
+        assert!(text.len() <= limit, "{} > {limit}", text.len());
+    }
+}
+
+/// Holds a save that wrote its row, so a test can act between a send's save
+/// and its registration. A save that found the row already there is not held.
+#[cfg(unix)]
+struct HeldSave {
+    store: Arc<crate::conversation::infrastructure::LocalThreadReports>,
+    saved: tokio::sync::Notify,
+    release: tokio::sync::Semaphore,
+}
+#[cfg(unix)]
+impl crate::conversation::application::ThreadReportStore for HeldSave {
+    fn save(
+        &self,
+        report: &crate::conversation::application::PendingReport,
+    ) -> crate::conversation::application::ConversationFuture<'_, bool> {
+        let report = report.clone();
+        Box::pin(async move {
+            let wrote = self.store.save(&report).await?;
+            self.saved.notify_one();
+            if wrote {
+                let _ = self.release.acquire().await.unwrap();
+            }
+            Ok(wrote)
+        })
+    }
+    fn settle(&self, report: &str) -> crate::conversation::application::ConversationFuture<'_, ()> {
+        self.store.settle(report)
+    }
+    fn forget_conversation(
+        &self,
+        id: &ConversationId,
+    ) -> crate::conversation::application::ConversationFuture<'_, ()> {
+        self.store.forget_conversation(id)
+    }
+    fn pending(
+        &self,
+    ) -> crate::conversation::application::ConversationFuture<
+        '_,
+        Vec<crate::conversation::application::PendingReport>,
+    > {
+        self.store.pending()
+    }
+}
+
+/// A start that reads the store between a send's save and its registration
+/// leaves that report to the send: it is not reported interrupted.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_start_reading_a_report_this_run_saved_leaves_it_to_its_send() {
+    use crate::conversation::application::ThreadReportStore;
+    use crate::conversation::infrastructure::LocalThreadReports;
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("data");
+    let private = directory.path().join("reports");
+    nessa_local_storage::create_directory(&private).unwrap();
+    let provider = Arc::new(ProviderFactory::default());
+    let (service, storage, metadata) = fixture(&root, provider.clone());
+    service.bind_commands(storage.clone());
+    let store = Arc::new(HeldSave {
+        store: Arc::new(LocalThreadReports::open(&private.join("thread-reports.sqlite3")).unwrap()),
+        saved: tokio::sync::Notify::new(),
+        release: tokio::sync::Semaphore::new(0),
+    });
+    service.bind_thread_reports(store.clone());
+    let source = id();
+    let worker = id();
+    opened(&service, &provider, &source).await;
+    opened(&service, &provider, &worker).await;
+    let saved = store.saved.notified();
+    let registering = {
+        let service = service.clone();
+        let (worker, source) = (worker.clone(), source.clone());
+        tokio::spawn(async move {
+            service
+                .report_thread_turn(
+                    worker,
+                    "later".into(),
+                    ThreadReport {
+                        parent: source,
+                        caller: caller("later-action"),
+                        execution: "later-report".into(),
+                    },
+                )
+                .await
+        })
+    };
+    saved.await;
+    assert_eq!(service.resume_thread_reports().await.unwrap(), 1);
+    store.release.add_permits(1);
+    assert_eq!(registering.await.unwrap(), ReportRegistration::Registered);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(service.inner.thread_reports.waiting(), 1);
+    assert_eq!(
+        store.pending().await.unwrap().len(),
+        1,
+        "the report still waits for its turn"
+    );
+    retire(service, storage, metadata).await;
+}
+
+/// Two registrations of the same report at once: the second waits for the
+/// first, and the report is this run's, not an earlier run's restored one.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_second_registration_of_a_report_at_once_does_not_mark_it_restored() {
+    use crate::conversation::infrastructure::LocalThreadReports;
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("data");
+    let private = directory.path().join("reports");
+    nessa_local_storage::create_directory(&private).unwrap();
+    let provider = Arc::new(ProviderFactory::default());
+    let (service, storage, metadata) = fixture(&root, provider.clone());
+    service.bind_commands(storage.clone());
+    let store = Arc::new(HeldSave {
+        store: Arc::new(LocalThreadReports::open(&private.join("thread-reports.sqlite3")).unwrap()),
+        saved: tokio::sync::Notify::new(),
+        release: tokio::sync::Semaphore::new(0),
+    });
+    service.bind_thread_reports(store.clone());
+    let source = id();
+    let worker = id();
+    opened(&service, &provider, &source).await;
+    opened(&service, &provider, &worker).await;
+    let register = || {
+        let service = service.clone();
+        let (worker, source) = (worker.clone(), source.clone());
+        tokio::spawn(async move {
+            service
+                .report_thread_turn(
+                    worker,
+                    "later".into(),
+                    ThreadReport {
+                        parent: source,
+                        caller: caller("later-action"),
+                        execution: "later-report".into(),
+                    },
+                )
+                .await
+        })
+    };
+    let saved = store.saved.notified();
+    let first = register();
+    saved.await;
+    let second = register();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    store.release.add_permits(1);
+    assert_eq!(first.await.unwrap(), ReportRegistration::Registered);
+    assert_eq!(second.await.unwrap(), ReportRegistration::AlreadyWaiting);
+    service.wake_thread_reports(&worker);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(
+        service.inner.thread_reports.waiting(),
+        1,
+        "a turn not yet sent is not reported interrupted"
+    );
     retire(service, storage, metadata).await;
 }
