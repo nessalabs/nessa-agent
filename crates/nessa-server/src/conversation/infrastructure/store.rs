@@ -15,7 +15,7 @@ use crate::conversation::application::{
     ConversationError, ConversationFuture, ConversationListing, ConversationModeApplication,
     ConversationModeRequest, ConversationModeRequestState, ConversationRepository,
     ConversationSummaries, ListedConversation, ListedConversations, ObservationCursor,
-    ObservedConversations, Reader, UnfinishedDeletions, WatchCatalogue,
+    ObservedConversations, Reader, UnfinishedDeletions, UnfinishedTurns, WatchCatalogue,
 };
 use crate::conversation::domain::{
     Conversation, ConversationDeletion, DeletionContradiction, ProviderSessionErasure,
@@ -1228,6 +1228,53 @@ impl ConversationRepository for LocalConversationStore {
                 }
             }
             Ok(found)
+        })
+    }
+}
+
+impl UnfinishedTurns for LocalConversationStore {
+    fn mark(&self, id: &ConversationId) -> ConversationFuture<'_, ()> {
+        let id = id.to_string();
+        self.run(move |connection| {
+            connection
+                .execute(
+                    "INSERT INTO unfinished_turns (conversation_id) VALUES (?1)
+                     ON CONFLICT (conversation_id) DO NOTHING",
+                    [id],
+                )
+                .map_err(failed)?;
+            Ok(())
+        })
+    }
+    fn clear(&self, id: &ConversationId) -> ConversationFuture<'_, ()> {
+        let id = id.to_string();
+        self.run(move |connection| {
+            connection
+                .execute(
+                    "DELETE FROM unfinished_turns WHERE conversation_id = ?1",
+                    [id],
+                )
+                .map_err(failed)?;
+            Ok(())
+        })
+    }
+    fn marked(&self) -> ConversationFuture<'_, Vec<ConversationId>> {
+        self.run(|connection| {
+            let mut statement = connection
+                .prepare("SELECT conversation_id FROM unfinished_turns ORDER BY conversation_id")
+                .map_err(failed)?;
+            let mut rows = statement.query([]).map_err(failed)?;
+            let mut marked = Vec::new();
+            while let Some(row) = rows.next().map_err(failed)? {
+                let name = cells(row.get::<_, String>(0))?.unwrap_or_default();
+                match ConversationId::new(&name) {
+                    Ok(id) => marked.push(id),
+                    Err(_) => {
+                        unreadable("unfinished_turns", &name);
+                    }
+                }
+            }
+            Ok(marked)
         })
     }
 }

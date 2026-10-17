@@ -143,6 +143,18 @@ impl InvocationHistory {
                 "invalid scheduling transition evidence",
             ));
         }
+        // Only the host's decision follows a cancellation, and only one that
+        // left the input owed: every other cancellation is final.
+        if transition.before() == Some(InvocationStage::Cancelled)
+            && !self
+                .last
+                .as_ref()
+                .is_some_and(|last| last.cause().leaves_work_owed())
+        {
+            return Err(InvocationHistoryError(
+                "a final cancellation cannot be decided again",
+            ));
+        }
         if matches!(
             transition.stage(),
             InvocationStage::Running | InvocationStage::Injected
@@ -481,7 +493,10 @@ impl InvocationHistory {
         cancellation: Option<InvocationCancellation>,
     ) -> Result<(), InvocationHistoryError> {
         if let (Some(last), Some(cancellation)) = (last, cancellation) {
+            // The host's decision follows the cancellation the stop was
+            // checked against when it was recorded.
             if last.stage() == InvocationStage::Cancelled
+                && last.before() != Some(InvocationStage::Cancelled)
                 && (last.cause() != cancellation.cause()
                     || last.initiator() != cancellation.initiator())
             {

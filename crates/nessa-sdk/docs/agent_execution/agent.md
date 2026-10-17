@@ -265,7 +265,10 @@ requires one temporary full-history copy, without imposing a total-history cap.
   still be queued, withdrawn, or injected into another execution. Otherwise it
   means settlement was not saved, not success or confirmed cancellation.
   Dropping an invocation future does not guarantee that provider work stopped;
-  await `Agent::close(actor)` for verified cleanup. Such inputs are never replayed.
+  await `Agent::close(actor)` for verified cleanup. Such inputs are never
+  replayed; a host continues one with a successor turn
+  ([resuming](scheduling.md#resuming-turns-a-restart-cut-off)), and a host
+  shutting down uses `Agent::suspend(actor)` so what it stops is owed.
 
 The manager acquires storage access during `SessionManager::open` and retains only
 its required `SessionStorageLease`. The shared backend can open other sessions.

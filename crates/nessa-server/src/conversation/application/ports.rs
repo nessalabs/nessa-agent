@@ -271,6 +271,26 @@ pub trait ConversationRepository: Send + Sync {
     fn unfinished_deletions(&self) -> ConversationFuture<'_, UnfinishedDeletions>;
 }
 
+/// Which conversations may have a turn that a restart would leave unfinished:
+/// the startup sweep's question
+/// ([`super::ConversationService::resume_unfinished`]).
+///
+/// A mark only says where to look. The conversation's own history decides
+/// what is owed (`Agent::owed_turns`), so a mark left behind costs one opening
+/// that finds nothing, and is cleared; a mark missing would lose a turn, so
+/// one is written, durably, before the agent is given a turn.
+pub trait UnfinishedTurns: Send + Sync {
+    /// Mark `id`. Durable before it returns; marking a marked one is not an
+    /// error.
+    fn mark(&self, id: &ConversationId) -> ConversationFuture<'_, ()>;
+    /// Remove `id`'s mark. Durable before it returns; one already gone is
+    /// not an error.
+    fn clear(&self, id: &ConversationId) -> ConversationFuture<'_, ()>;
+    /// Every marked conversation. A mark whose conversation cannot be named
+    /// is left out and logged: there is nothing it could open.
+    fn marked(&self) -> ConversationFuture<'_, Vec<ConversationId>>;
+}
+
 /// What [`ConversationRepository::unfinished_deletions`] found.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct UnfinishedDeletions {

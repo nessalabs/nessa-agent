@@ -18,16 +18,22 @@ diagramLinks: {}
 
 Nessa keeps each accepted input's original ID, content, caller and delivery mode. Up to 64 inputs can wait while the agent is busy or starting. Boundary steering gets priority over ordinary waiting inputs without interrupting active work. For example, it can put your correction ahead of ordinary follow-ups once the current invocation finishes.
 
-Retrying the same input can join its existing receipt or recover a retained result. Changing its content, caller or mode conflicts with that identity. If previous delivery cannot be safely resolved, Nessa refuses replay. Native steering falls back only when the agent explicitly confirms it did not consume the input; a timeout does not authorize fallback.
+Retrying the same input can join its existing receipt or recover a retained result. Changing its content, caller or mode conflicts with that identity. If previous delivery cannot be safely resolved, Nessa refuses replay. A turn cut off by a restart, or stopped by the gateway's own shutdown, is owed: when the gateway starts again it queues a successor turn that tells the agent the turn was cut off and repeats the request, so the model checks what is done and carries on or says it is finished. A person's stop and a failure stay final, and so does the gateway's own decision not to resume a turn (`NotResumed`). Native steering falls back only when the agent explicitly confirms it did not consume the input; a timeout does not authorize fallback.
 
 ```mermaid
 stateDiagram-v2
     [*] --> Queued: Scheduled admission / retain original input
     Queued --> Running: Dispatched / select invocation slot
-    Queued --> Cancelled: Withdrawn, SessionClosed or RunnerStopped
+    Queued --> Cancelled: Withdrawn, SessionClosed, RunnerStopped, Suspended or Interrupted
     Queued --> Settled: DispatchFailed / failed attachment settlement
     Running --> Settled: ExecutionSettled or ExecutionFailed
-    Running --> Cancelled: Local cancellation edge
+    Running --> Cancelled: Local cancellation edge, Suspended or Interrupted
+    Cancelled --> Cancelled: NotResumed, only after Suspended or Interrupted
+    note right of Queued
+        Suspended or Interrupted leaves the work owed:
+        resume_turn queues a successor, at most three in a row.
+        NotResumed is the host's final no.
+    end note
     [*] --> Injected: Native steering acknowledged / retain target
     note right of Injected
         Target execution owns output and eventual settlement.

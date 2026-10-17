@@ -230,7 +230,7 @@ fn an_alpha_v1_database_is_refused_without_migrating_its_rows() {
         LocalConversationStore::open(&path),
         Err(nessa_local_database::OpenError::Version {
             found: 1,
-            expected: 6
+            expected: 7
         })
     ));
     let old_row: String = raw(&path)
@@ -257,7 +257,7 @@ fn an_alpha_v2_database_is_refused_without_erasing_ownership() {
         LocalConversationStore::open(&path),
         Err(nessa_local_database::OpenError::Version {
             found: 2,
-            expected: 6
+            expected: 7
         })
     ));
     let retained: String = raw(&path)
@@ -1227,6 +1227,28 @@ async fn the_list_query_reads_only_its_owners_rows_however_many_others_there_are
     // An owner with more than the bound gets the bound and one more.
     let (rows, _, scanned) = list_cost(&path, "someone", 501);
     assert_eq!((rows, scanned), (501, 0));
+}
+
+#[tokio::test]
+async fn unfinished_turn_marks_are_kept_until_cleared_and_outlive_reopening() {
+    use crate::conversation::application::UnfinishedTurns;
+    let Opened {
+        _directory,
+        path,
+        store,
+    } = opened();
+    let (busy, idle) = (new_id(), new_id());
+    for id in [&busy, &idle] {
+        store.create(owned(id)).await.unwrap();
+        store.mark(id).await.unwrap();
+    }
+    // Marking a marked conversation again is not an error.
+    store.mark(&busy).await.unwrap();
+    store.clear(&idle).await.unwrap();
+    store.clear(&idle).await.unwrap();
+    drop(store);
+    let reopened = LocalConversationStore::open(&path).unwrap();
+    assert_eq!(reopened.marked().await.unwrap(), vec![busy]);
 }
 
 #[tokio::test]
@@ -2857,7 +2879,7 @@ async fn a_revoke_takes_the_row_out_of_the_devices_catalogue() {
 }
 
 /// A version 4 file, whose grants hold no capability set but read and no
-/// policy, is refused rather than read into the version 6 shape, and keeps
+/// policy, is refused rather than read into the current shape, and keeps
 /// its rows (docs/adr/todo/202-versioned-local-datasets.md).
 #[test]
 fn a_version_4_database_is_refused_without_erasing_its_grants() {
@@ -2881,7 +2903,7 @@ fn a_version_4_database_is_refused_without_erasing_its_grants() {
         LocalConversationStore::open(&path),
         Err(nessa_local_database::OpenError::Version {
             found: 4,
-            expected: 6
+            expected: 7
         })
     ));
     let kept: String = raw(&path)
@@ -2891,7 +2913,7 @@ fn a_version_4_database_is_refused_without_erasing_its_grants() {
 }
 
 /// The previous metadata version, whose grants name a role, is refused and
-/// left untouched. This build reads version 6 only.
+/// left untouched. This build reads version 7 only.
 #[test]
 fn a_version_5_database_is_refused_without_erasing_its_grants() {
     let directory = tempfile::tempdir().unwrap();
@@ -2918,7 +2940,7 @@ fn a_version_5_database_is_refused_without_erasing_its_grants() {
         LocalConversationStore::open(&path),
         Err(nessa_local_database::OpenError::Version {
             found: 5,
-            expected: 6
+            expected: 7
         })
     ));
     let kept: String = raw(&path)

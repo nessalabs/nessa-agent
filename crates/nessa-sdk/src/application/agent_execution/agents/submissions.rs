@@ -10,7 +10,9 @@ use crate::application::agent_execution::{
     executions::{ExecutionRequest, SubmissionMode, Submitter},
     sessions::{SessionManager, SubmissionAcknowledgement},
 };
-use crate::domain::agent_execution::executions::{ExecutionId, ExecutionOutcome, InvocationStage};
+use crate::domain::agent_execution::executions::{
+    ExecutionId, ExecutionOutcome, InvocationStage, Resumption,
+};
 use std::collections::HashMap;
 use tokio::sync::watch;
 
@@ -45,6 +47,45 @@ fn steering_evidence(
         AdmissionEvidence::Acknowledged => SteeringEvidence::Acknowledged,
         AdmissionEvidence::Failed(failure) => SteeringEvidence::Failed(failure),
     })
+}
+
+/// The receipt of the turn that last continued `input`'s owed turn, through
+/// its chain of successors ([`Resumption`]); `None` while none is saved.
+async fn successor_receipt(
+    manager: &SessionManager,
+    receipts: &HashMap<ExecutionId, SubmissionReceipt>,
+    input: &ExecutionRequest,
+) -> Option<Result<SteeringDelivery, AgentError>> {
+    let mut id = input.execution_id.clone();
+    loop {
+        let next = Resumption::of(&id).successor()?;
+        let queued = |result, evidence| {
+            Ok(SteeringDelivery::Queued(QueueAdmission::new(
+                QueuedInvocation::new(input.execution_id.clone(), result),
+                evidence,
+            )))
+        };
+        if let Some(SubmissionReceipt::Queued { result, evidence }) = receipts.get(&next) {
+            return Some(queued(result.clone(), evidence.clone()));
+        }
+        let record = manager.submission(&next).await?;
+        let last = record.scheduling.last()?;
+        if last.stage == InvocationStage::Cancelled && last.cause.leaves_work_owed() {
+            id = next;
+            continue;
+        }
+        let result = match last.stage {
+            InvocationStage::Cancelled => record.result.unwrap_or(Err(AgentError::Closed)),
+            _ => record
+                .result
+                .unwrap_or(Err(AgentError::SubmissionUnresolved)),
+        };
+        let (_, receiver) = watch::channel(Some(result));
+        return Some(
+            admission_evidence(&record.acknowledgement)
+                .and_then(|evidence| queued(receiver, evidence)),
+        );
+    }
 }
 
 pub(super) async fn recover(
@@ -95,7 +136,14 @@ pub(super) async fn recover(
                 },
             ));
         }
+        // Owed work continues in a successor: a retry answers as that turn
+        // does (`a_retry_of_a_resumed_turn_answers_as_its_successor`).
         Some(event) if event.stage == InvocationStage::Cancelled => {
+            if event.cause.leaves_work_owed() {
+                if let Some(answer) = successor_receipt(manager, receipts, input).await {
+                    return Some(answer);
+                }
+            }
             record.result.unwrap_or(Err(AgentError::Closed))
         }
         Some(event)

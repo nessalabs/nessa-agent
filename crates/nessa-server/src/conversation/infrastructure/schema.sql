@@ -156,4 +156,12 @@ CREATE UNIQUE INDEX share_grant_changes_request
 CREATE INDEX share_grant_changes_by_receiver
     ON share_grant_changes (receiver_id, revision);
 
-PRAGMA user_version = 6;
+-- Each conversation that may have a turn a restart would leave unfinished:
+-- written before its agent is given a turn, removed once its agent has
+-- nothing left to do. The startup sweep opens these and resumes what their
+-- history says is owed; the history, not this table, decides what that is.
+CREATE TABLE unfinished_turns (
+    conversation_id TEXT PRIMARY KEY NOT NULL REFERENCES conversations (id)
+) STRICT, WITHOUT ROWID;
+
+PRAGMA user_version = 7;

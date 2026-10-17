@@ -35,6 +35,7 @@ impl InvocationCancellation {
         if !matches!(
             (cause, initiator),
             (SchedulingCause::SessionClosed, SchedulingInitiator::Caller)
+                | (SchedulingCause::Suspended, SchedulingInitiator::Caller)
                 | (
                     SchedulingCause::RunnerStopped,
                     SchedulingInitiator::Automatic

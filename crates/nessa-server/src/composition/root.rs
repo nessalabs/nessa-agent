@@ -408,6 +408,24 @@ impl CompositionRoot {
                 }
             });
         }
+        // Turns the last run left unfinished — cut off by a crash, or
+        // suspended by its shutdown — are carried on now, in the background,
+        // each conversation opened as its owner's and its agent told what was
+        // cut off (#970).
+        if let Some(service) = conversations.clone() {
+            tokio::spawn(async move {
+                match service.resume_unfinished().await {
+                    Ok(0) => {}
+                    Ok(marked) => {
+                        tracing::info!(marked, "resumed conversations with unfinished turns")
+                    }
+                    Err(error) => tracing::error!(
+                        %error,
+                        "conversations with unfinished turns could not be listed to resume them"
+                    ),
+                }
+            });
+        }
 
         #[cfg(any(target_os = "macos", target_os = "linux"))]
         if bundle.is_some() {

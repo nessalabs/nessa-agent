@@ -51,4 +51,24 @@ pub enum SchedulingCause {
     RunnerStopped,
     /// A verified caller removed pending input before dispatch.
     Withdrawn,
+    /// The host stopped the agent for its own shutdown, not to end this work.
+    /// The input is owed: the next start resumes it with a successor turn.
+    Suspended,
+    /// Found unfinished when the agent was opened again after its process
+    /// ended — no result, and nothing left running it. The input is owed in
+    /// the same way as a suspended one.
+    Interrupted,
+    /// The host decided not to resume an owed input: the share grant that
+    /// started it no longer admits it, or it was resumed as many times as a
+    /// chain may be. Final, like a person's stop. The one edge that may
+    /// follow a cancellation, and only one that left the input owed.
+    NotResumed,
+}
+impl SchedulingCause {
+    /// Whether this cancellation leaves the input owed, to be resumed by a
+    /// successor turn, rather than final: the host's own shutdown or restart
+    /// ended it, not a person, a failure or the model.
+    pub fn leaves_work_owed(self) -> bool {
+        matches!(self, Self::Suspended | Self::Interrupted)
+    }
 }
