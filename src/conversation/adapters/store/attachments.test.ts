@@ -276,6 +276,8 @@ function viewSaying(imageInput: boolean): Read {
     revision: `image-input-${imageInput}`,
     messages: [],
     pending: [],
+    reviewsWaiting: [],
+    questionsWaiting: [],
     permissions: [],
     questions: [],
     tools: [],

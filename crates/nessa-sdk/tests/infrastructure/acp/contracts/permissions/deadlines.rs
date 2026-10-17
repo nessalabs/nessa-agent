@@ -117,6 +117,7 @@ fn assert_deadline_decided(
 
 fn human_allow(id: PermissionId) -> PermissionAnswer {
     PermissionAnswer {
+        key: None,
         attribution: ApprovalAttribution::new(
             ActionContext::new("reviewer", "nessa.panel", "human-answer").unwrap(),
             ApprovalBasis::Explicit,
@@ -1431,6 +1432,7 @@ async fn a_person_choosing_codex_cancel_ends_the_turn_and_leaves_the_session_ope
     opened
         .session
         .answer_permission(PermissionAnswer {
+            key: None,
             attribution: ApprovalAttribution::new(
                 ActionContext::new("reviewer", "nessa.panel", "human-answer").unwrap(),
                 ApprovalBasis::Explicit,
@@ -1509,6 +1511,7 @@ async fn a_person_choosing_codex_decline_then_an_unasked_cancel_ends_the_session
     opened
         .session
         .answer_permission(PermissionAnswer {
+            key: None,
             attribution: ApprovalAttribution::new(
                 ActionContext::new("reviewer", "nessa.panel", "human-answer").unwrap(),
                 ApprovalBasis::Explicit,
@@ -1575,6 +1578,7 @@ async fn an_allow_named_cancel_then_an_unasked_cancel_ends_the_session() {
     opened
         .session
         .answer_permission(PermissionAnswer {
+            key: None,
             attribution: ApprovalAttribution::new(
                 ActionContext::new("reviewer", "nessa.panel", "human-answer").unwrap(),
                 ApprovalBasis::Explicit,

@@ -347,7 +347,7 @@ function transcriptFor(
     sessionId: session.id,
     messages: messagesFor(session.id, session.updatedAt, text, count, characters),
     activity,
-    approval,
+    approvals: approval ? [approval] : [],
     revision: 1,
   }
 }

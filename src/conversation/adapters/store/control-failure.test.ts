@@ -333,6 +333,7 @@ function reviewTarget(conversationId: string) {
     conversationId,
     permissions: [
       {
+        review: "0".repeat(32),
         executionId: "execution",
         permissionId: "permission",
         options: [{ id: "deny" }],

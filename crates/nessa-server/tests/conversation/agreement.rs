@@ -118,11 +118,13 @@ fn an_app_calls_schema_states_the_bounds_the_gateway_keeps() {
         arguments["x-utf8MaxBytes"].as_u64(),
         Some(MAX_APP_ARGUMENTS_BYTES as u64)
     );
-    // An app's arguments are shown whole in its review, and the view carries
-    // the same text for a call the connection saw.
-    assert_eq!(
-        arguments["x-utf8MaxBytes"],
-        defs["ConversationPermission"]["properties"]["argumentsJson"]["x-utf8MaxBytes"]
+    // An app's arguments are shown whole in its review, which takes any
+    // input the agent's reviews may, and the view carries the same text for
+    // a call the connection saw.
+    assert!(
+        arguments["x-utf8MaxBytes"].as_u64()
+            <= defs["ConversationPermission"]["properties"]["argumentsJson"]["x-utf8MaxBytes"]
+                .as_u64()
     );
     assert_eq!(
         arguments["x-utf8MaxBytes"],

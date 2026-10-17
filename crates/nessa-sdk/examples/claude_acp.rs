@@ -382,6 +382,7 @@ async fn run_with_storage(
                                 });
                         let resolution = session
                             .answer_permission(PermissionAnswer {
+                                key: None,
                                 attribution: attribution(id.as_str()),
                                 execution_id: execution_id.clone(),
                                 id: id.clone(),

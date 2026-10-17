@@ -14,8 +14,10 @@
 //! offer. That is a decision too, so its immutable selection and response-write
 //! stages are modelled under one checked identity rather than lost.
 mod authority;
-pub(crate) use authority::PendingPermissions;
-pub use authority::{PermissionAuthority, PermissionAuthorityError};
+pub(crate) use authority::{OpenQuestions, PendingPermissions, QuestionListing};
+pub use authority::{
+    PendingQuestion, PendingReview, PermissionAuthority, PermissionAuthorityError,
+};
 pub mod entities;
 pub mod value_objects;
 pub use entities::{PermissionRequest, PermissionStateView};
@@ -25,7 +27,9 @@ pub use value_objects::{
     PermissionDeadlinePolicy, PermissionDeadlineSettlement, PermissionDecision, PermissionEffect,
     PermissionId, PermissionOfferPolicy, PermissionOption, PermissionOptionId, PermissionOptions,
     PermissionReviewDeadline, PermissionScope, PermissionScopeView, PermissionSessionId,
-    PermissionToolClass, RefusalOutcome, ReviewDecline, ReviewDeclineId, ReviewDeclineObservation,
-    ReviewDeclineReason, ReviewDeclineStage, MAX_DEADLINE_DUE_MS, MAX_DEADLINE_REASON_BYTES,
-    MAX_PERMISSION_DEADLINE, STANDARD_ALLOW_REASON, STANDARD_DENY_REASON, STANDARD_STOP_REASON,
+    PermissionToolClass, RefusalOutcome, ReviewContent, ReviewDecline, ReviewDeclineId,
+    ReviewDeclineObservation, ReviewDeclineReason, ReviewDeclineStage, MAX_DEADLINE_DUE_MS,
+    MAX_DEADLINE_REASON_BYTES, MAX_OPEN_REVIEWS, MAX_PERMISSION_DEADLINE, MAX_REVIEW_OPTIONS,
+    MAX_REVIEW_OPTION_LABEL_BYTES, MAX_REVIEW_TOOL_NAME_BYTES, STANDARD_ALLOW_REASON,
+    STANDARD_DENY_REASON, STANDARD_STOP_REASON,
 };

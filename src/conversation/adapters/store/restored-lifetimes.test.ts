@@ -85,7 +85,12 @@ it("LT2: an old permission failure after effect admission does not mark or follo
   const [target] = permissionTargets({
     conversationId: A,
     permissions: [
-      { executionId: "turn", permissionId: "review", options: [{ id: "allow" }] },
+      {
+        review: "0".repeat(32),
+        executionId: "turn",
+        permissionId: "review",
+        options: [{ id: "allow" }],
+      },
     ],
   })
   const pending = store.dispatch(

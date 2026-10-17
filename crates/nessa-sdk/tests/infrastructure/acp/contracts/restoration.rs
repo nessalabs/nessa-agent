@@ -372,6 +372,7 @@ async fn permission_ids_do_not_repeat_when_the_same_execution_id_is_resumed() {
     };
     assert_ne!(old_id, new_id);
     let answer = |id| PermissionAnswer {
+        key: None,
         execution_id: ExecutionId::new("write").unwrap(),
         id,
         option_id: PermissionOptionId::new("deny-one").unwrap(),

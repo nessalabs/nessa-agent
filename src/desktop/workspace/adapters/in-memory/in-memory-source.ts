@@ -14,7 +14,9 @@
  */
 import type { SessionSummary } from "../../model/workspace-index"
 import {
+  atWork,
   emptyTranscript,
+  type Approval,
   type ApprovalChoice,
   type Message,
   type MessageApp,
@@ -34,6 +36,7 @@ import {
   type WorkspaceUpdate,
 } from "../../application/ports"
 import type { WorkspaceFailureReason } from "../../model/failure"
+import type { AccessMode } from "../../model/access"
 import { acceptedQuestionChoices } from "./question-answer"
 import { sampleWorkspace } from "./sample-workspace"
 import {
@@ -50,11 +53,20 @@ export interface Schedule {
   after(ms: number, run: () => void): () => void
 }
 
-/** A session as it stood for an audited call: its revision, pin and the approval it waited on. */
+/**
+ * A session as it stood for an audited call: its revision, pin, the approval
+ * it waited on, the turn at work, and the access its agent ran at. `turn` is
+ * what a `stop` cancels, and `access` what a `set-access` changed from (the
+ * entry's own `access` is what it asked for).
+ */
 export interface AuditedState {
   readonly revision: number
   readonly pinned: boolean
   readonly waitingOn: { readonly approvalId: string; readonly command: string } | null
+  /** The message that began the turn at work (`atWork`); null when none is. */
+  readonly turn: string | null
+  /** The access the conversation said it ran at; null where it said none. */
+  readonly access: AccessMode | null
 }
 
 /**
@@ -86,6 +98,8 @@ export interface AuditEntry {
     | "let-go"
     | "answer-question"
     | "decline-question"
+    | "stop"
+    | "set-access"
   /** The approval answered, or let go. */
   readonly approvalId?: string
   /** The question answered or declined, and the execution it belongs to. */
@@ -98,6 +112,8 @@ export interface AuditEntry {
    * ask was declined. Own words are this controlled record's only copy.
    */
   readonly choices?: readonly QuestionChoice[]
+  /** The access asked for, for a `set-access`. */
+  readonly access?: AccessMode
   /** The message that let an approval go, for a `let-go`. */
   readonly messageId?: string
   readonly initiator: Initiator
@@ -158,20 +174,33 @@ export function inMemorySource(
   const stateOf = (sessionId: string): AuditedState | null => {
     const held = sessions.get(sessionId)
     if (!held) return null
-    const approval = transcripts.get(sessionId)?.approval
+    const transcript = transcripts.get(sessionId)
+    const approval = transcript?.approvals[0]
     return Object.freeze({
       revision: held.revision,
       pinned: held.pinned,
       waitingOn: approval
         ? Object.freeze({ approvalId: approval.id, command: approval.command })
         : null,
+      turn: atWork(transcript)
+        ? ([...(transcript?.messages ?? [])]
+            .reverse()
+            .find((message) => message.role === "user")?.id ?? null)
+        : null,
+      access: transcript?.access?.mode ?? null,
     })
   }
   /** Runs a consequential call; `work` answers with the revision it produced. */
   const audited = (
     asked: Pick<
       AuditEntry,
-      "sessionId" | "action" | "approvalId" | "questionId" | "executionId" | "initiator"
+      | "sessionId"
+      | "action"
+      | "approvalId"
+      | "questionId"
+      | "executionId"
+      | "access"
+      | "initiator"
     >,
     work: (record: (change: Partial<AuditEntry>) => void) => number,
   ): Promise<void> => {
@@ -438,9 +467,13 @@ export function inMemorySource(
         ...transcript.messages.filter((other) => other.id !== written.id),
         written,
       ],
-      // A new message moves the turn on: an approval still asked is let go.
-      approval: null,
+      // A new message moves the turn on: every approval still asked is let go.
+      approvals: [],
       activity: { label: "Thinking", since: at },
+      // A session begins at the access chosen for it; one begun keeps its own.
+      ...(!existing && message.start?.access
+        ? { access: { mode: message.start.access, modes: ["ask", "auto", "full"] } }
+        : {}),
     })
     later(session.id, scriptTiming.readingMs, () =>
       setActivity(session.id, "Reading the workspace", reply.now.reading),
@@ -453,9 +486,9 @@ export function inMemorySource(
   const waiting = (sessionId: string, approvalId: string) => {
     known(sessionId)
     const transcript = transcriptOf(sessionId)
-    if (transcript.approval?.id !== approvalId)
-      throw new WorkspaceSourceError("not-waiting")
-    return transcript
+    const approval = transcript.approvals.find((asked) => asked.id === approvalId)
+    if (!approval) throw new WorkspaceSourceError("not-waiting")
+    return { transcript, approval }
   }
 
   const waitingQuestion = (
@@ -474,8 +507,8 @@ export function inMemorySource(
   }
 
   /** An option the review does not offer, or of another choice, is not supported. */
-  const offered = (transcript: Transcript, choice: ApprovalChoice, optionId: string) => {
-    const option = transcript.approval?.options.find((each) => each.id === optionId)
+  const offered = (approval: Approval, choice: ApprovalChoice, optionId: string) => {
+    const option = approval.options.find((each) => each.id === optionId)
     if (!option || option.choice !== choice)
       throw new WorkspaceSourceError("not-supported")
   }
@@ -529,9 +562,9 @@ export function inMemorySource(
           initiator,
         },
         () => {
-          const transcript = waiting(sessionId, approvalId)
-          offered(transcript, scope === "always" ? "always" : "once", optionId)
-          const command = transcript.approval?.command ?? ""
+          const { transcript, approval } = waiting(sessionId, approvalId)
+          offered(approval, scope === "always" ? "always" : "once", optionId)
+          const command = approval.command
           putSession({
             ...known(sessionId),
             status: "running",
@@ -540,7 +573,7 @@ export function inMemorySource(
           })
           putTranscript({
             ...transcript,
-            approval: null,
+            approvals: transcript.approvals.filter((asked) => asked.id !== approvalId),
             activity: {
               label: `Running ${command.split(" ").slice(0, 2).join(" ")}`,
               since: schedule.now(),
@@ -610,17 +643,48 @@ export function inMemorySource(
       ),
     deny: (sessionId, approvalId, initiator, optionId) =>
       audited({ sessionId, approvalId, action: "deny", initiator }, () => {
-        const transcript = waiting(sessionId, approvalId)
-        offered(transcript, "deny", optionId)
-        const reply = deniedReply(transcript.approval?.command ?? "")
+        const { transcript, approval } = waiting(sessionId, approvalId)
+        offered(approval, "deny", optionId)
+        const reply = deniedReply(approval.command)
         putTranscript({
           ...transcript,
-          approval: null,
+          approvals: transcript.approvals.filter((asked) => asked.id !== approvalId),
           activity: null,
           messages: [...transcript.messages, agentMessage(sessionId, reply.parts)],
         })
         settle(sessionId, reply.preview)
         return known(sessionId).revision
+      }),
+    // The turn ends where it got to: its script stops, what it waited on is let go.
+    stop: (sessionId, initiator) =>
+      audited({ sessionId, action: "stop", initiator }, () => {
+        known(sessionId)
+        if (!atWork(transcriptOf(sessionId)))
+          throw new WorkspaceSourceError("not-waiting")
+        stopScript(sessionId)
+        putTranscript({
+          ...transcriptOf(sessionId),
+          activity: null,
+          approvals: [],
+          questions: [],
+        })
+        return putSession({
+          ...known(sessionId),
+          status: "idle",
+          now: undefined,
+          updatedAt: schedule.now(),
+        }).revision
+      }),
+    // As the gateway: changed only while no turn runs, and said by the conversation.
+    setAccess: (sessionId, mode, initiator) =>
+      audited({ sessionId, action: "set-access", access: mode, initiator }, () => {
+        known(sessionId)
+        const transcript = transcriptOf(sessionId)
+        if (atWork(transcript)) throw new WorkspaceSourceError("unavailable")
+        return putTranscript({
+          ...transcript,
+          access: { mode, modes: ["ask", "auto", "full"] },
+        }).revision
       }),
     setPinned: (sessionId, pinned, initiator) =>
       audited(

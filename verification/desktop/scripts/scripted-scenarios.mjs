@@ -38,6 +38,7 @@ import { main } from "./lib/run.mjs"
 import { writeView } from "./lib/scripted-evidence.mjs"
 import { css, offeredLabel } from "./lib/selectors.mjs"
 import { revealTranscriptWork, unofferedAnswers } from "./lib/workspace.mjs"
+import { readWithReviews } from "../../../scripts/conversation-smoke/reviews.mjs"
 
 const steps = ["permission", "allow", "fail", "cancel"]
 
@@ -113,7 +114,7 @@ async function untilTurn(client, conversationId, index, ready, seconds) {
   let view
   let turn
   do {
-    view = await client.conversation.read(conversationId)
+    view = await readWithReviews(client, conversationId)
     turn = view.messages[index]
     if (turn && ready(view, turn)) return { view, turn }
     await sleep(250)
@@ -370,7 +371,7 @@ const checks = {
         )
       try {
         await stack.client.conversation.close(conversationId)
-        closed = await stack.client.conversation.read(conversationId)
+        closed = await readWithReviews(stack.client, conversationId)
       } catch (error) {
         failures.push(
           `closing the conversation did not leave a readable turn: ${error.message}`,

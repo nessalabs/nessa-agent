@@ -523,6 +523,7 @@ async fn an_edit_approval_reaches_the_host_with_what_it_would_change() {
     opened
         .session
         .answer_permission(PermissionAnswer {
+            key: None,
             attribution: attribution(),
             execution_id: ExecutionId::new("first").unwrap(),
             id,
@@ -639,6 +640,7 @@ async fn an_answered_permission_is_recorded_against_the_session_and_the_tool_tha
     opened
         .session
         .answer_permission(PermissionAnswer {
+            key: None,
             attribution: attribution(),
             execution_id: ExecutionId::new("first").unwrap(),
             id,
@@ -723,6 +725,7 @@ async fn a_refused_permission_is_recorded_as_the_refusal_it_was() {
     opened
         .session
         .answer_permission(PermissionAnswer {
+            key: None,
             attribution: attribution(),
             execution_id: ExecutionId::new("first").unwrap(),
             id,
@@ -810,6 +813,7 @@ async fn an_approval_the_audit_cannot_record_is_never_given_to_opencode() {
     let failure = opened
         .session
         .answer_permission(PermissionAnswer {
+            key: None,
             attribution: attribution(),
             execution_id: ExecutionId::new("first").unwrap(),
             id,
@@ -999,6 +1003,7 @@ async fn opencode_permission_answer_survives_the_execution_callers_loss() {
     opened
         .session
         .answer_permission(PermissionAnswer {
+            key: None,
             attribution: attribution(),
             execution_id: ExecutionId::new("lost-caller").unwrap(),
             id,

@@ -433,10 +433,10 @@ export function AgentsOverview({
         // arrive before the session's own move on.
         const asks = () => {
           const state = store.getState()
-          const asked = selectTranscript(state, summary.id)?.approval
+          const asked = selectTranscript(state, summary.id)?.approvals ?? []
           return (
             selectSession(state, summary.id)?.status === "needs-you" &&
-            (asked == null || asked.id === approval.id)
+            asked.every((each) => each.id === approval.id)
           )
         }
         if (!asks()) return release()

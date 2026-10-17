@@ -11,7 +11,7 @@ import {
   QuestionnaireTitle,
 } from "@nessa-ui/react/questionnaire"
 import { questionAnswerReady, questionChoices } from "../../../../conversation"
-import { answerQuestion } from "../../adapters/store/commands"
+import { answerQuestion, retryReview } from "../../adapters/store/commands"
 import { useWorkspaceDispatch } from "../../adapters/store/hooks"
 import type { WorkspaceFailureReason } from "../../model/failure"
 import type { TranscriptQuestion } from "../../model/transcript"
@@ -67,6 +67,7 @@ export function QuestionCard({
         questionId: question.questionId,
         choices,
         initiator: "person",
+        key: question.key,
       }),
     ).then((outcome) => {
       if (outcome.status === "sent") return
@@ -84,6 +85,38 @@ export function QuestionCard({
   }
 
   if (dismissed) return null
+
+  // Listed, but all it asks is still being read: nothing is offered to a
+  // question nobody has seen (`TranscriptQuestion.loading`).
+  const key = question.key
+  if (question.loading)
+    return (
+      <Questionnaire
+        aria-label={question.message}
+        aria-busy={question.loading === "reading"}
+        className="workspace-question"
+      >
+        <QuestionnaireHeader>
+          <QuestionnaireTitle>{question.message}</QuestionnaireTitle>
+          <QuestionnaireDescription role="status">
+            {question.loading === "failed"
+              ? "This question could not be loaded. Trying again…"
+              : "Loading this question before you can answer…"}
+          </QuestionnaireDescription>
+        </QuestionnaireHeader>
+        {question.loading === "failed" && key ? (
+          <QuestionnaireActions className="workspace-question-actions">
+            <button
+              type="button"
+              className="workspace-button"
+              onClick={() => void dispatch(retryReview({ sessionId, approvalId: key }))}
+            >
+              Try again
+            </button>
+          </QuestionnaireActions>
+        ) : null}
+      </Questionnaire>
+    )
 
   return (
     <Questionnaire

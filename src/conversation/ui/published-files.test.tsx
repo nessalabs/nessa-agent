@@ -116,6 +116,8 @@ function conversation(artifacts: PublishedFile[]): Conversation {
       approvalModes: [{ id: "ask", name: "Provider asks", description: "Asks." }],
       questions: [],
       running: false,
+      reviewsWaiting: [],
+      questionsWaiting: [],
       permissions: [],
       tools: [],
       pending: [],

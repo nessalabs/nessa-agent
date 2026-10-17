@@ -20,7 +20,7 @@ import { sessionTime } from "../../model/time-labels"
 import { agentName, agentOf } from "../../model/workspace-index"
 import { AgentTile } from "../chrome/agent-tile"
 import { failureCopy, readFailureCopy } from "../failure-copy"
-import { offersChoice, optionOf } from "../../model/transcript"
+import { offersChoice, optionOf, shownWhole } from "../../model/transcript"
 import { approvalReason, approvalRequest } from "../transcript/approval-request"
 import { named, Saying, shownCommand, shownName, spoken } from "../transcript/said"
 import { overviewKeys } from "./overview-keys"
@@ -88,7 +88,12 @@ export const RequestRow = memo(function RequestRow({
   const agent = agentName(agentOf(summary.model))
   const agentCommand =
     approval && approval.origin.kind !== "app" ? shownCommand(approval.command) : ""
-  const answerable = approval !== null && !settling && !answering(answer, approval.id)
+  // Not before all of what it allows is shown (`Approval.loading`).
+  const answerable =
+    approval !== null &&
+    shownWhole(approval) &&
+    !settling &&
+    !answering(answer, approval.id)
   const refused = settling ? undefined : answer?.failure
   const unreadable = request.kind === "unreadable" ? request.reason : null
   const denies = approval?.options.filter((option) => option.choice === "deny") ?? []

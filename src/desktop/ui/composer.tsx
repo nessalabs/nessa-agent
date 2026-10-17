@@ -4,6 +4,7 @@ import {
   ComposerAccessMode,
   type ComposerAccessModeValue,
 } from "@nessa-ui/react/composer-access-mode"
+import { StatusLabel } from "@nessa-ui/react/status-label"
 import { AgentMark } from "../../onboarding/ui/agent-mark"
 import {
   agentForProvider,
@@ -78,6 +79,18 @@ function draftLines(textarea: HTMLTextAreaElement): number {
 }
 
 /**
+ * The shield, held by whoever owns the session's access
+ * (`workspace/ui/panes/composer-access.ts`): what it shows, told of a pick,
+ * and what to say of the last pick — waiting for the agent to stop
+ * (`neutral`), or refused (`warning`).
+ */
+export interface ComposerAccess {
+  readonly value: ComposerAccessModeValue
+  readonly onChange: (value: ComposerAccessModeValue) => void
+  readonly notice?: { readonly tone: "neutral" | "warning"; readonly text: string }
+}
+
+/**
  * The home composer: a message, and beneath it the three choices a turn is
  * sent with — model, thinking, and what the agent may do without asking.
  * Nothing is sent yet: the shell has no conversation wiring, and says so.
@@ -88,6 +101,8 @@ export function Composer({
   model: shown,
   onModelChange,
   onSend,
+  onStop,
+  access,
   text,
   onTextChange,
   placeholder = "What would you like to work on?",
@@ -106,6 +121,19 @@ export function Composer({
   onModelChange?: (model: { provider: string; modelId: string }) => void
   /** Sends a turn; without it nothing can be sent and the send button says so. */
   onSend?: (text: string) => void
+  /**
+   * Given while the conversation's agent is at work on a turn: the send
+   * button becomes Stop, which calls it. Return still sends a draft, which
+   * the source takes after the turn. `stopping` shows Stop asked and not
+   * yet answered, so it is not asked twice.
+   */
+  onStop?: { readonly stop: () => void; readonly stopping?: boolean }
+  /**
+   * The session's access, owned outside: the shield shows `access.value`
+   * and asks `access.onChange`. Without it there is no session to change,
+   * and the shield is disabled rather than showing a choice nobody keeps.
+   */
+  access?: ComposerAccess
   /**
    * What is typed and not sent, held by whoever owns it — the workspace keeps
    * a session's in its state, so it outlives a change of layout — and told of
@@ -138,7 +166,6 @@ export function Composer({
   }
   const model = shown && findComposerModel(shown.provider, shown.modelId)
   const [thinking, setThinking] = useState(defaultThinkingLevel)
-  const [access, setAccess] = useState<ComposerAccessModeValue>("ask-approval")
 
   const [fast, setFast] = useState(false)
 
@@ -177,6 +204,15 @@ export function Composer({
           }}
         />
       </div>
+      {access?.notice ? (
+        <StatusLabel
+          tone={access.notice.tone}
+          role="status"
+          className="desktop-composer-notice"
+        >
+          {access.notice.text}
+        </StatusLabel>
+      ) : null}
       <div className="desktop-composer-row">
         <div className="desktop-composer-controls">
           <ProjectMenu />
@@ -217,13 +253,16 @@ export function Composer({
         </div>
         <div className="desktop-composer-controls">
           <ComposerAccessMode
-            value={access}
-            onValueChange={setAccess}
+            value={access?.value ?? "ask-approval"}
+            onValueChange={access?.onChange}
+            disabled={!access}
             className="desktop-chip"
             contentClassName="desktop-popover"
             // The window's own tooltip names it; no second, system one.
             title=""
-            {...tooltip("Access", { side: "above" })}
+            {...tooltip(access ? "Access" : "Chat isn’t connected yet", {
+              side: "above",
+            })}
           />
           <span
             className="desktop-tip-anchor"
@@ -241,18 +280,31 @@ export function Composer({
               }
             />
           </span>
-          <button
-            type="submit"
-            className="desktop-send"
-            aria-label="Send"
-            {...tooltip(onSend ? "Send" : "Chat isn’t connected yet", {
-              shortcut: onSend ? "↩" : undefined,
-              side: "above",
-            })}
-            disabled={!onSend || draft.trim() === ""}
-          >
-            <DesktopIcon name="send" />
-          </button>
+          {onStop ? (
+            <button
+              type="button"
+              className="desktop-send"
+              aria-label="Stop"
+              {...tooltip("Stop", { side: "above" })}
+              disabled={onStop.stopping === true}
+              onClick={onStop.stop}
+            >
+              <DesktopIcon name="stop" />
+            </button>
+          ) : (
+            <button
+              type="submit"
+              className="desktop-send"
+              aria-label="Send"
+              {...tooltip(onSend ? "Send" : "Chat isn’t connected yet", {
+                shortcut: onSend ? "↩" : undefined,
+                side: "above",
+              })}
+              disabled={!onSend || draft.trim() === ""}
+            >
+              <DesktopIcon name="send" />
+            </button>
+          )}
         </div>
       </div>
     </form>

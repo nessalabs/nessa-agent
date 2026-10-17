@@ -252,15 +252,28 @@ mod mcp_app_lane {
         assert_eq!(refused["id"], "c5");
         assert_eq!(refused["error"]["code"], "temporarily_unavailable");
 
-        // The read still shows every review, as the app's.
+        // The read still lists every review, as the app's, and what each
+        // shows is read from its live owner.
         let read = json!({"conversationId": fixture.id.to_string()});
         send_command(&peer, "read", "conversation.read", read);
         let view = response(&mut peer).await;
         let permissions = view["payload"]["permissions"].as_array().unwrap();
         assert_eq!(permissions.len(), 4);
-        assert!(permissions
-            .iter()
-            .all(|review| review["origin"]["kind"] == "app" && review["origin"]["server"] == SERVER));
+        assert!(permissions.iter().all(|entry| entry["origin"] == "app"));
+        send_command(
+            &peer,
+            "detail",
+            "conversation.permissionReview",
+            json!({
+                "conversationId": fixture.id.to_string(),
+                "review": permissions[0]["review"],
+                "offset": 0,
+                "maxBytes": 32768,
+            }),
+        );
+        let detail = response(&mut peer).await;
+        assert_eq!(detail["id"], "detail");
+        assert!(detail["payload"]["totalBytes"].as_u64().unwrap() > 0, "{detail}");
 
         // The answer still reaches the first mount's review, and lets its call go.
         let review = &opened[0];
@@ -273,6 +286,7 @@ mod mcp_app_lane {
                 "requestId": "answer",
                 "executionId": review.execution_id,
                 "permissionId": review.permission_id,
+                "review": review.review,
                 "optionId": "allow",
             }),
         );
@@ -476,6 +490,7 @@ mod mcp_app_lane {
                 "requestId": request,
                 "executionId": review["executionId"],
                 "permissionId": review["permissionId"],
+                "review": review["review"],
                 "optionId": option,
             })
         };
@@ -764,6 +779,7 @@ mod mcp_app_lane {
                     "requestId": request,
                     "executionId": review.execution_id,
                     "permissionId": review.permission_id,
+                    "review": review.review,
                     "optionId": "deny",
                 }),
             );
