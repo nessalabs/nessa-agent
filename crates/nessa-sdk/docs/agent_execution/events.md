@@ -69,7 +69,7 @@ queue. Slow readers replay history and do not block provider progress.
 | More than 32 unreadable units | Later gaps still appear; `all_separated_invalid_units_emit_gaps_after_summary_limit` |
 | Small page then larger retry | Typed refusal preserves pending event; `item_budget_refusal_preserves_pending_event_and_reset_invalidates_cursor` |
 | Reset after read / old resume | Typed IdentityChanged; same test |
-| Invalid index, occupied observer slots, drop, shutdown | Refusal and capacity release; `invalid_cursor_and_observer_capacity_are_typed_and_drop_releases_capacity` |
+| Invalid index, many retained readers, shutdown | Typed refusal and no reader cap; `invalid_cursor_is_typed_and_retained_readers_are_not_capped` |
 | Cancel read, then drop handle while worker waits | Registration remains occupied until owned worker completes; `cancelled_read_and_dropped_handle_retain_registration_until_worker_finishes` |
 | Final metadata check fails after decoding | Pending payload and delivery cursor survive for retry; `failed_final_metadata_check_preserves_pending_payload_and_delivery_cursor` |
 | Custom page with mixed identities, wrong next/head, empty/oversized or unordered events | Constructor rejects before publication; `page_constructor_rejects_contradictory_adapter_output` and `page_constructor_accepts_ordered_correlated_changes` |
