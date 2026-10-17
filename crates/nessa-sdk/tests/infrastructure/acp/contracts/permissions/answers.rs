@@ -1045,6 +1045,94 @@ impl PermissionRules for RememberingRules {
     }
 }
 
+#[tokio::test]
+async fn remembered_choices_confirm_the_original_answer_and_map_only_the_wire_option() {
+    let _slot = process_test_slot().await;
+    for allow in [true, false] {
+        let rules = Arc::new(RememberingRules {
+            live: Mutex::new(Vec::new()),
+        });
+        let audit = Arc::new(AnswerAudit::default());
+        let (root, mut config, model) = test_acp_configuration("permission", 16);
+        config.shutdown_grace = Duration::from_secs(2);
+        config.execution_timeout = None;
+        config.permission_rules = rules.clone();
+        let binding = ClaudeAcpProvider::new(
+            config,
+            &model,
+            TokenLimits::new(900, 100).unwrap(),
+            audit.clone(),
+        )
+        .unwrap();
+        let mut opened = binding
+            .open(ProviderOpenRequest::without_startup_control(None))
+            .await
+            .unwrap();
+        let active = start(&opened, "write").await;
+        next(&mut opened).await;
+        let ExecutionUpdate::PermissionRequested { id, options, .. } = next(&mut opened).await
+        else {
+            panic!("expected review")
+        };
+        let choice = if allow {
+            "nessa.remember.allow"
+        } else {
+            "nessa.remember.deny"
+        };
+        let option_id = options
+            .choices()
+            .iter()
+            .find(|option| option.id().as_str() == choice)
+            .expect("owner review offers remember choice")
+            .id()
+            .clone();
+        let answer = PermissionAnswer {
+            execution_id: ExecutionId::new("write").unwrap(),
+            id,
+            option_id,
+            attribution: ApprovalAttribution::new(
+                attribution().actor().clone(),
+                ApprovalBasis::Explicit,
+            ),
+        };
+        let resolution = opened
+            .session
+            .answer_permission(answer.clone())
+            .await
+            .unwrap();
+        assert_eq!(resolution.attribution(), &answer.attribution);
+        assert!(
+            matches!(resolution.request().state(), PermissionStateView::Answered { option_id, .. }
+            if option_id == &answer.option_id)
+        );
+        assert_eq!(rules.live.lock().unwrap().len(), 1);
+        assert_eq!(
+            rules.live.lock().unwrap()[0].effect(),
+            if allow {
+                PermissionEffect::Allow
+            } else {
+                PermissionEffect::Deny
+            }
+        );
+        assert_eq!(active.await.unwrap().unwrap(), ExecutionOutcome::Completed);
+        opened
+            .session
+            .shutdown(SessionCloseRequest::Explicit(close_action()))
+            .await
+            .into_result()
+            .unwrap();
+        let records = answers(&audit);
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0].delivery(), &PermissionAnswerDelivery::Selected);
+        assert_eq!(records[1].delivery(), &PermissionAnswerDelivery::Written);
+        for record in records {
+            assert_eq!(record.resolution(), &resolution);
+        }
+        assert_eq!(root.path().join("fixture.txt").exists(), allow);
+        assert_gone(&root, "pid");
+    }
+}
+
 /// A remembered choice commits before the selection is recorded. A failed
 /// selection audit leaves that grant in place.
 #[tokio::test]
@@ -1102,10 +1190,7 @@ async fn a_failed_selection_audit_leaves_the_remembered_rule() {
     );
     let records = answers(&audit);
     assert_eq!(records[0].delivery(), &PermissionAnswerDelivery::Selected);
-    assert!(matches!(
-        records[0].resolution().attribution().basis(),
-        ApprovalBasis::Rule(_)
-    ));
+    assert_eq!(records[0].resolution().attribution(), &attribution());
     assert!(!root.path().join("fixture.txt").exists());
     assert_eq!(active.await.unwrap(), Err(AgentError::AuditFailure));
     assert_eq!(
