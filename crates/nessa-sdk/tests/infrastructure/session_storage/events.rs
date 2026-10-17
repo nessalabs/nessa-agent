@@ -172,7 +172,7 @@ async fn item_budget_refusal_preserves_pending_event_and_reset_invalidates_curso
 }
 
 #[tokio::test]
-async fn invalid_cursor_and_observer_capacity_are_typed_and_drop_releases_capacity() {
+async fn invalid_cursor_is_typed_and_retained_readers_are_not_capped() {
     let directory = tempfile::tempdir().unwrap();
     let storage = RecordStorage::new(directory.path().join("records")).unwrap();
     let session = SessionId::new("capacity").unwrap();
@@ -210,8 +210,9 @@ async fn invalid_cursor_and_observer_capacity_are_typed_and_drop_releases_capaci
         }
     }
     drop(invalid);
+    // Retained readers are not bounded by the four physical read workers.
     let mut readers = Vec::new();
-    for _ in 0..4 {
+    for _ in 0..64 {
         readers.push(
             storage
                 .events(session.clone(), EventStart::Beginning)
@@ -219,16 +220,6 @@ async fn invalid_cursor_and_observer_capacity_are_typed_and_drop_releases_capaci
                 .unwrap(),
         );
     }
-    assert!(matches!(
-        storage.events(session.clone(), EventStart::Beginning).await,
-        Err(EventReadError::Capacity)
-    ));
-    readers.pop();
-    let reader = storage
-        .events(session.clone(), EventStart::Beginning)
-        .await
-        .unwrap();
-    drop(reader);
     drop(readers);
     drop(lease);
     storage.shutdown().await.unwrap();

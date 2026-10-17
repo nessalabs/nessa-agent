@@ -1,0 +1,23 @@
+
+running 6 tests
+
+thread 'final_ownership_wait_attempts_acquisition_before_refusing_at_deadline' (18566) panicked at /workspace/scratch/nessa-943-independent-diagnosis/final-poll-probe.rs:80:13:
+release during the final interval was missed
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test owner::tests::bounded_restart_wait_can_acquire_after_predecessor_releases ... ok
+test final_ownership_wait_attempts_acquisition_before_refusing_at_deadline ... FAILED
+
+thread 'owner::tests::failed_or_panicking_acquisition_does_not_publish_a_lease' (18576) panicked at /workspace/nessa-943-final-ownership-poll/src-tauri/src/gateway/application/../../../tests/gateway/application/host_ownership_owner.rs:114:50:
+physical claim failed
+test owner::tests::failed_or_panicking_acquisition_does_not_publish_a_lease ... ok
+test owner::tests::admitted_worker_retains_lease_after_foreground_owner_disappears ... ok
+test owner::tests::busy_claim_has_no_resource_and_can_be_retried_after_owner_exit ... ok
+test owner::tests::acquisition_is_shared_across_concurrent_host_operations ... ok
+
+failures:
+
+failures:
+    final_ownership_wait_attempts_acquisition_before_refusing_at_deadline
+
+test result: FAILED. 5 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
