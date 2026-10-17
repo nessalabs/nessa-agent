@@ -480,7 +480,7 @@ Storage failures are returned even while necessary cleanup proceeds. The separat
 
 Snapshots retain pending/unresolved work after a runtime or process interruption;
 reconstruction never replays it by itself; the host resumes what is owed
-([Resuming turns a restart cut off](#resuming-turns-a-restart-cut-off)).
+([Resuming turns a restart or a failure cut off](#resuming-turns-a-restart-or-a-failure-cut-off)).
 
 ## Review and regression evidence
 

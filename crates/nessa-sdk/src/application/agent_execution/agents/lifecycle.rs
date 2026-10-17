@@ -1962,6 +1962,8 @@ impl SessionLifecycle {
             state.work_status = WorkStatus::Open;
             state.active = None;
             state.automatic_recovery_ready = automatic;
+            // A suspend decides one stop's cause, not the next one's.
+            state.suspended = false;
             self.close.send_replace(None);
         }
     }
