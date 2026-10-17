@@ -1513,8 +1513,13 @@ async fn review_notice_shutdown_joins_physical_write_and_queued_selection() {
     assert!(futures_util::poll!(drain.as_mut()).is_pending());
     assert!(stored(&path).is_empty());
     physical_clock.release();
+    // Scheduler and filesystem hang watchdog for the two durable writes;
+    // the injected product deadline clock stays frozen in this test.
+    const DURABLE_DRAIN_HANG: Duration = Duration::from_secs(60);
     assert_eq!(
-        timeout(Duration::from_secs(2), drain).await.unwrap(),
+        timeout(DURABLE_DRAIN_HANG, drain)
+            .await
+            .expect("released physical writes and their queued selection must finish draining"),
         Ok(())
     );
     assert_eq!(stored(&path).len(), 2);

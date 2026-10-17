@@ -43,6 +43,83 @@ const DESCENDANT_EXIT_POLL: Duration = Duration::from_millis(DESCENDANT_EXIT_POL
 const DESCENDANT_EXIT_DEADLINE: Duration =
     Duration::from_millis(DESCENDANT_EXIT_POLLS * DESCENDANT_EXIT_POLL_MS);
 
+/// The shell's newline publishes the whole PID: file creation or a digit
+/// prefix alone does not say its write finished.
+fn published_child_pid(marker: &std::path::Path) -> std::io::Result<Option<i32>> {
+    let record = match std::fs::read_to_string(marker) {
+        Ok(record) => record,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    let Some(line) = record.strip_suffix('\n') else {
+        return Ok(None);
+    };
+    let pid = line
+        .parse::<i32>()
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+    if pid <= 0 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "the published child PID must be positive",
+        ));
+    }
+    Ok(Some(pid))
+}
+
+async fn wait_for_child_pid(marker: &std::path::Path) -> std::io::Result<i32> {
+    tokio::time::timeout(Duration::from_secs(15), async {
+        loop {
+            if let Some(pid) = published_child_pid(marker)? {
+                return Ok(pid);
+            }
+            tokio::time::sleep(DESCENDANT_EXIT_POLL).await;
+        }
+    })
+    .await
+    .map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "the command did not publish its child PID",
+        )
+    })?
+}
+
+#[tokio::test]
+async fn a_child_pid_is_ready_only_after_its_complete_publication() {
+    let workspace = tempfile::tempdir().unwrap();
+    let marker = workspace.path().join("child.pid");
+    assert_eq!(published_child_pid(&marker).unwrap(), None);
+    std::fs::write(&marker, "").unwrap();
+    assert_eq!(published_child_pid(&marker).unwrap(), None);
+    let mut waiting = Box::pin(wait_for_child_pid(&marker));
+    assert!(futures_util::poll!(waiting.as_mut()).is_pending());
+    std::fs::write(&marker, "123").unwrap();
+    assert_eq!(published_child_pid(&marker).unwrap(), None);
+    std::fs::write(&marker, "12345\n").unwrap();
+    assert_eq!(waiting.await.unwrap(), 12345);
+    for record in ["0\n", "-1\n", "invalid\n"] {
+        std::fs::write(&marker, record).unwrap();
+        assert_eq!(
+            published_child_pid(&marker).unwrap_err().kind(),
+            std::io::ErrorKind::InvalidData
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_child_pid_read_failure_is_not_a_publication_wait() {
+    let workspace = tempfile::tempdir().unwrap();
+    let marker = workspace.path().join("child.pid");
+    std::fs::create_dir(&marker).unwrap();
+    let expected = std::fs::read_to_string(&marker).unwrap_err().kind();
+    assert_eq!(published_child_pid(&marker).unwrap_err().kind(), expected);
+    let mut waiting = Box::pin(wait_for_child_pid(&marker));
+    match futures_util::poll!(waiting.as_mut()) {
+        std::task::Poll::Ready(Err(error)) => assert_eq!(error.kind(), expected),
+        other => panic!("a failed read must answer without waiting: {other:?}"),
+    }
+}
+
 /// `true` once a sample shows `pid` has exited, including a zombie or dead
 /// task `/proc` still lists (`Z`, `X`, or `x`). Sampling continues until
 /// then, or until a sample taken at or just after `limit` still shows it
@@ -194,9 +271,9 @@ async fn a_stop_ends_a_running_command_and_its_descendants() {
     let running =
         runner(workspace.path()).run(command(&["sh", "-c", &script], None, 60_000), stopped);
     let task = tokio::spawn(running);
-    while !marker.exists() {
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
+    let child = wait_for_child_pid(&marker)
+        .await
+        .expect("the running command published its complete child PID");
     stop.send_replace(Some(CommandStop::Ended));
     let ran = tokio::time::timeout(Duration::from_secs(15), task)
         .await
@@ -204,11 +281,6 @@ async fn a_stop_ends_a_running_command_and_its_descendants() {
         .unwrap();
     assert_eq!(ran.end, CommandEnd::Stopped);
     assert!(matches!(ran.cleanup, Cleanup::Confirmed { .. }));
-    let child: i32 = std::fs::read_to_string(&marker)
-        .unwrap()
-        .trim()
-        .parse()
-        .unwrap();
     // The descendant may still look alive for a moment after the stop
     // returns. The last sample is at or just after the deadline. A zombie or
     // dead task `/proc` still lists (`Z`, `X`, or `x`) has already exited. A

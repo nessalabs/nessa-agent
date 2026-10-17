@@ -369,6 +369,14 @@ was absent, cancelled, or released.
 | RA8 | One physical write is held and a second selection waits for that worker | Shutdown cannot confirm either selection; release acknowledges both before success; uncertain timeout remains failed | `review_notice_shutdown_joins_physical_write_and_queued_selection`; `review_audit_host_shutdown_joins_physical_write_and_queued_selection` |
 | RA9 | Cleanup observer is cancelled before audit result observation | Published report retains audit `Unknown` and known peer outcomes; later task completion cannot retroactively confirm that report | `review_audit_cancelled_cleanup_retains_unknown_outcome` |
 
+The RA8 socket fixture keeps the injected policy clock fixed while its real
+filesystem worker publishes both decisions. Its local `DURABLE_DRAIN_HANG`
+watchdog bounds the test's post-release wait for scheduling and filesystem work;
+it is not a product latency or shutdown deadline. The fixture still checks that
+drain is pending and storage is empty before release, and that both decisions
+are durable before drain succeeds. Product deadline tests continue to advance
+the injected clock.
+
 ## Receiver durability and gate-15 order table
 
 Use sync-engine pass/validation plus the existing SDK physical-fact decoder in
