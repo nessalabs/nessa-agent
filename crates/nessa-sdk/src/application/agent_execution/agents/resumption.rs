@@ -196,8 +196,10 @@ fn owed(
     }
 }
 
-/// Whether `record` is a turn that ended for good, or that this process
-/// admitted: one that is not owed and was not resumed. A steering message
+/// Whether `record` is a turn that moved past every failure before it: one
+/// that ran, however it ended, or that ended for good or this process
+/// admitted (it is not owed and was not resumed). A turn that only waited
+/// behind a failure and was stopped with it has not. A steering message
 /// belongs to the turn it steered, and a successor carries on the host's
 /// resume rather than a person's next step, so neither counts.
 fn ended_for_good(
@@ -207,8 +209,8 @@ fn ended_for_good(
 ) -> bool {
     record.submission != SubmissionMode::Immediate
         && Resumption::of(&record.request.execution_id).attempt() == 0
-        && !resumed(record, saved)
-        && owed(record, saved, false, live).is_none()
+        && (dispatched(record)
+            || (!resumed(record, saved) && owed(record, saved, false, live).is_none()))
 }
 
 /// Whether a turn that a failure ended still owes its work: no stop but the

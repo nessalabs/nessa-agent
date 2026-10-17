@@ -131,6 +131,7 @@ impl Durable {
             FailureBackoff {
                 first: Duration::ZERO,
                 most: Duration::ZERO,
+                attempts: 8,
             },
         );
         service

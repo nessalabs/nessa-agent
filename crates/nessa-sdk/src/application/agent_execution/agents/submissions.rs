@@ -80,9 +80,15 @@ async fn successor_receipt(
         }
         let record = manager.submission(&next).await?;
         let last = record.scheduling.last()?;
+        // Followed only while a later successor is saved: the newest one
+        // answers, however it ended.
         if continued(last) {
-            id = next;
-            continue;
+            if let Some(after) = Resumption::of(&next).successor() {
+                if receipts.contains_key(&after) || manager.submission(&after).await.is_some() {
+                    id = next;
+                    continue;
+                }
+            }
         }
         let result = match last.stage {
             InvocationStage::Cancelled => record.result.unwrap_or(Err(AgentError::Closed)),

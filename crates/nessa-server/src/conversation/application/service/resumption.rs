@@ -43,21 +43,28 @@ use std::time::Duration;
 use uuid::Uuid;
 
 /// How long a failure's retry waits: `first` after the first failure in a
-/// row, twice as long after each next one, never longer than `most`. The
-/// number of retries is not bounded here: a turn gets at most
-/// `Resumption::MAX_RESUMES` successors, so a failure that repeats ends.
+/// row, twice as long after each next one, never longer than `most`. A turn
+/// gets at most `Resumption::MAX_RESUMES` successors, so a failure that
+/// repeats as the turn runs ends. A conversation that cannot be opened or
+/// take a turn at all is tried `attempts` times in a row, then left to its
+/// next opening or the next start.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FailureBackoff {
     /// The wait after the first failure in a row.
     pub first: Duration,
     /// The longest wait.
     pub most: Duration,
+    /// Retries in a row before a conversation that cannot take a turn is
+    /// left to its next opening.
+    pub attempts: u32,
 }
 impl Default for FailureBackoff {
     fn default() -> Self {
+        // About an hour and a half of trying before it waits for an opening.
         Self {
             first: Duration::from_secs(5),
             most: Duration::from_secs(300),
+            attempts: 24,
         }
     }
 }
@@ -106,6 +113,16 @@ async fn non_default_mode(live: &LiveConversation) -> bool {
         .selection
         .as_ref()
         .is_some_and(|selection| selection.approval_mode != ConversationApprovalMode::Ask)
+}
+
+/// Whether `live`'s agent cannot take a turn until it is closed and opened
+/// again: it awaits its close, or its attachment failed.
+fn stuck(live: &LiveConversation) -> bool {
+    live.agent.awaits_close()
+        || matches!(
+            live.agent.attachment_status().phase(),
+            AttachmentPhase::Failed(_)
+        )
 }
 
 /// How many marked conversations the startup sweep opens at once. Each
@@ -182,22 +199,28 @@ impl ConversationService {
                 None
             }
         };
-        if self.inner.retirement.get().is_some()
+        let spent = self.inner.failure_backoff.get().is_some_and(|backoff| {
+            self.unfinished_marked()
+                .get(id)
+                .is_some_and(|retry| retry.failures >= backoff.attempts)
+        });
+        if spent {
+            tracing::warn!(conversation_id = %id, "a conversation that cannot take its retry is left to its next opening");
+        }
+        if spent
+            || self.inner.retirement.get().is_some()
             || !self.unfinished_marked().contains_key(id)
-            || !self.schedule_retry(id).await
         {
             return;
         }
+        // Released before the retry is due, so the retry never meets the
+        // closing agent.
         if let Some(live) = blocked.and_then(|live| live.upgrade()) {
-            let stuck = live.agent.awaits_close()
-                || matches!(
-                    live.agent.attachment_status().phase(),
-                    AttachmentPhase::Failed(_)
-                );
-            if stuck {
+            if stuck(&live) {
                 self.release_for_reopen(id, live).await;
             }
         }
+        self.schedule_retry(id).await;
     }
 
     async fn resume_conversation(
@@ -244,10 +267,9 @@ impl ConversationService {
             return false;
         }
         let _ = live.join_attachment_owner().await;
-        // An agent whose attachment failed, or that awaits its close, takes
-        // no turn: its retry closes it and opens a new one
-        // (`resume_or_retry`, `after_settle`).
-        if live.agent.awaits_close()
+        // An agent that is stuck takes no turn: its retry closes it and
+        // opens a new one (`resume_or_retry`, `after_settle`).
+        if stuck(&live)
             || !matches!(
                 live.agent.attachment_status().phase(),
                 AttachmentPhase::Attached | AttachmentPhase::Absent
@@ -326,7 +348,8 @@ impl ConversationService {
         for admission in resumed {
             self.watch_receipt(id, live.clone(), admission, true).await;
         }
-        true
+        // A turn left undecided is retried after a backoff.
+        !unsettled
     }
 
     /// Whether `turn` is resumed, left ended, or cannot be decided now. The
@@ -436,9 +459,12 @@ impl ConversationService {
             self.clear_if_nothing_owed(id, &live).await;
             return;
         }
-        if self.schedule_retry(id).await && live.agent.awaits_close() {
+        // Released before the retry is due, so the retry never meets the
+        // closing agent.
+        if stuck(&live) {
             self.release_for_reopen(id, live).await;
         }
+        self.schedule_retry(id).await;
     }
 
     /// Close `live`, an agent that cannot take its retry, and let its slot go
@@ -461,37 +487,34 @@ impl ConversationService {
 
     /// Record that `id`'s next failure retry is due after its backoff, and
     /// wake the retry loop. A retry already waiting is kept as it is, so a
-    /// later settle neither puts it off nor counts as another failure. False
-    /// when `id` is not marked, or the deferral could not be saved: the mark
-    /// stays, and the next start resumes it.
-    async fn schedule_retry(&self, id: &ConversationId) -> bool {
+    /// later settle neither puts it off nor counts as another failure. Nothing
+    /// is done when `id` is not marked. A deferral that cannot be saved still
+    /// runs in this process; after a restart the mark alone resumes it.
+    async fn schedule_retry(&self, id: &ConversationId) {
         let (Some(marks), Some(backoff)) = (
             self.inner.unfinished_turns.get(),
             self.inner.failure_backoff.get(),
         ) else {
-            return false;
+            return;
         };
         let failures = match self.unfinished_marked().get(id) {
-            None => return false,
-            Some(Retry { at_ms: Some(_), .. }) => return true,
+            None | Some(Retry { at_ms: Some(_), .. }) => return,
             Some(retry) => retry.failures.saturating_add(1),
         };
         let delay = u64::try_from(backoff.delay(failures).as_millis()).unwrap_or(u64::MAX);
         let at_ms = self.inner.clock.unix_milliseconds().saturating_add(delay);
         if let Err(error) = marks.defer(id, failures, at_ms).await {
-            tracing::warn!(conversation_id = %id, %error, "a failed turn's retry could not be saved; the next start resumes it");
-            return false;
+            tracing::warn!(conversation_id = %id, %error, "a failed turn's retry could not be saved; it still runs, and a restart resumes it");
         }
-        tracing::info!(conversation_id = %id, failures, delay_ms = delay, "a failure left work owed; retrying after a backoff");
-        self.unfinished_marked().insert(
-            id.clone(),
-            Retry {
+        tracing::info!(conversation_id = %id, failures, delay_ms = delay, "work is still owed; retrying after a backoff");
+        // A clear that raced the deferral wins: the conversation owes nothing.
+        if let Some(retry) = self.unfinished_marked().get_mut(id) {
+            *retry = Retry {
                 failures,
                 at_ms: Some(at_ms),
-            },
-        );
+            };
+        }
         self.inner.retry_scheduled.notify_one();
-        true
     }
 
     /// Run each failure retry when it is due, until the gateway retires:

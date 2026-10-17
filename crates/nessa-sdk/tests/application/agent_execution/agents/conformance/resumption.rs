@@ -623,3 +623,60 @@ fn a_failure_that_lost_its_evidence_is_not_retried() {
     }
     .leaves_work_owed());
 }
+
+#[tokio::test]
+async fn a_later_message_that_also_failed_still_moves_past_the_first() {
+    let error = AgentError::Provider {
+        code: -32077,
+        diagnostic: None,
+    };
+    let (agent, backend, _storage) = failed_with(error.clone()).await;
+    *backend.execution_fault.lock().unwrap() = Some(ProviderOperationFailure::new(
+        error.clone(),
+        ProviderSessionState::CleanupReported(CleanupReport::confirmed(CloseOutcome {
+            forced: false,
+        })),
+    ));
+    let next = agent
+        .enqueue(request("next"), Submitter::owner(actor()))
+        .await
+        .unwrap();
+    assert_eq!(bounded(next.wait()).await, Err(error));
+    *backend.execution_fault.lock().unwrap() = None;
+    assert_eq!(
+        owed_ids(&agent.owed_turns().await),
+        ["next"],
+        "only the request the person moved on to is sent again"
+    );
+    bounded(agent.close(actor())).await.unwrap();
+}
+
+#[tokio::test]
+async fn a_retry_answers_as_the_successor_that_ended_the_chain() {
+    let (agent, backend, _storage) = failed_with(AgentError::Transport("pipe".into())).await;
+    let owed = agent.owed_turns().await;
+    let refused = AgentError::AuthenticationRequired { diagnostic: None };
+    *backend.execution_fault.lock().unwrap() = Some(ProviderOperationFailure::new(
+        refused.clone(),
+        ProviderSessionState::CleanupReported(CleanupReport::confirmed(CloseOutcome {
+            forced: false,
+        })),
+    ));
+    let Resumed::Continued(successor) = bounded(agent.resume_turn(&owed[0], resumer()))
+        .await
+        .unwrap()
+    else {
+        panic!("a failed turn is continued")
+    };
+    assert_eq!(bounded(successor.wait()).await, Err(refused.clone()));
+    *backend.execution_fault.lock().unwrap() = None;
+    let retry = bounded(agent.enqueue(request("failed"), Submitter::owner(actor())))
+        .await
+        .unwrap();
+    assert_eq!(
+        bounded(retry.wait()).await,
+        Err(refused),
+        "the successor's ending, not the original's"
+    );
+    bounded(agent.close(actor())).await.unwrap();
+}
