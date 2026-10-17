@@ -4,6 +4,12 @@
 mod deletion_inventory;
 mod export;
 mod ports;
+mod verification;
+
+pub use verification::{
+    verify_bundle, InventoryVerification, ManifestMacVerifier, VerificationFailure,
+    VerificationLimits, VerificationReport, VerificationSource, VerifiedOmission,
+};
 
 pub use deletion_inventory::{capture_fences, capture_inventory, CaptureError, InventoryFailure};
 pub use export::{capture_export, ExportFailure, ExportRequest};

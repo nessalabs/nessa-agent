@@ -11,6 +11,9 @@ mod jsonl;
 mod log;
 mod outbox;
 mod sensitivity;
+mod verification;
+
+pub use verification::{read_verification_key, DirectoryVerificationSource};
 pub(crate) mod snapshot;
 
 pub use admission::ConversationAdmission;

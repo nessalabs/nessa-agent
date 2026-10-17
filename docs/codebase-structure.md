@@ -618,6 +618,11 @@ acknowledgement checkpoints rather than continuous attachment. Windows `sync` on
 revalidates binding and does not claim directory durability or arbitrary power-loss
 survival. See the [local-storage module map](../crates/nessa-local-storage/README.md#module-map)
 and [retained publication design](design/retained-directory-publication.md).
+`PrivateDirectory::open_root` retains an existing caller-trusted private root;
+`open_directory` carries that captured ancestry into an existing child. Backup
+verification uses these read/search acquisitions for manifest reads, enumeration
+and body access, including cuts without a records directory. Neither acquisition
+creates storage or repairs permissions.
 
 On Unix, `create_private_directory_path` and `PrivateDirectory::open_path` retain an
 absolute private store through ordinary locator ancestry. System and account
@@ -1610,6 +1615,16 @@ snapshots. `infrastructure/` reads the namespace, including `device/outbox/` and
 `environment/outbox/` under each directory's `outbox.lock`, within the files and bytes one lease may keep, and writes the bundle. After a deletion, unshare, credential revocation, or pairing cancellation commits, the gateway records that fence through `infrastructure/cedar` without taking admission and without publishing a bundle. The Cedar decision is appended to `backup/inventory-decisions.jsonl` before the log is written. The
 mac key stays beside the deletion inventory and is not part of the bundle.
 Restore and quarantine are not in this module.
+
+The separate `nessa-backup-verify` binary enters through `backup_verify_main.rs`
+and `composition/backup_verification.rs`, without gateway bootstrap.
+`backup/entrypoint/arguments.rs` parses explicit input paths; `application/verification.rs`
+authenticates and streams the supplied cut through read-only ports;
+`domain/verification.rs` owns its current manifest grammar. The directory and
+key readers live in `infrastructure/verification.rs`. Tests follow these owners
+under `tests/backup/verification*.rs`; `tests/backup_verifier.rs` exercises the
+actual binary. [Standalone verification](design/backup-verification.md) defines
+the limits and the remaining restore contracts (#270).
 
 ## Attachments
 
