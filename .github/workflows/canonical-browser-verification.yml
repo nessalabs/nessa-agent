@@ -37,6 +37,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
+      # Keep the reviewed publisher outside the source checkout, which may be
+      # the final product tree with all diagnostic scaffolding removed.
+      - name: Retain the reviewed diagnostic publisher
+        run: cp scripts/desktop/fresh-native-diagnostic.py "$RUNNER_TEMP/nessa-fresh-diagnostic.py"
       - name: Validate commits and prepare the exact tree
         env:
           SOURCE_SHA: ${{ inputs.source }}
@@ -58,7 +62,7 @@ jobs:
           set +e
           pnpm test:e2e:scripted -- --channel bundled --evidence "$BROWSER_EVIDENCE" 2>&1 | tee "$BROWSER_EVIDENCE/canonical.log"
           canonical_status=$?
-          FRESH_COMMAND_STATUS="$canonical_status" python3 scripts/desktop/fresh-native-diagnostic.py "$BROWSER_EVIDENCE/canonical.log" --browser-evidence "$BROWSER_EVIDENCE"
+          FRESH_COMMAND_STATUS="$canonical_status" python3 "$RUNNER_TEMP/nessa-fresh-diagnostic.py" "$BROWSER_EVIDENCE/canonical.log" --browser-evidence "$BROWSER_EVIDENCE"
           exit "$canonical_status"
         timeout-minutes: 35
       - name: Preserve provenance and complete browser evidence
