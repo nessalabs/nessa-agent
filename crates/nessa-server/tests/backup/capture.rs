@@ -3,7 +3,7 @@
 
 use std::path::Path;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
@@ -17,14 +17,17 @@ use crate::backup::domain::{DeletionFence, DeletionLog};
 use crate::backup::infrastructure::{CedarInventoryPolicy, CommittedInventory};
 use crate::conversation::application::{
     AccessAsk, AccessDecision, ConversationAccessPolicyEvaluator, ConversationCaller,
-    ConversationRepository, FenceCapture, FenceCaptureError, ReceiverAuthority, ShareConversation,
-    ShareGrantChange, ShareGrantTransition, ShareGrants,
+    ConversationError, ConversationRepository, FenceCapture, FenceCaptureError, ReceiverAuthority,
+    ShareConversation, ShareGrantChange, ShareGrantTransition, ShareGrants,
 };
-use crate::conversation::domain::{Conversation, ReceiverBinding, ShareAccess};
+use crate::conversation::domain::{Capabilities, Conversation, ReceiverBinding, ShareAccess};
 use crate::conversation::infrastructure::LocalConversationStore;
 use nessa_auth::application::dto::{CredentialGrantDto, CredentialMetadataDto, ResourceDto};
 use nessa_auth::application::ports::{AccessReader, AccessSnapshot, Clock, PortFuture};
-use nessa_auth::domain::{CredentialId, OrganizationId, PrincipalId, Resource, ResourceId};
+use nessa_auth::domain::{
+    Action, AudienceId, Credential, CredentialId, Grant, Membership, MembershipId, MembershipRole,
+    MembershipStatus, OrganizationId, PrincipalId, Resource, ResourceId,
+};
 use nessa_protocol::agents::AgentId;
 use nessa_protocol::conversation::domain::{
     ConversationApprovalMode, ConversationId, ConversationModelId,
@@ -349,6 +352,198 @@ async fn an_unshare_reconciles_the_revoked_grant() {
     assert!(log.contains("read-party"), "{log}");
 }
 
+/// A committed regrant survives capture failure; an equivalent new request repairs the
+/// inventory from persisted grants rather than retaining the old revoke.
+#[tokio::test]
+async fn a_retried_share_reconciles_after_a_failed_capture() {
+    let namespace = tempfile::tempdir().unwrap();
+    let root = namespace.path();
+    let private = root.join("conversations");
+    nessa_local_storage::create_directory(&private).unwrap();
+    let policy = crate::conversation_test_support::access_policy();
+    let store = LocalConversationStore::open(&private.join("metadata.sqlite3"))
+        .unwrap()
+        .with_access_policy(policy.clone());
+    let id = ConversationId::new(&uuid::Uuid::new_v4().to_string()).unwrap();
+    store.create(owned(&id)).await.unwrap();
+    for (transition, receiver, request) in [
+        (
+            ShareGrantTransition::Grant(ShareAccess::read()),
+            Some("read-party"),
+            "grant",
+        ),
+        (ShareGrantTransition::Revoke, None, "revoke"),
+    ] {
+        assert!(
+            store
+                .change(grant_change(&id, transition, receiver, request))
+                .await
+                .unwrap()
+                .applied
+        );
+    }
+    let inventory = open_inventory(root);
+    FenceCapture::capture(&inventory).await.unwrap();
+    let inventory_path = root.join("backup/deletion-inventory.txt");
+    let revoked = std::fs::read_to_string(&inventory_path).unwrap();
+    assert!(revoked.contains(" grant "), "{revoked}");
+    let capture = FailFirstCapture {
+        inventory,
+        calls: AtomicUsize::new(0),
+    };
+    let target = ShareTarget;
+    let gateway = resource();
+    let shares = ShareConversation {
+        conversations: &store,
+        receivers: &target,
+        grants: &store,
+        access: &target,
+        gateway: &gateway,
+        policy: policy.as_ref(),
+        inventory: Some(&capture),
+    };
+    let credential = CredentialId::new("read-party-credential").unwrap();
+    let first = shares
+        .share(
+            caller("regrant"),
+            id.clone(),
+            credential.clone(),
+            Capabilities::read(),
+            None,
+            None,
+            30,
+        )
+        .await
+        .unwrap();
+    assert!(first.applied);
+    assert_eq!(store.grants(&id).await.unwrap().grants.len(), 1);
+    assert_eq!(std::fs::read_to_string(&inventory_path).unwrap(), revoked);
+    let retry = shares
+        .share(
+            caller("retry-regrant"),
+            id.clone(),
+            credential.clone(),
+            Capabilities::read(),
+            None,
+            None,
+            30,
+        )
+        .await
+        .unwrap();
+    assert!(!retry.applied);
+    assert_eq!(retry.policy_revision, first.policy_revision);
+    assert_eq!(capture.calls.load(Ordering::SeqCst), 2);
+    let reconciled = std::fs::read_to_string(&inventory_path).unwrap();
+    assert!(!reconciled.contains(" grant "), "{reconciled}");
+    assert_eq!(store.grants(&id).await.unwrap().grants.len(), 1);
+
+    // Ownership denial and a failed conditional write cannot trigger capture.
+    let mut denied = caller("denied");
+    denied.principal_id = PrincipalId::new("other").unwrap();
+    assert!(matches!(
+        shares
+            .share(
+                denied,
+                id.clone(),
+                credential.clone(),
+                Capabilities::read(),
+                None,
+                None,
+                40
+            )
+            .await,
+        Err(ConversationError::NotFound)
+    ));
+    assert!(matches!(
+        shares
+            .share(
+                caller("stale"),
+                id,
+                credential,
+                Capabilities::read(),
+                None,
+                Some(0),
+                40
+            )
+            .await,
+        Err(ConversationError::ShareGrantChanged)
+    ));
+    assert_eq!(capture.calls.load(Ordering::SeqCst), 2);
+}
+
+struct FailFirstCapture {
+    inventory: CommittedInventory,
+    calls: AtomicUsize,
+}
+
+#[async_trait]
+impl FenceCapture for FailFirstCapture {
+    async fn capture(&self) -> Result<(), FenceCaptureError> {
+        if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
+            return Err(FenceCaptureError::NotStored);
+        }
+        FenceCapture::capture(&self.inventory).await
+    }
+}
+
+struct ShareTarget;
+
+impl ReceiverAuthority for ShareTarget {
+    fn resolve<'a>(
+        &'a self,
+        credential: &'a CredentialId,
+    ) -> Pin<
+        Box<
+            dyn std::future::Future<Output = Result<Option<ReceiverBinding>, ReadRefusal>>
+                + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async move {
+            Ok(Some(ReceiverBinding {
+                receiver_id: "read-party".into(),
+                credential_id: credential.clone(),
+                organization_id: OrganizationId::new("org").unwrap(),
+                owner_id: PrincipalId::new("alice").unwrap(),
+                access_epoch: 1,
+                active: true,
+            }))
+        })
+    }
+}
+
+impl AccessReader for ShareTarget {
+    fn read<'a>(&'a self, credential: &'a CredentialId) -> PortFuture<'a, AccessSnapshot> {
+        Box::pin(async move {
+            let org = OrganizationId::new("org").unwrap();
+            let principal = PrincipalId::new("grantee-read-party").unwrap();
+            Ok(AccessSnapshot {
+                credential: Credential::new(
+                    credential.clone(),
+                    principal.clone(),
+                    org.clone(),
+                    AudienceId::new("gateway").unwrap(),
+                    1,
+                    100,
+                    vec![Grant::new(
+                        Action::new("conversation.read").unwrap(),
+                        resource(),
+                    )],
+                )
+                .unwrap(),
+                membership: Membership::new(
+                    MembershipId::new("member").unwrap(),
+                    principal,
+                    org,
+                    MembershipRole::Member,
+                    MembershipStatus::Active,
+                ),
+                revision: 1,
+            })
+        })
+    }
+}
+
 struct FailingCapture;
 
 #[async_trait]
@@ -492,6 +687,12 @@ impl FenceSource for Order {
 
 #[async_trait]
 impl DeletionLogStore for Order {
+    async fn hold_reconciliation(
+        &self,
+    ) -> Result<Box<dyn crate::backup::application::InventoryReconciliationLease>, ()> {
+        Ok(Box::new(UncontendedReconciliation))
+    }
+
     async fn load(&self) -> Result<DeletionLog, ()> {
         assert!(self.audited.load(Ordering::SeqCst));
         self.log_after_audit.store(true, Ordering::SeqCst);
@@ -523,6 +724,12 @@ struct MemLog(Mutex<DeletionLog>);
 
 #[async_trait]
 impl DeletionLogStore for MemLog {
+    async fn hold_reconciliation(
+        &self,
+    ) -> Result<Box<dyn crate::backup::application::InventoryReconciliationLease>, ()> {
+        Ok(Box::new(UncontendedReconciliation))
+    }
+
     async fn load(&self) -> Result<DeletionLog, ()> {
         Ok(self.0.lock().unwrap().clone())
     }
@@ -669,3 +876,8 @@ fn resource() -> Resource {
         ResourceId::new("gateway").unwrap(),
     )
 }
+
+// These adapters are used by single-capture tests only.
+struct UncontendedReconciliation;
+
+impl crate::backup::application::InventoryReconciliationLease for UncontendedReconciliation {}

@@ -83,9 +83,22 @@ pub enum LogStoreError {
     Stale,
 }
 
+/// Ownership of one inventory reconciliation until the guard is dropped.
+///
+/// Implementations exclude other reconciliation holders for the same durable
+/// inventory, including separately opened adapters.
+pub trait InventoryReconciliationLease: Send + Sync {}
+
 /// The deletion inventory file.
 #[async_trait]
 pub trait DeletionLogStore: Send + Sync {
+    /// Exclude other captures through their source reads and final no-op or write.
+    ///
+    /// The guard is independent of the short lock used by `load` and `store`.
+    /// Dropping a waiting caller must not leave a reconciliation holder behind
+    /// (`a_cancelled_reconciliation_waiter_releases_its_eventual_lock`).
+    async fn hold_reconciliation(&self) -> Result<Box<dyn InventoryReconciliationLease>, ()>;
+
     async fn load(&self) -> Result<DeletionLog, ()>;
 
     /// Replace the log with `next` when the stored log is still `base`.
