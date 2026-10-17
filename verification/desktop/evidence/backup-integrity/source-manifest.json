@@ -1,0 +1,19 @@
+{
+  "crates/nessa-server/src/backup/application/deletion_inventory.rs": "025858ff59c5dea1629853e95a07e9cd20e02418568b4eedd564c50fd01285ff",
+  "crates/nessa-server/src/backup/application/mod.rs": "14dd702829b1929660460525d70637d862cef5735302ec79e35dbb7c9ab50187",
+  "crates/nessa-server/src/backup/application/ports.rs": "5e671234fb5683d9e2e93afaeac3e3e9cb5fc9f838617d315ffd1d873577a317",
+  "crates/nessa-server/src/backup/infrastructure/decision_audit.rs": "8f6a084fb0da9663b6a699ccb4f958a334d5a7567dbe1e12891f659228a66256",
+  "crates/nessa-server/src/backup/infrastructure/gateway.rs": "bdea25f52ee9c507641317f4194a684a1e28639a7ad27e37589eec149849d988",
+  "crates/nessa-server/src/backup/infrastructure/log.rs": "5ec27efbc434202cd27305632aa0ffca36de01eefc6ee5c68ee729d447c655f5",
+  "crates/nessa-server/src/backup/infrastructure/outbox.rs": "e0ca13d9b590c2f81e9fddc3669955bc11215191b33cc35467a7a8b7af1fe1c1",
+  "crates/nessa-server/src/backup/mod.rs": "9700637c7ca62cef64e17c39152971672dd9d8c66acf9982e4cda43fb7bb07c1",
+  "crates/nessa-server/src/composition/local_auth.rs": "8f51595187a7ab9041450bf45b2586411e53ec0fc7e14efb7d453949ed17b6d1",
+  "crates/nessa-server/src/conversation/application/share_grants.rs": "274b429749a6cf20b585718b4043a7ebc661b1b48bf5d308d190ca5be4a4787e",
+  "crates/nessa-server/tests/backup/capture.rs": "d05579a7dd40810924ddfce1779ef8c812d02d0e8e36731b7974cee32ffbe5af",
+  "crates/nessa-server/tests/backup/deletion.rs": "2a8f3a773c5d85cba4ddf27316fa5c0dcfc3393ba3b853ebb8dcf0f3db467579",
+  "crates/nessa-server/tests/backup/export.rs": "e8953a66ae8fedbfdde667799e948d029e32fedb03c3fd901e05f3bf23c04bad",
+  "crates/nessa-server/tests/composition/local_auth.rs": "9eba2ca988e88ac0c1381a944d148c930439c5a24f20a22de38d796e6c682c6c",
+  "docs/design/export-cut.md": "16b26e7614d72e5352f0dc4fa38ccf8848303711163b8a7dd4762a3d34e4535f",
+  "crates/nessa-server/tests/backup/outbox_lock.rs": "e7eeb61d707e77527c1c79077e913c1b390dd0096bf5dd082972d4a8646b6829",
+  "crates/nessa-server/tests/backup/publication_lock.rs": "f8d2efe0d1dab0d03a40a35a8227bdade1dabfda7b888513a883e3e3d83d1fea"
+}

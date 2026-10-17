@@ -871,6 +871,9 @@ enclosing read. The factory's tests sit beside it, and panel routing/interleavin
 tests live in `src/conversation/adapters/store/permission-targets.test.ts`.
 See [permission targets](design/permission-targets.md) for the ordering table and
 the distinction between captured intent and server-owned authorization.
+[Permission answer receipts](design/permission-answer-receipts.md) distinguishes
+the person's logical remember choice from the mapped provider wire option and
+records the settled-answer publication contract.
 Question answers use the adjacent `application/question-target.ts`, including
 the immutable published ask rendered by `src/conversation/ui/conversation-questions.tsx`.
 Client regressions sit beside the factory and panel routing tests live in
@@ -1799,6 +1802,9 @@ adapters; Claude, Codex and OpenCode native programs are downloaded explicitly.
 and packaged gateway. `product/agent_install.rs` owns wire mapping and worker
 admission. `src/onboarding/application/agent-installations.ts`, its gateway
 adapter and `ui/agent-downloads.tsx` supply setup and panel download controls.
+`ui/agent-download-progress.tsx` presents their shared indeterminate installation
+indicator and known archive size; the final-outcome API supplies no received-byte
+percentage.
 `ui/selected-agent-setup.tsx` supplies native panel/desktop first-use hints and
 refusal recovery through one provider. `ui/agent-api-key-save.tsx` keeps the
 existing API-key save audit warning visible after a successful save retires its

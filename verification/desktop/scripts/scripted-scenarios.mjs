@@ -50,6 +50,7 @@ const meta = {
     only: { type: "string" },
     agent: { type: "string", default: "claude" },
     evidence: { type: "string" },
+    remember: { type: "boolean", default: false },
   },
   help: `
 Usage: node verification/desktop/scripts/scripted-scenarios.mjs [options]
@@ -60,6 +61,8 @@ scenarios/window.json. It starts its own gateway. --url is not used. --mode
 prod previews a production build; the default is a dev server.
 
 Options:
+  --remember          select the offered Always allow in this project choice
+                      and verify its receipt and stored rule (isolated gateway)
   --agent claude|codex  the harness profile the scripted agent speaks
                         (default: claude)
   --evidence <dir>      write acp.jsonl, mcp.jsonl, gateway.log and views/
@@ -121,7 +124,9 @@ async function untilTurn(client, conversationId, index, ready, seconds) {
 async function shot(page, options, engine, layout, name) {
   if (!options.shots) return
   mkdirSync(options.shots, { recursive: true })
-  await page
+  const surface =
+    options.remember && name === "permission" ? page.locator(css.agentApproval) : page
+  await surface
     .screenshot({
       path: join(options.shots, `scripted-scenarios-${engine}-${layout}-${name}.png`),
     })
@@ -218,7 +223,9 @@ const checks = {
     const permission = run.view.permissions.find(
       (each) => each.origin?.kind === "harness",
     )
-    const label = offeredLabel(permission?.options, "allow")
+    const label = run.remember
+      ? permission?.options.find((option) => option.id === "nessa.remember.allow")?.label
+      : offeredLabel(permission?.options, "allow")
     failures.push(
       ...(await unofferedAnswers(card, permission?.options)).map(
         (line) => `the approval card ${line}`,
@@ -235,6 +242,23 @@ const checks = {
     else if (!clickable) failures.push(`no "${label}" button on the agent approval card`)
     else await button.click()
     if (failures.length > 0) return { failures }
+    await waitFor(() => run.answerResponses.length > 0, 40_000)
+    const receipt = run.answerResponses[0]
+    if (
+      run.answerRequests.size !== 1 ||
+      run.answerResponses.length !== 1 ||
+      !receipt?.confirmed
+    )
+      failures.push(
+        `answer was not confirmed exactly once: ${JSON.stringify(run.answerResponses)}`,
+      )
+    if (run.remember) {
+      const rules = (await stack.client.conversation.permissionRules()).rules.filter(
+        (rule) => !run.priorRules.has(rule.id),
+      )
+      if (rules.length !== 1 || rules[0].effect !== "allow")
+        failures.push("remembered allow did not store exactly one allow rule")
+    }
     const { view, turn } = await untilTurn(
       stack.client,
       run.conversationId,
@@ -379,7 +403,21 @@ await main(
         const started = Date.now()
         let run
         try {
-          run = { ...(await ask(stack, options.agent)), agent: options.agent }
+          const priorRules = options.remember
+            ? new Set(
+                (await stack.client.conversation.permissionRules()).rules.map(
+                  (rule) => rule.id,
+                ),
+              )
+            : new Set()
+          run = {
+            ...(await ask(stack, options.agent)),
+            agent: options.agent,
+            remember: options.remember,
+            priorRules,
+            answerRequests: new Map(),
+            answerResponses: [],
+          }
         } catch (error) {
           rep.add(resultOfThrown({ name: "ask", engine, layout }, error))
           for (const name of only)
@@ -404,6 +442,36 @@ await main(
             url: `${origin}/desktop.html`,
             layout,
             lines: { engine, layout },
+            preparePage: async (page) => {
+              page.on("websocket", (socket) => {
+                socket.on("framesent", ({ payload }) => {
+                  let frame
+                  try {
+                    frame = JSON.parse(payload.toString())
+                  } catch {
+                    return
+                  }
+                  if (frame.type === "req" && frame.method === "conversation.answer")
+                    run.answerRequests.set(frame.id, frame.params?.requestId)
+                })
+                socket.on("framereceived", ({ payload }) => {
+                  let frame
+                  try {
+                    frame = JSON.parse(payload.toString())
+                  } catch {
+                    return
+                  }
+                  if (frame.type === "res" && run.answerRequests.has(frame.id))
+                    run.answerResponses.push({
+                      confirmed:
+                        frame.ok === true &&
+                        frame.payload?.applied === true &&
+                        frame.payload?.requestId === run.answerRequests.get(frame.id),
+                      code: frame.error?.code,
+                    })
+                })
+              })
+            },
             initScripts: [
               [gatewayHost, { endpoint: stack.endpoint, credential: stack.credential }],
             ],
@@ -463,6 +531,11 @@ await main(
           }
         } finally {
           await opened.close()
+          if (run.remember) {
+            for (const rule of (await stack.client.conversation.permissionRules()).rules)
+              if (!run.priorRules.has(rule.id))
+                await stack.client.conversation.revokePermissionRule(rule.id)
+          }
           log(`${engine} ${layout}: ${Date.now() - started} ms`)
         }
       }

@@ -89,9 +89,10 @@ await main(
             await opened.close()
           }
         }
-      for (const surface of ["setup", "first-use"]) {
+      for (const surface of ["setup", "first-use", "downloads"]) {
+        const downloads = surface === "downloads"
         const firstUse = surface === "first-use"
-        const attempts = firstUse ? 0 : 1
+        const attempts = firstUse || downloads ? 0 : 1
         const target = new URL(
           `/verification/desktop/fixtures/send-failure/index.html?surface=${surface}`,
           url,
@@ -103,7 +104,9 @@ await main(
         })
         try {
           const page = opened.page
-          const setup = page.getByRole("region", { name: "Claude setup" })
+          const setup = page.getByRole("region", {
+            name: downloads ? "Agent downloads" : "Claude setup",
+          })
           const download = page.getByRole("button", {
             name: "Download Claude · 117 MB",
             exact: true,
@@ -112,8 +115,7 @@ await main(
           // A production-sized label beside Retry must wrap inside
           // the card, never run past it or the viewport.
           const geometry = await setup.evaluate((region) => {
-            const card = region.querySelector(".agent-action-card")
-            if (!card) return "no setup card"
+            const card = region.querySelector(".agent-action-card") ?? region
             const box = card.getBoundingClientRect()
             if (box.left < 0 || box.right > innerWidth + 1) return "card leaves viewport"
             for (const button of card.querySelectorAll("button")) {
@@ -130,6 +132,56 @@ await main(
           await page
             .getByText("Downloading and verifying Claude.", { exact: false })
             .waitFor()
+          const progress = setup.getByRole("progressbar", {
+            name: "Downloading and verifying Claude",
+          })
+          await progress.waitFor({ state: "visible" })
+          if (
+            (await progress.getAttribute("value")) !== null ||
+            (await progress.getAttribute("aria-valuenow")) !== null
+          )
+            throw new Error("download invents a numeric completion value")
+          const spinner = progress.locator("svg")
+          const initialTransform = await spinner.evaluate(
+            (icon) => getComputedStyle(icon).transform,
+          )
+          await page.waitForFunction(
+            ({ label, initialTransform }) => {
+              const icon = document.querySelector(
+                `[role="progressbar"][aria-label="${label}"] svg`,
+              )
+              return (
+                icon &&
+                getComputedStyle(icon).animationName !== "none" &&
+                getComputedStyle(icon).transform !== initialTransform
+              )
+            },
+            { label: "Downloading and verifying Claude", initialTransform },
+          )
+          await page.emulateMedia({ reducedMotion: "reduce" })
+          if (
+            (await spinner.evaluate((icon) => getComputedStyle(icon).animationName)) !==
+            "none"
+          )
+            throw new Error("download indicator ignores reduced motion")
+          await page.emulateMedia({ reducedMotion: "no-preference" })
+          await setup.getByText("Archive size · 117 MB", { exact: true }).waitFor()
+          const fits = await progress.evaluate((bar) => {
+            const box = bar.getBoundingClientRect()
+            return (
+              box.width > 0 &&
+              box.height > 0 &&
+              box.left >= 0 &&
+              box.right <= innerWidth + 1
+            )
+          })
+          if (!fits) throw new Error("download progress leaves the viewport")
+          if (options.shots) {
+            mkdirSync(options.shots, { recursive: true })
+            await setup.screenshot({
+              path: resolve(options.shots, `${engine}-${surface}-download-progress.png`),
+            })
+          }
           let state = await page.evaluate(() => ({
             attempts: window.__sendFailure.attempts,
             installs: window.__sendFailure.installs,
@@ -137,6 +189,22 @@ await main(
           if (state.attempts !== attempts || state.installs.join() !== "claude")
             throw new Error("setup retargeted or automatically retried a send")
           await page.evaluate(() => window.__sendFailure.releaseInstall())
+          await progress.waitFor({ state: "detached" })
+          if (downloads) {
+            await setup.getByText("Installed", { exact: true }).waitFor()
+            const state = await page.evaluate(() => window.__sendFailure)
+            if (state.attempts !== 0 || state.installs.join() !== "claude")
+              throw new Error("downloads completion replayed work")
+            rep.add({
+              name: "agent-downloads-progress",
+              engine,
+              width: 360,
+              failures: [],
+              detail:
+                "indeterminate progress; archive size; removed after install; no replay",
+            })
+            continue
+          }
           await page
             .getByRole("button", { name: "Sign in to Claude", exact: true })
             .click()

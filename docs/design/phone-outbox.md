@@ -55,23 +55,27 @@ new ids. The original id is not sent again.
 
 ## One lease, and the transitions
 
-The writer lease is the SQLite file lock. A send or retry of any command
-waits while another command holds it
+The writer lease is the SQLite file lock. A draft send or an explicit retry
+that takes the lease waits while another command holds it
 (`a_second_command_waits_for_the_file_lease`). The first send takes it, and
 so does an explicit retry. Departure commits first. The caller that committed
 it reloads inside the lease and sends only when that committed row is still
 unknown and still inside the foreground budget
 (`the_departure_winner_reloads_before_it_sends`). The lease is then
 held across `conversation.send` and the save of that answer, including a
-`turn_running` save and its new draft, in that same commit. A second send or
-retry waits and reloads. It does not call `conversation.send` when a direct
+`turn_running` save and its new draft, in that same commit. A second caller
+that also loaded Draft, or an explicit retry whose lookup finds no receipt,
+waits and reloads. It does not call `conversation.send` when a direct
 answer is already stored, or when the foreground budget is already spent. If
 the wait ends without the lease, it reloads and returns that row. It does not
 return `Unavailable`, `Uncertain`, or `Conflict`. Unknown still means maybe
 sent. A send whose answer is lost may already have left the device. That is
-at least once. The server dedupes it. Recovery does not send and does not
-take the lease. Its write waits if a send holds the lease, then precedence
-applies.
+at least once. The server dedupes it. A send first reading a departed row only
+reconciles the receipt. If that lookup leaves the row unchanged, it can return
+unknown while another send is pending
+(`a_sender_first_reading_departure_can_return_before_the_send`). Recovery does
+not send and does not take the lease. Its write waits if a send holds the lease,
+then precedence applies.
 
 The lease commit is one transaction. If that commit is uncertain, the
 transaction is rolled back and every transition it contained is written
@@ -145,6 +149,29 @@ again in that call.
 A lookup does not produce running. Running is only the direct injected
 receipt. Restoration rejects a `Lookup` event whose outcome is running
 (`every_transition_and_precedence_pair`).
+
+## Concurrent caller fixture orderings (#955)
+
+The initial load selects two different existing paths. A caller that reads a
+Draft contends for departure and then the lease. A caller first reading an
+already-departed row reconciles its receipt without taking that lease. An absent
+receipt can therefore return Unknown while another caller is inside the gateway.
+The old S12 fixture did not select between these paths before asserting that both
+calls remained blocked. Synchronize initial draft reads to test S12; retain the
+late-reader ordering separately rather than requiring it to wait.
+
+| Initial reads and ordering | Expected evidence | Regression |
+| --- | --- | --- |
+| Both Draft; departure winner enters gateway first | One successful departure, one Conflict, two lease attempts; both callers pending until release, then Accepted; one physical send | `a_lost_departure_does_not_send_again` (WinnerFirst) |
+| Both Draft; departure loser enters gateway first | Same evidence; winner reloads the committed receipt under its lease | `a_lost_departure_does_not_send_again` (LoserFirst) |
+| Both Draft; either first sender holds the lease, competing wait returns Unavailable | Waiter returns durable Unknown(NotAdmitted); physical sender stays pending; after release Accepted is durable and the waiter can read it | `a_failed_lease_wait_returns_the_durable_departure` |
+| Second initial read occurs after departure and gateway entry; receipt is absent | Second caller returns Unknown(NotAdmitted) with no lease attempt or send; first returns Accepted after release; later read adopts it | `a_sender_first_reading_departure_can_return_before_the_send` |
+| Entered sender times out while the main thread waits for a missing contender; sender panic poisons the release mutex, then the ordering assertion unwinds | Release cleanup recovers that guard and sets the release flag; the original ordering failure is retained without a second panic aborting the binary | `a_poisoned_sender_release_preserves_the_ordering_failure` |
+
+The failed-wait port fixture injects `StoreError::Unavailable` at the existing
+store seam. The SQLite adapter's bounded-wait test separately holds a real writer
+lease, gives the competing connection a short busy timeout, observes Unavailable,
+and verifies read/reacquisition after release. Production lease timing is unchanged.
 
 ## Restoration replays the live transition
 
@@ -311,7 +338,7 @@ second rule.
 | S1 | Send starts | Departed is durable before `conversation.send` is asked | `departure_is_durable_before_the_gateway_is_asked` |
 | S2 | That save's commit is uncertain | `conversation.send` is not asked | `an_uncertain_departure_does_not_send` |
 | S15 | The lease commit is uncertain after SendLost, a lookup that changes the outcome, and ForegroundSend | Those events are written again, in order. The row loads | `an_uncertain_lease_rewrites_every_transition` |
-| S12 | Two sends of one draft overlap | The waiter blocks on the lease and reloads. It sends the same id only when the stored row is still unknown | `a_lost_departure_does_not_send_again` |
+| S12 | Two callers load the same Draft before departure | The waiter blocks on the lease and reloads. It sends the same id only when the stored row is still unknown | `a_lost_departure_does_not_send_again` |
 | S19 | The departure commit wins, then the other caller holds the lease and stores a direct answer | The winner reloads inside the lease and does not send | `the_departure_winner_reloads_before_it_sends` |
 | S3 | Send returns queued, injected, or settled | Accepted, running, or done | `a_queued_send_is_accepted`, `an_injected_send_is_running`, `a_settled_send_is_done` |
 | S4 | Send returns a conversation refusal other than `submission_unresolved` | Failed. The same id is not sent again | `a_refusal_is_failed_and_not_sent_again` |

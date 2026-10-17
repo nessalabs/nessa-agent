@@ -2178,12 +2178,15 @@ impl<P: AcpProfile> Worker<P> {
         }
     }
     /// A Nessa remember choice stores a project rule, then answers this review
-    /// with the harness's once option of the same effect. The harness's own
-    /// always-allow is left as the caller sent it. A refusal stores nothing
-    /// and leaves the review pending.
-    fn remembered_answer(&self, answer: PermissionAnswer) -> Result<PermissionAnswer, AgentError> {
+    /// with the harness's once wire option of the same effect. The logical
+    /// selection and Explicit attribution stay as submitted for receipt and
+    /// audit correlation. A refusal leaves the review pending.
+    fn remember_and_map_answer(
+        &self,
+        answer: &PermissionAnswer,
+    ) -> Result<PermissionOptionId, AgentError> {
         let Some(effect) = remember_effect(answer.option_id.as_str()) else {
-            return Ok(answer);
+            return Ok(answer.option_id.clone());
         };
         let context = self
             .permission_context
@@ -2228,8 +2231,7 @@ impl<P: AcpProfile> Worker<P> {
             })?;
         let workspace = self.config.workspace.to_str().unwrap_or("");
         let tool = context.tool.clone();
-        let rule = self
-            .config
+        self.config
             .permission_rules
             .remember(RememberRequest {
                 workspace,
@@ -2249,15 +2251,7 @@ impl<P: AcpProfile> Worker<P> {
                     AgentError::InvalidInput("the permission rule could not be stored".into())
                 }
             })?;
-        let reference = rule.reference().clone();
-        Ok(PermissionAnswer {
-            attribution: ApprovalAttribution::new(
-                answer.attribution.actor().clone(),
-                ApprovalBasis::Rule(reference),
-            ),
-            option_id: once,
-            ..answer
-        })
+        Ok(once)
     }
     /// Answer one pending review with the caller's selection: record it, send
     /// it, then record what delivery did. Queue admission transferred ownership
@@ -2270,8 +2264,8 @@ impl<P: AcpProfile> Worker<P> {
     ) -> Result<(), WorkerFailure> {
         let permission_id = answer.id.clone();
         let answered_execution = answer.execution_id.clone();
-        let answer = match self.remembered_answer(answer) {
-            Ok(answer) => answer,
+        let wire_option = match self.remember_and_map_answer(&answer) {
+            Ok(option) => option,
             Err(error) => {
                 let _ = reply.send(Err(ProviderOperationFailure::permission_answer(
                     error,
@@ -2283,7 +2277,6 @@ impl<P: AcpProfile> Worker<P> {
         };
         // The rule and its audit already committed inside `remember`. A later
         // failure to record this answer does not remove that grant.
-        let option_id = answer.option_id.clone();
         let resolution = match execution.answer_permission(answer) {
             Ok(resolution) => resolution,
             Err(error) => {
@@ -2329,7 +2322,7 @@ impl<P: AcpProfile> Worker<P> {
             .remove(&permission_id)
             .expect("pending wire permission");
         self.permission_context.remove(&permission_id);
-        let response = permission_wire::selected(&wire_id, option_id.as_str());
+        let response = permission_wire::selected(&wire_id, wire_option.as_str());
         let result = self.send(response).await;
         // Codex ends the turn when the person picks `cancel`. The cancelled
         // result that follows is that turn ending. `decline` does not stop
@@ -2348,7 +2341,7 @@ impl<P: AcpProfile> Worker<P> {
             && self
                 .profile
                 .deadline_deny_preference()
-                .stops_turn(option_id.as_str())
+                .stops_turn(wire_option.as_str())
             && self
                 .active
                 .as_ref()
