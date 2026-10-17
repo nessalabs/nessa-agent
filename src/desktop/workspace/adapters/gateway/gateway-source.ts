@@ -98,6 +98,7 @@ import {
   prepareSubmission,
   permissionTargets,
   questionTargets,
+  reviewDetails,
   ConversationErrorCode,
   conversationErrorCode,
   isRetryableConnectionError,
@@ -115,13 +116,14 @@ import {
   type ConversationSummary,
   type ConversationView,
   type ConversationViewCursor,
+  type ReviewDetail,
+  type ReviewDetails,
   type Subscription,
   type SubscriptionApi,
   type StopThreadResult,
   type SubscriptionEnd,
   type ViewFrame,
 } from "@nessa/client"
-import { reviewInputs } from "../../../../conversation"
 import { HostRefusalError } from "../../../../host/startup-refusals"
 import { isSignedOut } from "../../../../session"
 import { agentForProvider } from "../../../model/composer-options"
@@ -154,7 +156,7 @@ export interface GatewayClient {
     | "create"
     | "submit"
     | "answer"
-    | "permissionInput"
+    | "permissionReview"
     | "answerQuestion"
     | "stop"
     | "setApprovalMode"
@@ -255,8 +257,10 @@ export interface GatewayViewObserver {
 interface Read {
   /** The view as the gateway sent it. */
   readonly sent: ConversationView
-  /** `sent`, each review whose whole input was read carrying all of it (`reviewInputs`). */
+  /** `sent`, the view this read stands on. */
   readonly view: ConversationView
+  /** When `sent` arrived, on the window's clock. */
+  readonly receivedAtMs: number
   /** What a person could see of `view` ([`viewKey`]). */
   readonly key: string
   readonly transcript: Transcript
@@ -271,8 +275,14 @@ interface Read {
  * content anew. `serverNowMs` moves on every read. The gateway sends a frame
  * when this changes (`view_key`, row S9), so it is what decides here.
  */
-function viewKey(view: ConversationView): string {
-  return JSON.stringify({ ...view, revision: undefined, serverNowMs: undefined })
+function viewKey(view: ConversationView, details: readonly ReviewDetail[]): string {
+  return JSON.stringify({
+    ...view,
+    revision: undefined,
+    serverNowMs: undefined,
+    // A review's content, once read, never changes under its key.
+    reviews: details.map((detail) => [detail.entry.review, detail.state]),
+  })
 }
 
 /** An approval or a question is the person being asked. A withheld-review notice is not. */
@@ -374,8 +384,12 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
   const reads = new Map<string, Read>()
   // When each message was first seen, per session: the gateway's view has no times.
   const firstSeen = new Map<string, Map<string, number>>()
-  // The whole inputs of each conversation's waiting reviews, as read so far.
-  const inputs = new Map<string, ReturnType<typeof reviewInputs>>()
+  // What each conversation's listed reviews show, read from their live owner.
+  const reviews = new Map<string, ReviewDetails>()
+  const dropReviews = (sessionId: string) => {
+    reviews.get(sessionId)?.dispose()
+    reviews.delete(sessionId)
+  }
 
   // Nothing is said after `dispose`, which lets every listener go and admits no new one.
   const emit = (update: WorkspaceUpdate) => {
@@ -730,7 +744,7 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     unfollow(sessionId, new WorkspaceSourceError("unknown-session"))
     // Its last frame goes with it: listed again, nothing it said then speaks for it.
     reads.delete(sessionId)
-    inputs.delete(sessionId)
+    dropReviews(sessionId)
     emit({ kind: "session-removed", sessionId, revision })
   }
 
@@ -967,32 +981,42 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     receivedAtMs: number,
   ): Transcript => {
     const sent = view
-    const whole =
-      inputs.get(sessionId) ??
-      reviewInputs((target) =>
-        client("person").then((connected) =>
-          connected.conversation.permissionInput(target),
-        ),
-      )
-    inputs.set(sessionId, whole)
-    // A review's long input arrives as its start; it is read whole, and the
-    // frame applied again with it, before the review offers any answer.
-    whole.read(sent, () => {
-      const latest = reads.get(sessionId)
-      if (!disposed && latest?.sent === sent)
-        applyRead(sessionId, sent, latest.cursor, receivedAtMs)
-    })
-    view = whole.complete(sent)
+    // A view lists each waiting review by its key; what it shows is read
+    // from its live owner, and the frame applied again as each arrives,
+    // before the review offers any answer (`Approval.loading`).
+    let loader = reviews.get(sessionId)
+    if (!loader) {
+      loader = reviewDetails({
+        read: (review, signal) =>
+          client("person").then((connected) =>
+            connected.conversation.permissionReview(sessionId, review, { signal }),
+          ),
+        changed: () => {
+          const latest = reads.get(sessionId)
+          if (!disposed && latest)
+            applyRead(sessionId, latest.sent, latest.cursor, latest.receivedAtMs)
+        },
+      })
+      reviews.set(sessionId, loader)
+    }
+    loader.follow(sent.permissions)
+    const details = loader.details()
     const held = reads.get(sessionId)
-    const key = viewKey(view)
+    const key = viewKey(view, details)
     if (held && held.key === key) {
-      reads.set(sessionId, { ...held, sent, cursor })
+      reads.set(sessionId, { ...held, sent, cursor, receivedAtMs })
       return held.transcript
     }
     const revision = (transcriptCounts.get(sessionId) ?? 0) + 1
     transcriptCounts.set(sessionId, revision)
-    const transcript = transcriptFrom(view, revision, seenIn(sessionId), receivedAtMs)
-    reads.set(sessionId, { sent, view, key, transcript, cursor })
+    const transcript = transcriptFrom(
+      view,
+      revision,
+      seenIn(sessionId),
+      receivedAtMs,
+      details,
+    )
+    reads.set(sessionId, { sent, view, receivedAtMs, key, transcript, cursor })
     tellApps(() => options.apps?.observe(sent))
     emit({ kind: "transcript", transcript })
     // The summary follows what the frame says: an approval waiting, the model it runs on.
@@ -1120,7 +1144,7 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
                 throw error
               // The client is ahead of the history the gateway holds: start over.
               reads.delete(sessionId)
-              inputs.delete(sessionId)
+              dropReviews(sessionId)
               if (!live() || !current()) throw new WorkspaceSourceError("unavailable")
               return subscribe(connected, undefined)
             },
@@ -1182,7 +1206,7 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
         unfollow(oldest, new WorkspaceSourceError("unavailable"))
         // Not followed, it says only what its row says (`needs-you` is a frame's).
         reads.delete(oldest)
-        inputs.delete(oldest)
+        dropReviews(oldest)
         publish(oldest)
       }
     }
@@ -1231,19 +1255,26 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
   }
 
   const waitingReview = async (sessionId: string, approvalId: string) => {
-    const review = reviewOf(approvalId)
-    if (!review) throw new WorkspaceSourceError("not-waiting")
+    const key = reviewOf(approvalId)
+    if (!key) throw new WorkspaceSourceError("not-waiting")
+    // A review this window holds is answered as it holds it. One it does not
+    // hold yet — its conversation not followed — is read whole first.
+    const heldBefore = reviews.get(sessionId)?.get(key)
     await transcriptOf(sessionId, "person")
-    const view = reads.get(sessionId)?.view
-    const index =
-      view?.permissions.findIndex(
-        (asked) =>
-          asked.executionId === review.executionId &&
-          asked.permissionId === review.permissionId,
-      ) ?? -1
-    const permission = view?.permissions[index]
-    const target = view && permissionTargets(view)[index]
-    if (!permission || !target) throw new WorkspaceSourceError("not-waiting")
+    const listed = reads
+      .get(sessionId)
+      ?.sent.permissions.some((entry) => entry.review === key)
+    const loader = reviews.get(sessionId)
+    const detail = heldBefore ? loader?.get(key) : await loader?.settled(key)
+    if (!listed || !detail) throw new WorkspaceSourceError("not-waiting")
+    // No answer before the person could see the whole of what it allows.
+    if (detail.state !== "loaded") throw new WorkspaceSourceError("not-supported")
+    const permission = detail.permission
+    const [target] = permissionTargets({
+      conversationId: sessionId,
+      permissions: [permission],
+    })
+    if (!target) throw new WorkspaceSourceError("not-waiting")
     return { permission, target }
   }
 
@@ -1262,8 +1293,7 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     within(async (live) => {
       const { permission, target } = await waitingReview(sessionId, approvalId)
       const option = permission.options.find((offered) => offered.id === optionId)
-      // No answer before the person could see the whole of what it allows.
-      if (!permission.argumentsComplete || !option || option.effect !== effect)
+      if (!option || option.effect !== effect)
         throw new WorkspaceSourceError("not-supported")
       await dispatch(live, (connected) =>
         connected.conversation.answer(target, option.id),
@@ -1374,6 +1404,10 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
         : answer(sessionId, approvalId, optionId, "allow"),
     deny: (sessionId, approvalId, _initiator, optionId) =>
       answer(sessionId, approvalId, optionId, "deny"),
+    retryReview: (sessionId, approvalId) => {
+      const key = reviewOf(approvalId)
+      if (key) reviews.get(sessionId)?.retry(key)
+    },
     answerQuestion: (sessionId, executionId, questionId, choices, _initiator) =>
       within(async (live) => {
         await transcriptOf(sessionId, "person")
@@ -1477,6 +1511,7 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     dispose() {
       disposed = true
       stopStreams()
+      for (const sessionId of [...reviews.keys()]) dropReviews(sessionId)
       settle(list, { error: new WorkspaceSourceError("unavailable") })
       for (const sessionId of [...views.keys()])
         unfollow(sessionId, new WorkspaceSourceError("unavailable"))
