@@ -156,6 +156,9 @@ const checks = {
       throw new CannotRun(`no session row "${names.approvalSession}" in the list`)
     await row.click()
     await need(page, css.approvalCard, "the approval card")
+    // An agent's command is whole under Details: open them, so its words are measured shown.
+    const disclose = page.locator(css.approvalDisclose).first()
+    if (await disclose.count()) await disclose.click()
     await settled(page)
     const failures = []
     const seen = []

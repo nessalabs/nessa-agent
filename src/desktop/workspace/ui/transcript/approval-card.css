@@ -1,41 +1,298 @@
-/* An approval: the one warm thing on the page. */
+/*
+ * An approval (`approval-card.tsx`): a quiet card, its one warm thing the
+ * mark beside who asks. What is asked comes first at a glance; the whole
+ * command waits under Details.
+ */
 .workspace-approval {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
   min-width: 0;
   max-width: 100%;
-  padding: 16px;
+  padding: 14px;
   border-radius: var(--desktop-radius-lg);
-  background:
-    radial-gradient(
-      120% 80% at 0% 0%,
-      color-mix(in oklab, var(--desktop-needs) 10%, transparent),
-      transparent 70%
-    ),
-    color-mix(in oklab, var(--foreground) 3%, transparent);
+  background: color-mix(in oklab, var(--foreground) 4%, transparent);
   box-shadow:
-    inset 0 0 0 1px color-mix(in oklab, var(--desktop-needs) 22%, transparent),
+    inset 0 0 0 0.5px color-mix(in oklab, var(--foreground) 14%, transparent),
+    inset 0 1px 0 color-mix(in oklab, var(--foreground) 6%, transparent),
     0 18px 44px -26px rgb(0 0 0 / 65%);
   animation: workspace-message-in var(--desktop-slow) var(--desktop-out) both;
 }
 
-.workspace-approval-head {
+.workspace-approval-top {
   display: flex;
   align-items: center;
-  gap: 8px;
-  color: var(--desktop-ink-2);
+  gap: 10px;
+  min-width: 0;
+}
+
+.workspace-approval-head {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--foreground);
   font-weight: 600;
   -webkit-user-select: none;
   user-select: none;
 }
 
-.workspace-approval-head svg {
+.workspace-approval-mark {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 7px;
+  background: color-mix(in oklab, var(--desktop-needs) 16%, transparent);
+  color: var(--desktop-needs);
+}
+
+.workspace-approval-mark svg {
+  width: 13px;
+  height: 13px;
+  stroke-width: 1.8;
+}
+
+/* The deadline: a quiet ring and the seconds left, speaking up only at the end. */
+.workspace-approval-deadline {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: var(--desktop-fainter);
+  font-size: var(--desktop-text-caption);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  -webkit-user-select: none;
+  user-select: none;
+  transition: color var(--desktop-medium) ease;
+}
+
+.workspace-approval-deadline svg {
   width: 14px;
   height: 14px;
-  flex-shrink: 0;
-  stroke-width: 1.8;
+  transform: rotate(-90deg);
+  fill: none;
+  stroke-width: 1.5;
+}
+
+.workspace-approval-deadline-track {
+  stroke: color-mix(in oklab, var(--foreground) 12%, transparent);
+}
+
+.workspace-approval-deadline-left {
+  stroke: var(--desktop-faint);
+  stroke-linecap: round;
+  transition:
+    stroke var(--desktop-medium) ease,
+    stroke-dashoffset var(--desktop-base) linear;
+}
+
+.workspace-approval-deadline[data-ending] {
   color: var(--desktop-needs);
+}
+
+.workspace-approval-deadline[data-ending] .workspace-approval-deadline-left {
+  stroke: var(--desktop-needs);
+}
+
+/* What the agent's command touches, in one row, and the way to all of it. */
+.workspace-approval-gist {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 8px 6px 8px 12px;
+  border-radius: var(--desktop-radius-md);
+  background: color-mix(in oklab, var(--background) 45%, transparent);
+  box-shadow: var(--desktop-card-rim);
+}
+
+.workspace-approval-facts {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 14px;
+}
+
+.workspace-approval-fact {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+  color: var(--desktop-ink-2);
+}
+
+.workspace-approval-fact > svg,
+.workspace-approval-favicon svg {
+  flex: none;
+  width: 13px;
+  height: 13px;
+  stroke-width: 1.8;
+  color: var(--desktop-faint);
+}
+
+.workspace-approval-favicon {
+  width: 13px;
+  height: 13px;
+}
+
+.workspace-approval-site {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-family: var(--nessa-font-mono);
+  font-size: var(--desktop-text-caption);
+}
+
+.workspace-approval-site bdi {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-approval-program {
+  flex: none;
+  max-width: 100%;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: baseline;
+  min-width: 0;
+  padding: 0 6px;
+  border-radius: var(--desktop-radius-xs);
+  background: var(--desktop-selected);
+  font: 500 var(--desktop-text-caption) / 18px var(--nessa-font-mono);
+}
+
+.workspace-approval-program bdi {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-approval-program i {
+  margin-left: 3px;
+  color: var(--desktop-faint);
+  font-style: normal;
+}
+
+.workspace-approval-more-count {
+  color: var(--desktop-faint);
+  font-size: var(--desktop-text-caption);
+}
+
+.workspace-approval-disclose,
+.workspace-approval-copy {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--desktop-radius-pill);
+  background: transparent;
+  color: var(--desktop-muted);
+  font-size: var(--desktop-text-footnote);
+  font-weight: 500;
+  -webkit-user-select: none;
+  user-select: none;
+  transition:
+    background-color var(--desktop-fast) ease,
+    color var(--desktop-fast) ease;
+}
+
+.workspace-approval-disclose:hover,
+.workspace-approval-copy:hover {
+  background: var(--desktop-hover-strong);
+  color: var(--foreground);
+}
+
+.workspace-approval-disclose svg {
+  width: 12px;
+  height: 12px;
+  stroke-width: 2;
+  transition: transform var(--desktop-base) var(--desktop-ease);
+}
+
+.workspace-approval-gist[data-open] .workspace-approval-disclose svg {
+  transform: rotate(180deg);
+}
+
+/* Details: opened in place, the row's height following its content. */
+.workspace-approval-details {
+  display: grid;
+  grid-template-rows: 0fr;
+  margin-top: -10px;
+  transition:
+    grid-template-rows var(--desktop-base) var(--desktop-ease),
+    margin-top var(--desktop-base) var(--desktop-ease);
+}
+
+.workspace-approval-details[data-open] {
+  grid-template-rows: 1fr;
+  margin-top: 0;
+}
+
+.workspace-approval-details-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  opacity: 0;
+  transition: opacity var(--desktop-medium) ease;
+}
+
+.workspace-approval-details[data-open] .workspace-approval-details-body {
+  opacity: 1;
+}
+
+.workspace-approval-meta-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.workspace-approval-meta {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 14px;
+  margin: 0;
+  padding: 0 2px;
+  color: var(--desktop-faint);
+  font-size: var(--desktop-text-caption);
+}
+
+.workspace-approval-meta div {
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+}
+
+.workspace-approval-meta dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--desktop-muted);
+  font-family: var(--nessa-font-mono);
+}
+
+.workspace-approval-copy {
+  height: 22px;
+  font-size: var(--desktop-text-caption);
 }
 
 /*
@@ -99,12 +356,16 @@
 }
 
 .workspace-approval-reason,
-.workspace-approval-deadline,
 .workspace-approval-failure {
   margin: 0;
   color: var(--desktop-muted);
   font-size: var(--desktop-text-footnote);
   line-height: 1.5;
+}
+
+.workspace-approval-reason {
+  margin-top: -4px;
+  padding-left: 32px;
 }
 
 .workspace-approval-failure {
@@ -144,6 +405,16 @@
   margin-left: auto;
   min-width: 0;
   max-width: 100%;
+}
+
+/* Deny is the quiet answer at every width; what allows carries the weight. */
+.workspace-approval-actions .workspace-approval-deny {
+  background: transparent;
+  color: var(--desktop-muted) !important;
+}
+
+.workspace-approval-actions .workspace-approval-deny:hover {
+  background: var(--desktop-hover-strong);
 }
 
 .workspace-approval-short,
@@ -239,16 +510,13 @@
 
   .workspace-approval-actions .workspace-approval-deny {
     margin-left: 0;
-    background: transparent;
-    color: var(--desktop-muted) !important;
-  }
-
-  .workspace-approval-actions .workspace-approval-deny:hover {
-    background: var(--desktop-hover);
   }
 }
 
-.workspace-approval .workspace-button:focus-visible {
+.workspace-approval .workspace-button:focus-visible,
+.workspace-approval-disclose:focus-visible,
+.workspace-approval-copy:focus-visible {
+  outline: var(--desktop-focus-outline);
   outline-offset: 2px;
 }
 

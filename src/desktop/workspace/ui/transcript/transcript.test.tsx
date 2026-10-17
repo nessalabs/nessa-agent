@@ -127,7 +127,7 @@ async function shown(
 }
 
 const buttons = () =>
-  [...host.querySelectorAll<HTMLButtonElement>(".workspace-approval button")].map(
+  [...host.querySelectorAll<HTMLButtonElement>(".workspace-approval-actions button")].map(
     (button) => [
       button.getAttribute("aria-label") ?? button.textContent,
       button.disabled,
@@ -1037,11 +1037,62 @@ describe("a transcript", () => {
     })
     const deadline = host.querySelector<HTMLElement>("[data-deadline]")
     expect(deadline?.dataset.deadline).toBe("deny")
-    expect(deadline?.textContent).toBe(
+    // Quiet until its last seconds: the seconds left, the sentence its name.
+    expect(deadline?.textContent).toBe("30s")
+    expect(deadline?.getAttribute("aria-label")).toBe(
       "If nobody answers within 30 seconds, this is denied automatically.",
     )
     expect(host.querySelector(".workspace-approval-reason")?.textContent).toBe(
       "Runs the tests.",
+    )
+  })
+
+  it("says at a glance what an agent's command reaches and runs, the whole of it under Details", async () => {
+    const approval = conversation.approval
+    if (!approval) throw new Error("the sample asks for nothing")
+    const script =
+      'curl -s "https://tad2026.eventive.org/api" | head -c 1000; curl -I https://tad2026.eventive.org/'
+    await shown(fakeSource(), {
+      ...conversation,
+      approval: {
+        ...approval,
+        command: `mcp__nessa__shell ${JSON.stringify({ command: script })}`,
+        reason: "mcp__nessa__shell",
+        deadline: {
+          waitMs: 30_000,
+          dueAtMs: 7_000,
+          effect: "deny",
+          reason: "No human answered in time.",
+          stopsTurn: false,
+        },
+      },
+    })
+    const card = host.querySelector<HTMLElement>(".workspace-approval")
+    // A title that only names the tool is not repeated as a reason.
+    expect(card?.querySelector(".workspace-approval-reason")).toBeNull()
+    expect(card?.querySelector('[aria-label="Sites"]')?.textContent).toBe(
+      "tad2026.eventive.org",
+    )
+    expect(card?.querySelector('[aria-label="Programs"]')?.textContent).toBe("curl×2head")
+    // The last seconds say what will happen.
+    const deadline = card?.querySelector<HTMLElement>("[data-deadline]")
+    expect(deadline?.textContent).toBe("Denies in 6s")
+    expect(deadline?.hasAttribute("data-ending")).toBe(true)
+    // Closed, Details are out of reach; opened, they show the script a step per line.
+    const disclose = card?.querySelector<HTMLButtonElement>(
+      ".workspace-approval-disclose",
+    )
+    const details = card?.querySelector<HTMLElement>(".workspace-approval-details")
+    expect(disclose?.getAttribute("aria-expanded")).toBe("false")
+    expect(details?.hasAttribute("inert")).toBe(true)
+    await act(async () => disclose?.click())
+    expect(disclose?.getAttribute("aria-expanded")).toBe("true")
+    expect(details?.hasAttribute("inert")).toBe(false)
+    expect(details?.querySelector(".workspace-approval-command")?.textContent).toBe(
+      '$ curl -s "https://tad2026.eventive.org/api"\n  | head -c 1000;\ncurl -I https://tad2026.eventive.org/',
+    )
+    expect(details?.querySelector(".workspace-approval-meta dd")?.textContent).toBe(
+      "mcp__nessa__shell",
     )
   })
 
@@ -1200,7 +1251,7 @@ describe("a transcript", () => {
     source.refuse("deny", "not-waiting")
     await shown(source)
     await act(async () => {
-      host.querySelector<HTMLButtonElement>(".workspace-approval button")?.click()
+      host.querySelector<HTMLButtonElement>(".workspace-approval-actions button")?.click()
     })
     await act(async () => settle())
     expect(host.querySelector(".workspace-approval-failure")?.textContent).toBe(

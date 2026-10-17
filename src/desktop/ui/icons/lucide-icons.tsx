@@ -16,6 +16,7 @@ import {
   FlaskConical,
   Folder,
   FolderPlus,
+  Globe,
   Hash,
   Home,
   Info,
@@ -102,6 +103,7 @@ export const lucideIcons: DesktopIconFamily = {
   file: lucide(FileText),
   edit: lucide(PenLine),
   terminal: lucide(SquareTerminal),
+  site: lucide(Globe),
 
   preferences: lucide(Settings2),
   appearance: lucide(Palette),

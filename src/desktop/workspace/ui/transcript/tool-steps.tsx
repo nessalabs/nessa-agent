@@ -1,5 +1,6 @@
 import { useId, useState } from "react"
 import { AgentActivity, AgentActivityTrigger } from "@nessa-ui/react/agent-activity"
+import { Favicon } from "@nessa-ui/react/favicon"
 import { DesktopIcon, type DesktopIconRole } from "../../../ui/icons"
 import { workSummary, type StepKind, type StepPart } from "../../model/transcript"
 
@@ -48,7 +49,7 @@ function StepList({ id, steps }: { id?: string; steps: readonly StepPart[] }) {
     <ul id={id} className="workspace-steps">
       {steps.map((step, index) => (
         <li key={index}>
-          <DesktopIcon name={stepIcons[step.step]} />
+          <StepIcon step={step} />
           <span className="workspace-step-label">{step.label}</span>
           {step.detail ? (
             <span className="workspace-step-detail">{step.detail}</span>
@@ -62,5 +63,19 @@ function StepList({ id, steps }: { id?: string; steps: readonly StepPart[] }) {
         </li>
       ))}
     </ul>
+  )
+}
+
+/**
+ * A step's icon: its kind's, or — for a step on a web page, such as a fetch
+ * — that site's own icon once it has loaded, the kind's standing in until
+ * then and wherever the site has none.
+ */
+function StepIcon({ step }: { step: StepPart }) {
+  const icon = <DesktopIcon name={stepIcons[step.step]} />
+  return step.detail && /^https?:\/\//i.test(step.detail) ? (
+    <Favicon href={step.detail} fallback={icon} className="workspace-step-favicon" />
+  ) : (
+    icon
   )
 }
