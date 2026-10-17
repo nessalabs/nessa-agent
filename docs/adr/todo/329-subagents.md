@@ -102,7 +102,11 @@ without waking the parent, and allow consumption when the person explicitly
 starts later work. Do not drop the report, invent a second delivery ledger or
 claim passive delivery before its persistence/admission contract exists. The
 report-fix owner and cascade owner must settle the exact delivery boundary and
-lost-ack/restart orderings together.
+lost-ack/restart orderings together. This includes reports already admitted as
+separate queued parent executions before Stop, and deliveries awaiting parent
+submission admission when Stop wins. Fencing only future delivery is insufficient:
+the report owner must identify and withdraw or suppress that report work without
+cancelling unrelated queued user turns. This boundary remains unresolved.
 
 Reserved integration paths until the parent coordinates task
 `01a147eb-6534-75a7-b4f8-3bfd87e5902c`'s handoff:
@@ -136,6 +140,7 @@ portable provider fixtures and document checks cannot establish these guarantees
 | One child fails or refuses authorization | Other admitted targets attempted; partial outcome visible | Cedar + Stop supervisor |
 | Parent/child access revoked during admission | Existing access checks remain authoritative | Current Cedar integration |
 | Child settles before/after parent cancellation | Durable report retained; no report-driven parent restart | Report owner + Stop barriers |
+| Report queued before Stop, or delivery waits on submission admission | Identify and withdraw/suppress only correlated report work; no stopped-parent wake and no unrelated user-turn cancellation | Report owner + submission/Stop barriers |
 | Report delivery loses acknowledgement then restarts | One retained/delivered report; no stopped-parent wake | Report owner persistence |
 | Legitimate suspension has a resumed successor | Report follows saved successor; Stop cancellation stays final | Resumption + reports |
 | Later explicit user turn | Same conversation can run; old Stop cannot target it | Public submit/Stop APIs |
