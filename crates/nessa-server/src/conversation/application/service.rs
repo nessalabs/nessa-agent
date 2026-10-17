@@ -3903,14 +3903,10 @@ impl ConversationService {
             }
         })
         .await;
-        // Turns it held were cancelled with no invocation to follow, whether
-        // or not its uploads were then released.
-        if matches!(
-            closed,
-            Ok(()) | Err(ConversationError::AttachmentRelease(_))
-        ) {
-            self.wake_thread_reports(&closing);
-        }
+        // Turns a closed agent held were cancelled with no invocation to
+        // follow. Every close attempt looks, whatever it answers: one that did
+        // not close finds nothing new.
+        self.wake_thread_reports(&closing);
         closed
     }
     /// Archive the conversation, or unarchive it: whether `list` shows it by

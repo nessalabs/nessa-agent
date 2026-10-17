@@ -1300,11 +1300,22 @@ fn a_long_reply_is_cut_so_the_whole_report_fits_the_input_limit() {
         limit,
     );
     assert!(text.len() <= limit, "{} > {limit}", text.len());
-    assert!(text.ends_with("\n[reply cut to fit]"));
+    assert!(text.ends_with("\n[cut to fit]"));
+    // A limit smaller than the report's own heading still holds.
+    for limit in [0, 5, 40] {
+        let text = crate::conversation::application::service::report_text_for_test(
+            &id(),
+            "turn",
+            "completed",
+            "reply".into(),
+            limit,
+        );
+        assert!(text.len() <= limit, "{} > {limit}", text.len());
+    }
 }
 
-/// Holds a save after it is written, so a test can read the store between a
-/// send's save and its registration.
+/// Holds a save that wrote its row, so a test can act between a send's save
+/// and its registration. A save that found the row already there is not held.
 struct HeldSave {
     store: Arc<crate::conversation::infrastructure::LocalThreadReports>,
     saved: tokio::sync::Notify,
@@ -1319,7 +1330,9 @@ impl crate::conversation::application::ThreadReportStore for HeldSave {
         Box::pin(async move {
             let wrote = self.store.save(&report).await?;
             self.saved.notify_one();
-            let _ = self.release.acquire().await.unwrap();
+            if wrote {
+                let _ = self.release.acquire().await.unwrap();
+            }
             Ok(wrote)
         })
     }
@@ -1394,6 +1407,64 @@ async fn a_start_reading_a_report_this_run_saved_leaves_it_to_its_send() {
         store.pending().await.unwrap().len(),
         1,
         "the report still waits for its turn"
+    );
+    retire(service, storage, metadata).await;
+}
+
+/// Two registrations of the same report at once: the second waits for the
+/// first, and the report is this run's, not an earlier run's restored one.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_second_registration_of_a_report_at_once_does_not_mark_it_restored() {
+    use crate::conversation::infrastructure::LocalThreadReports;
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("data");
+    let private = directory.path().join("reports");
+    nessa_local_storage::create_directory(&private).unwrap();
+    let provider = Arc::new(ProviderFactory::default());
+    let (service, storage, metadata) = fixture(&root, provider.clone());
+    service.bind_commands(storage.clone());
+    let store = Arc::new(HeldSave {
+        store: Arc::new(LocalThreadReports::open(&private.join("thread-reports.sqlite3")).unwrap()),
+        saved: tokio::sync::Notify::new(),
+        release: tokio::sync::Semaphore::new(0),
+    });
+    service.bind_thread_reports(store.clone());
+    let source = id();
+    let worker = id();
+    opened(&service, &provider, &source).await;
+    opened(&service, &provider, &worker).await;
+    let register = || {
+        let service = service.clone();
+        let (worker, source) = (worker.clone(), source.clone());
+        tokio::spawn(async move {
+            service
+                .report_thread_turn(
+                    worker,
+                    "later".into(),
+                    ThreadReport {
+                        parent: source,
+                        caller: caller("later-action"),
+                        execution: "later-report".into(),
+                    },
+                )
+                .await
+        })
+    };
+    let saved = store.saved.notified();
+    let first = register();
+    saved.await;
+    let second = register();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    store.release.add_permits(1);
+    assert_eq!(first.await.unwrap(), ReportRegistration::Registered);
+    assert_eq!(second.await.unwrap(), ReportRegistration::AlreadyWaiting);
+    service.wake_thread_reports(&worker);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(
+        service.inner.thread_reports.waiting(),
+        1,
+        "a turn not yet sent is not reported interrupted"
     );
     retire(service, storage, metadata).await;
 }

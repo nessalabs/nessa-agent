@@ -140,6 +140,9 @@ pub(crate) struct ThreadReports {
     /// Reports this run saved and has not settled: the start's resume reads
     /// the store while sends save, and leaves these to the run that saved them.
     fresh: Mutex<HashSet<String>>,
+    /// Held while a report registers, so a second registration of the same
+    /// report sees the first one's watch, never its half-made state.
+    registering: tokio::sync::Mutex<()>,
     store: OnceLock<Arc<dyn ThreadReportStore>>,
 }
 
@@ -429,6 +432,7 @@ impl ConversationService {
             return ReportRegistration::Refused;
         }
         let reports = &self.inner.thread_reports;
+        let _registering = reports.registering.lock().await;
         if reports.holds(&child, &report.execution) {
             return ReportRegistration::AlreadyWaiting;
         }
@@ -902,10 +906,10 @@ pub(crate) fn report_text_for_test(
     report_text(child, execution, outcome, Some(reply), limit)
 }
 
-const REPLY_CUT: &str = "\n[reply cut to fit]";
+const CUT: &str = "\n[cut to fit]";
 
 /// The report turn's text, whole within `limit` bytes, the parent's input
-/// limit: the reply is cut to fit, with a marker.
+/// limit: what does not fit is cut, with a marker when the marker fits.
 fn report_text(
     child: &ConversationId,
     execution: &str,
@@ -923,17 +927,18 @@ fn report_text(
         None => text.push_str("It gave no reply text."),
         Some(reply) => {
             text.push_str("Its reply:\n");
-            if text.len() + reply.len() <= limit {
-                text.push_str(&reply);
-            } else {
-                let mut end = limit.saturating_sub(text.len() + REPLY_CUT.len());
-                while !reply.is_char_boundary(end) {
-                    end -= 1;
-                }
-                text.push_str(&reply[..end]);
-                text.push_str(REPLY_CUT);
-            }
+            text.push_str(&reply);
         }
     }
+    if text.len() <= limit {
+        return text;
+    }
+    let marker = if CUT.len() <= limit { CUT } else { "" };
+    let mut end = limit - marker.len();
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    text.truncate(end);
+    text.push_str(marker);
     text
 }
