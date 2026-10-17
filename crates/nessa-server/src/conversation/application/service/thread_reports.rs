@@ -340,10 +340,16 @@ impl ConversationService {
             // Not known now: the report's lifetime settles it.
             Ok(None) | Err(_) => return,
         };
-        if saved {
-            self.look_for_reports(child, true).await;
-        } else {
+        if !saved {
             self.forget_thread_report(&child, report);
+            return;
+        }
+        // One look now; the follow-up a failure may need runs off the send.
+        if self.look_once(&child).await {
+            let service = ConversationService {
+                inner: self.inner.clone(),
+            };
+            tokio::spawn(async move { service.look_for_reports(child, true).await });
         }
     }
 
