@@ -93,22 +93,6 @@ when {
      context.request.receiptOperation == "create")
 };
 
-// A catalogue watch fires on every change to the owner's catalogue, granted
-// or not. A device signs in as that owner and may watch; a peer gateway is
-// another party, and the timing of the owner's ungranted work is not its to
-// see, so it polls its head instead.
-@id("grant.catalogue_watch")
-permit (
-    principal is NessaConversation::Reader,
-    action == NessaConversation::Action::"catalogue.watch",
-    resource is NessaConversation::Catalogue
-)
-when {
-    principal.signedInAs == principal.bindingOwner &&
-    principal.organization == resource.organization &&
-    principal.bindingOwner == resource.owner
-};
-
 // A note a grant that includes comment left is delivered while the grant
 // still holds that capability and the conversation is not deleted.
 @id("grant.note_deliver")

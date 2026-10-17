@@ -1229,10 +1229,10 @@ async fn a_grant_revoked_while_a_batch_waits_for_capacity_ends_it_before_the_rea
     client.close().await;
 }
 
-/// Row S31: the subscribe reply is owed by the request's reply deadline, as
-/// a watch's is. A writer held past it closes the socket rather than write
-/// the identity after the client stopped waiting for it, which would leave
-/// a live subscription the client cannot name and every retry refused
+/// Row S31: the subscribe reply is owed by the request's reply deadline. A
+/// writer held past it closes the socket rather than write the identity
+/// after the client stopped waiting for it, which would leave a live
+/// subscription the client cannot name and every retry refused
 /// `subscription_duplicate`.
 #[tokio::test]
 async fn a_subscribe_reply_not_written_by_its_deadline_closes_the_socket() {
@@ -4516,6 +4516,52 @@ async fn the_agent_catalog_is_sent_again_as_paired_environments_come_and_go() {
     fixture.goes(&f);
     let revoked = client.until(&id, |_| true).await.remove(0);
     assert_eq!(places(&revoked), ["build.example"]);
+    client.close().await;
+}
+
+/// Row E1: `session.challenge` is the socket's event 1, and every event
+/// after it, a waiting-review snapshot or a subscription frame alike, takes
+/// the next number of the socket's one numbering in the order the writer
+/// sends it, so one socket never repeats a number.
+#[tokio::test]
+async fn review_snapshots_and_subscription_frames_continue_one_socket_numbering() {
+    let fixture = SubscriptionFixture::new().await;
+    let (_rules, board) = open_rules();
+    let mut client = connect(
+        fixture.state.clone().with_permission_rules(board.clone()),
+        &fixture.session,
+    );
+    let snapshot = client.next().await;
+    assert_eq!(
+        snapshot["event"],
+        product_event::PERMISSION_REVIEW_WAITING,
+        "{snapshot}"
+    );
+    assert_eq!(snapshot["seq"], CHALLENGE_EVENT_SEQUENCE + 1, "{snapshot}");
+    client.send("agents", "agents.subscribe", json!({}));
+    let (reply, before) = client.reply("agents").await;
+    assert_eq!(reply["ok"], true, "{reply}");
+    assert!(before.is_empty(), "{before:?}");
+    let id = reply["payload"]["subscriptionId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let catalog = client.until(&id, |_| true).await.remove(0);
+    assert_eq!(catalog["seq"], CHALLENGE_EVENT_SEQUENCE + 2, "{catalog}");
+    // A change of the waiting set is the next event after the frame.
+    board.waiting(&ReviewNotice {
+        conversation_id: fixture.id.to_string(),
+        execution_id: ExecutionId::new("turn").unwrap(),
+        permission_id: PermissionId::new("waiting").unwrap(),
+        tool: "Bash".into(),
+    });
+    let changed = client.next().await;
+    assert_eq!(
+        changed["event"],
+        product_event::PERMISSION_REVIEW_WAITING,
+        "{changed}"
+    );
+    assert_eq!(changed["seq"], CHALLENGE_EVENT_SEQUENCE + 3, "{changed}");
     client.close().await;
 }
 

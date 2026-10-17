@@ -142,7 +142,7 @@ mod change_watch;
 #[cfg(test)]
 pub(crate) use app_reviews::MAX_APP_REVIEW_BYTES;
 pub(crate) use audit_records::audit_records;
-pub use change_watch::{WatchNamespaces, WatchRecords};
+pub use change_watch::WatchRecords;
 mod catalogue;
 pub(crate) mod catalogue_watch;
 pub use catalogue_watch::{

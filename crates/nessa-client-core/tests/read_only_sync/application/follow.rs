@@ -1,19 +1,20 @@
-//! The watch loop against scripted substitutes, one test per row W3–W14 and W17.
+//! The follow loop against scripted substitutes, one test per behavior.
 use super::*;
+use crate::read_only_sync::application::{SubscriptionCode, SubscriptionRefusal};
 use nessa_protocol::product_contract::generated::{
-    ChangeWatchErrorCode, RecordReadErrorCode, SessionCloseReason,
+    ConversationErrorCode, RecordReadErrorCode, SessionCloseReason,
 };
 use std::collections::VecDeque;
 
 #[derive(Debug, PartialEq, Eq)]
 enum Call {
-    Register,
+    Subscribe,
     Wait,
     Pass,
 }
 /// A session that answers each call from its script, in order.
 struct Script {
-    register: Option<Result<Registered, GatewayError>>,
+    subscribe: Option<Result<Subscribed, GatewayError>>,
     waits: VecDeque<Result<Wait, GatewayError>>,
     passes: VecDeque<PassResult>,
     /// The next pass cannot begin, with this cause.
@@ -26,9 +27,13 @@ impl Script {
         waits: impl IntoIterator<Item = Result<Wait, GatewayError>>,
     ) -> Self {
         Self {
-            register: Some(Ok(Registered {
-                watch: "watch-1".into(),
+            subscribe: Some(Ok(Subscribed {
+                subscription: "1".into(),
                 operation: 2,
+                first: Wait::View {
+                    cursor: cursor(1),
+                    during_pass: false,
+                },
             })),
             waits: waits.into_iter().collect(),
             passes: passes.into_iter().collect(),
@@ -37,17 +42,17 @@ impl Script {
         }
     }
 }
-impl WatchSession for Script {
+impl FollowSession for Script {
     type Report = usize;
-    fn register(&mut self) -> Result<Registered, GatewayError> {
-        self.calls.push(Call::Register);
-        self.register.take().expect("one registration")
+    fn subscribe(&mut self) -> Result<Subscribed, GatewayError> {
+        self.calls.push(Call::Subscribe);
+        self.subscribe.take().expect("one subscribe")
     }
     fn wait(&mut self) -> Result<Wait, GatewayError> {
         self.calls.push(Call::Wait);
         self.waits.pop_front().expect("scripted wait")
     }
-    fn pass(&mut self) -> Result<WatchPass<usize>, GatewayError> {
+    fn pass(&mut self) -> Result<FollowPass<usize>, GatewayError> {
         self.calls.push(Call::Pass);
         if let Some(cause) = self.unbegun.take() {
             return Err(cause);
@@ -57,7 +62,7 @@ impl WatchSession for Script {
             .iter()
             .filter(|call| **call == Call::Pass)
             .count();
-        Ok(WatchPass {
+        Ok(FollowPass {
             report: count,
             result: self.passes.pop_front().expect("scripted pass"),
         })
@@ -65,9 +70,9 @@ impl WatchSession for Script {
 }
 #[derive(Debug, PartialEq, Eq)]
 enum Line {
-    Registered(String),
+    Subscribed(String),
     Pass(Trigger, usize),
-    Hint(bool),
+    View(ViewCursor, bool),
 }
 /// Lines as written; the line numbered `refuse_at` (from zero) is refused.
 #[derive(Default)]
@@ -84,15 +89,15 @@ impl Lines {
         Ok(())
     }
 }
-impl WatchEvents<usize> for Lines {
-    fn registered(&mut self, registered: &Registered) -> Result<(), OutputLost> {
-        self.push(Line::Registered(registered.watch.clone()))
+impl FollowEvents<usize> for Lines {
+    fn subscribed(&mut self, subscribed: &Subscribed) -> Result<(), OutputLost> {
+        self.push(Line::Subscribed(subscribed.subscription.clone()))
     }
     fn pass(&mut self, trigger: Trigger, report: &usize) -> Result<(), OutputLost> {
         self.push(Line::Pass(trigger, *report))
     }
-    fn hint(&mut self, during_pass: bool) -> Result<(), OutputLost> {
-        self.push(Line::Hint(during_pass))
+    fn view(&mut self, cursor: &ViewCursor, during_pass: bool) -> Result<(), OutputLost> {
+        self.push(Line::View(cursor.clone(), during_pass))
     }
 }
 fn passes(count: usize) -> NonZeroUsize {
@@ -103,81 +108,154 @@ fn run(script: &mut Script, max: usize) -> (End, Vec<Line>) {
     let end = follow(script, &mut lines, passes(max)).unwrap();
     (end, lines.written)
 }
-fn hint(during_pass: bool) -> Result<Wait, GatewayError> {
-    Ok(Wait::Hint { during_pass })
+fn cursor(position: u64) -> ViewCursor {
+    ViewCursor {
+        incarnation: "incarnation-1".into(),
+        position: position.to_string(),
+    }
+}
+fn view(position: u64, during_pass: bool) -> Result<Wait, GatewayError> {
+    Ok(Wait::View {
+        cursor: cursor(position),
+        during_pass,
+    })
 }
 
-/// Row W3: every refusal ends before any pass, keeping its typed code;
+/// Every subscribe refusal ends before any pass, keeping its typed code;
 /// authority codes are the ones `asks_status` names for the PC5 recheck.
 #[test]
-fn registration_refusal_ends_before_any_pass() {
-    for code in [
-        ChangeWatchErrorCode::WatchCapacity,
-        ChangeWatchErrorCode::WatchDuplicate,
-        ChangeWatchErrorCode::TemporarilyUnavailable,
-        ChangeWatchErrorCode::StaleEpoch,
+fn subscribe_refusal_ends_before_any_pass() {
+    for refusal in [
+        SubscriptionRefusal::Subscription(SubscriptionCode::Capacity),
+        SubscriptionRefusal::Subscription(SubscriptionCode::Duplicate),
+        SubscriptionRefusal::Conversation(ConversationErrorCode::ConversationNotFound),
+        SubscriptionRefusal::Forbidden,
     ] {
+        let cause = GatewayError::Subscription(refusal);
         let mut script = Script::new([], []);
-        script.register = Some(Err(GatewayError::Watch(code)));
+        script.subscribe = Some(Err(cause));
         let (end, lines) = run(&mut script, 3);
-        assert_eq!(end.reason, EndReason::RegistrationRefused);
-        assert_eq!(end.cause, Some(GatewayError::Watch(code)));
+        assert_eq!(end.reason, EndReason::SubscribeRefused);
+        assert_eq!(end.cause, Some(cause));
         assert!(!end.clean());
         assert_eq!(
-            asks_status(end.cause.unwrap()),
-            code == ChangeWatchErrorCode::StaleEpoch
+            asks_status(cause),
+            refusal == SubscriptionRefusal::Forbidden
         );
-        assert_eq!(script.calls, [Call::Register]);
+        assert_eq!(script.calls, [Call::Subscribe]);
         assert!(lines.is_empty());
     }
-    // A registration lost on the transport is not a refusal.
+    // A subscribe lost on the transport is not a refusal.
     let mut script = Script::new([], []);
-    script.register = Some(Err(GatewayError::Closed(None)));
+    script.subscribe = Some(Err(GatewayError::Closed(None)));
     assert_eq!(run(&mut script, 3).0.reason, EndReason::ConnectionClosed);
 }
 
-/// Row W4: the recheck pass runs first even when the session already holds a
-/// hint, which `wait` then returns at once.
+/// A subscription that ends in its first frame ends the run before any
+/// pass, with the refusal it carried.
 #[test]
-fn first_pass_is_the_recheck_even_with_a_dirty_inbox() {
-    let mut script = Script::new([PassResult::Complete; 2], [hint(true)]);
+fn an_end_as_the_first_frame_runs_no_pass() {
+    let cause = GatewayError::Subscription(SubscriptionRefusal::Forbidden);
+    let mut script = Script::new([], []);
+    script.subscribe = Some(Ok(Subscribed {
+        subscription: "1".into(),
+        operation: 2,
+        first: Wait::Ended(Ended {
+            reason: SubscriptionEnd::Refused,
+            cause: Some(cause),
+        }),
+    }));
+    let (end, lines) = run(&mut script, 3);
+    assert_eq!(
+        end,
+        End {
+            reason: EndReason::SubscriptionEnded(SubscriptionEnd::Refused),
+            cause: Some(cause),
+        }
+    );
+    assert_eq!(script.calls, [Call::Subscribe]);
+    assert_eq!(lines, [Line::Subscribed("1".into())]);
+}
+
+/// The recheck pass runs first even when the session already holds a newer
+/// view, which `wait` then returns at once.
+#[test]
+fn first_pass_is_the_recheck_even_with_a_kept_view() {
+    let mut script = Script::new([PassResult::Complete; 2], [view(2, true)]);
     let (end, lines) = run(&mut script, 2);
     assert_eq!(
         script.calls,
-        [Call::Register, Call::Pass, Call::Wait, Call::Pass]
+        [Call::Subscribe, Call::Pass, Call::Wait, Call::Pass]
     );
     assert_eq!(
         lines,
         [
-            Line::Registered("watch-1".into()),
+            Line::Subscribed("1".into()),
             Line::Pass(Trigger::Recheck, 1),
-            Line::Hint(true),
-            Line::Pass(Trigger::Hint, 2),
+            Line::View(cursor(2), true),
+            Line::Pass(Trigger::View, 2),
         ]
     );
     assert_eq!(end.reason, EndReason::PassesExhausted);
 }
 
-/// Row W5: a hint read while waiting starts exactly one pass.
+/// A view whose cursor moved, read while waiting, starts exactly one pass.
 #[test]
-fn hint_while_waiting_starts_one_pass() {
+fn a_moved_view_while_waiting_starts_one_pass() {
     let mut script = Script::new(
         [PassResult::Complete; 2],
-        [hint(false), Err(GatewayError::TimedOut)],
+        [view(2, false), Err(GatewayError::TimedOut)],
     );
     let (end, lines) = run(&mut script, 5);
     assert_eq!(
         lines[1..],
         [
             Line::Pass(Trigger::Recheck, 1),
-            Line::Hint(false),
-            Line::Pass(Trigger::Hint, 2),
+            Line::View(cursor(2), false),
+            Line::Pass(Trigger::View, 2),
         ]
     );
     assert_eq!(end.reason, EndReason::Idle);
 }
 
-/// Row W7: an incomplete pass is followed at once by the next one, with no
+/// A view at the cursor already copied changed only live facts: it writes
+/// no line and runs no pass. That includes the first view again, which the
+/// recheck pass already covered. A new incarnation is a moved cursor.
+#[test]
+fn a_view_at_the_same_cursor_runs_no_pass() {
+    let moved = ViewCursor {
+        incarnation: "incarnation-2".into(),
+        position: "1".into(),
+    };
+    let replaced = || {
+        Ok(Wait::View {
+            cursor: moved.clone(),
+            during_pass: false,
+        })
+    };
+    let mut script = Script::new(
+        [PassResult::Complete; 2],
+        [
+            view(1, true),
+            view(1, false),
+            replaced(),
+            replaced(),
+            Err(GatewayError::TimedOut),
+        ],
+    );
+    let (end, lines) = run(&mut script, 5);
+    assert_eq!(
+        lines[1..],
+        [
+            Line::Pass(Trigger::Recheck, 1),
+            Line::View(moved.clone(), false),
+            Line::Pass(Trigger::View, 2),
+        ]
+    );
+    assert_eq!(end.reason, EndReason::Idle);
+}
+
+/// An incomplete pass is followed at once by the next one, with no
 /// wait between them.
 #[test]
 fn incomplete_pass_continues_without_waiting() {
@@ -193,7 +271,7 @@ fn incomplete_pass_continues_without_waiting() {
     assert_eq!(
         script.calls,
         [
-            Call::Register,
+            Call::Subscribe,
             Call::Pass,
             Call::Pass,
             Call::Pass,
@@ -211,7 +289,7 @@ fn incomplete_pass_continues_without_waiting() {
     assert_eq!(end.reason, EndReason::Idle);
 }
 
-/// Row W8: an authority refusal during a pass ends the run after its line,
+/// An authority refusal during a pass ends the run after its line,
 /// with the cause the PC5 recheck is asked for.
 #[test]
 fn authority_failure_ends_unauthorized() {
@@ -230,11 +308,11 @@ fn authority_failure_ends_unauthorized() {
     assert!(!end.clean());
 }
 
-/// Row W9: a transport, timeout or protocol failure during a pass, or a
+/// A transport, timeout or protocol failure during a pass, or a
 /// wait's protocol failure, is `unavailable`; a pass that failed with no
 /// gateway cause is `passFailed`. Neither waits or passes again.
 #[test]
-fn transport_or_cache_failure_ends_the_watch() {
+fn transport_or_cache_failure_ends_the_follow() {
     for cause in [
         GatewayError::Transport,
         GatewayError::TimedOut,
@@ -248,7 +326,7 @@ fn transport_or_cache_failure_ends_the_watch() {
                 cause: Some(cause)
             }
         );
-        assert_eq!(script.calls, [Call::Register, Call::Pass]);
+        assert_eq!(script.calls, [Call::Subscribe, Call::Pass]);
     }
     let mut script = Script::new([PassResult::Failed(None)], []);
     assert_eq!(
@@ -262,7 +340,7 @@ fn transport_or_cache_failure_ends_the_watch() {
     assert_eq!(run(&mut script, 5).0.reason, EndReason::Unavailable);
 }
 
-/// Row W9: a pass that cannot begin has no report, so it writes no pass
+/// A pass that cannot begin has no report, so it writes no pass
 /// line; the run ends on its cause.
 #[test]
 fn pass_that_cannot_begin_ends_without_a_pass_line() {
@@ -276,27 +354,40 @@ fn pass_that_cannot_begin_ends_without_a_pass_line() {
             cause: Some(GatewayError::Busy)
         }
     );
-    assert_eq!(lines, [Line::Registered("watch-1".into())]);
+    assert_eq!(lines, [Line::Subscribed("1".into())]);
 }
 
-/// Row W10: the watch's end, kept during a pass, stops the run at the next
-/// wait, after that pass's line.
+/// The subscription's end, kept during a pass, stops the run at the next
+/// wait, after that pass's line. A refused end keeps its typed refusal, so
+/// an authority refusal asks the pinned status again.
 #[test]
-fn watch_ended_stops_after_the_running_pass() {
-    let mut script = Script::new(
-        [PassResult::Complete],
-        [Ok(Wait::Ended(ChangeWatchEndReason::NotificationFailed))],
-    );
-    let (end, lines) = run(&mut script, 5);
-    assert_eq!(
-        end.reason,
-        EndReason::WatchEnded(ChangeWatchEndReason::NotificationFailed)
-    );
-    assert_eq!(lines.last(), Some(&Line::Pass(Trigger::Recheck, 1)));
-    assert!(!end.clean());
+fn subscription_end_stops_after_the_running_pass() {
+    let lagging = Ended {
+        reason: SubscriptionEnd::Lagging,
+        cause: None,
+    };
+    let revoked = GatewayError::Subscription(SubscriptionRefusal::Forbidden);
+    let refused = Ended {
+        reason: SubscriptionEnd::Refused,
+        cause: Some(revoked),
+    };
+    for ended in [lagging, refused] {
+        let mut script = Script::new([PassResult::Complete], [Ok(Wait::Ended(ended))]);
+        let (end, lines) = run(&mut script, 5);
+        assert_eq!(
+            end,
+            End {
+                reason: EndReason::SubscriptionEnded(ended.reason),
+                cause: ended.cause,
+            }
+        );
+        assert_eq!(lines.last(), Some(&Line::Pass(Trigger::Recheck, 1)));
+        assert!(!end.clean());
+    }
+    assert!(asks_status(revoked));
 }
 
-/// Row W11: a closed connection, while waiting or during a pass, ends
+/// A closed connection, while waiting or during a pass, ends
 /// `connectionClosed` whether or not the close carries a reason. Plain EOF
 /// asks for no status recheck. A terminal revoke stays `connectionClosed`
 /// and does ask, so the composition reports that recheck on the ended line.
@@ -322,7 +413,7 @@ fn connection_close_stays_connection_closed() {
     assert!(asks_status(revoked));
 }
 
-/// Row W12: a wait that reaches its deadline with nothing read ends cleanly.
+/// A wait that reaches its deadline with nothing read ends cleanly.
 #[test]
 fn idle_wait_ends_cleanly() {
     let mut script = Script::new([PassResult::Complete], [Err(GatewayError::TimedOut)]);
@@ -337,17 +428,17 @@ fn idle_wait_ends_cleanly() {
     assert!(end.clean());
 }
 
-/// Row W13: the recheck counts toward the budget, and the last pass is not
+/// The recheck counts toward the budget, and the last pass is not
 /// followed by a wait, even when it was incomplete.
 #[test]
 fn pass_budget_ends_cleanly() {
     let mut script = Script::new([PassResult::Complete], []);
     let (end, _) = run(&mut script, 1);
-    assert_eq!(script.calls, [Call::Register, Call::Pass]);
+    assert_eq!(script.calls, [Call::Subscribe, Call::Pass]);
     assert!(end.clean());
     let mut script = Script::new(
         [PassResult::Complete, PassResult::Incomplete],
-        [hint(false)],
+        [view(2, false)],
     );
     let (end, _) = run(&mut script, 2);
     assert_eq!(
@@ -360,15 +451,15 @@ fn pass_budget_ends_cleanly() {
     assert_eq!(script.calls.last(), Some(&Call::Pass));
 }
 
-/// Row W14: a refused line stops the loop there; nothing after it is called.
+/// A refused line stops the loop there; nothing after it is called.
 #[test]
-fn output_failure_stops_the_watch() {
+fn output_failure_stops_the_follow() {
     for (refuse_at, calls) in [
-        (0, vec![Call::Register]),
-        (1, vec![Call::Register, Call::Pass]),
-        (2, vec![Call::Register, Call::Pass, Call::Wait]),
+        (0, vec![Call::Subscribe]),
+        (1, vec![Call::Subscribe, Call::Pass]),
+        (2, vec![Call::Subscribe, Call::Pass, Call::Wait]),
     ] {
-        let mut script = Script::new([PassResult::Complete; 2], [hint(false)]);
+        let mut script = Script::new([PassResult::Complete; 2], [view(2, false)]);
         let mut lines = Lines {
             refuse_at: Some(refuse_at),
             ..Lines::default()
@@ -378,9 +469,9 @@ fn output_failure_stops_the_watch() {
     }
 }
 
-/// Row W17: a pass answered `source_preparing` is the same pass again, at
+/// A pass answered `source_preparing` is the same pass again, at
 /// once and uncounted toward `MAX_PASSES`; the attempt that succeeds
-/// continues the watch as any complete pass does.
+/// continues the follow loop as any complete pass does.
 #[test]
 fn preparing_pass_is_retried_until_it_succeeds() {
     let preparing = PassResult::Failed(Some(GatewayError::Record(
@@ -393,7 +484,7 @@ fn preparing_pass_is_retried_until_it_succeeds() {
     let (end, lines) = run(&mut script, 1);
     assert_eq!(
         script.calls,
-        [Call::Register, Call::Pass, Call::Pass, Call::Pass]
+        [Call::Subscribe, Call::Pass, Call::Pass, Call::Pass]
     );
     assert_eq!(
         lines[1..],
@@ -408,7 +499,7 @@ fn preparing_pass_is_retried_until_it_succeeds() {
     assert!(end.clean());
 }
 
-/// Row W17: a source still preparing after `PREPARING_ATTEMPTS` attempts ends
+/// A source still preparing after `PREPARING_ATTEMPTS` attempts ends
 /// the run explicitly with that cause; it is never reported as success.
 #[test]
 fn preparing_beyond_the_attempt_bound_ends_unavailable() {
@@ -464,9 +555,9 @@ fn discovery(answers: &[Option<GatewayError>]) -> (Option<GatewayError>, u64) {
     (reported.outcome.failure, made)
 }
 
-/// Row W17 before registration: a discovery answered `source_preparing` is
+/// Before subscribing, a discovery answered `source_preparing` is
 /// asked again at once, and the attempt that succeeds is the one reported, so
-/// the watch goes on to register instead of refusing.
+/// the follow loop goes on to subscribe instead of refusing.
 #[test]
 fn preparing_discovery_is_retried_until_it_succeeds() {
     let preparing = Some(GatewayError::Record(RecordReadErrorCode::SourcePreparing));
@@ -474,7 +565,7 @@ fn preparing_discovery_is_retried_until_it_succeeds() {
 }
 
 /// A discovery still preparing after `PREPARING_ATTEMPTS` attempts is reported
-/// with that cause (row W16's refusal); any other failure is reported at once.
+/// with that cause; any other failure is reported at once.
 #[test]
 fn discovery_retries_only_preparing_and_only_up_to_the_bound() {
     let (captured, _guard) = limit_log();

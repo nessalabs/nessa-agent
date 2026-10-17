@@ -693,8 +693,8 @@ owner, not the caller, writes a `failed` outcome with reason `panicked` once
 the `requested` record was written.
 
 Gateway shutdown closes admission as it begins
-(`ProductRouteState::close_mcp_server_admission`, beside watch admission,
-before the conversations drain): a later request answers
+(`ProductRouteState::close_mcp_server_admission`, right after the product
+sockets close and before the conversations drain): a later request answers
 `mcp_servers_stopping`, unaudited, having started nothing. The same close
 stops the inspections under way at once — they change nothing, so they are
 not waited out: one not yet started is recorded `stopping` with

@@ -24,14 +24,14 @@ function fixture() {
 it("a throwing event subscriber does not suppress another subscriber's update", () => {
   const { session } = fixture()
   const received = vi.fn()
-  session.onEvent("conversation.changed", () => {
+  session.onEvent("conversation.listed", () => {
     throw new Error("consumer failed")
   })
-  session.onEvent("conversation.changed", received)
+  session.onEvent("conversation.listed", received)
   expect(() =>
     session.dispatchFrame({
       type: "event",
-      event: "conversation.changed",
+      event: "conversation.listed",
       payload: { conversationId: "chat" },
       seq: 1,
       stateVersion: 0,
@@ -44,12 +44,12 @@ it("a throwing event subscriber does not suppress another subscriber's update", 
 it("event subscriptions added during delivery start with the next event", () => {
   const { session } = fixture()
   const late = vi.fn()
-  session.onEvent("conversation.changed", () => {
-    session.onEvent("conversation.changed", late)
+  session.onEvent("conversation.listed", () => {
+    session.onEvent("conversation.listed", late)
   })
   const frame = {
     type: "event" as const,
-    event: "conversation.changed",
+    event: "conversation.listed",
     payload: {},
     seq: 1,
     stateVersion: 0,
@@ -64,11 +64,11 @@ it("event subscriptions added during delivery start with the next event", () => 
 it("an event subscriber removed before its turn does not receive the event", () => {
   const { session } = fixture()
   const received = vi.fn()
-  session.onEvent("conversation.changed", () => off())
-  const off = session.onEvent("conversation.changed", received)
+  session.onEvent("conversation.listed", () => off())
+  const off = session.onEvent("conversation.listed", received)
   session.dispatchFrame({
     type: "event",
-    event: "conversation.changed",
+    event: "conversation.listed",
     payload: {},
     seq: 1,
     stateVersion: 0,
@@ -82,18 +82,18 @@ it("a removed and re-added event callback starts with the next event in registra
   const received: string[] = []
   const later = () => received.push("later")
   let replace = true
-  session.onEvent("conversation.changed", () => {
+  session.onEvent("conversation.listed", () => {
     received.push("first")
     if (!replace) return
     replace = false
     off()
-    session.onEvent("conversation.changed", later)
+    session.onEvent("conversation.listed", later)
   })
-  const off = session.onEvent("conversation.changed", later)
-  session.onEvent("conversation.changed", () => received.push("last"))
+  const off = session.onEvent("conversation.listed", later)
+  session.onEvent("conversation.listed", () => received.push("last"))
   const frame = {
     type: "event" as const,
-    event: "conversation.changed",
+    event: "conversation.listed",
     payload: {},
     seq: 1,
     stateVersion: 0,
@@ -109,13 +109,13 @@ it("a removed and re-added event callback starts with the next event in registra
 it("an old unsubscribe handle cannot remove a replacement registration of the same function", () => {
   const { session } = fixture()
   const received = vi.fn()
-  const oldOff = session.onEvent("conversation.changed", received)
+  const oldOff = session.onEvent("conversation.listed", received)
   oldOff()
-  const newOff = session.onEvent("conversation.changed", received)
+  const newOff = session.onEvent("conversation.listed", received)
   oldOff()
   const frame = {
     type: "event" as const,
-    event: "conversation.changed",
+    event: "conversation.listed",
     payload: {},
     seq: 1,
     stateVersion: 0,
@@ -131,11 +131,11 @@ it("an old unsubscribe handle cannot remove a replacement registration of the sa
 it("duplicate active subscriptions of one function keep one delivery and share removal", () => {
   const { session } = fixture()
   const received = vi.fn()
-  const firstOff = session.onEvent("conversation.changed", received)
-  const secondOff = session.onEvent("conversation.changed", received)
+  const firstOff = session.onEvent("conversation.listed", received)
+  const secondOff = session.onEvent("conversation.listed", received)
   const frame = {
     type: "event" as const,
-    event: "conversation.changed",
+    event: "conversation.listed",
     payload: {},
     seq: 1,
     stateVersion: 0,
@@ -143,7 +143,7 @@ it("duplicate active subscriptions of one function keep one delivery and share r
   session.dispatchFrame(frame)
   expect(received).toHaveBeenCalledOnce()
   secondOff()
-  const replacementOff = session.onEvent("conversation.changed", received)
+  const replacementOff = session.onEvent("conversation.listed", received)
   firstOff()
   secondOff()
   session.dispatchFrame(frame)
@@ -159,21 +159,21 @@ it("a replacement registration receives a nested event but not its interrupted o
   const received = vi.fn()
   const outer = {
     type: "event" as const,
-    event: "conversation.changed",
+    event: "conversation.listed",
     payload: { name: "outer" },
     seq: 1,
     stateVersion: 0,
   }
   const nested = { ...outer, payload: { name: "nested" }, seq: 2 }
   let replace = true
-  session.onEvent("conversation.changed", () => {
+  session.onEvent("conversation.listed", () => {
     if (!replace) return
     replace = false
     off()
-    session.onEvent("conversation.changed", received)
+    session.onEvent("conversation.listed", received)
     session.dispatchFrame(nested)
   })
-  const off = session.onEvent("conversation.changed", received)
+  const off = session.onEvent("conversation.listed", received)
   session.dispatchFrame(outer)
   expect(received.mock.calls).toEqual([[{ name: "nested" }]])
   session.close()
@@ -184,20 +184,20 @@ it.each(["client", "transport"] as const)(
   (closure) => {
     const { session } = fixture()
     const received = vi.fn()
-    session.onEvent("conversation.changed", () => {
+    session.onEvent("conversation.listed", () => {
       if (closure === "client") session.close()
       else session.dispatchClose(1006, "connection lost")
     })
-    session.onEvent("conversation.changed", received)
+    session.onEvent("conversation.listed", received)
     const frame = {
       type: "event" as const,
-      event: "conversation.changed",
+      event: "conversation.listed",
       payload: {},
       seq: 1,
       stateVersion: 0,
     }
     session.dispatchFrame(frame)
-    session.onEvent("conversation.changed", received)
+    session.onEvent("conversation.listed", received)
     session.dispatchFrame(frame)
     expect(received).not.toHaveBeenCalled()
     expect(session.termination?.code).toBe(closure === "client" ? 1000 : 1006)

@@ -1,7 +1,7 @@
 //! Private core facades share the admitted session and retain one typed outcome.
 use super::session::{RpcKind, Session};
 use crate::read_only_sync::application::{
-    watch::{Registered, Wait},
+    follow::{Subscribed, Wait},
     GatewayAttempt, GatewayError, GatewayOutcome,
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
@@ -18,7 +18,7 @@ use nessa_protocol::product::generated::{
     ConversationCatalogueManifestResult, ConversationCatalogueResolveParams,
     ConversationCatalogueResolveResult, ConversationRecordsHeadParams,
     ConversationRecordsHeadResult, ConversationRecordsPageParams, ConversationRecordsPageResult,
-    ConversationWatchRecordsParams,
+    ConversationSubscribeParams,
 };
 use nessa_protocol::product::{catalogue_read, passive_read::ReadWireError, record_read};
 use nessa_protocol::product_contract::generated::{CatalogueReadErrorCode, RecordReadErrorCode};
@@ -101,34 +101,37 @@ impl GatewayConnection {
             outcome: self.finish()?,
         })
     }
-    /// Register the connection's one record watch as its own operation.
-    pub(crate) fn watch_records(
+    /// Subscribe to `conversation` and take its first frame, as one
+    /// operation. The subscription is not bound to a receiver: the gateway
+    /// admits it on this session's credential and the conversation's share.
+    pub(crate) fn subscribe(
         &self,
-        receiver: &Id,
-        epoch: u64,
         conversation: &ConversationId,
-    ) -> Result<Registered, GatewayError> {
-        let params = ConversationWatchRecordsParams {
+    ) -> Result<Subscribed, GatewayError> {
+        let params = ConversationSubscribeParams {
             conversation_id: conversation.to_string(),
-            receiver_id: receiver.as_str().to_owned(),
-            access_epoch: epoch.to_string(),
+            after: None,
         };
         let attempt = self.run(|| {
-            self.0
-                .try_borrow_mut()
-                .map_err(|_| GatewayError::Busy)?
-                .watch_records(&params)
+            let mut session = self.0.try_borrow_mut().map_err(|_| GatewayError::Busy)?;
+            let subscription = session.subscribe(&params)?;
+            let first = session.wait_view()?;
+            Ok((subscription, first))
         })?;
         let operation = attempt.outcome.operation;
-        settled(attempt).map(|watch| Registered { watch, operation })
+        settled(attempt).map(|(subscription, first)| Subscribed {
+            subscription,
+            operation,
+            first,
+        })
     }
-    /// Wait for the watch's next hint or end as its own operation.
-    pub(crate) fn wait_hint(&self) -> Result<Wait, GatewayError> {
+    /// Wait for the subscription's next view or end as its own operation.
+    pub(crate) fn wait_view(&self) -> Result<Wait, GatewayError> {
         settled(self.run(|| {
             self.0
                 .try_borrow_mut()
                 .map_err(|_| GatewayError::Busy)?
-                .wait_hint()
+                .wait_view()
         })?)
     }
     pub(crate) fn records(

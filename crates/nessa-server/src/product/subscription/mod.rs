@@ -14,6 +14,8 @@ mod events;
 mod target;
 
 pub(super) use connection::ConnectionSubscriptions;
+#[cfg(test)]
+pub(in crate::product) use delivery::{Deadline, Outgoing};
 pub(super) use delivery::{SubscriptionDeliveries, SubscriptionFrame};
 #[cfg(test)]
 pub(in crate::product) use events::read_event;

@@ -21,12 +21,13 @@
 //! `mcp_servers` translates `mcpServers.list`, `.save`, `.remove` and
 //! `.inspect` into `mcp_servers::application::McpServerSettings` (#391).
 //!
-//! `change_watch` owns original watch permits and first task faults; normal host
-//! cleanup in composition consumes its close/drain through ProductRouteState.
+//! `subscription` serves `conversation.subscribe*` and `agents.subscribe`: the
+//! one live read path a client follows a conversation, its list or the agent
+//! catalog by. Its frames share the socket's one writer and its one event
+//! numbering (`event_sequence`) with permission review notices.
 
 mod attachment;
 pub(crate) mod catalogue_read;
-mod change_watch;
 mod event_sequence;
 mod operational_limits;
 mod owner_phone;
@@ -58,10 +59,8 @@ pub use native::{DeviceCredentials, NativeSessions};
 
 mod agent_install;
 
-pub use change_watch::WatchTaskFault;
-
 #[cfg(test)]
 pub(crate) use conversation::dispatch as dispatch_conversation;
 
 #[cfg(test)]
-pub(crate) use socket::HostWatchFixture;
+pub(crate) use socket::HostProductFixture;

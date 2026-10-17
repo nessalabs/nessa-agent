@@ -4,7 +4,6 @@ use crate::conversation::application::{
     RecordHead, RecordReadValue,
 };
 use crate::conversation_test_support::EveryConversationGranted;
-use crate::product::change_watch::{watch_principal, Notice, WatchOwners};
 use nessa_sync::replication::domain::{Id, Scope};
 use serde_json::Value;
 use std::{
@@ -148,7 +147,7 @@ async fn continuously_ready_lane_releases_all_record_leases(
             ordinary,
             records,
             Duration::from_secs(60),
-            Arc::new(WatchDeliveries::new()),
+            Arc::default(),
             Arc::new(SubscriptionDeliveries::new(Default::default())),
         )));
         ready.notified().await;
@@ -242,7 +241,7 @@ async fn arriving_record_interrupts_stalled_priority(close: bool, refusal: Optio
         ordinary,
         records,
         Duration::from_secs(60),
-        Arc::new(WatchDeliveries::new()),
+        Arc::default(),
         Arc::new(SubscriptionDeliveries::new(Default::default())),
     ));
     peer.writing.recv().await.unwrap();
@@ -332,10 +331,8 @@ async fn nonexpired_pending_record_preserves_physical_priority_and_releases_leas
         }))
         .await
         .unwrap();
-    let deliveries = Arc::new(WatchDeliveries::new());
     let subscriptions = Arc::new(SubscriptionDeliveries::new(Default::default()));
-    // Close the same delivery interests as the production connection owner.
-    deliveries.close();
+    // Close the same delivery interest as the production connection owner.
     subscriptions.close();
     drop((control_send, refusal_send, ordinary_send, record_send));
     let writer = tokio::spawn(write_authenticated(
@@ -345,7 +342,7 @@ async fn nonexpired_pending_record_preserves_physical_priority_and_releases_leas
         ordinary,
         records,
         Duration::from_secs(5),
-        deliveries.clone(),
+        Arc::default(),
         subscriptions.clone(),
     ));
     for expected in ["control", "refusal", "ordinary", "record"] {
@@ -1366,7 +1363,7 @@ async fn slotless_record_refusal_expires_under_continuously_ready_controls() {
         ordinary,
         records,
         Duration::from_secs(60),
-        Arc::new(WatchDeliveries::new()),
+        Arc::default(),
         Arc::new(SubscriptionDeliveries::new(Default::default())),
     ));
     ready.notified().await;
@@ -1388,17 +1385,37 @@ async fn slotless_record_refusal_expires_under_continuously_ready_controls() {
     assert_eq!(records_written.load(Ordering::SeqCst), 0);
 }
 
+/// A subscription's last frame, offered with its deadline `after` from now
+/// on a socket whose deliveries continue a fresh event numbering.
+fn offered_last_frame(
+    after: Duration,
+) -> (
+    Arc<SubscriptionDeliveries>,
+    Instant,
+    tokio::sync::oneshot::Receiver<()>,
+) {
+    let deliveries = Arc::new(SubscriptionDeliveries::new(Default::default()));
+    assert!(deliveries.reserve("subscription"));
+    let deadline = Instant::now() + after;
+    let written = deliveries.offer(
+        "subscription",
+        crate::product::subscription::Outgoing::Event {
+            name: product_event::CONVERSATION_SUBSCRIPTION_ENDED,
+            payload: json!({}),
+        },
+        crate::product::subscription::Deadline::Last(deadline),
+        None,
+    );
+    (deliveries, deadline, written)
+}
+
+/// A subscription frame's deadline passes while the writer is inside
+/// another frame's physical send: the writer abandons the socket, and the
+/// frame is never written.
 #[tokio::test(start_paused = true)]
-async fn original_pending_watch_deadline_expires_during_another_physical_frame() {
+async fn a_pending_subscription_deadline_expires_during_another_physical_frame() {
     let (captured, _guard) = limit_log();
-    let owners = Arc::new(WatchOwners::new(1, 1));
-    let deliveries = Arc::new(WatchDeliveries::new());
-    let original = Arc::new(owners.try_acquire(&watch_principal("a")).unwrap());
-    assert!(deliveries.reserve("watch".into(), original.clone()));
-    drop(original);
-    deliveries.activate("watch");
-    assert!(deliveries.notice("watch", Notice::Changed)); // Authority remains pending.
-    let deadline = deliveries.deadline().unwrap();
+    let (deliveries, deadline, _written) = offered_last_frame(RECORD_SEND_TIMEOUT);
     tokio::time::advance(Duration::from_secs(20)).await;
     let (_release, gate) = tokio::sync::oneshot::channel();
     let (socket, mut peer) = test_socket(Some(gate));
@@ -1424,25 +1441,23 @@ async fn original_pending_watch_deadline_expires_during_another_physical_frame()
         ordinary,
         records,
         Duration::from_secs(60),
+        Arc::default(),
         deliveries.clone(),
-        Arc::new(SubscriptionDeliveries::new(Default::default())),
     ));
     peer.writing.recv().await.unwrap(); // Ordinary physical flush has a later own budget.
     assert!(peer.output.try_recv().is_err());
     assert_eq!(deliveries.deadline(), Some(deadline));
-    assert_eq!(owners.available_permits(), 0);
     tokio::time::advance(Duration::from_secs(10)).await;
     timeout(Duration::from_secs(1), writer)
         .await
         .unwrap()
         .unwrap();
     assert!(peer.output.try_recv().is_err()); // Abandoned frame never physically flushed.
-    assert!(peer.writing.try_recv().is_err()); // No hint or later error send.
+    assert!(peer.writing.try_recv().is_err()); // No subscription frame or later send.
     assert_eq!(slots.available_permits(), 1);
-    assert_eq!(owners.available_permits(), 0); // Pending authority/source interest is separately owned.
     let logged = limit_text(&captured);
     assert!(
-        logged.contains("socket.watch_delivery_deadline"),
+        logged.contains("socket.subscription_delivery_deadline"),
         "{logged}"
     );
     assert!(
@@ -1450,30 +1465,25 @@ async fn original_pending_watch_deadline_expires_during_another_physical_frame()
         "{logged}"
     );
     deliveries.close();
-    assert_eq!(owners.available_permits(), 1);
 }
 
-/// Row B4: neither continuously ready controls nor continuously ready
-/// ordinary responses can starve a pending watch deadline.
+/// Neither continuously ready controls nor continuously ready ordinary
+/// responses can starve a subscription frame's deadline: the writer takes a
+/// subscription frame last, so only the deadline ends it.
 #[tokio::test(start_paused = true)]
-async fn pending_watch_deadline_cannot_be_starved_by_continuously_ready_controls() {
-    pending_watch_deadline_survives_a_continuously_ready_lane(false).await;
+async fn pending_subscription_deadline_cannot_be_starved_by_continuously_ready_controls() {
+    pending_subscription_deadline_survives_a_continuously_ready_lane(false).await;
 }
 
 #[tokio::test(start_paused = true)]
-async fn pending_watch_deadline_cannot_be_starved_by_continuously_ready_ordinary_responses() {
-    pending_watch_deadline_survives_a_continuously_ready_lane(true).await;
+async fn pending_subscription_deadline_cannot_be_starved_by_continuously_ready_ordinary_responses()
+{
+    pending_subscription_deadline_survives_a_continuously_ready_lane(true).await;
 }
 
-async fn pending_watch_deadline_survives_a_continuously_ready_lane(ordinary_lane: bool) {
-    let owners = Arc::new(WatchOwners::new(1, 1));
-    let deliveries = Arc::new(WatchDeliveries::new());
-    assert!(deliveries.reserve(
-        "watch".into(),
-        Arc::new(owners.try_acquire(&watch_principal("a")).unwrap())
-    ));
-    deliveries.activate("watch");
-    assert!(deliveries.notice("watch", Notice::Changed)); // No fabricated allowed authority snapshot.
+async fn pending_subscription_deadline_survives_a_continuously_ready_lane(ordinary_lane: bool) {
+    let (captured, _guard) = limit_log();
+    let (deliveries, _, _written) = offered_last_frame(RECORD_SEND_TIMEOUT);
     let (control_send, controls) = mpsc::channel(4);
     let (_refusal_send, refusals) = mpsc::channel(1);
     let (ordinary_send, ordinary) = mpsc::channel(16);
@@ -1504,8 +1514,8 @@ async fn pending_watch_deadline_survives_a_continuously_ready_lane(ordinary_lane
         ordinary,
         records,
         Duration::from_secs(60),
+        Arc::default(),
         deliveries.clone(),
-        Arc::new(SubscriptionDeliveries::new(Default::default())),
     ));
     ready.notified().await;
     assert!(writes.load(Ordering::SeqCst) >= 64); // Traffic genuinely remains ready.
@@ -1520,82 +1530,13 @@ async fn pending_watch_deadline_survives_a_continuously_ready_lane(ordinary_lane
     let _ = writer.await;
     assert!(
         completed,
-        "a continuously ready lane must not starve the original watch deadline"
+        "a continuously ready lane must not starve the subscription frame's deadline"
     );
     assert_eq!(records_written.load(Ordering::SeqCst), 0);
-    assert_eq!(owners.available_permits(), 0);
-    deliveries.close();
-    assert_eq!(owners.available_permits(), 1);
-}
-
-/// Row U3: a notice is ready while the writer is busy with an ordinary frame,
-/// and an unwatch retires the watch before the writer chooses the notice.
-/// Nothing for that watch may follow the unwatch acknowledgement.
-#[tokio::test]
-async fn unwatch_before_writer_selection_sends_no_hint_after_the_acknowledgement() {
-    let owners = Arc::new(WatchOwners::new(1, 1));
-    let deliveries = Arc::new(WatchDeliveries::new());
-    assert!(deliveries.reserve(
-        "watch".into(),
-        Arc::new(owners.try_acquire(&watch_principal("a")).unwrap())
-    ));
-    deliveries.activate("watch");
-    assert!(deliveries.notice("watch", Notice::Changed));
-    deliveries.authorize("watch"); // The hint is ready to send.
-    let (release, gate) = tokio::sync::oneshot::channel();
-    let (socket, mut peer) = test_socket(Some(gate));
-    let (sink, _incoming) = socket.split();
-    let (control_send, controls) = mpsc::channel(4);
-    let (refusal_send, refusals) = mpsc::channel(1);
-    let (ordinary_send, ordinary) = mpsc::channel(16);
-    let (record_send, records) = mpsc::channel(1);
-    let slots = Arc::new(Semaphore::new(2));
-    let response = |id: &str| QueuedResponse {
-        message: WireResponse::ordinary(success(id, &json!({}))),
-        _slot: slots.clone().try_acquire_owned().unwrap().into(),
-        _record_work: None,
-        _mount: None,
-    };
-    ordinary_send.send(response("ordinary")).await.unwrap();
-    let subscriptions = Arc::new(SubscriptionDeliveries::new(Default::default()));
-    let writer = tokio::spawn(write_authenticated(
-        sink,
-        controls,
-        refusals,
-        ordinary,
-        records,
-        Duration::from_secs(60),
-        deliveries.clone(),
-        subscriptions.clone(),
-    ));
-    peer.writing.recv().await.unwrap(); // The ordinary frame is mid-flush.
-                                        // What `ConnectionWatches::begin` does for an unwatch: retire, then queue
-                                        // the acknowledgement on the ordinary lane.
-    deliveries.retire("watch");
-    ordinary_send.send(response("unwatch")).await.unwrap();
-    release.send(()).unwrap();
-    for expected in ["ordinary", "unwatch"] {
-        let Message::Text(text) = peer.message().await else {
-            panic!("expected {expected}")
-        };
-        let value: Value = serde_json::from_str(&text).unwrap();
-        assert_eq!(value["id"], expected, "{value}");
-    }
-    // With every lane closed, a locally held hint would be all that is left.
-    drop((control_send, refusal_send, ordinary_send, record_send));
-    for _ in 0..100 {
-        tokio::task::yield_now().await;
-    }
+    let logged = limit_text(&captured);
     assert!(
-        peer.output.try_recv().is_err(),
-        "no hint may follow the unwatch acknowledgement"
+        logged.contains("socket.subscription_delivery_deadline"),
+        "{logged}"
     );
-    assert!(!writer.is_finished());
     deliveries.close();
-    subscriptions.close();
-    timeout(Duration::from_secs(1), writer)
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(owners.available_permits(), 1);
 }

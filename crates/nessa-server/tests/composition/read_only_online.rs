@@ -13,10 +13,9 @@ use fixtures::*;
 use nessa_client_core::composition;
 use nessa_local_database::rusqlite::Connection;
 use nessa_protocol::product::generated::{
-    product_event, product_method, ConversationCloseParams, ConversationRecordsHeadParams,
-    ConversationRecordsHeadResult, ConversationRecordsPageParams, ConversationUnwatchParams,
-    ConversationWatchRecordsParams, CredentialListParams, RecordPageRequest,
-    MAX_CHANGE_WATCH_ID_BYTES, MAX_PHYSICAL_RECORD_PAYLOAD_BYTES, MAX_RECORD_PAGE_PAYLOAD_BYTES,
+    product_method, ConversationCloseParams, ConversationRecordsHeadParams,
+    ConversationRecordsHeadResult, ConversationRecordsPageParams, CredentialListParams,
+    RecordPageRequest, MAX_PHYSICAL_RECORD_PAYLOAD_BYTES, MAX_RECORD_PAGE_PAYLOAD_BYTES,
     MAX_RECORD_PAGE_RECORDS,
 };
 use serde_json::{json, Value};
@@ -388,7 +387,7 @@ fn online_unusable_enrollment_does_not_open_cache() {
         let path = root.join(format!("wrong-{index}.json"));
         private_write(&path, &serde_json::to_vec(&profile).unwrap());
         let path = path.to_string_lossy().into_owned();
-        // Row W1: `watch` is refused at the same point, the same way.
+        // Row W1: `follow` is refused at the same point, the same way.
         for args in [
             vec![
                 "check-records".into(),
@@ -396,7 +395,7 @@ fn online_unusable_enrollment_does_not_open_cache() {
                 setup.conversation.clone(),
             ],
             vec![
-                "watch".into(),
+                "follow".into(),
                 path.clone(),
                 setup.conversation.clone(),
                 "1".into(),
@@ -607,185 +606,26 @@ fn default_budget_consumes_cumulative_valid_rpcs() {
     assert_eq!(value["durable"]["progress"]["downloaded"], "1");
 }
 
-/// The finish line of #298 across real processes: a seeded receiver replays,
-/// registers before its final recheck, catches a commit made between the
-/// acknowledgement and that recheck, follows live hints, recovers a commit
-/// made while it was disconnected (so its hint was never sent) from its durable
-/// checkpoint, and ends with the same folded view a fresh
-/// full replay produces. Revocation stops hints and the next command is refused;
-/// a sleeping gateway leaves the saved view readable and the check failed.
-/// Rows L1–L7 of the delivery table in docs/design/committed-change-watches.md.
-#[test]
-fn online_replay_then_live_hints_converge_with_a_fresh_replay() {
-    let directory = tempfile::tempdir().unwrap();
-    let root = directory.path().join("gateway");
-    let mut gateway = Gateway::start_live(&root);
-    let setup: Setup =
-        serde_json::from_slice(&std::fs::read(root.join("setup.json")).unwrap()).unwrap();
-    let cache = setup_cache(directory.path());
-    let facts = |report: &Value| report["durable"]["progress"]["facts"].clone();
-    let sync = |cache: &Path| {
-        let (ok, report) = command(record_command(&root, cache, &setup, "100"), false);
-        assert!(ok, "{report:?}");
-        let report = report.unwrap();
-        assert_eq!(report["work"]["complete"], true, "{report}");
-        assert_eq!(report["durable"]["status"], "complete", "{report}");
-        report
-    };
-    let watch_params = ConversationWatchRecordsParams {
-        conversation_id: setup.conversation.clone(),
-        receiver_id: setup.receiver.clone(),
-        access_epoch: setup.epoch.to_string(),
-    };
-    let hint = |receiver: &mut WireClient, watch: &str| match receiver.frame() {
-        Frame::Text { value, bytes } => {
-            assert_eq!(
-                value["event"],
-                product_event::CONVERSATION_CHANGED,
-                "{value}"
-            );
-            // The hint names the watch and nothing else: no head, cursor or content.
-            assert_eq!(value["payload"], json!({ "watchId": watch }));
-            bytes
-        }
-        Frame::Closed => panic!("closed instead of a hint"),
-    };
-
-    // L1: seeded replay to a durable checkpoint.
-    assert_eq!(facts(&sync(&cache)), "1");
-
-    // L2: register; a commit lands after the acknowledgement and before the
-    // final recheck (the install-to-acknowledgement window is the in-process
-    // row O2). The recheck
-    // from the checkpoint catches it, and the hint for it still arrives,
-    // because registration came first.
-    let mut receiver = WireClient::connect(&root);
-    let watched = receiver.call(product_method::CONVERSATION_WATCH_RECORDS, &watch_params);
-    assert_eq!(watched["ok"], true, "{watched}");
-    let first_watch = watched["payload"]["watchId"].as_str().unwrap().to_owned();
-    gateway.act("commit");
-    assert_eq!(facts(&sync(&cache)), "2");
-    let bytes = hint(&mut receiver, &first_watch);
-    // Real encoded size of one hint frame; bounded by the published watch-id
-    // bound plus the fixed event envelope.
-    assert!(
-        bytes <= MAX_CHANGE_WATCH_ID_BYTES + 128,
-        "{bytes} encoded hint bytes"
-    );
-
-    // L3: a later commit is hinted, and the hint is answered by a pass.
-    gateway.act("commit");
-    hint(&mut receiver, &first_watch);
-    assert_eq!(facts(&sync(&cache)), "3");
-
-    // L4: the receiver disconnects and the gateway commits meanwhile, so no
-    // hint for that commit is ever sent. A new connection gets a new watch identity, the old one is
-    // foreign to it, and the recheck from the durable checkpoint recovers.
-    drop(receiver);
-    gateway.act("commit");
-    let mut receiver = WireClient::connect(&root);
-    let watched = receiver.call(product_method::CONVERSATION_WATCH_RECORDS, &watch_params);
-    assert_eq!(watched["ok"], true, "{watched}");
-    let second_watch = watched["payload"]["watchId"].as_str().unwrap().to_owned();
-    assert_ne!(second_watch, first_watch);
-    // Same counter as the new watch, other connection's namespace: foreign.
-    let stale = receiver.call(
-        product_method::CONVERSATION_UNWATCH,
-        &ConversationUnwatchParams {
-            watch_id: first_watch.clone(),
-        },
-    );
-    assert_eq!(stale["ok"], false, "{stale}");
-    assert_eq!(stale["error"]["code"], "invalid_watch", "{stale}");
-    assert_eq!(facts(&sync(&cache)), "4");
-    gateway.act("commit");
-    hint(&mut receiver, &second_watch);
-    assert_eq!(facts(&sync(&cache)), "5");
-
-    // L5: replay plus live passes give the same folded view as one fresh replay.
-    let show = |cache: &Path| {
-        let (ok, view) = command(
-            vec![
-                "show".into(),
-                cache.to_string_lossy().into_owned(),
-                setup.receiver.clone(),
-                setup.gateway.clone(),
-                setup.conversation.clone(),
-            ],
-            false,
-        );
-        assert!(ok, "{view:?}");
-        let mut view = view.unwrap();
-        // Each `show` names its own rendering with a fresh revision; the
-        // folded content and progress are what must agree.
-        let revision = view["view"]["revision"].take();
-        assert!(revision.is_string(), "{view}");
-        view
-    };
-    let fresh_directory = tempfile::tempdir().unwrap();
-    let fresh = setup_cache(fresh_directory.path());
-    assert_eq!(facts(&sync(&fresh)), "5");
-    let live_view = show(&cache);
-    assert!(live_view["view"].is_object(), "{live_view}");
-    assert_eq!(live_view, show(&fresh));
-
-    // L6: access revoked mid-watch. The next commit's hint is refused at
-    // delivery: the connection names authorization_lost and then closes, and
-    // the next command is refused before it reads.
-    gateway.act("revoke");
-    gateway.act("commit");
-    match receiver.frame() {
-        Frame::Text { value, .. } => {
-            assert_eq!(value["event"], "session.terminated", "{value}");
-            assert_eq!(value["payload"]["code"], "authorization_lost");
-            assert_eq!(value["payload"]["retryable"], false);
-        }
-        Frame::Closed => panic!("revocation closed without session.terminated"),
-    }
-    assert!(matches!(receiver.frame(), Frame::Closed));
-    let (ok, denied) = command(record_command(&root, &cache, &setup, "100"), false);
-    assert!(!ok);
-    // The receiver no longer holds the pairing, so the native profile's
-    // pinned status check before any read is refused (row PC5): not an
-    // authenticated Terminal, so nothing is purged.
-    let denied = denied.unwrap();
-    assert_eq!(denied["connectionCheck"], "attempted", "{denied}");
-    assert_eq!(denied["enrollmentFailure"]["code"], "refused", "{denied}");
-    assert!(denied["purge"].is_null(), "{denied}");
-
-    // L7: the gateway sleeps. The check fails explicitly, and the saved view
-    // is still read offline, unchanged.
-    drop(gateway);
-    let (ok, asleep) = command(record_command(&root, &cache, &setup, "100"), false);
-    assert!(!ok);
-    let asleep = asleep.unwrap();
-    // The native profile has no endpoint file to find missing: the connection
-    // is attempted and its pinned status check fails on I/O.
-    assert_eq!(asleep["connectionCheck"], "attempted", "{asleep}");
-    assert_eq!(asleep["enrollmentFailure"]["code"], "io", "{asleep}");
-    assert_eq!(show(&cache), live_view);
-}
-
-/// The next line of a watch, which must be of `kind`, and when it arrived.
-fn watch_line(child: &mut WatchChild, kind: &str) -> (Value, Instant) {
+/// The next line of a follow, which must be of `kind`, and when it arrived.
+fn follow_line(child: &mut FollowChild, kind: &str) -> (Value, Instant) {
     let (line, at) = child.next_line();
     assert_eq!(line["kind"], kind, "{line}");
     (line, at)
 }
 /// A successful complete pass with this trigger, holding `facts` facts, and
 /// when it arrived.
-fn watch_pass(child: &mut WatchChild, trigger: &str, facts: u64) -> Instant {
-    watch_pass_report(child, trigger, facts).1
+fn follow_pass(child: &mut FollowChild, trigger: &str, facts: u64) -> Instant {
+    follow_pass_report(child, trigger, facts).1
 }
-/// As `watch_pass`, with the pass's report. Attempts the gateway answered
+/// As `follow_pass`, with the pass's report. Attempts the gateway answered
 /// `source_preparing` before it (row W17: a slow cold read) are skipped; the
 /// pass that follows them carries `trigger: preparing`.
-fn watch_pass_report(child: &mut WatchChild, trigger: &str, facts: u64) -> (Value, Instant) {
-    let (mut line, mut at) = watch_line(child, "pass");
+fn follow_pass_report(child: &mut FollowChild, trigger: &str, facts: u64) -> (Value, Instant) {
+    let (mut line, mut at) = follow_line(child, "pass");
     let mut trigger = trigger;
     while line["report"]["transportFailure"]["productCode"] == "source_preparing" {
         assert_eq!(line["report"]["successful"], false, "{line}");
-        (line, at) = watch_line(child, "pass");
+        (line, at) = follow_line(child, "pass");
         trigger = "preparing";
     }
     assert_eq!(line["trigger"], trigger, "{line}");
@@ -798,20 +638,22 @@ fn watch_pass_report(child: &mut WatchChild, trigger: &str, facts: u64) -> (Valu
     );
     (line["report"].clone(), at)
 }
-fn watch_hint(child: &mut WatchChild, watch: &Value, during_pass: bool) {
-    let (line, _) = watch_line(child, "hint");
-    assert_eq!(line["watchId"], *watch, "{line}");
+/// A view whose cursor moved, on this subscription.
+fn follow_view(child: &mut FollowChild, subscription: &Value, during_pass: bool) {
+    let (line, _) = follow_line(child, "view");
+    assert_eq!(line["subscriptionId"], *subscription, "{line}");
+    assert!(line["cursor"]["position"].is_string(), "{line}");
     assert_eq!(line["duringPass"], during_pass, "{line}");
 }
-/// Registration, and the watch identity it names.
-fn watch_registered(child: &mut WatchChild) -> Value {
-    let (line, _) = watch_line(child, "registered");
+/// The admitted subscription, and the identity it names.
+fn follow_subscribed(child: &mut FollowChild) -> Value {
+    let (line, _) = follow_line(child, "subscribed");
     assert_eq!(line["enrollment"]["phase"], "active", "{line}");
-    assert!(line["watchId"].is_string(), "{line}");
-    line["watchId"].clone()
+    assert!(line["subscriptionId"].is_string(), "{line}");
+    line["subscriptionId"].clone()
 }
-fn watch_end(mut child: WatchChild, reason: &str) -> bool {
-    let (line, _) = watch_line(&mut child, "ended");
+fn follow_end(mut child: FollowChild, reason: &str) -> bool {
+    let (line, _) = follow_line(&mut child, "ended");
     assert_eq!(line["reason"], reason, "{line}");
     assert!(line["recheck"].is_null(), "{line}");
     child.succeeded()
@@ -822,11 +664,11 @@ fn percentile(sorted: &[f64], percent: usize) -> f64 {
     sorted[rank - 1]
 }
 
-/// Row W16: `watch`'s discovery and cache-open refusals come before
-/// `registered` and are the objects `sync-records` writes for them: one line,
+/// Row W16: `follow`'s discovery and cache-open refusals come before
+/// `subscribed` and are the objects `sync-records` writes for them: one line,
 /// no `kind`, no `ended`; exit 1.
 #[test]
-fn online_watch_precondition_refusals_use_the_records_output() {
+fn online_follow_precondition_refusals_use_the_records_output() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("gateway");
     let _gateway = Gateway::start(&root);
@@ -841,57 +683,57 @@ fn online_watch_precondition_refusals_use_the_records_output() {
             conversation.to_owned(),
             "100".to_owned(),
         ];
-        if command_name == "watch" {
+        if command_name == "follow" {
             args.push("2".into());
         }
-        let (lines, ok) = WatchChild::spawn(args).finish();
+        let (lines, ok) = FollowChild::spawn(args).finish();
         assert!(!ok, "{lines:?}");
         assert_eq!(lines.len(), 1, "{lines:?}");
         lines.into_iter().next().unwrap()
     };
     // Discovery: a conversation this receiver cannot read. Nothing is cached.
     let unknown = uuid();
-    let refused = run("watch", &unknown);
+    let refused = run("follow", &unknown);
     assert_eq!(refused["discoveryFailure"], true, "{refused}");
     assert!(refused.get("kind").is_none(), "{refused}");
     assert!(!cache.exists());
     assert_eq!(refused, run("sync-records", &unknown));
     // The cache cannot be opened.
     private_write(&cache, b"not a database");
-    let refused = run("watch", &setup.conversation);
+    let refused = run("follow", &setup.conversation);
     assert!(refused["cacheRefusal"]["code"].is_string(), "{refused}");
     assert!(refused.get("kind").is_none(), "{refused}");
     assert_eq!(refused, run("sync-records", &setup.conversation));
 }
 
-/// Row W17 before registration: `watch`'s discovery answered
-/// `source_preparing` is asked again, and the watch registers rather than
+/// Row W17 before subscribing: `follow`'s discovery answered
+/// `source_preparing` is asked again, and the follow subscribes rather than
 /// reporting the row W16 discovery refusal.
 #[test]
-fn online_watch_registers_after_a_preparing_discovery() {
+fn online_follow_subscribes_after_a_preparing_discovery() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("gateway");
     let _gateway = Gateway::start_mode(&root, "preparing-head");
     let setup: Setup =
         serde_json::from_slice(&std::fs::read(root.join("setup.json")).unwrap()).unwrap();
     let cache = setup_cache(directory.path());
-    let mut child = WatchChild::spawn(vec![
-        "watch".into(),
+    let mut child = FollowChild::spawn(vec![
+        "follow".into(),
         profile_for(&root, &cache),
         setup.conversation.clone(),
         "100".into(),
         "1".into(),
     ]);
-    watch_registered(&mut child);
-    watch_pass(&mut child, "recheck", 1);
-    assert!(watch_end(child, "passesExhausted"));
+    follow_subscribed(&mut child);
+    follow_pass(&mut child, "recheck", 1);
+    assert!(follow_end(child, "passesExhausted"));
 }
 
-/// Committed change watches rows L8–L10 and W2–W13, with the example
-/// client's own `watch` command on two paired devices in separate processes
+/// Read-only sync example rows W2–W13, with the example client's own
+/// `follow` command on two paired devices in separate processes
 /// against one gateway that is never restarted.
 #[test]
-fn online_two_devices_follow_live_hints_and_converge() {
+fn online_two_devices_follow_live_views_and_converge() {
     // Step 1.
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("gateway");
@@ -904,9 +746,9 @@ fn online_two_devices_follow_live_hints_and_converge() {
     let cache_b = setup_cache(&directory.path().join("b"));
     let profile_a = profile_for(&root, &cache_a);
     let profile_b = profile_for_device(&root, "profile-b.json", &cache_b);
-    let watch = |profile: &str, passes: &str| {
-        WatchChild::spawn(vec![
-            "watch".into(),
+    let follow = |profile: &str, passes: &str| {
+        FollowChild::spawn(vec![
+            "follow".into(),
             profile.into(),
             setup.conversation.clone(),
             "100".into(),
@@ -931,39 +773,39 @@ fn online_two_devices_follow_live_hints_and_converge() {
         view
     };
 
-    // Steps 2–3 (W2, W4, W6, L9): A registers; a commit lands while its
+    // Steps 2–3 (W2, W4, W6): A subscribes; a commit lands while its
     // recheck pass is reading the head (the fixture holds that read until
-    // the commit is acknowledged). The recheck already holds it, and its
-    // hint, read during that pass, causes exactly one more pass.
+    // the commit is acknowledged). The recheck already holds it, and the
+    // view that moved, read during that pass, causes exactly one more pass.
     gateway.act("hold");
-    let mut a = watch(&profile_a, "2");
-    let watch_a = watch_registered(&mut a);
+    let mut a = follow(&profile_a, "2");
+    let sub_a = follow_subscribed(&mut a);
     gateway.act("commit");
     gateway.act("release");
-    watch_pass(&mut a, "recheck", 2);
-    watch_hint(&mut a, &watch_a, true);
-    watch_pass(&mut a, "hint", 2);
-    assert!(watch_end(a, "passesExhausted"));
+    follow_pass(&mut a, "recheck", 2);
+    follow_view(&mut a, &sub_a, true);
+    follow_pass(&mut a, "view", 2);
+    assert!(follow_end(a, "passesExhausted"));
 
-    // Step 4 (L8): two live watchers on one gateway; B's recheck is its
-    // initial replay.
-    let mut a = watch(&profile_a, "11");
-    let mut b = watch(&profile_b, "11");
-    let watch_a = watch_registered(&mut a);
-    let watch_b = watch_registered(&mut b);
-    assert_ne!(watch_a, watch_b);
-    watch_pass(&mut a, "recheck", 2);
-    watch_pass(&mut b, "recheck", 2);
+    // Step 4: two live followers on one gateway, each on its own
+    // connection (a subscription id names one connection's subscription, so
+    // the two may be equal); B's recheck is its initial replay.
+    let mut a = follow(&profile_a, "11");
+    let mut b = follow(&profile_b, "11");
+    let sub_a = follow_subscribed(&mut a);
+    let sub_b = follow_subscribed(&mut b);
+    follow_pass(&mut a, "recheck", 2);
+    follow_pass(&mut b, "recheck", 2);
 
-    // Step 5 (W5, L8, L10): each commit is one hint and one pass per
-    // device, timed from the commit's durable acknowledgement.
+    // Step 5 (W5): each commit is one moved view and one pass per device,
+    // timed from the commit's durable acknowledgement.
     let mut samples = vec![];
     for commit in 1..=10 {
         gateway.act("commit");
         let acknowledged = Instant::now();
-        for (child, watch) in [(&mut a, &watch_a), (&mut b, &watch_b)] {
-            watch_hint(child, watch, false);
-            let visible = watch_pass(child, "hint", 2 + commit);
+        for (child, subscription) in [(&mut a, &sub_a), (&mut b, &sub_b)] {
+            follow_view(child, subscription, false);
+            let visible = follow_pass(child, "view", 2 + commit);
             samples.push(
                 visible
                     .saturating_duration_since(acknowledged)
@@ -973,26 +815,26 @@ fn online_two_devices_follow_live_hints_and_converge() {
         }
     }
     // Eleven passes: the recheck and exactly one per commit.
-    assert!(watch_end(a, "passesExhausted"));
-    assert!(watch_end(b, "passesExhausted"));
+    assert!(follow_end(a, "passesExhausted"));
+    assert!(follow_end(b, "passesExhausted"));
 
-    // Step 6 (W4, S2): a commit while nobody is connected is never hinted;
-    // the next watch's recheck from the checkpoint recovers it.
+    // Step 6 (W4): a commit while nobody is connected wakes nothing; the
+    // next follow's recheck from the checkpoint recovers it.
     gateway.act("commit");
-    let mut a = watch(&profile_a, "2");
-    let watch_a = watch_registered(&mut a);
-    watch_pass(&mut a, "recheck", 13);
+    let mut a = follow(&profile_a, "2");
+    let sub_a = follow_subscribed(&mut a);
+    follow_pass(&mut a, "recheck", 13);
     gateway.act("commit");
-    watch_hint(&mut a, &watch_a, false);
-    watch_pass(&mut a, "hint", 14);
-    assert!(watch_end(a, "passesExhausted"));
+    follow_view(&mut a, &sub_a, false);
+    follow_pass(&mut a, "view", 14);
+    assert!(follow_end(a, "passesExhausted"));
 
-    // Step 7 (L5, L8): both devices and a fresh replay hold the same folded
+    // Step 7: both devices and a fresh replay hold the same folded
     // view and progress, so neither cache has a duplicate or missing record.
-    let mut b = watch(&profile_b, "1");
-    watch_registered(&mut b);
-    let pass_report = watch_pass_report(&mut b, "recheck", 14).0;
-    assert!(watch_end(b, "passesExhausted"));
+    let mut b = follow(&profile_b, "1");
+    follow_subscribed(&mut b);
+    let pass_report = follow_pass_report(&mut b, "recheck", 14).0;
+    assert!(follow_end(b, "passesExhausted"));
     let fresh = setup_cache(&directory.path().join("fresh"));
     let (ok, replay) = command(record_command(&root, &fresh, &setup, "100"), false);
     assert!(ok, "{replay:?}");
@@ -1021,29 +863,27 @@ fn online_two_devices_follow_live_hints_and_converge() {
     assert_eq!(view_a, view_b);
     assert_eq!(view_a, show(&fresh, &setup.receiver));
 
-    // Step 8 (W11, A2): revoking B's receiver closes B with
-    // `authorization_lost` and no hint. The end stays `connectionClosed`,
-    // and that terminal revoke asks pinned status once. The receiver no
-    // longer holds the pairing, so the status is refused and nothing is
-    // purged. A goes on to its pass budget.
-    let mut a = watch(&profile_a, "2");
-    let mut b = watch(&profile_b, "5");
-    let watch_a = watch_registered(&mut a);
-    watch_registered(&mut b);
-    watch_pass(&mut a, "recheck", 14);
-    watch_pass(&mut b, "recheck", 14);
+    // Step 8 (W10, A2): revoking B's receiver ends B's subscription
+    // `refused` with `unauthorized` before its next view. That authority
+    // refusal asks pinned status once. The receiver no longer holds the
+    // pairing, so the status is refused and nothing is purged. A goes on to
+    // its pass budget.
+    let mut a = follow(&profile_a, "2");
+    let mut b = follow(&profile_b, "5");
+    let sub_a = follow_subscribed(&mut a);
+    follow_subscribed(&mut b);
+    follow_pass(&mut a, "recheck", 14);
+    follow_pass(&mut b, "recheck", 14);
     gateway.act("revoke b");
     gateway.act("commit");
-    watch_hint(&mut a, &watch_a, false);
-    watch_pass(&mut a, "hint", 15);
-    assert!(watch_end(a, "passesExhausted"));
-    let (ended, _) = watch_line(&mut b, "ended");
-    assert_eq!(ended["reason"], "connectionClosed", "{ended}");
-    assert_eq!(ended["cause"]["code"], "closed", "{ended}");
-    assert_eq!(
-        ended["cause"]["productCode"], "authorization_lost",
-        "{ended}"
-    );
+    follow_view(&mut a, &sub_a, false);
+    follow_pass(&mut a, "view", 15);
+    assert!(follow_end(a, "passesExhausted"));
+    let (ended, _) = follow_line(&mut b, "ended");
+    assert_eq!(ended["reason"], "subscriptionEnded", "{ended}");
+    assert_eq!(ended["ended"]["productCode"], "refused", "{ended}");
+    assert_eq!(ended["cause"]["code"], "subscription", "{ended}");
+    assert_eq!(ended["cause"]["productCode"], "unauthorized", "{ended}");
     assert_eq!(
         ended["recheck"]["enrollmentFailure"]["code"], "refused",
         "{ended}"
@@ -1065,17 +905,17 @@ fn online_two_devices_follow_live_hints_and_converge() {
     assert_eq!(denied["enrollmentFailure"]["code"], "refused", "{denied}");
     assert_eq!(show(&cache_b, &receiver_b), view_b);
 
-    // Step 9 (W1, W11, L7): the gateway goes away while A waits for a hint,
-    // with nothing run between its recheck and the close. A's watch ends on
+    // Step 9 (W1, W11): the gateway goes away while A waits for a view,
+    // with nothing run between its recheck and the close. A's follow ends on
     // the close; the next commands fail explicitly before connecting; A's
     // saved view stays readable.
     let view_a = show(&cache_a, &setup.receiver);
     assert_eq!(view_a["facts"], "15", "{view_a}");
-    let mut a = watch(&profile_a, "5");
-    watch_registered(&mut a);
-    watch_pass(&mut a, "recheck", 15);
+    let mut a = follow(&profile_a, "5");
+    follow_subscribed(&mut a);
+    follow_pass(&mut a, "recheck", 15);
     drop(gateway);
-    assert!(!watch_end(a, "connectionClosed"));
+    assert!(!follow_end(a, "connectionClosed"));
     for args in [
         vec![
             "sync-records".into(),
@@ -1084,7 +924,7 @@ fn online_two_devices_follow_live_hints_and_converge() {
             "100".into(),
         ],
         vec![
-            "watch".into(),
+            "follow".into(),
             profile_a.clone(),
             setup.conversation.clone(),
             "100".into(),
@@ -1099,7 +939,7 @@ fn online_two_devices_follow_live_hints_and_converge() {
     }
     assert_eq!(show(&cache_a, &setup.receiver), view_a);
 
-    // Step 10 (L10): the loopback measurement, one machine-readable line.
+    // Step 10: the loopback measurement, one machine-readable line.
     samples.sort_by(f64::total_cmp);
     let round = |value: f64| (value * 10.0).round() / 10.0;
     println!(
@@ -1115,7 +955,7 @@ fn online_two_devices_follow_live_hints_and_converge() {
 
 /// Rows L11 and PC3/PC6: two paired devices keep catalogues and transcripts.
 /// After the gateway process restarts, a commit made before either device
-/// reconnects has no hint to deliver; both `watch` rechecks recover it from
+/// reconnects wakes nothing; both `follow` rechecks recover it from
 /// the durable checkpoint and agree with each other. Revoking B's credential
 /// leaves B's cache intact until B's next command, which reads Terminal and
 /// purges only B. A's saved view and next read stay admitted.
@@ -1238,23 +1078,23 @@ fn online_two_devices_catch_up_after_restart_and_revocation_purges_only_the_vict
     let view = show(&cache_a, &setup.receiver);
     assert_eq!(view, show(&cache_b, &receiver_b));
 
-    // The gateway process is gone. Its hints die with it. The restarted
+    // The gateway process is gone. Its subscriptions die with it. The restarted
     // process commits before either device connects, so that commit is never
-    // hinted; the next recheck is what recovers it.
+    // seen live; the next recheck is what recovers it.
     drop(gateway);
     let mut gateway = Gateway::start_live(&root);
     gateway.act("commit");
     let catch_up = |profile: &str| {
-        let mut child = WatchChild::spawn(vec![
-            "watch".into(),
+        let mut child = FollowChild::spawn(vec![
+            "follow".into(),
             profile.into(),
             setup.conversation.clone(),
             "100".into(),
             "1".into(),
         ]);
-        watch_registered(&mut child);
-        watch_pass(&mut child, "recheck", seeded_facts + 1);
-        assert!(watch_end(child, "passesExhausted"));
+        follow_subscribed(&mut child);
+        follow_pass(&mut child, "recheck", seeded_facts + 1);
+        assert!(follow_end(child, "passesExhausted"));
     };
     catch_up(&profile_a);
     catch_up(&profile_b);

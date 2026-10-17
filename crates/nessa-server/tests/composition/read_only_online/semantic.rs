@@ -75,34 +75,34 @@ fn online_semantic_corpus_converges_after_receiver_restart_and_live_suffix() {
         .iter()
         .any(|part| part["text"] == "Committed before permission."));
 
-    let mut receiver = WatchChild::spawn(vec![
-        "watch".into(),
+    let mut receiver = FollowChild::spawn(vec![
+        "follow".into(),
         profile_for(&root, &cache),
         setup.conversation.clone(),
         "100".into(),
         "2".into(),
     ]);
-    let watch = watch_registered(&mut receiver);
+    let subscription = follow_subscribed(&mut receiver);
     let prefix_facts = prefix["progress"]["facts"]
         .as_str()
         .unwrap()
         .parse()
         .unwrap();
-    let (rechecked, _) = watch_pass_report(&mut receiver, "recheck", prefix_facts);
+    let (rechecked, _) = follow_pass_report(&mut receiver, "recheck", prefix_facts);
     assert_matches(&rechecked, &show(&cache), &prefix);
-    // The public hint pass waits until all terminal producer writes are confirmed.
+    // The pass after the moved view waits until all terminal producer writes are confirmed.
     gateway.act("hold");
     gateway.act("settle");
     let terminal = oracle("terminal");
-    watch_hint(&mut receiver, &watch, false);
+    follow_view(&mut receiver, &subscription, false);
     gateway.act("release");
     let terminal_facts = terminal["progress"]["facts"]
         .as_str()
         .unwrap()
         .parse()
         .unwrap();
-    let (resumed, _) = watch_pass_report(&mut receiver, "hint", terminal_facts);
-    assert!(watch_end(receiver, "passesExhausted"));
+    let (resumed, _) = follow_pass_report(&mut receiver, "view", terminal_facts);
+    assert!(follow_end(receiver, "passesExhausted"));
     let resumed_view = show(&cache);
     assert_matches(&resumed, &resumed_view, &terminal);
     assert!(resumed_view["view"]["messages"]

@@ -393,19 +393,6 @@
           }
         }
       },
-      "catalogue.watch": {
-        "appliesTo": {
-          "principalTypes": [
-            "Reader"
-          ],
-          "resourceTypes": [
-            "Catalogue"
-          ],
-          "context": {
-            "type": "Ask"
-          }
-        }
-      },
       "artifact.read": {
         "appliesTo": {
           "principalTypes": [

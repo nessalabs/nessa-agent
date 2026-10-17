@@ -13,7 +13,7 @@
 //! `application::reset` exposes the existing audited local reset through a port.
 //! The crate's `retained` composes the same core for a gateway reading a peer.
 //! Without the `cli` feature only `retained` composes this core, so the parts
-//! only the example's commands reach (offline reads, resets, watches) go
+//! only the example's commands reach (offline reads, resets, the follow loop) go
 //! unused in that build; they are kept, not compiled out one by one.
 #![cfg_attr(not(feature = "cli"), allow(dead_code, unused_imports))]
 

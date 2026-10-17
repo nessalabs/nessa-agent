@@ -277,6 +277,110 @@ an online one.
 | F6 | The part on disk is not the file | Removed, or emptied when it cannot be removed; both reported, and `reached` is 0 since none of it counts. `OUT` is not written. `bytes_that_are_not_the_named_digest_discard_the_part_and_keep_nothing`, `bytes_another_writer_added_to_the_part_fail_the_check_and_nothing_is_kept`, `a_part_of_other_bytes_on_disk_is_discarded_and_no_output_appears` |
 | F7 | Kept | Part synced, hard-linked at `OUT`, its own name removed, directory synced on Unix (on Windows the part is closed first). There is no separate check: the link refuses anything at `OUT` when it is made as `outputExists`, never replacing it. A part name that cannot be removed after the link is reported `remove`; the next run finds `OUT` is the file and removes it. `keeping_never_replaces_an_output_that_is_there`, `keeping_refuses_whatever_is_at_the_output_when_it_links`, `a_link_at_the_output_is_refused_and_never_followed` |
 
+### Following a conversation
+
+`follow PROFILE CONVERSATION PAGES MAX_PASSES` keeps the private record cache
+fresh while a conversation changes, so a separate-process test can drive
+"subscribe, then copy records from the durable checkpoint whenever they
+change" with the real client, on two paired devices at once. It is
+deliberately minimal: a phone keeps its own continuous lifecycle. No stop
+seam, no reconnect, no timestamps on its lines, no catalogue follow (a paired
+device's `conversation.subscribeList` waits on #724; catalogue freshness is
+`sync-catalogue`).
+
+The wake is the gateway's own `conversation.subscribe`, the one live read path
+([record subscriptions](record-subscriptions.md)). A view frame names the
+committed position its fold read (`cursor`). A view whose cursor moved means
+records were committed, so the loop runs one checkpoint pass. A view at the
+cursor already seen changed only live facts, such as the title or the agent's
+state, and runs nothing. The view itself is not stored: the cache holds
+records, and `show` folds them.
+
+```mermaid
+sequenceDiagram
+    participant Client as follow (example client)
+    participant Gateway as Gateway (one native connection)
+    Client->>Gateway: pinned status, then connect and discovery (as sync-records)
+    Client->>Gateway: conversation.subscribe {conversationId}
+    Gateway-->>Client: {subscriptionId}, then the first conversation.view {cursor}
+    Note over Client: line "subscribed"; the first cursor is the baseline
+    Client->>Gateway: recheck pass from the durable checkpoint
+    Gateway-->>Client: conversation.view (read inside the pass and kept)
+    Note over Client: line "pass", then "view" duringPass if its cursor moved
+    loop until MAX_PASSES, idle, or the subscription or connection ends
+        Client->>Gateway: wait for a view (one operation, ordinary deadline)
+        Gateway-->>Client: conversation.view {cursor}
+        alt cursor moved
+            Client->>Gateway: pass from the durable checkpoint
+        else same cursor
+            Client->>Client: wait again, no line
+        end
+    end
+    Note over Client: line "ended" with its reason
+```
+
+Every step is one operation on the one connection the example already owns
+(`Session`): the subscribe with its first view, each wait, and each pass.
+Views and the subscription's end that arrive while another operation waits
+for its response are kept in the session's subscription inbox and never count
+toward the per-operation unexpected-event capacity. A wait takes the newest
+kept view and drops the older ones, because each view replaces the one before
+it. stdout carries one JSON object per line: `subscribed`, `pass` (its
+`report` is the same object `sync-records` writes, `enrollment` and `recheck`
+included), `view` and a final `ended`. A refusal before subscribing (rows W1,
+W16) is instead the one object `sync-records` writes for it. Exit status is 0
+only when the run ends `passesExhausted` or `idle` (owner's decision).
+
+Placement: the loop is `read_only_sync/application/follow.rs` over two ports
+(`FollowSession`, `FollowEvents`); `Session::{subscribe, wait_view}` and the
+inbox are in `infrastructure/gateway/session.rs`; the lines are
+`entrypoint/follow.rs`; `crates/nessa-client-core/src/composition/online.rs`
+adapts the connection, driver and cache to the session port and runs the PC5
+status recheck.
+
+`app::` is `crates/nessa-client-core/tests/read_only_sync/application/follow.rs`,
+`session::` is `…/tests/read_only_sync/gateway/session/subscribe.rs`, `args::`
+is `…/tests/read_only_sync/entrypoint/arguments.rs`, `device::` is
+`…/tests/read_only_sync/application/device.rs`, and `online::` is
+`crates/nessa-server/tests/composition/read_only_online.rs`.
+
+| # | State / event / ordering | Result | Tests |
+|---|---|---|---|
+| W1 | Start: profile, credential and pinned status (device-pairing PC1–PC4); status not Active, or unreadable because the gateway is gone | Refused before any connection or cache open, with the same output `sync-records` gives; exit 1 | `online::online_unusable_enrollment_does_not_open_cache`, `online::online_two_devices_follow_live_views_and_converge` (step 9) |
+| W2 | Active; connect; discovery reads the actual scope; the cache opens; `conversation.subscribe` is admitted and its first view arrives, with the reply or after it | `subscribed {subscriptionId, connectionOperation, enrollment}`; the first view's cursor is the baseline the recheck pass covers | `session::a_view_before_the_subscribe_reply_is_delivered_first`, `online::…converge` (step 2) |
+| W3 | Subscribe refused: `subscription_capacity`, `subscription_duplicate`, `conversation_not_found` (not granted to this device), or an authority code | `ended {subscribeRefused, cause}` before any pass. `forbidden` and `unauthorized` ask pinned status once (PC5) and report it as `recheck`; exit 1. The first frame being `conversation.subscriptionEnded` ends the run the same way, with `subscriptionEnded` | `session::typed_refusals_keep_the_connection`, `app::subscribe_refusal_ends_before_any_pass`, `app::an_end_as_the_first_frame_runs_no_pass`, `device::only_authority_refusals_ask_status_again` |
+| W4 | Subscribed: the recheck pass runs first, unconditionally, from the durable checkpoint | `pass {trigger: recheck}` precedes any `view` line, even when a newer view is already kept; a commit between the first view and the recheck is caught by that pass and also arrives as a moved view | `app::first_pass_is_the_recheck_even_with_a_kept_view`, `online::…converge` (step 3) |
+| W5 | Waiting; a view whose cursor moved arrives | `view {cursor, duringPass: false}`, then one `pass {trigger: view}` | `app::a_moved_view_while_waiting_starts_one_pass`, `online::…converge` (step 5) |
+| W6 | One or many views during the subscribe or a pass, including in the same read as a response | The newest is kept; after the pass line, `view {duringPass: true}` once, then exactly one more pass. Views never count toward the event capacity | `session::views_during_a_read_come_out_newest_first_and_once`, `online::…converge` (step 3) |
+| W6b | A view at the cursor already seen (live facts changed, no record) | No line and no pass. A view from another incarnation is a moved cursor | `app::a_view_at_the_same_cursor_runs_no_pass` |
+| W7 | A pass ends incomplete (the `PAGES` budget) without failure | The next pass starts at once with `trigger: incomplete`; confirmed progress is kept | `app::incomplete_pass_continues_without_waiting` |
+| W8 | A pass fails with an authority refusal | PC5 once; `ended {unauthorized, cause, recheck}`; exit 1 | `app::authority_failure_ends_unauthorized` |
+| W9 | A pass or the subscribe fails on transport, timeout or protocol; a pass cannot begin; or a pass fails with no gateway cause (a cache or driver refusal) | `ended {unavailable, cause}`, or `ended {passFailed}` whose cause is in that pass's report; a pass that could not begin read nothing and writes no `pass` line; the saved view is unchanged; exit 1 | `app::transport_or_cache_failure_ends_the_follow`, `app::pass_that_cannot_begin_ends_without_a_pass_line` |
+| W10 | `conversation.subscriptionEnded {lagging \| refused \| source_closed \| too_large}` while waiting or during a pass | The end comes before any kept view; `ended {subscriptionEnded, ended: {code: subscriptionEnded, productCode}, cause}` after any running pass finishes; a `refused` end carries its typed refusal as `cause`, and an authority refusal asks pinned status once; exit 1 | `session::the_end_comes_first_and_a_refused_end_keeps_its_code`, `app::subscription_end_stops_after_the_running_pass`, `online::…converge` (step 8: a revoked receiver) |
+| W11 | The gateway closes the connection while the client is waiting or mid-pass (revocation, shutdown, deadline, process gone), including a reset or abort that carries no frame | `ended {connectionClosed, cause}` and exit 1. `failed` matches every `Closed` before `asks_status`, so the end reason stays `connectionClosed`. A terminal revoke, classified by `connection_outcome` (ADR 811), asks pinned status once and the line carries that `recheck`; the refusal does not purge. Plain EOF, a retryable close, `server_shutdown`, and `protocol_incompatible` carry `recheck: null`. The next command's pinned status is that same check | `session::a_wait_fails_on_close_stray_response_or_no_subscription`, `deadline_stream::peer_reset_or_abort_is_an_untyped_close_and_other_errors_stay_transport`, `app::connection_close_stays_connection_closed`, `online::…converge` (step 9) |
+| W12 | A wait reaches the ordinary operation deadline with nothing read | `ended {idle}`; exit 0 | `app::idle_wait_ends_cleanly` |
+| W13 | `MAX_PASSES` reached (the recheck counts; `0` is an argument error) | `ended {passesExhausted}`; exit 0; the connection drops, which ends the subscription | `args::follow_requires_a_positive_pass_count`, `app::pass_budget_ends_cleanly`, `online::…converge` |
+| W14 | A stdout write fails | The loop stops at that line; committed cache effects are not repeated; exit 1 | `app::output_failure_stops_the_follow` |
+| W15 | A frame for another subscription or conversation, or a response while nothing is pending | `GatewayError::Protocol` / `Correlation`; `ended {unavailable}` | `session::a_foreign_subscription_id_is_a_protocol_failure`, `session::a_view_for_another_conversation_is_a_protocol_failure`, `session::a_wait_fails_on_close_stray_response_or_no_subscription` |
+| W16 | Active and connected, but discovery is refused (after row W17's attempts, when it answers `source_preparing`) or the cache cannot be opened | Before `subscribed`: the one object `sync-records` writes for that refusal (`discoveryFailure`, with `recheck` after an authority refusal; or `cacheRefusal`), with no `kind` and no `ended` line; no cache is created by a discovery refusal; exit 1 | `online::online_follow_precondition_refusals_use_the_records_output` |
+| W17 | A pass, or the discovery before subscribing, is answered `source_preparing` (the gateway's cold-read work budget ran out; its preparation progress is kept) | The attempt fails but the connection stays open (`source_preparing` is the one typed refusal that keeps the session); the attempt's `pass` line, then the same pass again at once on the same session with `trigger: preparing`, not counted toward `MAX_PASSES`, up to `PREPARING_ATTEMPTS` (4) attempts; an attempt that succeeds continues as any pass does. Still preparing after the last attempt: `ended {unavailable, cause: record/source_preparing}`; exit 1. Discovery before subscribing is retried the same way, with no line per attempt; still preparing after the last attempt is row W16's refusal | `app::preparing_pass_is_retried_until_it_succeeds`, `app::preparing_beyond_the_attempt_bound_ends_unavailable`, `app::preparing_discovery_is_retried_until_it_succeeds`, `app::discovery_retries_only_preparing_and_only_up_to_the_bound`, `online::online_follow_subscribes_after_a_preparing_discovery` |
+
+`online::online_two_devices_follow_live_views_and_converge` is the client
+acceptance: two paired devices follow one conversation on a gateway that is
+never restarted, each commit is one moved view and one pass per device, and
+both caches equal a fresh replay. The fixture gateway's `hold` and `release`
+actions make the W4/W6 race deterministic: `hold` arms a `HeadHold` gate
+(`tests/composition/read_only_online/fixtures/gateway.rs`) that parks the
+second head read from then on (a `follow`'s discovery reads the first, its
+recheck pass the second); the test commits while that read is parked, then
+`release` lets it answer, so the recheck pass reads a head that already holds
+the commit. `online::online_two_devices_catch_up_after_restart_and_revocation_purges_only_the_victim`
+covers a gateway restart: a commit made before either device reconnects is
+recovered by each `follow`'s recheck pass from the durable checkpoint. A
+commit that lands while nothing follows is never announced; the recheck is
+the recovery path, because the gateway's change notices are process-local
+([committed change watches](committed-change-watches.md)).
+
 ## Transaction and resource policy
 
 ### Explicit command scheduling
@@ -401,9 +505,9 @@ binding rather than issuing or pairing again. The code is read from protected
 input, never command-line arguments or general logs.
 
 The CLI has finite record and catalogue sync, an online record check, offline
-`list`/`show`, explicit reset, and one bounded `watch PROFILE CONVERSATION
-PAGES MAX_PASSES` that follows live hints on one connection (rows W1–W16 in
-[committed change watches](committed-change-watches.md#298c-the-example-client-follows-hints)).
+`list`/`show`, explicit reset, and one bounded `follow PROFILE CONVERSATION
+PAGES MAX_PASSES` that follows a conversation through `conversation.subscribe`
+on one connection ([following a conversation](#following-a-conversation)).
 Experiment controls and weak-link shaping remain future #262 work. Data goes to stdout as JSON and tracing to stderr.
 Offline cache readability is intentional local policy. Only correlated trusted
 grant/epoch/deletion contact evidence authorizes fencing/purge; generic auth
