@@ -1933,3 +1933,17 @@ layout-specific shell). Contracts for `ui/transcript/{message,tool-steps,transcr
 
 These are functional geometry/order checks. Production frame budgets remain
 `perf-budget.mjs`; this fixture does not establish a performance budget.
+
+## Remembered permission confirmation (#944)
+
+`scripted-scenarios.mjs --remember --only permission,allow` clicks the published
+Always allow in this project option through the real window and isolated gateway
+in Chromium and WebKit. The browser must receive one successful action receipt
+for its original request, the rule catalogue must contain one new allow rule,
+and the provider continues with the scenario's allowed reply. The test revokes
+its isolated rule before the next engine. Normal scripted permission checks also
+require a confirmed receipt; eventual provider output alone cannot mask a
+rejected acknowledgement. SDK ACP tests cover remembered allow and deny, exact
+logical attribution and the mapped provider wire option. Service tests keep a
+second review pending and require live publication after success or consumption
+with a typed failure.

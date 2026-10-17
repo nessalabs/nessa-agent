@@ -223,10 +223,10 @@ for line in sys.stdin:
                     "rawOutput": {"formatted_output": "compiling\n2 passed\n", "exit_code": 0},
                     "_meta": {"terminal_exit": {"exit_code": 0, "signal": None, "terminal_id": "command-1"}}})
         elif mode in ("deadline-decline", "deadline-cancel-only", "deadline-decline-unasked-cancel",
-                      "deadline-allow-named-cancel"):
+                      "deadline-allow-named-cancel", "remember-cancel"):
             # A later prompt in the same session, after cancel already ended
             # the turn. The session is still open.
-            if mode == "deadline-cancel-only" and (root / "permission-outcome").exists():
+            if mode in ("deadline-cancel-only", "remember-cancel") and (root / "permission-outcome").exists():
                 text("turn-2-open")
                 result(pending, {"stopReason": "end_turn"})
                 pending = None
@@ -258,9 +258,20 @@ for line in sys.stdin:
                 ]
                 call = {"toolCallId": "file-change-1", "kind": "edit", "status": "pending", "title": "Edit config",
                         "locations": [{"path": str(root / "config.txt")}]}
+            if mode == "remember-cancel":
+                # Synthetic combination of a concrete MCP tool identity with
+                # Codex's cancel-only deny shape; not a recorded transcript.
+                call = {"toolCallId": "file-change-1", "kind": "execute", "status": "pending",
+                        "name": "mcp.probe.record_probe", "title": "mcp.probe.record_probe",
+                        "rawInput": {"server": "probe", "tool": "record_probe", "arguments": {"marker": "fixture"}},
+                        "_meta": {"is_mcp_tool_call": True}}
             update({"sessionUpdate": "tool_call", **call})
+            review = {key: value for key, value in call.items() if key != "title"}
+            if mode == "remember-cancel":
+                # The named tool and arguments must come from its cached update.
+                review = {"toolCallId": "file-change-1", "kind": "execute", "status": "pending"}
             send({"id": "file-review", "method": "session/request_permission", "params": {
-                "sessionId": session, "toolCall": {key: value for key, value in call.items() if key != "title"},
+                "sessionId": session, "toolCall": review,
                 "options": options,
             }})
             continue
@@ -297,12 +308,12 @@ for line in sys.stdin:
             pending = None
     elif msg.get("id") == "file-review":
         if mode in ("deadline-decline", "deadline-cancel-only", "deadline-decline-unasked-cancel",
-                    "deadline-allow-named-cancel"):
+                    "deadline-allow-named-cancel", "remember-cancel"):
             (root / "permission-outcome").write_text(json.dumps(msg["result"]))
         else:
             outcome = msg["result"]["outcome"]
             (root / "permission-outcome").write_text(json.dumps(outcome))
-        if mode == "deadline-cancel-only":
+        if mode in ("deadline-cancel-only", "remember-cancel"):
             # Real Codex stops the turn when cancel is selected. The edit
             # does not complete and the prompt does not continue.
             result(pending, {"stopReason": "cancelled"})

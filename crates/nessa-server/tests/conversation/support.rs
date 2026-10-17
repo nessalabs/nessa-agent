@@ -928,6 +928,7 @@ pub(crate) struct ProviderFactory {
     /// reply without this evidence intentionally leaves the synthetic stream
     /// open and does not model that adapter path.
     pub(crate) execution_observation_failure: Mutex<Option<ObservationFailure>>,
+    /// Number of independent reviews to publish before the execution gate.
     pub(crate) request_permission: AtomicUsize,
     pub(crate) permission_gate: Mutex<Option<Receiver<()>>>,
     /// Every permission answer the agent was given, in order.
@@ -1649,52 +1650,69 @@ impl ProviderSessionBackend for Backend {
                 }
                 return reply;
             }
-            if self.factory.request_permission.load(Ordering::SeqCst) != 0 {
-                let mut choices = vec![PermissionOption::new(
-                    PermissionOptionId::new("allow").unwrap(),
-                    "Allow once",
-                    PermissionDecision::new(PermissionEffect::Allow, PermissionScope::request()),
-                )
-                .unwrap()];
-                if self.factory.offer_deny.load(Ordering::SeqCst) {
-                    choices.push(
-                        PermissionOption::new(
-                            PermissionOptionId::new("reject").unwrap(),
-                            "Reject once",
-                            PermissionDecision::new(
-                                PermissionEffect::Deny,
-                                PermissionScope::request(),
-                            ),
-                        )
-                        .unwrap(),
-                    );
-                }
-                let options =
-                    PermissionOptions::new(choices, &PermissionOfferPolicy::once_only()).unwrap();
-                let event = self
-                    .controller
-                    .lock()
-                    .unwrap()
-                    .request_permission(
-                        &request.execution_id,
-                        PermissionId::new("permission").unwrap(),
-                        ToolCallUpdate::new(
-                            ToolCallId::new("tool").unwrap(),
-                            None,
-                            None,
-                            None,
-                            None,
-                            None,
+            let reviews = self.factory.request_permission.load(Ordering::SeqCst);
+            if reviews != 0 {
+                for index in 0..reviews {
+                    let permission = if index == 0 {
+                        "permission".to_owned()
+                    } else {
+                        format!("permission-{index}")
+                    };
+                    let tool = if index == 0 {
+                        "tool".to_owned()
+                    } else {
+                        format!("tool-{index}")
+                    };
+                    let mut choices = vec![PermissionOption::new(
+                        PermissionOptionId::new("allow").unwrap(),
+                        "Allow once",
+                        PermissionDecision::new(
+                            PermissionEffect::Allow,
+                            PermissionScope::request(),
                         ),
-                        ToolReviewInput {
-                            name: "write_file".into(),
-                            arguments_json: "{}".into(),
-                        },
-                        options,
-                        None,
                     )
-                    .unwrap();
-                let _ = self.sender.lock().unwrap().as_ref().unwrap().send(event);
+                    .unwrap()];
+                    if self.factory.offer_deny.load(Ordering::SeqCst) {
+                        choices.push(
+                            PermissionOption::new(
+                                PermissionOptionId::new("reject").unwrap(),
+                                "Reject once",
+                                PermissionDecision::new(
+                                    PermissionEffect::Deny,
+                                    PermissionScope::request(),
+                                ),
+                            )
+                            .unwrap(),
+                        );
+                    }
+                    let options =
+                        PermissionOptions::new(choices, &PermissionOfferPolicy::once_only())
+                            .unwrap();
+                    let event = self
+                        .controller
+                        .lock()
+                        .unwrap()
+                        .request_permission(
+                            &request.execution_id,
+                            PermissionId::new(&permission).unwrap(),
+                            ToolCallUpdate::new(
+                                ToolCallId::new(&tool).unwrap(),
+                                None,
+                                None,
+                                None,
+                                None,
+                                None,
+                            ),
+                            ToolReviewInput {
+                                name: "write_file".into(),
+                                arguments_json: "{}".into(),
+                            },
+                            options,
+                            None,
+                        )
+                        .unwrap();
+                    let _ = self.sender.lock().unwrap().as_ref().unwrap().send(event);
+                }
                 let gate = self.factory.permission_gate.lock().unwrap().take();
                 if let Some(gate) = gate {
                     let _ = gate.await;

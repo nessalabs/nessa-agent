@@ -1045,6 +1045,171 @@ impl PermissionRules for RememberingRules {
     }
 }
 
+#[tokio::test]
+async fn remembered_choices_confirm_original_answers_and_preserve_profile_turn_semantics() {
+    let _slot = process_test_slot().await;
+    for (codex, allow) in [(false, true), (false, false), (true, false)] {
+        let rules = Arc::new(RememberingRules {
+            live: Mutex::new(Vec::new()),
+        });
+        let audit = Arc::new(AnswerAudit::default());
+        let (root, mut config, model) = if codex {
+            codex_configuration("remember-cancel", 16)
+        } else {
+            test_acp_configuration("permission", 16)
+        };
+        config.shutdown_grace = Duration::from_secs(2);
+        config.execution_timeout = None;
+        config.permission_rules = rules.clone();
+        let binding: Arc<dyn AgentProvider> = if codex {
+            Arc::new(
+                CodexAcpProvider::new(
+                    config,
+                    &model,
+                    TokenLimits::new(900, 100).unwrap(),
+                    audit.clone(),
+                )
+                .unwrap(),
+            )
+        } else {
+            Arc::new(
+                ClaudeAcpProvider::new(
+                    config,
+                    &model,
+                    TokenLimits::new(900, 100).unwrap(),
+                    audit.clone(),
+                )
+                .unwrap(),
+            )
+        };
+        let mut opened = binding
+            .open(ProviderOpenRequest::without_startup_control(None))
+            .await
+            .unwrap();
+        let active = start(&opened, "write").await;
+        next(&mut opened).await;
+        let ExecutionUpdate::PermissionRequested {
+            id, input, options, ..
+        } = next(&mut opened).await
+        else {
+            panic!("expected review")
+        };
+        if codex {
+            assert_eq!(input.name, "mcp.probe.record_probe");
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&input.arguments_json).unwrap(),
+                serde_json::json!({"server":"probe","tool":"record_probe","arguments":{"marker":"fixture"}})
+            );
+        }
+        let choice = if allow {
+            "nessa.remember.allow"
+        } else {
+            "nessa.remember.deny"
+        };
+        let option_id = options
+            .choices()
+            .iter()
+            .find(|option| option.id().as_str() == choice)
+            .expect("owner review offers remember choice")
+            .id()
+            .clone();
+        let answer = PermissionAnswer {
+            execution_id: ExecutionId::new("write").unwrap(),
+            id,
+            option_id,
+            attribution: ApprovalAttribution::new(
+                attribution().actor().clone(),
+                ApprovalBasis::Explicit,
+            ),
+        };
+        let resolution = opened
+            .session
+            .answer_permission(answer.clone())
+            .await
+            .unwrap();
+        assert_eq!(resolution.attribution(), &answer.attribution);
+        assert!(
+            matches!(resolution.request().state(), PermissionStateView::Answered { option_id, .. }
+            if option_id == &answer.option_id)
+        );
+        assert_eq!(rules.live.lock().unwrap().len(), 1);
+        assert_eq!(
+            rules.live.lock().unwrap()[0].effect(),
+            if allow {
+                PermissionEffect::Allow
+            } else {
+                PermissionEffect::Deny
+            }
+        );
+        assert_eq!(
+            timeout(Duration::from_secs(5), active)
+                .await
+                .unwrap()
+                .unwrap(),
+            Ok(if codex {
+                ExecutionOutcome::Cancelled
+            } else {
+                ExecutionOutcome::Completed
+            })
+        );
+        if codex {
+            // The mapped cancel ends only the answered execution. A failure to
+            // correlate that wire option would tear down this provider session.
+            loop {
+                if let ExecutionUpdate::Finished(outcome) = next(&mut opened).await {
+                    assert_eq!(outcome, ExecutionOutcome::Cancelled);
+                    break;
+                }
+            }
+            let wire: serde_json::Value = serde_json::from_str(
+                &std::fs::read_to_string(root.path().join("permission-outcome")).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(wire["outcome"]["optionId"], "cancel");
+            let again = start(&opened, "again").await;
+            let mut saw_second_turn = false;
+            loop {
+                match next(&mut opened).await {
+                    ExecutionUpdate::Message(chunk) if chunk.as_str() == "turn-2-open" => {
+                        saw_second_turn = true;
+                    }
+                    ExecutionUpdate::Finished(outcome) => {
+                        assert_eq!(outcome, ExecutionOutcome::Completed);
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+            assert!(
+                saw_second_turn,
+                "the same Codex session accepts a later turn"
+            );
+            assert_eq!(
+                timeout(Duration::from_secs(5), again)
+                    .await
+                    .unwrap()
+                    .unwrap(),
+                Ok(ExecutionOutcome::Completed)
+            );
+        }
+        opened
+            .session
+            .shutdown(SessionCloseRequest::Explicit(close_action()))
+            .await
+            .into_result()
+            .unwrap();
+        let records = answers(&audit);
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0].delivery(), &PermissionAnswerDelivery::Selected);
+        assert_eq!(records[1].delivery(), &PermissionAnswerDelivery::Written);
+        for record in records {
+            assert_eq!(record.resolution(), &resolution);
+        }
+        assert_eq!(root.path().join("fixture.txt").exists(), allow);
+        assert_gone(&root, "pid");
+    }
+}
+
 /// A remembered choice commits before the selection is recorded. A failed
 /// selection audit leaves that grant in place.
 #[tokio::test]
@@ -1102,10 +1267,7 @@ async fn a_failed_selection_audit_leaves_the_remembered_rule() {
     );
     let records = answers(&audit);
     assert_eq!(records[0].delivery(), &PermissionAnswerDelivery::Selected);
-    assert!(matches!(
-        records[0].resolution().attribution().basis(),
-        ApprovalBasis::Rule(_)
-    ));
+    assert_eq!(records[0].resolution().attribution(), &attribution());
     assert!(!root.path().join("fixture.txt").exists());
     assert_eq!(active.await.unwrap(), Err(AgentError::AuditFailure));
     assert_eq!(
@@ -1124,11 +1286,17 @@ async fn a_failed_selection_audit_leaves_the_remembered_rule() {
 #[tokio::test]
 async fn a_settled_rule_is_not_withdrawn_when_the_answer_audit_fails() {
     let _slot = process_test_slot().await;
+    let rule = SettledRule::new(
+        ApprovalRuleReference::new(
+            "pr_live",
+            "4",
+            ActionContext::new("original-grantor", "nessa.panel", "original-grant").unwrap(),
+        )
+        .unwrap(),
+        PermissionEffect::Allow,
+    );
     let rules = Arc::new(RememberingRules {
-        live: Mutex::new(vec![SettledRule::new(
-            ApprovalRuleReference::new("pr_live", "4", attribution().actor().clone()).unwrap(),
-            PermissionEffect::Allow,
-        )]),
+        live: Mutex::new(vec![rule.clone()]),
     });
     let audit = Arc::new(AnswerAudit {
         reject_call: Some(1),
@@ -1138,8 +1306,13 @@ async fn a_settled_rule_is_not_withdrawn_when_the_answer_audit_fails() {
     config.shutdown_grace = Duration::from_secs(2);
     config.execution_timeout = None;
     config.permission_rules = rules.clone();
-    let binding =
-        ClaudeAcpProvider::new(config, &model, TokenLimits::new(900, 100).unwrap(), audit).unwrap();
+    let binding = ClaudeAcpProvider::new(
+        config,
+        &model,
+        TokenLimits::new(900, 100).unwrap(),
+        audit.clone(),
+    )
+    .unwrap();
     let mut opened = binding
         .open(ProviderOpenRequest::without_startup_control(None))
         .await
@@ -1158,6 +1331,16 @@ async fn a_settled_rule_is_not_withdrawn_when_the_answer_audit_fails() {
         assert_eq!(live.len(), 1);
         assert_eq!(live[0].reference().rule_id(), "pr_live");
     }
+    let records = answers(&audit);
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].delivery(), &PermissionAnswerDelivery::Selected);
+    assert_eq!(
+        records[0].resolution().attribution(),
+        &ApprovalAttribution::new(
+            rule.reference().granted_by().clone(),
+            ApprovalBasis::Rule(rule.reference().clone()),
+        )
+    );
     let _ = opened
         .session
         .shutdown(SessionCloseRequest::Explicit(close_action()))
