@@ -90,7 +90,7 @@ pub(crate) async fn review_notice_ask(
 
 /// Make the notices that are up the ones for the reviews that are waiting.
 /// The window sends every set the gateway pushes, the empty one included.
-/// One malformed review refuses the whole set, so nothing is half applied.
+/// A malformed review is left out, so it cannot keep the rest from settling.
 #[tauri::command]
 pub(crate) async fn review_notice_sync(
     reviews: Vec<ReviewWire>,
@@ -98,8 +98,13 @@ pub(crate) async fn review_notice_sync(
 ) -> Result<(), String> {
     let waiting = reviews
         .iter()
-        .map(ReviewWire::notice)
-        .collect::<Result<Vec<_>, _>>()?;
+        .filter_map(|review| {
+            review
+                .notice()
+                .inspect_err(|error| crate::host_log::warn(format!("{error}; no notice for it")))
+                .ok()
+        })
+        .collect::<Vec<_>>();
     on_pool(Arc::clone(&deps.review_notices), move |notices| {
         notices.sync(waiting);
     })

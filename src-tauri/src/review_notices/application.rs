@@ -9,6 +9,7 @@
 //! not take is not recorded, so the next set posts it again.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
@@ -70,6 +71,9 @@ struct Up {
 pub(crate) struct ReviewNotices {
     center: Arc<dyn NoticeCenter>,
     up: Mutex<Up>,
+    /// Whether this run has asked on its own, so a prompt the person left
+    /// alone is not raised again with every set.
+    asked: AtomicBool,
 }
 
 impl ReviewNotices {
@@ -81,6 +85,7 @@ impl ReviewNotices {
         Self {
             center,
             up: Mutex::default(),
+            asked: AtomicBool::new(false),
         }
     }
 
@@ -95,9 +100,14 @@ impl ReviewNotices {
     /// Make the notices that are up the ones for `waiting`.
     ///
     /// A review waiting while the person has never been asked asks them,
-    /// where the system has a prompt: that is the moment a notice is wanted.
+    /// once a run, where the system has a prompt: that is the moment a
+    /// notice is wanted.
     pub(crate) fn sync(&self, waiting: Vec<ReviewNotice>) {
-        if !waiting.is_empty() && self.center.access() == NoticeAccess::NotAsked {
+        if !waiting.is_empty()
+            && !self.asked.load(Ordering::Relaxed)
+            && self.center.access() == NoticeAccess::NotAsked
+        {
+            self.asked.store(true, Ordering::Relaxed);
             // Outside the lock: the person may take a while to answer.
             self.center.ask();
         }
@@ -126,8 +136,9 @@ impl ReviewNotices {
             }
         }
         for (id, notice) in wanted {
-            // The same review with the same words is already up as it is.
-            if up.shown.get(&id) == Some(&notice) {
+            // Already up. A title that arrived later is not worth a second
+            // alert for the same review.
+            if up.shown.contains_key(&id) {
                 continue;
             }
             match self.center.post(&notice) {
@@ -263,13 +274,12 @@ mod tests {
     }
 
     #[test]
-    fn a_notice_already_up_is_not_posted_again_unless_its_words_changed() {
+    fn a_notice_already_up_is_not_posted_again() {
         let (center, notices) = started();
         notices.sync(vec![notice("a")]);
         notices.sync(vec![notice("a")]);
-        assert_eq!(center.take(), ["post a Bash"]);
         notices.sync(vec![notice_titled("a", "Read")]);
-        assert_eq!(center.take(), ["post a Read"]);
+        assert_eq!(center.take(), ["post a Bash"]);
     }
 
     #[test]
@@ -305,6 +315,39 @@ mod tests {
         assert_eq!(center.take(), ["ask", "post a Bash"]);
         notices.sync(vec![notice("b")]);
         assert_eq!(center.take(), ["post b Bash", "withdraw a"]);
+    }
+
+    #[test]
+    fn a_prompt_left_alone_is_not_raised_again() {
+        let center = Arc::new(RecordingCenter::default());
+        let notices = ReviewNotices::start(Arc::new(IgnoredPrompt(center.clone())));
+        center.take();
+        notices.sync(vec![notice("a")]);
+        notices.sync(vec![notice("a")]);
+        assert_eq!(center.take(), ["ask", "post a Bash", "post a Bash"]);
+    }
+
+    /// Never asked, whatever the person does with the prompt.
+    struct IgnoredPrompt(Arc<RecordingCenter>);
+
+    impl NoticeCenter for IgnoredPrompt {
+        fn access(&self) -> NoticeAccess {
+            NoticeAccess::NotAsked
+        }
+        fn ask(&self) -> NoticeAccess {
+            self.0.record("ask".to_owned());
+            NoticeAccess::NotAsked
+        }
+        fn post(&self, notice: &ReviewNotice) -> Result<(), String> {
+            self.0.post(notice)?;
+            Err("not allowed".to_owned())
+        }
+        fn withdraw(&self, id: &NoticeId) -> Result<(), String> {
+            self.0.withdraw(id)
+        }
+        fn withdraw_all(&self) {
+            self.0.withdraw_all();
+        }
     }
 
     #[test]
