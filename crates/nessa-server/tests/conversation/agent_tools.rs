@@ -1049,7 +1049,7 @@ async fn a_thread_turn_reports_its_outcome_and_reply_back_to_the_sender() {
         )
         .await;
     assert_eq!(conflict["structuredContent"]["error"], "request_conflict");
-    assert_eq!(service.inner.thread_reports.waiting(), 0);
+    assert_eq!(reports_in(&service, &source, 1).await.len(), 1);
 
     // A steer taken into a running turn reports that turn's outcome and
     // reply once it settles, though a queued turn admitted in between is
@@ -1293,4 +1293,99 @@ fn a_long_reply_is_cut_so_the_whole_report_fits_the_input_limit() {
     );
     assert!(text.len() <= limit, "{} > {limit}", text.len());
     assert!(text.ends_with("\n[reply cut to fit]"));
+}
+
+/// Holds a save after it is written, so a test can read the store between a
+/// send's save and its registration.
+struct HeldSave {
+    store: Arc<crate::conversation::infrastructure::LocalThreadReports>,
+    saved: tokio::sync::Notify,
+    release: tokio::sync::Semaphore,
+}
+impl crate::conversation::application::ThreadReportStore for HeldSave {
+    fn save(
+        &self,
+        report: &crate::conversation::application::PendingReport,
+    ) -> crate::conversation::application::ConversationFuture<'_, ()> {
+        let report = report.clone();
+        Box::pin(async move {
+            self.store.save(&report).await?;
+            self.saved.notify_one();
+            let _ = self.release.acquire().await.unwrap();
+            Ok(())
+        })
+    }
+    fn settle(&self, report: &str) -> crate::conversation::application::ConversationFuture<'_, ()> {
+        self.store.settle(report)
+    }
+    fn forget_conversation(
+        &self,
+        id: &ConversationId,
+    ) -> crate::conversation::application::ConversationFuture<'_, ()> {
+        self.store.forget_conversation(id)
+    }
+    fn pending(
+        &self,
+    ) -> crate::conversation::application::ConversationFuture<
+        '_,
+        Vec<crate::conversation::application::PendingReport>,
+    > {
+        self.store.pending()
+    }
+}
+
+/// A start that reads the store between a send's save and its registration
+/// leaves that report to the send: it is not reported interrupted.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_start_reading_a_report_this_run_saved_leaves_it_to_its_send() {
+    use crate::conversation::application::ThreadReportStore;
+    use crate::conversation::infrastructure::LocalThreadReports;
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("data");
+    let private = directory.path().join("reports");
+    nessa_local_storage::create_directory(&private).unwrap();
+    let provider = Arc::new(ProviderFactory::default());
+    let (service, storage, metadata) = fixture(&root, provider.clone());
+    service.bind_commands(storage.clone());
+    let store = Arc::new(HeldSave {
+        store: Arc::new(LocalThreadReports::open(&private.join("thread-reports.sqlite3")).unwrap()),
+        saved: tokio::sync::Notify::new(),
+        release: tokio::sync::Semaphore::new(0),
+    });
+    service.bind_thread_reports(store.clone());
+    let source = id();
+    let worker = id();
+    opened(&service, &provider, &source).await;
+    opened(&service, &provider, &worker).await;
+    let saved = store.saved.notified();
+    let registering = {
+        let service = service.clone();
+        let (worker, source) = (worker.clone(), source.clone());
+        tokio::spawn(async move {
+            service
+                .report_thread_turn(
+                    worker,
+                    "later".into(),
+                    ThreadReport {
+                        parent: source,
+                        caller: caller("later-action"),
+                        execution: "later-report".into(),
+                    },
+                )
+                .await
+        })
+    };
+    saved.await;
+    assert_eq!(service.resume_thread_reports().await.unwrap(), 1);
+    store.release.add_permits(1);
+    assert_eq!(registering.await.unwrap(), ReportRegistration::Registered);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(service.inner.thread_reports.waiting(), 1);
+    assert_eq!(
+        store.pending().await.unwrap().len(),
+        1,
+        "the report still waits for its turn"
+    );
+    retire(service, storage, metadata).await;
 }

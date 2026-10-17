@@ -27,22 +27,21 @@
 //! interrupted: [`restored_unfinished`] owns that one decision.
 use super::{
     ConversationCaller, ConversationError, ConversationService, Inner, SubmissionMode,
-    SubmittedMessage,
+    SubmittedMessage, Writer,
 };
 use crate::conversation::application::ConversationFuture;
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_protocol::conversation::domain::ConversationId;
-use nessa_sdk::application::agent_execution::commands::{CreationStorageError, MutationFailure};
 use nessa_sdk::application::agent_execution::{
     executions::ExecutionUpdate,
     hooks::{HookError, InvocationContext, InvocationHook},
-    sessions::{InvocationRecord, StorageError},
+    sessions::InvocationRecord,
 };
 use nessa_sdk::domain::agent_execution::executions::{
     ExecutionOutcome, Initiation, InvocationStage, MessageKind,
 };
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc, Mutex, OnceLock, PoisonError, Weak,
@@ -57,11 +56,13 @@ use std::{
 const SETTLING_LOOKS: usize = 50;
 const SETTLING_LOOK_DELAY: Duration = Duration::from_millis(100);
 
-/// A report that cannot be queued yet (the person's own command holds their
-/// command store, or storage did not answer) waits this long, doubling up to
-/// the most, and tries again until the gateway retires; then it stays saved.
+/// A report its parent cannot take yet (full of open conversations, or its
+/// storage not answering) waits this long, doubling up to the most, and tries
+/// again until the gateway retires; then it stays saved for the next start.
 const DELIVERY_RETRY_FIRST: Duration = Duration::from_millis(100);
-const DELIVERY_RETRY_MOST: Duration = Duration::from_secs(30);
+const DELIVERY_RETRY_MOST: Duration = Duration::from_secs(60);
+/// Threads looked at together when the gateway starts.
+const RESUME_LOOKS: usize = 16;
 
 /// Where one finished turn is reported, fixed when its send was admitted.
 #[derive(Clone)]
@@ -135,13 +136,11 @@ pub(crate) struct ThreadReports {
     /// Threads being looked at, and whether another look (after a failure,
     /// when `true`) was asked for meanwhile.
     looking: Mutex<HashMap<ConversationId, Option<bool>>>,
-    /// One person's reports are queued one at a time: their commands share
-    /// one store that takes one command at a time.
-    deliveries: Mutex<HashMap<(OrganizationId, PrincipalId), DeliveryGate>>,
+    /// Reports this run saved and has not settled: the start's resume reads
+    /// the store while sends save, and leaves these to the run that saved them.
+    fresh: Mutex<HashSet<String>>,
     store: OnceLock<Arc<dyn ThreadReportStore>>,
 }
-
-type DeliveryGate = Arc<tokio::sync::Mutex<()>>;
 
 /// What a look found of one watched turn.
 enum Watched {
@@ -345,16 +344,8 @@ impl ThreadReports {
             .collect()
     }
 
-    /// The gate one person's deliveries take in turn.
-    fn delivery_gate(&self, caller: &ConversationCaller) -> DeliveryGate {
-        let mut gates = self
-            .deliveries
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        gates
-            .entry((caller.organization_id.clone(), caller.principal_id.clone()))
-            .or_default()
-            .clone()
+    fn fresh(&self) -> std::sync::MutexGuard<'_, HashSet<String>> {
+        self.fresh.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// Reports registered or being queued.
@@ -424,6 +415,7 @@ impl ConversationService {
         if reports.holds(&child, &report.execution) {
             return ReportRegistration::AlreadyWaiting;
         }
+        reports.fresh().insert(report.execution.clone());
         if let Some(store) = reports.store() {
             let pending = PendingReport {
                 child: child.clone(),
@@ -432,6 +424,7 @@ impl ConversationService {
             };
             if let Err(error) = store.save(&pending).await {
                 tracing::warn!(%child, %error, "a thread report could not be saved; none will come");
+                reports.fresh().remove(&report.execution);
                 return ReportRegistration::Refused;
             }
         }
@@ -464,6 +457,7 @@ impl ConversationService {
                 tracing::warn!(report, %error, "a settled thread report stays saved; the next start settles it");
             }
         }
+        self.inner.thread_reports.fresh().remove(report);
     }
 
     /// Load the reports an earlier run saved and look at each thread they
@@ -477,21 +471,38 @@ impl ConversationService {
         };
         let pending = store.pending().await?;
         let loaded = pending.len();
-        let mut children: Vec<ConversationId> = Vec::new();
+        let mut children: HashSet<ConversationId> = HashSet::new();
         for saved in pending {
-            if !children.contains(&saved.child) {
-                children.push(saved.child.clone());
+            // Saved by this run, not an earlier one: it is that send's.
+            if self
+                .inner
+                .thread_reports
+                .fresh()
+                .contains(&saved.report.execution)
+            {
+                continue;
             }
+            children.insert(saved.child.clone());
             self.inner
                 .thread_reports
                 .insert(saved.child, saved.execution, saved.report, true);
         }
+        let looks = Arc::new(tokio::sync::Semaphore::new(RESUME_LOOKS));
+        let mut running = tokio::task::JoinSet::new();
         for child in children {
             if self.inner.retirement.get().is_some() {
                 break;
             }
-            self.look_for_reports(child, false).await;
+            let Ok(permit) = looks.clone().acquire_owned().await else {
+                break;
+            };
+            let service = self.clone();
+            running.spawn(async move {
+                service.look_for_reports(child, false).await;
+                drop(permit);
+            });
         }
+        while running.join_next().await.is_some() {}
         Ok(loaded)
     }
 
@@ -594,8 +605,11 @@ impl ConversationService {
                     Watched::Settling | Watched::Waiting => None,
                 }
             });
+        // Each delivery runs on its own, so a parent that cannot take its
+        // report yet holds up no other.
         for taken in taken {
-            self.deliver_report(taken).await;
+            let service = self.clone();
+            tokio::spawn(async move { service.deliver_report(taken).await });
         }
         self.inner
             .thread_reports
@@ -640,52 +654,58 @@ impl ConversationService {
         }
     }
 
-    /// Queue one report into its parent, then settle its saved copy. One
-    /// person's reports go one at a time. A report the person's own command
-    /// meets, or storage does not take, tries again until the gateway
-    /// retires, and is then left saved for the next start. One the parent
-    /// refuses outright is let go.
+    /// Queue one report into its parent, then settle its saved copy. The
+    /// parent's own history is what says it has the report: one it already
+    /// holds is not queued again, and the report's fixed execution identity
+    /// makes a second submit answer from the first. A parent that cannot take
+    /// it yet is tried again until the gateway retires, which leaves it saved
+    /// for the next start. One the parent refuses for good is let go.
     async fn deliver_report(&self, taken: Taken) {
         let Taken { report, text, .. } = &taken;
-        let Some(storage) = self.commands() else {
-            return;
-        };
-        let gate = self.inner.thread_reports.delivery_gate(&report.caller);
-        let _turn = gate.lock().await;
         let mut delay = DELIVERY_RETRY_FIRST;
         loop {
             if self.inner.retirement.get().is_some() {
                 return;
             }
-            let answer = self
-                .submit_command(
-                    storage.clone(),
-                    report.parent.clone(),
-                    report.caller.clone(),
-                    Initiation::owner(),
-                    false,
-                    report.execution.clone(),
-                    SubmittedMessage {
-                        text: text.clone(),
-                        ..Default::default()
-                    },
-                    SubmissionMode::Queue,
-                )
-                .await;
-            match answer {
-                Ok(_) => break,
-                Err(_) if self.inner.retirement.get().is_some() => return,
-                Err(MutationFailure::Storage(CreationStorageError::Storage(
-                    StorageError::Busy,
-                ))) => {}
-                Err(MutationFailure::Storage(error)) => {
-                    let parent = &report.parent;
-                    tracing::warn!(%parent, ?error, "a thread report waits for command storage");
-                }
-                Err(error) => {
-                    let parent = &report.parent;
-                    tracing::warn!(%parent, ?error, "a thread report could not be queued; it is let go");
-                    break;
+            let delivered = self
+                .report_history(&report.parent, &report.caller)
+                .await
+                .map(|history| invocation(&history, &report.execution).is_some());
+            if delivered == Some(true) {
+                break;
+            }
+            if delivered == Some(false) {
+                let answer = self
+                    .submit_as(
+                        report.parent.clone(),
+                        report.caller.clone(),
+                        report.execution.clone(),
+                        SubmittedMessage {
+                            text: text.clone(),
+                            ..Default::default()
+                        },
+                        SubmissionMode::Queue,
+                        Writer::Person(Initiation::owner(), false),
+                    )
+                    .await;
+                match answer.map_err(super::SubmitFailure::into_error) {
+                    Ok(_) => break,
+                    Err(_) if self.inner.retirement.get().is_some() => return,
+                    Err(
+                        error @ (ConversationError::NotFound
+                        | ConversationError::Deleted
+                        | ConversationError::InvalidInput
+                        | ConversationError::RequestConflict
+                        | ConversationError::AgentUnsupported),
+                    ) => {
+                        let parent = &report.parent;
+                        tracing::warn!(%parent, %error, "a thread report was refused by its parent; it is let go");
+                        break;
+                    }
+                    Err(error) => {
+                        let parent = &report.parent;
+                        tracing::warn!(%parent, %error, "a thread report waits for its parent");
+                    }
                 }
             }
             tokio::time::sleep(delay).await;
@@ -709,30 +729,41 @@ fn watched(
 ) -> Watched {
     let found = match invocation(history, execution) {
         Some(record) => in_record(history, record, failure),
-        None => Found::Waiting,
+        None => Found::Waiting(None),
     };
     match found {
         Found::Finished(outcome, reply) => {
             Watched::Finished(report_text(child, execution, outcome, reply, limit))
         }
-        Found::Settling | Found::Waiting if restored => {
-            restored_unfinished(child, execution, limit)
+        Found::Settling(saved) | Found::Waiting(saved) if restored => {
+            restored_unfinished(child, execution, saved, limit)
         }
-        Found::Settling => Watched::Settling,
-        Found::Waiting => Watched::Waiting,
+        Found::Settling(_) => Watched::Settling,
+        Found::Waiting(_) => Watched::Waiting,
     }
 }
 
 /// A report an earlier run saved, whose turn that run left unfinished. No
-/// turn is run again after a restart, so it was interrupted.
-fn restored_unfinished(child: &ConversationId, execution: &str, limit: usize) -> Watched {
-    Watched::Finished(report_text(child, execution, "interrupted", None, limit))
+/// turn is run again after a restart, so it was interrupted: with the result
+/// and reply it saved, when it saved one before its settlement.
+fn restored_unfinished(
+    child: &ConversationId,
+    execution: &str,
+    saved: Option<Ended>,
+    limit: usize,
+) -> Watched {
+    let (outcome, reply) = saved.unwrap_or(("interrupted", None));
+    Watched::Finished(report_text(child, execution, outcome, reply, limit))
 }
+
+/// An outcome, and the reply that came with it.
+type Ended = (&'static str, Option<String>);
 
 enum Found {
     Finished(&'static str, Option<String>),
-    Settling,
-    Waiting,
+    /// Settling, with the result already saved, if one is.
+    Settling(Option<Ended>),
+    Waiting(Option<Ended>),
 }
 
 fn in_record(history: &[InvocationRecord], record: &InvocationRecord, failure: bool) -> Found {
@@ -751,18 +782,22 @@ fn in_record(history: &[InvocationRecord], record: &InvocationRecord, failure: b
                 .and_then(|event| event.target.as_ref())
                 .and_then(|target| invocation(history, target.as_str()));
             let Some(host) = host else {
-                return Found::Waiting;
+                return Found::Waiting(None);
             };
             match (settled(host), &host.result) {
                 (true, Some(result)) => Found::Finished(outcome(result), reply(host)),
                 (true, None) => Found::Finished("cancelled", None),
-                (false, Some(_)) => Found::Settling,
-                (false, None) => Found::Waiting,
+                (false, Some(result)) => Found::Settling(Some((outcome(result), reply(host)))),
+                (false, None) => Found::Waiting(None),
             }
         }
-        _ if record.result.is_some() => Found::Settling,
-        Some(InvocationStage::Queued) if failure => Found::Settling,
-        _ => Found::Waiting,
+        _ => match &record.result {
+            Some(result) => Found::Settling(Some((outcome(result), reply(record)))),
+            None if failure && last.map(|event| event.stage) == Some(InvocationStage::Queued) => {
+                Found::Settling(None)
+            }
+            None => Found::Waiting(None),
+        },
     }
 }
 

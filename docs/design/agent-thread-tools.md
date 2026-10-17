@@ -75,13 +75,19 @@ makes the agent cancel the turns queued behind it after that, so a look keeps
 looking for up to five seconds while a watched turn is settling.
 
 The report's execution identity derives from the send's source, request and
-purpose, so a second look, a retried send, or a redelivery after a restart
-answers from the first receipt. A report leaves the store only once its parent
-has it, or refuses it outright. One person's commands are taken one at a time
-without a queue, so one person's reports are delivered one at a time, and a
-report that meets the person's own command, or storage that does not answer,
-tries again with growing waits (up to 30 seconds) until the gateway retires;
-it then stays saved for the next start.
+purpose. The parent's own history is what says it has the report: each
+delivery first reads it, and one already there is settled, not queued again; a
+second submit under the same identity answers from the first. Delivery queues
+the report into the parent directly, not through the command store, so it never
+meets the person's own commands. Each delivery runs on its own; one the parent
+cannot take yet (too many conversations open, storage not answering) tries again
+with growing waits, up to a minute, until the gateway retires, and then stays
+saved for the next start. A report leaves the store only once its parent has
+it, or refuses it for good (deleted, gone, or an invalid message).
+
+At start the saved reports are loaded and their threads looked at, sixteen at a
+time. A report this run saved before the load read it is left to its own send,
+not taken for an earlier run's.
 
 | When | What happens |
 | --- | --- |
@@ -92,10 +98,11 @@ it then stays saved for the next start.
 | Turn settles or is cancelled | Report queued into the parent, then let go |
 | Steer injected into a turn | Reported with that turn once it settles |
 | Queued turn withdrawn, or thread closed | Look; reported `cancelled` |
-| Parent busy with the person's command | Retried until it is taken |
+| Parent cannot take it yet | Retried until it is taken |
+| Parent already has it (crash before settle) | Settled, not queued again |
 | Gateway retires before delivery | Stays saved; the next start delivers it |
 | Saved by an earlier run, turn finished | Delivered at start |
-| Saved by an earlier run, turn unfinished | Reported `interrupted` at start |
+| Saved by an earlier run, turn unfinished | Reported `interrupted` at start, with any result it saved |
 | Person may no longer view the thread, or it is deleted | Let go, nothing told |
 
 No turn the earlier run left unfinished runs again after a restart, so a saved
@@ -106,6 +113,7 @@ each other keep reporting to each other: that is their own conversation, and the
 person stops it as they would any turn. Tests:
 `a_thread_turn_reports_its_outcome_and_reply_back_to_the_sender`,
 `saved_thread_reports_are_delivered_after_a_restart`,
+`a_start_reading_a_report_this_run_saved_leaves_it_to_its_send`,
 `a_long_reply_is_cut_so_the_whole_report_fits_the_input_limit`,
 `waiting_reports_survive_reopening_until_settled`.
 
