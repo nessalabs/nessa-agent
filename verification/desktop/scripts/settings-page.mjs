@@ -9,13 +9,15 @@
  * WebKit.
  */
 import { mkdirSync } from "node:fs"
-import { dirname, join } from "node:path"
+import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { attempt, chosen } from "./lib/cli.mjs"
 import { need, openPage, withEngines } from "./lib/browser.mjs"
 import { main } from "./lib/run.mjs"
-import { css, keys, safeAreaTokens } from "./lib/selectors.mjs"
+import { css, keys, names, safeAreaTokens } from "./lib/selectors.mjs"
 import { frames, settled } from "./lib/workspace.mjs"
+import { reviewNoticeFailures } from "./lib/review-notices.mjs"
+import { repoRoot, startPreview, target } from "./lib/server.mjs"
 
 /** Sizes a person keeps a Mac window at, and one narrow enough to fold the sidebar. */
 const sizes = [
@@ -343,22 +345,24 @@ const checks = {
   },
 
   /**
-   * Privacy & Permissions › Access: review notifications offer Allow and
-   * do not ask until that button is pressed.
+   * Privacy & Permissions › Access: the browser owns permission; only its
+   * default state offers an accessible Allow button.
    */
   "review-notices": async (page) => {
-    const failures = []
     await show(page, "Privacy & Permissions", "Access")
+    const permission = await page.evaluate(() =>
+      typeof Notification === "undefined" ? "unsupported" : Notification.permission,
+    )
     const row = page.locator('[data-setting="review-notices"]')
-    if ((await row.count()) !== 1) {
-      failures.push("review-notices is missing")
-      return { text: "", failures }
+    const actual = {
+      permission,
+      rows: await row.count(),
+      allowButtons: await row
+        .getByRole("button", { name: names.notificationAllow, exact: true })
+        .count(),
+      text: (await row.allTextContents()).join(" "),
     }
-    const text = (await row.textContent()) ?? ""
-    if (!text.includes("Allow")) failures.push("the row does not offer Allow")
-    if (!text.includes("while you are away"))
-      failures.push("the row does not say what the notification is for")
-    return { text, failures }
+    return { ...actual, failures: reviewNoticeFailures(actual) }
   },
 
   /**
@@ -608,7 +612,7 @@ Per engine:
   arrive      a page's motion is at most 300ms; none under less motion
   search      Enter lands on the setting, in view and marked a moment; ⌘F
   focus-ring  a tab and a switch show the window's focus ring
-  review-notices  Access offers Allow and does not ask before that press
+  review-notices  Access reflects browser notification permission and accessible Allow buttons
   remembered-rules  Access rests the remembered-rules row without a gateway
   native-hooks  Native hooks rests Claude and Codex hook rows without a gateway, and
                  says a hook can deny or change a tool call
@@ -618,18 +622,32 @@ Per engine:
   native-hooks-failed  a refused change says it could not change`,
 }
 
-await main(meta, async ({ options, rep, url }) => {
-  const names = chosen(options.only, Object.keys(checks), options.list)
-  await withEngines(options, rep, async (engine, browser) => {
-    for (const name of names)
-      await attempt(rep, { engine, name }, async () => {
-        const opened = await openPage(browser, { url, width: 1000, height: 700 })
-        try {
-          await openSettings(opened.page)
-          return await checks[name](opened.page, { browser, url, engine })
-        } finally {
-          await opened.close()
-        }
-      })
-  })
-})
+await main(
+  meta,
+  async ({ options, rep, url }) => {
+    const names = chosen(options.only, Object.keys(checks), options.list)
+    await withEngines(options, rep, async (engine, browser) => {
+      for (const name of names)
+        await attempt(rep, { engine, name }, async () => {
+          const opened = await openPage(browser, { url, width: 1000, height: 700 })
+          try {
+            await openSettings(opened.page)
+            return await checks[name](opened.page, { browser, url, engine })
+          } finally {
+            await opened.close()
+          }
+        })
+    })
+  },
+  (options) =>
+    options.mode === "prod" && !options.url
+      ? startPreview(
+          options,
+          {},
+          resolve(
+            repoRoot,
+            "verification/desktop/fixtures/native-hooks-on/vite.config.ts",
+          ),
+        )
+      : target(options),
+)

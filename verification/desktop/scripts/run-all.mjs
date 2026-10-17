@@ -27,7 +27,7 @@ import {
   verdictOf,
 } from "./lib/cli.mjs"
 import { functionalPreviewEnv, target } from "./lib/server.mjs"
-import { argsForCheck } from "./lib/run-all-args.mjs"
+import { argsForCheck, ownsPreview } from "./lib/run-all-args.mjs"
 
 const here = dirname(fileURLToPath(import.meta.url))
 // workspace-load.mjs stays off this list. CHECKLIST.md › Seeded workspace load.
@@ -163,9 +163,7 @@ try {
 const scheduled = checksUnder(options.mode, checks)
 const leftOutSet = new Set(scheduled.leftOut)
 const sharesPage = (check) =>
-  functional.includes(check) &&
-  check !== "message-sync" &&
-  !(options.mode === "prod" && check === "committed-transcript")
+  functional.includes(check) && !ownsPreview(check, options.mode)
 const dir = mkdtempSync(join(tmpdir(), "nessa-desktop-verify-all-"))
 const summary = []
 const documents = {}

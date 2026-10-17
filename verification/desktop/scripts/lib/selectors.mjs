@@ -512,6 +512,7 @@ export const zoneSaid = {
 
 /** Accessible names, for getByRole / getByText. */
 export const names = {
+  notificationAllow: "Allow",
   agentsEntry: "Agents",
   /** An app's review card's head: the app by its server, and the tool it asked to run (`approvalHead`). */
   appAsks: (server, tool) => `The ${server} app wants to run ${tool}`,
