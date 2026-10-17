@@ -18,8 +18,8 @@
 
 use super::delivery::{Deadline, Outgoing, SubscriptionDeliveries};
 use crate::conversation::application::{
-    error_code, CatalogueChangeWatch, CatalogueWatchError, CatalogueWatchState, ConversationError,
-    ConversationService, ReadOpening,
+    error_code, CatalogueChangeWatch, CatalogueWatchState, ConversationError, ConversationService,
+    ReadOpening,
 };
 use crate::product::{
     conversation::{caller, read_list, read_view},
@@ -223,22 +223,17 @@ impl Sources {
     ) -> Result<Self, String> {
         let unavailable = || code_of(&ConversationError::Unavailable);
         let records = || state.record_watches.as_ref().ok_or_else(unavailable);
-        let capacity = |error: ChangeWatchError| match error {
-            ChangeWatchError::Capacity => ConversationSubscriptionErrorCode::SubscriptionCapacity
-                .as_str()
-                .to_owned(),
-            ChangeWatchError::Closed => unavailable(),
-        };
+        let closed = |ChangeWatchError::Closed| unavailable();
         Ok(match target {
             Target::Events { conversation, .. } => Self {
-                records: Some(records()?.watch(conversation).map_err(capacity)?),
+                records: Some(records()?.watch(conversation).map_err(closed)?),
                 catalogue: None,
                 live: None,
                 environments: None,
                 hooks: None,
             },
             Target::View { conversation, .. } => Self {
-                records: Some(records()?.watch(conversation).map_err(capacity)?),
+                records: Some(records()?.watch(conversation).map_err(closed)?),
                 catalogue: None,
                 // A view also shows what is live and not a record.
                 live: Some(
@@ -255,16 +250,11 @@ impl Sources {
                     .catalogue_watches
                     .as_ref()
                     .ok_or_else(unavailable)?
-                    .watch(&owner.organization_id, &owner.principal_id)
-                    .map_err(|CatalogueWatchError::Capacity| {
-                        ConversationSubscriptionErrorCode::SubscriptionCapacity
-                            .as_str()
-                            .to_owned()
-                    })?;
+                    .watch(&owner.organization_id, &owner.principal_id);
                 Self {
                     // A list row's `running` follows a turn's commits, which
                     // change no summary (row L2).
-                    records: Some(records()?.watch_any().map_err(capacity)?),
+                    records: Some(records()?.watch_any().map_err(closed)?),
                     catalogue: Some(catalogue),
                     live: None,
                     environments: None,
@@ -869,7 +859,7 @@ pub(super) async fn run(run: Run) {
         ));
     };
     // Admitted before anything is registered: a session that may not follow
-    // takes nothing from the shared watch pools (row S29).
+    // registers no watch (row S29).
     if let Err(code) = authorize_batch(&state, &session, &target).await {
         return refuse(code, slot);
     }

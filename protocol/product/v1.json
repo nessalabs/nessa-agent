@@ -6107,7 +6107,7 @@
         "unknown_subscription",
         "cursor_ahead"
       ],
-      "description": "Refusals of subscribe and unsubscribe beside the conversation error codes a refused first read carries. subscription_capacity: the connection's published limit, or a gateway-wide watch capacity (record.change_watches, or conversation.catalogue_watches for a list subscription), is full. subscription_duplicate: this connection already follows that target; the agent catalog is one target, so a connection follows it at most once. unknown_subscription: no such live subscription on this connection, or one the other unsubscribe stops. cursor_ahead: after names a position past the stored history."
+      "description": "Refusals of subscribe and unsubscribe beside the conversation error codes a refused first read carries. subscription_capacity: the connection's published limit is full. subscription_duplicate: this connection already follows that target; the agent catalog is one target, so a connection follows it at most once. unknown_subscription: no such live subscription on this connection, or one the other unsubscribe stops. cursor_ahead: after names a position past the stored history."
     },
     "ConversationMessageDelivery": {
       "type": "string",
