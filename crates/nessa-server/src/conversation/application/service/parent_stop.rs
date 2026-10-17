@@ -267,6 +267,9 @@ impl ConversationService {
                             {
                                 continue;
                             }
+                            ensure_live(self, &child_id, caller)
+                                .await
+                                .map_err(MutationFailure::Target)?;
                             // Read committed identities without opening a provider or
                             // admitting automatic resumption during selection. Each
                             // physical target still receives its ordinary Cedar check.

@@ -313,6 +313,20 @@ impl OwnershipCoordinator {
         })
     }
 
+    /// Read a retained child session identity, including closed history.
+    /// This grants no admission authority. Hosts can distinguish an ordinary
+    /// root opening from a session whose existing child ancestry is sealed.
+    pub fn child_lifetime_for_session(&self, session: &SessionId) -> Option<AgentLifetimeId> {
+        self.inner.with_graph(|graph| {
+            graph
+                .snapshot()
+                .spawns
+                .into_iter()
+                .find(|row| row.child_session == *session)
+                .map(|row| row.child_lifetime)
+        })
+    }
+
     /// Reserve, prepare, and admit one child. Identical retries do not call the factory again.
     /// A caller that arrives while the attempt is running joins it. Dropping one waiter
     /// leaves the attempt running.

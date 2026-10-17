@@ -1,9 +1,13 @@
 //! Actual gateway composition: persistent SDK graph + ordinary command receipts.
 use super::*;
-use crate::conversation::application::AgentToolSource;
+use crate::conversation::application::{
+    AgentToolSource, Environment, EnvironmentDeclaration, EnvironmentFuture, EnvironmentLease,
+};
+use nessa_sdk::application::agent_execution::providers::AgentProvider;
 use nessa_sdk::application::agent_execution::subagents::{
     LiveCapacity, OwnershipCoordinator, OwnershipDependencies,
 };
+use nessa_sdk::domain::agent_execution::leases::{LeaseCleanup, LeaseId, LeaseRefusal, LeaseTerms};
 use nessa_sdk::infrastructure::session_storage::SqliteOwnershipStore;
 
 pub(super) async fn bind(
@@ -921,4 +925,168 @@ async fn deleting_an_owned_child_releases_ownership_and_does_not_block_parent_st
     );
     assert!(provider.executions.lock().unwrap().is_empty());
     retire(service, storage, metadata).await;
+}
+
+#[tokio::test]
+async fn deleting_a_cold_owned_tree_reconciles_confirmed_leases_and_cannot_reparent_children() {
+    use nessa_sdk::domain::agent_execution::subagents::LifetimeState;
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("data");
+    let provider = Arc::new(ProviderFactory::default());
+    let (service, storage, metadata) = fixture(&root, provider.clone());
+    let coordinator = bind(&service, &storage, &root, true).await;
+    let parent = id();
+    opened(&service, &provider, &parent).await;
+    let p = hold_turn(&service, &provider, &parent, "parent").await;
+    let child_id = child(&service, &parent, "parent", "child").await;
+    let c = hold_turn(&service, &provider, &child_id, "child").await;
+    let grandchild = child(&service, &child_id, "child", "grandchild").await;
+    let lifetimes: Vec<_> = [&parent, &child_id, &grandchild]
+        .into_iter()
+        .map(|id| {
+            coordinator
+                .active_lifetime_for_session(&conversation_session(id))
+                .unwrap()
+        })
+        .collect();
+    drop((p, c));
+    retire(service, storage, metadata).await;
+    let provider = Arc::new(ProviderFactory::default());
+    let (service, storage, metadata) = fixture_with_sessions(
+        &root,
+        provider.clone(),
+        crate::conversation::infrastructure::in_process_environment().into(),
+        crate::conversation_test_support::access_policy(),
+        crate::conversation_test_support::claude_erasers(),
+    );
+    let coordinator = bind(&service, &storage, &root, true).await;
+    let owned = SqliteOwnershipStore::open(&root.join("ownership.sqlite3")).unwrap();
+    let snapshot = nessa_sdk::application::agent_execution::subagents::OwnershipStore::read(&owned)
+        .await
+        .unwrap();
+    service.recover_deleted_ownership(&snapshot).await.unwrap();
+    assert!(service
+        .delete(parent, caller("delete-cold-parent"))
+        .await
+        .unwrap());
+    for lifetime in lifetimes {
+        assert_eq!(
+            coordinator.lifetime_state(&lifetime),
+            Some(LifetimeState::Closed)
+        );
+    }
+    assert!(service
+        .ownership_gate(&child_id, &caller("reopen-child").actor().unwrap())
+        .await
+        .is_err());
+    assert!(service
+        .ownership_gate(&grandchild, &caller("reopen-grandchild").actor().unwrap())
+        .await
+        .is_err());
+    assert!(provider.executions.lock().unwrap().is_empty());
+    retire(service, storage, metadata).await;
+}
+
+struct PausedOwnedOpening {
+    inner: Arc<dyn Environment>,
+    pause: std::sync::atomic::AtomicBool,
+    entered: tokio::sync::Notify,
+    release: tokio::sync::Notify,
+}
+impl Environment for PausedOwnedOpening {
+    fn declaration(&self) -> EnvironmentDeclaration {
+        self.inner.declaration()
+    }
+    fn open<'a>(
+        &'a self,
+        lease: &'a LeaseId,
+        grant: &'a LeaseTerms,
+        binding: Arc<dyn AgentProvider>,
+    ) -> EnvironmentFuture<'a, Result<EnvironmentLease, LeaseRefusal>> {
+        Box::pin(async move {
+            let opened = self.inner.open(lease, grant, binding).await?;
+            if self.pause.swap(false, Ordering::SeqCst) {
+                self.entered.notify_one();
+                self.release.notified().await;
+            }
+            Ok(opened)
+        })
+    }
+    fn account<'a>(&'a self, lease: &'a LeaseId) -> EnvironmentFuture<'a, Option<LeaseCleanup>> {
+        self.inner.account(lease)
+    }
+}
+
+#[tokio::test]
+async fn an_opening_owner_prevents_historical_cleanup_from_closing_its_lifetime() {
+    use nessa_sdk::application::agent_execution::subagents::CloseCommand;
+    use nessa_sdk::domain::agent_execution::subagents::{Initiator, LifetimeCause, LifetimeState};
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("data");
+    let environment = Arc::new(PausedOwnedOpening {
+        inner: crate::conversation::infrastructure::in_process_environment(),
+        pause: std::sync::atomic::AtomicBool::new(false),
+        entered: tokio::sync::Notify::new(),
+        release: tokio::sync::Notify::new(),
+    });
+    let provider = Arc::new(ProviderFactory::default());
+    let (service, storage, metadata) = fixture_in(
+        &root,
+        provider.clone(),
+        (environment.clone() as Arc<dyn Environment>).into(),
+    );
+    let coordinator = bind(&service, &storage, &root, true).await;
+    let parent = id();
+    opened(&service, &provider, &parent).await;
+    let p = hold_turn(&service, &provider, &parent, "parent").await;
+    let child = child(&service, &parent, "parent", "child").await;
+    let parent_lifetime = coordinator
+        .active_lifetime_for_session(&conversation_session(&parent))
+        .unwrap();
+    let child_lifetime = coordinator
+        .active_lifetime_for_session(&conversation_session(&child))
+        .unwrap();
+    drop(p);
+    retire(service, storage, metadata).await;
+    let (service, storage, metadata) = fixture_in(
+        &root,
+        Arc::new(ProviderFactory::default()),
+        (environment.clone() as Arc<dyn Environment>).into(),
+    );
+    let coordinator = bind(&service, &storage, &root, true).await;
+    let owned = SqliteOwnershipStore::open(&root.join("ownership.sqlite3")).unwrap();
+    let snapshot = nessa_sdk::application::agent_execution::subagents::OwnershipStore::read(&owned)
+        .await
+        .unwrap();
+    service.recover_deleted_ownership(&snapshot).await.unwrap();
+    environment.pause.store(true, Ordering::SeqCst);
+    let opening = {
+        let service = service.clone();
+        let child = child.clone();
+        tokio::spawn(async move { service.resolve(&child, &caller("reopen")).await })
+    };
+    tokio::time::timeout(Duration::from_secs(5), environment.entered.notified())
+        .await
+        .unwrap();
+    assert!(coordinator
+        .end_lifetime(CloseCommand {
+            lifetime: parent_lifetime,
+            cause: LifetimeCause::Deletion,
+            initiator: Initiator::Runtime,
+            external_attachment: false,
+            timeout: Some(Duration::from_millis(50)),
+        })
+        .await
+        .is_err());
+    assert_eq!(
+        coordinator.lifetime_state(&child_lifetime),
+        Some(LifetimeState::Closing),
+        "a newer opening's hold is not released by the previous lease's cleanup"
+    );
+    environment.release.notify_one();
+    assert!(opening.await.unwrap().is_err());
+    let _ = service.shutdown().await;
+    drop(service);
+    storage.shutdown().await.unwrap();
+    drop((storage, metadata));
 }

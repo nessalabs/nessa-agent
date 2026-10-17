@@ -1701,6 +1701,11 @@ impl ConversationService {
                                     cause,
                                     holds: false,
                                 })?;
+                            let ownership = service.ownership_gate(&id, &actor).await
+                                .map_err(|cause| OpeningFailure { cause, holds: false })?;
+                            if ownership.as_ref().is_some_and(|gate| gate.is_sealed()) {
+                                return Err(OpeningFailure { cause: ConversationError::Unavailable, holds: false });
+                            }
                             let opening = open_lease(
                                 environment.as_ref(),
                                 LeaseRequest {
@@ -1725,7 +1730,7 @@ impl ConversationService {
                                     holds: error.needs_cleanup(),
                                 }
                             })?;
-                            if let Some(gate) = service.ownership_gate(&id, &actor).await.map_err(|cause| OpeningFailure { cause, holds: true })? {
+                            if let Some(gate) = ownership {
                                 agent.install_owned_lifetime(gate).map_err(|error| OpeningFailure { cause: ConversationError::Agent(error), holds: true })?;
                             }
                             // Before anything can run: every call a Drive

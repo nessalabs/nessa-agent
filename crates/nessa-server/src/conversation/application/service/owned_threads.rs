@@ -298,6 +298,52 @@ impl ConversationService {
             .map_err(|_| ConversationError::Unavailable)
     }
 
+    async fn cold_owned_resources(&self, id: &ConversationId) -> ResourceReport {
+        let unknown = ResourceReport {
+            physical: PhysicalFact::Failed,
+            evidence: EvidenceFact::Pending,
+        };
+        let Ok((committed, _)) = self.committed_with_order(id).await else {
+            return unknown;
+        };
+        let Some(lease) = committed
+            .snapshot()
+            .and_then(|snapshot| snapshot.lease.as_ref())
+            .and_then(|current| current.held())
+        else {
+            return unknown;
+        };
+        use nessa_sdk::domain::agent_execution::leases::{LeaseCleanup, LeasePhase};
+        let known = match lease.phase() {
+            LeasePhase::Ended { cleanup, .. } => Some(cleanup),
+            LeasePhase::Interrupted {
+                late_cleanup: Some(cleanup),
+                ..
+            } => Some(cleanup),
+            _ => {
+                let Ok(environment) = self.inner.environment.of(id).await else {
+                    return unknown;
+                };
+                if environment.declaration().environment != lease.terms().environment {
+                    return unknown;
+                }
+                environment.account(lease.id()).await
+            }
+        };
+        if matches!(known, Some(LeaseCleanup::Confirmed { .. })) {
+            // The existing environment/lease owner confirms this exact process
+            // tree. The coordinator durably records the resource observation.
+            ResourceReport {
+                physical: PhysicalFact::Released,
+                evidence: EvidenceFact::Acknowledged,
+            }
+        } else {
+            // NotHeld only says the environment currently holds nothing; it is
+            // not proof that a process from an earlier connection was reaped.
+            unknown
+        }
+    }
+
     pub(super) async fn ownership_gate(
         &self,
         id: &ConversationId,
@@ -318,6 +364,11 @@ impl ConversationService {
             return Ok(Some(gate));
         }
         let coordinator = &ownership.coordinator;
+        if coordinator.active_lifetime_for_session(&session).is_none()
+            && coordinator.child_lifetime_for_session(&session).is_some()
+        {
+            return Err(ConversationError::Unavailable);
+        }
         let lifetime = match coordinator.active_lifetime_for_session(&session) {
             Some(id) => id,
             None => coordinator
@@ -487,11 +538,12 @@ impl ChildResources for Resources {
             .await
             .get(&self.id)
             .cloned();
-        let Some(live) = slot
-            .as_ref()
-            .and_then(|slot| slot.value.get())
-            .and_then(|live| live.as_ref().ok())
-        else {
+        let Some(slot) = slot else {
+            return service.cold_owned_resources(&self.id).await;
+        };
+        // A pending or failed opening may retain a newer physical hold before
+        // its lease is published. Historical cleanup cannot release that owner.
+        let Some(live) = slot.value.get().and_then(|live| live.as_ref().ok()) else {
             return failed;
         };
         let close = live

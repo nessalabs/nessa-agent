@@ -74,6 +74,11 @@ remain independent attempts after admission. An unknown-target durable partial
 selection would require a further command-owner representation and is outside
 this draft's completion claim.
 
+Cold cleanup observes the existing environment/lease owner's exact confirmation.
+It does not claim to end or rewrite that owner's lower lease history. `NotHeld`
+remains unknown for physical release, because an earlier process may outlive an
+environment connection.
+
 The runtime draft has focused tests for default/override, descendants, stale ids,
 caller loss, spawn fencing, queued reports, unrelated work, authorization,
 partial target failures, lost acknowledgements and restart with changed settings.
@@ -88,6 +93,13 @@ a draft implementation is not evidence that those gates passed.
 | Automatic resume races Stop capture | Both hold application admission before mode changes through successor admission | Parent Stop recovery plus existing resume conformance |
 | Report polling races ordinary person submit | Person command retains the same supervised admission scope as report delivery | `queued_child_report_is_retained_across_stop_restart_and_only_person_work_releases_it` and actual browser continuation |
 | Owned child is successfully deleted before parent Stop | Durable erasure proves its attachment was stopped; existing ownership drain ends that lifetime and returns capacity. Selection still traverses graph descendants before ignoring erased work | `deleting_an_owned_child_releases_ownership_and_does_not_block_parent_stop` |
+| Descendant access is refused before capture | Existing Cedar admission runs before committed invocation history is read; the selection refuses before effects | Existing authorization fixtures and exact-head access-path review |
+| Deleted ancestor has cold descendants after restart | Reuse saved lease cleanup or exact environment accounting; Confirmed can settle ownership, NotHeld/unavailable stay unconfirmed | `deleting_a_cold_owned_tree_reconciles_confirmed_leases_and_cannot_reparent_children` |
+| A closed historical child is opened again | SDK publishes retained child identity; gateway refuses converting it into a fresh root | Same cold-tree regression |
+| Runner failure leaves a queued report target owed | Report waits for exact continuation or explicit host Stop/decline instead of publishing premature cancellation | `a_thread_turn_reports_its_outcome_and_reply_back_to_the_sender` |
+| A newer opening has a hold but no published lease | Retained pending/error slots stay unresolved; the cold path only observes a session with no current slot. Opening checks the existing lifetime seal before environment effects | `an_opening_owner_prevents_historical_cleanup_from_closing_its_lifetime` |
+
+
 
 ### Empty-child preparation integration seam
 
