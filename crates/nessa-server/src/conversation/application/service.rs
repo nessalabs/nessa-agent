@@ -3903,8 +3903,12 @@ impl ConversationService {
             }
         })
         .await;
-        // Turns it held were cancelled with no invocation to follow.
-        if closed.is_ok() {
+        // Turns it held were cancelled with no invocation to follow, whether
+        // or not its uploads were then released.
+        if matches!(
+            closed,
+            Ok(()) | Err(ConversationError::AttachmentRelease(_))
+        ) {
             self.wake_thread_reports(&closing);
         }
         closed

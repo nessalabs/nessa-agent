@@ -90,7 +90,8 @@ pub struct PendingReport {
 /// will. Keyed by the report's execution identity.
 pub trait ThreadReportStore: Send + Sync {
     /// Save one waiting report. A report already saved is left as it is.
-    fn save(&self, report: &PendingReport) -> ConversationFuture<'_, ()>;
+    /// Answers whether this save wrote it.
+    fn save(&self, report: &PendingReport) -> ConversationFuture<'_, bool>;
     /// Let go of one report; one not saved is no error.
     fn settle(&self, report: &str) -> ConversationFuture<'_, ()>;
     /// Let go of every report waiting on, or going to, a deleted conversation.
@@ -432,19 +433,29 @@ impl ConversationService {
             return ReportRegistration::AlreadyWaiting;
         }
         reports.fresh().insert(report.execution.clone());
+        // A row already saved, and not watched here, is an earlier run's: a
+        // retry of its send, before the start read it, keeps it restored.
+        let mut restored = false;
         if let Some(store) = reports.store() {
             let pending = PendingReport {
                 child: child.clone(),
                 execution: execution.clone(),
                 report: report.clone(),
             };
-            if let Err(error) = store.save(&pending).await {
-                tracing::warn!(%child, %error, "a thread report could not be saved; none will come");
-                reports.fresh().remove(&report.execution);
-                return ReportRegistration::Refused;
+            match store.save(&pending).await {
+                Ok(true) => {}
+                Ok(false) => {
+                    reports.fresh().remove(&report.execution);
+                    restored = true;
+                }
+                Err(error) => {
+                    tracing::warn!(%child, %error, "a thread report could not be saved; none will come");
+                    reports.fresh().remove(&report.execution);
+                    return ReportRegistration::Refused;
+                }
             }
         }
-        if reports.insert(child, execution, report, false) {
+        if reports.insert(child, execution, report, restored) {
             ReportRegistration::Registered
         } else {
             ReportRegistration::AlreadyWaiting

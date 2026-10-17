@@ -1253,6 +1253,14 @@ async fn saved_thread_reports_are_delivered_after_a_restart() {
     service.bind_commands(storage.clone());
     let store = Arc::new(LocalThreadReports::open(&saved).unwrap());
     service.bind_thread_reports(store.clone());
+    // A retry of the send before the start reads its report keeps it the
+    // earlier run's.
+    assert_eq!(
+        service
+            .report_thread_turn(worker.clone(), "never".into(), report("never"))
+            .await,
+        ReportRegistration::Registered
+    );
     assert_eq!(service.resume_thread_reports().await.unwrap(), 2);
     let reports = reports_in(&service, &source, 2).await;
     assert_eq!(reports.len(), 2, "{reports:?}");
@@ -1306,13 +1314,13 @@ impl crate::conversation::application::ThreadReportStore for HeldSave {
     fn save(
         &self,
         report: &crate::conversation::application::PendingReport,
-    ) -> crate::conversation::application::ConversationFuture<'_, ()> {
+    ) -> crate::conversation::application::ConversationFuture<'_, bool> {
         let report = report.clone();
         Box::pin(async move {
-            self.store.save(&report).await?;
+            let wrote = self.store.save(&report).await?;
             self.saved.notify_one();
             let _ = self.release.acquire().await.unwrap();
-            Ok(())
+            Ok(wrote)
         })
     }
     fn settle(&self, report: &str) -> crate::conversation::application::ConversationFuture<'_, ()> {

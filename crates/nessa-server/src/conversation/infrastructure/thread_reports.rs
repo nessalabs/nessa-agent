@@ -55,11 +55,11 @@ fn failed(error: nessa_local_database::rusqlite::Error) -> ConversationError {
 }
 
 impl ThreadReportStore for LocalThreadReports {
-    fn save(&self, report: &PendingReport) -> ConversationFuture<'_, ()> {
+    fn save(&self, report: &PendingReport) -> ConversationFuture<'_, bool> {
         let report = report.clone();
         self.run(move |connection| {
             let caller = &report.report.caller;
-            connection
+            let written = connection
                 .execute(
                     "INSERT INTO waiting_reports (report, child, execution, parent, \
                      organization_id, principal_id, surface_id, action_id) \
@@ -76,7 +76,7 @@ impl ThreadReportStore for LocalThreadReports {
                     ],
                 )
                 .map_err(failed)?;
-            Ok(())
+            Ok(written == 1)
         })
     }
 
@@ -205,8 +205,8 @@ mod tests {
         let other = "00000000-0000-4000-8000-000000000003";
         {
             let store = LocalThreadReports::open(&path).unwrap();
-            store.save(&report(child, parent, "a")).await.unwrap();
-            store.save(&report(child, parent, "a")).await.unwrap();
+            assert!(store.save(&report(child, parent, "a")).await.unwrap());
+            assert!(!store.save(&report(child, parent, "a")).await.unwrap());
             store.save(&report(child, parent, "b")).await.unwrap();
             store.save(&report(other, child, "c")).await.unwrap();
         }
