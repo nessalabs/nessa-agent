@@ -1,3 +1,4 @@
+import { AgentDownloads } from "../../../../src/onboarding/ui/agent-downloads"
 import {
   AgentSetupProvider,
   SelectedAgentSetup,
@@ -27,7 +28,8 @@ import "../../../../src/desktop/workspace/ui/panes/panes.css"
 
 const surface = new URLSearchParams(location.search).get("surface")
 const firstUse = surface === "first-use"
-const setupCase = surface === "setup" || firstUse
+const downloads = surface === "downloads"
+const setupCase = surface === "setup" || firstUse || downloads
 let readiness: "not-installed" | "needs-authentication" | "ready" = "not-installed"
 const state = {
   attempts: 0,
@@ -85,7 +87,7 @@ const store = makeDesktopStore(
 )
 await store.dispatch(loadWorkspace())
 store.dispatch(openSession({ sessionId: "b" }))
-if (!firstUse)
+if (!firstUse && !downloads)
   await store.dispatch(
     sendMessage({ sessionId: "b", text: "Hello", initiator: "person" }),
   )
@@ -112,7 +114,9 @@ createRoot(root).render(
               style={{ width: "100%", height: "100%" }}
             >
               <div className="workspace-pane-body">
-                {firstUse ? (
+                {downloads && setup ? (
+                  <AgentDownloads source={setup.installations} />
+                ) : firstUse ? (
                   <SelectedAgentSetup agent="claude" />
                 ) : overview ? (
                   <div style={{ marginTop: "auto", padding: 20 }}>
