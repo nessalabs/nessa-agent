@@ -150,7 +150,7 @@ mod access_policy;
 mod agent_tools;
 pub use agent_tools::{
     AgentToolAudit, AgentToolAuditRecord, AgentToolRequest, AgentToolSource,
-    MAX_AGENT_TOOL_ADMISSIONS,
+    MAX_AGENT_TOOL_ADMISSIONS, MAX_EVENT_READERS,
 };
 mod app_call_policy;
 mod artifacts;
@@ -186,6 +186,8 @@ mod review_notice_selection;
 pub(crate) use review_notice_selection::{AuditedReviewSelection, SelectReviewNotice};
 mod service;
 mod session_key;
+mod source_permits;
+pub use source_permits::{SourcePermit, SourcePermits};
 mod share_grants;
 mod tool_policy;
 pub use crate::conversation::domain::ReceiverBinding;
