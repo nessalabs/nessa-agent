@@ -147,13 +147,18 @@ impl QueueReplay {
                     QueueRemovalCause::RunnerStopped => {
                         (InvocationStage::Cancelled, SchedulingCause::RunnerStopped)
                     }
+                    QueueRemovalCause::Suspended => {
+                        (InvocationStage::Cancelled, SchedulingCause::Suspended)
+                    }
                     QueueRemovalCause::DispatchFailed => {
                         (InvocationStage::Settled, SchedulingCause::DispatchFailed)
                     }
                 };
                 let explicit = matches!(
                     cause,
-                    QueueRemovalCause::Withdrawn | QueueRemovalCause::SessionClosed
+                    QueueRemovalCause::Withdrawn
+                        | QueueRemovalCause::SessionClosed
+                        | QueueRemovalCause::Suspended
                 );
                 if edge.stage != expected_stage
                     || edge.cause != expected_cause
