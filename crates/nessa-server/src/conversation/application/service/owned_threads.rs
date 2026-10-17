@@ -23,8 +23,8 @@ use nessa_sdk::application::agent_execution::{
     },
 };
 use nessa_sdk::domain::agent_execution::subagents::{
-    ApprovalPolicy, EvidenceFact, HostActor, Initiator, LifetimeCause, PhysicalFact, PolicyRead,
-    SpawnOrigin, SpawnRequestId, TaskReceiptId,
+    ApprovalPolicy, EvidenceFact, HostActor, Initiator, LifetimeCause, LifetimeState, PhysicalFact,
+    PolicyRead, SpawnOrigin, SpawnProgress, SpawnRequestId, TaskReceiptId,
 };
 use nessa_sdk::domain::agent_execution::{
     executions::{ExecutionId, Initiation},
@@ -193,7 +193,7 @@ impl ConversationService {
         );
         // This is the ordinary creation policy, not inherited authority.
         let policy = creation_policy();
-        ownership
+        let prepared = ownership
             .coordinator
             .prepare_child(
                 SpawnCommand {
@@ -214,6 +214,11 @@ impl ConversationService {
             )
             .await
             .map_err(|_| CreationFailure::Target(ConversationError::Unavailable))?;
+        if prepared.progress != SpawnProgress::Ready
+            || ownership.coordinator.lifetime_state(&prepared.child) != Some(LifetimeState::Open)
+        {
+            return Err(CreationFailure::Target(ConversationError::Unavailable));
+        }
         let storage = self
             .commands()
             .ok_or(CreationFailure::Target(ConversationError::Unavailable))?;

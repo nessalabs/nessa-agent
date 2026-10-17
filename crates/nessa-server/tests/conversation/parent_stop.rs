@@ -1189,3 +1189,239 @@ async fn stopping_owed_parent_work_cascades_only_after_command_attempt_is_durabl
     drop((c, live));
     retire(service, storage, metadata).await;
 }
+fn recovery_caller_in_org(org: &str, request: &str) -> ConversationCaller {
+    let mut admitted = caller(request);
+    admitted.organization_id = OrganizationId::new(org).unwrap();
+    admitted
+}
+
+async fn hold_recovery_turn_in_org(
+    service: &ConversationService,
+    storage: &Arc<RecordStorage>,
+    provider: &ProviderFactory,
+    target: &ConversationId,
+    org: &str,
+    execution: &str,
+) -> oneshot::Sender<()> {
+    let (release, gate) = oneshot::channel();
+    *provider.execution_gate.lock().unwrap() = Some(gate);
+    let started = provider.execution_started.notified();
+    service
+        .submit_command(
+            storage.clone(),
+            target.clone(),
+            recovery_caller_in_org(org, &format!("submit-{execution}")),
+            Initiation::owner(),
+            false,
+            execution.into(),
+            message("hold this exact turn"),
+            SubmissionMode::Queue,
+        )
+        .await
+        .unwrap();
+    tokio::time::timeout(TURN_HOLD_HANG, started)
+        .await
+        .expect("the exact turn reached the real provider fixture");
+    release
+}
+
+#[tokio::test]
+async fn accepted_parent_stops_recover_each_targets_organization_for_one_principal() {
+    use nessa_sdk::application::agent_execution::subagents::OwnershipStore;
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("data");
+    let provider = Arc::new(ProviderFactory::default());
+    provider.turn_cancel.store(true, Ordering::SeqCst);
+    let (service, storage, metadata) = fixture(&root, provider.clone());
+    bind(&service, &storage, &root, true).await;
+    let mut selected = Vec::new();
+    let mut holds = Vec::new();
+    for org in ["org-a", "org-b"] {
+        let parent = id();
+        service
+            .create(
+                parent.clone(),
+                recovery_caller_in_org(org, &format!("create-{org}")),
+                RequestedConversation::default(),
+            )
+            .await
+            .unwrap();
+        let parent_execution = format!("parent-{org}");
+        holds.push(
+            hold_recovery_turn_in_org(
+                &service,
+                &storage,
+                &provider,
+                &parent,
+                org,
+                &parent_execution,
+            )
+            .await,
+        );
+        let child = id();
+        service
+            .create_owned_thread(
+                AgentToolSource {
+                    caller: recovery_caller_in_org(org, &format!("create-child-{org}")),
+                    source: parent.clone(),
+                    execution: parent_execution.clone(),
+                },
+                child.clone(),
+                RequestedConversation::default(),
+            )
+            .await
+            .unwrap();
+        holds.push(
+            hold_recovery_turn_in_org(
+                &service,
+                &storage,
+                &provider,
+                &child,
+                org,
+                &format!("child-{org}"),
+            )
+            .await,
+        );
+        let stopper = recovery_caller_in_org(org, &format!("stop-{org}"));
+        let faulty: Arc<dyn commands::CreationStorage> = Arc::new(FaultyCommands {
+            storage: storage.clone(),
+            target: parent.clone(),
+            commit: true,
+            stage: MutationStage::Accepted,
+            once: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+        });
+        assert!(service
+            .stop_command(
+                faulty,
+                parent.clone(),
+                stopper.clone(),
+                parent_execution.clone()
+            )
+            .await
+            .is_err());
+        selected.push((parent, child, stopper, parent_execution));
+    }
+    assert_eq!(provider.cancel_calls.load(Ordering::SeqCst), 0);
+    let retiring = {
+        let service = service.clone();
+        tokio::spawn(async move { service.shutdown().await })
+    };
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while provider.close_calls.load(Ordering::SeqCst) < 4 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    drop(holds);
+    retiring.await.unwrap().unwrap();
+    drop(service);
+    storage.shutdown().await.unwrap();
+    drop((storage, metadata));
+
+    let provider = Arc::new(ProviderFactory::default());
+    provider.turn_cancel.store(true, Ordering::SeqCst);
+    let (service, storage, metadata) = fixture(&root, provider.clone());
+    bind(&service, &storage, &root, false).await;
+    let owned = SqliteOwnershipStore::open(&root.join("ownership.sqlite3")).unwrap();
+    let snapshot = owned.read().await.unwrap();
+    assert_eq!(service.recover_parent_stops(&snapshot).await.unwrap(), 2);
+    for (parent, child, stopper, execution) in &selected {
+        let binding = ConversationService::stop_lookup(parent, stopper, execution).unwrap();
+        let mut last = String::new();
+        let completed = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let found = service
+                    .lookup_command(
+                        storage.clone(),
+                        parent.clone(),
+                        stopper.clone(),
+                        binding.clone(),
+                    )
+                    .await;
+                last = format!("{found:?}");
+                if found.is_ok_and(|receipt| {
+                    receipt.is_some_and(|receipt| receipt.stage() == MutationStage::Settled)
+                }) {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await;
+        assert!(
+            completed.is_ok(),
+            "org={} last lookup: {last}",
+            stopper.organization_id.as_str()
+        );
+        for target in [parent, child] {
+            let live = service.resolve(target, stopper).await.unwrap();
+            assert!(live.agent.owed_turns().await.is_empty());
+        }
+    }
+    assert!(provider.executions.lock().unwrap().is_empty());
+    retire(service, storage, metadata).await;
+}
+
+#[tokio::test]
+async fn owned_creation_retry_cannot_report_a_sealed_child_as_ready() {
+    use nessa_sdk::application::agent_execution::subagents::CloseCommand;
+    use nessa_sdk::domain::agent_execution::subagents::{
+        HostActor, Initiator, LifetimeCause, LifetimeState,
+    };
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("data");
+    let provider = Arc::new(ProviderFactory::default());
+    let (service, storage, metadata) = fixture(&root, provider.clone());
+    let coordinator = bind(&service, &storage, &root, true).await;
+    let parent = id();
+    opened(&service, &provider, &parent).await;
+    let held = hold_turn(&service, &provider, &parent, "parent").await;
+    let target = child(&service, &parent, "parent", "create-sealed-child").await;
+    let live = service
+        .resolve(&target, &caller("inspect-child"))
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while live.agent.attachment_status().phase() != AttachmentPhase::Attached {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    let lifetime = coordinator
+        .child_lifetime_for_session(&conversation_session(&target))
+        .unwrap();
+    coordinator
+        .end_lifetime(CloseCommand {
+            lifetime: lifetime.clone(),
+            cause: LifetimeCause::HostClose,
+            initiator: Initiator::Host(HostActor::new("person", "panel", "close-child").unwrap()),
+            external_attachment: false,
+            timeout: None,
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        coordinator.lifetime_state(&lifetime),
+        Some(LifetimeState::Closed)
+    );
+    assert!(
+        matches!(
+            service
+                .create_owned_thread(
+                    source(&parent, "parent", "create-sealed-child"),
+                    target,
+                    RequestedConversation::default(),
+                )
+                .await,
+            Err(commands::CreationFailure::Target(
+                ConversationError::Unavailable
+            ))
+        ),
+        "a cached successful preparation does not make a sealed child runnable"
+    );
+    assert_eq!(provider.executions.lock().unwrap().as_slice(), ["parent"]);
+    drop((held, live));
+    retire(service, storage, metadata).await;
+}

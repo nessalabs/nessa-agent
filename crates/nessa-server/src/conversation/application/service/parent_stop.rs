@@ -562,21 +562,18 @@ impl ConversationService {
         let Some(storage) = self.commands() else {
             return Ok(0);
         };
-        let mut owners = std::collections::BTreeMap::new();
+        let mut owners = BTreeSet::new();
         for row in &snapshot.lifetimes {
             let id = ConversationId::new(row.session_id.as_str())
                 .map_err(|_| ConversationError::Unavailable)?;
             if let Some(record) =
                 super::load_conversation(self.inner.metadata.as_ref(), &id).await?
             {
-                owners.insert(
-                    record.owner().as_str().to_owned(),
-                    record.organization().clone(),
-                );
+                owners.insert(record.owner().as_str().to_owned());
             }
         }
         let mut retry = Vec::new();
-        for (principal, organization_id) in owners {
+        for principal in owners {
             let Some(lease) = storage
                 .open_creation(principal.clone(), false)
                 .await
@@ -595,10 +592,17 @@ impl ConversationService {
                 }
                 let id = ConversationId::new(binding.target().as_str())
                     .map_err(|_| ConversationError::Unavailable)?;
+                let Some(record) =
+                    super::load_conversation(self.inner.metadata.as_ref(), &id).await?
+                else {
+                    continue;
+                };
                 let caller = ConversationCaller {
-                    organization_id: organization_id.clone(),
-                    principal_id: nessa_auth::domain::PrincipalId::new(&principal)
-                        .map_err(|_| ConversationError::Unavailable)?,
+                    organization_id: record.organization().clone(),
+                    principal_id: nessa_auth::domain::PrincipalId::new(
+                        binding.actor().principal_id(),
+                    )
+                    .map_err(|_| ConversationError::Unavailable)?,
                     surface_id: binding.actor().surface_id().into(),
                     action_id: binding.actor().request_id().into(),
                 };
