@@ -18,7 +18,12 @@ import {
   type Side,
   type Zone,
 } from "../../../split-panes/model/pane-layout"
-import { messageText, type Message, type QuestionChoice } from "../../model/transcript"
+import {
+  atWork,
+  messageText,
+  type Message,
+  type QuestionChoice,
+} from "../../model/transcript"
 import { differentFlight } from "../../application/question-flights"
 import {
   failureReason,
@@ -35,6 +40,7 @@ import { paneItemOf } from "../../model/pane-item"
 import type { WidgetRef } from "../../../widgets/model/widget-ref"
 import { fromSource, knownToSource } from "../../model/revision"
 import {
+  answerOf,
   answering,
   draftOf,
   entry,
@@ -44,6 +50,7 @@ import {
   type WorkspaceState,
 } from "../../application/workspace-state"
 import * as panesUseCases from "../../application/usecases/panes"
+import { accessToStart } from "../../application/usecases/access"
 import type { Drop } from "../../../split-panes"
 import type { PaneRoom } from "../../../split-panes/model/pane-sizing"
 import { workspaceActions } from "./slice"
@@ -96,6 +103,7 @@ const {
   approvalAnswering,
   approvalFailed,
   indexRequested,
+  accessCaptured,
 } = workspaceActions
 
 export type WorkspaceCommand<Result = void> = ThunkAction<
@@ -428,6 +436,11 @@ function deliver(
   return async (dispatch, getState, { workspace }) => {
     const session = sessionOf(getState().workspace, sessionId)
     if (!session) return "not-asked"
+    const access = knownToSource(session)
+      ? undefined
+      : accessToStart(getState().workspace, sessionId)
+    // Captured by this message: a pick after it is the newer word, not this one.
+    if (access) dispatch(accessCaptured({ sessionId, mode: access }))
     try {
       await workspace.send({
         sessionId,
@@ -437,7 +450,11 @@ function deliver(
         model,
         start: knownToSource(session)
           ? undefined
-          : { channelId: session.channelId, title: session.title },
+          : {
+              channelId: session.channelId,
+              title: session.title,
+              ...(access ? { access } : {}),
+            },
       })
       dispatch(messageDelivered({ sessionId, messageId: message.id }))
       return "sent"
@@ -562,11 +579,13 @@ function answer(
 ): WorkspaceCommand<Promise<AnswerOutcome>> {
   return async (dispatch, getState, dependencies) => {
     const state = getState().workspace
-    const approval = entry(state.transcripts, sessionId)?.approval
+    const approval = entry(state.transcripts, sessionId)?.approvals.find(
+      (asked) => asked.id === approvalId,
+    )
     // Only an approval on screen is answered: one a pane or the open overview shows.
-    if (!onScreen(state, sessionId) || approval?.id !== approvalId) return "not-asked"
-    // One answer at a time: a second waits until the first is refused.
-    if (answering(entry(state.answers, sessionId), approvalId)) return "answering"
+    if (!onScreen(state, sessionId) || !approval) return "not-asked"
+    // One answer to an approval at a time: a second waits until the first is refused.
+    if (answering(answerOf(state, sessionId, approvalId), approvalId)) return "answering"
     const token = dependencies.newId()
     dispatch(approvalAnswering({ sessionId, approvalId: approval.id, token }))
     try {
@@ -604,6 +623,18 @@ export function approve({
   )
 }
 
+/** Reads again, now, a review whose content could not be read. */
+export function retryReview({
+  sessionId,
+  approvalId,
+}: {
+  sessionId: string
+  approvalId: string
+}): WorkspaceCommand {
+  return (_dispatch, _getState, { workspace }) =>
+    workspace.retryReview?.(sessionId, approvalId)
+}
+
 /**
  * What became of an answer to a question the agent asked. `sent` once the
  * source has taken it. `not-asked` when this window is not showing that
@@ -635,21 +666,29 @@ export function answerQuestion({
   questionId,
   choices,
   initiator,
+  key,
 }: {
   sessionId: string
   executionId: string
   questionId: string
   choices: readonly QuestionChoice[] | null
   initiator: Initiator
+  /** The question's own key, as the source gave it (`TranscriptQuestion.key`). */
+  key?: string
 }): WorkspaceCommand<Promise<QuestionOutcome>> {
   return async (_dispatch, getState, { workspace, questionFlights }) => {
     const state = getState().workspace
+    // Only the question on screen, read whole: one still loading offers no
+    // answer, and one asked again under the same identities has another key.
     const asked = entry(state.transcripts, sessionId)?.questions?.some(
       (question) =>
-        question.executionId === executionId && question.questionId === questionId,
+        question.executionId === executionId &&
+        question.questionId === questionId &&
+        question.key === key &&
+        question.loading === undefined,
     )
     if (!onScreen(state, sessionId) || !asked) return { status: "not-asked" }
-    const flight = JSON.stringify([sessionId, executionId, questionId])
+    const flight = JSON.stringify([sessionId, executionId, questionId, key])
     const stamp = JSON.stringify([choices, initiator])
     const outcome = await questionFlights.join(flight, stamp, async () => {
       try {
@@ -659,6 +698,7 @@ export function answerQuestion({
           questionId,
           choices,
           initiator,
+          key,
         )
         return { status: "sent" as const }
       } catch (error) {
@@ -701,6 +741,34 @@ export function deny({
  * both on the source's record.
  */
 export type ChangeOutcome = "sent" | "refused" | "unknown" | "not-asked"
+
+/**
+ * Stops the turn a session's agent is at work on, saying who asked for the
+ * source's record. Only a session on screen whose conversation shows a turn
+ * at work is asked (`atWork`); the conversation that no longer runs arrives
+ * as the source's update, and a refusal leaves it as it was.
+ */
+export function stopTurn({
+  sessionId,
+  initiator,
+}: {
+  sessionId: string
+  initiator: Initiator
+}): WorkspaceCommand<Promise<ChangeOutcome>> {
+  return async (_dispatch, getState, { workspace }) => {
+    const state = getState().workspace
+    if (!onScreen(state, sessionId) || !atWork(entry(state.transcripts, sessionId)))
+      return "not-asked"
+    try {
+      await workspace.stop(sessionId, initiator)
+      return "sent"
+    } catch (error) {
+      const reason = failureReason(error)
+      console.warn("Could not stop a turn", sessionId, reason)
+      return outcomeOf(reason)
+    }
+  }
+}
 
 /**
  * Pins a session under its channel in the sidebar, or unpins it, saying who
@@ -784,3 +852,5 @@ export {
   revokeShare,
   shareSession,
 } from "./sharing-commands"
+
+export { chooseAccess, type AccessOutcome } from "./access-commands"

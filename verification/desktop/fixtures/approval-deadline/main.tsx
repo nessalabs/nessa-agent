@@ -26,6 +26,7 @@ import { followWorkspace, loadWorkspace } from "../../../../src/desktop/workspac
 import {
   fakeGateway,
   row,
+  type Unkeyed,
   view,
 } from "../../../../src/desktop/workspace/adapters/gateway/fake-gateway"
 import {
@@ -45,7 +46,7 @@ const waitMs = 10_000
 const gatewayNow = () => Date.now() + 60_000
 const dueAtMs = gatewayNow() + waitMs
 
-function armed(): ConversationPermission {
+function armed(): Unkeyed<ConversationPermission> {
   return {
     executionId: "run",
     permissionId: "review-1",
@@ -71,7 +72,7 @@ function armed(): ConversationPermission {
 
 function shown(
   revision: number,
-  review: ConversationPermission | undefined,
+  review: Unkeyed<ConversationPermission> | undefined,
 ): ConversationView {
   return conversationView(
     view(conversation, {

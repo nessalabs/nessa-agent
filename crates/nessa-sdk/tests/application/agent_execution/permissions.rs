@@ -25,6 +25,7 @@ fn attribution_requires_actor_and_immutable_decision_evidence() {
     let rule = ApprovalRuleReference::new("rule", "revision-2", human.clone()).unwrap();
     let resolution = pending_controller()
         .answer_permission(PermissionAnswer {
+            key: None,
             execution_id: ExecutionId::new("execution").unwrap(),
             id: PermissionId::new("permission").unwrap(),
             option_id: PermissionOptionId::new("allow").unwrap(),
@@ -80,6 +81,7 @@ fn a_hook_refusal_cannot_select_an_allow_option() {
     let hook = ApprovalAttribution::hook(&permission, HookRefusal::new(Some(0), "no")).unwrap();
     let rejected = controller
         .answer_permission(PermissionAnswer {
+            key: None,
             execution_id: execution.clone(),
             id: permission.clone(),
             option_id: PermissionOptionId::new("allow").unwrap(),
@@ -99,6 +101,7 @@ fn a_hook_refusal_cannot_select_an_allow_option() {
     ] {
         let mismatched = controller
             .answer_permission(PermissionAnswer {
+                key: None,
                 execution_id: execution.clone(),
                 id: permission.clone(),
                 option_id: PermissionOptionId::new("deny").unwrap(),
@@ -112,6 +115,7 @@ fn a_hook_refusal_cannot_select_an_allow_option() {
     }
     controller
         .answer_permission(PermissionAnswer {
+            key: None,
             execution_id: execution,
             id: permission,
             option_id: PermissionOptionId::new("deny").unwrap(),
@@ -145,6 +149,7 @@ async fn substituted_binding_preserves_each_actors_explicit_mode_or_rule_basis()
             basis,
         );
         let answer = PermissionAnswer {
+            key: None,
             execution_id: ExecutionId::new("execution").unwrap(),
             id: PermissionId::new("permission").unwrap(),
             option_id: PermissionOptionId::new("allow").unwrap(),
@@ -241,6 +246,7 @@ fn explicit_cancellation_rejects_automatic_causes_without_resolving_the_review()
         let mut controller = pending_controller();
         assert!(matches!(
             controller.cancel_review(PermissionCancellationRequest {
+                key: None,
                 execution_id: ExecutionId::new("execution").unwrap(),
                 id: PermissionId::new("permission").unwrap(),
                 reason,
@@ -250,6 +256,7 @@ fn explicit_cancellation_rejects_automatic_causes_without_resolving_the_review()
         ));
         let resolution = controller
             .answer_permission(PermissionAnswer {
+                key: None,
                 execution_id: ExecutionId::new("execution").unwrap(),
                 id: PermissionId::new("permission").unwrap(),
                 option_id: PermissionOptionId::new("allow").unwrap(),
@@ -399,6 +406,7 @@ fn answer_delivery_retains_controller_session_despite_identical_local_identities
             .unwrap();
         let resolution = controller
             .answer_permission(PermissionAnswer {
+                key: None,
                 execution_id: request.execution_id().clone(),
                 id: request.id().clone(),
                 option_id: PermissionOptionId::new("allow").unwrap(),
@@ -462,6 +470,7 @@ async fn substituted_backend_cannot_return_a_foreign_sessions_permission_as_succ
     let agent = reviewed_agent(backend.clone()).await;
     let failure = agent
         .answer_permission(PermissionAnswer {
+            key: None,
             execution_id: request.execution_id().clone(),
             id: request.id().clone(),
             option_id: PermissionOptionId::new("allow").unwrap(),
@@ -478,6 +487,7 @@ async fn substituted_backend_cannot_return_a_foreign_sessions_permission_as_succ
             .lock()
             .unwrap()
             .answer_permission(PermissionAnswer {
+                key: None,
                 execution_id: request.execution_id().clone(),
                 id: request.id().clone(),
                 option_id: PermissionOptionId::new("allow").unwrap(),

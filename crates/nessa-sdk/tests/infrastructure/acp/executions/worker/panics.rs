@@ -294,6 +294,9 @@ async fn audit_panics_attempt_all_cleanup_records_and_retain_process_for_retry()
                         ExecutionAuditRecord::NativeHooksLaunch(_) => {
                             panic!("explicit close did not record a hooks launch")
                         }
+                        ExecutionAuditRecord::TurnResumed(_) => {
+                            panic!("explicit close did not resume a turn")
+                        }
                     }
                 }
                 for kind in 0..3 {
@@ -338,6 +341,7 @@ async fn finish_audit_panic_preserves_known_provider_outcome_and_answer_receipt(
         .commands
         .send(Command::Answer(
             PermissionAnswer {
+                key: None,
                 execution_id: ExecutionId::new("run").unwrap(),
                 id,
                 option_id: PermissionOptionId::new("allow").unwrap(),

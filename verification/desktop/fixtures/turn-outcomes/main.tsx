@@ -48,6 +48,7 @@ import { followWorkspace, loadWorkspace } from "../../../../src/desktop/workspac
 import {
   fakeGateway,
   row,
+  shownQuestion,
   view,
 } from "../../../../src/desktop/workspace/adapters/gateway/fake-gateway"
 import { saveFile } from "../../../../src/host"
@@ -220,6 +221,13 @@ function showPanel() {
     { ...newConversation(conversation), serverConversationId: conversation },
     {
       ...current,
+      reviewsWaiting: [],
+      permissions: [],
+      questionsWaiting: [],
+      questions: current.questions.flatMap((entry) => {
+        const asked = shownQuestion(entry.question)
+        return asked ? [asked] : []
+      }),
       notes: current.notes.map(shownNote),
     },
   )
@@ -261,7 +269,7 @@ Object.assign(window, {
       gateway.views.set(conversation, {
         ...current,
         questions: current.questions.filter(
-          (question) => question.questionId !== questionId,
+          (entry) => shownQuestion(entry.question)?.questionId !== questionId,
         ),
       } satisfies ConversationView)
       gateway.publish(conversation)

@@ -271,6 +271,47 @@ pub trait ConversationRepository: Send + Sync {
     fn unfinished_deletions(&self) -> ConversationFuture<'_, UnfinishedDeletions>;
 }
 
+/// Which conversations may have a turn that a restart would leave unfinished:
+/// the startup sweep's question
+/// ([`super::ConversationService::resume_unfinished`]).
+///
+/// A mark only says where to look. The conversation's own history decides
+/// what is owed (`Agent::owed_turns`), so a mark left behind costs one opening
+/// that finds nothing, and is cleared; a mark missing would lose a turn, so
+/// one is written, durably, before the agent is given a turn.
+pub trait UnfinishedTurns: Send + Sync {
+    /// Mark `id`. Durable before it returns; marking a marked one is not an
+    /// error.
+    fn mark(&self, id: &ConversationId) -> ConversationFuture<'_, ()>;
+    /// Remove `id`'s mark. Durable before it returns; one already gone is
+    /// not an error.
+    fn clear(&self, id: &ConversationId) -> ConversationFuture<'_, ()>;
+    /// Mark `id` with a retry due at `retry_at_ms` (Unix milliseconds), the
+    /// `failures`th in a row. Durable before it returns; it marks `id` if it
+    /// was not, and replaces any retry it had.
+    fn defer(
+        &self,
+        id: &ConversationId,
+        failures: u32,
+        retry_at_ms: u64,
+    ) -> ConversationFuture<'_, ()>;
+    /// Every marked conversation. A mark whose conversation cannot be named
+    /// is left out and logged: there is nothing it could open.
+    fn marked(&self) -> ConversationFuture<'_, Vec<UnfinishedMark>>;
+}
+
+/// One conversation [`UnfinishedTurns`] holds a mark for.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UnfinishedMark {
+    /// The conversation that may have unfinished turns.
+    pub conversation_id: ConversationId,
+    /// How many failure retries in a row it has had; zero when none.
+    pub failures: u32,
+    /// When its next failure retry is due, in Unix milliseconds; `None` when
+    /// it waits for none and is resumed at once.
+    pub retry_at_ms: Option<u64>,
+}
+
 /// What [`ConversationRepository::unfinished_deletions`] found.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct UnfinishedDeletions {

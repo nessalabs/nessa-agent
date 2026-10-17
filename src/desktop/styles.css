@@ -1400,6 +1400,12 @@ html:not(.dark) [data-surface] {
   color: color-mix(in oklab, var(--foreground) 35%, transparent);
 }
 
+/* A refused access change, said on its own line above the controls. */
+.desktop-composer-notice {
+  display: flex;
+  margin-top: 8px;
+}
+
 .desktop-composer-row {
   display: flex;
   align-items: center;

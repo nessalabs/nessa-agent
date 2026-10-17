@@ -1,12 +1,17 @@
 import { expect, it } from "vitest"
-import { permissionTargets, type ConversationApi } from "@nessa/client"
-import { deferred, fakeGateway } from "./fake-gateway"
+import { permissionTargets, viewEntryBounds, type ConversationApi } from "@nessa/client"
+import { deferred, fakeGateway, questionEntry, reviewEntry } from "./fake-gateway"
 
 const conversationId = "00000000-0000-4000-8000-000000000001"
 const target = permissionTargets({
   conversationId,
   permissions: [
-    { executionId: "turn", permissionId: "review", options: [{ id: "allow" }] },
+    {
+      review: "a".repeat(32),
+      executionId: "turn",
+      permissionId: "review",
+      options: [{ id: "allow" }],
+    },
   ],
 })[0]!
 
@@ -16,6 +21,7 @@ it("AR5: answer callbacks retain their SDK arguments when later calls arrive", a
     conversationId,
     permissions: [
       {
+        review: "b".repeat(32),
         executionId: "other-turn",
         permissionId: "other-review",
         options: [{ id: "deny" }],
@@ -66,3 +72,27 @@ function obsoleteContract() {
   })
 }
 void obsoleteContract
+
+it("lists a long tool name or message clipped as the gateway clips it", () => {
+  const review = reviewEntry({
+    executionId: "execution",
+    permissionId: "permission",
+    toolId: "tool",
+    title: "Run it",
+    toolName: `${"x".repeat(viewEntryBounds.toolNameBytes - 1)}é`,
+    argumentsJson: "{}",
+    origin: { kind: "harness" },
+    ask: "tool",
+    options: [{ id: "allow", label: "Allow", effect: "allow" }],
+  })
+  // The two-byte character would pass the bound, so the entry stops before it.
+  expect(review.toolName).toBe("x".repeat(viewEntryBounds.toolNameBytes - 1))
+  const question = questionEntry({
+    executionId: "execution",
+    questionId: "question",
+    message: `"${"y".repeat(viewEntryBounds.messageBytes)}`,
+    questions: [],
+  })
+  // A quote takes two bytes encoded, as the gateway counts it.
+  expect(question.message).toBe(`"${"y".repeat(viewEntryBounds.messageBytes - 2)}`)
+})

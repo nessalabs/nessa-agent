@@ -16,6 +16,7 @@ import {
   FlaskConical,
   Folder,
   FolderPlus,
+  Globe,
   Hash,
   Home,
   Info,
@@ -39,6 +40,7 @@ import {
   Shield,
   ShieldAlert,
   ShieldCheck,
+  Square,
   SquarePen,
   SquareTerminal,
   X,
@@ -87,6 +89,7 @@ export const lucideIcons: DesktopIconFamily = {
   needsYou: lucide(ShieldAlert),
 
   send: lucide(ArrowUp),
+  stop: lucide(Square),
   attach: lucide(Paperclip),
   folder: lucide(Folder),
   folderAdd: lucide(FolderPlus),
@@ -102,6 +105,7 @@ export const lucideIcons: DesktopIconFamily = {
   file: lucide(FileText),
   edit: lucide(PenLine),
   terminal: lucide(SquareTerminal),
+  site: lucide(Globe),
 
   preferences: lucide(Settings2),
   appearance: lucide(Palette),

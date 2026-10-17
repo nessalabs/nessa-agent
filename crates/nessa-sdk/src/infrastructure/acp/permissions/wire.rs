@@ -5,7 +5,8 @@ use crate::application::agent_execution::permissions::{
 };
 use crate::domain::agent_execution::permissions::{
     PermissionDecision, PermissionEffect, PermissionOfferPolicy, PermissionOption,
-    PermissionOptionId, PermissionOptions, PermissionScope,
+    PermissionOptionId, PermissionOptions, PermissionScope, MAX_REVIEW_OPTIONS,
+    MAX_REVIEW_OPTION_LABEL_BYTES,
 };
 use crate::infrastructure::json_rpc::{protocol, success, RpcId};
 use serde_json::{json, Value};
@@ -96,6 +97,11 @@ pub(crate) fn admit(
         if label.trim().is_empty() {
             return Err(protocol("empty permission option label"));
         }
+        // A choice no surface could show is refused with the request, so the
+        // review is declined at once rather than left waiting unseen.
+        if label.len() > MAX_REVIEW_OPTION_LABEL_BYTES {
+            return Err(protocol("permission option label too long"));
+        }
         // A persistent kind is the harness's own memory. Keeping it does not
         // invent a session or application scope; the option stays one request,
         // and its id is what the harness is sent.
@@ -132,6 +138,9 @@ pub(crate) fn admit(
         .into_iter()
         .filter(|id| admitted.iter().any(|option| option.id() == id))
         .collect();
+    if admitted.len() > MAX_REVIEW_OPTIONS {
+        return Err(protocol("too many permission options"));
+    }
     let options =
         PermissionOptions::new(admitted, config).map_err(|error| protocol(&error.to_string()))?;
     Ok(AdmittedPermissions {
@@ -317,5 +326,39 @@ mod tests {
             {"optionId":"nessa.remember.deny", "kind":"reject_once", "name":"Always deny"}
         ]});
         assert!(admit(&deny, &once, PersistentKinds::Keep, false).is_err());
+    }
+    // A choice past what a review may carry is refused with the request, which
+    // the worker declines at once; a surface is never left holding a review
+    // it cannot show while its deadline runs.
+    #[test]
+    fn choices_a_review_cannot_carry_are_refused_with_the_request() {
+        let once = PermissionOfferPolicy::once_only();
+        let fits = json!({"options":[
+            {"optionId":"allow", "kind":"allow_once", "name":"x".repeat(MAX_REVIEW_OPTION_LABEL_BYTES)}
+        ]});
+        assert!(admit(&fits, &once, PersistentKinds::Drop, false).is_ok());
+        let long = json!({"options":[
+            {"optionId":"allow", "kind":"allow_once", "name":"x".repeat(MAX_REVIEW_OPTION_LABEL_BYTES + 1)}
+        ]});
+        assert!(admit(&long, &once, PersistentKinds::Drop, false).is_err());
+        let many = |count: usize| {
+            json!({"options": (0..count)
+                .map(|index| json!({"optionId": format!("allow-{index}"), "kind": "allow_once", "name": "Allow"}))
+                .collect::<Vec<_>>()})
+        };
+        assert!(admit(
+            &many(MAX_REVIEW_OPTIONS),
+            &once,
+            PersistentKinds::Drop,
+            false
+        )
+        .is_ok());
+        assert!(admit(
+            &many(MAX_REVIEW_OPTIONS + 1),
+            &once,
+            PersistentKinds::Drop,
+            false
+        )
+        .is_err());
     }
 }

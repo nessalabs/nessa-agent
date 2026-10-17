@@ -62,14 +62,22 @@ function question(key: string, required: boolean): Asked {
 function show(
   questions: Asked[],
   conversationId = "00000000-0000-4000-8000-000000000001",
+  key = "0".repeat(32),
 ) {
   const conversation = {
     id: "conversation",
     serverConversationId: conversationId,
     controlPending: false,
     remote: {
+      questionsWaiting: [],
       questions: [
-        { executionId: "execution", questionId: "1", message: "Which?", questions },
+        {
+          question: key,
+          executionId: "execution",
+          questionId: "1",
+          message: "Which?",
+          questions,
+        },
       ],
     },
   } as unknown as Conversation
@@ -189,13 +197,25 @@ it("QT1: equal turn and ask names in another conversation do not inherit its ans
   expect(answer().disabled).toBe(true)
 })
 
+it("an ask opened again under the same ids, with a new key, starts with nothing chosen", () => {
+  const conversationId = "00000000-0000-4000-8000-000000000001"
+  show([question("field", false)], conversationId, "0".repeat(32))
+  choose("field", "a")
+  expect(answer().disabled).toBe(false)
+  show([question("field", false)], conversationId, "1".repeat(32))
+  expect(answer().disabled).toBe(true)
+  expect(host.querySelector<HTMLInputElement>('input[value="a"]')?.checked).toBe(false)
+})
+
 it("QT10: simultaneous asks with equal field keys have independent native radio groups", () => {
   const conversation = {
     id: "conversation",
     serverConversationId: "00000000-0000-4000-8000-000000000001",
     controlPending: false,
     remote: {
+      questionsWaiting: [],
       questions: ["first", "second"].map((questionId) => ({
+        question: (questionId === "first" ? "a" : "b").repeat(32),
         executionId: "execution",
         questionId,
         message: questionId,
@@ -218,4 +238,39 @@ it("QT10: simultaneous asks with equal field keys have independent native radio 
   act(() => second.click())
   expect(inputs.map((input) => input.checked)).toEqual([true, true])
   expect(new Set(inputs.map((input) => input.name)).size).toBe(2)
+})
+
+it("offers no answer to a listed question until all it asks has been read", () => {
+  const render = (failed: boolean) => {
+    const conversation = {
+      id: "conversation",
+      serverConversationId: "00000000-0000-4000-8000-000000000001",
+      controlPending: false,
+      remote: {
+        questionsWaiting: [{ question: "0".repeat(32), message: "Which?", failed }],
+        questions: [],
+      },
+    } as unknown as Conversation
+    act(() => {
+      root.render(
+        React.createElement(ConversationQuestions, {
+          conversation,
+          gatewayAvailable: true,
+        }),
+      )
+    })
+  }
+  render(false)
+  expect(host.textContent).toContain("Which?")
+  expect(host.querySelector("[role=status]")?.textContent).toContain(
+    "Loading this question",
+  )
+  const buttons = () =>
+    [...host.querySelectorAll("button")].map((button) => button.textContent)
+  expect(buttons()).toEqual([])
+  render(true)
+  expect(host.querySelector("[role=status]")?.textContent).toContain(
+    "could not be loaded",
+  )
+  expect(buttons()).toEqual(["Try again"])
 })

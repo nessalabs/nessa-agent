@@ -126,6 +126,7 @@ async fn rejected_observation_fences_permission_controls_before_its_save_resumes
                         if matches!(control, Control::Cancel) {
                             agent
                                 .cancel_permission(PermissionCancellationRequest {
+                                    key: None,
                                     execution_id: pending.execution_id().clone(),
                                     id: pending.id().clone(),
                                     reason: PermissionCancellationReason::custom(
@@ -142,6 +143,7 @@ async fn rejected_observation_fences_permission_controls_before_its_save_resumes
                         } else {
                             agent
                                 .answer_permission(PermissionAnswer {
+                                    key: None,
                                     execution_id: pending.execution_id().clone(),
                                     id: pending.id().clone(),
                                     option_id: PermissionOptionId::new("allow").unwrap(),

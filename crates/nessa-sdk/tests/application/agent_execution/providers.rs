@@ -86,6 +86,7 @@ async fn adapter_substitution_keeps_instances_and_controls_isolated() {
     assert_eq!(
         online
             .answer_permission(PermissionAnswer {
+                key: None,
                 attribution: attribution(),
                 execution_id: ExecutionId::new("write").unwrap(),
                 id: PermissionId::new("1").unwrap(),
@@ -99,6 +100,7 @@ async fn adapter_substitution_keeps_instances_and_controls_isolated() {
     assert_eq!(
         offline
             .answer_permission(PermissionAnswer {
+                key: None,
                 attribution: attribution(),
                 execution_id: ExecutionId::new("write").unwrap(),
                 id: PermissionId::new("1").unwrap(),

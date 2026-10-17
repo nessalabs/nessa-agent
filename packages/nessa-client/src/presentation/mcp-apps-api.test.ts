@@ -11,7 +11,7 @@ import {
 } from "../application/mcp-resource-fetch.js"
 import { NessaRequestTooLargeError } from "../application/request-too-large-error.js"
 import { NessaRpcError } from "../application/rpc-error.js"
-import { conversationView } from "../protocol/conversation-validate.js"
+import { conversationPermission } from "../protocol/conversation-validate.js"
 import { bounds, mcpAppCallTiming } from "../generated/product.js"
 import {
   MAX_MCP_ARGUMENTS_BYTES,
@@ -242,68 +242,19 @@ it("calls a tool at exactly every bound", async () => {
 })
 
 /** The smallest whole view the client accepts, holding one review an app asked for. */
-function viewWithAppReview(argumentsJson: string) {
+/** The review the gateway would read back for an app's call with `argumentsJson`. */
+function appReview(argumentsJson: string) {
   return {
-    conversationId,
-    title: null,
-    revision: "1",
-    serverNowMs: 1_700_000_000_000,
-    approvalMode: "ask",
-    approvalModes: [{ id: "ask", name: "Ask", description: "Asks." }],
-    truncated: false,
-    queueComplete: true,
-    transcriptState: "complete",
-    artifacts: [],
-    notes: [],
-    unreadable: [],
-    unreadableTruncated: false,
-    messages: [
-      {
-        executionId: app.executionId,
-        userText: "chart it",
-        attachments: [],
-        files: [],
-        status: "completed",
-        parts: [],
-      },
-    ],
-    pending: [],
-    permissions: [
-      {
-        executionId: app.executionId,
-        permissionId: "review",
-        toolId: app.toolId,
-        title: "delete_rows",
-        toolName: "delete_rows",
-        argumentsJson,
-        origin: { kind: "app", server: "charts", tool: "delete_rows" },
-        ask: "tool",
-        options: [{ id: "allow", label: "Allow", effect: "allow" }],
-      },
-    ],
-    questions: [],
-    tools: [],
-    capabilities: {
-      queue: true,
-      steer: true,
-      resume: true,
-      permissions: true,
-      imageInput: false,
-      agentFeatures: {
-        permissionDenial: "unknown",
-        nativeHookSuppression: "unknown",
-        nativeHooks: "off",
-        compactionReporting: "unsupported_not_implemented",
-        modelSwitchReporting: "unsupported_not_implemented",
-        permissionDeferral: "unsupported_not_implemented",
-        elicitationForwarding: "unknown",
-        preToolPolicy: "unsupported_not_implemented",
-        policyEndTurn: "unsupported",
-        policyCloseSession: "unsupported",
-        incomingElicitation: "unsupported",
-      },
-    },
-    lifecycle: { phase: "attached" },
+    review: "0".repeat(32),
+    executionId: app.executionId,
+    permissionId: "review",
+    toolId: app.toolId,
+    title: "delete_rows",
+    toolName: "delete_rows",
+    argumentsJson,
+    origin: { kind: "app", server: "charts", tool: "delete_rows" },
+    ask: "tool",
+    options: [{ id: "allow", label: "Allow", effect: "allow" }],
   }
 }
 
@@ -315,8 +266,7 @@ it("sends no arguments its review could not show: 32 KiB fits the view, one byte
   await api(request).callTool(conversationId, app, "charts", "delete_rows", largest)
   const sent = (request.mock.calls[0]![1] as { argumentsJson: string }).argumentsJson
   // The review the gateway would show for it is one the client can read.
-  const view = conversationView(viewWithAppReview(sent), conversationId)
-  expect(view.permissions[0]).toMatchObject({
+  expect(conversationPermission(appReview(sent))).toMatchObject({
     argumentsJson: largest,
     origin: { kind: "app", server: "charts", tool: "delete_rows" },
   })

@@ -293,3 +293,100 @@ async fn publishers_that_never_send_hold_no_more_than_their_bound() {
     drop(idle);
     fixture.outbox.close("lease");
 }
+
+/// The check-to-open interleaving in #767, using only this fixture's trees.
+#[test]
+fn a_directory_swapped_after_resolution_is_refused_without_staging() {
+    for nested in [false, true] {
+        let fixture = fixture();
+        let parent = fixture.workspace.join("build");
+        fs::create_dir(&parent).unwrap();
+        let child = if nested {
+            parent.join("nested")
+        } else {
+            parent.clone()
+        };
+        fs::create_dir_all(&child).unwrap();
+        let file = child.join("report.txt");
+        fs::write(&file, b"workspace bytes").unwrap();
+        let asked = request(&file);
+        let resolved = fs::canonicalize(&file).unwrap();
+        assert!(resolved.starts_with(&fixture.workspace));
+        let replacement = fixture._root.path().join("replacement");
+        fs::create_dir_all(if nested {
+            replacement.join("nested")
+        } else {
+            replacement.clone()
+        })
+        .unwrap();
+        fs::write(
+            if nested {
+                replacement.join("nested/report.txt")
+            } else {
+                replacement.join("report.txt")
+            },
+            b"synthetic outside bytes",
+        )
+        .unwrap();
+        fs::rename(&parent, fixture.workspace.join("original")).unwrap();
+        symlink(&replacement, &parent).unwrap();
+        let _lock = fixture.outbox.lock_outbox().unwrap();
+        assert_eq!(
+            fixture.outbox.copy_resolved("lease", 1, &asked, &resolved),
+            Err(PublishRefusal::Unreadable)
+        );
+        assert!(!fixture.outbox.lease_directory("lease").exists());
+    }
+}
+
+#[test]
+fn the_workspace_handle_survives_path_replacement() {
+    let fixture = fixture();
+    let file = fixture.workspace.join("report.txt");
+    fs::write(&file, b"original workspace").unwrap();
+    let asked = request(&file);
+    let moved = fixture._root.path().join("original-work");
+    fs::rename(&fixture.workspace, &moved).unwrap();
+    fs::create_dir(&fixture.workspace).unwrap();
+    fs::write(&file, b"replacement workspace").unwrap();
+    let staged = fixture.outbox.stage("lease", 1, &asked).unwrap();
+    assert_eq!(fs::read(&staged.path).unwrap(), b"original workspace");
+}
+
+#[test]
+fn a_final_link_substituted_after_resolution_is_refused() {
+    let fixture = fixture();
+    let file = fixture.workspace.join("report.txt");
+    fs::write(&file, b"workspace").unwrap();
+    let asked = request(&file);
+    let resolved = fs::canonicalize(&file).unwrap();
+    let other = fixture._root.path().join("synthetic.txt");
+    fs::write(&other, b"synthetic").unwrap();
+    fs::remove_file(&file).unwrap();
+    symlink(&other, &file).unwrap();
+    let _lock = fixture.outbox.lock_outbox().unwrap();
+    assert_eq!(
+        fixture.outbox.copy_resolved("lease", 1, &asked, &resolved),
+        Err(PublishRefusal::Unreadable)
+    );
+    assert!(!fixture.outbox.lease_directory("lease").exists());
+}
+
+#[test]
+fn a_fifo_substituted_after_resolution_is_refused() {
+    let fixture = fixture();
+    let file = fixture.workspace.join("report.txt");
+    fs::write(&file, b"workspace").unwrap();
+    let asked = request(&file);
+    let resolved = fs::canonicalize(&file).unwrap();
+    fs::remove_file(&file).unwrap();
+    let name = CString::new(file.as_os_str().as_bytes()).unwrap();
+    // SAFETY: a NUL-terminated name in the isolated temporary fixture.
+    assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+    let _lock = fixture.outbox.lock_outbox().unwrap();
+    assert_eq!(
+        fixture.outbox.copy_resolved("lease", 1, &asked, &resolved),
+        Err(PublishRefusal::OutsideWorkspace)
+    );
+    assert!(!fixture.outbox.lease_directory("lease").exists());
+}

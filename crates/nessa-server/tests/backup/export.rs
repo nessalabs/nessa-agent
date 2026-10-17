@@ -901,6 +901,12 @@ struct WatchLog(Arc<AtomicBool>);
 
 #[async_trait]
 impl DeletionLogStore for WatchLog {
+    async fn hold_reconciliation(
+        &self,
+    ) -> Result<Box<dyn crate::backup::application::InventoryReconciliationLease>, ()> {
+        Ok(Box::new(UncontendedReconciliation))
+    }
+
     async fn load(&self) -> Result<DeletionLog, ()> {
         Ok(DeletionLog::default())
     }
@@ -915,6 +921,12 @@ struct EmptyLog;
 
 #[async_trait]
 impl DeletionLogStore for EmptyLog {
+    async fn hold_reconciliation(
+        &self,
+    ) -> Result<Box<dyn crate::backup::application::InventoryReconciliationLease>, ()> {
+        Ok(Box::new(UncontendedReconciliation))
+    }
+
     async fn load(&self) -> Result<DeletionLog, ()> {
         Ok(DeletionLog::default())
     }
@@ -958,3 +970,8 @@ impl ExportClock for Clock {
         self.0
     }
 }
+
+// These adapters are used by single-capture tests only.
+struct UncontendedReconciliation;
+
+impl crate::backup::application::InventoryReconciliationLease for UncontendedReconciliation {}

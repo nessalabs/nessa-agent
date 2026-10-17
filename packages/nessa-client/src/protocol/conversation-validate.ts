@@ -6,6 +6,8 @@ import type {
   ConversationObserveResult,
   ConversationSummary,
   ConversationView,
+  ConversationPermission,
+  ConversationQuestion,
   ConversationLease,
   ConversationReceipt,
   ConversationMutationResult,
@@ -46,7 +48,7 @@ import {
 } from "./attachment-validate.js"
 import { approvalModeChoices } from "./agents-validate.js"
 import { boundedName } from "./mcp-app-validate.js"
-import { decimal } from "./passive-read-validate.js"
+import { canonicalBase64, decimal } from "./passive-read-validate.js"
 
 const utf8 = new TextEncoder()
 const maxTranscriptStateBytes = Math.max(
@@ -162,6 +164,149 @@ export function conversationId(
   if (identity(item, "conversationId") !== expected)
     throw new Error("Conversation response belongs to another conversation")
   return { conversationId: expected }
+}
+/** A review's key, as a view lists it and `permissionReview` reads it. */
+export const reviewKeyPattern = /^[0-9a-f]{32}$/
+/**
+ * What one waiting review shows, read whole with `permissionReview`: who
+ * asked, what it asks, its whole input, every choice, and any deadline.
+ */
+export function conversationPermission(value: unknown): ConversationPermission {
+  const permission = record(value)
+  exact(permission, [
+    "review",
+    "executionId",
+    "permissionId",
+    "toolId",
+    "title",
+    "options",
+    "toolName",
+    "argumentsJson",
+    "origin",
+    "ask",
+    "deadline",
+  ])
+  if (!reviewKeyPattern.test(text(permission, "review", 32)))
+    throw new Error("Invalid conversation review key")
+  for (const key of ["executionId", "permissionId", "toolId"]) identity(permission, key)
+  // What it asks the person to allow, a closed set: a surface words its
+  // review by it, so a value this build does not know refuses the review.
+  const ask = text(permission, "ask", 16)
+  oneOf(ask, Object.values(ConversationPermissionAsk))
+  // Who asked: the agent, or an MCP App naming the tool it asked to call.
+  const origin = record(permission.origin)
+  exact(origin, ["kind", "server", "tool"])
+  const kind = text(origin, "kind", 16)
+  oneOf(kind, ["harness", "app"])
+  if (kind === "app") {
+    text(origin, "server", bounds.maxMcpNameBytes, false)
+    text(origin, "tool", bounds.maxMcpNameBytes, false)
+  } else if (origin.server !== undefined || origin.tool !== undefined) {
+    throw new Error("A review the agent asked for names no app tool")
+  } else if (ask === ConversationPermissionAsk.Message) {
+    // Only an app sends a message as the person; the agent asks to run tools.
+    throw new Error("A review the agent asked for asks to send a message")
+  }
+  text(permission, "title", 2048)
+  const toolName = text(permission, "toolName", bounds.maxReviewToolNameBytes)
+  // The card names the app's tool; the answer approves toolName.
+  if (kind === "app" && origin.tool !== toolName)
+    throw new Error("An app's review names a tool other than the one it reviews")
+  // The agent's own text, whole, shown as it is; it need not be JSON.
+  text(permission, "argumentsJson", bounds.maxReviewInputBytes)
+  const options = items(permission, "options", bounds.maxReviewOptions)
+  if (!options.length) throw new Error("Permission response has no choices")
+  const ids = new Set<string>()
+  for (const option of options) {
+    exact(option, ["id", "label", "effect"])
+    const id = identity(option, "id")
+    if (ids.has(id)) throw new Error("Permission response repeats an option")
+    ids.add(id)
+    text(option, "label", bounds.maxReviewOptionLabelBytes, false)
+    oneOf(text(option, "effect"), Object.values(ConversationPermissionOptionEffect))
+  }
+  if (permission.deadline !== undefined) deadlineOf(permission.deadline)
+  return permission as unknown as ConversationPermission
+}
+/**
+ * All one waiting question asks, read whole with `questionReview`: the
+ * agent's message and every question, with its options. A question is not a
+ * review: nothing is authorised, and what comes back is the agent's own
+ * input. It is checked as strictly all the same, because the panel renders
+ * whatever survives this.
+ */
+export function conversationQuestion(value: unknown): ConversationQuestion {
+  const question = record(value)
+  exact(question, ["question", "executionId", "questionId", "message", "questions"])
+  if (!reviewKeyPattern.test(text(question, "question", 32)))
+    throw new Error("Invalid conversation question key")
+  for (const key of ["executionId", "questionId"]) identity(question, key)
+  text(question, "message", 1024)
+  const asked = items(question, "questions", 16)
+  if (!asked.length) throw new Error("Question response asks nothing")
+  const keys = new Set<string>()
+  for (const one of asked) {
+    exact(one, [
+      "key",
+      "prompt",
+      "header",
+      "multiSelect",
+      "freeText",
+      "required",
+      "options",
+    ])
+    const key = identity(one, "key")
+    if (keys.has(key)) throw new Error("Question repeats a key")
+    keys.add(key)
+    text(one, "prompt", 1024)
+    if (one.header !== undefined && one.header !== null) text(one, "header", 1024)
+    flag(one, "multiSelect")
+    flag(one, "freeText")
+    flag(one, "required")
+    const options = items(one, "options", 32)
+    if (!options.length) throw new Error("Question offers no answers")
+    const values = new Set<string>()
+    for (const option of options) {
+      exact(option, ["value", "label", "description"])
+      const value = text(option, "value", 1024)
+      if (values.has(value)) throw new Error("Question repeats an answer")
+      values.add(value)
+      text(option, "label", 1024)
+      if (option.description !== undefined && option.description !== null)
+        text(option, "description", 1024)
+    }
+  }
+  return question as unknown as ConversationQuestion
+}
+/**
+ * One range of what a waiting review or question shows, held to the range asked: its
+ * offset, the review's whole length, and canonical base64 of exactly the
+ * bytes left up to `maxBytes`. `totalBytes`, when known from an earlier
+ * range, must not change between ranges.
+ */
+export function permissionReviewRange(
+  value: unknown,
+  offset: number,
+  maxBytes: number,
+  totalBytes?: number,
+): { totalBytes: number; bytes: Uint8Array } {
+  const item = record(value)
+  exact(item, ["offset", "totalBytes", "data"])
+  if (item.offset !== offset) throw new Error("Review response is for another range")
+  const total = item.totalBytes
+  if (
+    !Number.isSafeInteger(total) ||
+    (total as number) <= 0 ||
+    (total as number) > bounds.maxReviewBytes ||
+    (totalBytes !== undefined && total !== totalBytes) ||
+    offset >= (total as number)
+  )
+    throw new Error("Review response names another length")
+  const length = Math.min(maxBytes, (total as number) - offset)
+  const bytes = canonicalBase64(item.data, maxBytes, true)
+  if (bytes.byteLength !== length)
+    throw new Error("Review response is not the range asked for")
+  return { totalBytes: total as number, bytes }
 }
 /** Authoritative local activity; unlike a replacement view this cannot truncate the parent. */
 export function conversationPeek(
@@ -481,123 +626,28 @@ export function conversationView(value: unknown, expected: string): Conversation
     )
       throw new Error("Pending execution contradicts its queued message")
   }
-  // A question is not a review: nothing is authorised, and what comes back is
-  // the agent's own input. It is checked as strictly all the same, because the
-  // panel renders whatever survives this.
-  const questionIds = new Set<string>()
-  for (const question of items(item, "questions", 8)) {
-    exact(question, ["executionId", "questionId", "message", "questions"])
-    for (const key of ["executionId", "questionId"]) identity(question, key)
-    const questionKey = JSON.stringify([question.executionId, question.questionId])
-    if (questionIds.has(questionKey))
-      throw new Error("Conversation response repeats a question")
-    questionIds.add(questionKey)
-    const status = messageStatuses.get(question.executionId as string)
-    if (status !== undefined && status !== "running")
-      throw new Error("Question execution is not running")
-    if (status === undefined && !item.truncated)
-      throw new Error("Question execution is missing its message")
-    text(question, "message", 1024)
-    const asked = items(question, "questions", 16)
-    if (!asked.length) throw new Error("Question response asks nothing")
-    const keys = new Set<string>()
-    for (const one of asked) {
-      exact(one, [
-        "key",
-        "prompt",
-        "header",
-        "multiSelect",
-        "freeText",
-        "required",
-        "options",
-      ])
-      const key = identity(one, "key")
-      if (keys.has(key)) throw new Error("Question repeats a key")
-      keys.add(key)
-      text(one, "prompt", 1024)
-      if (one.header !== undefined && one.header !== null) text(one, "header", 1024)
-      flag(one, "multiSelect")
-      flag(one, "freeText")
-      flag(one, "required")
-      const options = items(one, "options", 32)
-      if (!options.length) throw new Error("Question offers no answers")
-      const values = new Set<string>()
-      for (const option of options) {
-        exact(option, ["value", "label", "description"])
-        const value = text(option, "value", 1024)
-        if (values.has(value)) throw new Error("Question repeats an answer")
-        values.add(value)
-        text(option, "label", 1024)
-        if (option.description !== undefined && option.description !== null)
-          text(option, "description", 1024)
-      }
-    }
+  // Each waiting question is listed by a small entry under its key: all it
+  // asks is read with `questionReview` and checked there.
+  const questionKeys = new Set<string>()
+  for (const entry of items(item, "questions", bounds.maxOpenQuestions)) {
+    exact(entry, ["question", "message"])
+    const key = text(entry, "question", 32)
+    if (!reviewKeyPattern.test(key)) throw new Error("Invalid conversation question key")
+    if (questionKeys.has(key)) throw new Error("Conversation response repeats a question")
+    questionKeys.add(key)
+    text(entry, "message", bounds.maxQuestionEntryMessageBytes)
   }
-  const permissionIds = new Set<string>()
-  for (const permission of items(item, "permissions", 64)) {
-    exact(permission, [
-      "executionId",
-      "permissionId",
-      "toolId",
-      "title",
-      "options",
-      "toolName",
-      "argumentsJson",
-      "origin",
-      "ask",
-      "deadline",
-    ])
-    for (const key of ["executionId", "permissionId", "toolId"]) identity(permission, key)
-    // What it asks the person to allow, a closed set: a surface words its
-    // review by it, so a value this build does not know refuses the view.
-    const ask = text(permission, "ask", 16)
-    oneOf(ask, Object.values(ConversationPermissionAsk))
-    // Who asked: the agent, or an MCP App naming the tool it asked to call.
-    const origin = record(permission.origin)
-    exact(origin, ["kind", "server", "tool"])
-    const kind = text(origin, "kind", 16)
-    oneOf(kind, ["harness", "app"])
-    if (kind === "app") {
-      text(origin, "server", bounds.maxMcpNameBytes, false)
-      text(origin, "tool", bounds.maxMcpNameBytes, false)
-    } else if (origin.server !== undefined || origin.tool !== undefined) {
-      throw new Error("A review the agent asked for names no app tool")
-    } else if (ask === ConversationPermissionAsk.Message) {
-      // Only an app sends a message as the person; the agent asks to run tools.
-      throw new Error("A review the agent asked for asks to send a message")
-    }
-    const permissionKey = JSON.stringify([
-      permission.executionId,
-      permission.permissionId,
-    ])
-    if (permissionIds.has(permissionKey))
-      throw new Error("Conversation response repeats a permission")
-    const status = messageStatuses.get(permission.executionId as string)
-    // The agent asks while its execution runs. An app asks whenever it is
-    // shown, naming its own tool call, which has normally finished.
-    if (kind === "harness" && status !== undefined && status !== "running")
-      throw new Error("Permission execution is not running")
-    if (status === undefined && !item.truncated)
-      throw new Error("Permission execution is missing its message")
-    permissionIds.add(permissionKey)
-    text(permission, "title", 2048)
-    const toolName = text(permission, "toolName", 256)
-    // The card names the app's tool; the answer approves toolName.
-    if (kind === "app" && origin.tool !== toolName)
-      throw new Error("An app's review names a tool other than the one it reviews")
-    JSON.parse(text(permission, "argumentsJson", 32768))
-    const options = items(permission, "options", 64)
-    if (!options.length) throw new Error("Permission response has no choices")
-    const ids = new Set<string>()
-    for (const option of options) {
-      exact(option, ["id", "label", "effect"])
-      const id = identity(option, "id")
-      if (ids.has(id)) throw new Error("Permission response repeats an option")
-      ids.add(id)
-      text(option, "label", 2048, false)
-      oneOf(text(option, "effect"), Object.values(ConversationPermissionOptionEffect))
-    }
-    if (permission.deadline !== undefined) deadlineOf(permission.deadline)
+  // Each waiting review is listed by its key alone, small and of one size:
+  // what it shows is read with `permissionReview` and checked there.
+  const reviewKeys = new Set<string>()
+  for (const entry of items(item, "permissions", bounds.maxListedReviews)) {
+    exact(entry, ["review", "origin", "toolName"])
+    const key = text(entry, "review", 32)
+    if (!reviewKeyPattern.test(key)) throw new Error("Invalid conversation review key")
+    if (reviewKeys.has(key)) throw new Error("Conversation response repeats a review")
+    reviewKeys.add(key)
+    oneOf(text(entry, "origin", 16), ["harness", "app"])
+    text(entry, "toolName", bounds.maxReviewEntryToolNameBytes)
   }
   const toolIds = new Set<string>()
   // One execution runs in one process, so its tools share that start's choice.
@@ -731,18 +781,12 @@ export function conversationView(value: unknown, expected: string): Conversation
       capabilities.queue ||
       capabilities.steer ||
       capabilities.permissions ||
-      pendingIds.size ||
-      permissionIds.size ||
-      questionIds.size)
+      pendingIds.size)
   )
     throw new Error("Unconfirmed conversation history offers controls")
   if (
     item.transcriptState === "complete_empty" &&
-    (messages.length ||
-      pendingIds.size ||
-      permissionIds.size ||
-      questionIds.size ||
-      toolIds.size)
+    (messages.length || pendingIds.size || toolIds.size)
   )
     throw new Error("Empty conversation history contains transcript evidence")
   const features = record(capabilities.agentFeatures)
@@ -1228,6 +1272,17 @@ export const toolPolicyBounds = {
   patternBytes: bounds.maxToolPatternBytes,
   hosts: bounds.maxCommandHosts,
   hostBytes: bounds.maxCommandHostBytes,
+} as const
+
+/**
+ * How long a view's list entries may be, as the product schema publishes
+ * them: a review entry's tool name holds at most `toolNameBytes` UTF-8 bytes,
+ * and a question entry's message at most `messageBytes`. The gateway clips
+ * each to fit; a view past them is refused.
+ */
+export const viewEntryBounds = {
+  toolNameBytes: bounds.maxReviewEntryToolNameBytes,
+  messageBytes: bounds.maxQuestionEntryMessageBytes,
 } as const
 
 /**

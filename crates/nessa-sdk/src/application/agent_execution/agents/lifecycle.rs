@@ -181,6 +181,9 @@ struct State {
     attachment_evidence_failure: Option<AttachmentFailure>,
     attachment_evidence: Vec<AttachmentEvidenceSlot>,
     automatic_recovery_ready: bool,
+    // Set when the first caller close is the host's own shutdown
+    // (`Agent::suspend`): the work it stops stays owed rather than final.
+    suspended: bool,
 }
 #[cfg(test)]
 struct AttachmentAuditPause {
@@ -383,6 +386,7 @@ impl SessionLifecycle {
                 attachment_evidence_failure: None,
                 attachment_evidence: Vec::new(),
                 automatic_recovery_ready: false,
+                suspended: false,
             }),
             close: watch::channel(None).0,
             stop: watch::channel(()).0,
@@ -471,6 +475,31 @@ impl SessionLifecycle {
     }
     pub(super) fn close_notice(&self) -> watch::Receiver<Option<ActionContext>> {
         self.close.subscribe()
+    }
+    /// Whether the first caller close was the host's own shutdown, so the
+    /// work it stopped is owed. A person's close that came first keeps its
+    /// cause (`a_suspend_after_a_persons_close_keeps_the_close_final`).
+    pub(super) fn closed_by_suspend(&self) -> bool {
+        self.state.lock().expect("session lifecycle").suspended
+    }
+    /// The cause a caller close records on the work it stops.
+    pub(super) fn caller_close_cause(&self) -> SchedulingCause {
+        if self.closed_by_suspend() {
+            SchedulingCause::Suspended
+        } else {
+            SchedulingCause::SessionClosed
+        }
+    }
+    /// [`Self::start_stop`] for the host's own shutdown: the first caller
+    /// close decides whether stopped work is owed or final.
+    pub(super) fn start_suspend(self: &Arc<Self>, actor: ActionContext) -> CloseAttempt {
+        let request = SessionCloseRequest::Explicit(actor);
+        self.seal_disposal_if_requested(&request);
+        let mut state = self.state.lock().expect("session lifecycle");
+        if self.close.borrow().is_none() {
+            state.suspended = true;
+        }
+        self.start_stop_locked(&mut state, request, false)
     }
     pub(super) fn attachment_status(&self) -> AttachmentStatus {
         let state = self.state.lock().expect("session lifecycle");
@@ -1467,7 +1496,11 @@ impl SessionLifecycle {
         };
         let cancellation = InvocationCancellationEvent {
             cause: if actor.is_some() {
-                SchedulingCause::SessionClosed
+                if state.suspended {
+                    SchedulingCause::Suspended
+                } else {
+                    SchedulingCause::SessionClosed
+                }
             } else {
                 SchedulingCause::RunnerStopped
             },
@@ -1929,6 +1962,8 @@ impl SessionLifecycle {
             state.work_status = WorkStatus::Open;
             state.active = None;
             state.automatic_recovery_ready = automatic;
+            // A suspend decides one stop's cause, not the next one's.
+            state.suspended = false;
             self.close.send_replace(None);
         }
     }

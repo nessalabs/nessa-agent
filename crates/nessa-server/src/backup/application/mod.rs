@@ -11,6 +11,6 @@ pub use ports::{
     AdmissionFailure, AdmissionLease, Authenticator, CopiedStore, DecisionAuditError,
     DeletionLogStore, ExportClock, ExportSource, FenceSource, InventoryAction,
     InventoryCapturePolicyEvaluator, InventoryCause, InventoryDecision, InventoryDecisionAudit,
-    InventoryDenial, InventoryFacts, LogStoreError, MacError, MacKey, ManifestPublisher,
-    MutationAdmission, PinnedStore, PublishedRecord,
+    InventoryDenial, InventoryFacts, InventoryReconciliationLease, LogStoreError, MacError, MacKey,
+    ManifestPublisher, MutationAdmission, PinnedStore, PublishedRecord,
 };

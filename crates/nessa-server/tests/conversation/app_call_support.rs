@@ -23,7 +23,7 @@ use nessa_protocol::agents::AgentId;
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_protocol::conversation::tool_uis::McpToolUis;
 use nessa_protocol::conversation::view::{
-    ConversationMessageStatus, ConversationPermission, ConversationPermissionOrigin,
+    ConversationMessageStatus, ConversationPermission, ConversationReviewKind,
 };
 use nessa_sdk::application::agent_execution::agents::{AgentError, AgentFuture};
 use nessa_sdk::application::agent_execution::executions::{
@@ -795,15 +795,28 @@ impl Fixture {
         (task, review)
     }
 
+    /// The app reviews a read lists, each as its live owner shows it.
     pub(crate) async fn app_reviews(&self) -> Vec<ConversationPermission> {
-        self.service
+        let listed = self
+            .service
             .read(self.id.clone(), self.caller("read"))
             .await
             .unwrap()
-            .permissions
+            .permissions;
+        let mut reviews = Vec::new();
+        for entry in listed
             .into_iter()
-            .filter(|review| matches!(review.origin, ConversationPermissionOrigin::App { .. }))
-            .collect()
+            .filter(|entry| entry.origin == ConversationReviewKind::App)
+        {
+            if let Ok(review) = self
+                .service
+                .waiting_review(self.id.clone(), self.caller("read"), &entry.review)
+                .await
+            {
+                reviews.push(review);
+            }
+        }
+        reviews
     }
 
     pub(crate) async fn answer(&self, review: &ConversationPermission, option: &str) {
@@ -813,6 +826,7 @@ impl Fixture {
                 self.caller("answer"),
                 review.execution_id.clone(),
                 review.permission_id.clone(),
+                review.review.clone(),
                 option.into(),
                 PermissionCaller::Owner,
             )

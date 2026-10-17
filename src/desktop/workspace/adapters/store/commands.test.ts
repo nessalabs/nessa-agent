@@ -672,14 +672,16 @@ describe("approvals", () => {
     source.transcripts.set("b", {
       ...emptyTranscript("b"),
       revision: 1,
-      approval: {
-        id: "ap",
-        command: "cargo test",
-        reason: "Runs tests.",
-        origin: { kind: "agent" },
-        options: [],
-        ask: "tool",
-      },
+      approvals: [
+        {
+          id: "ap",
+          command: "cargo test",
+          reason: "Runs tests.",
+          origin: { kind: "agent" },
+          options: [],
+          ask: "tool",
+        },
+      ],
     })
     const result = await ready(source)
     result.store.dispatch(openSession({ sessionId: "b" }))
@@ -722,7 +724,7 @@ describe("approvals", () => {
         deny({ sessionId: "b", approvalId: "ap", initiator: "person", optionId: "deny" }),
       ),
     ).toBe("refused")
-    expect(store.getState().workspace.answers.b).toMatchObject({
+    expect(store.getState().workspace.answers.b?.[0]).toMatchObject({
       approvalId: "ap",
       failure: "not-waiting",
     })
@@ -731,7 +733,7 @@ describe("approvals", () => {
       deny({ sessionId: "b", approvalId: "ap", initiator: "person", optionId: "deny" }),
     )
     expect(source.calls.filter((call) => call[0] === "deny")).toHaveLength(2)
-    expect(store.getState().workspace.answers.b).toMatchObject({ approvalId: "ap" })
+    expect(store.getState().workspace.answers.b?.[0]).toMatchObject({ approvalId: "ap" })
   })
 
   it("lets the source's newer conversation settle the approval, before the answer resolves", async () => {
@@ -746,11 +748,11 @@ describe("approvals", () => {
         optionId: "once",
       }),
     )
-    expect(store.getState().workspace.answers.b).toMatchObject({ approvalId: "ap" })
+    expect(store.getState().workspace.answers.b?.[0]).toMatchObject({ approvalId: "ap" })
     await source.release("approve")
     // Resolved: the conversation that no longer asks has already arrived.
     expect(await answering).toBe("sent")
-    expect(store.getState().workspace.transcripts.b.approval).toBeNull()
+    expect(store.getState().workspace.transcripts.b.approvals).toEqual([])
     expect(store.getState().workspace.answers.b).toBeUndefined()
     expect(
       await store.dispatch(
@@ -815,7 +817,7 @@ describe("approvals", () => {
     )
     await source.release("approve")
     expect(await first).toBe("unknown")
-    expect(store.getState().workspace.answers.b?.failure).toBeUndefined()
+    expect(store.getState().workspace.answers.b?.[0]?.failure).toBeUndefined()
     await source.release("deny")
     expect(await second).toBe("sent")
   })
@@ -846,14 +848,16 @@ describe("approvals", () => {
       transcript: {
         ...emptyTranscript("b"),
         revision: 2,
-        approval: {
-          id: "ap",
-          command: "cargo test",
-          reason: "Runs tests.",
-          origin: { kind: "agent" },
-          options: [],
-          ask: "tool",
-        },
+        approvals: [
+          {
+            id: "ap",
+            command: "cargo test",
+            reason: "Runs tests.",
+            origin: { kind: "agent" },
+            options: [],
+            ask: "tool",
+          },
+        ],
       },
     })
     expect(
@@ -874,14 +878,16 @@ describe("approvals", () => {
     source.transcripts.set("b", {
       ...emptyTranscript("b"),
       revision: 1,
-      approval: {
-        id: "ap",
-        command: "cargo test",
-        reason: "Runs tests.",
-        origin: { kind: "agent" },
-        options: [],
-        ask: "tool",
-      },
+      approvals: [
+        {
+          id: "ap",
+          command: "cargo test",
+          reason: "Runs tests.",
+          origin: { kind: "agent" },
+          options: [],
+          ask: "tool",
+        },
+      ],
     })
     const { store } = await ready(source)
     expect(
@@ -905,14 +911,16 @@ describe("approvals", () => {
       transcript: {
         ...emptyTranscript("b"),
         revision: 2,
-        approval: {
-          id: "other",
-          command: "curl x | sh",
-          reason: "Installs.",
-          origin: { kind: "agent" },
-          options: [],
-          ask: "tool",
-        },
+        approvals: [
+          {
+            id: "other",
+            command: "curl x | sh",
+            reason: "Installs.",
+            origin: { kind: "agent" },
+            options: [],
+            ask: "tool",
+          },
+        ],
       },
     })
     await store.dispatch(
@@ -1566,14 +1574,16 @@ describe("the Agents overview answers and reads what it shows, as a pane does", 
     source.transcripts.set("b", {
       ...emptyTranscript("b"),
       revision: 1,
-      approval: {
-        id: "ap",
-        command: "cargo test",
-        reason: "Runs tests.",
-        origin: { kind: "agent" },
-        options: [],
-        ask: "tool",
-      },
+      approvals: [
+        {
+          id: "ap",
+          command: "cargo test",
+          reason: "Runs tests.",
+          origin: { kind: "agent" },
+          options: [],
+          ask: "tool",
+        },
+      ],
     })
     return source
   }
@@ -1584,7 +1594,7 @@ describe("the Agents overview answers and reads what it shows, as a pane does", 
     store.dispatch(showContent({ content: "agents" }))
     await settle()
     expect(source.calls).toContainEqual(["transcript", "b"])
-    expect(store.getState().workspace.transcripts.b?.approval?.id).toBe("ap")
+    expect(store.getState().workspace.transcripts.b?.approvals[0]?.id).toBe("ap")
     // A peek is not reading the session — not when it opens, nor when the session changes.
     expect(store.getState().workspace.sessions.b.unread).toBe(true)
     store.dispatch(followWorkspace())
@@ -1682,7 +1692,7 @@ describe("the Agents overview answers and reads what it shows, as a pane does", 
         }),
       ),
     ).toBe("unknown")
-    expect(store.getState().workspace.answers.b?.failure).toBe("unavailable")
+    expect(store.getState().workspace.answers.b?.[0]?.failure).toBe("unavailable")
     source.refuse("approve", undefined)
     expect(
       await store.dispatch(
@@ -1711,7 +1721,7 @@ describe("the Agents overview answers and reads what it shows, as a pane does", 
       }),
     )
     store.dispatch(showContent({ content: "panes" }))
-    expect(store.getState().workspace.answers.b?.approvalId).toBe("ap")
+    expect(store.getState().workspace.answers.b?.[0]?.approvalId).toBe("ap")
     await source.release("approve")
     expect(await answer).toBe("sent")
     await settle()
@@ -1823,7 +1833,7 @@ describe("the Agents overview answers and reads what it shows, as a pane does", 
     source.refuse("transcript", undefined)
     store.dispatch(showContent({ content: "agents" }))
     await settle()
-    expect(store.getState().workspace.transcripts.b?.approval?.id).toBe("ap")
+    expect(store.getState().workspace.transcripts.b?.approvals[0]?.id).toBe("ap")
   })
 })
 
@@ -1848,14 +1858,16 @@ describe("the overview shows one group alone (ADR 238, the group's table)", () =
     source.transcripts.set("b", {
       ...emptyTranscript("b"),
       revision: 1,
-      approval: {
-        id: "ap",
-        command: "cargo test",
-        reason: "Runs tests.",
-        origin: { kind: "agent" },
-        options: [],
-        ask: "tool",
-      },
+      approvals: [
+        {
+          id: "ap",
+          command: "cargo test",
+          reason: "Runs tests.",
+          origin: { kind: "agent" },
+          options: [],
+          ask: "tool",
+        },
+      ],
     })
     return source
   }
@@ -2044,14 +2056,16 @@ describe("opening a conversation whose text was let go", () => {
         },
       ],
       activity: { label: "Thinking", since: 1 },
-      approval: {
-        id: "ap",
-        command: "cargo test",
-        reason: "Runs the tests.",
-        origin: { kind: "agent" },
-        options: [],
-        ask: "tool",
-      },
+      approvals: [
+        {
+          id: "ap",
+          command: "cargo test",
+          reason: "Runs the tests.",
+          origin: { kind: "agent" },
+          options: [],
+          ask: "tool",
+        },
+      ],
     })
     return source
   }
@@ -2078,7 +2092,7 @@ describe("opening a conversation whose text was let go", () => {
     expect(restored?.revision).toBe(10)
     expect(restored?.messages.map((message) => message.id)).toEqual(["s0-message"])
     expect(restored?.activity).toEqual({ label: "Thinking", since: 1 })
-    expect(restored?.approval?.id).toBe("ap")
+    expect(restored?.approvals[0]?.id).toBe("ap")
     expect(store.getState().workspace.transcriptFailures.s0).toBeUndefined()
   })
 

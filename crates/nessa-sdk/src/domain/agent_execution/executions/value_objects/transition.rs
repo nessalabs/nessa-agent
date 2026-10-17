@@ -103,6 +103,33 @@ impl SchedulingTransition {
                 SchedulingCause::Withdrawn,
                 SchedulingInitiator::Caller,
             ) => true,
+            (
+                Some(InvocationStage::Queued | InvocationStage::Running),
+                InvocationStage::Cancelled,
+                SchedulingCause::Suspended,
+                SchedulingInitiator::Caller,
+            ) => true,
+            (
+                Some(InvocationStage::Queued | InvocationStage::Running),
+                InvocationStage::Cancelled,
+                SchedulingCause::Interrupted,
+                SchedulingInitiator::Automatic,
+            ) => true,
+            // The host's decision on owed work: from a turn still Queued or
+            // Running, or after the cancellation or failed settlement that
+            // left it owed (which `InvocationHistory::schedule` checks it
+            // follows).
+            (
+                Some(
+                    InvocationStage::Queued
+                    | InvocationStage::Running
+                    | InvocationStage::Cancelled
+                    | InvocationStage::Settled,
+                ),
+                InvocationStage::Cancelled,
+                SchedulingCause::NotResumed,
+                SchedulingInitiator::Caller,
+            ) => true,
             _ => false,
         };
         if !legal || (kind == InvocationKind::Queued && target.is_some()) {

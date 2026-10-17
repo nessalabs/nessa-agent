@@ -37,6 +37,8 @@ import type { AgentsFilter } from "../../model/overview/filter"
 import type { AgentsGroup } from "../../model/overview/agents-glance"
 import * as panes from "../../application/usecases/panes"
 import * as sessions from "../../application/usecases/sessions"
+import * as access from "../../application/usecases/access"
+import type { AccessMode } from "../../model/access"
 import * as updates from "../../application/usecases/updates"
 import * as sharing from "../../application/usecases/sharing"
 import type { ShareDraft, ShareGrant, SharingChoices } from "../../model/sharing"
@@ -239,6 +241,36 @@ const workspaceSlice = createSlice({
     ) => sessions.sendFailed(state, payload),
     chooseModel: (state, { payload }: Payload<{ sessionId: string; model: ModelRef }>) =>
       sessions.chooseModel(state, payload),
+    accessChosen: (
+      state,
+      { payload }: Payload<{ sessionId: string; mode: AccessMode }>,
+    ) => access.accessChosen(state, payload),
+    accessCaptured: (
+      state,
+      { payload }: Payload<{ sessionId: string; mode: AccessMode }>,
+    ) => access.accessCaptured(state, payload),
+    accessPending: (
+      state,
+      { payload }: Payload<{ sessionId: string; mode: AccessMode }>,
+    ) => access.accessPending(state, payload),
+    accessChanging: (
+      state,
+      { payload }: Payload<{ sessionId: string; mode: AccessMode }>,
+    ) => access.accessChanging(state, payload),
+    accessTaken: (state, { payload }: Payload<{ sessionId: string; mode: AccessMode }>) =>
+      access.accessTaken(state, payload),
+    accessRefused: (
+      state,
+      {
+        payload,
+      }: Payload<{
+        sessionId: string
+        mode: AccessMode
+        reason: WorkspaceFailureReason
+        code?: string
+        requeue?: boolean
+      }>,
+    ) => access.accessRefused(state, payload),
     approvalAnswering: (
       state,
       { payload }: Payload<{ sessionId: string; approvalId: string; token: string }>,

@@ -24,6 +24,7 @@ import {
   NessaConversationMutationError,
 } from "@nessa/client"
 import { evidenceFor, readEvidence, waitFor } from "./conversation-smoke/evidence.mjs"
+import { readWithReviews } from "./conversation-smoke/reviews.mjs"
 import {
   collectCleanupFailures,
   createFixtureSupervisor,
@@ -100,7 +101,7 @@ const connect = async (url) => {
 
 const viewWith = (client, accept, description) => {
   const operation = waitFor(
-    () => client.conversation.read(conversationId),
+    () => readWithReviews(client, conversationId),
     accept,
     description,
     15_000,

@@ -146,6 +146,8 @@ export const nessaIcons: DesktopIconFamily = {
 
   // On send's filled disc a slightly firmer line keeps the arrow from thinning out.
   send: drawn(<path d="M10 15.5v-11M5.5 9 10 4.5 14.5 9" />, 1.6),
+  // Filled, as a running turn's Stop sits on the same disc as send.
+  stop: drawn(<rect x="6" y="6" width="8" height="8" rx="2" fill="currentColor" />),
   attach: drawn(
     <path d="M14.5 9.25l-4.9 4.9a3.2 3.2 0 0 1-4.5-4.5l5.4-5.4a2.1 2.1 0 0 1 3 3l-5.3 5.3a1.05 1.05 0 0 1-1.5-1.5l4.8-4.8" />,
   ),
@@ -191,6 +193,12 @@ export const nessaIcons: DesktopIconFamily = {
     <>
       {pane}
       <path d="M6.5 8l2 2-2 2M10.5 12.25h3" />
+    </>,
+  ),
+  site: drawn(
+    <>
+      <circle cx="10" cy="10" r="6.5" />
+      <path d="M3.5 10h13M10 3.5c-3.6 3.6-3.6 9.4 0 13M10 3.5c3.6 3.6 3.6 9.4 0 13" />
     </>,
   ),
 
