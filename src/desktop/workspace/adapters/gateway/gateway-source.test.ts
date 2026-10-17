@@ -752,6 +752,53 @@ describe("conversations", () => {
     expect(gateway.views.get("a")?.messages[0]?.status).toBe("running")
   })
 
+  it("withdraws a turn the person queued when none is active, so it never runs", async () => {
+    const { gateway, source, updates, follow } = started()
+    gateway.rows.set("a", row("a"))
+    gateway.views.set("a", view("a", { messages: [{ ...running(), status: "queued" }] }))
+    await source.index()
+    follow()
+    expect(atWork(await source.transcript("a"))).toBe(true)
+    await source.stop("a", "person")
+    const withdrawn = gateway.calls.filter((call) => call.method === "withdraw")
+    expect(
+      withdrawn.map((call) => (call.args[0] as { executionId: string }).executionId),
+    ).toEqual(["turn"])
+    gateway.publish("a")
+    await flush()
+    expect(atWork(transcriptsOf(updates, "a").at(-1))).toBe(false)
+  })
+
+  it("withdraws the queued turns before stopping the active one", async () => {
+    const { gateway, source } = started()
+    gateway.views.set(
+      "a",
+      view("a", {
+        messages: [running("now"), { ...running("next"), status: "queued" }],
+      }),
+    )
+    gateway.active.set("a", "now")
+    await source.transcript("a")
+    await source.stop("a", "person")
+    expect(
+      gateway.calls
+        .filter((call) => call.method === "withdraw" || call.method === "stop")
+        .map((call) => [
+          call.method,
+          call.method === "stop"
+            ? call.args[0]
+            : (call.args[0] as { executionId: string }).executionId,
+        ]),
+    ).toEqual([
+      ["withdraw", "next"],
+      ["stop", "a"],
+    ])
+    expect(gateway.views.get("a")?.messages.map((turn) => turn.status)).toEqual([
+      "cancelled",
+      "cancelled",
+    ])
+  })
+
   it("maps synchronous stale-choice validation without mapping later TypeErrors", async () => {
     const { gateway, source } = started()
     const question = {

@@ -94,6 +94,7 @@
  * app's calls go on that client too (`connected`).
  */
 import {
+  executionTargets,
   prepareSubmission,
   permissionTargets,
   questionTargets,
@@ -153,6 +154,7 @@ export interface GatewayClient {
     | "submit"
     | "answer"
     | "answerQuestion"
+    | "stop"
     | "setApprovalMode"
     | "archive"
   >
@@ -1377,17 +1379,32 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
           }
         })
       }),
-    // The gateway's own peek names the active execution (`stopThread`): a
-    // view's message can still say running after its turn stopped, so the
-    // view is not asked which turn that is.
+    // Two owners, each asked for its own: the view says which turns the
+    // person queued, and they are withdrawn first, so none starts once the
+    // active one ends; the gateway's peek names the active execution
+    // (`stopThread`), since a view's message can still say running after
+    // its turn stopped.
     stop: (sessionId, _initiator) =>
       within(async (live) => {
-        held(sessionId)
+        await transcriptOf(sessionId, "person")
+        const view = reads.get(sessionId)?.view
+        const queued = view
+          ? executionTargets({
+              conversationId: view.conversationId,
+              messages: view.messages.filter((turn) => turn.status === "queued"),
+              pending: view.pending,
+            })
+          : []
+        for (const target of queued)
+          await dispatch(live, (connected) => {
+            held(sessionId)
+            return connected.conversation.stop(target)
+          })
         const result = await dispatch(live, (connected) => {
           held(sessionId)
           return connected.stopThread(sessionId)
         })
-        if (result.outcome === "no_active_turn")
+        if (result.outcome === "no_active_turn" && queued.length === 0)
           throw new WorkspaceSourceError("not-waiting")
       }),
     // Committed by the gateway, which refuses it while a turn runs. The

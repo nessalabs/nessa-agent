@@ -52,11 +52,20 @@ export interface Schedule {
   after(ms: number, run: () => void): () => void
 }
 
-/** A session as it stood for an audited call: its revision, pin and the approval it waited on. */
+/**
+ * A session as it stood for an audited call: its revision, pin, the approval
+ * it waited on, the turn at work, and the access its agent ran at. `turn` is
+ * what a `stop` cancels, and `access` what a `set-access` changed from (the
+ * entry's own `access` is what it asked for).
+ */
 export interface AuditedState {
   readonly revision: number
   readonly pinned: boolean
   readonly waitingOn: { readonly approvalId: string; readonly command: string } | null
+  /** The message that began the turn at work (`atWork`); null when none is. */
+  readonly turn: string | null
+  /** The access the conversation said it ran at; null where it said none. */
+  readonly access: AccessMode | null
 }
 
 /**
@@ -164,13 +173,20 @@ export function inMemorySource(
   const stateOf = (sessionId: string): AuditedState | null => {
     const held = sessions.get(sessionId)
     if (!held) return null
-    const approval = transcripts.get(sessionId)?.approval
+    const transcript = transcripts.get(sessionId)
+    const approval = transcript?.approval
     return Object.freeze({
       revision: held.revision,
       pinned: held.pinned,
       waitingOn: approval
         ? Object.freeze({ approvalId: approval.id, command: approval.command })
         : null,
+      turn: atWork(transcript)
+        ? ([...(transcript?.messages ?? [])]
+            .reverse()
+            .find((message) => message.role === "user")?.id ?? null)
+        : null,
+      access: transcript?.access?.mode ?? null,
     })
   }
   /** Runs a consequential call; `work` answers with the revision it produced. */

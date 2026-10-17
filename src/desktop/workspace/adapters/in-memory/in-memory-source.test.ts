@@ -163,11 +163,44 @@ describe("the in-memory source", () => {
       sessionId: "new",
       action: "stop",
       initiator: "person",
+      // The turn it cancelled: the one the person's message began.
+      before: { turn: "m1" },
       outcome: "taken",
     })
     await expect(source.stop("new", "person")).rejects.toMatchObject({
       reason: "not-waiting",
     })
+    // Refused, it is on record too, with no turn at work to have stopped.
+    expect(source.audit().at(-1)).toMatchObject({
+      action: "stop",
+      before: { turn: null },
+      outcome: { refused: "not-waiting" },
+    })
+  })
+
+  it("records the access a change moved from and the one it asked for", async () => {
+    const { source } = started()
+    await source.send({
+      initiator: "person",
+      sessionId: "new",
+      messageId: "m1",
+      text: "Sketch a calmer header",
+      model: { provider: "anthropic", modelId: "claude-opus-5" },
+      start: { channelId: "desktop-app", title: "Sketch a calmer header" },
+    })
+    await source.stop("new", "person")
+    await source.setAccess("new", "auto", "person")
+    await source.setAccess("new", "full", "agent")
+    const changes = source.audit().filter((entry) => entry.action === "set-access")
+    expect(changes).toMatchObject([
+      { access: "auto", initiator: "person", before: { access: null }, outcome: "taken" },
+      {
+        access: "full",
+        initiator: "agent",
+        before: { access: "auto" },
+        outcome: "taken",
+      },
+    ])
   })
 
   it("previews what a running session is at, step by step, without moving it in the lists", async () => {

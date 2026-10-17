@@ -64,6 +64,7 @@ type Method =
   | "answer"
   | "answerQuestion"
   | "stop"
+  | "withdraw"
   | "setApprovalMode"
   | "archive"
   | "permissionRules"
@@ -471,6 +472,25 @@ export function fakeGateway(
         const behaviour = overrides.get("answerQuestion")?.shift()
         return (behaviour ? behaviour(normal) : Promise.resolve().then(normal)) as never
       },
+      // A queued turn named is withdrawn: it ends cancelled and never runs.
+      stop: (...args) =>
+        answer("withdraw", args, () => {
+          const [target] = args
+          const current = views.get(target.conversationId)
+          if (current)
+            views.set(target.conversationId, {
+              ...current,
+              messages: current.messages.map((turn) =>
+                turn.executionId === target.executionId
+                  ? { ...turn, status: "cancelled" }
+                  : turn,
+              ),
+              pending: current.pending.filter(
+                (waiting) => waiting.executionId !== target.executionId,
+              ),
+            })
+          return { requestId: "withdraw", stage: "accepted" }
+        }) as never,
       // Committed as asked; the view says it from now on.
       setApprovalMode: (...args) =>
         answer("setApprovalMode", args, () => {
