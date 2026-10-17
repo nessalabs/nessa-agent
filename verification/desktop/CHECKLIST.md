@@ -291,11 +291,14 @@ Experimental turns it on; the rail stands beside the workspace in
 
 - [ ] **Focused panes keep the same fill and elevation as their neighbors.**
   A subtle rim identifies focus in both themes. _Check:_ `columns.mjs --only pane-level`.
-- [ ] **Conversation content stays visible during sidebar and session-list toggles.**
+- [ ] **Conversation content stays visible during toggles and when a pane mounts.**
   Pane bodies, including the composer, do not disappear and their fill does not
   darken as bounds land immediately, without a workspace FLIP. Independent
   sidebar and session-list motion remains. _Check:_ `columns.mjs --only content-visible`
-  in both engines and layouts. Drag previews must also retain content; verify
+  in both engines and layouts. Its split action opens a filled conversation and
+  samples the new pane's body and header from their first mounted frame: full
+  cumulative ancestor opacity, visible content and unit root/header transform.
+  Drag previews must also retain content; verify
   these with the drag and focus checks when changing their motion.
 - [ ] **No two columns overlap**, and nothing sits under the rail, in any
   combination of the rail, the sidebar, the session list and the Agents
@@ -503,7 +506,9 @@ scripts drive the sample plugin the sample workspace registers
 - [ ] **A card opens its widget in a pane beside its conversation, and the
   window over the panes, and Escape goes back** — the pane's rect beside the
   conversation's, the caret in its body; the window inside the chat area and
-  clear of the session list, the caret in its body; the panes as they were
+  clear of the session list, the caret in its body; its body and header fully
+  opaque and its root/header at unit transform from the first mounted frame,
+  because it covers the main chat; the panes as they were
   after Escape, the caret back in the focused pane's body.
   _Check:_ `widgets.mjs --only card-pane-window`.
 - [ ] **The window is left as the overview is, with ⌘W its own**: its close,

@@ -821,8 +821,15 @@ masked outline stays in `styles.css` until nessa_ui adds one.
 
 Motion animates transform and opacity only. Workspace layout changes apply
 immediately (`--desktop-flight: 0ms`, #914): visible content must not travel
-beneath native window controls or disappear while a column changes. The shared
-`FlipScope` still owns drag-preview retirement and cancellation; its zero-duration
+beneath native window controls or disappear while a column changes. A new
+conversation pane also mounts at full opacity and unit scale, including its
+header: opening a split must not fade or shrink the whole conversation
+(`columns.mjs --only content-visible`, sampled from its first mounted frame).
+The full-chat widget window has the same entry rule (`widgets.mjs --only
+card-pane-window`); it hides the pane grid beneath it, so fading its content
+would blank the main view. The Agents conversation peek also stays opaque
+from its first mounted frame (`responsive.mjs --only overview-story,overview-leave`).
+The shared `FlipScope` still owns drag-preview retirement and cancellation; its zero-duration
 path skips snapshot/counter-scaling work. Independent popup, carried-card and
 first-message motion retain their own durations. `safe-area.mjs` and
 `drag.mjs` cover visible content and protected control areas; `perf-budget.mjs`
