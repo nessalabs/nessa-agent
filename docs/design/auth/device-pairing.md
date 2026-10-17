@@ -26,9 +26,10 @@ in the persisted auth DTO/registry mapping, independently of these width values.
 ### Retained replacement recovery verification (#324)
 
 The consumer implementation shipped after the shared storage slice. The following
-synthetic adapter tests exercise its recovery helpers with real retained files;
-they do not inject a failed native acknowledgement or prove the dispatch from
-`PrivatePublicationFailure`. Shared storage's W06/W07 tests own that failure fact.
+synthetic adapter tests exercise its recovery helpers and decomposed failure
+dispatch with real retained files. They do not inject a failed native
+acknowledgement through a public save. Shared storage's W06/W07 tests own that
+native failure fact.
 The existing public pending-store tests own expected-old CAS and key/pin retention.
 
 | Row | State/event | Expected result and evidence |
@@ -39,6 +40,16 @@ The existing public pending-store tests own expected-old CAS and key/pin retenti
 | C324-4 | Process owner drained; exact pending save retried through reopened owner | Acknowledge with writable existing-file handle, retain original key/pin/attempt; stale CAS still refuses. `restart_reconciliation_reflushes_existing_record` |
 | C324-5 | Canonical file absent at reconciliation | Return Uncertain without recreating a file or reservation. `restart_reconciliation_does_not_create_a_missing_record` |
 | C324-6 | Windows canonical destination pinned by a mutation-capable handle | Typed NotPublished/Rename failure; preserve old bytes; remove only unpublished reservation; accepted replacement and exact retry after release. `windows_pending_replacement_recovers_after_pinned_destination` |
+| C324-7 | Actual retained publication followed by a synthetic acknowledgement failure observation | Dispatch the decomposed storage observation through the private consumer handler; reflush/reconcile the original published handle and return success. `published_failure_dispatch_reconciles_original_handle` |
+| C324-8 | Synthetic failed acknowledgement retains original published handle, but canonical name now identifies another file with identical bytes | Dispatch refuses reconciliation, preserves original failure stage/primary and Published fact, and leaves the replacement intact. `published_failure_dispatch_preserves_fact_when_identity_changed` |
+| C324-9 | Synthetic failed acknowledgement retains original handle, but expected bytes differ | Dispatch preserves original failure separately from UnsafeStorage reconciliation; canonical bytes remain unchanged. `published_failure_dispatch_preserves_primary_when_bytes_differ` |
+
+C324-7–9 inject the parts of an acknowledgement-failure observation at the
+consumer's private handler, using a real retained publication. The production
+error arm consumes `PrivatePublicationFailure::into_parts()` immediately before
+calling that handler; no public construction or second publication authority is
+added. These cases prove synthetic consumer dispatch, not an injected native
+syscall failure through `save_pending`. W06/W07 still own the native producer fact.
 
 Windows file flushing requires writable access; a read-only reopen is a meaningful
 native counterfactual for C324-4. Unix may allow fsync on a read-only descriptor.

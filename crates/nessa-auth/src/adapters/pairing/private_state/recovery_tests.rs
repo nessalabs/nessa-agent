@@ -151,6 +151,122 @@ fn restart_reconciliation_does_not_create_a_missing_record() {
     assert_eq!(fs::read_dir(fixture.path()).unwrap().count(), 1);
 }
 
+#[test]
+fn published_failure_dispatch_reconciles_original_handle() {
+    let fixture = Fixture::new();
+    fixture
+        .store
+        .save_pending(&key(7), &[5; 44], intent(2), None)
+        .unwrap();
+    let bytes = encode_pending(&key(7), &[5; 44], intent(4));
+    let published = publish(&fixture, &bytes, true);
+    fixture
+        .store
+        .publication_failure(
+            ENROLLMENT_FILE,
+            &bytes,
+            (
+                PrivatePublicationStage::FlushAfterRename,
+                io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "synthetic acknowledgement loss",
+                ),
+                Some(published),
+                None,
+            ),
+        )
+        .unwrap();
+    assert_only_record_and_lock(&fixture, &bytes);
+    fixture
+        .store
+        .save_pending(&key(7), &[5; 44], intent(4), Some(intent(2)))
+        .unwrap();
+    assert_eq!(
+        fixture
+            .store
+            .save_pending(&key(7), &[5; 44], intent(6), Some(intent(2))),
+        Err(PrivateStateError::Conflict)
+    );
+    let saved = fixture.store.load_pending().unwrap().unwrap();
+    assert_eq!(saved.intent(), intent(4));
+    assert_eq!(saved.key().expose_bytes(), &[7; 32]);
+    assert_eq!(saved.gateway_pin(), &[5; 44]);
+}
+
+#[test]
+fn published_failure_dispatch_preserves_fact_when_identity_changed() {
+    let fixture = Fixture::new();
+    let bytes = encode_pending(&key(7), &[5; 44], intent(2));
+    let original = publish(&fixture, &bytes, false);
+    let replacement = publish(&fixture, &bytes, true);
+    assert_ne!(original.identity(), replacement.identity());
+    let error = fixture.store.publication_failure(
+        ENROLLMENT_FILE,
+        &bytes,
+        (
+            PrivatePublicationStage::ValidatePublishedDestination,
+            io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "synthetic acknowledgement loss",
+            ),
+            Some(original),
+            None,
+        ),
+    );
+    assert_eq!(
+        error,
+        Err(PrivateStateError::Publication(
+            PrivatePublicationError::new(
+                PrivatePublicationStep::ValidatePublishedDestination,
+                PrivateStorageFailure::Unavailable,
+                None,
+                PrivatePublicationEffect::Published,
+                Some(PrivateStorageFailure::UnsafeStorage),
+            )
+        ))
+    );
+    assert!(fixture
+        .store
+        .directory
+        .named_file_is(replacement.name(), replacement.as_file())
+        .unwrap());
+    assert_only_record_and_lock(&fixture, &bytes);
+}
+
+#[test]
+fn published_failure_dispatch_preserves_primary_when_bytes_differ() {
+    let fixture = Fixture::new();
+    let bytes = encode_pending(&key(7), &[5; 44], intent(2));
+    let original = publish(&fixture, &bytes, false);
+    let different = encode_pending(&key(8), &[5; 44], intent(2));
+    let error = fixture.store.publication_failure(
+        ENROLLMENT_FILE,
+        &different,
+        (
+            PrivatePublicationStage::FlushAfterRename,
+            io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "synthetic acknowledgement loss",
+            ),
+            Some(original),
+            None,
+        ),
+    );
+    assert_eq!(
+        error,
+        Err(PrivateStateError::Publication(
+            PrivatePublicationError::new(
+                PrivatePublicationStep::FlushAfterRename,
+                PrivateStorageFailure::Unavailable,
+                None,
+                PrivatePublicationEffect::Published,
+                Some(PrivateStorageFailure::UnsafeStorage),
+            )
+        ))
+    );
+    assert_only_record_and_lock(&fixture, &bytes);
+}
+
 #[cfg(windows)]
 #[test]
 fn windows_pending_replacement_recovers_after_pinned_destination() {
