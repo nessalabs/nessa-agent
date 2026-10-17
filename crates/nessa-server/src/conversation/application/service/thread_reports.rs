@@ -89,11 +89,13 @@ pub struct PendingReport {
 /// send is submitted and settled once its parent has it, or once it never
 /// will. Keyed by the report's execution identity.
 pub trait ThreadReportStore: Send + Sync {
-    /// Save one waiting report. A report already saved is left as it is.
+    /// Save one waiting report. An exact repeat leaves the row as it is.
+    /// A different binding under its identity returns `RequestConflict`.
     /// Answers whether this save wrote it.
     fn save(&self, report: &PendingReport) -> ConversationFuture<'_, bool>;
-    /// Let go of one report; one not saved is no error.
-    fn settle(&self, report: &str) -> ConversationFuture<'_, ()>;
+    /// Let go of one report belonging to `child`; an absent row is no error.
+    /// Answers whether this removed its saved row.
+    fn settle(&self, child: &ConversationId, report: &str) -> ConversationFuture<'_, bool>;
     /// Let go of every report waiting on, or going to, a deleted conversation.
     fn forget_conversation(&self, id: &ConversationId) -> ConversationFuture<'_, ()>;
     /// Every saved report.
@@ -166,6 +168,7 @@ impl Drop for Delivering {
 /// A report taken off its watch, counted as being queued from the moment it
 /// left the registry. Its saved copy stays until it is delivered.
 struct Taken {
+    child: ConversationId,
     report: ThreadReport,
     text: String,
     _delivering: Delivering,
@@ -306,6 +309,7 @@ impl ThreadReports {
             };
             self.delivering.fetch_add(1, Ordering::SeqCst);
             taken.push(Taken {
+                child: child.clone(),
                 report: watch.report.clone(),
                 text,
                 _delivering: Delivering(self.delivering.clone()),
@@ -436,7 +440,7 @@ impl ConversationService {
         if reports.holds(&child, &report.execution) {
             return ReportRegistration::AlreadyWaiting;
         }
-        reports.fresh().insert(report.execution.clone());
+        let newly_fresh = reports.fresh().insert(report.execution.clone());
         // A row already saved, and not watched here, is an earlier run's: a
         // retry of its send, before the start read it, keeps it restored.
         let mut restored = false;
@@ -449,12 +453,16 @@ impl ConversationService {
             match store.save(&pending).await {
                 Ok(true) => {}
                 Ok(false) => {
-                    reports.fresh().remove(&report.execution);
-                    restored = true;
+                    if newly_fresh {
+                        reports.fresh().remove(&report.execution);
+                    }
+                    restored = newly_fresh;
                 }
                 Err(error) => {
                     tracing::warn!(%child, %error, "a thread report could not be saved; none will come");
-                    reports.fresh().remove(&report.execution);
+                    if newly_fresh {
+                        reports.fresh().remove(&report.execution);
+                    }
                     return ReportRegistration::Refused;
                 }
             }
@@ -469,7 +477,7 @@ impl ConversationService {
     /// Drop a report whose turn will never run.
     pub async fn forget_thread_report(&self, child: &ConversationId, report: &str) {
         self.inner.thread_reports.forget(child, report);
-        self.settle_saved(report).await;
+        self.settle_saved(child, report).await;
     }
 
     /// Let go of the reports on, or to, a deleted conversation.
@@ -482,10 +490,15 @@ impl ConversationService {
         }
     }
 
-    async fn settle_saved(&self, report: &str) {
+    async fn settle_saved(&self, child: &ConversationId, report: &str) {
         if let Some(store) = self.inner.thread_reports.store() {
-            if let Err(error) = store.settle(report).await {
-                tracing::warn!(report, %error, "a settled thread report stays saved; the next start settles it");
+            match store.settle(child, report).await {
+                Ok(true) => {}
+                Ok(false) => return,
+                Err(error) => {
+                    tracing::warn!(report, %error, "a settled thread report stays saved; the next start settles it");
+                    return;
+                }
             }
         }
         self.inner.thread_reports.fresh().remove(report);
@@ -613,7 +626,7 @@ impl ConversationService {
                 // Refused, or gone for good: this person is told nothing.
                 Err(ConversationError::NotFound | ConversationError::Deleted) => {
                     for report in self.inner.thread_reports.drop_person(child, &caller) {
-                        self.settle_saved(&report).await;
+                        self.settle_saved(child, &report).await;
                     }
                 }
                 // Not decidable now: a later look, or the next start, settles it.
@@ -758,7 +771,7 @@ impl ConversationService {
             tokio::time::sleep(delay).await;
             delay = (delay * 2).min(DELIVERY_RETRY_MOST);
         }
-        self.settle_saved(&report.execution).await;
+        self.settle_saved(&taken.child, &report.execution).await;
     }
 }
 
