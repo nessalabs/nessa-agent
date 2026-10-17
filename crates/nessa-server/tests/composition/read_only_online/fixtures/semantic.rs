@@ -236,12 +236,21 @@ pub(super) async fn serve(
             "hold" => heads.hold_next(),
             "release" => heads.release(),
             "settle" => {
+                // The key the one waiting review is listed under.
+                let review = service
+                    .read(id.clone(), caller("answer-key"))
+                    .await
+                    .unwrap()
+                    .permissions[0]
+                    .review
+                    .clone();
                 service
                     .answer(
                         id.clone(),
                         caller("answer-permission"),
                         "first".into(),
                         "permission".into(),
+                        review,
                         "allow".into(),
                         PermissionCaller::Owner,
                     )

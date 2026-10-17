@@ -89,6 +89,7 @@ import {
   unofferedAnswers,
   until,
 } from "./lib/workspace.mjs"
+import { readWithReviews } from "../../../scripts/conversation-smoke/reviews.mjs"
 
 /** The server's app tool, and the tools its app calls (`server.mjs`, `APP_CALLS`). */
 const APP_TOOL = "review_rows"
@@ -269,7 +270,7 @@ async function appToolTurn(client, conversationId, agent) {
 
 /** The app's pending reviews in the conversation, as the gateway's view says. */
 async function appReviews(client, conversationId) {
-  const view = await client.conversation.read(conversationId)
+  const view = await readWithReviews(client, conversationId)
   return appPermissions(view)
 }
 
@@ -324,7 +325,7 @@ const reviewOpened = (stack, baseline, ms = appReviewUnstartedMs) =>
  */
 const awaitReview = (stack, baseline, pending) =>
   waitForAppReview({
-    read: () => stack.client.conversation.read(stack.conversationId),
+    read: () => readWithReviews(stack.client, stack.conversationId),
     baseline,
     deadlineMs: stack.reviewWaitMs,
     pending,
@@ -396,7 +397,7 @@ async function pointerOnto(page, frame, control) {
 /** Waits up to `ms` for `review` to be the conversation's first pending permission: the one the window shows. */
 const reviewShown = (stack, review, ms = 10_000) =>
   waitFor(async () => {
-    const view = await stack.client.conversation.read(stack.conversationId)
+    const view = await readWithReviews(stack.client, stack.conversationId)
     const first = view.permissions[0]
     return first !== undefined && permissionKey(first) === permissionKey(review)
   }, ms)
@@ -684,7 +685,7 @@ async function copiesShown(locator, least, timeout) {
 async function thisSend(client, conversationId, earlier) {
   const deadline = Date.now() + 20_000
   for (;;) {
-    const view = await client.conversation.read(conversationId)
+    const view = await readWithReviews(client, conversationId)
     const arrived = messagesArrived(view, earlier, MESSAGE_TEXT)
     if (arrived.length > 1 || (arrived.length === 1 && arrived[0].app)) return arrived
     if (Date.now() >= deadline) return arrived
@@ -933,7 +934,7 @@ const checks = {
     // engine adds is the executionId that was not here before the click, and
     // the transcript row the page did not already show. The transcript appends,
     // so that row is the one after the copies already counted.
-    const prior = await stack.client.conversation.read(stack.conversationId)
+    const prior = await readWithReviews(stack.client, stack.conversationId)
     const earlier = executionIds(prior)
     const copiesBefore = messagesArrived(prior, new Set(), MESSAGE_TEXT).length
     const shown = page

@@ -116,6 +116,7 @@ async fn a_binding_on_a_host_runs_there_with_the_same_events_approvals_and_close
     opened
         .session
         .answer_permission(PermissionAnswer {
+            key: None,
             attribution: attribution(),
             execution_id: ExecutionId::new("write").unwrap(),
             id,

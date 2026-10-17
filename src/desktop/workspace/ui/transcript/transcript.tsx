@@ -292,19 +292,27 @@ export const Transcript = memo(function Transcript({
           {transcript?.activity ? <LiveRow activity={transcript.activity} /> : null}
           {(transcript?.questions ?? []).map((question) => (
             <QuestionCard
-              key={JSON.stringify([question.executionId, question.questionId])}
+              key={JSON.stringify([
+                question.key ?? null,
+                question.executionId,
+                question.questionId,
+              ])}
               sessionId={sessionId}
               question={question}
             />
           ))}
-          {transcript?.approval && model ? (
-            <ApprovalCard
-              key={transcript.approval.id}
-              sessionId={sessionId}
-              approval={transcript.approval}
-              model={model}
-            />
-          ) : null}
+          {/* One card for each review, in the order the source lists them:
+            each loads, retries and is answered on its own. */}
+          {model
+            ? transcript?.approvals.map((approval) => (
+                <ApprovalCard
+                  key={approval.id}
+                  sessionId={sessionId}
+                  approval={approval}
+                  model={model}
+                />
+              ))
+            : null}
         </div>
       </div>
       <IconButton

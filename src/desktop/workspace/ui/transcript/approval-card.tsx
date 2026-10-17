@@ -4,12 +4,12 @@ import { memo, useEffect, useId, useState } from "react"
 import { useNow } from "../../../../clock"
 import { DesktopIcon } from "../../../ui/icons"
 import { tooltip } from "../../../ui/tooltip"
-import { approve, deny } from "../../adapters/store/commands"
+import { approve, deny, retryReview } from "../../adapters/store/commands"
 import { useWorkspaceDispatch, useWorkspaceSelector } from "../../adapters/store/hooks"
 import { selectAnswer } from "../../adapters/store/selectors"
 import { answering } from "../../application/workspace-state"
 import { agentName, agentOf, type ModelRef } from "../../model/workspace-index"
-import type { Approval, ApprovalDeadline } from "../../model/transcript"
+import { shownWhole, type Approval, type ApprovalDeadline } from "../../model/transcript"
 import { failureCopy } from "../failure-copy"
 import { commandGist, type CommandGist } from "./approval-gist"
 import {
@@ -56,7 +56,7 @@ export const ApprovalCard = memo(function ApprovalCard({
   )
   const waiting = answering(answer, approval.id)
   const gist =
-    approval.origin.kind === "agent" && approval.ask === "tool"
+    approval.origin.kind === "agent" && approval.ask === "tool" && shownWhole(approval)
       ? commandGist(approval.command)
       : undefined
   return (
@@ -83,7 +83,25 @@ export const ApprovalCard = memo(function ApprovalCard({
           <Saying said={approvalReason(approval)} />
         </p>
       )}
-      {gist ? (
+      {/* While the review is read, `command` is only the tool's name: nothing to show yet. */}
+      {approval.loading === "reading" ? (
+        <p className="workspace-approval-loading" role="status">
+          Loading this review before you can answer…
+        </p>
+      ) : approval.loading === "failed" ? (
+        <p className="workspace-approval-loading" role="status">
+          This review could not be loaded. Trying again…{" "}
+          <button
+            type="button"
+            className="workspace-button workspace-approval-retry"
+            onClick={() =>
+              void dispatch(retryReview({ sessionId, approvalId: approval.id }))
+            }
+          >
+            Try again
+          </button>
+        </p>
+      ) : gist ? (
         <ApprovalScript command={approval.command} gist={gist} />
       ) : (
         <ApprovalCommand
@@ -98,7 +116,8 @@ export const ApprovalCard = memo(function ApprovalCard({
       ) : null}
       <ApprovalActions
         options={approval.options}
-        disabled={waiting}
+        // Not before all of what it allows is shown (`Approval.loading`).
+        disabled={waiting || !shownWhole(approval)}
         onAnswer={(option) =>
           void dispatch(
             option.choice === "deny"

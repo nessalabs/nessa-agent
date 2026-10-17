@@ -1632,6 +1632,7 @@ async fn invoke_control(agent: &Agent, operation: ProviderControl) -> Result<(),
             .map(|_| ()),
         ProviderControl::Answer => agent
             .answer_permission(PermissionAnswer {
+                key: None,
                 attribution: attribution(),
                 execution_id: ExecutionId::new("active").unwrap(),
                 id: PermissionId::new("review").unwrap(),
@@ -1642,6 +1643,7 @@ async fn invoke_control(agent: &Agent, operation: ProviderControl) -> Result<(),
             .map_err(|failure| failure.into_parts().0),
         ProviderControl::CancelPermission => agent
             .cancel_permission(PermissionCancellationRequest {
+                key: None,
                 execution_id: ExecutionId::new("active").unwrap(),
                 id: PermissionId::new("review").unwrap(),
                 reason: PermissionCancellationReason::custom(

@@ -90,6 +90,7 @@ fn controller(
 }
 fn answer() -> PermissionAnswer {
     PermissionAnswer {
+        key: None,
         execution_id: ExecutionId::new("execution").unwrap(),
         id: PermissionId::new("permission").unwrap(),
         option_id: PermissionOptionId::new("allow").unwrap(),
@@ -179,6 +180,7 @@ async fn answer_response_checks_session_execution_review_option_and_entire_attri
 async fn cancellation_response_checks_session_execution_review_cause_and_entire_actor() {
     for field in 0..9 {
         let command = PermissionCancellationRequest {
+            key: None,
             execution_id: ExecutionId::new("execution").unwrap(),
             id: PermissionId::new("permission").unwrap(),
             reason: reason("withdraw", "review no longer needed"),

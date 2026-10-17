@@ -60,6 +60,7 @@ import { main } from "./lib/run.mjs"
 import { writeView } from "./lib/scripted-evidence.mjs"
 import { css, selectorFor } from "./lib/selectors.mjs"
 import { inside, settled } from "./lib/workspace.mjs"
+import { readWithReviews } from "../../../scripts/conversation-smoke/reviews.mjs"
 
 const APP_TOOL = "review_rows"
 const steps = ["handshake", "lists", "opens", "live", "apps"]
@@ -388,7 +389,7 @@ const checks = {
     const messages = await transcript(page)
     // The last turn as the gateway holds it now: an engine before this one
     // added its own live turn.
-    const last = lastTurn(await stack.client.conversation.read(stack.conversationId))
+    const last = lastTurn(await readWithReviews(stack.client, stack.conversationId))
     return { seen: { messages }, failures: drawn(messages, last) }
   },
 

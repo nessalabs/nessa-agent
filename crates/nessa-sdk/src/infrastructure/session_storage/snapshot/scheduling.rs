@@ -78,6 +78,9 @@ pub(super) enum Cause {
     SessionClosed,
     RunnerStopped,
     Withdrawn,
+    Suspended,
+    Interrupted,
+    NotResumed,
 }
 impl From<SchedulingCause> for Cause {
     fn from(value: SchedulingCause) -> Self {
@@ -91,6 +94,9 @@ impl From<SchedulingCause> for Cause {
             SchedulingCause::SessionClosed => Self::SessionClosed,
             SchedulingCause::RunnerStopped => Self::RunnerStopped,
             SchedulingCause::Withdrawn => Self::Withdrawn,
+            SchedulingCause::Suspended => Self::Suspended,
+            SchedulingCause::Interrupted => Self::Interrupted,
+            SchedulingCause::NotResumed => Self::NotResumed,
         }
     }
 }
@@ -106,6 +112,9 @@ impl From<Cause> for SchedulingCause {
             Cause::SessionClosed => Self::SessionClosed,
             Cause::RunnerStopped => Self::RunnerStopped,
             Cause::Withdrawn => Self::Withdrawn,
+            Cause::Suspended => Self::Suspended,
+            Cause::Interrupted => Self::Interrupted,
+            Cause::NotResumed => Self::NotResumed,
         }
     }
 }

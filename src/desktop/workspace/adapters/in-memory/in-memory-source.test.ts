@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 import type { WorkspaceUpdate } from "../../application/ports"
 import { WorkspaceSourceError } from "../../application/ports"
 import {
+  atWork,
   messageText,
   type QuestionChoice,
   type Transcript,
@@ -137,6 +138,71 @@ describe("the in-memory source", () => {
     expect(summaries.at(-1)).toMatchObject({ session: { status: "idle" } })
   })
 
+  it("stops a reply where it got to, rests the session, records the stop, and refuses a second", async () => {
+    const { source, updates, advance, pending } = started()
+    await source.send({
+      initiator: "person",
+      sessionId: "new",
+      messageId: "m1",
+      text: "Sketch a calmer header",
+      model: { provider: "anthropic", modelId: "claude-opus-5" },
+      start: { channelId: "desktop-app", title: "Sketch a calmer header" },
+    })
+    advance(scriptTiming.answerMs + scriptTiming.stepMs)
+    const transcripts = () =>
+      updates.flatMap((update) =>
+        update.kind === "transcript" ? [update.transcript] : [],
+      )
+    expect(atWork(transcripts().at(-1))).toBe(true)
+    await source.stop("new", "person")
+    expect(atWork(transcripts().at(-1))).toBe(false)
+    expect(pending()).toBe(0)
+    const summaries = updates.filter((update) => update.kind === "session")
+    expect(summaries.at(-1)).toMatchObject({ session: { status: "idle" } })
+    expect(source.audit().at(-1)).toMatchObject({
+      sessionId: "new",
+      action: "stop",
+      initiator: "person",
+      // The turn it cancelled: the one the person's message began.
+      before: { turn: "m1" },
+      outcome: "taken",
+    })
+    await expect(source.stop("new", "person")).rejects.toMatchObject({
+      reason: "not-waiting",
+    })
+    // Refused, it is on record too, with no turn at work to have stopped.
+    expect(source.audit().at(-1)).toMatchObject({
+      action: "stop",
+      before: { turn: null },
+      outcome: { refused: "not-waiting" },
+    })
+  })
+
+  it("records the access a change moved from and the one it asked for", async () => {
+    const { source } = started()
+    await source.send({
+      initiator: "person",
+      sessionId: "new",
+      messageId: "m1",
+      text: "Sketch a calmer header",
+      model: { provider: "anthropic", modelId: "claude-opus-5" },
+      start: { channelId: "desktop-app", title: "Sketch a calmer header" },
+    })
+    await source.stop("new", "person")
+    await source.setAccess("new", "auto", "person")
+    await source.setAccess("new", "full", "agent")
+    const changes = source.audit().filter((entry) => entry.action === "set-access")
+    expect(changes).toMatchObject([
+      { access: "auto", initiator: "person", before: { access: null }, outcome: "taken" },
+      {
+        access: "full",
+        initiator: "agent",
+        before: { access: "auto" },
+        outcome: "taken",
+      },
+    ])
+  })
+
   it("previews what a running session is at, step by step, without moving it in the lists", async () => {
     const { source, updates, advance } = started()
     await source.send({
@@ -200,25 +266,29 @@ describe("the in-memory source", () => {
     const clock = manualSchedule()
     const seed = sampleWorkspace(clock.schedule.now())
     const held = seed.transcripts.get("notarize")
-    if (!held?.approval) throw new Error("notarize asks for nothing")
+    if (!held?.approvals[0]) throw new Error("notarize asks for nothing")
     seed.transcripts.set("notarize", {
       ...held,
-      approval: {
-        ...held.approval,
-        options: held.approval.options.filter((option) => option.choice !== "always"),
-      },
+      approvals: [
+        {
+          ...held.approvals[0],
+          options: held.approvals[0].options.filter(
+            (option) => option.choice !== "always",
+          ),
+        },
+      ],
     })
     const source = inMemorySource(clock.schedule, seed)
     await expect(
-      source.approve("notarize", held.approval.id, "always", "person", "always"),
+      source.approve("notarize", held.approvals[0].id, "always", "person", "always"),
     ).rejects.toMatchObject({ reason: "not-supported" })
     expect(source.audit().at(-1)).toMatchObject({
       action: "allow-always",
       outcome: { refused: "not-supported" },
     })
     // What it does offer is still taken.
-    await source.approve("notarize", held.approval.id, "once", "person", "once")
-    expect((await source.transcript("notarize")).approval).toBeNull()
+    await source.approve("notarize", held.approvals[0].id, "once", "person", "once")
+    expect((await source.transcript("notarize")).approvals).toEqual([])
   })
 
   it("says a waiting session waits, runs what was allowed, and says nothing once denied", async () => {
@@ -231,14 +301,14 @@ describe("the in-memory source", () => {
       index.sessions.filter((s) => s.status === "idle").map(() => undefined),
     )
     const asked = await source.transcript("retry-budget")
-    await source.approve("retry-budget", asked.approval!.id, "once", "person", "once")
+    await source.approve("retry-budget", asked.approvals[0]!.id, "once", "person", "once")
     const running = (await source.index()).sessions.find((s) => s.id === "retry-budget")
     expect(running?.now).toBe("Running cargo test, as you allowed")
     advance(scriptTiming.commandMs)
     const rested = (await source.index()).sessions.find((s) => s.id === "retry-budget")
     expect(rested?.now).toBeUndefined()
     const waiting = await source.transcript("notarize")
-    await source.deny("notarize", waiting.approval!.id, "person", "deny")
+    await source.deny("notarize", waiting.approvals[0]!.id, "person", "deny")
     const denied = (await source.index()).sessions.find((s) => s.id === "notarize")
     expect(denied?.now).toBeUndefined()
   })
@@ -266,22 +336,28 @@ describe("the in-memory source", () => {
   it("runs an approved command, or lets it go when denied", async () => {
     const { source, updates, advance } = started()
     const before = await source.transcript("retry-budget")
-    await source.approve("retry-budget", before.approval!.id, "once", "person", "once")
+    await source.approve(
+      "retry-budget",
+      before.approvals[0]!.id,
+      "once",
+      "person",
+      "once",
+    )
     expect(updates.at(-1)).toMatchObject({
       kind: "transcript",
-      transcript: { approval: null },
+      transcript: { approvals: [] },
     })
     advance(scriptTiming.commandMs)
     const after = await source.transcript("retry-budget")
     expect(after.messages.at(-1)?.parts[0]).toMatchObject({ kind: "step", label: "Ran" })
     const waiting = await source.transcript("notarize")
-    await source.deny("notarize", waiting.approval!.id, "agent", "deny")
+    await source.deny("notarize", waiting.approvals[0]!.id, "agent", "deny")
     expect(messageText((await source.transcript("notarize")).messages.at(-1)!)).toMatch(
       /won’t run it/,
     )
     expect(source.audit()[0].before?.waitingOn).toEqual({
-      approvalId: before.approval!.id,
-      command: before.approval!.command,
+      approvalId: before.approvals[0]!.id,
+      command: before.approvals[0]!.command,
     })
     // Taken, each names the revision it produced: the session's summary after it.
     const [allowed, denied] = source.audit()
@@ -672,13 +748,13 @@ describe("the in-memory source", () => {
   it("lets an approval go when the session is sent to instead, so it rests with nothing asked", async () => {
     const { source, advance } = started()
     const model = { provider: "anthropic", modelId: "claude-opus-5" }
-    const asked = (await source.transcript("retry-budget")).approval
-    expect(asked).not.toBeNull()
+    const asked = (await source.transcript("retry-budget")).approvals[0]
+    expect(asked).toBeDefined()
     // A subscriber shown the approval gone finds it let go on record already.
     const onRecord: (string | undefined)[] = []
     source.subscribe((update) => {
       if (update.kind === "transcript" && update.transcript.sessionId === "retry-budget")
-        if (update.transcript.approval === null)
+        if (update.transcript.approvals.length === 0)
           onRecord.push(source.audit().find((entry) => entry.messageId === "m1")?.action)
     })
     await source.send({
@@ -701,7 +777,7 @@ describe("the in-memory source", () => {
     expect(letGo.after).toBeGreaterThan(letGo.before!.revision)
     expect(onRecord[0]).toBe("let-go")
     advance(60_000)
-    expect((await source.transcript("retry-budget")).approval).toBeNull()
+    expect((await source.transcript("retry-budget")).approvals).toEqual([])
     await expect(
       source.approve("retry-budget", asked?.id ?? "", "once", "person", "once"),
     ).rejects.toThrow(WorkspaceSourceError)

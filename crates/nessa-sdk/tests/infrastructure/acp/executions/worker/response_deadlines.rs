@@ -118,7 +118,7 @@ async fn blocked_worker(
         armed_permissions: HashMap::new(),
         path_classification: std::sync::Arc::new(tokio::sync::Semaphore::new(1)),
         startup_advisory_session: None,
-        questions: HashMap::new(),
+        questions: AskedQuestions::default(),
         declined: None,
         stopped_prompts: Vec::new(),
         expired_stops: Vec::new(),
@@ -661,6 +661,7 @@ async fn an_ask_whose_answer_could_not_be_recorded_is_still_ended_with_evidence(
     let answered = worker
         .answer_question(
             QuestionAnswer {
+                key: None,
                 actor: ActionContext::new("person", "panel", "answer").unwrap(),
                 execution_id: ExecutionId::new("active").unwrap(),
                 id: id.clone(),

@@ -24,7 +24,6 @@ use crate::domain::agent_execution::{
 use std::collections::{HashMap, HashSet};
 
 const MAX_TOOLS: usize = 4096;
-const MAX_PERMISSIONS: usize = 128;
 pub(crate) const MAX_EXECUTION_PERMISSIONS: usize = 4096;
 const MAX_RETAINED_BYTES: usize = 32 * 1024 * 1024;
 
@@ -217,7 +216,39 @@ impl ExecutionController {
         let admitted = AdmittedQuestion::new(self.id().clone(), execution.clone(), id, question);
         admitted.event().validate_payload_size()?;
         self.admitted_question_ids.insert(admitted.id().clone());
+        // Listed as one the agent waits on, under a key of its own, until
+        // the adapter closes it or the execution ends.
+        if let Some(listing) = self.session.question_listing() {
+            listing.list(
+                crate::domain::agent_execution::permissions::PendingQuestion::new(
+                    admitted.execution_id().clone(),
+                    admitted.id().clone(),
+                    admitted.question().clone(),
+                ),
+            );
+        }
         Ok(admitted)
+    }
+    /// The handle through which the adapter takes the questions it admitted
+    /// out of the list once each ends. `None` when no execution is active.
+    pub(crate) fn question_listing(
+        &self,
+    ) -> Option<crate::domain::agent_execution::permissions::QuestionListing> {
+        self.session.question_listing()
+    }
+    /// The key the admitted question `id` is listed under, while it is: an
+    /// answer naming another key is for a question that reused its ids, and
+    /// the adapter holding the question refuses it as StalePermission.
+    pub fn question_key(&self, id: &QuestionId) -> Option<String> {
+        self.session.question_listing()?.key_of(id)
+    }
+    /// Stop listing the admitted question `id` as one the agent waits on:
+    /// it was answered, withdrawn or ended. An adapter calls this as its
+    /// question closes; the end of the execution takes out any left.
+    pub fn close_question(&self, id: &QuestionId) {
+        if let Some(listing) = self.session.question_listing() {
+            listing.unlist(id);
+        }
     }
     /// Capture a refusal for this controller's active execution before delivery
     /// or settlement. This records no audit, changes no lifecycle state and does
@@ -301,15 +332,23 @@ impl ExecutionController {
             .validate_permission_admission(&request)
             .map_err(domain_error)?;
         self.observe_tool(execution, tool)?;
-        self.session
-            .request_permission(request)
-            .map_err(domain_error)?;
         let observation = self
             .session
             .tool(&tool_id)
             .expect("accepted observed tool")
             .observation()
             .clone();
+        // What a person is shown of it is held with the review itself, so the
+        // one owner of whether it waits is also the one that says what it is.
+        let request = request.with_content(ReviewContent::new(
+            observation.title().clone(),
+            input.name.clone(),
+            input.arguments_json.clone(),
+            deadline.clone(),
+        ));
+        self.session
+            .request_permission(request)
+            .map_err(domain_error)?;
         self.review_inputs
             .insert(id.clone(), (input.clone(), charged_bytes));
         self.retained_review_bytes = review_bytes;
@@ -417,7 +456,7 @@ impl ExecutionController {
             .map(|bytes| HistoricalReviewCost { bytes })
     }
     pub(crate) fn validate_review_totals(count: usize, bytes: usize) -> Result<(), AgentError> {
-        if count > MAX_PERMISSIONS {
+        if count > MAX_OPEN_REVIEWS {
             return Err(AgentError::Protocol(
                 "pending permission limit exceeded".into(),
             ));
@@ -571,7 +610,25 @@ impl ExecutionController {
                 ));
             }
         }
+        self.shown_under(&answer.execution_id, &answer.id, answer.key.as_deref())?;
         self.resolve(answer, false)
+    }
+    /// `Ok` when no key is named, or `key` is the one pending review `id` was
+    /// opened under; StalePermission otherwise, as for a review that reused
+    /// these ids. Checked under this controller's own borrow, so nothing can
+    /// change the review between this and resolving it.
+    pub(crate) fn shown_under(
+        &self,
+        execution: &ExecutionId,
+        id: &PermissionId,
+        key: Option<&str>,
+    ) -> Result<(), AgentError> {
+        match key {
+            Some(key) if self.session.pending_review_key(execution, id).as_deref() != Some(key) => {
+                Err(AgentError::StalePermission)
+            }
+            _ => Ok(()),
+        }
     }
     /// The deadline the worker armed for review `id` selects `option`.
     ///
@@ -602,6 +659,7 @@ impl ExecutionController {
             ));
         }
         let answer = PermissionAnswer {
+            key: None,
             attribution: ApprovalAttribution::deadline(id, deadline)?,
             execution_id: execution.clone(),
             id: id.clone(),
@@ -663,6 +721,7 @@ impl ExecutionController {
         if self.session.active_execution() != Some(&input.execution_id) {
             return Err(AgentError::StalePermission);
         }
+        self.shown_under(&input.execution_id, &input.id, input.key.as_deref())?;
         self.cancel_permission(
             &input.execution_id,
             &input.id,
@@ -1182,6 +1241,7 @@ mod tests {
     }
     fn answer(id: &str) -> PermissionAnswer {
         PermissionAnswer {
+            key: None,
             execution_id: ExecutionId::new("execution").unwrap(),
             id: PermissionId::new(id).unwrap(),
             option_id: PermissionOptionId::new("allow").unwrap(),
@@ -1266,6 +1326,7 @@ mod tests {
         let mut claimed = pending(Some(allow.clone()));
         assert!(matches!(
             claimed.answer_permission(PermissionAnswer {
+                key: None,
                 attribution: ApprovalAttribution::deadline(&permission, allow.clone()).unwrap(),
                 ..answer("permission")
             }),
@@ -1430,6 +1491,7 @@ mod tests {
             .request_permission(&execution, id.clone(), tool(None), input(), deny, None)
             .unwrap();
         let hook_answer = |outcome| PermissionAnswer {
+            key: None,
             execution_id: execution.clone(),
             id: id.clone(),
             option_id: PermissionOptionId::new("deny").unwrap(),
@@ -1498,6 +1560,163 @@ mod tests {
             next.pending(&permission),
             Err(PermissionAuthorityError::Unavailable)
         );
+    }
+
+    #[test]
+    fn a_waiting_review_is_listed_with_what_it_shows_under_a_key_of_its_own() {
+        let mut first_owner = controller();
+        let authority = first_owner
+            .permission_authority_source()
+            .read()
+            .unwrap()
+            .unwrap();
+        assert!(authority.reviews().unwrap().is_empty());
+        request(&mut first_owner, "permission", "Write big.txt").unwrap();
+        request(&mut first_owner, "second", "Write small.txt").unwrap();
+        let listed = authority.reviews().unwrap();
+        assert_eq!(
+            listed
+                .iter()
+                .map(|review| review.id.as_str())
+                .collect::<Vec<_>>(),
+            ["permission", "second"]
+        );
+        let first = &listed[0];
+        assert_eq!(first.execution_id.as_str(), "execution");
+        assert_eq!(first.content.title(), Some("Write big.txt"));
+        assert_eq!(first.content.arguments_json(), input().arguments_json);
+        assert_eq!(first.content.key().len(), 32);
+        assert_ne!(first.content.key(), listed[1].content.key());
+        first_owner.answer_permission(answer("permission")).unwrap();
+        assert_eq!(
+            authority
+                .reviews()
+                .unwrap()
+                .iter()
+                .map(|review| review.id.as_str())
+                .collect::<Vec<_>>(),
+            ["second"]
+        );
+        // The same identities asked again after a restart, by a new owner:
+        // a new review, under a new key, showing what it asks now.
+        let mut restarted = controller();
+        let after = restarted
+            .permission_authority_source()
+            .read()
+            .unwrap()
+            .unwrap();
+        request(&mut restarted, "permission", "Write other.txt").unwrap();
+        let again = &after.reviews().unwrap()[0];
+        assert_eq!(again.id.as_str(), "permission");
+        assert_eq!(again.execution_id, first.execution_id);
+        assert_eq!(again.content.title(), Some("Write other.txt"));
+        assert_ne!(again.content.key(), first.content.key());
+    }
+
+    #[test]
+    fn an_answer_or_cancel_naming_another_key_is_stale_and_leaves_the_review_waiting() {
+        let mut controller = controller();
+        request(&mut controller, "permission", "Write").unwrap();
+        let execution = ExecutionId::new("execution").unwrap();
+        let id = PermissionId::new("permission").unwrap();
+        let shown = controller
+            .session
+            .pending_review_key(&execution, &id)
+            .expect("an opened review has a key");
+        let stale = "0".repeat(32);
+        assert_ne!(shown, stale);
+        let keyed = |key: &str| PermissionAnswer {
+            key: Some(key.into()),
+            ..answer("permission")
+        };
+        assert!(matches!(
+            controller.answer_permission(keyed(&stale)),
+            Err(AgentError::StalePermission)
+        ));
+        assert!(matches!(
+            controller.cancel_review(PermissionCancellationRequest {
+                key: Some(stale.clone()),
+                execution_id: execution.clone(),
+                id: id.clone(),
+                reason: PermissionCancellationReason::custom(
+                    CustomPermissionCancellationReason::new("person", "not this one").unwrap(),
+                ),
+                actor: ActionContext::new("actor", "surface", "cancel").unwrap(),
+            }),
+            Err(AgentError::StalePermission)
+        ));
+        // Both refused before anything changed: the review still waits, and
+        // its own key answers it.
+        assert_eq!(
+            controller.session.pending_review_key(&execution, &id),
+            Some(shown.clone())
+        );
+        assert!(controller.answer_permission(keyed(&shown)).is_ok());
+    }
+
+    #[test]
+    fn a_waiting_question_is_listed_under_a_key_of_its_own_until_it_ends() {
+        use crate::domain::agent_execution::questions::{
+            AgentQuestion, AnswerOption, AnswerShape, Question, QuestionId,
+        };
+        let ask = |value: &str| {
+            AgentQuestion::new(
+                format!("Choose {value}"),
+                vec![Question::new(
+                    "environment",
+                    "Environment?",
+                    None,
+                    AnswerShape::One,
+                    vec![AnswerOption::new(value, value, None).unwrap()],
+                    None,
+                    true,
+                )
+                .unwrap()],
+            )
+            .unwrap()
+        };
+        let execution = ExecutionId::new("execution").unwrap();
+        let mut first_owner = controller();
+        let authority = first_owner
+            .permission_authority_source()
+            .read()
+            .unwrap()
+            .unwrap();
+        assert!(authority.questions().unwrap().is_empty());
+        let admitted = first_owner
+            .ask_question(&execution, QuestionId::new("ask").unwrap(), ask("staging"))
+            .unwrap();
+        let listed = authority.questions().unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id.as_str(), "ask");
+        assert_eq!(listed[0].question.message(), "Choose staging");
+        assert_eq!(listed[0].key().len(), 32);
+        // What an adapter compares an answer's key with.
+        assert_eq!(
+            first_owner.question_key(admitted.id()),
+            Some(listed[0].key())
+        );
+        first_owner.close_question(admitted.id());
+        assert_eq!(first_owner.question_key(admitted.id()), None);
+        assert!(authority.questions().unwrap().is_empty());
+        // The same identities asked again after a restart: a new key.
+        let mut restarted = controller();
+        let after = restarted
+            .permission_authority_source()
+            .read()
+            .unwrap()
+            .unwrap();
+        restarted
+            .ask_question(
+                &execution,
+                QuestionId::new("ask").unwrap(),
+                ask("production"),
+            )
+            .unwrap();
+        let again = &after.questions().unwrap()[0];
+        assert_eq!(again.id.as_str(), "ask");
+        assert_eq!(again.question.message(), "Choose production");
+        assert_ne!(again.key(), listed[0].key());
     }
 
     #[test]

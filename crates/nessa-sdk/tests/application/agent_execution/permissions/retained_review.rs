@@ -162,12 +162,14 @@ async fn complete_retained_review_is_required_for_answers_and_cancellations() {
             let (_, expected) = review(ReviewChange::Original);
             let (mut actual, _) = review(change);
             let answer = PermissionAnswer {
+                key: None,
                 execution_id: ExecutionId::new("execution").unwrap(),
                 id: PermissionId::new("permission").unwrap(),
                 option_id: PermissionOptionId::new("allow").unwrap(),
                 attribution: attribution(),
             };
             let cancellation = PermissionCancellationRequest {
+                key: None,
                 execution_id: answer.execution_id.clone(),
                 id: answer.id.clone(),
                 reason: PermissionCancellationReason::custom(
@@ -267,12 +269,14 @@ async fn contradictory_receipt_never_hides_cleanup_or_audit_failure() {
             let (_, expected) = review(ReviewChange::Original);
             let (mut actual, _) = review(ReviewChange::ToolId);
             let answer = PermissionAnswer {
+                key: None,
                 execution_id: ExecutionId::new("execution").unwrap(),
                 id: PermissionId::new("permission").unwrap(),
                 option_id: PermissionOptionId::new("allow").unwrap(),
                 attribution: attribution(),
             };
             let cancellation = PermissionCancellationRequest {
+                key: None,
                 execution_id: answer.execution_id.clone(),
                 id: answer.id.clone(),
                 reason: PermissionCancellationReason::custom(

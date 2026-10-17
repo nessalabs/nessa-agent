@@ -43,8 +43,11 @@ const view: ConversationView = {
       mode: "queued",
     },
   ],
+  reviewsWaiting: [],
+  questionsWaiting: [],
   permissions: [
     {
+      review: "0".repeat(32),
       executionId: "run",
       permissionId: "review",
       toolId: "tool",
@@ -140,6 +143,7 @@ it("keeps error and status separate from actual assistant text, and handles empt
 
 it("keeps a question while the view lists it and drops it when a later view does not", () => {
   const question = {
+    question: "0".repeat(32),
     executionId: "run",
     questionId: "place",
     message: "Where should this land?",

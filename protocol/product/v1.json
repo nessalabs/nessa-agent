@@ -216,7 +216,7 @@
         "methods": {
           "type": "array",
           "items": { "type": "string" },
-          "maxItems": 75,
+          "maxItems": 77,
           "description": "Registered product methods; permission is checked for every command."
         }
       },
@@ -1303,8 +1303,15 @@
     "ConversationPermission": {
       "type": "object",
       "additionalProperties": false,
-      "description": "A pending review with its complete offered choices.",
+      "description": "A pending review with all it shows, as conversation.permissionReview reads it for one entry of a view.",
       "properties": {
+        "review": {
+          "type": "string",
+          "minLength": 32,
+          "maxLength": 32,
+          "pattern": "^[0-9a-f]{32}$",
+          "description": "The key the view lists it under. An answer names it, so a review whose identities are reused is never answered by mistake."
+        },
         "executionId": {
           "type": "string",
           "minLength": 1,
@@ -1356,9 +1363,9 @@
         },
         "argumentsJson": {
           "type": "string",
-          "maxLength": 32768,
-          "x-utf8MaxBytes": 32768,
-          "description": "Exact original JSON input reviewed by the user; never truncated."
+          "maxLength": 33554432,
+          "x-utf8MaxBytes": 33554432,
+          "description": "The reviewed input, exactly as the agent or the app gave it."
         },
         "deadline": {
           "$ref": "#/$defs/ConversationPermissionDeadline",
@@ -1366,6 +1373,7 @@
         }
       },
       "required": [
+        "review",
         "executionId",
         "permissionId",
         "toolId",
@@ -1376,6 +1384,54 @@
         "origin",
         "ask"
       ]
+    },
+    "ConversationReviewEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One review waiting on a person, as a view lists it: its key, who asked, and the start of the tool's name. A view never leaves one out for its size. Read what it shows with conversation.permissionReview, and offer no answer until that has loaded.",
+      "properties": {
+        "review": {
+          "type": "string",
+          "minLength": 32,
+          "maxLength": 32,
+          "pattern": "^[0-9a-f]{32}$",
+          "description": "The review's own key: new for every review opened, so a review whose identities are reused is a new entry."
+        },
+        "origin": {
+          "type": "string",
+          "enum": ["harness", "app"],
+          "description": "Who asked: the agent, or an MCP App."
+        },
+        "toolName": {
+          "type": "string",
+          "maxLength": 64,
+          "x-utf8MaxBytes": 64,
+          "description": "The start of the reviewed tool's name, to say what the review is while the rest is read."
+        }
+      },
+      "required": ["review", "origin", "toolName"]
+    },
+    "ConversationQuestionEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One question waiting on a person, as a view lists it: its key and the start of the agent's message. A view never leaves one out for its size. Read all it asks with conversation.questionReview, and offer no answer until that has loaded.",
+      "properties": {
+        "question": {
+          "type": "string",
+          "minLength": 32,
+          "maxLength": 32,
+          "pattern": "^[0-9a-f]{32}$",
+          "description": "The question's own key: new for every question asked, so a question whose identities are reused is a new entry."
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 48,
+          "x-utf8MaxBytes": 48,
+          "description": "The start of the agent's message, to say what the question is while the rest is read."
+        }
+      },
+      "required": ["question", "message"]
     },
     "ConversationTool": {
       "type": "object",
@@ -1530,9 +1586,9 @@
         },
         "permissions": {
           "type": "array",
-          "items": { "$ref": "#/$defs/ConversationPermission" },
-          "maxItems": 64,
-          "description": "Actionable permission reviews."
+          "items": { "$ref": "#/$defs/ConversationReviewEntry" },
+          "maxItems": 144,
+          "description": "Every review waiting on a person now, oldest first: the agent's (the SDK holds at most MAX_OPEN_REVIEWS open) and then the MCP Apps'. Each entry is small and of fixed size, and a bounded view gives up everything else before any of them, so none is ever left out."
         },
         "tools": {
           "type": "array",
@@ -1615,8 +1671,8 @@
         "questions": {
           "type": "array",
           "maxItems": 8,
-          "items": { "$ref": "#/$defs/ConversationQuestion" },
-          "description": "Questions the agent is waiting on, oldest first."
+          "items": { "$ref": "#/$defs/ConversationQuestionEntry" },
+          "description": "Every question the agent is waiting on now, oldest first (the SDK holds at most MAX_OPEN_QUESTIONS open). Each entry is small and of fixed size, and a bounded view gives up everything else before any of them, so none is ever left out."
         },
         "approvalMode": {
           "$ref": "#/$defs/ApprovalMode",
@@ -1779,19 +1835,9 @@
           "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
           "description": "Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization."
         },
-        "executionId": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "minLength": 1,
-          "maxLength": 256
-        }
+        "executionId": { "type": ["string", "null"], "minLength": 1, "maxLength": 256 }
       },
-      "required": [
-        "conversationId",
-        "executionId"
-      ]
+      "required": ["conversationId", "executionId"]
     },
     "ConversationReadParams": {
       "type": "object",
@@ -2278,6 +2324,13 @@
           "x-utf8MaxBytes": 256,
           "description": "Stable invocation identifier retained for retries of one logical message, at most 256 UTF-8 bytes."
         },
+        "review": {
+          "type": "string",
+          "minLength": 32,
+          "maxLength": 32,
+          "pattern": "^[0-9a-f]{32}$",
+          "description": "The review's key, as the view lists it. Refused with stale_permission when the review waiting under these identities has another."
+        },
         "permissionId": {
           "type": "string",
           "minLength": 1,
@@ -2297,9 +2350,128 @@
         "conversationId",
         "requestId",
         "executionId",
+        "review",
         "permissionId",
         "optionId"
       ]
+    },
+    "ConversationPermissionReviewParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Read one range of what a waiting review shows: the UTF-8 JSON of its ConversationPermission, from the live owner of the review. A surface reads from 0 until totalBytes, checks the whole is that long, and offers no answer until it has. Refused with stale_permission once the view no longer lists the review.",
+      "properties": {
+        "conversationId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization."
+        },
+        "review": {
+          "type": "string",
+          "minLength": 32,
+          "maxLength": 32,
+          "pattern": "^[0-9a-f]{32}$",
+          "description": "The review's key, as the view lists it."
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 268435455,
+          "description": "First byte of the range: 0, or less than the review's length."
+        },
+        "maxBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 32768,
+          "description": "Most bytes to answer with. The answer carries fewer only at the end of the review."
+        }
+      },
+      "required": ["conversationId", "review", "offset", "maxBytes"]
+    },
+    "ConversationQuestionReviewParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Read one range of all a waiting question asks: the UTF-8 JSON of its ConversationQuestion, from the agent's live invocation. A surface reads from 0 until totalBytes, checks the whole is that long, and offers no answer until it has. Refused with stale_permission once the view no longer lists the question.",
+      "properties": {
+        "conversationId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization."
+        },
+        "question": {
+          "type": "string",
+          "minLength": 32,
+          "maxLength": 32,
+          "pattern": "^[0-9a-f]{32}$",
+          "description": "The question's key, as the view lists it."
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 268435455,
+          "description": "First byte of the range: 0, or less than the question's length."
+        },
+        "maxBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 32768,
+          "description": "Most bytes to answer with. The answer carries fewer only at the end of the question."
+        }
+      },
+      "required": ["conversationId", "question", "offset", "maxBytes"]
+    },
+    "ConversationPermissionReviewResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One range of what a waiting review shows. Assemble the ranges, check the whole is totalBytes long, is UTF-8 and is the ConversationPermission of the review asked for, then show it.",
+      "properties": {
+        "offset": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "First byte of this range, as asked."
+        },
+        "totalBytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 268435456,
+          "description": "Length of the whole review, in UTF-8 bytes."
+        },
+        "data": {
+          "type": "string",
+          "maxLength": 43692,
+          "contentEncoding": "base64",
+          "description": "The range's bytes, standard base64 with padding: at most maxBytes, and fewer only when the review ends first."
+        }
+      },
+      "required": ["offset", "totalBytes", "data"]
+    },
+    "ConversationQuestionReviewResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One range of all a waiting question asks. Assemble the ranges, check the whole is totalBytes long, is UTF-8 and is the ConversationQuestion of the question asked for, then show it.",
+      "properties": {
+        "offset": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "First byte of this range, as asked."
+        },
+        "totalBytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 268435456,
+          "description": "Length of the whole question, in UTF-8 bytes."
+        },
+        "data": {
+          "type": "string",
+          "maxLength": 43692,
+          "contentEncoding": "base64",
+          "description": "The range's bytes, standard base64 with padding: at most maxBytes, and fewer only when the question ends first."
+        }
+      },
+      "required": ["offset", "totalBytes", "data"]
     },
     "ConversationCancelParams": {
       "type": "object",
@@ -2327,6 +2499,13 @@
           "x-utf8MaxBytes": 256,
           "description": "Stable invocation identifier retained for retries of one logical message, at most 256 UTF-8 bytes."
         },
+        "review": {
+          "type": "string",
+          "minLength": 32,
+          "maxLength": 32,
+          "pattern": "^[0-9a-f]{32}$",
+          "description": "The review's key, as the view lists it. Refused with stale_permission when the review waiting under these identities has another."
+        },
         "permissionId": {
           "type": "string",
           "minLength": 1,
@@ -2342,7 +2521,14 @@
           "description": "Reason recorded with authenticated caller attribution."
         }
       },
-      "required": ["conversationId", "requestId", "executionId", "permissionId", "reason"]
+      "required": [
+        "conversationId",
+        "requestId",
+        "executionId",
+        "review",
+        "permissionId",
+        "reason"
+      ]
     },
     "ConversationCloseParams": {
       "type": "object",
@@ -4071,8 +4257,15 @@
     "ConversationQuestion": {
       "type": "object",
       "additionalProperties": false,
-      "description": "A question the agent is waiting on an answer to. Nothing is authorised by answering; the agent simply cannot continue that path until it hears back.",
+      "description": "A question the agent is waiting on an answer to, with all it asks, as conversation.questionReview reads it for one entry of a view. Nothing is authorised by answering; the agent simply cannot continue that path until it hears back.",
       "properties": {
+        "question": {
+          "type": "string",
+          "minLength": 32,
+          "maxLength": 32,
+          "pattern": "^[0-9a-f]{32}$",
+          "description": "The key the view lists it under. An answer names it, so a question whose identities are reused is never answered by mistake."
+        },
         "executionId": {
           "type": "string",
           "minLength": 1,
@@ -4101,7 +4294,7 @@
           "description": "What is being asked, in the order the agent asked it."
         }
       },
-      "required": ["executionId", "questionId", "message", "questions"]
+      "required": ["question", "executionId", "questionId", "message", "questions"]
     },
     "ConversationQuestionChoice": {
       "type": "object",
@@ -4161,6 +4354,13 @@
           "x-utf8MaxBytes": 256,
           "description": "Stable invocation identifier retained for retries of one logical message, at most 256 UTF-8 bytes."
         },
+        "question": {
+          "type": "string",
+          "minLength": 32,
+          "maxLength": 32,
+          "pattern": "^[0-9a-f]{32}$",
+          "description": "The question's key, as the view lists it. Refused with stale_permission when the question waiting under these identities has another."
+        },
         "questionId": {
           "type": "string",
           "minLength": 1,
@@ -4175,7 +4375,7 @@
           "description": "What was chosen. Null declines the question, which is an answer the agent is told."
         }
       },
-      "required": ["conversationId", "requestId", "executionId", "questionId"]
+      "required": ["conversationId", "requestId", "executionId", "question", "questionId"]
     },
     "ApprovalMode": {
       "type": "string",
@@ -6036,7 +6236,10 @@
           "maxLength": 64,
           "description": "For refused: the conversation error code, or unauthorized or forbidden when access was refused."
         },
-        "lastEventCursor": { "$ref": "#/$defs/ConversationEventCursor", "description": "Last semantic event cursor written, or the supplied after cursor if no batch was written. A written cursor records socket delivery, not application processing. Resume from your application's own last-applied batch cursor." },
+        "lastEventCursor": {
+          "$ref": "#/$defs/ConversationEventCursor",
+          "description": "Last semantic event cursor written, or the supplied after cursor if no batch was written. A written cursor records socket delivery, not application processing. Resume from your application's own last-applied batch cursor."
+        },
         "lastDelivered": {
           "$ref": "#/$defs/ConversationViewCursor",
           "description": "Where a view subscription resumes from: the cursor of the last view frame written or, when none was, the after it was opened with. Absent for a list, and for a view subscription opened without after that wrote no frame."
@@ -6575,235 +6778,78 @@
           ]
         }
       },
-      "required": [
-        "id",
-        "cursor",
-        "kind"
-      ],
+      "required": ["id", "cursor", "kind"],
       "description": "Metadata projected from one complete committed semantic fact. No prompt, thinking, tool arguments or results are included.",
       "allOf": [
         {
-          "if": {
-            "properties": {
-              "kind": {
-                "const": "turn.accepted"
-              }
-            }
-          },
+          "if": { "properties": { "kind": { "const": "turn.accepted" } } },
           "then": {
-            "required": [
-              "executionId",
-              "status"
-            ],
-            "properties": {
-              "status": {
-                "const": "accepted"
-              }
-            },
+            "required": ["executionId", "status"],
+            "properties": { "status": { "const": "accepted" } },
             "not": {
               "anyOf": [
-                {
-                  "required": [
-                    "toolId"
-                  ]
-                },
-                {
-                  "required": [
-                    "name"
-                  ]
-                },
-                {
-                  "required": [
-                    "outcome"
-                  ]
-                }
+                { "required": ["toolId"] },
+                { "required": ["name"] },
+                { "required": ["outcome"] }
               ]
             }
           }
         },
         {
-          "if": {
-            "properties": {
-              "kind": {
-                "const": "turn.started"
-              }
-            }
-          },
+          "if": { "properties": { "kind": { "const": "turn.started" } } },
           "then": {
-            "required": [
-              "executionId",
-              "status"
-            ],
-            "properties": {
-              "status": {
-                "const": "running"
-              }
-            },
+            "required": ["executionId", "status"],
+            "properties": { "status": { "const": "running" } },
             "not": {
               "anyOf": [
-                {
-                  "required": [
-                    "toolId"
-                  ]
-                },
-                {
-                  "required": [
-                    "name"
-                  ]
-                },
-                {
-                  "required": [
-                    "outcome"
-                  ]
-                }
+                { "required": ["toolId"] },
+                { "required": ["name"] },
+                { "required": ["outcome"] }
               ]
             }
           }
         },
         {
-          "if": {
-            "properties": {
-              "kind": {
-                "const": "turn.ended"
-              }
-            }
-          },
+          "if": { "properties": { "kind": { "const": "turn.ended" } } },
           "then": {
-            "required": [
-              "executionId",
-              "status",
-              "outcome"
-            ],
-            "properties": {
-              "status": {
-                "const": "settled"
-              }
-            },
-            "not": {
-              "anyOf": [
-                {
-                  "required": [
-                    "toolId"
-                  ]
-                },
-                {
-                  "required": [
-                    "name"
-                  ]
-                }
-              ]
-            }
+            "required": ["executionId", "status", "outcome"],
+            "properties": { "status": { "const": "settled" } },
+            "not": { "anyOf": [{ "required": ["toolId"] }, { "required": ["name"] }] }
           }
         },
         {
-          "if": {
-            "properties": {
-              "kind": {
-                "const": "tool.updated"
-              }
-            }
-          },
+          "if": { "properties": { "kind": { "const": "tool.updated" } } },
           "then": {
-            "required": [
-              "executionId",
-              "toolId"
-            ],
+            "required": ["executionId", "toolId"],
             "properties": {
-              "status": {
-                "enum": [
-                  "pending",
-                  "running",
-                  "completed",
-                  "failed"
-                ]
-              }
+              "status": { "enum": ["pending", "running", "completed", "failed"] }
             },
-            "not": {
-              "anyOf": [
-                {
-                  "required": [
-                    "outcome"
-                  ]
-                }
-              ]
-            }
+            "not": { "anyOf": [{ "required": ["outcome"] }] }
           }
         },
         {
-          "if": {
-            "properties": {
-              "kind": {
-                "const": "state.changed"
-              }
-            }
-          },
+          "if": { "properties": { "kind": { "const": "state.changed" } } },
           "then": {
             "oneOf": [
               {
-                "required": [
-                  "status"
-                ],
-                "properties": {
-                  "status": {
-                    "const": "opened"
-                  }
-                },
+                "required": ["status"],
+                "properties": { "status": { "const": "opened" } },
                 "not": {
                   "anyOf": [
-                    {
-                      "required": [
-                        "executionId"
-                      ]
-                    },
-                    {
-                      "required": [
-                        "toolId"
-                      ]
-                    },
-                    {
-                      "required": [
-                        "name"
-                      ]
-                    },
-                    {
-                      "required": [
-                        "outcome"
-                      ]
-                    }
+                    { "required": ["executionId"] },
+                    { "required": ["toolId"] },
+                    { "required": ["name"] },
+                    { "required": ["outcome"] }
                   ]
                 }
               },
               {
-                "required": [
-                  "executionId",
-                  "status",
-                  "outcome"
-                ],
-                "properties": {
-                  "status": {
-                    "const": "settlement_updated"
-                  }
-                },
-                "not": {
-                  "anyOf": [
-                    {
-                      "required": [
-                        "toolId"
-                      ]
-                    },
-                    {
-                      "required": [
-                        "name"
-                      ]
-                    }
-                  ]
-                }
+                "required": ["executionId", "status", "outcome"],
+                "properties": { "status": { "const": "settlement_updated" } },
+                "not": { "anyOf": [{ "required": ["toolId"] }, { "required": ["name"] }] }
               },
               {
-                "required": [
-                  "executionId",
-                  "status"
-                ],
+                "required": ["executionId", "status"],
                 "properties": {
                   "status": {
                     "enum": [
@@ -6823,21 +6869,9 @@
                 },
                 "not": {
                   "anyOf": [
-                    {
-                      "required": [
-                        "toolId"
-                      ]
-                    },
-                    {
-                      "required": [
-                        "name"
-                      ]
-                    },
-                    {
-                      "required": [
-                        "outcome"
-                      ]
-                    }
+                    { "required": ["toolId"] },
+                    { "required": ["name"] },
+                    { "required": ["outcome"] }
                   ]
                 }
               }
@@ -6867,18 +6901,14 @@
         },
         "kinds": {
           "type": "array",
-          "items": {
-            "$ref": "#/$defs/ConversationEventKind"
-          },
+          "items": { "$ref": "#/$defs/ConversationEventKind" },
           "minItems": 1,
           "maxItems": 5,
           "uniqueItems": true,
           "description": "Event kinds to deliver; omitted delivers all supported kinds. Filtered batches still advance their cursor."
         }
       },
-      "required": [
-        "conversationId"
-      ],
+      "required": ["conversationId"],
       "not": { "required": ["after", "replay"] },
       "description": "Follow committed semantic events without opening an Agent. Replay uses complete saved facts and explicit gap refusals; default is future events. Stop with conversation.unsubscribe."
     },
@@ -6896,18 +6926,12 @@
         },
         "events": {
           "type": "array",
-          "items": {
-            "$ref": "#/$defs/ConversationEvent"
-          },
+          "items": { "$ref": "#/$defs/ConversationEvent" },
           "maxItems": 64,
           "description": "Committed semantic events in source order; empty advances filtered progress."
         }
       },
-      "required": [
-        "subscriptionId",
-        "cursor",
-        "events"
-      ],
+      "required": ["subscriptionId", "cursor", "events"],
       "description": "An ordered bounded semantic event batch. An empty batch advances the checkpoint past filtered facts. Application checkpoints belong to the consumer."
     }
   }

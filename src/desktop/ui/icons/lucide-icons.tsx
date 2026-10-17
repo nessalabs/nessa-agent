@@ -40,6 +40,7 @@ import {
   Shield,
   ShieldAlert,
   ShieldCheck,
+  Square,
   SquarePen,
   SquareTerminal,
   X,
@@ -88,6 +89,7 @@ export const lucideIcons: DesktopIconFamily = {
   needsYou: lucide(ShieldAlert),
 
   send: lucide(ArrowUp),
+  stop: lucide(Square),
   attach: lucide(Paperclip),
   folder: lucide(Folder),
   folderAdd: lucide(FolderPlus),

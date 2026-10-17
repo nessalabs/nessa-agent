@@ -1,10 +1,12 @@
 #![deny(missing_docs)]
 
+use std::sync::Arc;
+
 use crate::domain::agent_execution::{
     executions::ExecutionId,
     permissions::{
         PermissionCancellationReason, PermissionCancellationReasonView, PermissionDecision,
-        PermissionId, PermissionOptionId, PermissionOptions,
+        PermissionId, PermissionOptionId, PermissionOptions, ReviewContent,
     },
     tools::ToolCallId,
     ExecutionError,
@@ -41,6 +43,9 @@ pub struct PermissionRequest {
     tool_id: ToolCallId,
     options: PermissionOptions,
     state: PermissionState,
+    /// What a person is shown while it waits, when the host recorded it;
+    /// dropped when it resolves.
+    content: Option<Arc<ReviewContent>>,
 }
 // Resolution is owned only by its request; public inspection borrows its evidence.
 #[derive(Debug, PartialEq, Eq)]
@@ -94,7 +99,17 @@ impl PermissionRequest {
             tool_id,
             options,
             state: PermissionState::Pending,
+            content: None,
         }
+    }
+    /// This request, holding what a person is shown of it while it waits.
+    pub fn with_content(mut self, content: ReviewContent) -> Self {
+        self.content = Some(Arc::new(content));
+        self
+    }
+    /// What a person is shown of it while it waits, when that was recorded.
+    pub fn content(&self) -> Option<&Arc<ReviewContent>> {
+        self.content.as_ref()
     }
     /// Stable review identity reserved by the owning execution through completion.
     pub fn id(&self) -> &PermissionId {
@@ -192,6 +207,9 @@ impl PermissionRequest {
             option_id: option_id.clone(),
             decision: decision.clone(),
         };
+        // Nobody is shown a resolved review: what it showed ends with it, and
+        // the resolved request is the one its history records.
+        self.content = None;
         Ok(decision)
     }
     /// The decision `option_id` would record, checked as an answer is, without
@@ -222,6 +240,7 @@ impl PermissionRequest {
             return Err(ExecutionError::PermissionResolved);
         }
         self.state = PermissionState::Cancelled { reason };
+        self.content = None;
         Ok(())
     }
 }

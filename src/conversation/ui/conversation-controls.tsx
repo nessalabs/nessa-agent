@@ -1,6 +1,6 @@
 import { deadlinePendingLine, permissionTargets } from "@nessa/client"
 import { historyExtent, historyNotices, type Conversation } from "../model"
-import { controlConversation } from "../adapters/store/slice"
+import { controlConversation, refollowConversation } from "../adapters/store/slice"
 import { useConversationDispatch } from "../adapters/store/hooks"
 import { useNow } from "../../clock"
 
@@ -17,7 +17,12 @@ import {
   ToolApprovalAction,
 } from "@nessa-ui/react/tool-approval"
 
-/** Render exact offered choices; permission input is never abbreviated before approval. */
+/**
+ * Render exact offered choices. A review is shown, and its choices offered,
+ * only once all it shows has been read whole from its live owner; until then
+ * it says it is loading, or that it could not be loaded, and offers trying
+ * again.
+ */
 export function ConversationControls({
   conversation,
   gatewayAvailable,
@@ -42,9 +47,51 @@ export function ConversationControls({
           {notice.text}
         </p>
       ))}
+      {remote?.reviewsWaiting.map((waiting) => (
+        // Listed, but what it shows is still being read: nothing is offered
+        // on a review nobody has seen (`reviewDetails`).
+        <ToolApproval
+          key={waiting.review}
+          variant="floating"
+          aria-label={`Approve ${waiting.toolName}`}
+          aria-busy={!waiting.failed}
+          className="self-center"
+        >
+          <ToolApprovalHeader>
+            <ToolApprovalIcon>
+              <ShieldCheck aria-hidden="true" />
+            </ToolApprovalIcon>
+            <ToolApprovalHeading>
+              <ToolApprovalTitle>{waiting.toolName}</ToolApprovalTitle>
+              <ToolApprovalDescription role="status">
+                {waiting.failed
+                  ? "This review could not be loaded. Trying again…"
+                  : "Loading this review before you can answer…"}
+              </ToolApprovalDescription>
+            </ToolApprovalHeading>
+          </ToolApprovalHeader>
+          {waiting.failed ? (
+            <ToolApprovalActions>
+              <ToolApprovalAction
+                variant="ghost"
+                disabled={!gatewayAvailable}
+                onClick={() => void dispatch(refollowConversation(conversation.id))}
+              >
+                Try again
+              </ToolApprovalAction>
+            </ToolApprovalActions>
+          ) : null}
+        </ToolApproval>
+      ))}
       {remote?.permissions.map((permission, index) => (
         <ToolApproval
-          key={JSON.stringify([permission.executionId, permission.permissionId])}
+          // The review's key beside its ids: one opened again under the same
+          // ids is a new card.
+          key={JSON.stringify([
+            permission.review,
+            permission.executionId,
+            permission.permissionId,
+          ])}
           variant="floating"
           aria-label={`Approve ${permission.title}`}
           aria-busy={conversation.controlPending}
