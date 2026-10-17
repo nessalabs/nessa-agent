@@ -61,7 +61,7 @@ use super::batch::Batch;
 use super::choosing::{describe_each, ChosenFile};
 use super::content_type::ContentTypes;
 use super::dragged::{DragBoard, DraggedContent, DraggedText};
-use super::files::{answered_within, ChosenFiles, Kind, NoAnswer};
+use super::files::{answered_within, ChosenFiles, DirectoryEntries, Kind, NoAnswer};
 use super::readiness::{Announce, Gesture, Readiness, Telling, LONGEST_READY_WAIT};
 use super::refusal::{named, FileNotAttached};
 use super::tickets::AttachmentTickets;
@@ -198,8 +198,16 @@ pub(super) fn expand(
             continue;
         }
         walked = true;
-        let mut held = match files.entries(&path) {
-            Ok(held) => held,
+        // Reserve queued siblings before asking for more entries. The adapter
+        // consumes only the remaining budget plus one overflow witness.
+        let mut held = match files.entries(
+            &path,
+            MOST_FOLDER_ENTRIES.saturating_sub(examined + queue.len()),
+        ) {
+            Ok(DirectoryEntries::Within(held)) => held,
+            Ok(DirectoryEntries::TooMany) => {
+                return Err(FileNotAttached::folder_too_large(&named(&path)));
+            }
             Err(error) => return Err(FileNotAttached::folder_unreadable(&named(&path), &error)),
         };
         // Depth first and in order, so a folder attaches the same way twice.
@@ -738,6 +746,47 @@ mod tests {
             dropped.refused.map(|refused| refused.reason),
             Some(NotAttached::FolderTooLarge)
         );
+    }
+
+    #[test]
+    fn queued_sibling_directories_reserve_the_remaining_budget() {
+        let names: Vec<String> = (0..MOST_FOLDER_ENTRIES - 2)
+            .map(|n| format!("/synthetic/root/{n:04}"))
+            .collect();
+        let inside: Vec<&str> = names.iter().map(String::as_str).collect();
+        let mut kinds = vec![("/synthetic/root", Kind::Directory)];
+        kinds.extend(inside.iter().map(|at| (*at, Kind::Directory)));
+        let leaves = ["/synthetic/root/0000/a", "/synthetic/root/0000/b"];
+        let tree = [
+            ("/synthetic/root", inside.as_slice()),
+            (inside[0], leaves.as_slice()),
+        ];
+        let files = FakeFiles::holding(8).tree(&tree, &kinds);
+        assert_eq!(
+            expand(paths(&["/synthetic/root"]), &files)
+                .unwrap_err()
+                .reason,
+            NotAttached::FolderTooLarge
+        );
+        assert_eq!(files.entry_budgets(), vec![MOST_FOLDER_ENTRIES - 1, 1]);
+    }
+
+    #[test]
+    fn exact_entry_limit_with_empty_directories_and_one_file_is_admitted() {
+        let names: Vec<String> = (0..MOST_FOLDER_ENTRIES - 2)
+            .map(|n| format!("/synthetic/root/{n:04}"))
+            .collect();
+        let mut inside: Vec<&str> = names.iter().map(String::as_str).collect();
+        inside.push("/synthetic/root/z.txt");
+        let mut kinds = vec![("/synthetic/root", Kind::Directory)];
+        kinds.extend(names.iter().map(|at| (at.as_str(), Kind::Directory)));
+        let files = FakeFiles::holding(8).tree(&[("/synthetic/root", &inside)], &kinds);
+        assert_eq!(
+            expand(paths(&["/synthetic/root"]), &files).unwrap(),
+            paths(&["/synthetic/root/z.txt"])
+        );
+        assert_eq!(files.entry_budgets()[0], MOST_FOLDER_ENTRIES - 1);
+        assert!(files.entry_budgets()[1..].iter().all(|budget| *budget == 0));
     }
 
     /// A folder that will not open is its own sentence: the person can choose
