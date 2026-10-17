@@ -2329,8 +2329,8 @@ async fn every_question_the_agent_may_hold_open_is_listed_read_whole_and_answere
             None,
         )
     };
-    // Another question's key, or one no question has: stale, and nothing
-    // reaches the agent.
+    // Another question's key, or one no question has: the agent holding
+    // the question refuses it as stale, and nothing is answered.
     for stale in [view.questions[1].question.clone(), "0".repeat(32)] {
         assert!(matches!(
             answer(stale).await,
@@ -2381,6 +2381,7 @@ async fn an_answer_naming_another_reviews_key_is_stale_and_answers_nothing() {
     .await
     .unwrap();
     let other = key_of(&service, &id, "permission-1").await;
+    let other_key = other.clone();
     let execution = shown_reviews(&service, &id).await[0].execution_id.clone();
     for stale in [other, "0".repeat(32)] {
         assert!(matches!(
@@ -2414,7 +2415,16 @@ async fn an_answer_naming_another_reviews_key_is_stale_and_answers_nothing() {
             Err(ConversationError::Agent(AgentError::StalePermission))
         ));
     }
-    assert!(provider.permission_answers.lock().unwrap().is_empty());
+    // Each reached the agent naming its stale key, and the agent's own
+    // controller refused it there: both reviews still wait.
+    let stale_keys = provider
+        .permission_answers
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|answer| answer.key.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(stale_keys, [Some(other_key), Some("0".repeat(32))]);
     assert_eq!(shown_reviews(&service, &id).await.len(), 2);
     service
         .answer(
@@ -2428,7 +2438,7 @@ async fn an_answer_naming_another_reviews_key_is_stale_and_answers_nothing() {
         )
         .await
         .unwrap();
-    assert_eq!(provider.permission_answers.lock().unwrap().len(), 1);
+    assert_eq!(provider.permission_answers.lock().unwrap().len(), 3);
     finish.send(()).unwrap();
     service.shutdown().await.unwrap();
 }

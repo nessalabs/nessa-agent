@@ -2265,6 +2265,18 @@ impl<P: AcpProfile> Worker<P> {
     ) -> Result<(), WorkerFailure> {
         let permission_id = answer.id.clone();
         let answered_execution = answer.execution_id.clone();
+        // A review shown under another key is not this one: nothing is
+        // remembered or answered for it.
+        if let Err(error) =
+            execution.shown_under(&answer.execution_id, &answer.id, answer.key.as_deref())
+        {
+            let _ = reply.send(Err(ProviderOperationFailure::permission_answer(
+                error,
+                ProviderSessionState::Usable,
+                PermissionSelectionState::Pending,
+            )));
+            return Ok(());
+        }
         let wire_option = match self.remember_and_map_answer(&answer) {
             Ok(option) => option,
             Err(error) => {
@@ -3033,6 +3045,7 @@ impl<P: AcpProfile> Worker<P> {
                 },
             );
             let answer = PermissionAnswer {
+                key: None,
                 attribution: ApprovalAttribution::new(
                     rule.reference().granted_by().clone(),
                     ApprovalBasis::Rule(rule.reference().clone()),
@@ -3124,6 +3137,7 @@ impl<P: AcpProfile> Worker<P> {
             PermissionEffect::Deny => context.once_deny.clone(),
         }?;
         Some(PermissionAnswer {
+            key: None,
             attribution: ApprovalAttribution::new(
                 rule.reference().granted_by().clone(),
                 ApprovalBasis::Rule(rule.reference().clone()),
@@ -3994,6 +4008,19 @@ impl<P: AcpProfile> Worker<P> {
             )));
             return Ok(());
         }
+        // Shown under another key, it was another question that reused this
+        // one's ids: stale, and nothing is answered.
+        if answer
+            .key
+            .as_deref()
+            .is_some_and(|key| self.questions.key_of(&answer.id).as_deref() != Some(key))
+        {
+            let _ = reply.send(Err(ProviderOperationFailure::new(
+                AgentError::StalePermission,
+                ProviderSessionState::Usable,
+            )));
+            return Ok(());
+        }
         // The answer is validated where it is recorded, against the ask it is
         // recorded beside, so an answer this refuses never becomes evidence and
         // one it accepts can only be an answer to that ask.
@@ -4369,6 +4396,10 @@ impl AskedQuestions {
     }
     fn get(&self, id: &QuestionId) -> Option<&OpenQuestion> {
         self.open.get(id)
+    }
+    /// The key ask `id` is listed under, while it is.
+    fn key_of(&self, id: &QuestionId) -> Option<String> {
+        self.listings.get(id)?.key_of(id)
     }
     #[cfg(test)]
     fn len(&self) -> usize {

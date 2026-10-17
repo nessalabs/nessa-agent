@@ -661,6 +661,7 @@ async fn an_ask_whose_answer_could_not_be_recorded_is_still_ended_with_evidence(
     let answered = worker
         .answer_question(
             QuestionAnswer {
+                key: None,
                 actor: ActionContext::new("person", "panel", "answer").unwrap(),
                 execution_id: ExecutionId::new("active").unwrap(),
                 id: id.clone(),

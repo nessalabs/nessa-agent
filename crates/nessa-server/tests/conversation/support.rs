@@ -1796,6 +1796,17 @@ impl ProviderSessionBackend for Backend {
     fn answer_question(&self, answer: QuestionAnswer) -> ProviderOperationFuture<'_, ()> {
         Box::pin(async move {
             let controller = self.controller.lock().unwrap();
+            // The owner of the question compares the key it was shown under.
+            if answer
+                .key
+                .as_deref()
+                .is_some_and(|key| controller.question_key(&answer.id).as_deref() != Some(key))
+            {
+                return Err(ProviderOperationFailure::new(
+                    AgentError::StalePermission,
+                    ProviderSessionState::Usable,
+                ));
+            }
             controller.close_question(&answer.id);
             let closed = ExecutionEvent::new(
                 answer.execution_id.clone(),

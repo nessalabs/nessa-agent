@@ -67,8 +67,7 @@ use nessa_sdk::application::agent_execution::{
     },
     permissions::{
         is_remember_option, ActionContext, ApprovalAttribution, ApprovalBasis, PermissionAnswer,
-        PermissionCaller, PermissionCancellationRequest, PermissionRules, PermissionSelectionState,
-        QuestionAnswer,
+        PermissionCaller, PermissionCancellationRequest, PermissionRules, QuestionAnswer,
     },
     providers::{
         AgentProvider, ApprovalMode as ProviderApprovalMode, CloseOutcome, OperationCapabilities,
@@ -1063,26 +1062,6 @@ fn agent_question_entries(
         })
         .map(|pending| question_entry(&pending.key(), pending.question.message()))
         .collect()
-}
-
-/// Whether the agent's review `permission` of `execution` waits as the one
-/// a view listed under `review`: one asked again under the same identities
-/// has a key of its own, and an answer to the first is stale for it.
-fn shown_review(
-    agent: &Agent,
-    execution: &ExecutionId,
-    permission: &PermissionId,
-    review: &str,
-) -> bool {
-    agent
-        .pending_reviews()
-        .unwrap_or_default()
-        .iter()
-        .any(|pending| {
-            &pending.execution_id == execution
-                && &pending.id == permission
-                && pending.content.key() == review
-        })
 }
 
 /// The range of `shown`'s UTF-8 JSON from `offset`, at most `max_bytes`,
@@ -3736,24 +3715,21 @@ impl ConversationService {
                 .transpose()?;
             let live = service.resolve(&id, &caller).await?;
             // Only the question the person was shown: one asked again under
-            // the same identities has a key of its own.
-            let shown = live.agent.pending_questions().unwrap_or_default();
-            if !shown.iter().any(|pending| {
-                pending.execution_id == execution_id
-                    && pending.id == question_id
-                    && pending.key() == key
-            }) {
-                return Err(AgentError::StalePermission.into());
-            }
+            // the same identities has a key of its own, and the agent that
+            // holds it refuses another as stale.
             live.agent
                 .answer_question(QuestionAnswer {
+                    key: Some(key),
                     actor,
                     execution_id,
                     id: question_id,
                     choices,
                 })
                 .await
-                .map_err(|_| ConversationError::Unavailable)
+                .map_err(|error| match error {
+                    AgentError::StalePermission => error.into(),
+                    _ => ConversationError::Unavailable,
+                })
         })
         .await
     }
@@ -3805,17 +3781,12 @@ impl ConversationService {
                 ReviewAnswer::Stale => return Err(AgentError::StalePermission.into()),
                 ReviewAnswer::NotAnAppReview => {}
             }
-            // Nothing is selected: whatever waits under these identities
-            // waits on.
-            if !shown_review(&live.agent, &execution_id, &permission_id, &review) {
-                return Err(ConversationError::PermissionAnswer {
-                    error: AgentError::StalePermission,
-                    selection: PermissionSelectionState::Pending,
-                });
-            }
+            // Only the review the person was shown: the agent refuses another
+            // key as stale, and whatever waits under these identities waits on.
             let answer = live
                 .agent
                 .answer_permission(PermissionAnswer {
+                    key: Some(review),
                     attribution: ApprovalAttribution::new(actor, ApprovalBasis::Explicit),
                     execution_id,
                     id: permission_id,
@@ -3947,12 +3918,10 @@ impl ConversationService {
                 ReviewAnswer::Stale => return Err(AgentError::StalePermission.into()),
                 ReviewAnswer::NotAnAppReview => {}
             }
-            if !shown_review(&live.agent, &execution_id, &permission_id, &review) {
-                return Err(AgentError::StalePermission.into());
-            }
             let _cancellation = live
                 .agent
                 .cancel_permission(PermissionCancellationRequest {
+                    key: Some(review),
                     execution_id,
                     id: permission_id,
                     reason: PermissionCancellationReason::custom(reason),

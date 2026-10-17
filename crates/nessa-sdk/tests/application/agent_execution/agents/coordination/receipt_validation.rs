@@ -186,6 +186,7 @@ async fn received_permission_receipt_finishes_validation_after_close() {
                     if cancel {
                         agent
                             .cancel_permission(PermissionCancellationRequest {
+                                key: None,
                                 execution_id: execution,
                                 id,
                                 reason,
@@ -196,6 +197,7 @@ async fn received_permission_receipt_finishes_validation_after_close() {
                     } else {
                         agent
                             .answer_permission(PermissionAnswer {
+                                key: None,
                                 execution_id: execution,
                                 id,
                                 option_id: option,

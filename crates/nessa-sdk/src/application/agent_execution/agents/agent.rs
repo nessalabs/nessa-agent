@@ -2497,6 +2497,7 @@ impl Agent {
             .flatten();
         if let Some(option_id) = deny {
             self.answer_permission(PermissionAnswer {
+                key: None,
                 attribution,
                 execution_id: event.execution_id().clone(),
                 id,
@@ -2542,6 +2543,7 @@ impl Agent {
         )
         .map_err(|error| AgentError::InvalidInput(error.to_string()))?;
         self.cancel_permission(PermissionCancellationRequest {
+            key: None,
             execution_id: event.execution_id().clone(),
             id,
             reason: PermissionCancellationReason::custom(custom),

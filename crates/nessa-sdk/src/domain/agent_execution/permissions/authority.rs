@@ -68,6 +68,12 @@ impl QuestionListing {
             }
         }
     }
+    /// The key question `id` is listed under, while it is listed.
+    pub(crate) fn key_of(&self, id: &QuestionId) -> Option<String> {
+        let open = self.0.upgrade()?;
+        let open = open.lock().ok()?;
+        open.get(id).map(PendingQuestion::key)
+    }
     pub(crate) fn unlist(&self, id: &QuestionId) {
         if let Some(open) = self.0.upgrade() {
             if let Ok(mut open) = open.lock() {

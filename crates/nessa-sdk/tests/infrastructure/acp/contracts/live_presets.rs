@@ -46,6 +46,7 @@ async fn turn(opened: &mut OpenedProviderSession, text: String, id: &str) -> Val
                             }).expect("once-only choice");
                             permissions.push(json!({"name":input.name,"arguments":input.arguments_json,"effect":format!("{effect:?}")}));
                             opened.session.answer_permission(PermissionAnswer {
+                                key: None,
                                 attribution: attribution(), execution_id: execution_id.clone(), id,
                                 option_id: option.id().clone(),
                             }).await.map_err(|failure| failure.into_error()).unwrap();

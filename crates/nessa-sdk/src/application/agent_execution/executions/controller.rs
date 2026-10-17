@@ -236,6 +236,12 @@ impl ExecutionController {
     ) -> Option<crate::domain::agent_execution::permissions::QuestionListing> {
         self.session.question_listing()
     }
+    /// The key the admitted question `id` is listed under, while it is: an
+    /// answer naming another key is for a question that reused its ids, and
+    /// the adapter holding the question refuses it as StalePermission.
+    pub fn question_key(&self, id: &QuestionId) -> Option<String> {
+        self.session.question_listing()?.key_of(id)
+    }
     /// Stop listing the admitted question `id` as one the agent waits on:
     /// it was answered, withdrawn or ended. An adapter calls this as its
     /// question closes; the end of the execution takes out any left.
@@ -604,7 +610,25 @@ impl ExecutionController {
                 ));
             }
         }
+        self.shown_under(&answer.execution_id, &answer.id, answer.key.as_deref())?;
         self.resolve(answer, false)
+    }
+    /// `Ok` when no key is named, or `key` is the one pending review `id` was
+    /// opened under; StalePermission otherwise, as for a review that reused
+    /// these ids. Checked under this controller's own borrow, so nothing can
+    /// change the review between this and resolving it.
+    pub(crate) fn shown_under(
+        &self,
+        execution: &ExecutionId,
+        id: &PermissionId,
+        key: Option<&str>,
+    ) -> Result<(), AgentError> {
+        match key {
+            Some(key) if self.session.pending_review_key(execution, id).as_deref() != Some(key) => {
+                Err(AgentError::StalePermission)
+            }
+            _ => Ok(()),
+        }
     }
     /// The deadline the worker armed for review `id` selects `option`.
     ///
@@ -635,6 +659,7 @@ impl ExecutionController {
             ));
         }
         let answer = PermissionAnswer {
+            key: None,
             attribution: ApprovalAttribution::deadline(id, deadline)?,
             execution_id: execution.clone(),
             id: id.clone(),
@@ -696,6 +721,7 @@ impl ExecutionController {
         if self.session.active_execution() != Some(&input.execution_id) {
             return Err(AgentError::StalePermission);
         }
+        self.shown_under(&input.execution_id, &input.id, input.key.as_deref())?;
         self.cancel_permission(
             &input.execution_id,
             &input.id,
@@ -1215,6 +1241,7 @@ mod tests {
     }
     fn answer(id: &str) -> PermissionAnswer {
         PermissionAnswer {
+            key: None,
             execution_id: ExecutionId::new("execution").unwrap(),
             id: PermissionId::new(id).unwrap(),
             option_id: PermissionOptionId::new("allow").unwrap(),
@@ -1299,6 +1326,7 @@ mod tests {
         let mut claimed = pending(Some(allow.clone()));
         assert!(matches!(
             claimed.answer_permission(PermissionAnswer {
+                key: None,
                 attribution: ApprovalAttribution::deadline(&permission, allow.clone()).unwrap(),
                 ..answer("permission")
             }),
@@ -1463,6 +1491,7 @@ mod tests {
             .request_permission(&execution, id.clone(), tool(None), input(), deny, None)
             .unwrap();
         let hook_answer = |outcome| PermissionAnswer {
+            key: None,
             execution_id: execution.clone(),
             id: id.clone(),
             option_id: PermissionOptionId::new("deny").unwrap(),
@@ -1585,6 +1614,47 @@ mod tests {
     }
 
     #[test]
+    fn an_answer_or_cancel_naming_another_key_is_stale_and_leaves_the_review_waiting() {
+        let mut controller = controller();
+        request(&mut controller, "permission", "Write").unwrap();
+        let execution = ExecutionId::new("execution").unwrap();
+        let id = PermissionId::new("permission").unwrap();
+        let shown = controller
+            .session
+            .pending_review_key(&execution, &id)
+            .expect("an opened review has a key");
+        let stale = "0".repeat(32);
+        assert_ne!(shown, stale);
+        let keyed = |key: &str| PermissionAnswer {
+            key: Some(key.into()),
+            ..answer("permission")
+        };
+        assert!(matches!(
+            controller.answer_permission(keyed(&stale)),
+            Err(AgentError::StalePermission)
+        ));
+        assert!(matches!(
+            controller.cancel_review(PermissionCancellationRequest {
+                key: Some(stale.clone()),
+                execution_id: execution.clone(),
+                id: id.clone(),
+                reason: PermissionCancellationReason::custom(
+                    CustomPermissionCancellationReason::new("person", "not this one").unwrap(),
+                ),
+                actor: ActionContext::new("actor", "surface", "cancel").unwrap(),
+            }),
+            Err(AgentError::StalePermission)
+        ));
+        // Both refused before anything changed: the review still waits, and
+        // its own key answers it.
+        assert_eq!(
+            controller.session.pending_review_key(&execution, &id),
+            Some(shown.clone())
+        );
+        assert!(controller.answer_permission(keyed(&shown)).is_ok());
+    }
+
+    #[test]
     fn a_waiting_question_is_listed_under_a_key_of_its_own_until_it_ends() {
         use crate::domain::agent_execution::questions::{
             AgentQuestion, AnswerOption, AnswerShape, Question, QuestionId,
@@ -1621,7 +1691,13 @@ mod tests {
         assert_eq!(listed[0].id.as_str(), "ask");
         assert_eq!(listed[0].question.message(), "Choose staging");
         assert_eq!(listed[0].key().len(), 32);
+        // What an adapter compares an answer's key with.
+        assert_eq!(
+            first_owner.question_key(admitted.id()),
+            Some(listed[0].key())
+        );
         first_owner.close_question(admitted.id());
+        assert_eq!(first_owner.question_key(admitted.id()), None);
         assert!(authority.questions().unwrap().is_empty());
         // The same identities asked again after a restart: a new key.
         let mut restarted = controller();

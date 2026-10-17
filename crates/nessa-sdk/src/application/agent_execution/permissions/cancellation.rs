@@ -157,4 +157,7 @@ pub struct PermissionCancellationRequest {
     pub reason: PermissionCancellationReason,
     /// Host-verified caller or guard attribution; construction does not authorize it.
     pub actor: ActionContext,
+    /// The key the review was shown under, compared by its owner as for
+    /// [`PermissionAnswer::key`](super::PermissionAnswer::key).
+    pub key: Option<String>,
 }

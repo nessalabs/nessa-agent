@@ -69,6 +69,12 @@ pub struct PermissionAnswer {
     pub id: PermissionId,
     /// Exact offered option identity; arbitrary or previously resolved choices fail.
     pub option_id: PermissionOptionId,
+    /// The key the review was shown under ([`PendingReview`](crate::domain::agent_execution::permissions::PendingReview)),
+    /// when a person was shown it. The owner of the review compares it as it
+    /// resolves the answer: another key, as for a review that reused these ids,
+    /// is `StalePermission` and resolves nothing. `None` answers by ids alone,
+    /// for an answer nobody was shown a key for.
+    pub key: Option<String>,
 }
 
 /// What a host answers one of the agent's own questions with.
@@ -87,4 +93,7 @@ pub struct QuestionAnswer {
     pub id: QuestionId,
     /// What was chosen, or `None` to answer nothing at all.
     pub choices: Option<Vec<QuestionChoice>>,
+    /// The key the question was shown under ([`PendingQuestion::key`](crate::domain::agent_execution::permissions::PendingQuestion::key)),
+    /// compared by its owner as for [`PermissionAnswer::key`].
+    pub key: Option<String>,
 }

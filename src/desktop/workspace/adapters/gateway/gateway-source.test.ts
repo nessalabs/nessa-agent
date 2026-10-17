@@ -2082,6 +2082,46 @@ describe("a connection that could not be made says why (#419)", () => {
       warn.mockRestore()
     })
 
+  it("S12: an answer connects at once while the source waits", async () => {
+    const warn = quiet()
+    const gateway = fakeGateway()
+    gateway.rows.set(conversationA, row(conversationA))
+    const asked = permission()
+    gateway.views.set(
+      conversationA,
+      view(conversationA, { messages: [running()], permissions: [asked] }),
+    )
+    const { source, state } = counted(gateway)
+    // Read whole first: only a review the window was shown is answered.
+    state.refuse = false
+    await source.transcript(conversationA)
+    await flush()
+    expect(state.attempts).toBe(1)
+    // Then the connection goes, and connecting again is refused: it waits.
+    state.refuse = true
+    gateway.setState({
+      status: "closed",
+      error: new NessaConnectionClosedError(1006, ""),
+    })
+    await source.index().catch(() => undefined)
+    expect(state.attempts).toBe(2)
+    // The gateway is back: the person's answer connects at once and is sent.
+    state.refuse = false
+    gateway.setState({ status: "connected" })
+    await flush()
+    expect(state.attempts).toBe(2)
+    await source.approve(
+      conversationA,
+      approvalId(reviewEntry(asked)),
+      "once",
+      "person",
+      "opt-a",
+    )
+    expect(state.attempts).toBe(3)
+    expect(gateway.count("answer")).toBe(1)
+    warn.mockRestore()
+  })
+
   it("S15: a message's subscription uses the client held: after a close for good it connects nothing", async () => {
     const warn = quiet()
     const gateway = fakeGateway()

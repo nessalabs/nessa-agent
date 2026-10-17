@@ -46,6 +46,7 @@ async fn permission_is_typed_once_only_and_can_be_denied() {
             serde_json::json!({"file_path":std::fs::canonicalize(root.path()).unwrap().join("fixture.txt"),"content":"fixture"})
         );
         let answer = PermissionAnswer {
+            key: None,
             attribution: attribution.clone(),
             execution_id: ExecutionId::new("write").unwrap(),
             id: id.clone(),
@@ -81,6 +82,7 @@ async fn permission_is_typed_once_only_and_can_be_denied() {
             opened
                 .session
                 .answer_permission(PermissionAnswer {
+                    key: None,
                     option_id: PermissionOptionId::new("not-an-option").unwrap(),
                     ..answer.clone()
                 })
@@ -92,6 +94,7 @@ async fn permission_is_typed_once_only_and_can_be_denied() {
             opened
                 .session
                 .answer_permission(PermissionAnswer {
+                    key: None,
                     execution_id: ExecutionId::new("another-execution").unwrap(),
                     ..answer.clone()
                 })
@@ -182,6 +185,7 @@ async fn provider_cancellation_retires_only_the_matching_permission() {
             ExecutionUpdate::Message(MessageChunk::text("provider cancellation processed"))
         );
         let answer = |id| PermissionAnswer {
+            key: None,
             attribution: attribution(),
             execution_id: ExecutionId::new("write").unwrap(),
             id,
@@ -270,6 +274,7 @@ async fn close_cancels_pending_permission_before_cleanup() {
         opened
             .session
             .answer_permission(PermissionAnswer {
+                key: None,
                 attribution: attribution(),
                 execution_id: ExecutionId::new("write").unwrap(),
                 id: id.clone(),
@@ -563,6 +568,7 @@ async fn custom_guard_cancellation_preserves_its_reason_actor_and_review() {
         .unwrap(),
     );
     let request = PermissionCancellationRequest {
+        key: None,
         execution_id: ExecutionId::new("write").unwrap(),
         id: id.clone(),
         reason: reason.clone(),
@@ -572,6 +578,7 @@ async fn custom_guard_cancellation_preserves_its_reason_actor_and_review() {
         opened
             .session
             .cancel_permission(PermissionCancellationRequest {
+                key: None,
                 execution_id: ExecutionId::new("another-execution").unwrap(),
                 ..request.clone()
             })
@@ -728,6 +735,7 @@ async fn websearch_permission_is_reviewed_and_can_be_denied() {
         opened
             .session
             .answer_permission(PermissionAnswer {
+                key: None,
                 attribution: attribution(),
                 execution_id: ExecutionId::new("search").unwrap(),
                 id,
@@ -1170,6 +1178,7 @@ async fn a_question_reaches_a_host_and_its_answer_reaches_the_agent() {
     let refused = opened
         .session
         .answer_question(QuestionAnswer {
+            key: None,
             actor: answerer(),
             execution_id: ExecutionId::new("write").unwrap(),
             id: id.clone(),
@@ -1188,6 +1197,7 @@ async fn a_question_reaches_a_host_and_its_answer_reaches_the_agent() {
     );
 
     let answer = QuestionAnswer {
+        key: None,
         actor: answerer(),
         execution_id: ExecutionId::new("write").unwrap(),
         id: id.clone(),
@@ -1198,6 +1208,20 @@ async fn a_question_reaches_a_host_and_its_answer_reaches_the_agent() {
         )
         .unwrap()]),
     };
+    // Shown under another key, it is another question that reused these ids:
+    // the worker holding this one refuses it, and it still waits.
+    let stale = opened
+        .session
+        .answer_question(QuestionAnswer {
+            key: Some("0".repeat(32)),
+            ..answer.clone()
+        })
+        .await
+        .map_err(ProviderOperationFailure::into_error);
+    assert!(
+        matches!(stale, Err(AgentError::StalePermission)),
+        "{stale:?}"
+    );
     opened
         .session
         .answer_question(answer.clone())
@@ -1291,6 +1315,7 @@ async fn answer_with(opened: &OpenedProviderSession, id: &QuestionId, value: &st
     opened
         .session
         .answer_question(QuestionAnswer {
+            key: None,
             actor: answerer(),
             execution_id: ExecutionId::new("write").unwrap(),
             id: id.clone(),
@@ -1415,6 +1440,7 @@ async fn a_withdrawn_ask_closes_is_recorded_and_can_no_longer_be_answered() {
     let late = opened
         .session
         .answer_question(QuestionAnswer {
+            key: None,
             actor: answerer(),
             execution_id: ExecutionId::new("write").unwrap(),
             id,

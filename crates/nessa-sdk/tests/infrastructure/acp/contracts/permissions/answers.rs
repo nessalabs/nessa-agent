@@ -83,6 +83,7 @@ async fn fixture_on(
         panic!("expected review")
     };
     let answer = PermissionAnswer {
+        key: None,
         execution_id: ExecutionId::new("write").unwrap(),
         id,
         option_id: PermissionOptionId::new("approve-one").unwrap(),
@@ -481,6 +482,7 @@ async fn cancellation_admitted_before_dispatch_survives_dropped_waiter() {
     let audit = Arc::new(AnswerAudit::default());
     let (root, mut opened, active, answer) = fixture("permission-stop", audit.clone()).await;
     let request = PermissionCancellationRequest {
+        key: None,
         execution_id: answer.execution_id.clone(),
         id: answer.id.clone(),
         reason: PermissionCancellationReason::custom(
@@ -588,6 +590,7 @@ async fn close_cannot_replace_an_admitted_explicit_cancellation() {
     let audit = Arc::new(AnswerAudit::default());
     let (root, opened, active, answer) = fixture("permission-stop", audit.clone()).await;
     let request = PermissionCancellationRequest {
+        key: None,
         execution_id: answer.execution_id,
         id: answer.id,
         reason: PermissionCancellationReason::custom(
@@ -648,6 +651,7 @@ async fn close_drains_later_admitted_commands_after_audit_failure() {
     });
     let (root, opened, active, answer) = fixture("permission", audit.clone()).await;
     let request = PermissionCancellationRequest {
+        key: None,
         execution_id: answer.execution_id.clone(),
         id: answer.id.clone(),
         reason: PermissionCancellationReason::custom(
@@ -720,12 +724,14 @@ async fn failed_answer_drains_a_distinct_admitted_cancellation_before_bulk_close
         }
         assert_ne!(ids[0], ids[1]);
         let answer = PermissionAnswer {
+            key: None,
             execution_id: ExecutionId::new("write").unwrap(),
             id: ids[0].clone(),
             option_id: PermissionOptionId::new("deny-one").unwrap(),
             attribution: attribution(),
         };
         let cancellation = PermissionCancellationRequest {
+            key: None,
             execution_id: answer.execution_id.clone(),
             id: ids[1].clone(),
             reason: PermissionCancellationReason::custom(
@@ -848,6 +854,7 @@ async fn admitted_answer_failures_retain_both_orders_and_confirmed_process_clean
                 panic!("expected distinct pending review");
             };
             decisions.push(PermissionAnswer {
+                key: None,
                 execution_id: ExecutionId::new("write").unwrap(),
                 id,
                 option_id: PermissionOptionId::new("deny-one").unwrap(),
@@ -981,6 +988,7 @@ async fn agent_acp_permission_query_does_not_wait_behind_consumed_answer_audit()
         async move {
             agent
                 .answer_permission(PermissionAnswer {
+                    key: None,
                     execution_id: execution,
                     id: permission,
                     option_id: PermissionOptionId::new("approve-one").unwrap(),
@@ -1087,6 +1095,7 @@ async fn remembered_choices_confirm_the_original_answer_and_map_only_the_wire_op
             .id()
             .clone();
         let answer = PermissionAnswer {
+            key: None,
             execution_id: ExecutionId::new("write").unwrap(),
             id,
             option_id,
@@ -1175,6 +1184,7 @@ async fn a_failed_selection_audit_leaves_the_remembered_rule() {
     let failure = opened
         .session
         .answer_permission(PermissionAnswer {
+            key: None,
             execution_id: ExecutionId::new("write").unwrap(),
             id,
             option_id,

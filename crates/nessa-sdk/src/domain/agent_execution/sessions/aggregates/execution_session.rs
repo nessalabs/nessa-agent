@@ -508,6 +508,16 @@ impl ExecutionSession {
             .insert(request.id().clone(), request);
         Ok(())
     }
+    /// The key pending review `id` of `execution` was opened under, if it is
+    /// pending and has content to show.
+    pub fn pending_review_key(&self, execution: &ExecutionId, id: &PermissionId) -> Option<String> {
+        if self.is_closed() || self.check_execution(execution).is_err() {
+            return None;
+        }
+        let active = self.active_execution.as_ref()?;
+        let pending = active.pending_permissions.lock().ok()?;
+        pending.get(id)?.content().map(|content| content.key())
+    }
     /// Decision of a still-pending offered option, checked as
     /// [`Self::answer_permission`] checks it.
     ///
