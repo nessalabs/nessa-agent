@@ -230,7 +230,7 @@ fn an_alpha_v1_database_is_refused_without_migrating_its_rows() {
         LocalConversationStore::open(&path),
         Err(nessa_local_database::OpenError::Version {
             found: 1,
-            expected: 6
+            expected: 7
         })
     ));
     let old_row: String = raw(&path)
@@ -257,7 +257,7 @@ fn an_alpha_v2_database_is_refused_without_erasing_ownership() {
         LocalConversationStore::open(&path),
         Err(nessa_local_database::OpenError::Version {
             found: 2,
-            expected: 6
+            expected: 7
         })
     ));
     let retained: String = raw(&path)
@@ -1227,6 +1227,224 @@ async fn the_list_query_reads_only_its_owners_rows_however_many_others_there_are
     // An owner with more than the bound gets the bound and one more.
     let (rows, _, scanned) = list_cost(&path, "someone", 501);
     assert_eq!((rows, scanned), (501, 0));
+}
+
+#[tokio::test]
+async fn unfinished_turn_marks_are_kept_until_cleared_and_outlive_reopening() {
+    use crate::conversation::application::{UnfinishedMark, UnfinishedTurns};
+    let Opened {
+        _directory,
+        path,
+        store,
+    } = opened();
+    let (busy, idle, failed) = (new_id(), new_id(), new_id());
+    for id in [&busy, &idle, &failed] {
+        store.create(owned(id)).await.unwrap();
+        assert_eq!(
+            store.mark(id).await.unwrap(),
+            UnfinishedMark {
+                conversation_id: id.clone(),
+                failures: 0,
+                retry_at_ms: None,
+            }
+        );
+    }
+    // Marking a marked conversation again is not an error, and keeps a
+    // retry it waits for.
+    store.mark(&busy).await.unwrap();
+    store.defer(&failed, 1, 5_000).await.unwrap();
+    store.defer(&failed, 2, 9_000_000_010_000).await.unwrap();
+    assert_eq!(
+        store.mark(&failed).await.unwrap(),
+        UnfinishedMark {
+            conversation_id: failed.clone(),
+            failures: 2,
+            retry_at_ms: Some(9_000_000_010_000),
+        }
+    );
+    store.clear(&idle).await.unwrap();
+    store.clear(&idle).await.unwrap();
+    drop(store);
+    let reopened = LocalConversationStore::open(&path).unwrap();
+    let mut expected = vec![
+        UnfinishedMark {
+            conversation_id: busy,
+            failures: 0,
+            retry_at_ms: None,
+        },
+        UnfinishedMark {
+            conversation_id: failed,
+            failures: 2,
+            retry_at_ms: Some(9_000_000_010_000),
+        },
+    ];
+    expected.sort_by_key(|mark| mark.conversation_id.to_string());
+    assert_eq!(reopened.marked().await.unwrap(), expected);
+    // A retry time past what the table keeps is refused, not wrapped.
+    assert!(reopened.defer(&new_id(), 1, u64::MAX).await.is_err());
+}
+
+#[tokio::test]
+async fn an_exact_unfinished_mark_read_is_noncreating_and_keeps_conversations_separate() {
+    use crate::conversation::application::{UnfinishedMark, UnfinishedTurns};
+    let Opened {
+        _directory,
+        path,
+        store,
+    } = opened();
+    let (absent, waiting, other) = (new_id(), new_id(), new_id());
+    for id in [&absent, &waiting, &other] {
+        store.create(owned(id)).await.unwrap();
+    }
+    assert!(UnfinishedTurns::get(&store, &absent)
+        .await
+        .unwrap()
+        .is_none());
+    assert!(store.marked().await.unwrap().is_empty());
+    store.defer(&waiting, 3, 9_000_000_020_000).await.unwrap();
+    let expected = UnfinishedMark {
+        conversation_id: waiting.clone(),
+        failures: 3,
+        retry_at_ms: Some(9_000_000_020_000),
+    };
+    let other_mark = store.mark(&other).await.unwrap();
+    assert_eq!(
+        other_mark,
+        UnfinishedMark {
+            conversation_id: other.clone(),
+            failures: 0,
+            retry_at_ms: None,
+        }
+    );
+    for id in [&absent, &new_id()] {
+        assert!(UnfinishedTurns::get(&store, id).await.unwrap().is_none());
+    }
+    assert_eq!(
+        UnfinishedTurns::get(&store, &waiting).await.unwrap(),
+        Some(expected.clone())
+    );
+    assert_eq!(
+        UnfinishedTurns::get(&store, &other).await.unwrap(),
+        Some(other_mark.clone())
+    );
+    assert_eq!(store.mark(&waiting).await.unwrap(), expected);
+    drop(store);
+    let reopened = LocalConversationStore::open(&path).unwrap();
+    assert_eq!(
+        UnfinishedTurns::get(&reopened, &waiting).await.unwrap(),
+        Some(expected)
+    );
+    assert_eq!(
+        UnfinishedTurns::get(&reopened, &other).await.unwrap(),
+        Some(other_mark)
+    );
+    assert!(UnfinishedTurns::get(&reopened, &absent)
+        .await
+        .unwrap()
+        .is_none());
+    reopened.clear(&waiting).await.unwrap();
+    assert!(UnfinishedTurns::get(&reopened, &waiting)
+        .await
+        .unwrap()
+        .is_none());
+    assert_eq!(reopened.marked().await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn exact_unfinished_mark_reads_and_acknowledgements_refuse_corrupt_retry_cells() {
+    use crate::conversation::application::UnfinishedTurns;
+    let Opened {
+        _directory,
+        path,
+        store,
+    } = opened();
+    let (corrupt, valid) = (new_id(), new_id());
+    for id in [&corrupt, &valid] {
+        store.create(owned(id)).await.unwrap();
+        store.mark(id).await.unwrap();
+    }
+    store.defer(&valid, 2, 9_000_000_030_000).await.unwrap();
+    let valid_mark = UnfinishedTurns::get(&store, &valid).await.unwrap().unwrap();
+    let connection = raw(&path);
+    connection
+        .pragma_update(None, "ignore_check_constraints", true)
+        .unwrap();
+    for (failures, retry_at_ms) in [
+        (-1_i64, Some(9_000_000_040_000_i64)),
+        (i64::from(u32::MAX) + 1, None),
+        (1, Some(-1)),
+    ] {
+        connection
+            .execute(
+                "UPDATE unfinished_turns SET failures = ?1, retry_at_ms = ?2
+                 WHERE conversation_id = ?3",
+                params![failures, retry_at_ms, corrupt.to_string()],
+            )
+            .unwrap();
+        assert!(matches!(
+            UnfinishedTurns::get(&store, &corrupt).await,
+            Err(ConversationError::Metadata)
+        ));
+        assert!(matches!(
+            store.mark(&corrupt).await,
+            Err(ConversationError::Metadata)
+        ));
+        let retained: (i64, Option<i64>) = connection
+            .query_row(
+                "SELECT failures, retry_at_ms FROM unfinished_turns
+                 WHERE conversation_id = ?1",
+                [corrupt.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(retained, (failures, retry_at_ms));
+        assert_eq!(
+            UnfinishedTurns::get(&store, &valid).await.unwrap(),
+            Some(valid_mark.clone())
+        );
+        assert_eq!(store.mark(&valid).await.unwrap(), valid_mark);
+    }
+    drop(store);
+    // The last negative deadline also violates SQLite's CHECK, so the
+    // database integrity check refuses opening before exact reads can run.
+    assert!(matches!(
+        LocalConversationStore::open(&path),
+        Err(nessa_local_database::OpenError::Damaged(_))
+    ));
+    // This value satisfies SQLite's schema but exceeds the port's u32 count.
+    // Reopening reaches the exact-row validator without weakening that schema.
+    let failures = i64::from(u32::MAX) + 1;
+    connection
+        .execute(
+            "UPDATE unfinished_turns SET failures = ?1, retry_at_ms = NULL
+             WHERE conversation_id = ?2",
+            params![failures, corrupt.to_string()],
+        )
+        .unwrap();
+    drop(connection);
+    let reopened = LocalConversationStore::open(&path).unwrap();
+    assert!(matches!(
+        UnfinishedTurns::get(&reopened, &corrupt).await,
+        Err(ConversationError::Metadata)
+    ));
+    assert!(matches!(
+        reopened.mark(&corrupt).await,
+        Err(ConversationError::Metadata)
+    ));
+    let retained: (i64, Option<i64>) = raw(&path)
+        .query_row(
+            "SELECT failures, retry_at_ms FROM unfinished_turns
+             WHERE conversation_id = ?1",
+            [corrupt.to_string()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(retained, (failures, None));
+    assert_eq!(
+        UnfinishedTurns::get(&reopened, &valid).await.unwrap(),
+        Some(valid_mark.clone())
+    );
+    assert_eq!(reopened.mark(&valid).await.unwrap(), valid_mark);
 }
 
 #[tokio::test]
@@ -2857,7 +3075,7 @@ async fn a_revoke_takes_the_row_out_of_the_devices_catalogue() {
 }
 
 /// A version 4 file, whose grants hold no capability set but read and no
-/// policy, is refused rather than read into the version 6 shape, and keeps
+/// policy, is refused rather than read into the current shape, and keeps
 /// its rows (docs/adr/todo/202-versioned-local-datasets.md).
 #[test]
 fn a_version_4_database_is_refused_without_erasing_its_grants() {
@@ -2881,7 +3099,7 @@ fn a_version_4_database_is_refused_without_erasing_its_grants() {
         LocalConversationStore::open(&path),
         Err(nessa_local_database::OpenError::Version {
             found: 4,
-            expected: 6
+            expected: 7
         })
     ));
     let kept: String = raw(&path)
@@ -2891,7 +3109,7 @@ fn a_version_4_database_is_refused_without_erasing_its_grants() {
 }
 
 /// The previous metadata version, whose grants name a role, is refused and
-/// left untouched. This build reads version 6 only.
+/// left untouched. This build reads version 7 only.
 #[test]
 fn a_version_5_database_is_refused_without_erasing_its_grants() {
     let directory = tempfile::tempdir().unwrap();
@@ -2918,7 +3136,7 @@ fn a_version_5_database_is_refused_without_erasing_its_grants() {
         LocalConversationStore::open(&path),
         Err(nessa_local_database::OpenError::Version {
             found: 5,
-            expected: 6
+            expected: 7
         })
     ));
     let kept: String = raw(&path)

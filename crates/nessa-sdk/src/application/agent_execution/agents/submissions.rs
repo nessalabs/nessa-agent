@@ -1,6 +1,7 @@
 //! Recovers an existing submission without repeating provider effects.
 //! Saved intent verifies retries; live receipts share one settlement notification.
 
+use super::resumption::lineage::Lineage;
 use super::scheduling::QueuedInvocation;
 use super::{
     AdmissionEvidence, AdmissionEvidenceFailure, AgentError, QueueAdmission, SteeringDelivery,
@@ -47,6 +48,46 @@ fn steering_evidence(
     })
 }
 
+/// The receipt of the last authenticated successor of this original input.
+async fn successor_receipt(
+    manager: &SessionManager,
+    receipts: &HashMap<ExecutionId, SubmissionReceipt>,
+    input: &ExecutionRequest,
+) -> Option<Result<SteeringDelivery, AgentError>> {
+    let record = manager
+        .with_invocations(|records| {
+            let lineage = Lineage::new(records);
+            let mut next = lineage.successor_of(&input.execution_id)?;
+            while let Some(after) = lineage.successor_of(next) {
+                next = after;
+            }
+            lineage.record(records, next).cloned()
+        })
+        .await?;
+    let queued = |result, evidence| {
+        Ok(SteeringDelivery::Queued(QueueAdmission::new(
+            QueuedInvocation::new(input.execution_id.clone(), result),
+            evidence,
+        )))
+    };
+    if let Some(SubmissionReceipt::Queued { result, evidence }) =
+        receipts.get(&record.request.execution_id)
+    {
+        return Some(queued(result.clone(), evidence.clone()));
+    }
+    let last = record.scheduling.last()?;
+    let result = match last.stage {
+        InvocationStage::Cancelled => record.result.unwrap_or(Err(AgentError::Closed)),
+        _ => record
+            .result
+            .unwrap_or(Err(AgentError::SubmissionUnresolved)),
+    };
+    let (_, receiver) = watch::channel(Some(result));
+    Some(
+        admission_evidence(&record.acknowledgement).and_then(|evidence| queued(receiver, evidence)),
+    )
+}
+
 pub(super) async fn recover(
     manager: &SessionManager,
     receipts: &HashMap<ExecutionId, SubmissionReceipt>,
@@ -70,6 +111,12 @@ pub(super) async fn recover(
             evidence,
         )))
     };
+    // Owed work continues in a successor: a retry answers as that turn
+    // does, even while the original's own receipt is still held
+    // (`a_retry_of_a_resumed_turn_answers_as_its_successor`).
+    if let Some(answer) = successor_receipt(manager, receipts, input).await {
+        return Some(answer);
+    }
     if let Some(receipt) = receipts.get(&input.execution_id) {
         return Some(match receipt {
             SubmissionReceipt::Queued { result, evidence } => {

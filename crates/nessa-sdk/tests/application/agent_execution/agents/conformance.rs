@@ -619,3 +619,5 @@ mod observation_boundary;
 mod queue_order;
 
 mod permission_authority;
+
+mod resumption;

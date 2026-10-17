@@ -10,7 +10,7 @@ use super::{
     },
     audit_observation::AuditObserver,
     lifecycle::{SessionLifecycle, WorkPermit},
-    scheduling::{ActiveInvocation, Scheduler},
+    scheduling::{ActiveInvocation, CloseMode, Scheduler},
 };
 use crate::application::agent_execution::agents::{
     AgentError, AgentFuture, AgentInitializationError, OwnedLifetime,
@@ -2700,6 +2700,9 @@ impl Agent {
     /// the provider may resume the same context on a later explicit invocation.
     /// `actor` supplies host-verified attribution for pending-work cancellation.
     /// Stops waiting work and waits for dispatched work and provider cleanup.
+    /// Final close also declines failed work still owed after cleanup; the
+    /// saved decision prevents a stale host retry mark from continuing it
+    /// (`a_persons_close_ends_failed_work_in_history_and_after_restore`).
     /// Direct invocation is supervised independently of its waiter; close joins
     /// its invocation ownership and settlement even after that waiter is dropped.
     /// Concurrent explicit and failure cleanup share one provider shutdown attempt.
@@ -2716,7 +2719,23 @@ impl Agent {
     /// a panic from it is logged and does not affect the operation. See
     /// "Caller wakers" in docs/agent_execution/lifecycle.md.
     pub fn close(&self, actor: ActionContext) -> AgentFuture<'_, CloseOutcome> {
-        Box::pin(async move { self.close_scheduled(actor).await })
+        Box::pin(async move { self.close_scheduled(actor, CloseMode::Final).await })
+    }
+
+    /// [`Self::close`] for the host's own shutdown or restart, not to end this
+    /// agent's work: the running turn and every queued one are recorded
+    /// cancelled with [`SchedulingCause::Suspended`](crate::domain::agent_execution::executions::SchedulingCause::Suspended), which leaves them owed,
+    /// and the host continues them on the next start ([`Self::owed_turns`],
+    /// [`Self::resume_turn`]). A
+    /// close by `actor` that came first keeps its own cause, so a person's
+    /// stop stays final (`a_suspend_after_a_persons_close_keeps_the_close_final`).
+    /// Cleanup, evidence and failures are otherwise exactly as [`Self::close`].
+    ///
+    /// The caller's `Waker` is woken when the operation's own task finishes;
+    /// a panic from it is logged and does not affect the operation. See
+    /// "Caller wakers" in docs/agent_execution/lifecycle.md.
+    pub fn suspend(&self, actor: ActionContext) -> AgentFuture<'_, CloseOutcome> {
+        Box::pin(async move { self.close_scheduled(actor, CloseMode::Suspend).await })
     }
 
     /// Install ownership participation once, before attachment authorization.
@@ -2737,10 +2756,10 @@ impl Agent {
         Box::pin(async move {
             let gate = self.inner.lifecycle.owned_gate();
             let Some(gate) = gate else {
-                return self.close_scheduled(actor).await;
+                return self.close_scheduled(actor, CloseMode::Final).await;
             };
             let seal = gate.seal_for_host(&actor).await;
-            let cleanup = self.close_scheduled(actor).await;
+            let cleanup = self.close_scheduled(actor, CloseMode::Final).await;
             let descendants = gate.join_descendants().await;
             combine_owned_close(seal, cleanup, descendants)
         })

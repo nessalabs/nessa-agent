@@ -848,6 +848,17 @@ fn beyond_cleanup(error: AgentError, confirmed: CloseOutcome) -> Option<AgentErr
     }
 }
 
+/// What a close does with the agent's unfinished work. [`Self::Close`] ends
+/// it, as a person's stop or a deletion does. [`Self::Suspend`] is the
+/// gateway's own stop, at shutdown or to recover an approval mode: what was
+/// queued or running is recorded as owed, and resumed when the conversation
+/// opens again (`Agent::suspend`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AgentEnd {
+    Close,
+    Suspend,
+}
+
 /// The lease a live conversation's agent runs under.
 pub(crate) struct LiveLease {
     lease: LeaseId,
@@ -986,6 +997,7 @@ impl LiveLease {
         cause: LeaseEndCause,
         actor: ActionContext,
         cleanup_deadline: Duration,
+        end: AgentEnd,
     ) -> Result<CloseOutcome, AgentError> {
         let manager = agent.session_manager();
         let lease = self.lease.clone();
@@ -1003,7 +1015,10 @@ impl LiveLease {
             })
             .await;
         self.fence.ending();
-        let close = agent.close(actor);
+        let close = match end {
+            AgentEnd::Close => agent.close(actor),
+            AgentEnd::Suspend => agent.suspend(actor),
+        };
         tokio::pin!(close);
         let within = tokio::select! {
             result = &mut close => Some(result),
@@ -1076,6 +1091,13 @@ impl LiveLease {
                     error,
                     cleanup_result: Box::new(Ok(outcome)),
                 })
+            }
+            // The SDK already reported this writer's failure separately from
+            // physical cleanup. Keep that first answer rather than placing it
+            // inside another error's physical-cleanup field.
+            (Err(failure @ AgentError::StorageDuringClose { .. }), Err(error)) => {
+                tracing::error!(lease = self.lease.as_str(), %error, "lease evidence retry failed; retaining the earlier storage failure and cleanup result");
+                Err(failure)
             }
             // Both answered: the caller learns the records were not saved as
             // well as why the cleanup failed. The records stay retained for

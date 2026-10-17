@@ -2115,3 +2115,243 @@ async fn a_close_keeps_its_report_wake_after_the_caller_is_lost() {
     drop(service);
     drop(storage);
 }
+
+/// Both startup owners read the same actual durable histories. A report of
+/// suspended work waits for the successor rather than reporting the old stop.
+#[cfg(unix)]
+async fn resumed_child_reports_once(reports_first: bool) {
+    use crate::conversation::application::{FailureBackoff, UnfinishedTurns};
+    use nessa_sdk::application::agent_execution::providers::{
+        CleanupReport, CloseOutcome, ExecutionReport,
+    };
+    use nessa_sdk::domain::agent_execution::executions::Resumption;
+
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("data");
+    let path = directory.path().join("reports/thread-reports.sqlite3");
+    let source = id();
+    let child = id();
+    let watched = "watched-before-shutdown";
+    let successor = Resumption::of(&ExecutionId::new(watched).unwrap())
+        .successor()
+        .unwrap();
+    {
+        let provider = Arc::new(ProviderFactory::default());
+        let (service, storage, metadata) = fixture(&root, provider.clone());
+        service.bind_unfinished_turns(metadata.clone(), FailureBackoff::default());
+        let reports = report_store(&path);
+        service.bind_thread_reports(reports.clone());
+        opened(&service, &provider, &source).await;
+        opened(&service, &provider, &child).await;
+        *provider.execution_updates.lock().unwrap() =
+            vec![ExecutionUpdate::Finished(ExecutionOutcome::Cancelled)];
+        *provider.execution_reply.lock().unwrap() = Some(
+            providers::ProviderExecutionReply::Finished(ExecutionReport::cancelled_locally(
+                CleanupReport::confirmed(CloseOutcome { forced: false }),
+            )),
+        );
+        let release = hold_turn(&service, &provider, &child, watched).await;
+        assert_eq!(
+            service
+                .report_thread_turn(
+                    child.clone(),
+                    watched.into(),
+                    ThreadReport {
+                        parent: source.clone(),
+                        caller: caller("report"),
+                        execution: "resumed-child-report".into(),
+                    }
+                )
+                .await,
+            ReportRegistration::Registered
+        );
+        assert!(metadata
+            .marked()
+            .await
+            .unwrap()
+            .iter()
+            .any(|mark| mark.conversation_id == child));
+        let live = service
+            .resolve(&child, &caller("capture-close"))
+            .await
+            .unwrap();
+        let shutting_down = tokio::spawn(async move { retire(service, storage, metadata).await });
+        tokio::time::timeout(TURN_HOLD_HANG, async {
+            while live.agent.attachment_status().phase() == AttachmentPhase::Attached {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        drop(live);
+        release.send(()).unwrap();
+        tokio::time::timeout(TURN_HOLD_HANG, shutting_down)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(reports.pending().await.unwrap().len(), 1);
+    }
+
+    let provider = Arc::new(ProviderFactory::default());
+    let (service, storage, metadata) = fixture(&root, provider.clone());
+    service.bind_unfinished_turns(metadata.clone(), FailureBackoff::default());
+    let reports = report_store(&path);
+    service.bind_thread_reports(reports.clone());
+    let (release, gate) = oneshot::channel();
+    *provider.execution_gate.lock().unwrap() = Some(gate);
+    provider
+        .execution_updates
+        .lock()
+        .unwrap()
+        .push(ExecutionUpdate::Message(MessageChunk::text(
+            "The resumed answer.",
+        )));
+    if reports_first {
+        assert_eq!(service.resume_thread_reports().await.unwrap(), 1);
+        assert_eq!(service.resume_unfinished().await.unwrap(), 1);
+    } else {
+        assert_eq!(service.resume_unfinished().await.unwrap(), 1);
+        assert_eq!(service.resume_thread_reports().await.unwrap(), 1);
+    }
+    tokio::time::timeout(TURN_HOLD_HANG, async {
+        while !provider
+            .executions
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|execution| execution == successor.as_str())
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the child's derived successor reaches the provider");
+    let child_live = service
+        .resolve(&child, &caller("held-successor"))
+        .await
+        .unwrap();
+    assert_eq!(child_live.agent.active_execution_id(), Some(successor));
+    drop(child_live);
+    assert_eq!(reports.pending().await.unwrap().len(), 1);
+    let parent = service
+        .resolve(&source, &caller("read-parent"))
+        .await
+        .unwrap();
+    assert!(
+        !parent
+            .agent
+            .session_manager()
+            .snapshot_handle()
+            .await
+            .unwrap()
+            .invocations
+            .iter()
+            .any(|record| record
+                .request
+                .user_message
+                .text_str()
+                .starts_with("[Thread report]")),
+        "a suspended child is not reported ended while its successor runs"
+    );
+    drop(parent);
+    release.send(()).unwrap();
+    let received = reports_in(&service, &source, 1).await;
+    assert_eq!(received.len(), 1);
+    assert!(
+        received[0].contains(&format!("execution {watched})")),
+        "{}",
+        received[0]
+    );
+    assert!(received[0].contains(": completed."), "{}", received[0]);
+    assert!(
+        received[0].contains("Its reply:\nThe resumed answer."),
+        "{}",
+        received[0]
+    );
+    reports_settled(reports.as_ref()).await;
+    service.resume_unfinished().await.unwrap();
+    assert_eq!(service.resume_thread_reports().await.unwrap(), 0);
+    assert_eq!(reports_in(&service, &source, 1).await.len(), 1);
+    retire(service, storage, metadata).await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn reports_loaded_before_unfinished_turns_wait_for_the_resumed_child() {
+    resumed_child_reports_once(true).await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn unfinished_turns_loaded_before_reports_report_the_resumed_child_once() {
+    resumed_child_reports_once(false).await;
+}
+
+/// A validated durable prefix can already know completion before its
+/// scheduling settlement is written. This test initially constructs that
+/// exact earlier prefix from a real completed turn; a physical save gate is
+/// still needed before calling this an actual crash/reopen reproduction.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_restored_completed_result_without_its_last_edge_is_reportable() {
+    use nessa_sdk::application::agent_execution::{
+        agents::ResumptionHistory,
+        sessions::{CommittedCompleteness, CommittedFreshness, CommittedSession, CommittedStatus},
+    };
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("data");
+    let provider = Arc::new(ProviderFactory::default());
+    let (service, storage, metadata) = fixture(&root, provider.clone());
+    let child = id();
+    opened(&service, &provider, &child).await;
+    finish_turn(&service, &provider, &child, "done-before-last-edge").await;
+    report_turn_settled(&service, &child, "done-before-last-edge").await;
+    let live = service.resolve(&child, &caller("capture")).await.unwrap();
+    let mut snapshot = live.agent.session_manager().snapshot().await.unwrap();
+    drop(live);
+    let record = snapshot
+        .invocations
+        .iter_mut()
+        .find(|record| record.request.execution_id.as_str() == "done-before-last-edge")
+        .unwrap();
+    assert_eq!(record.result, Some(Ok(ExecutionOutcome::Completed)));
+    assert_eq!(
+        record.scheduling.pop().unwrap().stage,
+        InvocationStage::Settled
+    );
+    assert_eq!(
+        record.scheduling.last().unwrap().stage,
+        InvocationStage::Running
+    );
+    let committed = CommittedSession::new(
+        snapshot.id.clone(),
+        "report-completion-checkpoint".into(),
+        1,
+        1,
+        1,
+        Some(snapshot),
+        CommittedStatus::new(CommittedCompleteness::Complete, CommittedFreshness::Current),
+    )
+    .expect("the saved result before its scheduling edge is valid SDK history");
+    let frame = ResumptionHistory::from_committed(Arc::new(committed.snapshot().unwrap().clone()));
+    let execution = ExecutionId::new("done-before-last-edge").unwrap();
+    assert!(
+        !frame.is_owed(&execution),
+        "completed work must not execute again"
+    );
+    let classify = |restored| {
+        crate::conversation::application::service::completed_checkpoint_report_for_test(
+            &child,
+            &frame,
+            execution.as_str(),
+            restored,
+        )
+    };
+    // The frame is cold: report registration provenance is not live ownership.
+    for restored in [false, true] {
+        let report = classify(restored)
+            .expect("an earlier-run completed result has no live settlement owner to wait for");
+        assert!(report.contains(": completed."), "{report}");
+    }
+    retire(service, storage, metadata).await;
+}

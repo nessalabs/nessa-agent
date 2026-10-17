@@ -467,6 +467,9 @@ enum LockWaiter {
     CommittedSnapshot,
     CommittedSnapshotHandle,
     CommittedInvocationStatus,
+    ResumptionHistory,
+    OwedTurns,
+    IsIdle,
 }
 
 #[tokio::test]
@@ -478,6 +481,9 @@ async fn panicking_lock_waiter_does_not_fail_the_admission_that_released_it() {
         LockWaiter::CommittedSnapshot,
         LockWaiter::CommittedSnapshotHandle,
         LockWaiter::CommittedInvocationStatus,
+        LockWaiter::ResumptionHistory,
+        LockWaiter::OwedTurns,
+        LockWaiter::IsIdle,
     ] {
         for fault in [false, true] {
             let (agent, backend, storage) = probe(false).await;
@@ -510,6 +516,15 @@ async fn panicking_lock_waiter_does_not_fail_the_admission_that_released_it() {
                 }),
                 LockWaiter::CommittedSnapshotHandle => Box::pin(async {
                     agent.session_manager().snapshot_handle().await;
+                }),
+                LockWaiter::OwedTurns => Box::pin(async {
+                    agent.owed_turns().await;
+                }),
+                LockWaiter::IsIdle => Box::pin(async {
+                    agent.is_idle().await;
+                }),
+                LockWaiter::ResumptionHistory => Box::pin(async {
+                    agent.resumption_history().await;
                 }),
                 LockWaiter::CommittedInvocationStatus => Box::pin(async {
                     agent

@@ -39,6 +39,8 @@ pub(crate) enum CallerWaiter {
     ApprovalModeChange(SessionId),
     /// `SessionManager::snapshot` or `snapshot_handle` for this session.
     CommittedSnapshot(SessionId),
+    /// `Agent::resumption_history`, `owed_turns` or `is_idle` for this session.
+    ResumptionState(SessionId),
     /// `SessionManager::committed_invocation_status` for this session.
     CommittedInvocationStatus(SessionId),
     /// `AttachmentWait::wait` for this attachment generation.
@@ -47,6 +49,8 @@ pub(crate) enum CallerWaiter {
     Invocation(ExecutionId),
     /// `Agent::enqueue` or `Agent::enqueue_steering` of this input.
     Admission(ExecutionId),
+    /// `Agent::resume_turn` or `Agent::decline_turn` for this owed turn.
+    TurnResumption(ExecutionId),
     /// `Agent::steer` of this input.
     Steering(ExecutionId),
     /// `Agent::reorder_queued` on this session's Agent.
@@ -110,6 +114,13 @@ impl fmt::Display for CallerWaiter {
                     session.as_str()
                 )
             }
+            Self::ResumptionState(session) => {
+                write!(
+                    formatter,
+                    "resumption state of session {}",
+                    session.as_str()
+                )
+            }
             Self::CommittedInvocationStatus(session) => {
                 write!(
                     formatter,
@@ -122,6 +133,7 @@ impl fmt::Display for CallerWaiter {
             }
             Self::Invocation(id) => write!(formatter, "invocation {}", id.as_str()),
             Self::Admission(id) => write!(formatter, "admission of {}", id.as_str()),
+            Self::TurnResumption(id) => write!(formatter, "resumption of {}", id.as_str()),
             Self::Steering(id) => write!(formatter, "steering of {}", id.as_str()),
             Self::QueueReorder(session) => {
                 write!(formatter, "queue reorder of session {}", session.as_str())

@@ -1,5 +1,6 @@
 //! The first stop belongs to each admitted input, across invocation delivery modes.
 use super::*;
+use nessa_sdk::application::agent_execution::sessions::InvocationSchedulingEvent;
 
 #[derive(Clone, Copy, Debug)]
 enum Delivery {
@@ -134,32 +135,65 @@ async fn active_input_keeps_automatic_cause_when_later_close_overtakes_dispatch(
                         assert!(cancellation.actor.is_none());
                     } else {
                         assert!(active.cancellation.is_none());
-                        let cancellation = active.scheduling.last().unwrap();
-                        assert_eq!(cancellation.stage, InvocationStage::Cancelled);
-                        assert_eq!(
-                            cancellation.cause,
+                        assert_original_stop_and_finality(
+                            &active.scheduling,
                             SchedulingCause::RunnerStopped,
-                            "{delivery:?}"
+                            None,
+                            &closer,
                         );
-                        assert!(cancellation.actor.is_none());
                     }
-                    let waiting = saved.invocations[1].scheduling.last().unwrap();
-                    assert_eq!(waiting.stage, InvocationStage::Cancelled);
-                    assert_eq!(
-                        waiting.cause,
+                    assert_original_stop_and_finality(
+                        &saved.invocations[1].scheduling,
                         if audit_failed {
                             SchedulingCause::RunnerStopped
                         } else {
                             SchedulingCause::SessionClosed
-                        }
+                        },
+                        if audit_failed {
+                            None
+                        } else {
+                            Some(closer.clone())
+                        },
+                        &closer,
                     );
-                    assert_eq!(
-                        waiting.actor,
-                        if audit_failed { None } else { Some(closer) }
-                    );
+                    if audit_failed {
+                        // The earlier close stage failed: no finality decision
+                        // may turn that error into a cleanup result.
+                        assert!(saved.invocations.iter().all(|record| record
+                            .scheduling
+                            .iter()
+                            .all(|edge| edge.cause != SchedulingCause::NotResumed)));
+                    } else {
+                        assert!(agent.owed_turns().await.is_empty());
+                    }
                     assert!(agent.session_manager().snapshot().await.is_some());
                 }
             }
         }
+    }
+}
+
+/// Final Close can append its decision; it must preserve the earlier stop.
+fn assert_original_stop_and_finality(
+    history: &[InvocationSchedulingEvent],
+    cause: SchedulingCause,
+    actor: Option<ActionContext>,
+    closer: &ActionContext,
+) {
+    assert_eq!(history.last().unwrap().stage, InvocationStage::Cancelled);
+    let stops: Vec<_> = history
+        .iter()
+        .filter(|edge| edge.stage == InvocationStage::Cancelled)
+        .collect();
+    let original = stops.first().expect("original stop remains saved");
+    assert_eq!(original.cause, cause);
+    assert_eq!(original.actor, actor);
+    assert!(stops.len() <= 2, "at most one later finality decision");
+    if let Some(finality) = stops.get(1) {
+        assert_eq!(finality.cause, SchedulingCause::NotResumed);
+        assert_eq!(finality.before, Some(InvocationStage::Cancelled));
+        assert_eq!(finality.actor.as_ref(), Some(closer));
+        assert_eq!(finality.kind, original.kind);
+        assert_eq!(finality.target, original.target);
     }
 }

@@ -22,9 +22,10 @@
 //! look(child) ─▶ child's history ─▶ finished watches ─▶ submit to parent ─▶ settle
 //! ```
 //!
-//! After a restart no turn left unfinished by the earlier run is run again,
-//! so a report saved by that run whose turn has not finished says it was
-//! interrupted: [`restored_unfinished`] owns that one decision.
+//! With automatic resumption bound, the SDK's committed resumption frame
+//! decides which work remains owed and which successor carries it. Reports
+//! wait for that final turn. Without automatic resumption, an unfinished
+//! earlier-run turn retains [`restored_unfinished`]'s interruption report.
 use super::{
     ConversationCaller, ConversationError, ConversationService, Inner, SubmissionMode,
     SubmittedMessage, Writer,
@@ -33,12 +34,13 @@ use crate::conversation::application::ConversationFuture;
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_sdk::application::agent_execution::{
+    agents::ResumptionHistory,
     executions::ExecutionUpdate,
     hooks::{HookError, InvocationContext, InvocationHook},
-    sessions::InvocationRecord,
+    sessions::{InvocationRecord, SessionSnapshot},
 };
 use nessa_sdk::domain::agent_execution::executions::{
-    ExecutionOutcome, Initiation, InvocationStage, MessageKind,
+    ExecutionId, ExecutionOutcome, Initiation, InvocationStage, MessageKind,
 };
 use std::{
     collections::{HashMap, HashSet},
@@ -146,6 +148,24 @@ pub(crate) struct ThreadReports {
     store: OnceLock<Arc<dyn ThreadReportStore>>,
     #[cfg(all(test, unix))]
     completed_settling_bursts: AtomicUsize,
+}
+
+/// One immutable read, with resumption policy owned by the SDK when enabled.
+/// Both variants retain data only, never an Agent or its storage lease.
+enum ReportHistory {
+    Plain(Option<Arc<SessionSnapshot>>),
+    Resuming(Box<ResumptionHistory>),
+}
+impl ReportHistory {
+    fn invocations(&self) -> &[InvocationRecord] {
+        match self {
+            Self::Plain(snapshot) => snapshot
+                .as_deref()
+                .map(|snapshot| snapshot.invocations.as_slice())
+                .unwrap_or_default(),
+            Self::Resuming(frame) => frame.invocations(),
+        }
+    }
 }
 
 /// What a look found of one watched turn.
@@ -562,7 +582,14 @@ impl ConversationService {
     ) {
         let saved = match self.check_view_access(&child, caller).await {
             Ok(()) => match self.report_history(&child, caller).await {
-                Some(history) => invocation(&history, execution).is_some(),
+                Some(history) => match &history {
+                    ReportHistory::Resuming(frame) => ExecutionId::new(execution)
+                        .ok()
+                        .is_some_and(|id| frame.has_observed(&id)),
+                    ReportHistory::Plain(_) => {
+                        invocation(history.invocations(), execution).is_some()
+                    }
+                },
                 None => return,
             },
             Err(ConversationError::NotFound | ConversationError::Deleted) => false,
@@ -711,30 +738,41 @@ impl ConversationService {
             })
     }
 
-    /// The child's saved invocations: from its agent when it is open, else
-    /// from its committed history. `None` when neither can be read now.
+    /// Capture one acknowledged history frame, from the open Agent or the
+    /// committed store. Automatic recovery consumes the SDK's resumption policy.
     async fn report_history(
         &self,
         child: &ConversationId,
         caller: &ConversationCaller,
-    ) -> Option<Vec<InvocationRecord>> {
+    ) -> Option<ReportHistory> {
+        let resuming = self.inner.unfinished_turns.get().is_some();
         if let Ok(Some(live)) = self.live_now(child, caller).await {
-            return live
-                .agent
-                .session_manager()
-                .snapshot()
-                .await
-                .map(|snapshot| snapshot.invocations);
+            return if resuming {
+                live.agent
+                    .resumption_history()
+                    .await
+                    .map(|frame| ReportHistory::Resuming(Box::new(frame)))
+            } else {
+                live.agent
+                    .session_manager()
+                    .snapshot_handle()
+                    .await
+                    .map(|snapshot| ReportHistory::Plain(Some(snapshot)))
+            };
         }
         match self.committed_with_order(child).await {
-            Ok((committed, _)) => Some(
-                committed
-                    .snapshot()
-                    .map(|snapshot| snapshot.invocations.clone())
-                    .unwrap_or_default(),
-            ),
-            // A thread with no history yet ran nothing.
-            Err(ConversationError::NotFound) => Some(Vec::new()),
+            Ok((committed, _)) => {
+                let snapshot = committed.snapshot().cloned().map(Arc::new);
+                Some(match (resuming, snapshot) {
+                    (true, Some(snapshot)) => ReportHistory::Resuming(Box::new(
+                        ResumptionHistory::from_committed(snapshot),
+                    )),
+                    (_, snapshot) => ReportHistory::Plain(snapshot),
+                })
+            }
+            // No committed history and no live observation: the registered
+            // send never reached admission in the earlier process.
+            Err(ConversationError::NotFound) => Some(ReportHistory::Plain(None)),
             Err(error) => {
                 tracing::warn!(%child, %error, "a watched thread's history could not be read");
                 None
@@ -762,7 +800,7 @@ impl ConversationService {
             let delivered = self
                 .report_history(&report.parent, &report.caller)
                 .await
-                .map(|history| invocation(&history, &report.execution).is_some());
+                .map(|history| invocation(history.invocations(), &report.execution).is_some());
             if delivered == Some(true) {
                 break;
             }
@@ -845,12 +883,16 @@ impl ConversationService {
 /// whose turn has not finished was interrupted.
 fn watched(
     child: &ConversationId,
-    history: &[InvocationRecord],
+    history: &ReportHistory,
     execution: &str,
     failure: bool,
     restored: bool,
     limit: usize,
 ) -> Watched {
+    if let ReportHistory::Resuming(frame) = history {
+        return watched_resuming(child, frame, execution, restored, limit);
+    }
+    let history = history.invocations();
     let found = match invocation(history, execution) {
         Some(record) => in_record(history, record, failure),
         None => Found::Waiting(None),
@@ -867,9 +909,67 @@ fn watched(
     }
 }
 
-/// A report an earlier run saved, whose turn that run left unfinished. No
-/// turn is run again after a restart, so one that saved no result is reported
-/// interrupted. One that saved its result, but not its settlement, did end:
+/// Resolve injected delivery before following authenticated resumption links.
+/// Only a committed, non-owed final leaf supplies report content; the report
+/// continues to name the execution originally watched by its sender.
+fn watched_resuming(
+    child: &ConversationId,
+    frame: &ResumptionHistory,
+    execution: &str,
+    restored: bool,
+    limit: usize,
+) -> Watched {
+    let Ok(id) = ExecutionId::new(execution) else {
+        return Watched::Waiting;
+    };
+    let Some(mut record) = invocation(frame.invocations(), execution) else {
+        return if frame.has_observed(&id) {
+            Watched::Settling
+        } else if restored {
+            restored_unfinished(child, execution, None, limit)
+        } else {
+            Watched::Waiting
+        };
+    };
+    // An injected message's host owns its output and continuation. The SDK
+    // authenticates successor links; this adapter never derives them from IDs.
+    loop {
+        if let Some(edge) = record
+            .scheduling
+            .last()
+            .filter(|edge| edge.stage == InvocationStage::Injected)
+        {
+            let Some(host) = edge
+                .target
+                .as_ref()
+                .and_then(|target| invocation(frame.invocations(), target.as_str()))
+            else {
+                return Watched::Settling;
+            };
+            record = host;
+            continue;
+        }
+        if let Some(successor) = frame.successor_of(&record.request.execution_id) {
+            let Some(next) = invocation(frame.invocations(), successor.as_str()) else {
+                return Watched::Settling;
+            };
+            record = next;
+            continue;
+        }
+        break;
+    }
+    if !frame.is_finished(&record.request.execution_id) {
+        return Watched::Settling;
+    }
+    let (ending, text) = match &record.result {
+        Some(result) => (outcome(result), reply(record)),
+        None => ("cancelled", None),
+    };
+    Watched::Finished(report_text(child, execution, ending, text, limit))
+}
+
+/// Legacy unbound recovery, or a restored send that never reached admission:
+/// no turn continues it, so one that saved no result is reported interrupted. One that saved its result, but not its settlement, did end:
 /// it is reported with that result and reply.
 fn restored_unfinished(
     child: &ConversationId,
@@ -1018,4 +1118,17 @@ fn report_text(
     text.truncate(end);
     text.push_str(marker);
     text
+}
+
+#[cfg(all(test, unix))]
+pub(crate) fn completed_checkpoint_report_for_test(
+    child: &ConversationId,
+    frame: &ResumptionHistory,
+    execution: &str,
+    restored: bool,
+) -> Option<String> {
+    match watched_resuming(child, frame, execution, restored, 65536) {
+        Watched::Finished(text) => Some(text),
+        Watched::Settling | Watched::Waiting => None,
+    }
 }

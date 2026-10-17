@@ -159,6 +159,13 @@ must bound its asynchronous observation so physical serialization cannot turn
 completed provider cleanup into an unbounded evidence wait. Physical ownership
 and its one-write bound remain in the adapter, independently of observation loss.
 
+A later final Close records a separate NotResumed decision for owed work. It
+preserves the original physical stop cause and actor across queued and steering
+delivery, hook refusal and failed audit;
+`active_input_keeps_automatic_cause_when_later_close_overtakes_dispatch` checks
+both records and that a successful close leaves no work owed. An earlier audit
+failure preserves its failure and does not begin the finality decision.
+
 | Producer / order | Observation and cleanup contract | Regression |
 | --- | --- | --- |
 | Queue admission holds physical slot; authorization is still Authorized; explicit close issues Closed | Closed observation expires with typed audit failure; completed physical cleanup and cancelled queue receipt remain reachable | `attachment_close_evidence_times_out_behind_a_stalled_physical_audit` |
@@ -314,11 +321,98 @@ result even when a local cancellation outcome is retained separately.
 Running evidence with an already-saved result recovers that outcome even if
 the final scheduling transition was not saved. Pending/running evidence with no
 recorded result and no live owner returns `SubmissionUnresolved`; the SDK never risks replaying delivery that may already
-have happened. Late receipt errors are retained for subsequent snapshot saves; if
+have happened. Once the host has resumed such a turn (below), a retry answers as its successor. Late receipt errors are retained for subsequent snapshot saves; if
 storage remains unavailable through a crash, only the last persisted evidence can
 be recovered, not an error response that never reached storage. No manual snapshot
 inspection is required before retrying. This contract covers scheduled admission and steering; immediate `invoke` remains a
 supervised operation without receipt recovery.
+
+## Resuming turns a restart or a failure cut off
+
+The SDK never replays a turn by itself; the host decides what to continue.
+`owed_turns()` lists every turn whose work is owed:
+
+- one still Queued or Running with no result and nothing in this process
+  running it (a crash cut it off);
+- one cancelled with a cause that leaves work owed (`Suspended`, `Interrupted`);
+- one a failure ended (`ExecutionFailed`, `DispatchFailed`, or `RunnerStopped`
+  behind another turn's failure) whose retained error is one a retry can fix
+  (`AgentError::leaves_work_owed`: the provider, its transport, a deadline, a
+  passing storage failure). A refusal, invalid input, a sign-in the provider
+  needs, or a known result stays final. A failure is owed only while no later
+  turn moved past it: once a person's next message runs, or they stop it, the
+  failed turn is not sent again. A successor and a steering message do not
+  count as moving past it.
+
+A result can be saved before its final scheduling edge. The SDK reads that
+acknowledged prefix without rewriting it: known completion and permanent
+failure are final, while a retryable failure can still owe work. Applied local
+stops keep their original cause and actor. `ResumptionHistory::is_finished`
+publishes that same decision for report readers; an active receipt still owns
+its unfinished work. The ordering table below names the regression cases.
+
+`suspend(actor)` is the host's own shutdown: it stops the Agent like `close`,
+but records the stopped turns as `Cancelled(Suspended)` instead of
+`SessionClosed`, so they are owed. A person's close and a withdrawal stay final;
+a suspend after a close keeps the close's cause.
+
+`resume_turn(turn, actor)` first records a cut-off turn `Cancelled(Interrupted)`,
+then queues a successor turn: a notice that says why the turn stopped (a
+restart or a failure, and whether the provider had it), then the original
+request (a successor's own notice is replaced, never stacked), under the
+original caller and initiation. The SDK does not directly replay saved tool
+calls. The notice asks the model to check what is already done, but a new model
+turn may issue a tool call again. This is not an exactly-once external-effect
+guarantee. The successor's identity is derived from the original
+(`Resumption`), so resuming twice queues one successor, a retry of the original
+answers as the successor, and a chain is resumed at most three times, counting
+shutdowns, crashes and failures alike. A turn that is not resumed is ended by
+one more edge, `Cancelled(NotResumed)`, recorded after its owed ending: the
+host's final decision, and the only edge that may follow a cancellation or a
+settlement, and only one that left work owed or ended with a failure. A spent
+chain gets it and is audited `Exhausted`. The host checks who may resume a turn
+(a share grant still in force, say) before calling it; `decline_turn` gives one
+it will not resume the same edge and audits `Declined`, so each turn is decided
+once. Each decision records one `TurnResumed` audit record. `is_idle()` says when every
+admitted turn has settled, so a host can tell when nothing is left to resume.
+
+The resumption module owns one lineage index over retained records. A link
+requires the complete expected successor input, caller, initiation and queued
+mode, in saved order. A successor-looking ID on an unrelated input is still an
+ordinary original. `resumption/lineage.rs` owns that rule for owed detection,
+retry receipts and `ResumptionHistory`; `resumption/progress.rs` publishes the
+committed read frame without retaining an Agent or storage lease. The index is
+rebuilt in linear history/input work and is not another durable ledger.
+
+### Resumption decision ordering
+
+The scheduler owns the decision through successor admission. Losing the caller
+must not abandon work that the scheduler has accepted. These orderings also
+apply when the gateway opens a conversation while its startup recovery is running.
+
+| Ordering | Required result | Regression |
+| --- | --- | --- |
+| Acknowledged result precedes its final scheduling edge; no live receipt owns it. | Read-only finished/owed projection preserves the stored record; known Completed and permanent failures are finished, retryable failures and owed stop causes remain owed. | `acknowledged_result_prefixes_preserve_retry_and_stop_meaning_after_restore` |
+| Successor physically running; later ordinary work Completed. | A live successor is neither owed nor finished; later completed ordinary work supersedes an earlier retryable failure, including after restore. | `result_prefix_recovery_respects_live_successors_and_later_completed_work` |
+| Actual provider Completed, then settlement-save panic becomes a retained diagnostic error. | Preserve both original error and provider provenance; saved prefixes are finished and never replayed merely because the local diagnostic is an error. | `a_completed_provider_result_stays_final_beneath_a_saved_diagnostic_error` |
+| Explicit resume cannot save the projected missing ending. | Return typed storage failure, retain committed original facts, and admit/audit no successor. A retry acknowledges the ending and admits one successor; same-store reopen does not replay it. | `a_failed_projected_ending_save_can_retry_once_and_reopen_without_replay` |
+| A cold committed completion has no final scheduling edge | The SDK frame publishes finality without rewriting history; both newly registered and restored reports consume that same answer | server `a_restored_completed_result_without_its_last_edge_is_reportable` |
+| An OwedTurn from another persistent session matches this session’s index and execution ID. | Compare private session identity before selecting or changing the owed record; return NotOwed (resume) / no decision (decline), with no local history mutation, decision audit, or dispatch. | `a_foreign_session_owed_turn_cannot_resume_or_decline_a_matching_local_turn` |
+| This persistent session is suspended, its Agent dropped, and the same storage reopened. | A still-owed token belongs to the persistent session, so a new Agent instance may resume it. | `an_owed_turn_token_remains_usable_after_its_own_session_is_reopened` |
+| A same-session token carries stale dispatch metadata compared with the selected valid restored frame. | Revalidate whether the current record is owed; the current selected record owns dispatch evidence in both the successor notice and TurnResumed audit. | `a_resumption_audit_uses_the_selected_sessions_current_dispatch_evidence` |
+| Successor is admitted; queue audit waits; resume caller disappears | The supervised owner finishes acknowledgement, starts the successor, and records its resumption; original-ID retry observes the successor | `a_resumption_keeps_its_successor_after_its_caller_is_lost_during_admission_audit` |
+| Final decline save waits and its response caller disappears | The owned decision completes its save and audit; a repeat adds neither work nor another decision | `a_decline_keeps_its_final_save_after_its_caller_is_lost` |
+| Two callers resume the same owed turn | One successor and one resumption decision; the other caller sees `NotOwed` | `concurrent_resumptions_of_one_owed_turn_make_one_decision` |
+| An unrelated ordinary request occupies a generated successor ID | Do not adopt its receipt or suppress the original owed work; generated admission conflicts | `an_unrelated_derived_identity_does_not_own_a_cut_off_turn` |
+| A later candidate differs in exactly one binding fact | Reject text, actor, initiation and mode mismatches independently | `a_later_successor_candidate_must_match_text_actor_initiation_and_mode` |
+| An ordinary suspension changes its original stop actor | Reject the forged history before dispatch; only the later NotResumed decision has its own actor | `an_ordinary_suspension_cannot_name_a_different_local_stop_actor` |
+| An ordinary original ID looks like a third successor | It is still an original and receives its own first successor | `a_canonical_resume_shaped_root_still_gets_its_own_successor` |
+| Original unsent text starts with a system-looking notice and has an image | Keep that literal text and image beneath the new notice | `an_unsent_notice_prefix_and_image_are_preserved_as_original_input` |
+| Resume and decline compete for the same owed turn | The scheduler orders the decisions: decline first leaves no successor; resume first leaves decline nothing to decide | `a_decline_racing_a_resumption_does_not_decide_the_turn_twice` |
+| A later caller declines work suspended by an earlier caller | Keep the original stop attribution and record the later final decision's own actor | `a_later_decline_keeps_its_actor_separate_from_the_original_suspension` |
+| Person closes a failed turn while removing the gateway's retry mark fails; gateway restarts | Saved SDK history keeps that close final; a stale mark does not authorize a successor | server `a_persons_close_after_failure_stays_final_when_clearing_its_mark_fails` |
+| Saving the final close decision fails after physical cleanup; close is retried | Report typed storage failure with the observed cleanup result; retry saves finality before success | `a_failed_final_decline_keeps_cleanup_and_a_close_retry_saves_finality` |
+| Close already failed to save its cancellation; the same writer remains unavailable | Keep the original failure classification and retained facts for a later close. Finality begins only after the earlier close stages succeed; an earlier operation error is not reclassified as its physical cleanup result | `a_failed_close_keeps_its_first_failure_when_storage_stays_unavailable` |
 
 ## Native steering
 
@@ -438,8 +532,8 @@ Storage failures are returned even while necessary cleanup proceeds. The separat
 `ExecutionAudit` port owns provider lifecycle and permission evidence.
 
 Snapshots retain pending/unresolved work after a runtime or process interruption;
-reconstruction never automatically replays it. This is not a durable job service
-or a guarantee of background execution after the host exits.
+reconstruction never replays it by itself; the host resumes what is owed
+([Resuming turns a restart or a failure cut off](#resuming-turns-a-restart-or-a-failure-cut-off)).
 
 ## Review and regression evidence
 

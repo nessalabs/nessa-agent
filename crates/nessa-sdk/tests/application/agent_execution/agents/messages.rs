@@ -162,7 +162,7 @@ fn image(media_type: ImageMediaType, size: u64) -> ImageReference {
 /// (eight as base64), or those images alone (`taking_no_text`), whose agent
 /// answers `agent` about images, and whose backend refuses every input with
 /// `refuses` when that is set.
-struct ImageProvider {
+pub(super) struct ImageProvider {
     executions: Arc<AtomicUsize>,
     agent: ProviderOperationCapabilities,
     refuses: Option<AgentError>,
@@ -175,7 +175,10 @@ struct ImageBackend {
     sender: mpsc::UnboundedSender<ExecutionEvent>,
 }
 impl ImageProvider {
-    fn new(agent: ProviderOperationCapabilities, refuses: Option<AgentError>) -> Arc<Self> {
+    pub(super) fn new(
+        agent: ProviderOperationCapabilities,
+        refuses: Option<AgentError>,
+    ) -> Arc<Self> {
         Arc::new(Self {
             executions: Arc::default(),
             agent,

@@ -16,6 +16,7 @@ use crate::application::agent_execution::providers::{ExecutionReport, ExecutionR
 use crate::domain::agent_execution::{
     executions::{
         ExecutionOutcome, InvocationHistory, InvocationObservation, InvocationStage, QueueMutation,
+        SchedulingCause,
     },
     tools::{McpTool, ToolCallId},
 };
@@ -304,6 +305,14 @@ pub(super) fn validate_observation_context(
     Ok(())
 }
 
+/// The domain-owned settlement decision for one retained valid invocation.
+/// A diagnostic error cannot override a known provider/local outcome here.
+pub(crate) fn invocation_settlement_cause(
+    invocation: &InvocationRecord,
+) -> Result<Option<SchedulingCause>, StorageError> {
+    Ok(invocation_history(invocation)?.settlement_cause())
+}
+
 /// Rebuild history authority from a boundary projection. Live mutations and
 /// restoration use this same entity; the DTO cannot authorize a transition.
 pub(super) fn invocation_history(
@@ -428,7 +437,11 @@ pub(super) fn validate_stop_actor(
     scheduling: Option<&InvocationSchedulingEvent>,
 ) -> Result<(), StorageError> {
     if let (Some(cancellation), Some(scheduling)) = (cancellation, scheduling) {
-        if scheduling.stage == InvocationStage::Cancelled && cancellation.actor != scheduling.actor
+        // NotResumed is a later final decision, rather than the original
+        // physical stop; its caller can differ without rewriting that stop.
+        if scheduling.stage == InvocationStage::Cancelled
+            && scheduling.cause != SchedulingCause::NotResumed
+            && cancellation.actor != scheduling.actor
         {
             return Err(corrupt(
                 "scheduling cancellation names a different invocation stop actor",

@@ -3,7 +3,7 @@ use super::{
     initiator_of, supervised, AgentSlot, ConversationCaller, ConversationService, Inner, StopBy,
 };
 use crate::conversation::application::{
-    environment::confirmed_despite,
+    environment::{confirmed_despite, AgentEnd},
     mcp_apps::McpAppInitiator,
     metadata_target::load_conversation,
     provider_sessions::ProviderSessionHandler,
@@ -462,6 +462,7 @@ impl ConversationService {
                         actor: &actor,
                         ended_by: deleted_by,
                         cause: LeaseEndCause::Closed,
+                        end: AgentEnd::Close,
                     },
                 ) => stopped,
                 () = self.retired() => Err(StopFailure::Failed(AgentError::Closed)),

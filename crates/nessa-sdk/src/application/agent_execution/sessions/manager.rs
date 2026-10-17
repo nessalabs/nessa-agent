@@ -35,7 +35,7 @@ use crate::domain::agent_execution::{
     sessions::SessionId,
 };
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fmt,
     future::poll_fn,
     panic::{catch_unwind, AssertUnwindSafe},
@@ -1044,7 +1044,36 @@ impl SessionManager {
         .await
         .map_err(|_| AgentError::SubmissionUnresolved)?
     }
-    /// Latest locally observed submission, including evidence awaiting persistence.
+    /// Capture committed history and every locally observed identity together.
+    /// Resumption reporting uses the committed frame for its owed-work decision;
+    /// observed identities distinguish an unknown turn from one awaiting save.
+    pub(crate) async fn resumption_evidence(
+        &self,
+    ) -> Option<(Arc<SessionSnapshot>, HashSet<ExecutionId>)> {
+        let evidence = self.evidence.lock().await;
+        let committed = evidence.committed.clone()?;
+        let observed = evidence
+            .observed
+            .iter()
+            .flat_map(|snapshot| &snapshot.invocations)
+            .map(|record| record.request.execution_id.clone())
+            .collect();
+        Some((committed, observed))
+    }
+    /// Read one observed invocation frame under the evidence lock without
+    /// copying its records. The callback owns any projection it retains.
+    pub(crate) async fn with_invocations<T>(
+        &self,
+        read: impl FnOnce(&[InvocationRecord]) -> T,
+    ) -> T {
+        let evidence = self.evidence.lock().await;
+        read(
+            evidence
+                .observed
+                .as_ref()
+                .map_or(&[], |snapshot| snapshot.invocations.as_slice()),
+        )
+    }
     pub(crate) async fn submission(&self, id: &ExecutionId) -> Option<InvocationRecord> {
         self.evidence
             .lock()

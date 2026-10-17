@@ -38,7 +38,7 @@ pub use audit::{
     EffortLevelChangeRecord, ExecutionAudit, ExecutionAuditRecord, LateProviderResultRecord,
     NativeHooksLaunchCause, NativeHooksLaunchRecord, QueueAdmissionRecord, QueueOrderCause,
     QueueOrderRecord, QueueSettlementRecord, SessionClosureRecord, SteeringAcknowledgementRecord,
-    SteeringAuditCause, SteeringAuditStage,
+    SteeringAuditCause, SteeringAuditStage, TurnResumption, TurnResumptionRecord,
 };
 pub use controller::ExecutionController;
 pub use events::{ExecutionEvent, ExecutionUpdate};

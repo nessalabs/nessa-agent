@@ -102,7 +102,7 @@ not taken for an earlier run's.
 | Parent already has it (crash before settle) | Settled, not queued again |
 | Gateway retires before delivery | Stays saved; the next start delivers it |
 | Saved by an earlier run, turn finished | Delivered at start |
-| Saved by an earlier run, turn unfinished | Reported at start: `interrupted` when no result was saved, else that saved result and reply |
+| Saved by an earlier run, turn unfinished | When automatic recovery is bound, wait for the SDK successor chain; otherwise report the interrupted run |
 | Parent's agent cannot open in this run (configuration, placement) | Not retried in this run; stays saved for the next start |
 | Person may no longer view the thread, or it is deleted | Let go, nothing told |
 
@@ -119,10 +119,10 @@ The following delivery interleavings keep the original binding and current autho
 | Final scheduling settlement takes longer than the first settling look window | A later look delivers without another invocation or manual wake | `a_report_follows_settlement_after_the_initial_look_window` |
 | A report is taken; parent is temporarily unavailable; child is deleted before retry | Retry rechecks child authority and releases the durable report without disclosure | `a_taken_report_rechecks_its_deleted_child_before_retrying_delivery` |
 
-No turn the earlier run left unfinished runs again after a restart, so a saved
-report whose turn saved no result is reported `interrupted`;
-`restored_unfinished` owns that decision, and is what changes once interrupted
-turns resume. A thread cannot report to itself. Two agents that keep messaging
+Automatic recovery continues unfinished work through SDK-owned successors.
+Reports follow those successors and keep the original watched request label.
+With no recovery owner bound, `restored_unfinished` describes the interrupted
+run instead. A thread cannot report to itself. Two agents that keep messaging
 each other keep reporting to each other: that is their own conversation, and the
 person stops it as they would any turn. Tests:
 `a_thread_turn_reports_its_outcome_and_reply_back_to_the_sender`,
@@ -289,3 +289,91 @@ owns source admission; the existing Cedar access adapter owns delegation policy;
 `conversation/infrastructure/agent_tool_audit.rs` owns durable delivery. Event
 projection and target admission are shared through the conversation application;
 private record formats stay in SDK infrastructure.
+
+### Reports while automatic recovery is enabled
+
+When unfinished-turn recovery is bound, a report follows the SDK's successor
+chain and keeps the original watched request label. The SDK publishes one
+committed history frame with its owed identities; the server does not independently
+classify which provider failures may retry. An observed admission that has not
+been acknowledged cannot make a committed failed turn look final. A saved report
+with no committed or observed original invocation after restart still reports
+interruption: registration preceded admission and there is no admitted turn to
+resume. A missing committed invocation that is observed locally waits.
+
+| Ordering | Result | Regression |
+| --- | --- | --- |
+| Startup captures a mark, then a turn finishes and clears it before that snapshot returns | Each fresh submission acknowledges the existing idempotent durable mark before admission. A stale in-memory entry cannot stand in for durable evidence | `a_startup_snapshot_cannot_make_a_fresh_send_skip_its_durable_mark` |
+| Startup captures an undated unfinished mark; the running turn then fails and saves a future retry before that startup snapshot is installed | Retain the newer in-process failure count and due time, including when admission renews its durable marker; the startup sweep admits no successor before that deadline, and saved retry metadata is unchanged | `a_startup_snapshot_preserves_a_newer_failure_count_and_retry_due_time` |
+| A committed result survives without its final scheduling edge | Consume the SDK's finality query after resolving injection and successor ownership; report provenance does not establish whether an execution is live | `a_restored_completed_result_without_its_last_edge_is_reportable` |
+| Public unfinished-turn sweep loses its caller while an already-open Drive successor waits before its input save | The owned resume keeps the actual grant revision hold through admission, then installs the receipt watcher and clears the durable mark after settlement | `an_already_open_resumption_keeps_its_grant_hold_and_watcher_after_caller_loss` |
+| That caller is lost, then the successor input save fails | The owned host operation persists a failure count and due retry time, rather than leaving an undated mark stranded until restart | `an_already_open_resumption_schedules_retry_after_caller_loss_and_save_failure` |
+| A failure deferral has saved its future due time, but its caller has not published that fact in the cache; startup reads that saved row | Startup does not schedule or admit a successor before the saved due time, and the acknowledged retry remains saved | `a_startup_scan_respects_a_retry_saved_before_its_cache_update` |
+| Report recovery runs before unfinished-turn recovery | Keep the original report pending while the successor runs; report its final committed result once | `reports_loaded_before_unfinished_turns_wait_for_the_resumed_child` |
+| Unfinished-turn recovery runs before report recovery | Same original report identity and eventual final result | `unfinished_turns_loaded_before_reports_report_the_resumed_child_once` |
+| Successor is observed but its save is not acknowledged | The original cannot be reported final from an older committed frame | `an_unacknowledged_successor_does_not_end_the_committed_roots_work` |
+| SDK close and the lease adapter both fail to save retained evidence through the same session writer | Return the first typed storage failure with its actual physical cleanup result; log a later write failure without nesting evidence failure in the physical-result field. Retained facts await a later acknowledged save. Confirmed cleanup releases the slot; uncertain cleanup keeps it | `l5_a_desktop_stop_whose_cleanup_record_cannot_be_saved_says_so_and_the_conversation_opens_again`; `l7_l8_a_failed_cleanup_whose_records_cannot_be_saved_answers_both_and_keeps_its_cause`; `a_lease_save_keeps_the_first_storage_failure_and_confirmed_cleanup` (later `Busy` differs from first `Io`) |
+
+
+### Retry catalogue ownership
+
+The startup scan discovers candidates. Its saved failure count and deadline may
+already be old when it returns, so they do not initialize or override the live
+schedule. One short per-conversation marker-update lock owns each durable
+mark, exact read, deferral or clear through its cache publication. Startup reads a
+current mark only when that schedule has no entry. A missing row is skipped.
+Ordinary admission acknowledges its mark and receives the exact saved metadata
+from the same transaction; it initializes a missing live entry from that reply.
+An existing entry owns this process's later decisions, including a deadline the
+retry worker already consumed. Both admission and startup wake the retry loop
+when they install scheduling information. Final close attempts the durable clear
+even before startup has initialized the cache: cache absence is not durable
+absence. The marker lock is acquired inside these helpers, so cleanup uses the
+same ordering whether its caller retains a submission guard or has released it.
+
+When both are needed, submission ordering precedes marker ordering. No marker
+operation acquires the submission lock or waits for provider work, opening or
+receipt watching. A stopped slot remains fenced until final clear finishes. This
+avoids threading borrowed or detached submission guards through physical close.
+The retry worker consumes published deadlines under the existing cache mutex;
+an already-selected attempt may still look, and the SDK decides what remains
+owed. This is not cancellation of already-selected host attempts. A failed
+clear keeps its cached state and logs the existing failure; SDK finality still
+ends the work, as `a_persons_close_after_failure_stays_final_when_clearing_its_mark_fails`
+checks. A crash after saved SDK finality but before marker clear can leave an
+extra recovery look; marker metadata does not authorize reviving closed work.
+
+This replaces snapshot merging; it adds no Unknown state, generation, retry
+expiry, or second scheduler. The existing SDK scheduler remains the owner that
+reselects owed work and admits a successor. Startup and the due worker may both
+look at one conversation, but that does not authorize two successors. An exact
+mark read costs one indexed lookup for a previously unknown candidate; ordinary
+mark acknowledgement adds an indexed read in its existing write transaction.
+Discovery scans the marked rows, with the existing bound on concurrent
+openings. The retry loop still scans its catalogue when woken; many new future
+deadlines can cause repeated scans. The hash table can retain its peak allocation
+after entries clear. The added lock registry keeps live locks while an update
+has holders or waiters and removes dead weak entries on the next acquisition.
+Its map can retain its peak allocation, and acquisition scans its entries. It
+introduces no per-history generation map.
+Marks without a deadline and already-known startup entries
+do not add wakeups.
+
+| Ordering | Result | Regression |
+| --- | --- | --- |
+| A rejected conflicting command acknowledges a durable future retry before startup returns | Keep the actual saved count and due time, wake the retry loop, and run the successor at its deadline | `a_conflicting_retry_before_startup_preserves_the_saved_future_retry` |
+| Startup captured a future retry, then explicit close clears the mark | A current exact read sees absence; no old deadline or failure count returns to the live catalogue | `a_cleared_future_retry_is_not_reinstalled_by_a_startup_snapshot` |
+| A conflicting command acknowledges restored undated owed work before startup returns | The current undated entry remains eligible; startup carries the work on | `an_undated_conflicting_retry_before_startup_still_resumes_the_saved_work` |
+| The retry worker consumed a due deadline before ordinary mark acknowledgement | Keep that consumed schedule; acknowledging the saved row does not reinstall its old deadline | `an_acknowledged_mark_preserves_a_retry_deadline_already_claimed_by_the_worker` |
+| The retry loop is already waiting with an empty catalogue when a conflicting command acknowledges a saved due retry | That acknowledgement wakes the registered owner without relying on startup | `a_conflicting_mark_wakes_the_idle_retry_owner_without_a_startup_sweep` |
+| Startup installs a future deadline while the retry loop already waits with an empty catalogue | Wake that owner; it dispatches at the saved deadline without another mark or scan | `a_startup_future_mark_wakes_an_already_idle_retry_owner` |
+| A recovery opening fails, saves deferral, and pauses before publishing its cache deadline | The same marker-update owner keeps a second startup scan behind publication; no early successor is admitted | `a_failed_recovery_opening_keeps_startup_behind_its_defer_publication` |
+| A final close runs before startup initializes its cache; later independent work fails | Clear the actual saved row, so the later failure starts its own count and deadline; SDK finality still ends the old work | `a_final_close_before_startup_clears_the_saved_future_retry` |
+| Desktop Stop releases submission ordering for physical close; startup has captured an exact row but not returned it | Order the complete read/publication before final clear, or observe absence after clear; both durable and cached retry metadata are absent when the owners join | `a_desktop_stop_cannot_leave_a_late_exact_read_cached_after_final_clear` |
+| A changed retry of a known execution acknowledges its saved mark while desktop Stop closes | Keep the SDK SubmissionConflict; final clear follows that acknowledgement and cache publication before releasing the stopped slot | `a_desktop_stop_clears_a_conflicting_commands_mark_before_releasing_its_slot` |
+| A saved mark has damaged retry metadata | Exact read and mark acknowledgement refuse it; no default deadline, failure count, or admission is invented | `exact_unfinished_mark_reads_and_acknowledgements_refuse_corrupt_retry_cells` |
+| A mark has gone or belongs to another conversation | Exact read creates no row and keeps IDs separate, including after reopen | `an_exact_unfinished_mark_read_is_noncreating_and_keeps_conversations_separate` |
+
+Without a bound automatic-recovery owner, the existing interrupted-turn report
+still describes the terminal outcome of that run. The recovery owner, rather
+than a second report policy, decides whether continuation is enabled.

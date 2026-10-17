@@ -38,7 +38,7 @@ use std::{
     task::Poll,
 };
 use tokio::{
-    sync::watch,
+    sync::{watch, MutexGuard},
     time::{sleep, sleep_until, Instant},
 };
 
@@ -216,6 +216,15 @@ pub enum QueueRemoval {
     NotPending,
 }
 
+/// Whether a close ends the work it stops, or leaves it owed for the next start.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum CloseMode {
+    /// A person or the host ended this agent's work.
+    Final,
+    /// The host stopped for its own shutdown; stopped work is resumed later.
+    Suspend,
+}
+
 pub(super) struct Scheduler {
     queue: InvocationQueue,
     pending: HashMap<ExecutionId, Pending>,
@@ -251,11 +260,15 @@ impl Scheduler {
     // `cancel_pending`, which collects owners whether or not they are queued.
     // Both orderings are rows of the table in
     // docs/agent_execution/scheduling.md, each with its test.
-    fn has_no_work(&self) -> bool {
+    pub(super) fn has_no_work(&self) -> bool {
         self.queue.is_empty() && self.pending.is_empty()
     }
     pub(super) fn is_idle(&self) -> bool {
         !self.running && self.queue.is_empty()
+    }
+    /// Whether this Agent admitted `id` itself, so it owns its receipt.
+    pub(super) fn has_receipt(&self, id: &ExecutionId) -> bool {
+        self.receipts.contains_key(id)
     }
     pub(super) fn new() -> Self {
         Self {
@@ -391,11 +404,13 @@ impl Agent {
     /// most 64 inputs may wait; a full queue returns a Scheduling error. Retrying
     /// the same execution ID, input, submitter, and operation joins its original receipt,
     /// even after settlement. Changed intent returns SubmissionConflict. Restored
-    /// unresolved delivery returns SubmissionUnresolved without resending it.
+    /// unresolved delivery returns SubmissionUnresolved without resending it;
+    /// one the host resumed ([`Self::resume_turn`]) answers as its successor.
     /// WorkStatus is supervised once polled, including while saving input.
     /// Validation/storage errors prevent admission. Each dispatched input runs the
     /// normal invocation hooks. Dropping the returned receipt does not cancel it.
-    /// Queued work is retained but is never automatically replayed after restart.
+    /// Queued work is retained but is never replayed by itself after restart:
+    /// the host asks [`Self::owed_turns`] and decides what to resume.
     ///
     /// # Examples
     /// ```
@@ -836,7 +851,7 @@ impl Agent {
         .map_err(|_| AgentError::SubmissionUnresolved)?
     }
 
-    async fn accept_work(
+    pub(super) async fn accept_work(
         &self,
         input: ExecutionRequest,
         submitter: Submitter,
@@ -844,7 +859,21 @@ impl Agent {
         candidates: NoteCandidates,
     ) -> Result<QueueAdmission, AgentError> {
         validate_configured_input(self.capabilities(), &input)?;
-        let mut scheduler = self.inner.scheduler.lock().await;
+        let scheduler = self.inner.scheduler.lock().await;
+        self.accept_work_locked(input, submitter, kind, candidates, scheduler)
+            .await
+    }
+
+    /// Admit an already validated request while its caller retains the
+    /// scheduler from selection through admission.
+    pub(super) async fn accept_work_locked(
+        &self,
+        input: ExecutionRequest,
+        submitter: Submitter,
+        kind: InvocationKind,
+        candidates: NoteCandidates,
+        mut scheduler: MutexGuard<'_, Scheduler>,
+    ) -> Result<QueueAdmission, AgentError> {
         let mode = match kind {
             InvocationKind::Queued => SubmissionMode::Queued,
             InvocationKind::Steering => SubmissionMode::BoundarySteering,
@@ -1315,6 +1344,15 @@ impl Agent {
         result
     }
 
+    pub(super) async fn record_resumption_audit(
+        &self,
+        record: ExecutionAuditRecord,
+    ) -> Result<(), AgentError> {
+        self.record_scheduling_audit(record, "turn_resumption")
+            .await
+            .map_err(AuditObservationFailure::into_agent_error)
+    }
+
     // Only observe the sink here. The adapter owns physical I/O it has started,
     // including after this bounded observer is dropped; do not grow a detached
     // task queue to keep arbitrary pending sink futures alive.
@@ -1341,7 +1379,7 @@ impl Agent {
             None
         };
         let cause = if actor.is_some() {
-            SchedulingCause::SessionClosed
+            self.inner.lifecycle.caller_close_cause()
         } else {
             SchedulingCause::RunnerStopped
         };
@@ -1981,7 +2019,7 @@ impl Agent {
             None
         };
         let cause = if actor.is_some() {
-            SchedulingCause::SessionClosed
+            self.inner.lifecycle.caller_close_cause()
         } else {
             SchedulingCause::RunnerStopped
         };
@@ -2277,6 +2315,7 @@ impl Agent {
                                         SchedulingCause::SessionClosed => {
                                             QueueRemovalCause::SessionClosed
                                         }
+                                        SchedulingCause::Suspended => QueueRemovalCause::Suspended,
                                         _ => QueueRemovalCause::RunnerStopped,
                                     },
                                 }),
@@ -2409,17 +2448,23 @@ impl Agent {
     pub(super) async fn close_scheduled(
         &self,
         actor: ActionContext,
+        mode: CloseMode,
     ) -> Result<CloseOutcome, AgentError> {
         let agent = self.clone();
         let waiter = CallerWaiter::Close(self.inner.manager.id().clone());
         contain_caller_wake(
             waiter,
             tokio::spawn(async move {
-                let attempt = agent.start_shutdown(SessionCloseRequest::Explicit(actor));
+                let closing_actor = actor.clone();
+                let attempt = match mode {
+                    CloseMode::Final => agent.start_shutdown(SessionCloseRequest::Explicit(actor)),
+                    CloseMode::Suspend => agent.inner.lifecycle.start_suspend(actor),
+                };
                 let (cause, actor) = match &attempt.request {
-                    SessionCloseRequest::Explicit(actor) => {
-                        (SchedulingCause::SessionClosed, Some(actor.clone()))
-                    }
+                    SessionCloseRequest::Explicit(actor) => (
+                        agent.inner.lifecycle.caller_close_cause(),
+                        Some(actor.clone()),
+                    ),
                     _ => (SchedulingCause::RunnerStopped, None),
                 };
                 let mut scheduler = agent.inner.scheduler.lock().await;
@@ -2430,11 +2475,50 @@ impl Agent {
                 agent.inner.lifecycle.wait_for_work().await;
                 let cleanup = agent.inner.lifecycle.complete_stop(&attempt).await;
                 let cleanup = cleanup.into_result();
-                match saved {
+                let result = match saved {
                     Ok(()) => cleanup,
                     Err(AgentError::Storage(error)) => Err(AgentError::StorageDuringClose {
                         error,
                         cleanup_result: Box::new(cleanup),
+                    }),
+                    Err(error) => Err(error),
+                };
+                if mode == CloseMode::Suspend {
+                    return result;
+                }
+                // An earlier failure remains the answer. Do not reinterpret
+                // that operation error as the cleanup result of another save.
+                // A later close retries retained evidence before acknowledging.
+                let outcome = result?;
+                // Physical cleanup is already observed. A final close also
+                // ends failed work that was waiting to retry: the gateway's
+                // mark is only an index and may survive a failed removal.
+                // Flush an earlier unacknowledged decision before deciding
+                // what remains, so a repeated close can acknowledge finality.
+                let finality = agent
+                    .catch_scheduling_panic(async {
+                        agent
+                            .inner
+                            .manager
+                            .flush_observed()
+                            .await
+                            .map_err(AgentError::Storage)?;
+                        for turn in agent.owed_turns().await {
+                            agent.decline_owed(turn, closing_actor.clone()).await?;
+                        }
+                        Ok::<(), AgentError>(())
+                    })
+                    .await
+                    .unwrap_or_else(|()| {
+                        Err(AgentError::Storage(StorageError::Io(
+                            "final close evidence persistence panicked".into(),
+                        )))
+                    });
+                match finality {
+                    Ok(()) => Ok(outcome),
+                    Err(AgentError::Storage(error)) => Err(AgentError::StorageDuringClose {
+                        error,
+                        cleanup_result: Box::new(Ok(outcome)),
                     }),
                     Err(error) => Err(error),
                 }

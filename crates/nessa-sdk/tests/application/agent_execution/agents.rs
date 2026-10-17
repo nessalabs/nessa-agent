@@ -34,9 +34,11 @@ struct SavedState {
     snapshot: Option<SessionSnapshot>,
     writes: usize,
     fail_write: Option<usize>,
+    fail_writes: bool,
     fail_queue: Option<QueueMutation>,
     panic_queue: Option<QueueMutation>,
     fail_scheduling: Option<(String, InvocationStage)>,
+    fail_scheduling_cause: Option<(String, SchedulingCause)>,
     fail_observation: Option<String>,
     fail_settlement: Option<String>,
     panic_provider_settlement: Option<bool>,
@@ -249,6 +251,22 @@ impl SessionStorageLease for MemoryStore {
             if fail_scheduling {
                 state.fail_scheduling = None;
             }
+            let fail_scheduling_cause =
+                state
+                    .fail_scheduling_cause
+                    .as_ref()
+                    .is_some_and(|(id, cause)| {
+                        snapshot.invocations.iter().any(|record| {
+                            record.request.execution_id.as_str() == id
+                                && record
+                                    .scheduling
+                                    .last()
+                                    .is_some_and(|event| event.cause == *cause)
+                        })
+                    });
+            if fail_scheduling_cause {
+                state.fail_scheduling_cause = None;
+            }
             let fail_observation = state.fail_observation.as_ref().is_some_and(|id| {
                 snapshot.invocations.iter().any(|record| {
                     record.request.execution_id.as_str() == id && !record.events.is_empty()
@@ -265,9 +283,11 @@ impl SessionStorageLease for MemoryStore {
             if fail_settlement {
                 state.fail_settlement = None;
             }
-            if fail_queue
+            if state.fail_writes
+                || fail_queue
                 || state.fail_write == Some(state.writes)
                 || fail_scheduling
+                || fail_scheduling_cause
                 || fail_observation
                 || fail_settlement
             {
@@ -441,6 +461,13 @@ impl MemoryStorage {
     }
     pub(super) fn fail_scheduling(&self, id: &str, stage: InvocationStage) {
         self.0.lock().unwrap().fail_scheduling = Some((id.into(), stage));
+    }
+    /// Refuse one save whose named invocation's last scheduling edge has this cause.
+    pub(super) fn fail_scheduling_cause(&self, id: &str, cause: SchedulingCause) {
+        self.0.lock().unwrap().fail_scheduling_cause = Some((id.into(), cause));
+    }
+    pub(super) fn fail_writes(&self, fail: bool) {
+        self.0.lock().unwrap().fail_writes = fail;
     }
     pub(super) fn fail_next(&self) {
         let mut state = self.0.lock().unwrap();

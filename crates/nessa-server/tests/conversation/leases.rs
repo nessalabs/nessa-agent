@@ -48,7 +48,7 @@ use nessa_sdk::application::agent_execution::{
     agents::AgentError,
     executions::ExecutionUpdate,
     permissions::ActionContext,
-    providers::AgentProvider,
+    providers::{AgentProvider, CloseOutcome},
     sessions::{
         CommittedSession, CurrentLease, LeaseRecord, SessionChange, SessionLoad,
         SessionSaveGeneration, SessionSaveReceipt, SessionSaveUnit, SessionSnapshot,
@@ -176,12 +176,21 @@ pub(super) type FailingRecords = Arc<Mutex<Option<fn(&LeaseRecord) -> bool>>>;
 /// holding a record `stall_once` names, as a disk that hangs would.
 /// A save of accepted input, paused after it is entered and before it is
 /// written, until the second notify.
-type InputStall = Arc<Mutex<Option<(Arc<Notify>, Arc<Notify>)>>>;
+type InputStall = Arc<Mutex<Option<InputSaveStall>>>;
+struct InputSaveStall {
+    entered: Arc<Notify>,
+    release: Arc<Notify>,
+    failure: Option<(StorageError, Arc<AtomicBool>)>,
+}
+
+/// A distinct late cleanup-save error, and how many refusals returned it.
+type CleanupSaveFault = Arc<Mutex<Option<(StorageError, usize)>>>;
 
 struct Records {
     inner: RecordStorage,
     fail_issue: Arc<AtomicBool>,
     failing: FailingRecords,
+    cleanup_save_fault: CleanupSaveFault,
     stall_once: FailingRecords,
     stall_input: InputStall,
     /// Every lease record handed to a save, in order.
@@ -201,6 +210,7 @@ impl SessionStorage for Records {
     fn open(&self, id: SessionId) -> StorageFuture<'_, Box<dyn SessionStorageLease>> {
         let fail_issue = self.fail_issue.clone();
         let failing = self.failing.clone();
+        let cleanup_save_fault = self.cleanup_save_fault.clone();
         let stall_once = self.stall_once.clone();
         let stall_input = self.stall_input.clone();
         let saved = self.saved.clone();
@@ -211,6 +221,7 @@ impl SessionStorage for Records {
                 inner,
                 fail_issue,
                 failing,
+                cleanup_save_fault,
                 stall_once,
                 stall_input,
                 saved,
@@ -224,6 +235,7 @@ impl SessionStorage for Records {
     ) -> StorageFuture<'_, Option<Box<dyn SessionStorageLease>>> {
         let fail_issue = self.fail_issue.clone();
         let failing = self.failing.clone();
+        let cleanup_save_fault = self.cleanup_save_fault.clone();
         let stall_once = self.stall_once.clone();
         let stall_input = self.stall_input.clone();
         let saved = self.saved.clone();
@@ -234,6 +246,7 @@ impl SessionStorage for Records {
                     inner,
                     fail_issue,
                     failing,
+                    cleanup_save_fault,
                     stall_once,
                     stall_input,
                     saved,
@@ -247,6 +260,7 @@ pub(super) struct RecordsLease {
     inner: Box<dyn SessionStorageLease>,
     fail_issue: Arc<AtomicBool>,
     failing: FailingRecords,
+    cleanup_save_fault: CleanupSaveFault,
     stall_once: FailingRecords,
     stall_input: InputStall,
     saved: SavedRecords,
@@ -260,6 +274,7 @@ impl RecordsLease {
             inner,
             fail_issue: Arc::new(AtomicBool::new(false)),
             failing,
+            cleanup_save_fault: CleanupSaveFault::default(),
             stall_once: FailingRecords::default(),
             stall_input: InputStall::default(),
             saved: SavedRecords::default(),
@@ -310,7 +325,29 @@ impl SessionStorageLease for RecordsLease {
             return Box::pin(std::future::pending());
         }
         if refused || (issues && self.fail_issue.swap(false, Ordering::SeqCst)) {
-            return Box::pin(async { Err(StorageError::Io("the disk went away".into())) });
+            let mut error = StorageError::Io("the disk went away".into());
+            let cleanup = units
+                .iter()
+                .flat_map(SessionSaveUnit::changes)
+                .any(|change| {
+                    matches!(
+                        change,
+                        SessionChange::Lease(
+                            LeaseRecord::Ended { .. }
+                                | LeaseRecord::Interrupted { .. }
+                                | LeaseRecord::CleanupReported { .. }
+                        )
+                    )
+                });
+            if refused && cleanup {
+                if let Some((configured, observed)) =
+                    self.cleanup_save_fault.lock().unwrap().as_mut()
+                {
+                    *observed += 1;
+                    error = configured.clone();
+                }
+            }
+            return Box::pin(async move { Err(error) });
         }
         self.saved.lock().unwrap().extend(
             units
@@ -339,10 +376,19 @@ impl SessionStorageLease for RecordsLease {
         // release, so a grant change can be shown waiting on the admission
         // hold while this save has not committed.
         let save = self.inner.save_changes(binding, snapshot, units);
-        if let Some((entered, release)) = input_stall {
+        if let Some(InputSaveStall {
+            entered,
+            release,
+            failure,
+        }) = input_stall
+        {
             Box::pin(async move {
                 entered.notify_one();
                 release.notified().await;
+                if let Some((error, returned)) = failure {
+                    returned.store(true, Ordering::SeqCst);
+                    return Err(error);
+                }
                 save.await
             })
         } else {
@@ -420,6 +466,7 @@ fn harness_working_in(
         inner: RecordStorage::new(root.join("sessions")).unwrap(),
         fail_issue: Arc::new(AtomicBool::new(false)),
         failing: Arc::new(Mutex::new(None)),
+        cleanup_save_fault: CleanupSaveFault::default(),
         stall_once: Arc::new(Mutex::new(None)),
         stall_input: InputStall::default(),
         saved: SavedRecords::default(),
@@ -1254,6 +1301,55 @@ async fn opens_again_and_accounts_for_the_lease(harness: &Harness, substitute: &
     let lease = harness.lease().await;
     assert_eq!(lease.revision(), Some(LeaseRevision::new(2).unwrap()));
     assert_eq!(kinds(&lease), ["issued", "ending", "ended"]);
+}
+
+/// The SDK's failed evidence flush and the lease adapter's later failed
+/// save share one canonical writer, while physical cleanup is already known.
+#[tokio::test]
+async fn a_lease_save_keeps_the_first_storage_failure_and_confirmed_cleanup() {
+    let root = tempfile::tempdir().unwrap();
+    let (harness, substitute) = with_cleanup_records_failing(root.path(), |record| {
+        matches!(
+            record,
+            LeaseRecord::Ending { .. }
+                | LeaseRecord::Interrupted { .. }
+                | LeaseRecord::Ended { .. }
+                | LeaseRecord::CleanupReported { .. }
+        )
+    })
+    .await;
+    *harness.storage.cleanup_save_fault.lock().unwrap() = Some((StorageError::Busy, 0));
+    let failed = harness
+        .service
+        .close(harness.id.clone(), caller("close"))
+        .await
+        .unwrap_err();
+    let busy_refusals = harness
+        .storage
+        .cleanup_save_fault
+        .lock()
+        .unwrap()
+        .as_ref()
+        .unwrap()
+        .1;
+    *harness.storage.cleanup_save_fault.lock().unwrap() = None;
+    opens_again_and_accounts_for_the_lease(&harness, &substitute).await;
+    let ConversationError::Agent(AgentError::StorageDuringClose {
+        error,
+        cleanup_result,
+    }) = failed
+    else {
+        panic!("the close must preserve a storage failure and its physical cleanup separately");
+    };
+    assert!(
+        matches!(error, StorageError::Io(message) if message == "the disk went away"),
+        "the initial SDK evidence error must not be replaced by the later Busy refusal"
+    );
+    assert_eq!(*cleanup_result, Ok(CloseOutcome { forced: false }));
+    assert!(
+        busy_refusals > 0,
+        "the late lease-save Busy failure was actually returned"
+    );
 }
 
 #[tokio::test]
@@ -6134,6 +6230,62 @@ impl super::ShareGrants for PausingGrants {
     }
 }
 
+/// Count the lifetime of the real store's revision permit, without replacing it.
+struct CountedRevisionGrants {
+    inner: Arc<LocalConversationStore>,
+    held: Arc<AtomicUsize>,
+}
+struct HeldRevisionCounter(Arc<AtomicUsize>);
+impl Drop for HeldRevisionCounter {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+impl super::ShareGrants for CountedRevisionGrants {
+    fn held_grant<'a>(
+        &'a self,
+        id: &'a ConversationId,
+        receiver: &'a str,
+    ) -> super::ConversationFuture<'a, Option<super::HeldGrant>> {
+        self.inner.held_grant(id, receiver)
+    }
+    fn change(
+        &self,
+        change: super::ShareGrantChange,
+    ) -> super::ConversationFuture<'_, crate::conversation::application::ShareGrantReceipt> {
+        self.inner.change(change)
+    }
+    fn grants<'a>(
+        &'a self,
+        id: &'a ConversationId,
+    ) -> super::ConversationFuture<'a, super::ShareGrantList> {
+        self.inner.grants(id)
+    }
+    fn policy_at<'a>(
+        &'a self,
+        id: &'a ConversationId,
+        receiver: &'a str,
+        revision: u64,
+    ) -> super::ConversationFuture<'a, Option<crate::conversation::domain::ToolPolicy>> {
+        self.inner.policy_at(id, receiver, revision)
+    }
+    fn hold_revision<'a>(
+        &'a self,
+        id: &'a ConversationId,
+        receiver: &'a str,
+        revision: u64,
+    ) -> super::ConversationFuture<'a, super::RevisionHold> {
+        Box::pin(async move {
+            let hold = self.inner.hold_revision(id, receiver, revision).await?;
+            self.held.fetch_add(1, Ordering::SeqCst);
+            Ok(super::RevisionHold::held((
+                hold,
+                HeldRevisionCounter(self.held.clone()),
+            )))
+        })
+    }
+}
+
 fn bind_live_grants(harness: &Harness, grants: Arc<dyn super::ShareGrants>) {
     harness.service.bind_drive_tools(super::DriveTools {
         grants,
@@ -6747,8 +6899,11 @@ async fn a_grant_change_waits_until_the_turn_is_saved() {
     harness.create().await;
     let revision = grant_drive(&harness, "phone").await;
     let (entered, release) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
-    *harness.storage.stall_input.lock().unwrap() =
-        Some((Arc::clone(&entered), Arc::clone(&release)));
+    *harness.storage.stall_input.lock().unwrap() = Some(InputSaveStall {
+        entered: Arc::clone(&entered),
+        release: Arc::clone(&release),
+        failure: None,
+    });
     let service = harness.service.clone();
     let id = harness.id.clone();
     let sent = tokio::spawn(async move {
@@ -6866,8 +7021,11 @@ async fn a_stalled_save_on_one_conversation_does_not_block_another() {
         .expect("the other grant")
         .policy_revision;
     let (entered, release) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
-    *harness.storage.stall_input.lock().unwrap() =
-        Some((Arc::clone(&entered), Arc::clone(&release)));
+    *harness.storage.stall_input.lock().unwrap() = Some(InputSaveStall {
+        entered: Arc::clone(&entered),
+        release: Arc::clone(&release),
+        failure: None,
+    });
     let service = harness.service.clone();
     let id = harness.id.clone();
     let stalled = tokio::spawn(async move {
@@ -6988,4 +7146,188 @@ async fn a_saved_drive_turn_is_retried_after_its_grant_is_revoked() {
         .filter(|turn| turn.request.execution_id.as_str() == "driven")
         .collect();
     assert_eq!(driven.len(), 1);
+}
+
+/// A public sweep's caller does not own a resumed Drive admission or its watcher.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_already_open_resumption_keeps_its_grant_hold_and_watcher_after_caller_loss() {
+    resumption_after_caller_loss(false).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_already_open_resumption_schedules_retry_after_caller_loss_and_save_failure() {
+    resumption_after_caller_loss(true).await;
+}
+
+async fn resumption_after_caller_loss(fail_save: bool) {
+    use crate::conversation::application::{FailureBackoff, UnfinishedTurns};
+    use nessa_sdk::application::agent_execution::providers::{
+        CleanupReport, ExecutionReport, ProviderExecutionReply,
+    };
+    use nessa_sdk::domain::agent_execution::executions::ExecutionOutcome;
+    let root = tempfile::tempdir().unwrap();
+    let first = in_process(root.path(), DELETION_BUDGETS.stop);
+    first
+        .service
+        .bind_unfinished_turns(first.metadata.clone(), FailureBackoff::default());
+    bind_live_grants(&first, first.metadata.clone());
+    first.create().await;
+    let revision = grant_drive(&first, "phone").await;
+    *first.provider.execution_updates.lock().unwrap() =
+        vec![ExecutionUpdate::Finished(ExecutionOutcome::Cancelled)];
+    *first.provider.execution_reply.lock().unwrap() = Some(ProviderExecutionReply::Finished(
+        ExecutionReport::cancelled_locally(CleanupReport::confirmed(CloseOutcome {
+            forced: false,
+        })),
+    ));
+    let running = first
+        .running_drive_turn("driven-before-restart", "phone", revision)
+        .await;
+    let stopping = {
+        let service = first.service.clone();
+        tokio::spawn(async move { service.shutdown().await })
+    };
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while first.provider.close_calls.load(Ordering::SeqCst) == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("shutdown enters the provider close");
+    running.send(()).unwrap();
+    stopping.await.unwrap().unwrap();
+    assert_eq!(first.metadata.marked().await.unwrap().len(), 1);
+    drop(first);
+
+    let second = in_process(root.path(), DELETION_BUDGETS.stop);
+    second
+        .service
+        .bind_unfinished_turns(second.metadata.clone(), FailureBackoff::default());
+    let held = Arc::new(AtomicUsize::new(0));
+    bind_live_grants(
+        &second,
+        Arc::new(CountedRevisionGrants {
+            inner: second.metadata.clone(),
+            held: held.clone(),
+        }),
+    );
+    // Opening sees no in-memory marks. Wait for that opening owner to leave,
+    // so only the public sweep below can decide the persisted owed turn.
+    second
+        .service
+        .read(second.id.clone(), caller("open-before-sweep"))
+        .await
+        .unwrap();
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        second
+            .service
+            .await_opening_finished_for_test(&second.id, &caller("join-opening")),
+    )
+    .await
+    .expect("the initial opening owner finishes before the marks load")
+    .unwrap();
+    assert_eq!(second.provider.messages.lock().unwrap().len(), 0);
+    let (entered, release) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
+    let save_failed = Arc::new(AtomicBool::new(false));
+    *second.storage.stall_input.lock().unwrap() = Some(InputSaveStall {
+        entered: entered.clone(),
+        release: release.clone(),
+        failure: fail_save.then(|| {
+            (
+                StorageError::Io("successor save failed after caller loss".into()),
+                save_failed.clone(),
+            )
+        }),
+    });
+    let release_on_exit = ReleaseWhenDropped(release);
+    let (finish, gate) = oneshot::channel();
+    *second.provider.execution_gate.lock().unwrap() = Some(gate);
+    let sweep = {
+        let service = second.service.clone();
+        tokio::spawn(async move { service.resume_unfinished().await })
+    };
+    tokio::time::timeout(Duration::from_secs(10), entered.notified())
+        .await
+        .expect("the successor waits before its accepted input commits");
+    assert_eq!(held.load(Ordering::SeqCst), 1);
+    sweep.abort();
+    assert!(sweep.await.unwrap_err().is_cancelled());
+    assert_eq!(
+        held.load(Ordering::SeqCst),
+        1,
+        "caller loss must not release the real grant permit before successor admission"
+    );
+    if fail_save {
+        drop(release_on_exit);
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while !save_failed.load(Ordering::SeqCst) || held.load(Ordering::SeqCst) != 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the injected save failure returns and releases the actual grant hold");
+        assert!(save_failed.load(Ordering::SeqCst));
+        assert_eq!(held.load(Ordering::SeqCst), 0);
+        // Retry persistence is a liveness checkpoint. The bound only limits
+        // a stranded continuation; the assertion reports the actual SQL row.
+        let _progress = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                let marked = second.metadata.marked().await.unwrap();
+                if marked.iter().any(|mark| {
+                    mark.conversation_id == second.id
+                        && mark.failures == 1
+                        && mark.retry_at_ms.is_some()
+                }) {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        let marked = second.metadata.marked().await.unwrap();
+        let mark = marked
+            .iter()
+            .find(|mark| mark.conversation_id == second.id)
+            .expect("the failed successor retains its durable unfinished mark");
+        assert_eq!(
+            mark.failures, 1,
+            "the owned host continuation must count the failed admission"
+        );
+        assert!(
+            mark.retry_at_ms.is_some(),
+            "the failed admission must have a due retry time"
+        );
+        assert_eq!(second.provider.messages.lock().unwrap().len(), 0);
+        drop(finish);
+        second.service.shutdown().await.unwrap();
+        return;
+    }
+    let revoke = {
+        let metadata = second.metadata.clone();
+        let id = second.id.clone();
+        tokio::spawn(async move { revoke_drive(&metadata, &id, "phone").await })
+    };
+    drop(release_on_exit);
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        second.provider.execution_started.notified(),
+    )
+    .await
+    .expect("the admitted successor runs");
+    assert!(tokio::time::timeout(Duration::from_secs(10), revoke)
+        .await
+        .unwrap()
+        .unwrap());
+    assert_eq!(held.load(Ordering::SeqCst), 0);
+    assert_eq!(second.provider.messages.lock().unwrap().len(), 1);
+    finish.send(()).unwrap();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !second.metadata.marked().await.unwrap().is_empty() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the retained receipt watcher clears the settled successor's mark");
+    second.service.shutdown().await.unwrap();
 }
