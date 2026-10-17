@@ -121,8 +121,8 @@ impl RecordReadSource for GatedRead {
                 }
                 ("timeout-head", Some(1)) => std::future::pending::<()>().await,
                 // A cold first head read, as a loaded gateway answers it
-                // (row W17); the next head read succeeds.
-                ("preparing-head", Some(1)) => {
+                // (row W17); eight retained work slices precede readiness.
+                ("preparing-head", Some(1..=8)) => {
                     eprintln!(
                         "record fixture injected {:?}",
                         RecordReadError::SourcePreparing

@@ -152,6 +152,15 @@ pub trait WatchCatalogue: Send + Sync {
         organization: &OrganizationId,
         owner: &PrincipalId,
     ) -> Result<CatalogueChangeWatch, CatalogueWatchError>;
+
+    /// Register a paired receiver's head changes. The receiver comes from
+    /// admitted read authority; this source neither grants nor widens access.
+    fn watch_reader(
+        &self,
+        organization: &OrganizationId,
+        owner: &PrincipalId,
+        receiver: &str,
+    ) -> Result<CatalogueChangeWatch, CatalogueWatchError>;
 }
 
 #[cfg(test)]

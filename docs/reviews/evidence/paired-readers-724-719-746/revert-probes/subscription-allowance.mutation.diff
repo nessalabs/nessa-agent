@@ -1,0 +1,11 @@
+--- crates/nessa-server/src/product/state.rs
++++ crates/nessa-server/src/product/state.rs
+@@ -297,7 +297,7 @@
+             )),
+             subscription_watches: Arc::new(WatchOwners::new(
+                 MAX_RECORD_CHANGE_WATCHES,
+-                MAX_PRINCIPAL_SUBSCRIPTIONS,
++                MAX_RECORD_CHANGE_WATCHES,
+             )),
+             record_watches: None,
+             catalogue_watches: None,

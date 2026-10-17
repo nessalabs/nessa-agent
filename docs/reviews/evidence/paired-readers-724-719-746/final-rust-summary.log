@@ -1,0 +1,42 @@
+[nessa-sdk application] test result: ok. 499 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 22.64s
+nessa-sdk application finished in 22.7s with exit 0
+[nessa-sdk domain] test result: ok. 265 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.61s
+nessa-sdk domain finished in 0.6s with exit 0
+[nessa-device-client nessa_device_client] test result: ok. 81 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.66s
+nessa-device-client nessa_device_client finished in 1.7s with exit 0
+[nessa-client-core nessa_client_core] test result: ok. 418 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 9.13s
+nessa-client-core nessa_client_core finished in 9.2s with exit 0
+[nessa-protocol phone_wire] test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+nessa-protocol phone_wire finished in 0.0s with exit 0
+[nessa-protocol owner_phone_consent_wire] test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+nessa-protocol owner_phone_consent_wire finished in 0.0s with exit 0
+[nessa-protocol nessa_protocol] test result: ok. 162 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.07s
+nessa-protocol nessa_protocol finished in 2.1s with exit 0
+[nessa-auth native_transport_failure_order] test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+nessa-auth native_transport_failure_order finished in 0.1s with exit 0
+[nessa-auth cedar_flow] test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+nessa-auth cedar_flow finished in 0.0s with exit 0
+[nessa-auth pairing_domain] test result: ok. 41 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+nessa-auth pairing_domain finished in 0.0s with exit 0
+[nessa-auth owner_phone_record] test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+nessa-auth owner_phone_record finished in 0.0s with exit 0
+[nessa-auth owner_phone_device_proof] test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+nessa-auth owner_phone_device_proof finished in 0.0s with exit 0
+[nessa-auth owner_phone_consent_admission] test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+nessa-auth owner_phone_consent_admission finished in 0.1s with exit 0
+[nessa-auth native_transport_key_update] test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s
+nessa-auth native_transport_key_update finished in 0.1s with exit 0
+[nessa-auth nessa_auth] test result: ok. 199 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 15.07s
+nessa-auth nessa_auth finished in 15.1s with exit 0
+[nessa-local-storage windows_replacement] test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+nessa-local-storage windows_replacement finished in 0.0s with exit 0
+[nessa-local-storage retained_directory] thread 'absolute_private_path_allows_safe_locator_ancestry_and_retains_every_binding' (96549) panicked at crates/nessa-local-storage/tests/retained_directory.rs:56:50:
+[nessa-local-storage retained_directory] called `Result::unwrap()` on an `Err` value: Custom { kind: PermissionDenied, error: UnsafeFile }
+[nessa-local-storage retained_directory] thread 'shared_service_directory_keeps_0755_and_publishes_only_private_files' (96575) panicked at crates/nessa-local-storage/tests/retained_directory.rs:972:64:
+[nessa-local-storage retained_directory] called `Result::unwrap()` on an `Err` value: Custom { kind: PermissionDenied, error: UnsafeFile }
+[nessa-local-storage retained_directory] thread 'shared_service_directory_rejects_symlinks_and_changed_bindings' (96576) panicked at crates/nessa-local-storage/tests/retained_directory.rs:1009:64:
+[nessa-local-storage retained_directory] called `Result::unwrap()` on an `Err` value: Custom { kind: PermissionDenied, error: UnsafeFile }
+[nessa-local-storage retained_directory] test result: FAILED. 27 passed; 3 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+nessa-local-storage retained_directory finished in 0.0s with exit 101
+[nessa-sdk infrastructure] test result: ok. 72 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 150.09s
+nessa-sdk infrastructure finished in 150.1s with exit 0

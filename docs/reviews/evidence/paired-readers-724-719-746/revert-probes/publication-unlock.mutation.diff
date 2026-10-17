@@ -1,0 +1,12 @@
+--- crates/nessa-server/src/conversation/infrastructure/store.rs
++++ crates/nessa-server/src/conversation/infrastructure/store.rs
+@@ -235,8 +235,8 @@
+                 let mut connection = connection.lock().unwrap_or_else(PoisonError::into_inner);
+                 let mut publication = CataloguePublication::default();
+                 let result = work(&mut connection, &mut publication);
++                publication.publish();
+                 drop(connection);
+-                publication.publish();
+                 result
+             })
+             .await

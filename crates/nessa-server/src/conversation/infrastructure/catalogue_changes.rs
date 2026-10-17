@@ -7,7 +7,10 @@ use crate::conversation::application::{
     CatalogueChangeWatch, CatalogueWatchError,
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
-use std::sync::{Arc, Mutex, PoisonError, Weak};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex, PoisonError, Weak},
+};
 
 /// Maximum actual registrations in this producer, separate from gateway policy.
 pub const MAX_CATALOGUE_CHANGE_WATCHES: usize = 64;
@@ -27,6 +30,7 @@ struct State {
 struct Entry {
     target: (OrganizationId, PrincipalId),
     signal: Arc<CatalogueChangeSignal>,
+    receiver: Option<String>,
 }
 struct Registration {
     registry: Weak<Registry>,
@@ -37,6 +41,14 @@ impl CatalogueChanges {
     pub fn watch(
         &self,
         target: (OrganizationId, PrincipalId),
+    ) -> Result<CatalogueChangeWatch, CatalogueWatchError> {
+        self.watch_for(target, None)
+    }
+
+    pub fn watch_for(
+        &self,
+        target: (OrganizationId, PrincipalId),
+        receiver: Option<&str>,
     ) -> Result<CatalogueChangeWatch, CatalogueWatchError> {
         let mut state = self
             .inner
@@ -49,6 +61,7 @@ impl CatalogueChanges {
         let signal = Arc::new(CatalogueChangeSignal::default());
         state.entries.push(Entry {
             target,
+            receiver: receiver.map(str::to_owned),
             signal: signal.clone(),
         });
         let registration = Registration {
@@ -57,27 +70,54 @@ impl CatalogueChanges {
         };
         Ok(CatalogueChangeWatch::new(signal, Box::new(registration)))
     }
-    pub fn publish(&self, target: &(OrganizationId, PrincipalId)) {
-        // At most the published registration limit is captured. Waking outside
-        // the registry lock permits a waker to retire/register source interest.
-        let signals = {
-            let state = self
-                .inner
-                .state
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner);
-            state
+    /// Capture recipients while the store still owns its committed revision.
+    /// Reader heads are the catalogue's authority; this registry selects no grants.
+    pub fn capture(
+        &self,
+        target: &(OrganizationId, PrincipalId),
+        mut changed: impl FnMut(&str) -> bool,
+    ) -> CataloguePublication {
+        let state = self
+            .inner
+            .state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let mut heads = HashMap::new();
+        CataloguePublication {
+            signals: state
                 .entries
                 .iter()
                 .filter(|entry| &entry.target == target)
+                .filter(|entry| {
+                    entry.receiver.as_deref().is_none_or(|receiver| {
+                        *heads.entry(receiver).or_insert_with(|| changed(receiver))
+                    })
+                })
                 .map(|entry| entry.signal.clone())
-                .collect::<Vec<_>>()
-        };
-        for signal in signals {
+                .collect(),
+        }
+    }
+
+    #[cfg(test)]
+    pub fn publish(&self, target: &(OrganizationId, PrincipalId)) {
+        self.capture(target, |_| true).publish();
+    }
+}
+
+/// At most one signal per registered watch. The blocking worker publishes after
+/// releasing the database mutex, even when its asynchronous caller disappeared.
+#[derive(Default)]
+pub(super) struct CataloguePublication {
+    signals: Vec<Arc<CatalogueChangeSignal>>,
+}
+impl CataloguePublication {
+    pub fn publish(self) {
+        for signal in self.signals {
             signal.publish();
         }
     }
 }
+
 impl CatalogueWatchRegistration for Registration {}
 
 impl Drop for Registration {
@@ -254,5 +294,34 @@ mod tests {
         );
         assert_eq!(ready(&mut watched), CatalogueWatchState::Closed);
         assert_eq!(ready(&mut watched), CatalogueWatchState::Closed);
+    }
+    #[test]
+    fn full_registry_checks_each_receiver_once_and_releases_only_on_drop() {
+        let producer = CatalogueChanges::default();
+        let key = target("owner");
+        let mut watches: Vec<_> = (0..MAX_CATALOGUE_CHANGE_WATCHES - 1)
+            .map(|_| producer.watch_for(key.clone(), Some("reader")).unwrap())
+            .collect();
+        let mut other = producer.watch_for(key.clone(), Some("other")).unwrap();
+        let mut reads = 0;
+        let publication = producer.capture(&key, |receiver| {
+            reads += 1;
+            receiver == "reader"
+        });
+        assert_eq!(reads, 2);
+        // Cancel a wait while the physical registration still owns capacity.
+        pending(&mut watches[0]);
+        assert!(matches!(
+            producer.watch(key.clone()),
+            Err(CatalogueWatchError::Capacity)
+        ));
+        publication.publish();
+        for watch in &mut watches {
+            assert_eq!(ready(watch), CatalogueWatchState::Dirty);
+            pending(watch);
+        }
+        pending(&mut other);
+        drop(watches.pop());
+        assert!(producer.watch(key).is_ok());
     }
 }

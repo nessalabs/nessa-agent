@@ -152,10 +152,68 @@ sequenceDiagram
     Socket-->>Device: refused, as not the owner's
 ```
 
-A device's catalogue watch is still the owner's: its notice carries no id
-and only says "read again", so it fires on any change to the owner's
-catalogue, granted or not. What the device then reads is narrowed; the notice
-tells it that something changed, never what.
+A device's catalogue watch signals only a change to that receiver's existing
+catalogue head. The store captures recipients after commit while holding its
+connection, reusing `granted_head` for at most the registered-watch limit, then
+releases the connection before invoking notification callbacks. A watch installed
+after that capture discovers the commit in its final head recheck. A cancelled
+caller does not cancel publication by the blocking worker.
+
+The Cedar bundle remains byte-for-byte unchanged: `profile_sources` feeds its raw
+source into the receiver read-policy fingerprint. Even editing its historical
+owner-wide notification comment would change that fingerprint. Producer scoping
+is described here and in `AdmitPassiveRead::catalogue_watch`; it does not change
+the bundle's existing device-only admission.
+
+| Event or ordering (#724) | Result | Regression |
+| --- | --- | --- |
+| Ungranted owner changes or another receiver's grant on an ungranted row | Head unchanged; no reader notice | `paired_catalogue_notices_follow_only_the_readers_head`; `paired_catalogue_watch_does_not_send_ungranted_owner_activity` |
+| Granted row changes; grant or last revoke | Head advances; reader notice, including the now-empty catalogue | `paired_catalogue_notices_follow_only_the_readers_head` |
+| Historical receiver replaced again | Only the immediately preceding active receiver observes its removal; earlier receivers keep their last head and stay quiet | `historical_receiver_replacements_stop_at_their_own_removal` |
+| Recipient has another owner or organization | No notice | `paired_catalogue_notices_follow_only_the_readers_head` |
+| Notification callback reenters the database | Database mutex released before callback | `catalogue_publication_releases_database_before_invoking_a_waker` |
+| Caller disappears during a committed write | Blocking worker keeps commit and publication ownership | `a_cancelled_grant_change_keeps_its_permit_until_the_write_finishes` |
+| Scoped head lookup fails after commit | Durable write and owner notice succeed; affected reader stays quiet | `a_failed_scoped_head_capture_does_not_broaden_a_committed_notice` |
+| Full registry includes duplicate receivers; wait is cancelled | One head query per distinct receiver; capacity remains charged until registration drops | `full_registry_checks_each_receiver_once_and_releases_only_on_drop` |
+
+### Cursor-preserving metadata upgrade (#724)
+
+The owner authorized a version-6 to version-7 preserving migration for this fix,
+including isolated synthetic tests, without authorizing its execution on a live
+database. This is an explicit exception to alpha's default version-refusal rule;
+other contexts and other predecessor versions retain that rule.
+
+The version-6 head joined every historical receiver to all later replacements.
+Before narrowing that query, the upgrade freezes that exact old head for each
+historical `(organization, owner, receiver)` in a new floor table. Version 7
+answers the maximum of this immutable floor and its corrected scoped projection.
+The projection follows only the immediately preceding **active** grant when a
+receiver or credential changes. An inactive predecessor on revoke/regrant cannot
+make an old receiver observe another receiver's activity. New databases have no
+legacy floors. The floor does not grant access or supply catalogue rows. It
+retains a pre-upgrade boundary that version 6 already exposed, including to a
+receiver that never queried it; it cannot erase past disclosure while preserving
+every possibly saved cursor. Future replacements cannot advance that floor.
+
+| State / ordering | Result and invariant | Regression |
+| --- | --- | --- |
+| Empty file | Create version 7 with empty floors | `new_metadata_has_no_legacy_floors` |
+| Version 6 with old saved cursors | Under one immediate write transaction, validate pages, capture all old heads, install floors and version 7; incarnation, grants, journal, sequences, request receipts and attribution stay intact | `metadata_upgrade_preserves_old_cursors_and_grant_receipts` |
+| Failure after upgrade writes begin | Transaction rolls back floor rows, table and version; existing logical data stays unchanged and retry may succeed | `failed_metadata_upgrade_rolls_back_and_can_retry`; local-database upgrade rollback checks |
+| Invalid predecessor receiver cell or a projected head beyond its retained owner counter | Refuse without silently omitting a receiver or installing a floor that suppresses future legitimate writes | `failed_metadata_upgrade_rolls_back_and_can_retry`; `metadata_upgrade_refuses_a_head_beyond_its_owner_counter` |
+| Crash before / after commit | SQLite rollback leaves complete version 6, or complete version 7; restart reads an existing floor instead of recapturing future activity | `metadata_upgrade_preserves_old_cursors_and_grant_receipts`; `process_loss_before_or_after_upgrade_commit_keeps_one_complete_version` |
+| Existing version 7, including after more retargets | Do not run the upgrade or advance old floors; saved boundaries still resume | `metadata_upgrade_preserves_old_cursors_and_grant_receipts` |
+| R1 → R2 → R3; credential replacement; immediate revoke → another receiver's regrant, with or without an intervening no-op revoke | Each affected receiver observes its own removal, then stays quiet with unchanged head on other receivers' later changes | `historical_receiver_replacements_stop_at_their_own_removal`; `receiver_heads_ignore_regrant_after_revoke` |
+| Unknown predecessor or newer version | Refuse before persistent changes, as the ordinary opener does | version-4/version-5 refusal and local-database version checks |
+
+The context owns the one predecessor transformation; the private database opener
+owns private-file validation, integrity checks, the write lock, version recheck,
+commit and rollback. Supported files retain the opener's rollback-journal and
+sync pragmas; a migration error does not promise a byte-identical file or journal
+mode, but preserves its version and existing logical rows. No grant transition or
+audit receipt is invented by the migration. Downgrade is refused by a version-6
+binary at its next open; mixed running old/new binaries are not a supported
+upgrade procedure. This work does not run that procedure on any live process.
 
 ## Revisions
 
@@ -913,15 +971,18 @@ row's tests are named by the row: the transitions in
 
 ## Known limits
 
-- **A device's catalogue watch is the owner's.** Its notices fire on every
-  catalogue change, granted or not, so a device can count its owner's activity
-  (shares to other devices included) without learning any row. Its catalogue
-  head no longer moves with them: a paired reader's head is the latest
-  revision among its granted rows and its own grant changes
-  ([peer gateways](auth/peer-gateways.md), row H9), still numbered by the
-  owner's catalogue. A device paired before that change needs one explicit
-  catalogue reset (see the peer gateways Known limits). A peer gateway,
-  another party, is refused the catalogue watch and polls that head.
+- **Catalogue revisions keep the owner's numbering.** A paired reader's head
+  and notices follow granted rows and its own grant history, but gaps between
+  visible revisions can count intervening owner changes. Eliminating those gaps
+  needs receiver-specific revision numbering and is outside #724's scoped-head
+  option. A device whose progress predates scoped heads needs one explicit
+  catalogue reset (see the peer gateways Known limits). A peer gateway remains
+  refused the catalogue watch by the existing policy and polls its scoped head.
+- **Pre-upgrade heads remain as immutable floors (#724).** The explicitly
+  authorized version-6 to version-7 upgrade preserves old cursor boundaries;
+  it does not retract previously exposed history. Future replacements follow
+  only the immediately preceding active party, so former receivers do not
+  observe later replacements. See the cursor-preserving upgrade table above.
 - **Unpairing is `credential.revoke`, which leaves the binding active.** Reads
   stop because the credential no longer authenticates, but `conversation.share`
   still accepts that credential and writes a grant no one can use.
@@ -933,15 +994,16 @@ row's tests are named by the row: the transitions in
   `conversation.read`, so Cedar already refuses a real device the socket's
   `conversation.*` reads, lists and subscriptions; their tests give the device
   `conversation.write` to reach the grant check behind Cedar.
-- **Existing paired devices see nothing after upgrade** until their owner
-  shares conversations with them, from the share dialog above.
-- **The metadata file is version 6.** Replacing the role column with the
-  capability set changed the grant table's shape, so a version 5 file is
-  refused at start rather than read, and so is a version 4 file, as every
-  alpha change of shape has been
+- **A paired device without a read grant sees no conversations.** The
+  version-6 preserving upgrade retains existing grants; it does not ask an
+  owner to share them again.
+- **The metadata file is version 7.** The #724 upgrade preserves version-6
+  grants, journal, attribution and cursors with durable reader head floors.
+  Version 5 (role-shaped grants) and version 4 remain refused rather than
+  reinterpreted
   (`a_version_5_database_is_refused_without_erasing_its_grants`,
   `a_version_4_database_is_refused_without_erasing_its_grants`). There is
-  no migration.
+  no upgrade path from those older versions.
 - **An owner's write asks the receiver authority.** Telling a paired
   session from the owner's needs its receiver binding, so every
   `conversation.write` request on a gateway that pairs reads it, as

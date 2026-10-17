@@ -66,8 +66,8 @@ session to the same gateway as its checkpoint read. The two calls do not
 share a connection. The checkpoint read still copies records
 (`conversation.recordsHead` / `recordsPage`). `conversation.watchRecords`
 remains for that retained path until nessa-ios is confirmed to have stopped using `conversation.watchRecords`.
-`conversation.subscribeList` stays refused to a paired device until #724
-scopes the catalogue head to the device's grants. The desktop shows the
+`conversation.subscribeList` stays refused to a paired device under the existing
+policy; scoped catalogue notices do not expand list admission. The desktop shows the
 view's own `truncated` and `transcriptState` (`history` on its transcript).
 It does not page records to reconstruct older text, and a turn the view left
 out does not hide the turns the view did draw.
@@ -211,7 +211,8 @@ conversation, and a list batch, which is refused to a paired device
 ### Limits
 
 `x-subscriptionLimits` publishes `conversationTargets` (8) and `listTargets`
-(two: active and archived) per connection, and `deliveryTimeoutMs` (10000). The SDK and catalogue
+(two: active and archived) per connection, `principalTargets` (27) across one
+organization and principal, and `deliveryTimeoutMs` (10000). The SDK and catalogue
 watch registries keep their own producer bounds (64 each); a full one refuses
 `subscription_capacity`. A list frame larger than the 64 KiB frame bound is
 cut, newest first, and marked `complete: false` (row L3): the client walks
@@ -467,3 +468,23 @@ Idle checkpoint. SDK page construction validates the page's internal evidence,
 while this shared validator correlates it with the requested start and preceding
 outputs. Its regressions live in `tests/conversation/event_read.rs`.
 No persisted subscription registry, plugin SDK, or workflow engine is introduced.
+
+## Per-principal subscription allowance (#719)
+
+`x-subscriptionLimits.principalTargets` publishes a separate allowance of 27
+subscriptions across all sockets for one authenticated organization and principal.
+It covers view, event and list subscriptions; three windows with eight
+views and a list each fit. Passive payloadless watches retain their own allowance. Agent catalog subscriptions
+use no record source and retain their existing per-connection duplicate bound.
+`Sources::register` acquires the subscription charge after authorization and before
+registering a physical source. Its RAII owner drops after those sources on refusal,
+termination, unsubscribe, task cancellation and disconnect. This bounds one
+principal's use without reserving a particular source slot for another principal;
+the shared source pool can still fill across several principals.
+
+| Ordering | Result | Regression |
+| --- | --- | --- |
+| Three windows reach the allowance; another socket subscribes | `subscription_capacity`; no source taken | `principal_subscription_allowance_is_shared_bounded_and_released` |
+| First principal full; another principal admits | Separate principal can acquire capacity | `principal_subscription_allowance_is_shared_bounded_and_released` |
+| Unsubscribe then replacement; disconnect all sockets | Charge and physical source capacity return | `principal_subscription_allowance_is_shared_bounded_and_released` |
+| Unauthorized subscribe with full pool | Authorization refuses before capacity admission | `a_forbidden_subscribe_is_refused_before_it_takes_a_watch` |

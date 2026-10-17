@@ -2751,6 +2751,7 @@ export const changeWatchLimits = {
 export const subscriptionLimits = {
   conversationTargets: 8,
   listTargets: 2,
+  principalTargets: 27,
   deliveryTimeoutMs: 10000,
 } as const
 export const conversationSubscriptionIdPattern = "^[1-9][0-9]{0,19}$" as const

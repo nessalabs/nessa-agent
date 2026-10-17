@@ -3,7 +3,9 @@
 //! subscription (`connection.rs`); each runs in its own task (`target.rs`),
 //! which admits every batch in `authorize_batch` and reads through the same
 //! fold a one-shot read uses; its frames reach the connection's one writer
-//! through `delivery.rs`. The agent catalog (`agents.subscribe`) is one more
+//! through `delivery.rs`. `target::Sources` holds the separately published
+//! per-principal subscription allowance until its physical sources drop.
+//! The agent catalog (`agents.subscribe`) is one more
 //! target of the same machinery, woken by the paired environments'
 //! connection changes rather than by records (`docs/design/auth/peer-gateways.md`,
 //! row I10).

@@ -1,0 +1,172 @@
+{
+  "base": "839b1d50352c833c888254130456ac1355cccfa6",
+  "diff_sha256": "0f88849ab242ef3602c4da846fd9a034c1bc82ecaab7f09e3cd6a383178a7903",
+  "cases": [
+    {
+      "name": "reader-route",
+      "file": "crates/nessa-server/src/product/change_watch/registration.rs",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "nessa-server",
+        "--lib",
+        "paired_catalogue_watch_does_not_send_ungranted_owner_activity"
+      ],
+      "exit_code": 101,
+      "failed_test_without_compile_error": true,
+      "elapsed_seconds": 125.94,
+      "original_sha256": "2da724cbd2573ed7b314327a08043dfbc7ee1e76e9d3530f66a32fab2bee836a",
+      "mutant_sha256": "c505d49bbd3b8f293d57b1a94d4fde259f358fc167265c4016b45d34ce809e9f"
+    },
+    {
+      "name": "reader-publication",
+      "file": "crates/nessa-server/src/conversation/infrastructure/catalogue_changes.rs",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "nessa-server",
+        "--lib",
+        "paired_catalogue_notices_follow_only_the_readers_head"
+      ],
+      "exit_code": 101,
+      "failed_test_without_compile_error": true,
+      "elapsed_seconds": 72.25,
+      "original_sha256": "1cf59a514010b05c84684e1e1261fa6855a85fb707c342d9a5e123163b6b3ded",
+      "mutant_sha256": "9942558c8c2df7fb7d453a140740948117e05c76b0065b7e3897fe9e1ca95024"
+    },
+    {
+      "name": "subscription-allowance",
+      "file": "crates/nessa-server/src/product/state.rs",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "nessa-server",
+        "--lib",
+        "principal_subscription_allowance_is_shared_bounded_and_released"
+      ],
+      "exit_code": 101,
+      "failed_test_without_compile_error": true,
+      "elapsed_seconds": 60.52,
+      "original_sha256": "887bf409c74aeabdb57591c396a9bbf23f22e412d4651f7f40a0b1f8bc53fd1c",
+      "mutant_sha256": "1cad10249908ae4c9909e453bb5e0ecded9643afab68ea1e903973570c0a4d12"
+    },
+    {
+      "name": "publication-unlock",
+      "file": "crates/nessa-server/src/conversation/infrastructure/store.rs",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "nessa-server",
+        "--lib",
+        "catalogue_publication_releases_database_before_invoking_a_waker"
+      ],
+      "exit_code": 101,
+      "failed_test_without_compile_error": true,
+      "elapsed_seconds": 58.97,
+      "original_sha256": "675e6d6c5b73a7cdd7e0e1020a52bc6f8da62f697d99f3011df40c4e73735152",
+      "mutant_sha256": "b0033767fe813dc825d88e46e2ddd4e116deb4084f3ce7e2586a4ae3ce01667a"
+    },
+    {
+      "name": "receiver-work-bound",
+      "file": "crates/nessa-server/src/conversation/infrastructure/catalogue_changes.rs",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "nessa-server",
+        "--lib",
+        "full_registry_checks_each_receiver_once_and_releases_only_on_drop"
+      ],
+      "exit_code": 101,
+      "failed_test_without_compile_error": true,
+      "elapsed_seconds": 96.24,
+      "original_sha256": "1cf59a514010b05c84684e1e1261fa6855a85fb707c342d9a5e123163b6b3ded",
+      "mutant_sha256": "aabcb85cbb66501c05997957e032b2e46473ada7ebcec1eef6420492d0c28fd8"
+    },
+    {
+      "name": "scoped-query-failure",
+      "file": "crates/nessa-server/src/conversation/infrastructure/store.rs",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "nessa-server",
+        "--lib",
+        "a_failed_scoped_head_capture_does_not_broaden_a_committed_notice"
+      ],
+      "exit_code": 101,
+      "failed_test_without_compile_error": true,
+      "elapsed_seconds": 75.9,
+      "original_sha256": "675e6d6c5b73a7cdd7e0e1020a52bc6f8da62f697d99f3011df40c4e73735152",
+      "mutant_sha256": "cf1d5fb2cac5d657fad6ddc7b8cfe27d2f6deaabed497040461def2b1f8d91c0"
+    },
+    {
+      "name": "cancelled-grant-publication",
+      "file": "crates/nessa-server/src/conversation/infrastructure/store/share_grants.rs",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "nessa-server",
+        "--lib",
+        "a_cancelled_grant_change_keeps_its_permit_until_the_write_finishes"
+      ],
+      "exit_code": 101,
+      "failed_test_without_compile_error": true,
+      "elapsed_seconds": 63.54,
+      "original_sha256": "fb6f0c15b2fba42ad11bcf096b8aca7bed854f743af2ab4d6c176f0b9b326567",
+      "mutant_sha256": "89bf6f904d07003f436170bb96e55ea7dcc884f4eb4651b0b0f30dadb1fbd6ed"
+    },
+    {
+      "name": "preparing-attempts",
+      "file": "crates/nessa-client-core/src/read_only_sync/application/watch.rs",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "nessa-client-core",
+        "--lib",
+        "prolonged_preparing"
+      ],
+      "exit_code": 101,
+      "failed_test_without_compile_error": true,
+      "elapsed_seconds": 8.17,
+      "original_sha256": "e2811a56d13fea8a78635eaa515b87ea88fc6f9649f268210febe2b5645919a1",
+      "mutant_sha256": "812ce5b0b2ba7d18cc87206307e7314e28476c570c8d67be67ef1808952c8524"
+    },
+    {
+      "name": "subscription-release",
+      "file": "crates/nessa-server/src/product/subscription/target.rs",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "nessa-local-storage",
+        "-p",
+        "nessa-auth",
+        "-p",
+        "nessa-server",
+        "-p",
+        "nessa-protocol",
+        "-p",
+        "nessa-client-core",
+        "-p",
+        "nessa-device-client",
+        "-p",
+        "nessa-sdk",
+        "--lib",
+        "principal_subscription_allowance_is_shared_bounded_and_released"
+      ],
+      "exit_code": 101,
+      "failed_test_without_compile_error": true,
+      "elapsed_seconds": 135.81,
+      "starting_diff_sha256": "23aa319120c1c69ddb628410bdd37f8873e53acb6da629383811519d42094a19",
+      "original_sha256": "e084498b34df39ce69d983ca1bd85374d817c4d901cc987dddf64000bd1c3d00",
+      "mutant_sha256": "c52e52182d0de8ea10de33d469a45822d65395a8c94854543bf09db4a6143551"
+    }
+  ]
+}

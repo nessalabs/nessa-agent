@@ -1,0 +1,6 @@
+{
+  "crates/nessa-server/src/conversation/infrastructure/access_policy/cedar/schema.json": "fd1436615098b73c8ce2f16a0ed83061e979e769c319fd9a889fbae12b0cc81b",
+  "crates/nessa-server/src/conversation/infrastructure/access_policy/cedar/ownership.cedar": "d8322331f3af5abfea7634c739e626fbee27f94cb7481f450400e7137ee7dd42",
+  "crates/nessa-server/src/conversation/infrastructure/access_policy/cedar/shares.cedar": "d7a6d180eaa89ee913702406090bcf6ac54d793931bf49af090409bcdb0d0915",
+  "crates/nessa-server/src/conversation/infrastructure/access_policy/cedar/readers.cedar": "ec9dc5a53ebe700f9e3b7cd538d2a76f9103e6a7fb49206a34c8791d9821cc6f"
+}

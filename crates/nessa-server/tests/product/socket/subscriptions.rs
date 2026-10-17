@@ -16,11 +16,13 @@ use conversation_support::{
     TestClock, DELETION_BUDGETS,
 };
 use nessa_protocol::product::generated::{
-    AgentsListResult, AgentsListed, MAX_CONNECTION_CONVERSATION_SUBSCRIPTIONS, MAX_SHARE_PAGE,
+    AgentsListResult, AgentsListed, MAX_CONNECTION_CONVERSATION_SUBSCRIPTIONS,
+    MAX_PRINCIPAL_SUBSCRIPTIONS, MAX_SHARE_PAGE,
     SUBSCRIPTION_DELIVERY_TIMEOUT_MS,
 };
 use nessa_sdk::application::agent_execution::sessions::ChangeWatchError;
 use nessa_sdk::domain::agent_execution::sessions::ExecutionSessionId;
+use nessa_sdk::infrastructure::session_storage::MAX_RECORD_CHANGE_WATCHES;
 use std::task::Waker;
 use tempfile::TempDir;
 use tokio::sync::Notify;
@@ -5287,4 +5289,129 @@ async fn a_queued_drive_turn_is_not_sent_where_its_tools_can_no_longer_be_checke
         .unwrap()
         .iter()
         .any(|execution| execution == "queued"));
+}
+
+/// #719: three ordinary windows (eight views and a list apiece) share one
+/// allowance across sockets. Refusal has no source effects; stop and disconnect
+/// return the physical sources and the principal's charge.
+#[tokio::test]
+async fn principal_subscription_allowance_is_shared_bounded_and_released() {
+    let fixture = SubscriptionFixture::new().await;
+    let mut conversations = vec![fixture.id.clone()];
+    while conversations.len() < MAX_CONNECTION_CONVERSATION_SUBSCRIPTIONS {
+        conversations.push(fixture.create().await);
+    }
+    let mut clients = Vec::new();
+    let mut first_id = None;
+    for window in 0..3 {
+        let mut client = fixture.connect();
+        for (index, conversation) in conversations.iter().enumerate() {
+            let id = client
+                .subscribe(&format!("view-{index}"), conversation)
+                .await;
+            if window == 0 && index == 0 {
+                first_id = Some(id);
+            }
+        }
+        client.send("list", "conversation.subscribeList", json!({}));
+        assert_eq!(client.reply("list").await.0["ok"], true);
+        clients.push(client);
+    }
+    let owners = &fixture.state.subscription_watches;
+    assert_eq!(
+        owners.available_permits(),
+        MAX_RECORD_CHANGE_WATCHES - MAX_PRINCIPAL_SUBSCRIPTIONS
+    );
+    // Another authenticated principal uses the same physical source pool.
+    let mut other_fixture = SubscriptionFixture::new().await;
+    {
+        let mut snapshot = other_fixture.authority.snapshot.lock().unwrap();
+        let principal = PrincipalId::new("other-synthetic-principal").unwrap();
+        snapshot.credential = Credential::new(
+            CredentialId::new("credential").unwrap(),
+            principal.clone(),
+            OrganizationId::new("organization").unwrap(),
+            AudienceId::new("gateway").unwrap(),
+            100,
+            200,
+            snapshot.credential.grants().to_vec(),
+        )
+        .unwrap();
+        snapshot.membership = Membership::new(
+            MembershipId::new("other-membership").unwrap(),
+            principal,
+            OrganizationId::new("organization").unwrap(),
+            MembershipRole::Member,
+            MembershipStatus::Active,
+        );
+    }
+    other_fixture.state.subscription_watches = owners.clone();
+    other_fixture.state.record_watches = fixture.state.record_watches.clone();
+    other_fixture.session = authenticate(&other_fixture.state).await;
+    let other_conversation = other_fixture.create().await;
+    let mut other = other_fixture.connect();
+    other
+        .subscribe("other-principal", &other_conversation)
+        .await;
+    let mut fourth = fixture.connect();
+    fourth.send("agents-at-capacity", "agents.subscribe", json!({}));
+    assert_eq!(fourth.reply("agents-at-capacity").await.0["ok"], true);
+    fourth.send(
+        "full",
+        "conversation.subscribe",
+        json!({"conversationId": fixture.id.to_string()}),
+    );
+    assert_eq!(
+        fourth.reply("full").await.0["error"]["code"],
+        "subscription_capacity"
+    );
+    fourth.send(
+        "events-at-capacity",
+        "conversation.subscribeEvents",
+        json!({"conversationId": fixture.id.to_string()}),
+    );
+    assert_eq!(
+        fourth.reply("events-at-capacity").await.0["error"]["code"],
+        "subscription_capacity"
+    );
+    assert_eq!(
+        owners.available_permits(),
+        MAX_RECORD_CHANGE_WATCHES - MAX_PRINCIPAL_SUBSCRIPTIONS - 1
+    );
+    clients[0].send(
+        "stop",
+        "conversation.unsubscribe",
+        json!({"subscriptionId": first_id.unwrap()}),
+    );
+    assert_eq!(clients[0].reply("stop").await.0["ok"], true);
+    timeout(EXPECTED, async {
+        while owners.available_permits() != MAX_RECORD_CHANGE_WATCHES - MAX_PRINCIPAL_SUBSCRIPTIONS
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    fourth.subscribe("replacement", &fixture.id).await;
+    fourth.close().await;
+    for client in clients {
+        client.close().await;
+    }
+    other.close().await;
+    timeout(EXPECTED, async {
+        while owners.available_permits() != MAX_RECORD_CHANGE_WATCHES {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    // The source pool is free too, not only its gateway accounting.
+    let watches: Vec<_> = (0..MAX_RECORD_CHANGE_WATCHES)
+        .map(|_| fixture.storage.watch_any_committed().unwrap())
+        .collect();
+    assert!(matches!(
+        fixture.storage.watch_any_committed(),
+        Err(ChangeWatchError::Capacity)
+    ));
+    drop(watches);
 }

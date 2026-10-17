@@ -293,7 +293,7 @@ export async function runParallelCargoTests({
   if (doctestCode !== 0) throw new Error(`cargo test --doc exited with ${doctestCode}`)
 }
 
-function spawnProcess(command, args, io) {
+export function spawnProcess(command, args, io) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
       cwd: io.cwd,

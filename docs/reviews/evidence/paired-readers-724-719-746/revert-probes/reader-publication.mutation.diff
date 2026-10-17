@@ -1,0 +1,11 @@
+--- crates/nessa-server/src/conversation/infrastructure/catalogue_changes.rs
++++ crates/nessa-server/src/conversation/infrastructure/catalogue_changes.rs
+@@ -90,7 +90,7 @@
+                 .filter(|entry| &entry.target == target)
+                 .filter(|entry| {
+                     entry.receiver.as_deref().is_none_or(|receiver| {
+-                        *heads.entry(receiver).or_insert_with(|| changed(receiver))
++                        *heads.entry(receiver).or_insert_with(|| { let _ = changed(receiver); true })
+                     })
+                 })
+                 .map(|entry| entry.signal.clone())

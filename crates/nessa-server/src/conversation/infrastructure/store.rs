@@ -1,4 +1,5 @@
 mod acquisition;
+mod catalogue_heads;
 mod export;
 mod share_grants;
 
@@ -6,7 +7,7 @@ pub use export::{
     ExportFacts, ExportFences, ExportSkip, MetadataSnapshot, NamedRecord, RevocationFact,
 };
 
-use super::catalogue_changes::CatalogueChanges;
+use super::catalogue_changes::{CatalogueChanges, CataloguePublication};
 
 use crate::conversation::application::{
     CatalogueChangeWatch, CatalogueDescriptor, CatalogueHead, CatalogueKey, CataloguePage,
@@ -39,9 +40,9 @@ use nessa_sync::replication::catalogue::{
 use nessa_sync::replication::domain::{Id, Scope, MAX_ID_BYTES};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 #[cfg(test)]
-use std::sync::{Condvar, MutexGuard, PoisonError};
+use std::sync::{Condvar, MutexGuard};
 
 /// A grant write that has entered its blocking task and will not commit
 /// until [`GrantWritePause::release`]. The permit is held across the wait.
@@ -97,7 +98,10 @@ impl GrantWritePause {
 }
 
 /// The tables and their version, defined once.
-const DEFINITION: &str = include_str!("schema.sql");
+const DEFINITION: &str = concat!(
+    include_str!("schema.sql"),
+    include_str!("store/catalogue_heads.sql")
+);
 
 /// One owner's conversations that a list shows, newest summary first, at most
 /// `?4` of them. The index on `(organization, owner)` finds the owner's rows,
@@ -168,7 +172,9 @@ impl LocalConversationStore {
     /// it whether starting again could help
     /// (docs/adr/todo/202-versioned-local-datasets.md).
     pub fn open(path: &Path) -> Result<Self, OpenError> {
-        let connection = nessa_local_database::open(path, &Schema::new(DEFINITION)?)?;
+        let schema =
+            Schema::new(DEFINITION)?.upgrading_from(6, catalogue_heads::preserve_legacy_heads);
+        let connection = nessa_local_database::open(path, &schema)?;
         Ok(Self {
             connection: Arc::new(Mutex::new(connection)),
             changes: CatalogueChanges::default(),
@@ -210,20 +216,34 @@ impl LocalConversationStore {
             .unwrap_or_else(PoisonError::into_inner)
     }
 
+    #[cfg(test)]
+    pub(super) fn mutation_is_unlocked(&self) -> bool {
+        self.connection.try_lock().is_ok()
+    }
+
     fn run<T: Send + 'static>(
         &self,
         work: impl FnOnce(&mut Connection) -> Result<T, ConversationError> + Send + 'static,
     ) -> ConversationFuture<'_, T> {
+        self.run_publishing(move |connection, _| work(connection))
+    }
+
+    fn run_publishing<T: Send + 'static>(
+        &self,
+        work: impl FnOnce(&mut Connection, &mut CataloguePublication) -> Result<T, ConversationError>
+            + Send
+            + 'static,
+    ) -> ConversationFuture<'_, T> {
         let connection = self.connection.clone();
         Box::pin(async move {
             tokio::task::spawn_blocking(move || {
-                // A call that panicked left no transaction open — rusqlite
-                // rolls one back as it unwinds — so the connection is still
-                // fit for the next caller.
-                let mut connection = connection
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                work(&mut connection)
+                // A panicking transaction rolls back through rusqlite.
+                let mut connection = connection.lock().unwrap_or_else(PoisonError::into_inner);
+                let mut publication = CataloguePublication::default();
+                let result = work(&mut connection, &mut publication);
+                drop(connection);
+                publication.publish();
+                result
             })
             .await
             .map_err(|_| ConversationError::Metadata)?
@@ -315,52 +335,33 @@ fn admit_catalogue_target(
     Ok(())
 }
 
-/// A paired reader's head: the latest revision among the owner's rows granted
-/// to `receiver`, among `receiver`'s grants and revokes, and among later
-/// journal rows that replaced this receiver or its credential. A change of
-/// capabilities or constraints, with the same receiver and credential, is
-/// none of those: it leaves what the receiver reads as it was, and takes no
-/// revision of its own (`docs/design/read-grants.md`, row J4). A revoke, and
-/// a switch of the grant onto another receiver, stamps a new revision, so
-/// the head moves forward and never back: the journal only grows and
-/// conversation rows are never removed. Zero when the receiver was never
-/// granted anything.
+fn catalogue_publication(
+    changes: &CatalogueChanges,
+    connection: &Connection,
+    organization: &OrganizationId,
+    owner: &PrincipalId,
+    revision: i64,
+) -> CataloguePublication {
+    changes.capture(
+        &(organization.clone(), owner.clone()),
+        |receiver| match granted_head(connection, organization, owner, receiver) {
+            Ok(head) => head == revision,
+            Err(error) => {
+                tracing::warn!(?error, "could not capture a reader's catalogue notice");
+                false
+            }
+        },
+    )
+}
+
+/// The scoped projection and its preserving upgrade share one SQL owner.
 fn granted_head(
     connection: &Connection,
     organization: &OrganizationId,
     owner: &PrincipalId,
     receiver: &str,
 ) -> Result<i64, ConversationError> {
-    connection
-        .query_row(
-            &format!(
-                "SELECT MAX(
-                     COALESCE((SELECT MAX(c.change_revision) FROM conversations AS c
-                               WHERE c.organization = ?1 AND c.owner = ?2 AND {}), 0),
-                     COALESCE((SELECT MAX(j.revision) FROM share_grant_changes AS j
-                               JOIN conversations AS c ON c.id = j.resource_id
-                               WHERE c.organization = ?1 AND c.owner = ?2
-                                 AND j.resource_kind = '{kind}'
-                                 AND j.receiver_id = ?3
-                                 AND (j.before = 'none') <> (j.after = 'none')), 0),
-                     COALESCE((SELECT MAX(later.revision) FROM share_grant_changes AS later
-                               JOIN share_grant_changes AS j
-                                 ON j.resource_kind = later.resource_kind
-                                AND j.resource_id = later.resource_id
-                                AND j.principal_id = later.principal_id
-                                AND j.sequence < later.sequence
-                                AND j.receiver_id = ?3
-                                AND (later.receiver_id IS NOT j.receiver_id
-                                     OR later.credential_id <> j.credential_id)
-                               JOIN conversations AS c ON c.id = later.resource_id
-                               WHERE c.organization = ?1 AND c.owner = ?2
-                                 AND later.resource_kind = '{kind}'), 0))",
-                share_grants::granted("c.id", "?3"),
-                kind = share_grants::CONVERSATION,
-            ),
-            params![organization.as_str(), owner.as_str(), receiver],
-            |row| row.get(0),
-        )
+    catalogue_heads::head(connection, organization.as_str(), owner.as_str(), receiver)
         .map_err(failed)
 }
 
@@ -932,7 +933,7 @@ impl ConversationRepository for LocalConversationStore {
     }
     fn create(&self, conversation: Conversation) -> ConversationFuture<'_, ConversationCreation> {
         let changes = self.changes.clone();
-        self.run(move |connection| {
+        self.run_publishing(move |connection, publication| {
             let transaction = connection
                 .transaction_with_behavior(TransactionBehavior::Immediate)
                 .map_err(failed)?;
@@ -968,10 +969,13 @@ impl ConversationRepository for LocalConversationStore {
                 )
                 .map_err(failed)?;
             transaction.commit().map_err(failed)?;
-            changes.publish(&(
-                conversation.organization().clone(),
-                conversation.owner().clone(),
-            ));
+            *publication = catalogue_publication(
+                &changes,
+                connection,
+                conversation.organization(),
+                conversation.owner(),
+                revision,
+            );
             Ok(ConversationCreation {
                 conversation,
                 disposition: ConversationCreationDisposition::Created,
@@ -1114,7 +1118,7 @@ impl ConversationRepository for LocalConversationStore {
         let id = id.clone();
         let request_id = request_id.to_owned();
         let changes = self.changes.clone();
-        self.run(move |connection| {
+        self.run_publishing(move |connection, publication| {
             if state == ConversationModeRequestState::Pending {
                 return Err(ConversationError::InvalidInput);
             }
@@ -1149,7 +1153,7 @@ impl ConversationRepository for LocalConversationStore {
             if current.approval_mode() != request.prior {
                 return Err(ConversationError::ApprovalModeUncertain);
             }
-            if state == ConversationModeRequestState::Applied {
+            let revision = if state == ConversationModeRequestState::Applied {
                 let revision = next_revision(&transaction, &current, false)?;
                 transaction
                     .execute(
@@ -1163,7 +1167,10 @@ impl ConversationRepository for LocalConversationStore {
                         ],
                     )
                     .map_err(failed)?;
-            }
+                Some(revision)
+            } else {
+                None
+            };
             transaction
                 .execute(
                     "UPDATE mode_requests SET state = ?1
@@ -1172,8 +1179,14 @@ impl ConversationRepository for LocalConversationStore {
                 )
                 .map_err(failed)?;
             transaction.commit().map_err(failed)?;
-            if state == ConversationModeRequestState::Applied {
-                changes.publish(&(current.organization().clone(), current.owner().clone()));
+            if let Some(revision) = revision {
+                *publication = catalogue_publication(
+                    &changes,
+                    connection,
+                    current.organization(),
+                    current.owner(),
+                    revision,
+                );
             }
             Ok(ConversationModeRequest { state, ..request })
         })
@@ -1185,7 +1198,7 @@ impl ConversationRepository for LocalConversationStore {
     ) -> ConversationFuture<'_, Conversation> {
         let id = id.clone();
         let changes = self.changes.clone();
-        self.run(move |connection| {
+        self.run_publishing(move |connection, publication| {
             let transaction = connection
                 .transaction_with_behavior(TransactionBehavior::Immediate)
                 .map_err(failed)?;
@@ -1196,7 +1209,7 @@ impl ConversationRepository for LocalConversationStore {
             let deleted = conversation.deleted(deletion).map_err(contradicted)?;
             let tombstone = deleted.deletion().ok_or(ConversationError::Metadata)?;
             write_deletion(&transaction, &id, tombstone)?;
-            if first_deletion {
+            let revision = if first_deletion {
                 let revision = next_revision(&transaction, &deleted, false)?;
                 transaction
                     .execute(
@@ -1204,10 +1217,19 @@ impl ConversationRepository for LocalConversationStore {
                         params![revision, id.to_string()],
                     )
                     .map_err(failed)?;
-            }
+                Some(revision)
+            } else {
+                None
+            };
             transaction.commit().map_err(failed)?;
-            if first_deletion {
-                changes.publish(&(deleted.organization().clone(), deleted.owner().clone()));
+            if let Some(revision) = revision {
+                *publication = catalogue_publication(
+                    &changes,
+                    connection,
+                    deleted.organization(),
+                    deleted.owner(),
+                    revision,
+                );
             }
             Ok(deleted)
         })
@@ -1270,7 +1292,7 @@ impl ConversationSummaries for LocalConversationStore {
     ) -> ConversationFuture<'_, ()> {
         let id = id.clone();
         let changes = self.changes.clone();
-        self.run(move |connection| {
+        self.run_publishing(move |connection, publication| {
             let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate).map_err(failed)?;
             let conversation = read(&transaction, &id)?.ok_or(ConversationError::Metadata)?;
             if conversation.deletion().is_some() {
@@ -1300,14 +1322,14 @@ impl ConversationSummaries for LocalConversationStore {
                 params![revision, id.to_string()],
             ).map_err(failed)?;
             transaction.commit().map_err(failed)?;
-            changes.publish(&(conversation.organization().clone(), conversation.owner().clone()));
+            *publication = catalogue_publication(&changes, connection, conversation.organization(), conversation.owner(), revision);
             Ok(())
         })
     }
     fn erase(&self, id: &ConversationId) -> ConversationFuture<'_, ()> {
         let id = id.clone();
         let changes = self.changes.clone();
-        self.run(move |connection| {
+        self.run_publishing(move |connection, publication| {
             let transaction = connection
                 .transaction_with_behavior(TransactionBehavior::Immediate)
                 .map_err(failed)?;
@@ -1331,13 +1353,15 @@ impl ConversationSummaries for LocalConversationStore {
                 Some((
                     conversation.organization().clone(),
                     conversation.owner().clone(),
+                    revision,
                 ))
             } else {
                 None
             };
             transaction.commit().map_err(failed)?;
-            if let Some(owner) = changed_owner {
-                changes.publish(&owner);
+            if let Some((organization, owner, revision)) = changed_owner {
+                *publication =
+                    catalogue_publication(&changes, connection, &organization, &owner, revision);
             }
             Ok(())
         })
@@ -1788,5 +1812,14 @@ impl WatchCatalogue for LocalConversationStore {
         owner: &PrincipalId,
     ) -> Result<CatalogueChangeWatch, CatalogueWatchError> {
         self.changes.watch((organization.clone(), owner.clone()))
+    }
+    fn watch_reader(
+        &self,
+        organization: &OrganizationId,
+        owner: &PrincipalId,
+        receiver: &str,
+    ) -> Result<CatalogueChangeWatch, CatalogueWatchError> {
+        self.changes
+            .watch_for((organization.clone(), owner.clone()), Some(receiver))
     }
 }

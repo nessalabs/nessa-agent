@@ -46,7 +46,11 @@ pub(crate) enum Trigger {
 /// the first included. The gateway keeps its preparation progress between
 /// attempts, so each one resumes it; the bound keeps a source that never
 /// becomes ready an explicit failure.
-pub(crate) const PREPARING_ATTEMPTS: usize = 4;
+// A gateway read advances at most 128 discovery steps in a 200 ms slice.
+// Thirty-two attempts permit up to 4096 retained steps without widening any read's
+// source work, request deadline, or physical ownership. The prolonged-preparing
+// tests cover progress after the former four-attempt cutoff and final refusal.
+pub(crate) const PREPARING_ATTEMPTS: usize = 32;
 
 /// The gateway's answer that the source is not ready yet: its progress is
 /// retained, and the same read may be asked again.
@@ -69,6 +73,7 @@ pub(crate) fn discover<R, E>(
             Some(cause) if preparing(cause) => {
                 tracing::warn!(
                     limit = "client.preparing_attempts",
+                    attempts,
                     "product session hit an operational limit"
                 );
                 return Ok(discovery);
@@ -187,6 +192,7 @@ pub(crate) fn follow<S: WatchSession, E: WatchEvents<S::Report>>(
             PassResult::Failed(Some(cause)) if preparing(cause) => {
                 tracing::warn!(
                     limit = "client.preparing_attempts",
+                    attempts,
                     "product session hit an operational limit"
                 );
             }

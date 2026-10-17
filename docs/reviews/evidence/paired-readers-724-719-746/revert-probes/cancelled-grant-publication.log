@@ -1,0 +1,18 @@
+running 1 test
+test conversation::infrastructure::store_tests::a_cancelled_grant_change_keeps_its_permit_until_the_write_finishes ... FAILED
+
+failures:
+
+---- conversation::infrastructure::store_tests::a_cancelled_grant_change_keeps_its_permit_until_the_write_finishes stdout ----
+
+thread 'conversation::infrastructure::store_tests::a_cancelled_grant_change_keeps_its_permit_until_the_write_finishes' (85585) panicked at crates/nessa-server/src/conversation/infrastructure/../../../tests/conversation/store.rs:2388:26:
+expected a committed source notice
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    conversation::infrastructure::store_tests::a_cancelled_grant_change_keeps_its_permit_until_the_write_finishes
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3178 filtered out; finished in 0.32s
+
+error: test failed, to rerun pass `-p nessa-server --lib`

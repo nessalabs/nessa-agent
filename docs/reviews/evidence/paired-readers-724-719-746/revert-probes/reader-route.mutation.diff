@@ -1,0 +1,15 @@
+--- crates/nessa-server/src/product/change_watch/registration.rs
++++ crates/nessa-server/src/product/change_watch/registration.rs
+@@ -295,11 +295,7 @@
+                 .catalogue_watches
+                 .as_ref()
+                 .ok_or(ChangeWatchErrorCode::TemporarilyUnavailable)?
+-                .watch_reader(
+-                    &admitted.organization_id,
+-                    &admitted.owner_id,
+-                    &admitted.receiver_id,
+-                )
++                .watch(&admitted.organization_id, &admitted.owner_id)
+                 .map(WatchHandle::Catalogue)
+                 .map_err(|CatalogueWatchError::Capacity| ChangeWatchErrorCode::WatchCapacity),
+         }

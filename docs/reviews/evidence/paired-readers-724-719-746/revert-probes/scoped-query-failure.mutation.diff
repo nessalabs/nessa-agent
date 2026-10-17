@@ -1,0 +1,11 @@
+--- crates/nessa-server/src/conversation/infrastructure/store.rs
++++ crates/nessa-server/src/conversation/infrastructure/store.rs
+@@ -342,7 +342,7 @@
+             Ok(head) => head == revision,
+             Err(error) => {
+                 tracing::warn!(?error, "could not capture a reader's catalogue notice");
+-                false
++                true
+             }
+         },
+     )

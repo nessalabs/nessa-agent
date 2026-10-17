@@ -414,7 +414,12 @@ ts += `export const changeWatchLimits = ${JSON.stringify(watchLimits)} as const\
 // Subscription capacity and delivery deadline are product policy too: the
 // server reads these constants, and the desktop keeps within the same limit.
 const subscriptionLimits = schema["x-subscriptionLimits"]
-const subscriptionLimitNames = ["conversationTargets", "listTargets", "deliveryTimeoutMs"]
+const subscriptionLimitNames = [
+  "conversationTargets",
+  "listTargets",
+  "principalTargets",
+  "deliveryTimeoutMs",
+]
 for (const name of subscriptionLimitNames) {
   if (
     !subscriptionLimits ||
@@ -428,6 +433,7 @@ if (Object.keys(subscriptionLimits).length !== subscriptionLimitNames.length)
   throw new Error("Invalid subscription limit: unknown policy key")
 rs += `pub const MAX_CONNECTION_CONVERSATION_SUBSCRIPTIONS: usize = ${subscriptionLimits.conversationTargets};\n`
 rs += `pub const MAX_CONNECTION_LIST_SUBSCRIPTIONS: usize = ${subscriptionLimits.listTargets};\n`
+rs += `pub const MAX_PRINCIPAL_SUBSCRIPTIONS: usize = ${subscriptionLimits.principalTargets};\n`
 rs += `pub const SUBSCRIPTION_DELIVERY_TIMEOUT_MS: u64 = ${subscriptionLimits.deliveryTimeoutMs};\n`
 ts += `export const subscriptionLimits = ${JSON.stringify(subscriptionLimits)} as const\n`
 const subscriptionId = schema.$defs.ConversationSubscriptionId

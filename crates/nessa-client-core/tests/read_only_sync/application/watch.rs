@@ -519,3 +519,79 @@ fn limit_log() -> (LimitLog, tracing::subscriber::DefaultGuard) {
 fn limit_text(captured: &LimitLog) -> String {
     String::from_utf8(captured.0.lock().expect("limit log").clone()).unwrap()
 }
+
+/// #746: slow retained discovery needs more than four work slices; it still
+/// uses one registration and successful passes retain their original budget.
+#[test]
+fn prolonged_preparing_preserves_the_live_watch_and_pass_budget() {
+    let preparing = PassResult::Failed(Some(GatewayError::Record(
+        RecordReadErrorCode::SourcePreparing,
+    )));
+    let mut script = Script::new(
+        std::iter::repeat_n(preparing, 8).chain([PassResult::Complete, PassResult::Complete]),
+        [hint(false)],
+    );
+    let (end, lines) = run(&mut script, 2);
+    assert_eq!(
+        end,
+        End {
+            reason: EndReason::PassesExhausted,
+            cause: None
+        }
+    );
+    assert_eq!(
+        script
+            .calls
+            .iter()
+            .filter(|call| **call == Call::Register)
+            .count(),
+        1
+    );
+    assert_eq!(
+        script
+            .calls
+            .iter()
+            .filter(|call| **call == Call::Pass)
+            .count(),
+        10
+    );
+    assert!(lines.contains(&Line::Pass(Trigger::Preparing, 9)));
+    assert!(lines.contains(&Line::Pass(Trigger::Hint, 10)));
+}
+
+#[test]
+fn prolonged_preparing_discovery_keeps_progress_until_registration() {
+    let preparing = Some(GatewayError::Record(RecordReadErrorCode::SourcePreparing));
+    let answers: Vec<_> = std::iter::repeat_n(preparing, 8).chain([None]).collect();
+    assert_eq!(discovery(&answers), (None, 9));
+}
+
+#[test]
+fn lost_output_stops_prolonged_preparing_without_waiting_or_reregistering() {
+    let preparing = PassResult::Failed(Some(GatewayError::Record(
+        RecordReadErrorCode::SourcePreparing,
+    )));
+    let mut script = Script::new(std::iter::repeat_n(preparing, 8), []);
+    let mut lines = Lines {
+        refuse_at: Some(6),
+        ..Lines::default()
+    };
+    assert_eq!(follow(&mut script, &mut lines, passes(1)), Err(OutputLost));
+    assert_eq!(
+        script
+            .calls
+            .iter()
+            .filter(|call| **call == Call::Pass)
+            .count(),
+        6
+    );
+    assert_eq!(
+        script
+            .calls
+            .iter()
+            .filter(|call| **call == Call::Register)
+            .count(),
+        1
+    );
+    assert!(!script.calls.contains(&Call::Wait));
+}

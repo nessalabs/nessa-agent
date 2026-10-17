@@ -3,6 +3,7 @@ use crate::conversation::application::{
     CatalogueChangeWatch, CatalogueWatchError, CatalogueWatchState, WatchCatalogue, WatchRecords,
 };
 use crate::conversation::infrastructure::NessaRecordWatches;
+use crate::conversation::domain::ShareAccess;
 use crate::product::{
     change_watch::{
         watch_principal, ProductWatchPermit, WatchOwners, WatchPrincipal, WatchSelector,
@@ -81,6 +82,7 @@ struct WatchFixture {
     state: ProductRouteState,
     session: AuthenticatedSession,
     storage: Arc<RecordStorage>,
+    metadata: Arc<LocalConversationStore>,
     id: ConversationId,
     records: Arc<CountingRecords>,
     receiver: Arc<CountingReceiver>,
@@ -170,13 +172,14 @@ impl WatchFixture {
                 metadata.clone(),
                 crate::conversation_test_support::access_policy(),
             )
-            .with_change_watches(records.clone(), metadata)
+            .with_change_watches(records.clone(), metadata.clone())
             .with_record_source(reads.clone());
         let session = authenticate(&state).await;
         Self {
             state,
             session,
             storage,
+            metadata,
             id,
             records,
             receiver,
@@ -251,7 +254,7 @@ impl WatchFixture {
             .unwrap();
     }
 
-    async fn catalogue_commit(&self, creation: u64) -> ConversationId {
+    async fn catalogue_create(&self, creation: u64) -> ConversationId {
         let id = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
         self.state
             .passive_read
@@ -274,6 +277,18 @@ impl WatchFixture {
             )
             .await
             .unwrap();
+        id
+    }
+
+    async fn catalogue_commit(&self, creation: u64) -> ConversationId {
+        let id = self.catalogue_create(creation).await;
+        crate::conversation_test_support::grant_as(
+            self.metadata.as_ref(),
+            &id,
+            "receiver",
+            ShareAccess::read(),
+        )
+        .await;
         id
     }
 
@@ -1046,6 +1061,14 @@ impl WatchCatalogue for RetainedCatalogueWatch {
             .unwrap()
             .take()
             .ok_or(CatalogueWatchError::Capacity)
+    }
+    fn watch_reader(
+        &self,
+        organization: &OrganizationId,
+        owner: &PrincipalId,
+        _receiver: &str,
+    ) -> Result<CatalogueChangeWatch, CatalogueWatchError> {
+        self.watch(organization, owner)
     }
 }
 
@@ -2509,4 +2532,32 @@ async fn a_revoke_ends_an_installed_records_watch_at_its_next_notice() {
     );
     assert!(peer.output.try_recv().is_err());
     fixture.finish(peer, socket).await;
+}
+
+#[tokio::test]
+async fn paired_catalogue_watch_does_not_send_ungranted_owner_activity() {
+    let fixture = WatchFixture::new().await;
+    let (socket, mut peer) = test_socket(None);
+    let task = tokio::spawn(run_authenticated(
+        socket,
+        fixture.state.clone(),
+        fixture.session.clone(),
+    ));
+    fixture.send(
+        &peer,
+        "catalogue",
+        "conversation.watchCatalogue",
+        json!({"receiverId": "receiver", "accessEpoch": "3"}),
+    );
+    let reply = text(peer.message().await);
+    assert_eq!(reply["ok"], true, "{reply}");
+    fixture.catalogue_create(100).await;
+    assert!(timeout(Duration::from_millis(100), peer.output.recv())
+        .await
+        .is_err());
+    fixture.catalogue_commit(101).await;
+    let notice = text(peer.message().await);
+    assert_eq!(notice["event"], "conversation.changed");
+    assert_eq!(notice["payload"]["watchId"], reply["payload"]["watchId"]);
+    fixture.finish(peer, task).await;
 }

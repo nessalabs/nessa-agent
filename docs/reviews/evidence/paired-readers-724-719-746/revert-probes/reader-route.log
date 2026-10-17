@@ -1,0 +1,18 @@
+running 1 test
+test product::socket::tests::watches::paired_catalogue_watch_does_not_send_ungranted_owner_activity ... FAILED
+
+failures:
+
+---- product::socket::tests::watches::paired_catalogue_watch_does_not_send_ungranted_owner_activity stdout ----
+
+thread 'product::socket::tests::watches::paired_catalogue_watch_does_not_send_ungranted_owner_activity' (83170) panicked at crates/nessa-server/src/product/../../tests/product/socket/watches.rs:2555:5:
+assertion failed: timeout(Duration::from_millis(100), peer.output.recv()).await.is_err()
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    product::socket::tests::watches::paired_catalogue_watch_does_not_send_ungranted_owner_activity
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3178 filtered out; finished in 0.03s
+
+error: test failed, to rerun pass `-p nessa-server --lib`

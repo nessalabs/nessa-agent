@@ -1,0 +1,250 @@
+{
+  "base_head": "35f9d50aa59d7d6ddf7b1b942c0e269358a8b16b",
+  "working_source_sha256": {
+    ".github/workflows/local-auth.yml": "1321923d194e5bf3ba6965c35387fda7d699854046b2fc9a17e2d4ba6122023a",
+    "crates/nessa-local-database/README.md": "3d2a013855a91a110d5d7924bde81a4100f425fc938c88ba78bb8a22f6ff3492",
+    "crates/nessa-local-database/src/lib.rs": "6f37d0881d6718287ed749a145eed6254869ca86d5a9e388a5a108ce5305d120",
+    "crates/nessa-local-database/tests/upgrade.rs": "8c3725a81bf439af67339d94037bdd98585d5da5aed7c54b1daff8e6833937ce",
+    "crates/nessa-server/src/conversation/infrastructure/schema.sql": "3e650f3a5fba17cc1f7bf1d29926c70a34ca24114ba531b8b47211a7e22f6b26",
+    "crates/nessa-server/src/conversation/infrastructure/store.rs": "7ab60f7216168eed7619bfb2c0f30a16db07a2928acaf7f1ed11dc740b5979e6",
+    "crates/nessa-server/src/conversation/infrastructure/store/catalogue_heads.rs": "2510d2a9d2c9e073699bc529f4002909adad92b308258036eaaf9abaf2340c64",
+    "crates/nessa-server/src/conversation/infrastructure/store/catalogue_heads.sql": "842cc3870634733134e016187753e0494f3ab9fff0334f976e58002e2fab86da",
+    "crates/nessa-server/tests/composition/read_only_online.rs": "142588b8b963508037f612ab737fffea895a83e1c212fe943d0cca84bb4644a4",
+    "crates/nessa-server/tests/conversation/store.rs": "7ee46c62d956953a661211c5563460c4e4e4dfff0fca584b0daa88398346347d",
+    "crates/nessa-server/tests/conversation/store/fixtures/metadata-v6.sql": "de5df94aa1a42cac1f894e73cf5b75fee7bc4fc0806e5e36bc7a06e3f6a670a0",
+    "crates/nessa-server/tests/conversation/store/metadata_upgrade.rs": "b79abf47ffc2be649f24b24eaeaa4d607ac755434fde877bc6cd7c501e0f176e",
+    "docs/adr/todo/202-versioned-local-datasets.md": "a618308c2ec4617b5a5d489810b67e3b7ee45c7ee7c1dbee0e21d39a9965a709",
+    "docs/codebase-structure.md": "35235724506dbdb652cb078ac0976d159d0fc04c760bbea1babbd07c83e033fd",
+    "docs/design/committed-change-watches.md": "5b3f4021f18ef6f081da31f288765a39caea90a4f572ff2c4e644c41ec35fd39",
+    "docs/design/read-grants.md": "ef0d1bc5faa575887b8c54cf4737fbba8353f0c05d6cea3f84b1b468945ecfce",
+    "scripts/cargo-test-parallel.mjs": "399dda97c9b1c68ef708b5197f801654a921fbfd24250e3e1bbdaf8957434530",
+    "scripts/cargo-test-parallel/README.md": "817c48187e9cf0e5b2b4667fb14dace109e7ae3fed750e2b443a5e99e17349f4",
+    "scripts/cargo-test-parallel/paired-reader-load.mjs": "10711412b8babc96919ffed70f3374e6077270dbcbcab0703998bf1ba78fe4eb",
+    "scripts/cargo-test-parallel/paired-reader-load.test.mjs": "8864f9faffca7b832019c1e7210237a6b63204c097c59da047a85f4e8be8a52b"
+  },
+  "probes": [
+    {
+      "probe": "unversioned-predecessor-refusal",
+      "file": "crates/nessa-local-database/src/lib.rs",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "nessa-local-database",
+        "--test",
+        "upgrade",
+        "populated_unversioned_files_are_not_a_supported_predecessor",
+        "--",
+        "--exact"
+      ],
+      "before_exit": 101,
+      "after_exit": 0,
+      "source_restored": true,
+      "starting_diff_restored": true,
+      "mutation_diff": "--- crates/nessa-local-database/src/lib.rs\n+++ crates/nessa-local-database/src/lib.rs\n@@ -186,7 +186,7 @@\n         return Ok(Accepted::Current);\n     }\n     if schema.upgrade.is_some_and(|upgrade| {\n-        upgrade.from_version > 0\n+        true\n             && upgrade.from_version < schema.version\n             && found == i64::from(upgrade.from_version)\n     }) {\n",
+      "before_log_sha256": "c8962a34a6391b7c6aa0d5d208f227f6b86e4165e9ef80adbcc19d6861f13ca6",
+      "before_log": "     Running tests/upgrade.rs (target/debug/deps/upgrade-7078215363e2f5f5)\n\nrunning 1 test\ntest populated_unversioned_files_are_not_a_supported_predecessor ... FAILED\n\nfailures:\n\n---- populated_unversioned_files_are_not_a_supported_predecessor stdout ----\n\nthread 'populated_unversioned_files_are_not_a_supported_predecessor' (222562) panicked at crates/nessa-local-database/tests/upgrade.rs:154:5:\nassertion failed: matches!(open(&path, &schema),\n    Err(OpenError::Version { found: 0, expected: 3 }))\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n\n\nfailures:\n    populated_unversioned_files_are_not_a_supported_predecessor\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.00s\n\nerror: test failed, to rerun pass `-p nessa-local-database --test upgrade`\n",
+      "after_log_sha256": "4e11d748055bb66ca332b4019bdb5d1b22d71e984027d2b24c629f18004adff9",
+      "after_log": "     Running tests/upgrade.rs (target/debug/deps/upgrade-7078215363e2f5f5)\n\nrunning 1 test\ntest populated_unversioned_files_are_not_a_supported_predecessor ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.00s\n\n"
+    },
+    {
+      "probe": "retain-first-failure",
+      "file": "scripts/cargo-test-parallel/paired-reader-load.mjs",
+      "command": [
+        "node",
+        "--test",
+        "scripts/cargo-test-parallel/paired-reader-load.test.mjs"
+      ],
+      "before_exit": 1,
+      "after_exit": 0,
+      "source_restored": true,
+      "starting_diff_restored": true,
+      "mutation_diff": "--- scripts/cargo-test-parallel/paired-reader-load.mjs\n+++ scripts/cargo-test-parallel/paired-reader-load.mjs\n@@ -26,7 +26,7 @@\n export function runsPassed(runs, repetitions) {\n   return (\n     runs.length === repetitions &&\n-    runs.every((run) => run.exit_code === 0 && run.matched === true)\n+    runs.some((run) => run.exit_code === 0 && run.matched === true)\n   )\n }\n \n",
+      "before_log_sha256": "4a521b6fa1669bbe35ee9a936b598f6b7d88e06f122a5bd5f862d5d1e7e4f160",
+      "before_log": "\u2714 a partial ledger and a nonzero exit cannot become a passing summary (2.283912ms)\n\u2714 libtest must actually run one successful test, rather than match zero (0.195967ms)\n\u2716 loaded repetitions retain early failures instead of accepting later passes (1.534204ms)\n\u2716 zero matched tests and failed process launches cannot pass (0.420842ms)\n\u2714 successful runs pass and a failed ledger still releases the CPU workers (0.641635ms)\n\u2714 repeat cost is bounded before starting load (0.333204ms)\n\u2714 existing macOS matrix owns the loaded check, same package build and retained logs (0.867918ms)\n\u2139 tests 7\n\u2139 suites 0\n\u2139 pass 5\n\u2139 fail 2\n\u2139 cancelled 0\n\u2139 skipped 0\n\u2139 todo 0\n\u2139 duration_ms 89.399535\n\n\u2716 failing tests:\n\ntest at scripts/cargo-test-parallel/paired-reader-load.test.mjs:53:1\n\u2716 loaded repetitions retain early failures instead of accepting later passes (1.534204ms)\n  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:\n  \n  true !== false\n  \n      at TestContext.<anonymous> (file:///workspace/paired-readers/scripts/cargo-test-parallel/paired-reader-load.test.mjs:59:10)\n      at async Test.run (node:internal/test_runner/test:1389:7)\n      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {\n    generatedMessage: true,\n    code: 'ERR_ASSERTION',\n    actual: true,\n    expected: false,\n    operator: 'strictEqual',\n    diff: 'simple'\n  }\n\ntest at scripts/cargo-test-parallel/paired-reader-load.test.mjs:70:1\n\u2716 zero matched tests and failed process launches cannot pass (0.420842ms)\n  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:\n  \n  true !== false\n  \n      at TestContext.<anonymous> (file:///workspace/paired-readers/scripts/cargo-test-parallel/paired-reader-load.test.mjs:73:12)\n      at async Test.run (node:internal/test_runner/test:1389:7)\n      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {\n    generatedMessage: true,\n    code: 'ERR_ASSERTION',\n    actual: true,\n    expected: false,\n    operator: 'strictEqual',\n    diff: 'simple'\n  }\n",
+      "after_log_sha256": "bd3464fbabfac0f7aea222d0980c51fc821fc69b5b7e78564257c48d1a129530",
+      "after_log": "\u2714 a partial ledger and a nonzero exit cannot become a passing summary (0.84535ms)\n\u2714 libtest must actually run one successful test, rather than match zero (1.423986ms)\n\u2714 loaded repetitions retain early failures instead of accepting later passes (1.126177ms)\n\u2714 zero matched tests and failed process launches cannot pass (0.518696ms)\n\u2714 successful runs pass and a failed ledger still releases the CPU workers (0.665428ms)\n\u2714 repeat cost is bounded before starting load (0.29313ms)\n\u2714 existing macOS matrix owns the loaded check, same package build and retained logs (1.098442ms)\n\u2139 tests 7\n\u2139 suites 0\n\u2139 pass 7\n\u2139 fail 0\n\u2139 cancelled 0\n\u2139 skipped 0\n\u2139 todo 0\n\u2139 duration_ms 121.21805\n"
+    },
+    {
+      "probe": "incomplete-ledger-fails",
+      "file": "scripts/cargo-test-parallel/paired-reader-load.mjs",
+      "command": [
+        "node",
+        "--test",
+        "scripts/cargo-test-parallel/paired-reader-load.test.mjs"
+      ],
+      "before_exit": 1,
+      "after_exit": 0,
+      "source_restored": true,
+      "starting_diff_restored": true,
+      "mutation_diff": "--- scripts/cargo-test-parallel/paired-reader-load.mjs\n+++ scripts/cargo-test-parallel/paired-reader-load.mjs\n@@ -25,7 +25,7 @@\n \n export function runsPassed(runs, repetitions) {\n   return (\n-    runs.length === repetitions &&\n+    runs.length <= repetitions &&\n     runs.every((run) => run.exit_code === 0 && run.matched === true)\n   )\n }\n",
+      "before_log_sha256": "1ef1392ded55b95cbfc0c3b4278dd311bb8958c05c005e67b8ede982895cf115",
+      "before_log": "\u2716 a partial ledger and a nonzero exit cannot become a passing summary (1.609947ms)\n\u2714 libtest must actually run one successful test, rather than match zero (1.466194ms)\n\u2714 loaded repetitions retain early failures instead of accepting later passes (1.05916ms)\n\u2714 zero matched tests and failed process launches cannot pass (0.366405ms)\n\u2714 successful runs pass and a failed ledger still releases the CPU workers (0.673288ms)\n\u2714 repeat cost is bounded before starting load (0.296027ms)\n\u2714 existing macOS matrix owns the loaded check, same package build and retained logs (0.897739ms)\n\u2139 tests 7\n\u2139 suites 0\n\u2139 pass 6\n\u2139 fail 1\n\u2139 cancelled 0\n\u2139 skipped 0\n\u2139 todo 0\n\u2139 duration_ms 91.233474\n\n\u2716 failing tests:\n\ntest at scripts/cargo-test-parallel/paired-reader-load.test.mjs:6:1\n\u2716 a partial ledger and a nonzero exit cannot become a passing summary (1.609947ms)\n  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:\n  \n  true !== false\n  \n      at TestContext.<anonymous> (file:///workspace/paired-readers/scripts/cargo-test-parallel/paired-reader-load.test.mjs:7:10)\n      at Test.runInAsyncScope (node:async_hooks:227:14)\n      at Test.run (node:internal/test_runner/test:1382:25)\n      at Test.start (node:internal/test_runner/test:1242:17)\n      at startSubtestAfterBootstrap (node:internal/test_runner/harness:387:17) {\n    generatedMessage: true,\n    code: 'ERR_ASSERTION',\n    actual: true,\n    expected: false,\n    operator: 'strictEqual',\n    diff: 'simple'\n  }\n",
+      "after_log_sha256": "9d79df01651133a21bd6a9b0bcfc68947c32b6bb45e00fb4579dbb0d4da2dedb",
+      "after_log": "\u2714 a partial ledger and a nonzero exit cannot become a passing summary (2.311221ms)\n\u2714 libtest must actually run one successful test, rather than match zero (0.185095ms)\n\u2714 loaded repetitions retain early failures instead of accepting later passes (1.333269ms)\n\u2714 zero matched tests and failed process launches cannot pass (0.496073ms)\n\u2714 successful runs pass and a failed ledger still releases the CPU workers (0.716641ms)\n\u2714 repeat cost is bounded before starting load (0.363236ms)\n\u2714 existing macOS matrix owns the loaded check, same package build and retained logs (1.112553ms)\n\u2139 tests 7\n\u2139 suites 0\n\u2139 pass 7\n\u2139 fail 0\n\u2139 cancelled 0\n\u2139 skipped 0\n\u2139 todo 0\n\u2139 duration_ms 90.424518\n"
+    },
+    {
+      "probe": "zero-matched-tests-fail",
+      "file": "scripts/cargo-test-parallel/paired-reader-load.mjs",
+      "command": [
+        "node",
+        "--test",
+        "scripts/cargo-test-parallel/paired-reader-load.test.mjs"
+      ],
+      "before_exit": 1,
+      "after_exit": 0,
+      "source_restored": true,
+      "starting_diff_restored": true,
+      "mutation_diff": "--- scripts/cargo-test-parallel/paired-reader-load.mjs\n+++ scripts/cargo-test-parallel/paired-reader-load.mjs\n@@ -20,7 +20,7 @@\n const LOAD_WORKERS = 4\n \n export function matchedSinglePass(output) {\n-  return /test result: ok\\. 1 passed; 0 failed;/.test(output)\n+  return /test result: ok\\. [01] passed; 0 failed;/.test(output)\n }\n \n export function runsPassed(runs, repetitions) {\n",
+      "before_log_sha256": "16ef91e50d328182a14933695b9f6d437fd5c01738f0ca1f345cd960ae84b100",
+      "before_log": "\u2714 a partial ledger and a nonzero exit cannot become a passing summary (0.895006ms)\n\u2716 libtest must actually run one successful test, rather than match zero (2.42577ms)\n\u2714 loaded repetitions retain early failures instead of accepting later passes (1.149342ms)\n\u2714 zero matched tests and failed process launches cannot pass (2.423931ms)\n\u2714 successful runs pass and a failed ledger still releases the CPU workers (1.913426ms)\n\u2714 repeat cost is bounded before starting load (0.495164ms)\n\u2714 existing macOS matrix owns the loaded check, same package build and retained logs (1.357025ms)\n\u2139 tests 7\n\u2139 suites 0\n\u2139 pass 6\n\u2139 fail 1\n\u2139 cancelled 0\n\u2139 skipped 0\n\u2139 todo 0\n\u2139 duration_ms 97.714139\n\n\u2716 failing tests:\n\ntest at scripts/cargo-test-parallel/paired-reader-load.test.mjs:12:1\n\u2716 libtest must actually run one successful test, rather than match zero (2.42577ms)\n  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:\n  \n  true !== false\n  \n      at TestContext.<anonymous> (file:///workspace/paired-readers/scripts/cargo-test-parallel/paired-reader-load.test.mjs:13:10)\n      at Test.runInAsyncScope (node:async_hooks:227:14)\n      at Test.run (node:internal/test_runner/test:1382:25)\n      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)\n      at Test.postRun (node:internal/test_runner/test:1522:19)\n      at Test.run (node:internal/test_runner/test:1447:12)\n      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {\n    generatedMessage: true,\n    code: 'ERR_ASSERTION',\n    actual: true,\n    expected: false,\n    operator: 'strictEqual',\n    diff: 'simple'\n  }\n",
+      "after_log_sha256": "a10ace7922aa7fed24d479d6cdbb97a4928515673dd1af35e2adf0954a8952b6",
+      "after_log": "\u2714 a partial ledger and a nonzero exit cannot become a passing summary (0.819651ms)\n\u2714 libtest must actually run one successful test, rather than match zero (0.231937ms)\n\u2714 loaded repetitions retain early failures instead of accepting later passes (1.080002ms)\n\u2714 zero matched tests and failed process launches cannot pass (0.342961ms)\n\u2714 successful runs pass and a failed ledger still releases the CPU workers (0.786529ms)\n\u2714 repeat cost is bounded before starting load (0.915182ms)\n\u2714 existing macOS matrix owns the loaded check, same package build and retained logs (0.860507ms)\n\u2139 tests 7\n\u2139 suites 0\n\u2139 pass 7\n\u2139 fail 0\n\u2139 cancelled 0\n\u2139 skipped 0\n\u2139 todo 0\n\u2139 duration_ms 90.927071\n"
+    },
+    {
+      "probe": "release-load-workers",
+      "file": "scripts/cargo-test-parallel/paired-reader-load.mjs",
+      "command": [
+        "node",
+        "--test",
+        "scripts/cargo-test-parallel/paired-reader-load.test.mjs"
+      ],
+      "before_exit": 1,
+      "after_exit": 0,
+      "source_restored": true,
+      "starting_diff_restored": true,
+      "mutation_diff": "--- scripts/cargo-test-parallel/paired-reader-load.mjs\n+++ scripts/cargo-test-parallel/paired-reader-load.mjs\n@@ -54,7 +54,7 @@\n     }\n     return runsPassed(runs, repetitions)\n   } finally {\n-    await stop()\n+    await Promise.resolve()\n   }\n }\n \n",
+      "before_log_sha256": "93f2735be8dd803934fb9527c9c6b84edccd17b5c90d7608e4622b6a7df73ca3",
+      "before_log": "\u2714 a partial ledger and a nonzero exit cannot become a passing summary (0.984666ms)\n\u2714 libtest must actually run one successful test, rather than match zero (1.349817ms)\n\u2716 loaded repetitions retain early failures instead of accepting later passes (1.920094ms)\n\u2716 zero matched tests and failed process launches cannot pass (0.407446ms)\n\u2716 successful runs pass and a failed ledger still releases the CPU workers (0.274511ms)\n\u2714 repeat cost is bounded before starting load (0.791128ms)\n\u2714 existing macOS matrix owns the loaded check, same package build and retained logs (0.990202ms)\n\u2139 tests 7\n\u2139 suites 0\n\u2139 pass 4\n\u2139 fail 3\n\u2139 cancelled 0\n\u2139 skipped 0\n\u2139 todo 0\n\u2139 duration_ms 91.482449\n\n\u2716 failing tests:\n\ntest at scripts/cargo-test-parallel/paired-reader-load.test.mjs:53:1\n\u2716 loaded repetitions retain early failures instead of accepting later passes (1.920094ms)\n  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:\n  \n  0 !== 1\n  \n      at TestContext.<anonymous> (file:///workspace/paired-readers/scripts/cargo-test-parallel/paired-reader-load.test.mjs:67:10)\n      at async Test.run (node:internal/test_runner/test:1389:7)\n      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {\n    generatedMessage: true,\n    code: 'ERR_ASSERTION',\n    actual: 0,\n    expected: 1,\n    operator: 'strictEqual',\n    diff: 'simple'\n  }\n\ntest at scripts/cargo-test-parallel/paired-reader-load.test.mjs:70:1\n\u2716 zero matched tests and failed process launches cannot pass (0.407446ms)\n  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:\n  \n  0 !== 1\n  \n      at TestContext.<anonymous> (file:///workspace/paired-readers/scripts/cargo-test-parallel/paired-reader-load.test.mjs:75:12)\n      at async Test.run (node:internal/test_runner/test:1389:7)\n      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {\n    generatedMessage: true,\n    code: 'ERR_ASSERTION',\n    actual: 0,\n    expected: 1,\n    operator: 'strictEqual',\n    diff: 'simple'\n  }\n\ntest at scripts/cargo-test-parallel/paired-reader-load.test.mjs:79:1\n\u2716 successful runs pass and a failed ledger still releases the CPU workers (0.274511ms)\n  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:\n  \n  0 !== 1\n  \n      at TestContext.<anonymous> (file:///workspace/paired-readers/scripts/cargo-test-parallel/paired-reader-load.test.mjs:82:10)\n      at async Test.run (node:internal/test_runner/test:1389:7)\n      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {\n    generatedMessage: true,\n    code: 'ERR_ASSERTION',\n    actual: 0,\n    expected: 1,\n    operator: 'strictEqual',\n    diff: 'simple'\n  }\n",
+      "after_log_sha256": "3605584255715cd0199200c93992d706653363ecb5e635d1bc047c0de8dbdead",
+      "after_log": "\u2714 a partial ledger and a nonzero exit cannot become a passing summary (3.299482ms)\n\u2714 libtest must actually run one successful test, rather than match zero (0.339822ms)\n\u2714 loaded repetitions retain early failures instead of accepting later passes (1.232573ms)\n\u2714 zero matched tests and failed process launches cannot pass (0.372426ms)\n\u2714 successful runs pass and a failed ledger still releases the CPU workers (0.621107ms)\n\u2714 repeat cost is bounded before starting load (0.300955ms)\n\u2714 existing macOS matrix owns the loaded check, same package build and retained logs (1.194566ms)\n\u2139 tests 7\n\u2139 suites 0\n\u2139 pass 7\n\u2139 fail 0\n\u2139 cancelled 0\n\u2139 skipped 0\n\u2139 todo 0\n\u2139 duration_ms 97.723866\n"
+    },
+    {
+      "probe": "bounded-repeat-cost",
+      "file": "scripts/cargo-test-parallel/paired-reader-load.mjs",
+      "command": [
+        "node",
+        "--test",
+        "scripts/cargo-test-parallel/paired-reader-load.test.mjs"
+      ],
+      "before_exit": 1,
+      "after_exit": 0,
+      "source_restored": true,
+      "starting_diff_restored": true,
+      "mutation_diff": "--- scripts/cargo-test-parallel/paired-reader-load.mjs\n+++ scripts/cargo-test-parallel/paired-reader-load.mjs\n@@ -16,7 +16,7 @@\n \n export const FIXTURE =\n   \"composition::read_only_online_tests::online_two_devices_follow_live_hints_and_converge\"\n-const REPETITIONS = 10\n+const REPETITIONS = 11\n const LOAD_WORKERS = 4\n \n export function matchedSinglePass(output) {\n",
+      "before_log_sha256": "6b93e6efdce686f772af9ab08411417d577792c2df62763c92ff0d5aaa61c8c0",
+      "before_log": "\u2714 a partial ledger and a nonzero exit cannot become a passing summary (0.835301ms)\n\u2714 libtest must actually run one successful test, rather than match zero (1.528209ms)\n\u2714 loaded repetitions retain early failures instead of accepting later passes (1.108288ms)\n\u2714 zero matched tests and failed process launches cannot pass (0.358913ms)\n\u2714 successful runs pass and a failed ledger still releases the CPU workers (0.621783ms)\n\u2716 repeat cost is bounded before starting load (1.223559ms)\n\u2714 existing macOS matrix owns the loaded check, same package build and retained logs (0.881018ms)\n\u2139 tests 7\n\u2139 suites 0\n\u2139 pass 6\n\u2139 fail 1\n\u2139 cancelled 0\n\u2139 skipped 0\n\u2139 todo 0\n\u2139 duration_ms 91.78308\n\n\u2716 failing tests:\n\ntest at scripts/cargo-test-parallel/paired-reader-load.test.mjs:91:1\n\u2716 repeat cost is bounded before starting load (1.223559ms)\n  AssertionError [ERR_ASSERTION]: Missing expected rejection.\n      at async TestContext.<anonymous> (file:///workspace/paired-readers/scripts/cargo-test-parallel/paired-reader-load.test.mjs:94:5)\n      at async Test.run (node:internal/test_runner/test:1389:7)\n      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {\n    generatedMessage: false,\n    code: 'ERR_ASSERTION',\n    actual: undefined,\n    expected: /between 1 and 10/,\n    operator: 'rejects',\n    diff: 'simple'\n  }\n",
+      "after_log_sha256": "a868fca8edbc4685cbd9ee28c3b0d21fa708f859ee8e9b2fd80307c0503e04a1",
+      "after_log": "\u2714 a partial ledger and a nonzero exit cannot become a passing summary (0.928171ms)\n\u2714 libtest must actually run one successful test, rather than match zero (1.623234ms)\n\u2714 loaded repetitions retain early failures instead of accepting later passes (1.1777ms)\n\u2714 zero matched tests and failed process launches cannot pass (0.562335ms)\n\u2714 successful runs pass and a failed ledger still releases the CPU workers (0.660911ms)\n\u2714 repeat cost is bounded before starting load (0.321487ms)\n\u2714 existing macOS matrix owns the loaded check, same package build and retained logs (0.873363ms)\n\u2139 tests 7\n\u2139 suites 0\n\u2139 pass 7\n\u2139 fail 0\n\u2139 cancelled 0\n\u2139 skipped 0\n\u2139 todo 0\n\u2139 duration_ms 85.104503\n"
+    },
+    {
+      "probe": "partial-ledger-retained",
+      "file": "scripts/cargo-test-parallel/paired-reader-load.mjs",
+      "command": [
+        "node",
+        "--test",
+        "scripts/cargo-test-parallel/paired-reader-load.test.mjs"
+      ],
+      "before_exit": 1,
+      "after_exit": 0,
+      "source_restored": true,
+      "starting_diff_restored": true,
+      "mutation_diff": "--- scripts/cargo-test-parallel/paired-reader-load.mjs\n+++ scripts/cargo-test-parallel/paired-reader-load.mjs\n@@ -50,7 +50,7 @@\n         result = { exit_code: 1, matched: false, error: error.message }\n       }\n       runs.push({ run, ...result })\n-      await save(runs)\n+      if (run === repetitions) await save(runs)\n     }\n     return runsPassed(runs, repetitions)\n   } finally {\n",
+      "before_log_sha256": "54d5e58517b1b0ccf27cb310162685d32ca8ef7399d22c58a9e29496561222a9",
+      "before_log": "\u2714 a partial ledger and a nonzero exit cannot become a passing summary (0.892425ms)\n\u2714 libtest must actually run one successful test, rather than match zero (1.268396ms)\n\u2716 loaded repetitions retain early failures instead of accepting later passes (2.239894ms)\n\u2716 zero matched tests and failed process launches cannot pass (0.454366ms)\n\u2714 successful runs pass and a failed ledger still releases the CPU workers (0.691315ms)\n\u2714 repeat cost is bounded before starting load (0.308664ms)\n\u2714 existing macOS matrix owns the loaded check, same package build and retained logs (1.089793ms)\n\u2139 tests 7\n\u2139 suites 0\n\u2139 pass 5\n\u2139 fail 2\n\u2139 cancelled 0\n\u2139 skipped 0\n\u2139 todo 0\n\u2139 duration_ms 100.641293\n\n\u2716 failing tests:\n\ntest at scripts/cargo-test-parallel/paired-reader-load.test.mjs:53:1\n\u2716 loaded repetitions retain early failures instead of accepting later passes (2.239894ms)\n  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:\n  + actual - expected\n  \n    [\n  -   1,\n  -   2,\n      3\n    ]\n  \n      at TestContext.<anonymous> (file:///workspace/paired-readers/scripts/cargo-test-parallel/paired-reader-load.test.mjs:61:10)\n      at async Test.run (node:internal/test_runner/test:1389:7)\n      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {\n    generatedMessage: true,\n    code: 'ERR_ASSERTION',\n    actual: [ 3 ],\n    expected: [ 1, 2, 3 ],\n    operator: 'deepStrictEqual',\n    diff: 'simple'\n  }\n\ntest at scripts/cargo-test-parallel/paired-reader-load.test.mjs:70:1\n\u2716 zero matched tests and failed process launches cannot pass (0.454366ms)\n  TypeError: Cannot read properties of undefined (reading '0')\n      at TestContext.<anonymous> (file:///workspace/paired-readers/scripts/cargo-test-parallel/paired-reader-load.test.mjs:74:34)\n      at async Test.run (node:internal/test_runner/test:1389:7)\n      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)\n",
+      "after_log_sha256": "3c081edec27642eec8416bd1355e487941a48088b829e2c3766359e3ac9f2abd",
+      "after_log": "\u2714 a partial ledger and a nonzero exit cannot become a passing summary (0.883052ms)\n\u2714 libtest must actually run one successful test, rather than match zero (1.231608ms)\n\u2714 loaded repetitions retain early failures instead of accepting later passes (1.097736ms)\n\u2714 zero matched tests and failed process launches cannot pass (0.479863ms)\n\u2714 successful runs pass and a failed ledger still releases the CPU workers (0.767062ms)\n\u2714 repeat cost is bounded before starting load (0.333318ms)\n\u2714 existing macOS matrix owns the loaded check, same package build and retained logs (0.971056ms)\n\u2139 tests 7\n\u2139 suites 0\n\u2139 pass 7\n\u2139 fail 0\n\u2139 cancelled 0\n\u2139 skipped 0\n\u2139 todo 0\n\u2139 duration_ms 91.325626\n"
+    },
+    {
+      "probe": "spawn-failure-is-failure",
+      "file": "scripts/cargo-test-parallel/paired-reader-load.mjs",
+      "command": [
+        "node",
+        "--test",
+        "scripts/cargo-test-parallel/paired-reader-load.test.mjs"
+      ],
+      "before_exit": 1,
+      "after_exit": 0,
+      "source_restored": true,
+      "starting_diff_restored": true,
+      "mutation_diff": "--- scripts/cargo-test-parallel/paired-reader-load.mjs\n+++ scripts/cargo-test-parallel/paired-reader-load.mjs\n@@ -47,7 +47,7 @@\n       try {\n         result = await runTest(run)\n       } catch (error) {\n-        result = { exit_code: 1, matched: false, error: error.message }\n+        result = { exit_code: 0, matched: true, error: error.message }\n       }\n       runs.push({ run, ...result })\n       await save(runs)\n",
+      "before_log_sha256": "1dc6af0177d34ffa37ed4ca1d1ccd6248be2db2676eb9717c2ab120c2b42ebf6",
+      "before_log": "\u2714 a partial ledger and a nonzero exit cannot become a passing summary (0.86046ms)\n\u2714 libtest must actually run one successful test, rather than match zero (0.189171ms)\n\u2714 loaded repetitions retain early failures instead of accepting later passes (1.008556ms)\n\u2716 zero matched tests and failed process launches cannot pass (1.203428ms)\n\u2714 successful runs pass and a failed ledger still releases the CPU workers (0.633767ms)\n\u2714 repeat cost is bounded before starting load (0.2923ms)\n\u2714 existing macOS matrix owns the loaded check, same package build and retained logs (0.867701ms)\n\u2139 tests 7\n\u2139 suites 0\n\u2139 pass 6\n\u2139 fail 1\n\u2139 cancelled 0\n\u2139 skipped 0\n\u2139 todo 0\n\u2139 duration_ms 89.185476\n\n\u2716 failing tests:\n\ntest at scripts/cargo-test-parallel/paired-reader-load.test.mjs:70:1\n\u2716 zero matched tests and failed process launches cannot pass (1.203428ms)\n  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:\n  \n  true !== false\n  \n      at TestContext.<anonymous> (file:///workspace/paired-readers/scripts/cargo-test-parallel/paired-reader-load.test.mjs:73:12)\n      at async Test.run (node:internal/test_runner/test:1389:7)\n      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {\n    generatedMessage: true,\n    code: 'ERR_ASSERTION',\n    actual: true,\n    expected: false,\n    operator: 'strictEqual',\n    diff: 'simple'\n  }\n",
+      "after_log_sha256": "5ea9b1cf024bdbba144b64be4de21c791a581a2400588c84e70770fbecd36f21",
+      "after_log": "\u2714 a partial ledger and a nonzero exit cannot become a passing summary (2.108905ms)\n\u2714 libtest must actually run one successful test, rather than match zero (0.223181ms)\n\u2714 loaded repetitions retain early failures instead of accepting later passes (1.067664ms)\n\u2714 zero matched tests and failed process launches cannot pass (0.626351ms)\n\u2714 successful runs pass and a failed ledger still releases the CPU workers (0.782059ms)\n\u2714 repeat cost is bounded before starting load (0.371329ms)\n\u2714 existing macOS matrix owns the loaded check, same package build and retained logs (0.952206ms)\n\u2139 tests 7\n\u2139 suites 0\n\u2139 pass 7\n\u2139 fail 0\n\u2139 cancelled 0\n\u2139 skipped 0\n\u2139 todo 0\n\u2139 duration_ms 90.895353\n"
+    },
+    {
+      "probe": "macos-only-load",
+      "file": ".github/workflows/local-auth.yml",
+      "command": [
+        "node",
+        "--test",
+        "scripts/cargo-test-parallel/paired-reader-load.test.mjs"
+      ],
+      "before_exit": 1,
+      "after_exit": 0,
+      "source_restored": true,
+      "starting_diff_restored": true,
+      "mutation_diff": "--- .github/workflows/local-auth.yml\n+++ .github/workflows/local-auth.yml\n@@ -410,7 +410,7 @@\n       # Linux's measured median was 9.1 s/run; budget 1\u20133 warm minutes, with\n       # a ten-minute ceiling for macOS. This changes no product timeout.\n       - name: Loaded paired-reader macOS acceptance\n-        if: runner.os == 'macOS'\n+        if: true\n         timeout-minutes: 10\n         env:\n           PAIRED_READER_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}\n",
+      "before_log_sha256": "ccc336e7fb274083d773622d7a4c3ac4f3dae85167d123e4d76b815b0212ef6b",
+      "before_log": "\u2714 a partial ledger and a nonzero exit cannot become a passing summary (1.074114ms)\n\u2714 libtest must actually run one successful test, rather than match zero (1.276801ms)\n\u2714 loaded repetitions retain early failures instead of accepting later passes (1.072751ms)\n\u2714 zero matched tests and failed process launches cannot pass (0.559924ms)\n\u2714 successful runs pass and a failed ledger still releases the CPU workers (0.621206ms)\n\u2714 repeat cost is bounded before starting load (0.304278ms)\n\u2716 existing macOS matrix owns the loaded check, same package build and retained logs (1.422459ms)\n\u2139 tests 7\n\u2139 suites 0\n\u2139 pass 6\n\u2139 fail 1\n\u2139 cancelled 0\n\u2139 skipped 0\n\u2139 todo 0\n\u2139 duration_ms 97.577848\n\n\u2716 failing tests:\n\ntest at scripts/cargo-test-parallel/paired-reader-load.test.mjs:102:1\n\u2716 existing macOS matrix owns the loaded check, same package build and retained logs (1.422459ms)\n  AssertionError [ERR_ASSERTION]: The input did not match the regular expression /if: runner\\.os == 'macOS'/. Input:\n  \n  '      - name: Loaded paired-reader macOS acceptance\\n' +\n    '        if: true\\n' +\n    '        timeout-minutes: 10\\n' +\n    '        env:\\n' +\n    '          PAIRED_READER_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}\\n' +\n    '        run: node scripts/cargo-test-parallel/paired-reader-load.mjs -- -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk'\n  \n      at TestContext.<anonymous> (file:///workspace/paired-readers/scripts/cargo-test-parallel/paired-reader-load.test.mjs:115:10)\n      at Test.runInAsyncScope (node:async_hooks:227:14)\n      at Test.run (node:internal/test_runner/test:1382:25)\n      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)\n      at Test.postRun (node:internal/test_runner/test:1522:19)\n      at Test.run (node:internal/test_runner/test:1447:12)\n      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {\n    generatedMessage: true,\n    code: 'ERR_ASSERTION',\n    actual: '      - name: Loaded paired-reader macOS acceptance\\n        if: true\\n        timeout-minutes: 10\\n        env:\\n          PAIRED_READER_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}\\n        run: node scripts/cargo-test-parallel/paired-reader-load.mjs -- -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk',\n    expected: /if: runner\\.os == 'macOS'/,\n    operator: 'match',\n    diff: 'simple'\n  }\n",
+      "after_log_sha256": "5082ab1c3a9f635897e75cf70f2672ee2dd51fca4446b2b98dfead087b3dbd1e",
+      "after_log": "\u2714 a partial ledger and a nonzero exit cannot become a passing summary (0.861292ms)\n\u2714 libtest must actually run one successful test, rather than match zero (0.209066ms)\n\u2714 loaded repetitions retain early failures instead of accepting later passes (1.022319ms)\n\u2714 zero matched tests and failed process launches cannot pass (0.424626ms)\n\u2714 successful runs pass and a failed ledger still releases the CPU workers (0.593015ms)\n\u2714 repeat cost is bounded before starting load (0.335337ms)\n\u2714 existing macOS matrix owns the loaded check, same package build and retained logs (0.954203ms)\n\u2139 tests 7\n\u2139 suites 0\n\u2139 pass 7\n\u2139 fail 0\n\u2139 cancelled 0\n\u2139 skipped 0\n\u2139 todo 0\n\u2139 duration_ms 83.58853\n"
+    },
+    {
+      "probe": "ci-load-time-budget",
+      "file": ".github/workflows/local-auth.yml",
+      "command": [
+        "node",
+        "--test",
+        "scripts/cargo-test-parallel/paired-reader-load.test.mjs"
+      ],
+      "before_exit": 1,
+      "after_exit": 0,
+      "source_restored": true,
+      "starting_diff_restored": true,
+      "mutation_diff": "--- .github/workflows/local-auth.yml\n+++ .github/workflows/local-auth.yml\n@@ -411,7 +411,7 @@\n       # a ten-minute ceiling for macOS. This changes no product timeout.\n       - name: Loaded paired-reader macOS acceptance\n         if: runner.os == 'macOS'\n-        timeout-minutes: 10\n+        timeout-minutes: 11\n         env:\n           PAIRED_READER_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}\n         run: node scripts/cargo-test-parallel/paired-reader-load.mjs -- -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk\n",
+      "before_log_sha256": "2197f252592554d624d7e75ffe8111309321bfa59591ad0ca101e6619acb2c33",
+      "before_log": "\u2714 a partial ledger and a nonzero exit cannot become a passing summary (0.847391ms)\n\u2714 libtest must actually run one successful test, rather than match zero (1.489218ms)\n\u2714 loaded repetitions retain early failures instead of accepting later passes (1.233287ms)\n\u2714 zero matched tests and failed process launches cannot pass (0.378182ms)\n\u2714 successful runs pass and a failed ledger still releases the CPU workers (0.52633ms)\n\u2714 repeat cost is bounded before starting load (0.754812ms)\n\u2716 existing macOS matrix owns the loaded check, same package build and retained logs (2.159676ms)\n\u2139 tests 7\n\u2139 suites 0\n\u2139 pass 6\n\u2139 fail 1\n\u2139 cancelled 0\n\u2139 skipped 0\n\u2139 todo 0\n\u2139 duration_ms 93.812138\n\n\u2716 failing tests:\n\ntest at scripts/cargo-test-parallel/paired-reader-load.test.mjs:102:1\n\u2716 existing macOS matrix owns the loaded check, same package build and retained logs (2.159676ms)\n  AssertionError [ERR_ASSERTION]: The input did not match the regular expression /timeout-minutes: 10/. Input:\n  \n  '      - name: Loaded paired-reader macOS acceptance\\n' +\n    \"        if: runner.os == 'macOS'\\n\" +\n    '        timeout-minutes: 11\\n' +\n    '        env:\\n' +\n    '          PAIRED_READER_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}\\n' +\n    '        run: node scripts/cargo-test-parallel/paired-reader-load.mjs -- -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk'\n  \n      at TestContext.<anonymous> (file:///workspace/paired-readers/scripts/cargo-test-parallel/paired-reader-load.test.mjs:116:10)\n      at Test.runInAsyncScope (node:async_hooks:227:14)\n      at Test.run (node:internal/test_runner/test:1382:25)\n      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)\n      at Test.postRun (node:internal/test_runner/test:1522:19)\n      at Test.run (node:internal/test_runner/test:1447:12)\n      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {\n    generatedMessage: true,\n    code: 'ERR_ASSERTION',\n    actual: \"      - name: Loaded paired-reader macOS acceptance\\n        if: runner.os == 'macOS'\\n        timeout-minutes: 11\\n        env:\\n          PAIRED_READER_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}\\n        run: node scripts/cargo-test-parallel/paired-reader-load.mjs -- -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk\",\n    expected: /timeout-minutes: 10/,\n    operator: 'match',\n    diff: 'simple'\n  }\n",
+      "after_log_sha256": "bb6d9e57a34e01773b5c18426e9a47899e7630743971d78479b2022969c1e9de",
+      "after_log": "\u2714 a partial ledger and a nonzero exit cannot become a passing summary (1.148815ms)\n\u2714 libtest must actually run one successful test, rather than match zero (0.250087ms)\n\u2714 loaded repetitions retain early failures instead of accepting later passes (1.054184ms)\n\u2714 zero matched tests and failed process launches cannot pass (0.36225ms)\n\u2714 successful runs pass and a failed ledger still releases the CPU workers (0.950532ms)\n\u2714 repeat cost is bounded before starting load (0.351368ms)\n\u2714 existing macOS matrix owns the loaded check, same package build and retained logs (0.802549ms)\n\u2139 tests 7\n\u2139 suites 0\n\u2139 pass 7\n\u2139 fail 0\n\u2139 cancelled 0\n\u2139 skipped 0\n\u2139 todo 0\n\u2139 duration_ms 97.502478\n"
+    },
+    {
+      "probe": "retain-failed-run-artifacts",
+      "file": ".github/workflows/local-auth.yml",
+      "command": [
+        "node",
+        "--test",
+        "scripts/cargo-test-parallel/paired-reader-load.test.mjs"
+      ],
+      "before_exit": 1,
+      "after_exit": 0,
+      "source_restored": true,
+      "starting_diff_restored": true,
+      "mutation_diff": "--- .github/workflows/local-auth.yml\n+++ .github/workflows/local-auth.yml\n@@ -416,7 +416,7 @@\n           PAIRED_READER_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}\n         run: node scripts/cargo-test-parallel/paired-reader-load.mjs -- -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk\n       - name: Retain loaded paired-reader macOS evidence\n-        if: ${{ !cancelled() && runner.os == 'macOS' }}\n+        if: ${{ success() && runner.os == 'macOS' }}\n         uses: actions/upload-artifact@v4\n         with:\n           name: paired-reader-macos-load\n",
+      "before_log_sha256": "41a96f9604a7305adc875d1d750630c14bb8e5016d6c9dc8b0d3ccd1f9d1195f",
+      "before_log": "\u2714 a partial ledger and a nonzero exit cannot become a passing summary (0.970356ms)\n\u2714 libtest must actually run one successful test, rather than match zero (1.447888ms)\n\u2714 loaded repetitions retain early failures instead of accepting later passes (1.142806ms)\n\u2714 zero matched tests and failed process launches cannot pass (0.430035ms)\n\u2714 successful runs pass and a failed ledger still releases the CPU workers (0.715459ms)\n\u2714 repeat cost is bounded before starting load (0.434383ms)\n\u2716 existing macOS matrix owns the loaded check, same package build and retained logs (1.6924ms)\n\u2139 tests 7\n\u2139 suites 0\n\u2139 pass 6\n\u2139 fail 1\n\u2139 cancelled 0\n\u2139 skipped 0\n\u2139 todo 0\n\u2139 duration_ms 88.404717\n\n\u2716 failing tests:\n\ntest at scripts/cargo-test-parallel/paired-reader-load.test.mjs:102:1\n\u2716 existing macOS matrix owns the loaded check, same package build and retained logs (1.6924ms)\n  AssertionError [ERR_ASSERTION]: The input did not match the regular expression /if: \\$\\{\\{ !cancelled\\(\\) && runner\\.os == 'macOS' \\}\\}/. Input:\n  \n  '      - name: Retain loaded paired-reader macOS evidence\\n' +\n    \"        if: ${{ success() && runner.os == 'macOS' }}\\n\" +\n    '        uses: actions/upload-artifact@v4\\n' +\n    '        with:\\n' +\n    '          name: paired-reader-macos-load\\n' +\n    '          path: target/paired-reader-macos-load\\n' +\n    '          if-no-files-found: error\\n' +\n    '          retention-days: 7'\n  \n      at TestContext.<anonymous> (file:///workspace/paired-readers/scripts/cargo-test-parallel/paired-reader-load.test.mjs:126:10)\n      at Test.runInAsyncScope (node:async_hooks:227:14)\n      at Test.run (node:internal/test_runner/test:1382:25)\n      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)\n      at Test.postRun (node:internal/test_runner/test:1522:19)\n      at Test.run (node:internal/test_runner/test:1447:12)\n      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {\n    generatedMessage: true,\n    code: 'ERR_ASSERTION',\n    actual: \"      - name: Retain loaded paired-reader macOS evidence\\n        if: ${{ success() && runner.os == 'macOS' }}\\n        uses: actions/upload-artifact@v4\\n        with:\\n          name: paired-reader-macos-load\\n          path: target/paired-reader-macos-load\\n          if-no-files-found: error\\n          retention-days: 7\",\n    expected: /if: \\$\\{\\{ !cancelled\\(\\) && runner\\.os == 'macOS' \\}\\}/,\n    operator: 'match',\n    diff: 'simple'\n  }\n",
+      "after_log_sha256": "a8342aa898859a371bc50ea734008d2452607e71e8feed33126de69d2028db00",
+      "after_log": "\u2714 a partial ledger and a nonzero exit cannot become a passing summary (3.533493ms)\n\u2714 libtest must actually run one successful test, rather than match zero (0.187731ms)\n\u2714 loaded repetitions retain early failures instead of accepting later passes (0.987726ms)\n\u2714 zero matched tests and failed process launches cannot pass (0.482634ms)\n\u2714 successful runs pass and a failed ledger still releases the CPU workers (0.721292ms)\n\u2714 repeat cost is bounded before starting load (0.328193ms)\n\u2714 existing macOS matrix owns the loaded check, same package build and retained logs (0.972629ms)\n\u2139 tests 7\n\u2139 suites 0\n\u2139 pass 7\n\u2139 fail 0\n\u2139 cancelled 0\n\u2139 skipped 0\n\u2139 todo 0\n\u2139 duration_ms 132.793681\n"
+    },
+    {
+      "probe": "same-built-package-selection",
+      "file": ".github/workflows/local-auth.yml",
+      "command": [
+        "node",
+        "--test",
+        "scripts/cargo-test-parallel/paired-reader-load.test.mjs"
+      ],
+      "before_exit": 1,
+      "after_exit": 0,
+      "source_restored": true,
+      "starting_diff_restored": true,
+      "mutation_diff": "--- .github/workflows/local-auth.yml\n+++ .github/workflows/local-auth.yml\n@@ -414,7 +414,7 @@\n         timeout-minutes: 10\n         env:\n           PAIRED_READER_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}\n-        run: node scripts/cargo-test-parallel/paired-reader-load.mjs -- -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk\n+        run: node scripts/cargo-test-parallel/paired-reader-load.mjs -- -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client\n       - name: Retain loaded paired-reader macOS evidence\n         if: ${{ !cancelled() && runner.os == 'macOS' }}\n         uses: actions/upload-artifact@v4\n",
+      "before_log_sha256": "02867ce72bc833ebc21b88fa7059524352688cfdec4746fa22eab80064efd2b1",
+      "before_log": "\u2714 a partial ledger and a nonzero exit cannot become a passing summary (0.859714ms)\n\u2714 libtest must actually run one successful test, rather than match zero (0.249473ms)\n\u2714 loaded repetitions retain early failures instead of accepting later passes (1.077904ms)\n\u2714 zero matched tests and failed process launches cannot pass (0.395471ms)\n\u2714 successful runs pass and a failed ledger still releases the CPU workers (0.679808ms)\n\u2714 repeat cost is bounded before starting load (3.416359ms)\n\u2716 existing macOS matrix owns the loaded check, same package build and retained logs (2.630276ms)\n\u2139 tests 7\n\u2139 suites 0\n\u2139 pass 6\n\u2139 fail 1\n\u2139 cancelled 0\n\u2139 skipped 0\n\u2139 todo 0\n\u2139 duration_ms 117.220655\n\n\u2716 failing tests:\n\ntest at scripts/cargo-test-parallel/paired-reader-load.test.mjs:102:1\n\u2716 existing macOS matrix owns the loaded check, same package build and retained logs (2.630276ms)\n  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:\n  + actual - expected\n  \n  + '-p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client'\n  - '-p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk'\n  \n      at TestContext.<anonymous> (file:///workspace/paired-readers/scripts/cargo-test-parallel/paired-reader-load.test.mjs:124:10)\n      at Test.runInAsyncScope (node:async_hooks:227:14)\n      at Test.run (node:internal/test_runner/test:1382:25)\n      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)\n      at Test.postRun (node:internal/test_runner/test:1522:19)\n      at Test.run (node:internal/test_runner/test:1447:12)\n      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {\n    generatedMessage: true,\n    code: 'ERR_ASSERTION',\n    actual: '-p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client',\n    expected: '-p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk',\n    operator: 'strictEqual',\n    diff: 'simple'\n  }\n",
+      "after_log_sha256": "c5d62682c56b35fa8dbff2e8bf806e640a94bd2c421440a5b40ce881371b842d",
+      "after_log": "\u2714 a partial ledger and a nonzero exit cannot become a passing summary (0.808983ms)\n\u2714 libtest must actually run one successful test, rather than match zero (1.445043ms)\n\u2714 loaded repetitions retain early failures instead of accepting later passes (1.11633ms)\n\u2714 zero matched tests and failed process launches cannot pass (0.471037ms)\n\u2714 successful runs pass and a failed ledger still releases the CPU workers (0.574546ms)\n\u2714 repeat cost is bounded before starting load (1.20552ms)\n\u2714 existing macOS matrix owns the loaded check, same package build and retained logs (0.848265ms)\n\u2139 tests 7\n\u2139 suites 0\n\u2139 pass 7\n\u2139 fail 0\n\u2139 cancelled 0\n\u2139 skipped 0\n\u2139 todo 0\n\u2139 duration_ms 192.566062\n"
+    }
+  ],
+  "log_note": "Repeated compiler warnings are omitted before the Cargo Running line; original full-log hashes are retained. Node logs are complete."
+}
