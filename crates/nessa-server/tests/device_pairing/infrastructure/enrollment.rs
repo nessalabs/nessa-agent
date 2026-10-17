@@ -2286,6 +2286,30 @@ fn native_gateway_runs_on_a_one_thread_blocking_pool() {
     // already uses. Five seconds was that floor, and on a loaded Windows
     // runner the exchange was still going when it expired. The timeout is
     // what fails a job that waits on a second blocking thread.
+    // Retained until the timed future is dropped, so a timeout names the last
+    // entered phase as well as completed phases. No credentials are recorded.
+    struct Phase {
+        name: &'static str,
+        started: std::time::Instant,
+    }
+    impl Phase {
+        fn enter(name: &'static str) -> Self {
+            eprintln!("one-thread-phase enter={name}");
+            Self {
+                name,
+                started: std::time::Instant::now(),
+            }
+        }
+    }
+    impl Drop for Phase {
+        fn drop(&mut self) {
+            eprintln!(
+                "one-thread-phase leave={} elapsed={:?}",
+                self.name,
+                self.started.elapsed()
+            );
+        }
+    }
     let sample = std::time::Instant::now();
     let mut entropy = OsEntropy;
     let code = ManualCode::generate(&mut entropy);
@@ -2296,7 +2320,9 @@ fn native_gateway_runs_on_a_one_thread_blocking_pool() {
         [9; 44],
     )
     .expect("one Argon2id stretch");
-    let budget = sample.elapsed().saturating_mul(20).max(WAIT);
+    let sampled = sample.elapsed();
+    let budget = sampled.saturating_mul(20).max(WAIT);
+    eprintln!("one-thread-phase sample={sampled:?} budget={budget:?}");
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .max_blocking_threads(1)
@@ -2305,12 +2331,17 @@ fn native_gateway_runs_on_a_one_thread_blocking_pool() {
         .unwrap();
     let outcome = runtime.block_on(async {
         tokio::time::timeout(budget, async {
+            let phase = Phase::enter("fixture");
             let fixture = Fixture::new().await;
+            drop(phase);
+            let phase = Phase::enter("create");
             let created = fixture
                 .gateway
                 .create(fixture.session.clone(), ConsentClass::DeviceRead, OsEntropy)
                 .await
                 .unwrap();
+            drop(phase);
+            let phase = Phase::enter("pending");
             let id = created.record().id();
             assert_eq!(
                 fixture
@@ -2321,11 +2352,16 @@ fn native_gateway_runs_on_a_one_thread_blocking_pool() {
                     .len(),
                 1
             );
+            drop(phase);
+            let phase = Phase::enter("listener-and-device-store");
             let (address, stop, listener, connections) = fixture.listener().await;
             let (_, store) = pending(fixture.directory.path(), "client-private");
             let code = ManualCode::parse(created.code().expose_bytes()).unwrap();
             let (reply, replied) = tokio::sync::oneshot::channel();
+            drop(phase);
+            let phase = Phase::enter("device-reply");
             std::thread::spawn(move || {
+                let device_phase = Phase::enter("device-connect-and-ready-to-confirm");
                 let stream = TcpStream::connect(address).unwrap();
                 stream.set_read_timeout(Some(WAIT)).unwrap();
                 let (mut channel, public, key, message) = ready_to_confirm(
@@ -2334,6 +2370,8 @@ fn native_gateway_runs_on_a_one_thread_blocking_pool() {
                     &code,
                     &store,
                 );
+                drop(device_phase);
+                let device_phase = Phase::enter("device-confirm-reply");
                 channel
                     .send_envelope(
                         &encode_request(&NativePairingRequest::Confirm { public, message })
@@ -2341,9 +2379,12 @@ fn native_gateway_runs_on_a_one_thread_blocking_pool() {
                     )
                     .unwrap();
                 let status = decode_reply(&channel.receive_envelope().unwrap()).unwrap();
+                drop(device_phase);
                 reply.send((status, key)).ok();
             });
             let (status, key) = replied.await.unwrap();
+            drop(phase);
+            let phase = Phase::enter("listener-stop-and-connection-drain");
             assert!(matches!(
                 status,
                 NativePairingReply::Status(NativePairingStatus::Claimed(_))
@@ -2351,6 +2392,8 @@ fn native_gateway_runs_on_a_one_thread_blocking_pool() {
             stop.send(()).unwrap();
             listener.await.unwrap().unwrap();
             connections.shutdown().await;
+            drop(phase);
+            let phase = Phase::enter("owner-status-and-approve");
             assert_eq!(
                 fixture
                     .gateway
@@ -2369,7 +2412,10 @@ fn native_gateway_runs_on_a_one_thread_blocking_pool() {
                     .phase(),
                 PairingPhase::Approved
             );
+            drop(phase);
+            let phase = Phase::enter("gateway-drain");
             fixture.gateway.shutdown().await;
+            drop(phase);
         })
         .await
     });
