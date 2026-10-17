@@ -1275,6 +1275,17 @@ export const toolPolicyBounds = {
 } as const
 
 /**
+ * How long a view's list entries may be, as the product schema publishes
+ * them: a review entry's tool name holds at most `toolNameBytes` UTF-8 bytes,
+ * and a question entry's message at most `messageBytes`. The gateway clips
+ * each to fit; a view past them is refused.
+ */
+export const viewEntryBounds = {
+  toolNameBytes: bounds.maxReviewEntryToolNameBytes,
+  messageBytes: bounds.maxQuestionEntryMessageBytes,
+} as const
+
+/**
  * How `conversation.shares` is read: one answer holds at most `pageSize`
  * grants, and a conversation holds at most `grants`. A later page echoes the
  * cursor the previous page returned.
