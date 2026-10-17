@@ -234,6 +234,7 @@ export async function runParallelCargoTests({
   const executables = testExecutables(buildStdout)
   if (executables.length === 0)
     throw new Error("cargo test --no-run produced no test binaries")
+  stderr.write(`::notice title=Rust build completed::${executables.length} test executables compiled\n`)
   stderr.write(
     `test build finished in ${secondsSince(buildStarted)}s and produced ${executables.length} binaries\n`,
   )
