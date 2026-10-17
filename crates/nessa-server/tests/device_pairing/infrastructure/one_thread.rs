@@ -96,19 +96,28 @@ impl Owners {
     }
     async fn cleanup(&mut self, panicked: bool) -> Cleanup {
         let _phase = Phase::enter("retained-cleanup");
-        if self.fixture.is_none() {
+        let initialization = if self.fixture.is_none() {
             if panicked {
                 // A constructor panic has unwound its original future; polling
                 // it again is invalid. Startup's physical worker returns before
                 // Fixture unwraps its result. No listener/device exists yet.
                 self.initializing.take();
+                None
             } else {
                 // A timeout is cancellation of the observer, not initialization.
                 // Finish the same future, retaining its private directory and
                 // startup worker until their real acknowledgement arrives.
-                self.initialize().await;
+                let result = AssertUnwindSafe(self.initialize()).catch_unwind().await;
+                if result.is_err() {
+                    // Preserve the earlier timeout and this distinct cleanup
+                    // failure; the unwound constructor cannot be polled again.
+                    self.initializing.take();
+                }
+                Some(result)
             }
-        }
+        } else {
+            None
+        };
         if let Some(stop) = self.stop.take() {
             let _ = stop.send(());
         }
@@ -127,9 +136,14 @@ impl Owners {
         // its actual OS-thread handle through join, even if it panicked. This
         // does not queue another job onto the one-thread blocking pool.
         let device = self.device.take().map(|device| device.join());
-        let cleanup = Cleanup { listener, device };
+        let cleanup = Cleanup {
+            initialization,
+            listener,
+            device,
+        };
         eprintln!(
-            "one-thread-phase cleanup listener_failed={} device_failed={}",
+            "one-thread-phase cleanup initialization_failed={} listener_failed={} device_failed={}",
+            matches!(cleanup.initialization, Some(Err(_))),
             matches!(cleanup.listener, Some(Err(_)) | Some(Ok(Err(_)))),
             matches!(cleanup.device, Some(Err(_)))
         );
@@ -143,11 +157,15 @@ pub enum Completion {
     TimedOut,
 }
 pub struct Cleanup {
+    initialization: Option<Result<(), Panic>>,
     listener: Option<Result<IoResult<()>, tokio::task::JoinError>>,
     device: Option<ThreadResult<()>>,
 }
 impl Cleanup {
     pub fn assert_success(self) {
+        if let Some(initialization) = self.initialization {
+            initialization.unwrap();
+        }
         if let Some(listener) = self.listener {
             listener.unwrap().unwrap();
         }
@@ -438,5 +456,40 @@ fn finished_work_does_not_hide_device_join_failure() {
             std::panic::catch_unwind(AssertUnwindSafe(|| attempt.cleanup.assert_success()))
                 .is_err()
         );
+    });
+}
+
+#[test]
+fn late_initialization_panic_preserves_timeout_and_cleanup_failure() {
+    runtime().block_on(async {
+        let polls = Arc::new(AtomicUsize::new(0));
+        let polled = polls.clone();
+        let (release, released) = oneshot::channel();
+        let mut initializing: Initialization = Box::pin(async move {
+            released.await.unwrap();
+            panic!("controlled late fixture constructor panic");
+        });
+        let initializing = Box::pin(std::future::poll_fn(move |cx| {
+            polled.fetch_add(1, Ordering::SeqCst);
+            initializing.as_mut().poll(cx)
+        }));
+        let attempt = run_initializing(
+            initializing,
+            TokioInstant::now() - Duration::from_secs(1),
+            |owners| {
+                Box::pin(async move {
+                    owners.initialize().await;
+                })
+            },
+        );
+        tokio::pin!(attempt);
+        assert!(futures_util::poll!(attempt.as_mut()).is_pending());
+        assert!(polls.load(Ordering::SeqCst) >= 2);
+        release.send(()).unwrap();
+        let attempt = attempt.await;
+        assert_eq!(attempt.completion.unwrap(), Completion::TimedOut);
+        assert!(matches!(attempt.cleanup.initialization, Some(Err(_))));
+        assert!(attempt.owners.fixture.is_none());
+        assert!(attempt.owners.initializing.is_none());
     });
 }

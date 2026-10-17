@@ -406,19 +406,27 @@ jobs:
       # process-contract semaphore is process-local, and a process-per-test
       # runner would make that semaphore admit every contract test at once.
       # #777: one controlled isolated observation before the unchanged package
-      # selection below. Phase notices survive a failed test without requiring
-      # access to raw log storage. This is diagnostic evidence, not a retry.
+      # selection below. Aggregate phases per command so the notice limit
+      # cannot hide device/drain timings. No raw log access or retry is needed.
       - name: Locate the Windows one-thread enrollment timeout
         if: runner.os == 'Windows'
         shell: bash
         run: |
           observe_phases() {
-            "$@" 2>&1 | while IFS= read -r line; do
-              printf '%s\n' "$line"
-              case "$line" in
-                'one-thread-phase '*) printf '::notice title=One-thread enrollment phase::%s\n' "$line" ;;
-              esac
-            done
+            "$@" 2>&1 | awk '
+              {
+                print; fflush()
+                if ($0 ~ /^one-thread-phase / || $0 ~ /^test result:/) {
+                  line = $0
+                  gsub(/%/, "%25", line)
+                  gsub(/\r/, "%0D", line)
+                  phases = phases line "%0A"
+                }
+              }
+              END {
+                if (phases != "") printf "::notice title=One-thread enrollment phases::%s\n", phases
+              }
+            '
           }
           observe_phases cargo test -p nessa-server --test native_enrollment enrollment::native_gateway_runs_on_a_one_thread_blocking_pool -- --exact --nocapture
           observe_phases cargo test -p nessa-server --test native_enrollment one_thread:: -- --nocapture

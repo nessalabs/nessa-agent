@@ -1,58 +1,65 @@
 stop-sender (verified counterfactual exit 101)
 drop(stop);
-sha256=fa3fbae906de4570971ddb0ea714e9a855e867a690c28d11b8203f97951c96c1
+sha256=49064230b0f0b5db95c23ead773070b8bd760499af180dc386619fac5eb8c537
 one-thread-phase outcome=timed-out
-thread 'tokio-rt-worker' (12957) panicked at crates/nessa-server/tests/device_pairing/infrastructure/support.rs:327:31:
+thread 'tokio-rt-worker' (15787) panicked at crates/nessa-server/tests/device_pairing/infrastructure/support.rs:327:31:
 called `Result::unwrap()` on an `Err` value: RecvError(())
-one-thread-phase cleanup listener_failed=true device_failed=false
-thread 'one_thread::timeout_stops_listener_and_joins_device' (12956) panicked at crates/nessa-server/tests/device_pairing/infrastructure/one_thread.rs:282:9:
+one-thread-phase cleanup initialization_failed=false listener_failed=true device_failed=false
+thread 'one_thread::timeout_stops_listener_and_joins_device' (15786) panicked at crates/nessa-server/tests/device_pairing/infrastructure/one_thread.rs:300:9:
 assertion failed: matches!(attempt.cleanup.listener, Some(Ok(Ok(()))))
-test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 114 filtered out; finished in 0.05s
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 115 filtered out; finished in 0.05s
 
 device-join (verified counterfactual exit 101)
 let device = self.device.take().and_then(|device| { drop(device); None });
-sha256=eeb88dbba8520a612469fcc14319a8dfc64b2e9f91ad0cdcdc96210fe9163ace
+sha256=7fabcca4cecb9a62097915fbffba160790120ca2e0d27367201ed05bc1cfd6c5
 one-thread-phase outcome=timed-out
-one-thread-phase cleanup listener_failed=false device_failed=false
-thread 'one_thread::timeout_stops_listener_and_joins_device' (13024) panicked at crates/nessa-server/tests/device_pairing/infrastructure/one_thread.rs:283:9:
+one-thread-phase cleanup initialization_failed=false listener_failed=false device_failed=false
+thread 'one_thread::timeout_stops_listener_and_joins_device' (15830) panicked at crates/nessa-server/tests/device_pairing/infrastructure/one_thread.rs:301:9:
 assertion failed: matches!(attempt.cleanup.device, Some(Ok(())))
-test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 114 filtered out; finished in 0.05s
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 115 filtered out; finished in 0.05s
 
 gateway-drain (verified counterfactual exit 101)
 let _ = fixture;
-sha256=fa045005245e1705aef69b337a4a562d89a9ab1577306cb4079146ae626dfbb7
+sha256=04e6e6f4f2ba109559a89c8a1511d431bca9bdee4f75e0dfe891e7bf8cd1dec0
 one-thread-phase outcome=timed-out
-one-thread-phase cleanup listener_failed=false device_failed=false
-thread 'one_thread::timeout_stops_listener_and_joins_device' (13068) panicked at crates/nessa-server/tests/device_pairing/infrastructure/one_thread.rs:260:5:
+one-thread-phase cleanup initialization_failed=false listener_failed=false device_failed=false
+thread 'one_thread::timeout_stops_listener_and_joins_device' (15874) panicked at crates/nessa-server/tests/device_pairing/infrastructure/one_thread.rs:278:5:
 assertion failed: matches!(fixture.gateway.create(fixture.session.clone(),
-test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 114 filtered out; finished in 0.20s
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 115 filtered out; finished in 0.17s
 
 initialization-owner (verified counterfactual exit 101)
 self.initializing = Some(Box::pin(Fixture::new()));
                 // A timeout is cancellation of the observer, not initialization.
-sha256=1d85ed41620eaa890ca253fa4d0bdb1db03795ac0d0045edc2fccf3dd12429bf
+sha256=a5acb2cea2d68d75b8ef467996e81f0998df3a6333b1f578ad9be85e04715b65
 one-thread-phase outcome=timed-out
-thread 'one_thread::timeout_before_fixture_completion_retains_initialization' (13112) panicked at crates/nessa-server/tests/device_pairing/infrastructure/one_thread.rs:371:9:
+thread 'one_thread::timeout_before_fixture_completion_retains_initialization' (15918) panicked at crates/nessa-server/tests/device_pairing/infrastructure/one_thread.rs:389:9:
 assertion failed: polls.load(Ordering::SeqCst) >= 2
-test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 114 filtered out; finished in 0.01s
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 115 filtered out; finished in 0.01s
 
 cleanup-verdict (verified counterfactual exit 101)
 let _ = device;
-sha256=14a6b1ffe113abd7d3427a5c2740a201c611fc597fa3c69aaa059b958adaf8b9
+sha256=5f158db1ade65faf5b0eac14588ba69d4406e8155664d0910ec132266ce39031
 one-thread-phase outcome=finished
-thread '<unnamed>' (13159) panicked at crates/nessa-server/tests/device_pairing/infrastructure/one_thread.rs:429:21:
-one-thread-phase cleanup listener_failed=false device_failed=true
-thread 'one_thread::finished_work_does_not_hide_device_join_failure' (13155) panicked at crates/nessa-server/tests/device_pairing/infrastructure/one_thread.rs:437:9:
+thread '<unnamed>' (15965) panicked at crates/nessa-server/tests/device_pairing/infrastructure/one_thread.rs:447:21:
+one-thread-phase cleanup initialization_failed=false listener_failed=false device_failed=true
+thread 'one_thread::finished_work_does_not_hide_device_join_failure' (15961) panicked at crates/nessa-server/tests/device_pairing/infrastructure/one_thread.rs:455:9:
 assertion failed: std::panic::catch_unwind(AssertUnwindSafe(||
-test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 114 filtered out; finished in 0.01s
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 115 filtered out; finished in 0.01s
+
+late-initialization-panic (verified counterfactual exit 101)
+self.initialize().await; let result: Result<(), Panic> = Ok(());
+sha256=710e744bfa4876f7ab707833d933dcf853c79a6c391716d9a4a97927de30209b
+one-thread-phase outcome=timed-out
+thread 'one_thread::late_initialization_panic_preserves_timeout_and_cleanup_failure' (16005) panicked at crates/nessa-server/tests/device_pairing/infrastructure/one_thread.rs:470:13:
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 115 filtered out; finished in 0.00s
 
 ready-order (verified counterfactual exit 101)
 if deadline <= TokioInstant::now() { tokio::time::timeout(Duration::ZERO, std::future::pending::<()>()).await } else { tokio::time::timeout_at(deadline, work(&mut owners)).await }
-sha256=44cde2e30601e85cbf1a8b83c949b24f9fc98dc526712e371bf63cd1acfeed7b
+sha256=99a5575e060433284f62f29da7c1b156c3cedd6d2c3300ab4ae1f8452652d1c9
 one-thread-phase outcome=timed-out
-one-thread-phase cleanup listener_failed=false device_failed=false
-thread 'one_thread::finished_work_wins_a_ready_deadline_and_still_drains' (13226) panicked at crates/nessa-server/tests/device_pairing/infrastructure/one_thread.rs:395:9:
+one-thread-phase cleanup initialization_failed=false listener_failed=false device_failed=false
+thread 'one_thread::finished_work_wins_a_ready_deadline_and_still_drains' (16047) panicked at crates/nessa-server/tests/device_pairing/infrastructure/one_thread.rs:413:9:
 assertion `left == right` failed
   left: TimedOut
  right: Finished
-test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 114 filtered out; finished in 0.01s
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 115 filtered out; finished in 0.01s
