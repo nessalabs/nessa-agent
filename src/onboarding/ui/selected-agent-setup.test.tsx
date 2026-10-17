@@ -100,7 +100,12 @@ it("keeps progress visible and coalesces duplicate clicks while physical install
   expect(value.installations.install).toHaveBeenCalledTimes(1)
   expect(container.textContent).toContain("Downloading and verifying Claude")
   expect(button("Downloading").disabled).toBe(true)
+  expect(container.textContent).toContain("Archive size · 12 MB")
+  expect(
+    container.querySelector('[role="progressbar"]')?.hasAttribute("aria-valuenow"),
+  ).toBe(false)
   await React.act(async () => finish({ status: "installed", cleanupPending: false }))
+  expect(container.querySelector('[role="progressbar"]')).toBeNull()
 })
 
 it.each(["busy", "not-confirmed"] as const)(

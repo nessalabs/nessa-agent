@@ -1,0 +1,67 @@
+name: Canonical browser verification
+
+# Manual only. This file must first exist on the default branch for dispatch.
+# Source/base are commits on this repository's branches, never arbitrary URLs.
+on:
+  workflow_dispatch:
+    inputs:
+      source:
+        description: Full lowercase source commit SHA from this repository
+        required: true
+        type: string
+      base:
+        description: Optional full lowercase base commit SHA to integrate with source
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  browsers:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    # Planning bound, not a measured browser CI duration. Cold gateway builds,
+    # dependency downloads and both engines must fit; a timeout remains failure.
+    timeout-minutes: 60
+    env:
+      BROWSER_EVIDENCE: ${{ github.workspace }}/../canonical-browser-evidence
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Validate commits and prepare the exact tree
+        env:
+          SOURCE_SHA: ${{ inputs.source }}
+          BASE_SHA: ${{ inputs.base }}
+        run: |
+          mkdir -p "$BROWSER_EVIDENCE"
+          node scripts/prepare-browser-verification.mjs 2>&1 | tee "$BROWSER_EVIDENCE/prepare.log"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: local-auth
+          save-if: false
+      - uses: ./.github/actions/pnpm-install
+      - name: Install the pinned Playwright browsers and official runtime dependencies
+        run: pnpm exec playwright install --with-deps chromium webkit 2>&1 | tee "$BROWSER_EVIDENCE/browser-install.log"
+        timeout-minutes: 15
+      - name: Run the canonical signed-out suite in both engines
+        run: pnpm test:e2e:scripted -- --channel bundled --evidence "$BROWSER_EVIDENCE" 2>&1 | tee "$BROWSER_EVIDENCE/canonical.log"
+        timeout-minutes: 35
+      - name: Preserve provenance and complete browser evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: canonical-browser-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.BROWSER_EVIDENCE }}
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7

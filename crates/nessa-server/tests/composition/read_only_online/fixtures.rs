@@ -204,6 +204,16 @@ impl Drop for Gateway {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
-        let _ = self.stderr.finish();
+        let diagnostics = self.stderr.finish();
+        if std::thread::panicking() {
+            // Only these fixture-owned lines contain typed read state and timing.
+            // Other child stderr may contain data unrelated to this failure.
+            for line in diagnostics
+                .lines()
+                .filter(|line| line.starts_with("record fixture "))
+            {
+                eprintln!("{line}");
+            }
+        }
     }
 }
