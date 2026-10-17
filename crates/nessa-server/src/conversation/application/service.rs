@@ -1,6 +1,7 @@
 mod agent_tools;
 mod creation;
 mod mutation;
+mod thread_reports;
 use super::metadata_target::{load_conversation, validate_target};
 use super::session_key::conversation_session;
 use super::{
@@ -99,6 +100,9 @@ use std::{
     },
     time::Duration,
 };
+#[cfg(test)]
+pub(crate) use thread_reports::report_text_for_test;
+pub use thread_reports::{PendingReport, ReportRegistration, ThreadReport, ThreadReportStore};
 
 use tokio::{
     sync::{
@@ -725,6 +729,8 @@ struct Inner {
     agent_tool_audit: OnceLock<Arc<dyn AgentToolAudit>>,
     /// Physical source admission owners retain their slot after response loss.
     agent_tool_admissions: Arc<Semaphore>,
+    /// Agent sends waiting to report their thread's finished turn.
+    thread_reports: thread_reports::ThreadReports,
     /// Decides every command's admission to a conversation.
     access_policy: Arc<dyn ConversationAccessPolicyEvaluator>,
     limits: ConversationLimits,
@@ -1114,6 +1120,7 @@ impl ConversationService {
                 clock,
                 agent_tool_audit: OnceLock::new(),
                 agent_tool_admissions: Arc::new(Semaphore::new(super::MAX_AGENT_TOOL_ADMISSIONS)),
+                thread_reports: Default::default(),
                 access_policy,
                 limits,
                 conversations: Mutex::new(HashMap::new()),
@@ -1614,6 +1621,14 @@ impl ConversationService {
                                     source,
                                 }));
                             }
+                            // Every agent: whether a send to this thread
+                            // waits on a report is decided as each turn ends.
+                            agent.add_invocation_hook(Arc::new(
+                                thread_reports::ThreadReportHook {
+                                    service: Arc::downgrade(&service.inner),
+                                    child: id.clone(),
+                                },
+                            ));
                             let issued = issue(
                                 agent.session_manager(),
                                 environment.as_ref(),
@@ -3606,6 +3621,9 @@ impl ConversationService {
                 ExecutionId::new(&execution).map_err(|_| ConversationError::InvalidInput)?;
             let live = service.resolve(&id, &caller).await?;
             let result = live.agent.remove_queued(execution.clone(), actor).await?;
+            if result == QueueRemoval::Removed {
+                service.wake_thread_reports(&id);
+            }
             Ok(result == QueueRemoval::Removed)
         })
         .await
@@ -3766,7 +3784,8 @@ impl ConversationService {
         caller: ConversationCaller,
     ) -> Result<(), ConversationError> {
         let service = self.clone();
-        supervised(async move {
+        let closing = id.clone();
+        let closed = supervised(async move {
             let _admission = service.admit().await?;
             let _mode = service.inner.mode_changes.lock(&id).await;
             let actor = caller.actor()?;
@@ -3883,7 +3902,12 @@ impl ConversationService {
                 }),
             }
         })
-        .await
+        .await;
+        // Turns a closed agent held were cancelled with no invocation to
+        // follow. Every close attempt looks, whatever it answers: one that did
+        // not close finds nothing new.
+        self.wake_thread_reports(&closing);
+        closed
     }
     /// Archive the conversation, or unarchive it: whether `list` shows it by
     /// default. Nothing is stopped or removed. Returns whether this changed
@@ -4495,6 +4519,7 @@ impl ConversationService {
                     failures.history = Some(ConversationError::Storage(error));
                 }
             }
+            self.forget_thread_reports_of(&id).await;
             let _writes = self.inner.summary_writes.lock(&id).await;
             if let Err(error) = self.inner.summaries.erase(&id).await {
                 failures.summary = Some(error);

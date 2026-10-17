@@ -1281,6 +1281,18 @@ async fn conversations(
         DurableAgentToolAudit::new(root.join("audit").join("agent-tools"), clock.clone())
             .map_err(|error| RunError::Agent(error.to_string()))?,
     ));
+    // Reports an agent's sent turn owes back are kept across a restart.
+    let thread_reports_path = root.join("thread-reports.sqlite3");
+    service.bind_thread_reports(Arc::new(
+        crate::conversation::infrastructure::LocalThreadReports::open(&thread_reports_path)
+            .map_err(|cause| {
+                RunError::opening(
+                    crate::core::Dataset::ThreadReports,
+                    &thread_reports_path,
+                    cause,
+                )
+            })?,
+    ));
     conversation_tools.attach(service.clone());
     // A note's author is checked against the same grant table the socket
     // admits it by (row J23).
