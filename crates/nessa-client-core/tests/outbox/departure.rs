@@ -1,5 +1,7 @@
 //! Controlled orderings for a shared SQLite departure and its receipt.
 use super::*;
+use std::panic::{catch_unwind, panic_any};
+use std::sync::PoisonError;
 
 #[test]
 fn a_lost_departure_does_not_send_again() {
@@ -248,6 +250,31 @@ fn assert_accepted(store: &mut SqliteIntents) {
     );
 }
 
+/// The sender and ordering failures stay distinct through cleanup.
+struct SenderTimeout;
+struct OrderingFailure;
+
+#[test]
+fn a_poisoned_sender_release_preserves_the_ordering_failure() {
+    let released = Arc::new((Mutex::new(false), Condvar::new()));
+    let sender_release = Arc::clone(&released);
+    let sender = thread::spawn(move || {
+        // PausingSend's deadline assertion can panic while holding this guard.
+        let _guard = sender_release.0.lock().unwrap();
+        panic_any(SenderTimeout);
+    });
+    assert!(sender.join().unwrap_err().is::<SenderTimeout>());
+    assert!(released.0.is_poisoned());
+
+    let failure = catch_unwind(|| {
+        let _release = ReleaseSend(Arc::clone(&released));
+        panic_any(OrderingFailure);
+    });
+    assert!(failure.unwrap_err().is::<OrderingFailure>());
+    // Cleanup releases the flag while retaining the sender's poison evidence.
+    assert!(*released.0.lock().unwrap_err().into_inner());
+}
+
 /// Release even when a main-thread assertion fails, so the physical owner can exit.
 struct ReleaseSend(Arc<(Mutex<bool>, Condvar)>);
 impl ReleaseSend {
@@ -255,7 +282,9 @@ impl ReleaseSend {
         Self(Arc::new((Mutex::new(false), Condvar::new())))
     }
     fn release(&self) {
-        *self.0 .0.lock().unwrap() = true;
+        // A sender timeout may poison this flag. Cleanup must still release
+        // it without replacing the main thread's ordering failure.
+        *self.0 .0.lock().unwrap_or_else(PoisonError::into_inner) = true;
         self.0 .1.notify_all();
     }
 }

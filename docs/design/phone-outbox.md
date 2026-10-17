@@ -166,6 +166,7 @@ late-reader ordering separately rather than requiring it to wait.
 | Both Draft; departure loser enters gateway first | Same evidence; winner reloads the committed receipt under its lease | `a_lost_departure_does_not_send_again` (LoserFirst) |
 | Both Draft; either first sender holds the lease, competing wait returns Unavailable | Waiter returns durable Unknown(NotAdmitted); physical sender stays pending; after release Accepted is durable and the waiter can read it | `a_failed_lease_wait_returns_the_durable_departure` |
 | Second initial read occurs after departure and gateway entry; receipt is absent | Second caller returns Unknown(NotAdmitted) with no lease attempt or send; first returns Accepted after release; later read adopts it | `a_sender_first_reading_departure_can_return_before_the_send` |
+| Entered sender times out while the main thread waits for a missing contender; sender panic poisons the release mutex, then the ordering assertion unwinds | Release cleanup recovers that guard and sets the release flag; the original ordering failure is retained without a second panic aborting the binary | `a_poisoned_sender_release_preserves_the_ordering_failure` |
 
 The failed-wait port fixture injects `StoreError::Unavailable` at the existing
 store seam. The SQLite adapter's bounded-wait test separately holds a real writer
