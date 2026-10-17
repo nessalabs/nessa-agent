@@ -11,8 +11,18 @@ function source(conversationId = first) {
   return {
     conversationId,
     permissions: [
-      { executionId: "turn-a", permissionId: "review-a", options: [{ id: "allow-a" }] },
-      { executionId: "turn-b", permissionId: "review-b", options: [{ id: "deny-b" }] },
+      {
+        review: "a".repeat(32),
+        executionId: "turn-a",
+        permissionId: "review-a",
+        options: [{ id: "allow-a" }],
+      },
+      {
+        review: "b".repeat(32),
+        executionId: "turn-b",
+        permissionId: "review-b",
+        options: [{ id: "deny-b" }],
+      },
     ],
   }
 }
@@ -37,6 +47,7 @@ it("PT1/PT7: answer and cancel keep each enclosing conversation and review toget
       {
         conversationId: first,
         executionId: "turn-a",
+        review: "a".repeat(32),
         permissionId: "review-a",
         optionId: "allow-a",
         requestId: "action",
@@ -47,6 +58,7 @@ it("PT1/PT7: answer and cancel keep each enclosing conversation and review toget
       {
         conversationId: first,
         executionId: "turn-b",
+        review: "b".repeat(32),
         permissionId: "review-b",
         reason: "withdrawn",
         requestId: "action",
@@ -57,6 +69,7 @@ it("PT1/PT7: answer and cancel keep each enclosing conversation and review toget
       {
         conversationId: second,
         executionId: "turn-a",
+        review: "a".repeat(32),
         permissionId: "review-a",
         optionId: "allow-a",
         requestId: "action",

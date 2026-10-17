@@ -25,6 +25,8 @@ import type {
   ConversationObserveCursor,
   ConversationObserveResult,
   ConversationView,
+  ConversationPermission,
+  ConversationQuestion,
   ConversationReceipt,
   ConversationMutationResult,
   ConversationQuestionChoice,
@@ -65,6 +67,10 @@ import {
   conversationShares,
   maxPolicyRevision,
   minExpectedPolicyRevision,
+  conversationPermission,
+  conversationQuestion,
+  permissionReviewRange,
+  reviewKeyPattern,
 } from "../protocol/conversation-validate.js"
 import { decimal } from "../protocol/passive-read-validate.js"
 import {
@@ -231,6 +237,48 @@ export type ConversationApi = {
     optionId: string,
     options?: ConversationActionOptions,
   ) => Promise<ConversationMutationResult>
+  /**
+   * Read what one waiting review shows: who asked, its whole input, every
+   * choice, and any deadline.
+   *
+   * A view lists each waiting review by its key alone. Read it here, and offer
+   * no choice on it until this returns. Ranges of
+   * `bounds.maxReviewRangeBytes` are asked one after another, each held to the
+   * range asked; the assembled bytes are parsed only when they are the whole
+   * length and UTF-8, and returned only when they are a valid review.
+   * @param conversationId - The conversation whose view lists the review.
+   * @param review - The review's key, as the view lists it.
+   * @param options - `signal` abandons the read between ranges.
+   * @returns The review, as its live owner holds it.
+   * @throws The session's refusal, `stale_permission` once the review no
+   * longer waits; `Error` for an answer that is not the range asked for or
+   * not a review.
+   */
+  permissionReview: (
+    conversationId: string,
+    review: string,
+    options?: { signal?: AbortSignal },
+  ) => Promise<ConversationPermission>
+  /**
+   * Read all one waiting question asks: the agent's message and every
+   * question, with its options.
+   *
+   * A view lists each waiting question by a small entry under its key. Read
+   * it here, and offer no answer to it until this returns; it is read as
+   * {@link ConversationApi.permissionReview} reads a review.
+   * @param conversationId - The conversation whose view lists the question.
+   * @param question - The question's key, as the view lists it.
+   * @param options - `signal` abandons the read between ranges.
+   * @returns The question, as the agent's live invocation holds it.
+   * @throws The session's refusal, `stale_permission` once the question no
+   * longer waits; `Error` for an answer that is not the range asked for or
+   * not that question.
+   */
+  questionReview: (
+    conversationId: string,
+    question: string,
+    options?: { signal?: AbortSignal },
+  ) => Promise<ConversationQuestion>
   /**
    * Answer one question the agent asked, or decline it.
    *
@@ -663,6 +711,44 @@ export function createConversationApi(
       deadline,
     )
   }
+  /**
+   * The whole of what one listed review or question shows, read range by
+   * range from its live owner with `method`, `key` naming it, each range held
+   * to the one asked; parsed only once whole and UTF-8.
+   */
+  async function readWhole(
+    method: string,
+    conversationId: string,
+    key: { review: string } | { question: string },
+    signal?: AbortSignal,
+  ): Promise<unknown> {
+    validConversationId(conversationId)
+    if (!reviewKeyPattern.test(Object.values(key)[0] as string))
+      throw new TypeError("Use a key from a view")
+    const maxBytes = bounds.maxReviewRangeBytes
+    const parts: Uint8Array[] = []
+    let offset = 0
+    let totalBytes: number | undefined
+    do {
+      signal?.throwIfAborted()
+      const range = permissionReviewRange(
+        await session.request(method, { conversationId, ...key, offset, maxBytes }),
+        offset,
+        maxBytes,
+        totalBytes,
+      )
+      totalBytes = range.totalBytes
+      parts.push(range.bytes)
+      offset += range.bytes.byteLength
+    } while (offset < totalBytes)
+    const whole = new Uint8Array(offset)
+    let at = 0
+    for (const part of parts) {
+      whole.set(part, at)
+      at += part.byteLength
+    }
+    return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(whole))
+  }
   return {
     create: (options = {}) => {
       const id = validConversationId(options.conversationId ?? newId())
@@ -846,6 +932,7 @@ export function createConversationApi(
       const capturedChoices = captureQuestionChoices(choices)
       const {
         conversationId: id,
+        question,
         executionId,
         questionId,
       } = questionFields(target, capturedChoices)
@@ -857,6 +944,7 @@ export function createConversationApi(
           conversationId: id,
           requestId,
           executionId,
+          question,
           questionId,
           choices: capturedChoices,
         },
@@ -865,24 +953,50 @@ export function createConversationApi(
       )
     },
     answer: (target, optionId, options) => {
-      const { conversationId, executionId, permissionId } = permissionFields(
+      const { conversationId, review, executionId, permissionId } = permissionFields(
         target,
         optionId,
       )
       return action(
         ProductMethod.ConversationAnswer,
         conversationId,
-        { executionId, permissionId, optionId },
+        { executionId, review, permissionId, optionId },
         options,
         true,
       )
     },
+    permissionReview: async (conversationId, review, options = {}) => {
+      const shown = conversationPermission(
+        await readWhole(
+          ProductMethod.ConversationPermissionReview,
+          conversationId,
+          { review },
+          options.signal,
+        ),
+      )
+      if (shown.review !== review) throw new Error("Review response is another review")
+      return shown
+    },
+    questionReview: async (conversationId, question, options = {}) => {
+      const shown = conversationQuestion(
+        await readWhole(
+          ProductMethod.ConversationQuestionReview,
+          conversationId,
+          { question },
+          options.signal,
+        ),
+      )
+      if (shown.question !== question)
+        throw new Error("Question response is another question")
+      return shown
+    },
     cancel: (target, reason, options) => {
-      const { conversationId, executionId, permissionId } = permissionFields(target)
+      const { conversationId, review, executionId, permissionId } =
+        permissionFields(target)
       return action(
         ProductMethod.ConversationCancel,
         conversationId,
-        { executionId, permissionId, reason },
+        { executionId, review, permissionId, reason },
         options,
       )
     },

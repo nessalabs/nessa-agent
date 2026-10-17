@@ -20,6 +20,7 @@ import { isMac } from "../../../adapters/platform"
 import { matchesChord } from "../../../model/keyboard"
 import { answering } from "../../application/workspace-state"
 import { peekOf } from "../../model/overview/peek"
+import { shownWhole } from "../../model/transcript"
 import { sessionTime } from "../../model/time-labels"
 import { agentName, agentOf, modelName, nowLine } from "../../model/workspace-index"
 import { AgentTile } from "../chrome/agent-tile"
@@ -87,7 +88,8 @@ export const SessionPeek = memo(function SessionPeek({
   )
   const now = useNow(30_000)
   const waiting = settling !== undefined || live?.status === "needs-you"
-  const approval = settling?.approval ?? (waiting ? (transcript?.approval ?? null) : null)
+  const approval =
+    settling?.approval ?? (waiting ? (transcript?.approvals[0] ?? null) : null)
   const answer = useWorkspaceSelector((state) =>
     approval ? selectAnswer(state, sessionId, approval.id) : undefined,
   )
@@ -97,7 +99,12 @@ export const SessionPeek = memo(function SessionPeek({
   const line = nowLine(summary)
   // What the agent is doing now, while it works: the story's last line, where its reply will appear.
   const running = summary.status === "running" ? (peek?.activity ?? null) : null
-  const answerable = approval !== null && !settling && !answering(answer, approval.id)
+  // Not before all of what it allows is shown (`Approval.loading`).
+  const answerable =
+    approval !== null &&
+    shownWhole(approval) &&
+    !settling &&
+    !answering(answer, approval.id)
   const refused = settling ? undefined : answer?.failure
   const agent = agentName(agentOf(summary.model))
   const reply = (
@@ -203,7 +210,9 @@ export const SessionPeek = memo(function SessionPeek({
         ) : null}
         {(transcript?.questions ?? []).map((question) => (
           <QuestionCard
-            key={JSON.stringify([question.executionId, question.questionId])}
+            key={
+              question.key ?? JSON.stringify([question.executionId, question.questionId])
+            }
             sessionId={sessionId}
             question={question}
           />

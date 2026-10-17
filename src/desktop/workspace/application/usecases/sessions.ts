@@ -209,6 +209,8 @@ export function unsentDiscarded(
   )
     return discarded
   const model = modelForNextTurn(discarded, sessionId) ?? session.model
+  // The access chosen for it goes back with the home, as its model does.
+  const access = entry(discarded.accessChoices, sessionId)
   const unlisted = forgetSession(discarded, sessionId)
   return discarded.panes && paneShowingSession(discarded.panes, sessionId)
     ? {
@@ -217,6 +219,10 @@ export function unsentDiscarded(
           ...unlisted.drafts,
           [sessionId]: { id: sessionId, channelId: session.channelId, model },
         },
+        accessChoices:
+          access?.state === "chosen"
+            ? { ...unlisted.accessChoices, [sessionId]: access }
+            : unlisted.accessChoices,
       }
     : unlisted
 }
@@ -247,7 +253,13 @@ export function approvalAnswering(
     token,
   }: { sessionId: string; approvalId: string; token: string },
 ): WorkspaceState {
-  return { ...state, answers: { ...state.answers, [sessionId]: { approvalId, token } } }
+  const others = (entry(state.answers, sessionId) ?? []).filter(
+    (answer) => answer.approvalId !== approvalId,
+  )
+  return {
+    ...state,
+    answers: { ...state.answers, [sessionId]: [...others, { approvalId, token }] },
+  }
 }
 
 /**
@@ -270,13 +282,16 @@ export function approvalFailed(
   },
 ): WorkspaceState {
   // An earlier answer's refusal, arriving late, says nothing of the one on its way now.
-  const given = entry(state.answers, sessionId)
-  if (given?.approvalId !== approvalId || given.token !== token) return state
+  const answers = entry(state.answers, sessionId) ?? []
+  const given = answers.find((answer) => answer.approvalId === approvalId)
+  if (!given || given.token !== token) return state
   return {
     ...state,
     answers: {
       ...state.answers,
-      [sessionId]: { ...given, failure: reason },
+      [sessionId]: answers.map((answer) =>
+        answer === given ? { ...given, failure: reason } : answer,
+      ),
     },
   }
 }

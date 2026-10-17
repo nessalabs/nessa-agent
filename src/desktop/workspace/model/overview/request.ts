@@ -19,12 +19,12 @@ export type Request =
 
 /** The request in a held conversation, or why none could be read. */
 export function requestOf(
-  conversation: Pick<Transcript, "approval"> | undefined,
+  conversation: Pick<Transcript, "approvals"> | undefined,
   failure: WorkspaceFailureReason | undefined,
 ): Request {
   if (!conversation)
     return failure ? { kind: "unreadable", reason: failure } : { kind: "reading" }
-  return conversation.approval
-    ? { kind: "approval", approval: conversation.approval }
-    : { kind: "question" }
+  // A row asks one thing: the first review the conversation lists.
+  const approval = conversation.approvals[0]
+  return approval ? { kind: "approval", approval } : { kind: "question" }
 }

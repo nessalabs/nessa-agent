@@ -431,6 +431,7 @@ async fn a_non_claude_profile_uses_shared_sessions_permissions_and_transport() {
         let resolution = opened
             .session
             .answer_permission(PermissionAnswer {
+                key: None,
                 attribution: ApprovalAttribution::new(
                     ActionContext::new("tester", "test", id).unwrap(),
                     ApprovalBasis::Explicit,

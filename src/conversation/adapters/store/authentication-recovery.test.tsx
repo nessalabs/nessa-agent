@@ -49,6 +49,8 @@ function wireView(
     title: null,
     messages: [],
     pending: [],
+    reviewsWaiting: [],
+    questionsWaiting: [],
     permissions: [],
     questions: [],
     tools: [],

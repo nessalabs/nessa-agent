@@ -100,12 +100,12 @@ async fn each_change_to_the_open_reviews_is_told_and_nothing_else() {
     assert_eq!(count(), 2, "a review opened");
     let id = answered.permission_id.clone();
     assert_eq!(
-        reviews.answer("e1", &id, ALLOW, person()),
+        reviews.answer("e1", &id, &key_of(&reviews, &id), ALLOW, person()),
         ReviewAnswer::Ended
     );
     assert_eq!(count(), 3, "a review answered");
     assert_eq!(
-        reviews.answer("e1", &id, ALLOW, person()),
+        reviews.answer("e1", &id, &key_of(&reviews, &id), ALLOW, person()),
         ReviewAnswer::NotAnAppReview
     );
     reviews.withdraw("not-a-review");
@@ -131,6 +131,16 @@ fn reporting() -> (Arc<AppReviews>, Arc<Reported>) {
 }
 
 /// A conversation's apps, in its first opening.
+/// The key the open review `permission` is listed under, or one no review
+/// has once it is not open.
+fn key_of(reviews: &AppReviews, permission: &str) -> String {
+    reviews
+        .reviews()
+        .into_iter()
+        .find(|review| review.permission_id == permission)
+        .map_or_else(|| "0".repeat(32), |review| review.review)
+}
+
 fn reviews() -> Arc<AppReviews> {
     reporting().0
 }
@@ -193,7 +203,7 @@ async fn a_review_is_shown_with_its_app_origin_and_ends_as_answered() {
     );
     let id = waiting.permission_id.clone();
     assert_eq!(
-        reviews.answer("e1", &id, ALLOW, person()),
+        reviews.answer("e1", &id, &key_of(&reviews, &id), ALLOW, person()),
         ReviewAnswer::Ended
     );
     assert_eq!(
@@ -213,10 +223,13 @@ async fn a_denial_and_a_cancellation_both_deny() {
         cancelled.permission_id.clone(),
     );
     assert_eq!(
-        reviews.answer("e1", &first, DENY, person()),
+        reviews.answer("e1", &first, &key_of(&reviews, &first), DENY, person()),
         ReviewAnswer::Ended
     );
-    assert_eq!(reviews.cancel("e1", &second, person()), ReviewAnswer::Ended);
+    assert_eq!(
+        reviews.cancel("e1", &second, &key_of(&reviews, &second), person()),
+        ReviewAnswer::Ended
+    );
     assert_eq!(
         denied.ended(APP_REVIEW_DEADLINE).await,
         ReviewEnd::Denied(person())
@@ -233,13 +246,13 @@ async fn an_ended_review_is_no_longer_the_apps_and_a_wrong_answer_changes_nothin
     let waiting = open(&reviews, "i1").unwrap();
     let id = waiting.permission_id.clone();
     assert_eq!(
-        reviews.answer("e1", &id, ALLOW, person()),
+        reviews.answer("e1", &id, &key_of(&reviews, &id), ALLOW, person()),
         ReviewAnswer::Ended
     );
     // Ended: the identity names no open app review, so it is the agent's to
     // answer — which answers it stale itself — and nothing happens here.
     assert_eq!(
-        reviews.answer("e1", &id, DENY, person()),
+        reviews.answer("e1", &id, &key_of(&reviews, &id), DENY, person()),
         ReviewAnswer::NotAnAppReview
     );
     assert_eq!(
@@ -251,13 +264,37 @@ async fn an_ended_review_is_no_longer_the_apps_and_a_wrong_answer_changes_nothin
     let other = open(&reviews, "i1").unwrap();
     let other_id = other.permission_id.clone();
     assert_eq!(
-        reviews.answer("e2", &other_id, ALLOW, person()),
+        reviews.answer(
+            "e2",
+            &other_id,
+            &key_of(&reviews, &other_id),
+            ALLOW,
+            person()
+        ),
         ReviewAnswer::Stale
     );
     assert_eq!(
-        reviews.answer("e1", &other_id, "maybe", person()),
+        reviews.answer(
+            "e1",
+            &other_id,
+            &key_of(&reviews, &other_id),
+            "maybe",
+            person()
+        ),
         ReviewAnswer::Stale
     );
+    // Open under the same identities, but not the review the person was
+    // shown: an answer naming another key is stale, and it waits on.
+    for stale in ["0".repeat(32), key_of(&reviews, &id)] {
+        assert_eq!(
+            reviews.answer("e1", &other_id, &stale, ALLOW, person()),
+            ReviewAnswer::Stale
+        );
+        assert_eq!(
+            reviews.cancel("e1", &other_id, &stale, person()),
+            ReviewAnswer::Stale
+        );
+    }
     assert_eq!(reviews.reviews().len(), 1);
     drop(other);
 }
@@ -269,7 +306,7 @@ fn an_agents_review_is_the_agents_whatever_it_is_named() {
     let reviews = reviews();
     for name in ["1", "app-1", "app-6f1d6c0e-8f8c-4a52-9b8e-1f6c3d2a4b5c"] {
         assert_eq!(
-            reviews.answer("e1", name, ALLOW, person()),
+            reviews.answer("e1", name, &key_of(&reviews, name), ALLOW, person()),
             ReviewAnswer::NotAnAppReview,
             "{name}"
         );
@@ -296,7 +333,7 @@ async fn an_answer_at_the_deadline_is_what_the_review_ended_with() {
         let reviews = reviews.clone();
         async move {
             tokio::time::sleep(deadline).await;
-            reviews.answer("e1", &id, ALLOW, person())
+            reviews.answer("e1", &id, &key_of(&reviews, &id), ALLOW, person())
         }
     };
     let (end, answered) = tokio::join!(waiting.ended(deadline), answering);
@@ -402,7 +439,7 @@ async fn a_wait_dropped_before_its_review_ended_withdraws_it_as_the_apps() {
     let _ = wait.await;
     assert!(reviews.reviews().is_empty());
     assert_eq!(
-        reviews.answer("e1", &id, ALLOW, person()),
+        reviews.answer("e1", &id, &key_of(&reviews, &id), ALLOW, person()),
         ReviewAnswer::NotAnAppReview
     );
 }
@@ -1021,6 +1058,7 @@ async fn every_message_is_its_own_review_and_allowing_one_allows_no_other() {
         reviews.answer(
             &answered.execution_id,
             &answered.permission_id,
+            &answered.review,
             ALLOW,
             person()
         ),

@@ -45,7 +45,8 @@ export function questionTargets(view: QuestionView): readonly QuestionTarget[] {
   for (let askIndex = 0; askIndex < askCount; askIndex += 1) {
     const sourceAsk = asks[askIndex]
     if (sourceAsk === undefined) throw new TypeError("A captured ask must be present")
-    const { executionId, questionId, message, questions: fields } = sourceAsk
+    const { question, executionId, questionId, message, questions: fields } = sourceAsk
+    primitiveText(question)
     primitiveText(executionId)
     primitiveText(questionId)
     primitiveText(message)
@@ -99,6 +100,7 @@ export function questionTargets(view: QuestionView): readonly QuestionTarget[] {
     }
     const target = Object.freeze({
       conversationId,
+      question,
       executionId,
       questionId,
       message,
@@ -133,8 +135,8 @@ export function questionFields(
     )
       throw new TypeError("Select a field and choice offered by the captured question")
   }
-  const { conversationId, executionId, questionId } = target
-  return { conversationId, executionId, questionId }
+  const { conversationId, question, executionId, questionId } = target
+  return { conversationId, question, executionId, questionId }
 }
 
 /** Published question choice data with read-only option values. */

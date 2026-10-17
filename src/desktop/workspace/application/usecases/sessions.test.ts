@@ -319,14 +319,14 @@ describe("what the person changes", () => {
       ask: "tool" as const,
     }
     const state = transcriptLoaded(loaded(), {
-      transcript: { ...emptyTranscript("b"), revision: 1, approval },
+      transcript: { ...emptyTranscript("b"), revision: 1, approvals: [approval] },
     })
     const answering = approvalAnswering(state, {
       sessionId: "b",
       approvalId: "ap",
       token: "t1",
     })
-    expect(answering.answers.b).toEqual({ approvalId: "ap", token: "t1" })
+    expect(answering.answers.b).toEqual([{ approvalId: "ap", token: "t1" }])
     expect(answering.transcripts.b).toBe(state.transcripts.b)
     const failed = approvalFailed(answering, {
       sessionId: "b",
@@ -334,7 +334,7 @@ describe("what the person changes", () => {
       token: "t1",
       reason: "not-waiting",
     })
-    expect(failed.answers.b).toEqual({
+    expect(failed.answers.b[0]).toEqual({
       approvalId: "ap",
       token: "t1",
       failure: "not-waiting",
@@ -361,7 +361,7 @@ describe("what the person changes", () => {
       approvalId: "ap",
       token: "t2",
     })
-    expect(again.answers.b.failure).toBeUndefined()
+    expect(again.answers.b[0].failure).toBeUndefined()
   })
 
   it("lets an answer go once the source's conversation no longer asks", () => {
@@ -374,7 +374,7 @@ describe("what the person changes", () => {
       ask: "tool" as const,
     }
     const state = transcriptLoaded(openSession(loaded(), { sessionId: "b" }), {
-      transcript: { ...emptyTranscript("b"), revision: 1, approval },
+      transcript: { ...emptyTranscript("b"), revision: 1, approvals: [approval] },
     })
     const answering = approvalAnswering(state, {
       sessionId: "b",
@@ -384,10 +384,10 @@ describe("what the person changes", () => {
     const still = updateReceived(answering, {
       update: {
         kind: "transcript",
-        transcript: { ...emptyTranscript("b"), revision: 2, approval },
+        transcript: { ...emptyTranscript("b"), revision: 2, approvals: [approval] },
       },
     })
-    expect(still.answers.b).toEqual({ approvalId: "ap", token: "t1" })
+    expect(still.answers.b).toEqual([{ approvalId: "ap", token: "t1" }])
     const answered = updateReceived(still, {
       update: {
         kind: "transcript",
@@ -397,6 +397,57 @@ describe("what the person changes", () => {
     expect(answered.answers.b).toBeUndefined()
     // Its pane showing another session meanwhile: the answer on its way stays.
     expect(openSession(still, { sessionId: "a" }).answers.b).toEqual(still.answers.b)
+  })
+
+  it("holds an answer to each of a session's approvals, and lets each go on its own", () => {
+    const ask = (id: string) => ({
+      id,
+      command: `run ${id}`,
+      reason: "Runs it.",
+      origin: { kind: "agent" } as const,
+      options: [],
+      ask: "tool" as const,
+    })
+    const both = {
+      ...emptyTranscript("b"),
+      revision: 1,
+      approvals: [ask("one"), ask("two")],
+    }
+    const state = transcriptLoaded(openSession(loaded(), { sessionId: "b" }), {
+      transcript: both,
+    })
+    const first = approvalAnswering(state, {
+      sessionId: "b",
+      approvalId: "one",
+      token: "t1",
+    })
+    const second = approvalAnswering(first, {
+      sessionId: "b",
+      approvalId: "two",
+      token: "t2",
+    })
+    expect(second.answers.b).toEqual([
+      { approvalId: "one", token: "t1" },
+      { approvalId: "two", token: "t2" },
+    ])
+    // One refused: the other's answer is still on its way.
+    const refused = approvalFailed(second, {
+      sessionId: "b",
+      approvalId: "one",
+      token: "t1",
+      reason: "not-waiting",
+    })
+    expect(refused.answers.b).toEqual([
+      { approvalId: "one", token: "t1", failure: "not-waiting" },
+      { approvalId: "two", token: "t2" },
+    ])
+    const settled = updateReceived(second, {
+      update: {
+        kind: "transcript",
+        transcript: { ...both, revision: 2, approvals: [ask("two")] },
+      },
+    })
+    expect(settled.answers.b).toEqual([{ approvalId: "two", token: "t2" }])
   })
 
   it("clears a session's unread mark, changing nothing when it is read", () => {

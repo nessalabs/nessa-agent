@@ -10,10 +10,16 @@ import {
   maxPolicyRevision,
   minExpectedPolicyRevision,
   minPolicyRevision,
+  conversationPermission,
+  conversationQuestion,
+  permissionReviewRange,
 } from "./conversation-validate.js"
 import { bounds } from "../generated/product.js"
 
 const DIGEST = `sha256:${"0".repeat(64)}`
+function entry(index = 0, origin = "harness", toolName = "write_file") {
+  return { review: index.toString(16).padStart(32, "0"), origin, toolName }
+}
 function image(change: { size?: number } = {}) {
   return { digest: DIGEST, mimeType: "image/png", size: 3, ...change }
 }
@@ -223,7 +229,7 @@ describe("conversation view agreement", () => {
     ).toThrow(/unreadable/)
   })
 
-  it("keeps the product fixture's question attached to a running turn", () => {
+  it("lists the product fixture's question by its entry", () => {
     const fixtures = JSON.parse(
       readFileSync(
         new URL("../../../../protocol/product/fixtures.json", import.meta.url),
@@ -232,7 +238,7 @@ describe("conversation view agreement", () => {
     )
     const sample = fixtures.ConversationView
     const parsed = conversationView(sample, sample.conversationId)
-    expect(parsed.questions[0]?.executionId).toBe(parsed.messages[0]?.executionId)
+    expect(parsed.questions[0]?.question).toMatch(/^[0-9a-f]{32}$/)
     expect(parsed.capabilities.agentFeatures.incomingElicitation).toBe(
       "supported_with_correlated_round_trip",
     )
@@ -462,46 +468,24 @@ describe("conversation view agreement", () => {
 
   it("reads who asked for a review: the agent, or an app naming the tool it asked for", () => {
     const withOrigin = (origin: unknown) => {
-      const value = view()
-      Object.assign(value, {
-        permissions: [
-          {
-            executionId: "running",
-            permissionId: "permission",
-            toolId: "tool",
-            title: "Review",
-            toolName: "delete_rows",
-            argumentsJson: "{}",
-            origin,
-            ask: "tool",
-            options: [{ id: "allow", label: "Allow", effect: "allow" }],
-          },
-        ],
-      })
-      return value
+      return {
+        review: "0".repeat(32),
+        executionId: "running",
+        permissionId: "permission",
+        toolId: "tool",
+        title: "Review",
+        toolName: "delete_rows",
+        argumentsJson: "{}",
+        origin,
+        ask: "tool",
+        options: [{ id: "allow", label: "Allow", effect: "allow" }],
+      }
     }
     for (const origin of [
       { kind: "harness" },
       { kind: "app", server: "charts", tool: "delete_rows" },
     ])
-      expect(() => conversationView(withOrigin(origin), "conversation")).not.toThrow()
-    // An app asks from a tool call that has finished; the agent only while
-    // its execution runs.
-    const finished = (origin: unknown) => {
-      const value = withOrigin(origin)
-      const message = value.messages.find((each) => each.executionId === "running")!
-      message.status = "completed"
-      return value
-    }
-    expect(() =>
-      conversationView(
-        finished({ kind: "app", server: "charts", tool: "delete_rows" }),
-        "conversation",
-      ),
-    ).not.toThrow()
-    expect(() => conversationView(finished({ kind: "harness" }), "conversation")).toThrow(
-      "not running",
-    )
+      expect(() => conversationPermission(withOrigin(origin))).not.toThrow()
     for (const origin of [
       undefined,
       {},
@@ -514,29 +498,145 @@ describe("conversation view agreement", () => {
       { kind: "harness", tool: "delete_rows" },
       { kind: "app", server: "charts", tool: "delete_rows", extra: true },
     ])
-      expect(() => conversationView(withOrigin(origin), "conversation")).toThrow()
+      expect(() => conversationPermission(withOrigin(origin))).toThrow()
+  })
+
+  it("reads a review's whole input, whatever its size, as the agent gave it", () => {
+    const withInput = (argumentsJson: string) => ({
+      review: "0".repeat(32),
+      executionId: "running",
+      permissionId: "permission",
+      toolId: "tool",
+      title: "Write",
+      toolName: "Write",
+      argumentsJson,
+      origin: { kind: "harness" },
+      ask: "tool",
+      options: [{ id: "allow", label: "Allow", effect: "allow" }],
+    })
+    // Not JSON, and need not be; and a 100 KB Write is read whole.
+    for (const input of [
+      '{"content":"é',
+      JSON.stringify({ content: "x".repeat(100_000) }),
+    ])
+      expect(conversationPermission(withInput(input)).argumentsJson).toBe(input)
+    // A review says only what it shows: no account of a part left out.
+    expect(() =>
+      conversationPermission({ ...withInput("{}"), argumentsComplete: true }),
+    ).toThrow("unknown fields")
+    expect(() =>
+      conversationPermission({ ...withInput("{}"), argumentsBytes: 2 }),
+    ).toThrow("unknown fields")
+  })
+
+  it("lists each waiting question by a small entry under its key, and reads it whole apart", () => {
+    const listing = (questions: unknown[]) => {
+      const value: Record<string, unknown> = view()
+      value.questions = questions
+      return () => conversationView(value, "conversation")
+    }
+    const entry = (index: number) => ({
+      question: index.toString(16).padStart(32, "0"),
+      message: "é".repeat(bounds.maxQuestionEntryMessageBytes / 2),
+    })
+    const most = Array.from({ length: bounds.maxOpenQuestions }, (_, index) =>
+      entry(index),
+    )
+    expect(listing(most)()).toMatchObject({ questions: most })
+    expect(listing([...most, entry(most.length)])).toThrow()
+    expect(listing([entry(1), entry(1)])).toThrow("repeats a question")
+    expect(listing([{ ...entry(1), question: "Q".repeat(32) }])).toThrow("question key")
+    expect(listing([{ ...entry(1), message: "x".repeat(49) }])).toThrow()
+    expect(listing([{ ...entry(1), executionId: "running" }])).toThrow("unknown fields")
+    const asked = {
+      question: "0".repeat(32),
+      executionId: "running",
+      questionId: "ask",
+      message: "Which?",
+      questions: [
+        {
+          key: "environment",
+          prompt: "Where?",
+          header: null,
+          multiSelect: false,
+          freeText: false,
+          required: true,
+          options: [{ value: "staging", label: "Staging", description: null }],
+        },
+      ],
+    }
+    expect(conversationQuestion(asked)).toEqual(asked)
+    expect(() => conversationQuestion({ ...asked, question: "ask" })).toThrow(
+      "question key",
+    )
+    expect(() => conversationQuestion({ ...asked, questions: [] })).toThrow(
+      "asks nothing",
+    )
+    const { question: _key, ...unkeyed } = asked
+    expect(() => conversationQuestion(unkeyed)).toThrow()
+  })
+
+  it("refuses a review shown without the key it is listed under", () => {
+    const shown = {
+      review: "0".repeat(32),
+      executionId: "running",
+      permissionId: "permission",
+      toolId: "tool",
+      title: "Write",
+      toolName: "Write",
+      argumentsJson: "{}",
+      origin: { kind: "harness" },
+      ask: "tool",
+      options: [{ id: "allow", label: "Allow", effect: "allow" }],
+    }
+    expect(conversationPermission(shown).review).toBe(shown.review)
+    const { review: _key, ...unkeyed } = shown
+    expect(() => conversationPermission(unkeyed)).toThrow()
+    expect(() => conversationPermission({ ...shown, review: "permission" })).toThrow(
+      "review key",
+    )
+  })
+
+  it("reads one range of a review, held to the range asked", () => {
+    const data = (text: string) => btoa(text)
+    expect(
+      permissionReviewRange({ offset: 0, totalBytes: 5, data: data("hello") }, 0, 8),
+    ).toMatchObject({ totalBytes: 5, bytes: new TextEncoder().encode("hello") })
+    expect(
+      permissionReviewRange({ offset: 2, totalBytes: 5, data: data("ll") }, 2, 2, 5)
+        .bytes,
+    ).toEqual(new TextEncoder().encode("ll"))
+    for (const [value, offset, maxBytes, totalBytes] of [
+      // Another range, a short or long one, a length that moved.
+      [{ offset: 1, totalBytes: 5, data: data("hello") }, 0, 8, undefined],
+      [{ offset: 0, totalBytes: 5, data: data("hell") }, 0, 8, undefined],
+      [{ offset: 0, totalBytes: 5, data: data("hello!") }, 0, 8, undefined],
+      [{ offset: 0, totalBytes: 6, data: data("hello") }, 0, 8, 5],
+      [{ offset: 5, totalBytes: 5, data: "" }, 5, 8, undefined],
+      // A review is never empty, nor longer than the most one can be.
+      [{ offset: 0, totalBytes: 0, data: "" }, 0, 8, undefined],
+      [{ offset: 0, totalBytes: bounds.maxReviewBytes + 1, data: "" }, 0, 8, undefined],
+      [{ offset: 0, totalBytes: -1, data: "" }, 0, 8, undefined],
+      [{ offset: 0, totalBytes: 5, data: data("hello"), extra: 1 }, 0, 8, undefined],
+    ] as const)
+      expect(() => permissionReviewRange(value, offset, maxBytes, totalBytes)).toThrow()
   })
 
   it("reads a review's deadline and refuses one it cannot show", () => {
     const withDeadline = (deadline: unknown) => {
-      const value = view()
-      Object.assign(value, {
-        permissions: [
-          {
-            executionId: "running",
-            permissionId: "permission",
-            toolId: "tool",
-            title: "Review",
-            toolName: "Write",
-            argumentsJson: "{}",
-            origin: { kind: "harness" },
-            ask: "tool",
-            options: [{ id: "deny", label: "Deny", effect: "deny" }],
-            deadline,
-          },
-        ],
-      })
-      return value
+      return {
+        review: "0".repeat(32),
+        executionId: "running",
+        permissionId: "permission",
+        toolId: "tool",
+        title: "Review",
+        toolName: "Write",
+        argumentsJson: "{}",
+        origin: { kind: "harness" },
+        ask: "tool",
+        options: [{ id: "deny", label: "Deny", effect: "deny" }],
+        deadline,
+      }
     }
     const reason =
       "No human answered in time. Continue without this tool or try another approach."
@@ -547,16 +647,14 @@ describe("conversation view agreement", () => {
       reason,
       stopsTurn: false,
     }
-    const read = conversationView(withDeadline(deadline), "conversation")
-    expect(read.permissions[0]!.deadline).toEqual(deadline)
+    const read = conversationPermission(withDeadline(deadline))
+    expect(read.deadline).toEqual(deadline)
     expect(
-      conversationView(withDeadline({ ...deadline, stopsTurn: true }), "conversation")
-        .permissions[0]!.deadline?.stopsTurn,
+      conversationPermission(withDeadline({ ...deadline, stopsTurn: true })).deadline
+        ?.stopsTurn,
     ).toBe(true)
     const allowed = { ...deadline, effect: "allow" as const, stopsTurn: false }
-    expect(
-      conversationView(withDeadline(allowed), "conversation").permissions[0]!.deadline,
-    ).toEqual(allowed)
+    expect(conversationPermission(withDeadline(allowed)).deadline).toEqual(allowed)
     for (const broken of [
       { waitMs: 0, dueAtMs: deadline.dueAtMs, effect: "deny", reason, stopsTurn: false },
       {
@@ -601,7 +699,7 @@ describe("conversation view agreement", () => {
       { ...deadline, effect: "allow", stopsTurn: true },
       { ...deadline, later: true },
     ])
-      expect(() => conversationView(withDeadline(broken), "conversation")).toThrow()
+      expect(() => conversationPermission(withDeadline(broken))).toThrow()
   })
 
   it("reads the gateway's time the view was sent at, and refuses a view without a usable one", () => {
@@ -618,129 +716,103 @@ describe("conversation view agreement", () => {
 
   it("refuses an app's review that names a tool other than the one it reviews", () => {
     const withTools = (tool: string, toolName: string) => {
-      const value = view()
-      Object.assign(value, {
-        permissions: [
-          {
-            executionId: "running",
-            permissionId: "permission",
-            toolId: "tool",
-            title: "Review",
-            toolName,
-            argumentsJson: "{}",
-            origin: { kind: "app", server: "charts", tool },
-            ask: "tool",
-            options: [{ id: "allow", label: "Allow", effect: "allow" }],
-          },
-        ],
-      })
-      return value
+      return {
+        review: "0".repeat(32),
+        executionId: "running",
+        permissionId: "permission",
+        toolId: "tool",
+        title: "Review",
+        toolName,
+        argumentsJson: "{}",
+        origin: { kind: "app", server: "charts", tool },
+        ask: "tool",
+        options: [{ id: "allow", label: "Allow", effect: "allow" }],
+      }
     }
     expect(() =>
-      conversationView(withTools("app_delete_rows", "app_delete_rows"), "conversation"),
+      conversationPermission(withTools("app_delete_rows", "app_delete_rows")),
     ).not.toThrow()
     for (const [tool, toolName] of [
       ["app_delete_row", "app_delete_rows"],
       ["App_Delete_Rows", "app_delete_rows"],
     ])
-      expect(() => conversationView(withTools(tool, toolName), "conversation")).toThrow(
+      expect(() => conversationPermission(withTools(tool, toolName))).toThrow(
         "An app's review names a tool other than the one it reviews",
       )
   })
 
   it("D19 (#390): reads what a review asks as a closed set, and refuses a view whose review asks nothing it knows", () => {
     const withAsk = (ask: unknown, keep = true) => {
-      const value = view()
-      Object.assign(value, {
-        permissions: [
-          {
-            executionId: "running",
-            permissionId: "permission",
-            toolId: "tool",
-            title: "The show app on charts asks to send a message as you",
-            toolName: "show",
-            argumentsJson: '{"text":"Plot May"}',
-            origin: { kind: "app", server: "charts", tool: "show" },
-            ...(keep ? { ask } : {}),
-            options: [{ id: "allow", label: "Allow", effect: "allow" }],
-          },
-        ],
-      })
-      return value
+      return {
+        review: "0".repeat(32),
+        executionId: "running",
+        permissionId: "permission",
+        toolId: "tool",
+        title: "The show app on charts asks to send a message as you",
+        toolName: "show",
+        argumentsJson: '{"text":"Plot May"}',
+        origin: { kind: "app", server: "charts", tool: "show" },
+        ...(keep ? { ask } : {}),
+        options: [{ id: "allow", label: "Allow", effect: "allow" }],
+      }
     }
     for (const ask of ["tool", "message"])
-      expect(conversationView(withAsk(ask), "conversation").permissions[0]!.ask).toBe(ask)
-    expect(() => conversationView(withAsk(undefined, false), "conversation")).toThrow()
+      expect(conversationPermission(withAsk(ask)).ask).toBe(ask)
+    expect(() => conversationPermission(withAsk(undefined, false))).toThrow()
     for (const ask of [null, "", "Message", "send_message", "tool ", 1, {}])
-      expect(() => conversationView(withAsk(ask), "conversation")).toThrow()
+      expect(() => conversationPermission(withAsk(ask))).toThrow()
   })
 
   it("D19 (#390): refuses a review the agent asked for that asks to send a message, a contradiction", () => {
     const withOrigin = (ask: string) => {
-      const value = view()
-      Object.assign(value, {
-        permissions: [
-          {
-            executionId: "running",
-            permissionId: "permission",
-            toolId: "tool",
-            title: "Run write_file",
-            toolName: "write_file",
-            argumentsJson: "{}",
-            origin: { kind: "harness" },
-            ask,
-            options: [{ id: "allow", label: "Allow", effect: "allow" }],
-          },
-        ],
-      })
-      return value
+      return {
+        review: "0".repeat(32),
+        executionId: "running",
+        permissionId: "permission",
+        toolId: "tool",
+        title: "Run write_file",
+        toolName: "write_file",
+        argumentsJson: "{}",
+        origin: { kind: "harness" },
+        ask,
+        options: [{ id: "allow", label: "Allow", effect: "allow" }],
+      }
     }
-    expect(conversationView(withOrigin("tool"), "conversation").permissions[0]!.ask).toBe(
-      "tool",
-    )
-    expect(() => conversationView(withOrigin("message"), "conversation")).toThrow(
+    expect(conversationPermission(withOrigin("tool")).ask).toBe("tool")
+    expect(() => conversationPermission(withOrigin("message"))).toThrow(
       "A review the agent asked for asks to send a message",
     )
   })
 
   it("reads what each permission option decides, and refuses an option that does not say", () => {
     const withOptions = (options: unknown[]) => {
-      const value = view()
-      Object.assign(value, {
-        permissions: [
-          {
-            executionId: "running",
-            permissionId: "permission",
-            toolId: "tool",
-            title: "Review",
-            toolName: "write_file",
-            argumentsJson: "{}",
-            origin: { kind: "harness" },
-            ask: "tool",
-            options,
-          },
-        ],
-      })
-      return value
+      return {
+        review: "0".repeat(32),
+        executionId: "running",
+        permissionId: "permission",
+        toolId: "tool",
+        title: "Review",
+        toolName: "write_file",
+        argumentsJson: "{}",
+        origin: { kind: "harness" },
+        ask: "tool",
+        options,
+      }
     }
-    const read = conversationView(
+    const read = conversationPermission(
       withOptions([
         { id: "a", label: "Allow", effect: "allow" },
         { id: "d", label: "Deny", effect: "deny" },
       ]),
-      "conversation",
     )
-    expect(read.permissions[0]!.options.map((option) => option.effect)).toEqual([
-      "allow",
-      "deny",
-    ])
+    expect(read.options.map((option) => option.effect)).toEqual(["allow", "deny"])
     for (const option of [
       { id: "a", label: "Allow" },
       { id: "a", label: "Allow", effect: "always" },
       { id: "a", label: "Allow", effect: "" },
       { id: "a", label: "Allow", effect: true },
     ])
-      expect(() => conversationView(withOptions([option]), "conversation")).toThrow()
+      expect(() => conversationPermission(withOptions([option]))).toThrow()
   })
 
   it("rejects unknown fields at the view and nested schema boundaries", () => {
@@ -760,21 +832,58 @@ describe("conversation view agreement", () => {
 
     const permission = view()
     Object.assign(permission, {
-      permissions: [
-        {
-          executionId: "running",
-          permissionId: "permission",
-          toolId: "tool",
-          title: "Review",
-          toolName: "write_file",
-          argumentsJson: "{}",
-          origin: { kind: "harness" },
-          ask: "tool",
-          options: [{ id: "allow", label: "Allow", effect: "allow", extra: true }],
-        },
-      ],
+      permissions: [{ ...entry(), extra: true }],
     })
     expect(() => conversationView(permission, "conversation")).toThrow("unknown fields")
+    expect(() =>
+      conversationPermission({
+        review: "0".repeat(32),
+        executionId: "running",
+        permissionId: "permission",
+        toolId: "tool",
+        title: "Review",
+        toolName: "write_file",
+        argumentsJson: "{}",
+        origin: { kind: "harness" },
+        ask: "tool",
+        options: [{ id: "allow", label: "Allow", effect: "allow", extra: true }],
+      }),
+    ).toThrow("unknown fields")
+  })
+
+  it("lists each waiting review by its key alone, whatever is confirmed of the transcript", () => {
+    const listing = (permissions: unknown[], transcriptState = "complete") => {
+      const value: Record<string, unknown> = view()
+      value.permissions = permissions
+      if (transcriptState !== "complete") {
+        value.transcriptState = transcriptState
+        value.queueComplete = false
+        value.pending = []
+        const capabilities = value.capabilities as Record<string, unknown>
+        capabilities.queue = false
+        capabilities.steer = false
+        capabilities.permissions = false
+      }
+      return value
+    }
+    // The most a view lists, each at its largest, in any transcript state.
+    const most = Array.from({ length: bounds.maxListedReviews }, (_, index) =>
+      entry(index, index % 9 === 0 ? "app" : "harness", "\u{1F600}".repeat(16)),
+    )
+    expect(conversationView(listing(most), "conversation").permissions).toEqual(most)
+    expect(() =>
+      conversationView(listing([entry()], "partial"), "conversation"),
+    ).not.toThrow()
+    for (const broken of [
+      [...most, entry(bounds.maxListedReviews)],
+      [entry(1), entry(1)],
+      [{ ...entry(), review: "0123456789ABCDEF0123456789ABCDEF" }],
+      [{ ...entry(), review: "0123456789abcdef" }],
+      [{ ...entry(), origin: "plugin" }],
+      [{ ...entry(), toolName: "x".repeat(bounds.maxReviewEntryToolNameBytes + 1) }],
+      [{ review: entry().review, origin: "harness" }],
+    ])
+      expect(() => conversationView(listing(broken), "conversation")).toThrow()
   })
 
   it("accepts an image-only message whose waiting input names the same images", () => {

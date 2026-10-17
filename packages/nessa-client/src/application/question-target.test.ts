@@ -15,6 +15,7 @@ function source(conversationId = first) {
   return {
     conversationId,
     questions: ["a", "b"].map((suffix) => ({
+      question: suffix.repeat(32),
       executionId: `turn-${suffix}`,
       questionId: `ask-${suffix}`,
       message: `Ask ${suffix}`,
@@ -49,6 +50,7 @@ it("QT1/QT5: answers and declines retain each original conversation, turn and as
     {
       conversationId: first,
       executionId: "turn-a",
+      question: "a".repeat(32),
       questionId: "ask-a",
       requestId: "action",
       choices: [{ key: "field-a", values: ["value-a"] }],
@@ -56,6 +58,7 @@ it("QT1/QT5: answers and declines retain each original conversation, turn and as
     {
       conversationId: first,
       executionId: "turn-b",
+      question: "b".repeat(32),
       questionId: "ask-b",
       requestId: "action",
       choices: null,
@@ -63,6 +66,7 @@ it("QT1/QT5: answers and declines retain each original conversation, turn and as
     {
       conversationId: second,
       executionId: "turn-a",
+      question: "a".repeat(32),
       questionId: "ask-a",
       requestId: "action",
       choices: null,
@@ -184,6 +188,7 @@ it("QT11: queued serialization retains the exact answer snapshot that passed cor
   expect(serialized).toEqual({
     conversationId: first,
     executionId: "turn-a",
+    question: "a".repeat(32),
     questionId: "ask-a",
     requestId: "action",
     choices: [{ key: "field-a", values: ["value-a"], ownWords: "Original" }],
@@ -451,6 +456,7 @@ it("QT14: choice capture rejects boxed scalars and preserves primitive/null repl
 
 it.each([
   "conversationId",
+  "question",
   "executionId",
   "questionId",
   "message",
@@ -472,7 +478,7 @@ it.each([
     const question = ask.questions[0]!
     const option = question.options[0]!
     if (field === "conversationId") Object.assign(view, { [field]: mutable })
-    else if (["executionId", "questionId", "message"].includes(field))
+    else if (["question", "executionId", "questionId", "message"].includes(field))
       Object.assign(ask, { [field]: mutable })
     else if (["value", "label", "description"].includes(field))
       Object.assign(option, { [field]: mutable })

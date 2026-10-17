@@ -385,6 +385,7 @@ fn audit_maps_permission_selection_delivery_and_custom_cancellation_exactly() {
         .unwrap();
     let answer = controller
         .answer_permission(PermissionAnswer {
+            key: None,
             execution_id: id.clone(),
             id: permission.clone(),
             option_id: PermissionOptionId::new("allow-once").unwrap(),
@@ -539,6 +540,7 @@ fn audit_maps_a_rule_answer_exactly() {
     let rule = ApprovalRuleReference::new("pr_rule", "2", grantor.clone()).unwrap();
     let answer = controller
         .answer_permission(PermissionAnswer {
+            key: None,
             attribution: ApprovalAttribution::new(grantor, ApprovalBasis::Rule(rule)),
             execution_id: id,
             id: permission,
@@ -692,6 +694,7 @@ fn audit_maps_a_hook_refusal_as_the_hook_and_not_the_person() {
             .unwrap();
     let answer = controller
         .answer_permission(PermissionAnswer {
+            key: None,
             execution_id: id,
             id: permission,
             option_id: PermissionOptionId::new("deny-once").unwrap(),
@@ -743,6 +746,7 @@ fn audit_maps_a_runtime_hook_refusal_with_no_hook_index() {
             .unwrap();
     let answer = controller
         .answer_permission(PermissionAnswer {
+            key: None,
             execution_id: id,
             id: permission,
             option_id: PermissionOptionId::new("deny-once").unwrap(),

@@ -52,8 +52,9 @@ use crate::application::agent_execution::tools::ToolReviewInput;
 use crate::application::agent_execution::traces::GenAiSpan;
 use crate::domain::agent_execution::executions::{Initiation, Initiator, ToolChecking};
 use crate::domain::agent_execution::permissions::{
-    CustomPermissionCancellationReason, PermissionAuthorityError, PermissionCancellationReason,
-    PermissionEffect, PermissionId, PermissionOptionId, PermissionScope, RefusalOutcome,
+    CustomPermissionCancellationReason, PendingQuestion, PendingReview, PermissionAuthorityError,
+    PermissionCancellationReason, PermissionEffect, PermissionId, PermissionOptionId,
+    PermissionScope, RefusalOutcome,
 };
 use crate::domain::agent_execution::tools::ToolCallId;
 use crate::domain::model_metadata::value_objects::{EffortLevel, EffortLevels};
@@ -532,6 +533,71 @@ impl Agent {
             return Ok(false);
         }
         pending
+    }
+    /// The reviews the live invocation still waits on, oldest first, each
+    /// with what a person is shown of it. Empty when no execution is active,
+    /// the backend exposes no review authority, or the lifecycle changed
+    /// while reading. The same owner as [`Self::pending_permission`]: a
+    /// committed review alone is never listed.
+    ///
+    /// # Errors
+    /// Refuses foreign handles and reports typed owner/carrier faults.
+    pub fn pending_reviews(&self) -> Result<Vec<PendingReview>, PermissionAuthorityError> {
+        let Some(execution) = self.inner.lifecycle.active() else {
+            return Ok(Vec::new());
+        };
+        let Some((origin, attached)) = self.inner.lifecycle.permission_read_context(&execution)
+        else {
+            return Ok(Vec::new());
+        };
+        let Some(authority) = attached.session.permission_authority()? else {
+            return Ok(Vec::new());
+        };
+        if authority.execution_id() != &execution {
+            return Err(PermissionAuthorityError::IdentityMismatch);
+        }
+        let reviews = authority.reviews();
+        if self
+            .inner
+            .lifecycle
+            .permission_read_context(&execution)
+            .is_none_or(|(current, _)| current != origin)
+        {
+            return Ok(Vec::new());
+        }
+        reviews
+    }
+    /// Every question the active execution's agent is waiting on, as its
+    /// adapter lists it, oldest first. Empty when nothing runs, when the
+    /// backend exposes no live authority, or when the execution changed while
+    /// this was read.
+    ///
+    /// # Errors
+    /// Reports a dropped or poisoned owner, or a handle for another execution.
+    pub fn pending_questions(&self) -> Result<Vec<PendingQuestion>, PermissionAuthorityError> {
+        let Some(execution) = self.inner.lifecycle.active() else {
+            return Ok(Vec::new());
+        };
+        let Some((origin, attached)) = self.inner.lifecycle.permission_read_context(&execution)
+        else {
+            return Ok(Vec::new());
+        };
+        let Some(authority) = attached.session.permission_authority()? else {
+            return Ok(Vec::new());
+        };
+        if authority.execution_id() != &execution {
+            return Err(PermissionAuthorityError::IdentityMismatch);
+        }
+        let questions = authority.questions();
+        if self
+            .inner
+            .lifecycle
+            .permission_read_context(&execution)
+            .is_none_or(|(current, _)| current != origin)
+        {
+            return Ok(Vec::new());
+        }
+        questions
     }
     /// Whether this Agent currently has no running or queued work. This
     /// snapshot does not reserve admission; a host must serialize subsequent
@@ -2528,6 +2594,7 @@ impl Agent {
             .flatten();
         if let Some(option_id) = deny {
             self.answer_permission(PermissionAnswer {
+                key: None,
                 attribution,
                 execution_id: event.execution_id().clone(),
                 id,
@@ -2573,6 +2640,7 @@ impl Agent {
         )
         .map_err(|error| AgentError::InvalidInput(error.to_string()))?;
         self.cancel_permission(PermissionCancellationRequest {
+            key: None,
             execution_id: event.execution_id().clone(),
             id,
             reason: PermissionCancellationReason::custom(custom),

@@ -48,9 +48,13 @@ pub struct ConversationView {
     pub revision: String,
     pub messages: Vec<ConversationMessage>,
     pub pending: Vec<ConversationPending>,
-    pub permissions: Vec<ConversationPermission>,
+    /// Every review waiting on a person now, as the live review owners hold
+    /// them, oldest first: a small entry of fixed size each, never given up
+    /// for the view's size. What each shows is read with
+    /// `conversation.permissionReview`.
+    pub permissions: Vec<ConversationReviewEntry>,
     /// Questions the agent is waiting on, oldest first.
-    pub questions: Vec<ConversationQuestion>,
+    pub questions: Vec<ConversationQuestionEntry>,
     pub tools: Vec<ConversationTool>,
     pub capabilities: ConversationCapabilities,
     pub lifecycle: ConversationLifecycle,
@@ -311,14 +315,41 @@ impl From<&LinkedFile> for ConversationLinkedFile {
         }
     }
 }
+/// One review waiting on a person, as a view lists it: its key and who asked,
+/// with the start of the tool's name to say what it is while the rest is
+/// read. Its encoding never exceeds `MAX_REVIEW_ENTRY_BYTES`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationReviewEntry {
+    /// The review's own key, 32 lowercase hex digits: new for every review
+    /// opened, so a review whose identities are reused is a new entry.
+    pub review: String,
+    pub origin: ConversationReviewKind,
+    /// The start of the reviewed tool's name, clipped so its encoding takes
+    /// at most `MAX_REVIEW_ENTRY_TOOL_NAME_BYTES`.
+    pub tool_name: String,
+}
+/// Who asked for a review an entry lists.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ConversationReviewKind {
+    Harness,
+    App,
+}
+/// A pending review with all it shows: what `conversation.permissionReview`
+/// reads for one entry of the view.
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConversationPermission {
+    /// The key the view lists it under: an answer names it, so a review
+    /// whose identities are reused is never answered by mistake.
+    pub review: String,
     pub execution_id: String,
     pub permission_id: String,
     pub tool_id: String,
     pub title: String,
     pub tool_name: String,
+    /// The reviewed input, exactly as the agent gave it.
     pub arguments_json: String,
     pub options: Vec<ConversationPermissionOption>,
     /// Who asked for the review: the agent, or an MCP App.
@@ -390,10 +421,25 @@ impl From<PermissionEffect> for ConversationPermissionOptionEffect {
         }
     }
 }
-/// One question an agent is waiting on an answer to.
+/// One question waiting on a person, as a view lists it: its key, and the
+/// start of the agent's message to say what it is while the rest is read.
+/// Its encoding never exceeds `MAX_QUESTION_ENTRY_BYTES`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationQuestionEntry {
+    /// The question's own key, 32 lowercase hex digits: new for every
+    /// question asked, so one whose identities are reused is a new entry.
+    pub question: String,
+    /// The start of the agent's message, clipped so its encoding takes at
+    /// most `MAX_QUESTION_ENTRY_MESSAGE_BYTES`.
+    pub message: String,
+}
+/// One question an agent is waiting on an answer to, with all it asks.
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConversationQuestion {
+    /// The key the view lists it under: an answer names it.
+    pub question: String,
     pub execution_id: String,
     pub question_id: String,
     /// The agent's own framing of why it is asking.

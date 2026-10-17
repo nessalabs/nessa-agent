@@ -171,6 +171,7 @@ async fn owner_phone_remember_answer_stores_no_rule() {
             "conversationId": id,
             "requestId": request,
             "executionId": "exec-1",
+            "review": "0123456789abcdef0123456789abcdef",
             "permissionId": "perm-1",
             "optionId": option,
         })

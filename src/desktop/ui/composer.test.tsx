@@ -107,6 +107,37 @@ it("sends on a press of Return, and nothing on its repeats", async () => {
   await act(async () => root.unmount())
 })
 
+it("shows Stop in place of Send while given one, and holds it while a stop is asked", async () => {
+  let stops = 0
+  const root = createRoot(host)
+  const render = (stopping: boolean) =>
+    act(async () =>
+      root.render(
+        <Composer
+          page={false}
+          onPageChange={() => {}}
+          onSend={() => {}}
+          onStop={{ stop: () => stops++, stopping }}
+          text=""
+          onTextChange={() => {}}
+          model={undefined}
+          onModelChange={() => {}}
+        />,
+      ),
+    )
+  await render(false)
+  const button = () => host.querySelector<HTMLButtonElement>(".desktop-send")
+  expect(host.querySelector('[aria-label="Send"]')).toBeNull()
+  expect(button()?.getAttribute("aria-label")).toBe("Stop")
+  // A Stop is a button of its own, not the form's submit.
+  expect(button()?.type).toBe("button")
+  await act(async () => button()?.click())
+  expect(stops).toBe(1)
+  await render(true)
+  expect(button()?.disabled).toBe(true)
+  await act(async () => root.unmount())
+})
+
 it("shows the model it is given, and only that", async () => {
   const root = createRoot(host)
   const render = (model: { provider: string; modelId: string } | undefined) =>

@@ -1,10 +1,12 @@
 //! A native acknowledgement and a correlated metadata commit select one model.
 use super::{
+    agent_question_entries, agent_review_entries, lifecycle_view, ActionContext, AgentError,
+};
+use super::{
     contain_mode_terminal, load_conversation, provider_approval_mode, supervised, AttachmentPhase,
     Conversation, ConversationCaller, ConversationError, ConversationId, ConversationModelId,
-    ConversationService, ExecutionId, LiveConversation, ModelBudget, PermissionId, SessionSnapshot,
+    ConversationService, LiveConversation, ModelBudget, SessionSnapshot,
 };
-use super::{lifecycle_view, reviews_this_process_holds, ActionContext, AgentError};
 use crate::conversation::application::{
     ConversationModelApplication, ConversationModelRequest, ConversationModelRequestState,
     ConversationModelSelection,
@@ -496,14 +498,8 @@ impl ConversationService {
         let (committed, order) = self.committed_with_order(id).await?;
         let (view, cursor) = if let Some(live) = &live {
             let active = live.agent.active_execution_id();
-            let holding = reviews_this_process_holds(&live.agent, committed.snapshot());
             let mut projection = live.projection.lock().await;
-            if projection.replace_committed_while_holding(
-                &committed,
-                &order,
-                active.as_ref(),
-                &holding,
-            ) {
+            if projection.replace_committed(&committed, &order, active.as_ref()) {
                 projection.transcript_state(committed.state().into());
             }
             projection.lifecycle(lifecycle_view(&live.agent));
@@ -519,7 +515,14 @@ impl ConversationService {
             )
         };
         let read = self
-            .pending_selection_read((view, cursor), &record, id, caller, live.as_ref())
+            .pending_selection_read(
+                (view, cursor),
+                &record,
+                id,
+                caller,
+                live.as_ref(),
+                committed.snapshot(),
+            )
             .await?;
         Ok(Some(read))
     }
@@ -533,6 +536,7 @@ impl ConversationService {
         id: &ConversationId,
         caller: &ConversationCaller,
         live: Option<&Arc<LiveConversation>>,
+        snapshot: Option<&SessionSnapshot>,
     ) -> Result<(ConversationView, Option<CommittedCursor>), ConversationError> {
         view.selection = Some(ConversationSelectionView {
             agent: record.agent().ok_or(ConversationError::AgentUnsupported)?,
@@ -544,20 +548,7 @@ impl ConversationService {
             view.capabilities.steer = false;
             view.capabilities.resume = false;
         }
-        if let Some(live) = live {
-            view.permissions.retain(|review| {
-                match (
-                    ExecutionId::new(&review.execution_id),
-                    PermissionId::new(&review.permission_id),
-                ) {
-                    (Ok(execution), Ok(permission)) => live
-                        .agent
-                        .pending_permission(&execution, &permission)
-                        .unwrap_or(false),
-                    _ => false,
-                }
-            });
-        } else {
+        if live.is_none() {
             view.capabilities.permissions = false;
             view.permissions.clear();
             view.questions.clear();
@@ -577,7 +568,12 @@ impl ConversationService {
         }
 
         let view = if let Some(live) = live {
-            super::app_calls::with_app_reviews(view, live.app_reviews.reviews())
+            super::app_calls::with_reviews(
+                view,
+                agent_review_entries(&live.agent, snapshot),
+                live.app_reviews.entries(),
+                agent_question_entries(&live.agent, snapshot),
+            )
         } else {
             bound_view(view)
         };

@@ -19,6 +19,38 @@ fn caller() -> ConversationCaller {
     }
 }
 
+// Read the current public keyed-content contract, including the full review's
+// turn/request identities. The view's key remains its immutable identity while
+// a model or preset control is pending.
+async fn listed_model_review(
+    service: &ConversationService,
+    id: &ConversationId,
+) -> serde_json::Value {
+    let key = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let view = service.read(id.clone(), caller()).await.unwrap();
+            if let Some(entry) = view.permissions.first() {
+                break entry.review.clone();
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the native review is listed");
+    let (bytes, total) = service
+        .permission_review(id.clone(), caller(), key.clone(), 0, 32_768)
+        .await
+        .unwrap();
+    assert_eq!(
+        bytes.len() as u64,
+        total,
+        "the fixture review fits one content range"
+    );
+    let review: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(review["review"].as_str(), Some(key.as_str()));
+    review
+}
+
 #[tokio::test]
 async fn model_choice_during_a_turn_keeps_native_session_and_exact_attributed_history() {
     let directory = tempfile::tempdir().unwrap();
@@ -190,17 +222,7 @@ async fn a_pending_model_control_keeps_the_original_review_answerable_after_call
         )
         .await
         .unwrap();
-    let review = tokio::time::timeout(Duration::from_secs(5), async {
-        loop {
-            let view = service.read(id.clone(), caller()).await.unwrap();
-            if let Some(review) = view.permissions.first() {
-                break review.clone();
-            }
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .expect("the native review is published");
+    let review = listed_model_review(&service, &id).await;
     let (ack, model_gate) = tokio::sync::oneshot::channel();
     *provider.model_gate.lock().unwrap() = Some(model_gate);
     let actor = caller();
@@ -227,8 +249,10 @@ async fn a_pending_model_control_keeps_the_original_review_answerable_after_call
         actor.action_id
     );
     assert_eq!(during.permissions.len(), 1);
-    assert_eq!(during.permissions[0].execution_id, review.execution_id);
-    assert_eq!(during.permissions[0].permission_id, review.permission_id);
+    assert_eq!(
+        during.permissions[0].review,
+        review["review"].as_str().unwrap()
+    );
     changing.abort();
     assert!(changing.await.unwrap_err().is_cancelled());
     tokio::time::timeout(
@@ -236,8 +260,9 @@ async fn a_pending_model_control_keeps_the_original_review_answerable_after_call
         service.answer(
             id.clone(),
             caller(),
-            review.execution_id.clone(),
-            review.permission_id.clone(),
+            review["executionId"].as_str().unwrap().to_owned(),
+            review["permissionId"].as_str().unwrap().to_owned(),
+            review["review"].as_str().unwrap().to_owned(),
             "allow".into(),
             PermissionCaller::Owner,
         ),
@@ -426,17 +451,7 @@ async fn an_active_permission_preset_keeps_the_original_review_and_native_turn()
         )
         .await
         .unwrap();
-    let review = tokio::time::timeout(Duration::from_secs(5), async {
-        loop {
-            let view = service.read(id.clone(), caller()).await.unwrap();
-            if let Some(review) = view.permissions.first() {
-                break review.clone();
-            }
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .unwrap();
+    let review = listed_model_review(&service, &id).await;
     let before_noop = service
         .read_at(id.clone(), caller(), ReadOpening::LiveOnly)
         .await
@@ -458,8 +473,8 @@ async fn an_active_permission_preset_keeps_the_original_review_and_native_turn()
     assert_eq!(before_noop.1, after_noop.1);
     assert!(provider.mode_updates.lock().unwrap().is_empty());
     assert_eq!(
-        after_noop.0.permissions[0].permission_id,
-        review.permission_id
+        after_noop.0.permissions[0].review,
+        review["review"].as_str().unwrap()
     );
     assert_eq!(
         metadata
@@ -499,7 +514,10 @@ async fn an_active_permission_preset_keeps_the_original_review_and_native_turn()
         actor.action_id
     );
     assert_eq!(during.permissions.len(), 1);
-    assert_eq!(during.permissions[0].permission_id, review.permission_id);
+    assert_eq!(
+        during.permissions[0].review,
+        review["review"].as_str().unwrap()
+    );
     assert!(
         provider.permission_answers.lock().unwrap().is_empty(),
         "changing a preset is not an answer to the existing review"
@@ -508,8 +526,9 @@ async fn an_active_permission_preset_keeps_the_original_review_and_native_turn()
         .answer(
             id.clone(),
             caller(),
-            review.execution_id,
-            review.permission_id,
+            review["executionId"].as_str().unwrap().to_owned(),
+            review["permissionId"].as_str().unwrap().to_owned(),
+            review["review"].as_str().unwrap().to_owned(),
             "allow".into(),
             PermissionCaller::Owner,
         )

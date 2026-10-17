@@ -344,6 +344,7 @@ async fn finish_audit_panic_preserves_known_provider_outcome_and_answer_receipt(
         .commands
         .send(Command::Answer(
             PermissionAnswer {
+                key: None,
                 execution_id: ExecutionId::new("run").unwrap(),
                 id,
                 option_id: PermissionOptionId::new("allow").unwrap(),

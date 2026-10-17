@@ -13,6 +13,7 @@ import {
   bounds,
   ConversationErrorCode,
   type ConversationToolPolicy,
+  type ConversationPermission,
   type ConversationView,
 } from "../generated/product.js"
 
@@ -70,6 +71,7 @@ function reviewTarget(permissionId = "permission") {
     conversationId,
     permissions: [
       {
+        review: "0123456789abcdef0123456789abcdef",
         executionId: "execution",
         permissionId,
         options: [{ id: "allow" }, { id: "option" }],
@@ -298,17 +300,6 @@ it("rejects terminal executions that remain pending or actionable", async () => 
     parts: [],
     status: "completed",
   } as const
-  const permission = {
-    executionId: "finished",
-    permissionId: "review",
-    toolId: "tool",
-    title: "Review",
-    toolName: "shell",
-    argumentsJson: "{}",
-    origin: { kind: "harness" },
-    ask: "tool",
-    options: [{ id: "deny", label: "Deny", effect: "deny" }],
-  }
   const request = vi.fn()
   const api = createConversationApi({ request }, () => "id")
   for (const invalid of [
@@ -325,7 +316,6 @@ it("rejects terminal executions that remain pending or actionable", async () => 
         },
       ],
     },
-    { ...view, messages: [terminal], permissions: [permission] },
   ]) {
     request.mockResolvedValueOnce(invalid)
     await expect(api.read(conversationId)).rejects.toThrow()
@@ -360,6 +350,7 @@ it("routes every control with stable action and target identities", async () => 
     conversationId: conversationId,
     requestId: "action",
     executionId: "execution",
+    review: "0123456789abcdef0123456789abcdef",
     permissionId: "review",
     optionId: "allow",
   })
@@ -407,25 +398,6 @@ it("accepts bounded full replacement views and rejects mismatched identities or 
         },
       ],
     },
-    {
-      ...view,
-      permissions: [
-        {
-          executionId: "e",
-          permissionId: "p",
-          toolId: "t",
-          title: "run",
-          toolName: "shell",
-          argumentsJson: "{}",
-          origin: { kind: "harness" },
-          ask: "tool",
-          options: [
-            { id: "same", label: "Allow", effect: "allow" },
-            { id: "same", label: "Deny", effect: "deny" },
-          ],
-        },
-      ],
-    },
   ]) {
     request.mockResolvedValueOnce(invalid)
     await expect(api.read(conversationId)).rejects.toThrow()
@@ -441,15 +413,9 @@ it("rejects duplicate identities and impossible steering order at the response b
     status: "completed",
   } as const
   const permission = {
-    executionId: "first",
-    permissionId: "permission",
-    toolId: "tool",
-    title: "Run",
+    review: "0123456789abcdef0123456789abcdef",
+    origin: "harness",
     toolName: "shell",
-    argumentsJson: "{}",
-    origin: { kind: "harness" },
-    ask: "tool",
-    options: [{ id: "allow", label: "Allow", effect: "allow" }],
   }
   const tool = {
     executionId: "first",
@@ -584,15 +550,9 @@ it("accepts bounded omissions and the intentional pending-message overlap", asyn
     ],
     permissions: [
       {
-        executionId: "omitted-execution",
-        permissionId: "review",
-        toolId: "omitted-tool",
-        title: "Review",
+        review: "0123456789abcdef0123456789abcdef",
+        origin: "harness",
         toolName: "shell",
-        argumentsJson: "{}",
-        origin: { kind: "harness" },
-        ask: "tool",
-        options: [{ id: "deny", label: "Deny", effect: "deny" }],
       },
     ],
     tools: [
@@ -665,7 +625,13 @@ it("correlates a question answer acknowledgement with its action", async () => {
       questionTargets({
         conversationId,
         questions: [
-          { executionId: "execution", questionId: "ask", message: "Ask", questions: [] },
+          {
+            question: "0123456789abcdef0123456789abcdef",
+            executionId: "execution",
+            questionId: "ask",
+            message: "Ask",
+            questions: [],
+          },
         ],
       })[0]!,
       null,
@@ -674,6 +640,7 @@ it("correlates a question answer acknowledgement with its action", async () => {
   expect(request).toHaveBeenCalledWith("conversation.answerQuestion", {
     conversationId,
     executionId: "execution",
+    question: "0123456789abcdef0123456789abcdef",
     questionId: "ask",
     requestId: "question-action",
     choices: null,
@@ -684,6 +651,7 @@ it.each([false, true])(
   "reconciles a lost question answer without replay when consumed is %s",
   async (consumed) => {
     const ask = {
+      question: "0123456789abcdef0123456789abcdef",
       executionId: "execution",
       questionId: "ask",
       message: "Choose an environment",
@@ -714,7 +682,8 @@ it.each([false, true])(
               status: "running",
             },
           ],
-          questions: waiting ? [ask] : [],
+          // A view lists it by its entry; what it asks is read apart.
+          questions: waiting ? [{ question: ask.question, message: ask.message }] : [],
         }
       expect(method).toBe("conversation.answerQuestion")
       expect(waiting).toBe(true)
@@ -749,15 +718,21 @@ it.each([false, true])(
     })
     expect(error).not.toHaveProperty("retry")
     const current = await api.read(conversationId)
-    expect(current.questions).toEqual(consumed ? [] : [ask])
+    expect(current.questions).toEqual(
+      consumed ? [] : [{ question: ask.question, message: ask.message }],
+    )
     expect(answers).toBe(1)
     if (current.questions.length) {
       // A fresh read may justify a new deliberate action, not replay of the
       // failed action. The provider remains the owner of ask consumption.
       await expect(
-        api.answerQuestion(questionTargets(current)[0]!, choices, {
-          requestId: "deliberate-answer",
-        }),
+        api.answerQuestion(
+          questionTargets({ conversationId, questions: [ask] })[0]!,
+          choices,
+          {
+            requestId: "deliberate-answer",
+          },
+        ),
       ).resolves.toEqual({ requestId: "deliberate-answer", applied: true })
       expect(answers).toBe(2)
       expect(request.mock.calls.at(-1)?.[1].requestId).toBe("deliberate-answer")
@@ -776,7 +751,13 @@ it("keeps question refusal and mismatched acknowledgement in the shared control 
       questionTargets({
         conversationId,
         questions: [
-          { executionId: "execution", questionId: "ask", message: "Ask", questions: [] },
+          {
+            question: "0123456789abcdef0123456789abcdef",
+            executionId: "execution",
+            questionId: "ask",
+            message: "Ask",
+            questions: [],
+          },
         ],
       })[0]!,
       null,
@@ -790,7 +771,13 @@ it("keeps question refusal and mismatched acknowledgement in the shared control 
       questionTargets({
         conversationId,
         questions: [
-          { executionId: "execution", questionId: "ask", message: "Ask", questions: [] },
+          {
+            question: "0123456789abcdef0123456789abcdef",
+            executionId: "execution",
+            questionId: "ask",
+            message: "Ask",
+            questions: [],
+          },
         ],
       })[0]!,
       null,
@@ -2116,4 +2103,134 @@ it("correlates a model switch and validates its whole acknowledged selection", a
       api.setModel(conversationId, selected.model, { requestId: selected.requestId }),
     ).rejects.toBeInstanceOf(NessaConversationControlError)
   }
+})
+
+it("reads all a waiting question asks range by range, and refuses another question's", async () => {
+  const key = "0123456789abcdef0123456789abcdef"
+  const asked = {
+    question: key,
+    executionId: "execution",
+    questionId: "ask",
+    message: '"'.repeat(1024),
+    questions: [
+      {
+        key: "environment",
+        prompt: '"'.repeat(1024),
+        header: null,
+        multiSelect: false,
+        freeText: false,
+        required: true,
+        options: [{ value: "staging", label: '"'.repeat(1024), description: null }],
+      },
+    ],
+  }
+  const serve = (value: unknown) => {
+    const encoded = new TextEncoder().encode(JSON.stringify(value))
+    return vi.fn(async (_method: string, params: unknown) => {
+      const { offset, maxBytes } = params as { offset: number; maxBytes: number }
+      let binary = ""
+      for (const byte of encoded.subarray(offset, offset + maxBytes))
+        binary += String.fromCharCode(byte)
+      return { offset, totalBytes: encoded.byteLength, data: btoa(binary) }
+    })
+  }
+  const request = serve(asked)
+  const api = createConversationApi({ request }, () => "unused")
+  await expect(api.questionReview(conversationId, key)).resolves.toEqual(asked)
+  expect(request.mock.calls[0]).toEqual([
+    "conversation.questionReview",
+    { conversationId, question: key, offset: 0, maxBytes: 32_768 },
+  ])
+  await expect(
+    createConversationApi(
+      { request: serve({ ...asked, question: "f".repeat(32) }) },
+      () => "unused",
+    ).questionReview(conversationId, key),
+  ).rejects.toThrow("another question")
+  const unasked = serve(asked)
+  await expect(
+    createConversationApi({ request: unasked }, () => "unused").questionReview(
+      conversationId,
+      "ask",
+    ),
+  ).rejects.toThrow()
+  expect(unasked).not.toHaveBeenCalled()
+})
+
+it("reads what a waiting review shows range by range, and refuses one that does not add up", async () => {
+  // A review of a 100 KB Write input, of two-byte characters split across ranges.
+  const key = "0123456789abcdef0123456789abcdef"
+  const review: ConversationPermission = {
+    review: key,
+    executionId: "execution",
+    permissionId: "review",
+    toolId: "tool",
+    title: "Write",
+    toolName: "Write",
+    argumentsJson: JSON.stringify({
+      file_path: "/tmp/big.txt",
+      content: "é".repeat(50_000),
+    }),
+    origin: { kind: "harness" },
+    ask: "tool",
+    options: [{ id: "allow", label: "Allow once", effect: "allow" }],
+  }
+  const encode = (value: unknown) => new TextEncoder().encode(JSON.stringify(value))
+  const bytes = encode(review)
+  const serve = (encoded: Uint8Array) =>
+    vi.fn(async (_method: string, params: unknown) => {
+      const { offset, maxBytes } = params as { offset: number; maxBytes: number }
+      const part = encoded.subarray(offset, offset + maxBytes)
+      let binary = ""
+      for (const byte of part) binary += String.fromCharCode(byte)
+      return { offset, totalBytes: encoded.byteLength, data: btoa(binary) }
+    })
+  const request = serve(bytes)
+  const api = createConversationApi({ request }, () => "unused")
+  await expect(api.permissionReview(conversationId, key)).resolves.toEqual(review)
+  const asked = request.mock.calls.map((call) => call[1] as Record<string, unknown>)
+  expect(asked.length).toBe(Math.ceil(bytes.byteLength / 32_768))
+  expect(asked[0]).toEqual({ conversationId, review: key, offset: 0, maxBytes: 32_768 })
+  expect(asked.map((each) => each.offset)).toEqual(
+    asked.map((_, index) => index * 32_768),
+  )
+  expect(
+    request.mock.calls.every((call) => call[0] === "conversation.permissionReview"),
+  ).toBe(true)
+  const refused = (encoded: Uint8Array) =>
+    createConversationApi({ request: serve(encoded) }, () => "unused").permissionReview(
+      conversationId,
+      key,
+    )
+  // Bytes that are not UTF-8, or not JSON, or not a review, are not a review.
+  await expect(refused(new Uint8Array([0xff]))).rejects.toThrow()
+  await expect(refused(new TextEncoder().encode("{"))).rejects.toThrow()
+  await expect(refused(encode({ ...review, options: [] }))).rejects.toThrow()
+  await expect(
+    refused(encode({ ...review, options: [review.options[0], review.options[0]] })),
+  ).rejects.toThrow("repeats an option")
+  await expect(refused(encode({ ...review, argumentsComplete: true }))).rejects.toThrow()
+  // Another review's whole, under another key, is not the review asked for.
+  await expect(refused(encode({ ...review, review: "f".repeat(32) }))).rejects.toThrow(
+    "another review",
+  )
+  // A key that is not one a view lists is not asked for.
+  const unasked = serve(bytes)
+  await expect(
+    createConversationApi({ request: unasked }, () => "unused").permissionReview(
+      conversationId,
+      "review",
+    ),
+  ).rejects.toThrow()
+  // A read let go is not asked again.
+  const stopped = new AbortController()
+  stopped.abort()
+  await expect(
+    createConversationApi({ request: unasked }, () => "unused").permissionReview(
+      conversationId,
+      key,
+      { signal: stopped.signal },
+    ),
+  ).rejects.toThrow()
+  expect(unasked).not.toHaveBeenCalled()
 })

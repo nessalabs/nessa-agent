@@ -1723,6 +1723,7 @@ async fn malformed_controls_do_not_open_a_dormant_owned_provider() {
                 caller("panel", "answer"),
                 "execution".into(),
                 "permission".into(),
+                "0".repeat(32),
                 "".into(),
                 PermissionCaller::Owner,
             )
@@ -1736,6 +1737,7 @@ async fn malformed_controls_do_not_open_a_dormant_owned_provider() {
                 caller("panel", "cancel"),
                 "execution".into(),
                 "permission".into(),
+                "0".repeat(32),
                 "   ".into(),
             )
             .await,
@@ -1843,6 +1845,7 @@ async fn permission_consumption_case(
     *provider.answer_failure.lock().unwrap() = Some((AgentError::AuditFailure, selection));
     let (release, gate) = oneshot::channel();
     *provider.answer_gate.lock().unwrap() = Some(gate);
+    let review = key_of(&service, &id, "permission").await;
     let answer = tokio::spawn({
         let service = service.clone();
         let id = id.clone();
@@ -1853,6 +1856,7 @@ async fn permission_consumption_case(
                     caller("panel", "answer"),
                     "review".into(),
                     "permission".into(),
+                    review,
                     "allow".into(),
                     PermissionCaller::Owner,
                 )
@@ -1951,6 +1955,7 @@ async fn settled_permission_answers_wake_readers_and_expose_the_next_review() {
             *provider.answer_gate.lock().unwrap() = Some(gate);
             release
         });
+        let review = key_of(&service, &id, "permission").await;
         let answer = tokio::spawn({
             let service = service.clone();
             let id = id.clone();
@@ -1961,6 +1966,7 @@ async fn settled_permission_answers_wake_readers_and_expose_the_next_review() {
                         caller("panel", "answer"),
                         "reviews".into(),
                         "permission".into(),
+                        review,
                         "allow".into(),
                         PermissionCaller::Owner,
                     )
@@ -1995,16 +2001,484 @@ async fn settled_permission_answers_wake_readers_and_expose_the_next_review() {
             "settled permission must wake its conversation reader"
         );
         changes.borrow_and_update();
-        let view = service
-            .read(id.clone(), caller("panel", "after-answer"))
-            .await
-            .unwrap();
-        assert_eq!(view.permissions.len(), 1);
-        assert_eq!(view.permissions[0].permission_id, "permission-1");
+        let shown = shown_reviews(&service, &id).await;
+        assert_eq!(shown.len(), 1);
+        assert_eq!(shown[0].permission_id, "permission-1");
         assert_eq!(provider.permission_answers.lock().unwrap().len(), 1);
         finish.send(()).unwrap();
         service.shutdown().await.unwrap();
     }
+}
+
+// An answered review leaves no event in the committed history the view is
+// folded from. When the open-review limit counted that history, a turn that
+// had asked as many reviews as the limit hid every later one, and each hidden
+// review waited out its deadline with nobody shown it. Now every review the
+// SDK may hold open is shown, and only those still waiting.
+#[tokio::test]
+async fn every_review_the_agent_may_hold_open_is_offered_and_answered_ones_leave() {
+    const LIMIT: usize = nessa_sdk::domain::agent_execution::permissions::MAX_OPEN_REVIEWS;
+    let (service, provider, _, _) = fixture(ConversationLimits::default());
+    provider.request_permission.store(LIMIT, Ordering::SeqCst);
+    provider.answer_succeeds.store(true, Ordering::SeqCst);
+    let (finish, gate) = oneshot::channel();
+    *provider.permission_gate.lock().unwrap() = Some(gate);
+    let id = id();
+    service
+        .create(
+            id.clone(),
+            caller("panel", "create"),
+            RequestedConversation::default(),
+        )
+        .await
+        .unwrap();
+    service
+        .submit(
+            id.clone(),
+            caller("panel", "send"),
+            "reviews".into(),
+            SubmittedMessage {
+                text: "change files".into(),
+                images: Vec::new(),
+                files: Vec::new(),
+            },
+            SubmissionMode::Queue,
+        )
+        .await
+        .unwrap();
+    let all = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let view = service
+                .read(id.clone(), caller("panel", "read"))
+                .await
+                .unwrap();
+            if view.permissions.len() == LIMIT {
+                break view;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(all.interaction_view_error, None);
+    for permission in ["permission", "permission-1"] {
+        service
+            .answer(
+                id.clone(),
+                caller("panel", "answer"),
+                "reviews".into(),
+                permission.into(),
+                key_of(&service, &id, permission).await,
+                "allow".into(),
+                PermissionCaller::Owner,
+            )
+            .await
+            .unwrap();
+    }
+    // The end state is waited for itself: every review still waiting.
+    let expected: Vec<String> = (2..LIMIT)
+        .map(|index| format!("permission-{index}"))
+        .collect();
+    let view = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let view = service
+                .read(id.clone(), caller("panel", "after-answers"))
+                .await
+                .unwrap();
+            let shown: Vec<_> = shown_reviews(&service, &id)
+                .await
+                .into_iter()
+                .map(|review| review.permission_id)
+                .collect();
+            if shown == expected && view.permissions.len() == expected.len() {
+                break view;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the reviews still waiting are offered");
+    assert_eq!(view.interaction_view_error, None);
+    finish.send(()).unwrap();
+    service.shutdown().await.unwrap();
+}
+
+// A review is offered whatever the size of its input: the view carries the
+// start, and the whole is read range by range while the review waits, so a
+// person can see all of it before they choose.
+#[tokio::test]
+async fn a_large_write_review_is_listed_and_read_whole_from_its_live_owner_before_it_is_answered() {
+    let (service, provider, _, _) = fixture(ConversationLimits::default());
+    let arguments =
+        serde_json::json!({"file_path": "/tmp/big.txt", "content": "é".repeat(50_000)}).to_string();
+    assert!(arguments.len() > 100_000);
+    *provider.review_arguments.lock().unwrap() = Some(arguments.clone());
+    provider.request_permission.store(1, Ordering::SeqCst);
+    provider.answer_succeeds.store(true, Ordering::SeqCst);
+    let (finish, gate) = oneshot::channel();
+    *provider.permission_gate.lock().unwrap() = Some(gate);
+    let id = id();
+    service
+        .create(
+            id.clone(),
+            caller("panel", "create"),
+            RequestedConversation::default(),
+        )
+        .await
+        .unwrap();
+    service
+        .submit(
+            id.clone(),
+            caller("panel", "send"),
+            "reviews".into(),
+            SubmittedMessage {
+                text: "write a big file".into(),
+                images: Vec::new(),
+                files: Vec::new(),
+            },
+            SubmissionMode::Queue,
+        )
+        .await
+        .unwrap();
+    let entry = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let view = service
+                .read(id.clone(), caller("panel", "read"))
+                .await
+                .unwrap();
+            if let Some(entry) = view.permissions.into_iter().next() {
+                break entry;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    // The view lists it by a key of its own, whatever the size of its input.
+    assert_eq!(entry.review.len(), 32);
+    assert_eq!(entry.tool_name, "write_file");
+    let read = |offset: u64, caller_id: &'static str| {
+        service.permission_review(
+            id.clone(),
+            caller("panel", caller_id),
+            entry.review.clone(),
+            offset,
+            32_768,
+        )
+    };
+    let mut whole = Vec::new();
+    loop {
+        let (range, total) = read(whole.len() as u64, "review").await.unwrap();
+        assert!(!range.is_empty() && range.len() <= 32_768);
+        whole.extend(range);
+        if whole.len() as u64 == total {
+            break;
+        }
+    }
+    let shown: serde_json::Value = serde_json::from_slice(&whole).unwrap();
+    assert_eq!(shown["argumentsJson"], arguments.as_str());
+    assert_eq!(shown["toolName"], "write_file");
+    let permission = shown["permissionId"].as_str().unwrap().to_owned();
+    service
+        .answer(
+            id.clone(),
+            caller("panel", "answer"),
+            "reviews".into(),
+            permission,
+            entry.review.clone(),
+            "allow".into(),
+            PermissionCaller::Owner,
+        )
+        .await
+        .unwrap();
+    // Once answered, it is no longer listed or served.
+    assert!(matches!(
+        read(0, "late").await,
+        Err(ConversationError::Agent(AgentError::StalePermission))
+    ));
+    finish.send(()).unwrap();
+    service.shutdown().await.unwrap();
+}
+
+/// The key the view lists the agent's waiting review `permission` under.
+async fn key_of(service: &ConversationService, id: &ConversationId, permission: &str) -> String {
+    shown_reviews(service, id)
+        .await
+        .into_iter()
+        .find(|review| review.permission_id == permission)
+        .map(|review| review.review)
+        .expect("the review is listed")
+}
+
+/// Every review a read lists, each as its live owner shows it.
+async fn shown_reviews(
+    service: &ConversationService,
+    id: &ConversationId,
+) -> Vec<nessa_protocol::conversation::view::ConversationPermission> {
+    let view = service
+        .read(id.clone(), caller("panel", "listed"))
+        .await
+        .unwrap();
+    let mut shown = Vec::new();
+    for entry in view.permissions {
+        if let Ok(review) = service
+            .waiting_review(id.clone(), caller("panel", "review"), &entry.review)
+            .await
+        {
+            shown.push(review);
+        }
+    }
+    shown
+}
+
+use nessa_sdk::domain::agent_execution::questions::{
+    AgentQuestion, AnswerOption, AnswerShape, Question,
+};
+
+/// A question as large as one may be asked: its message, and each of its
+/// questions, headers and options as long as each may be, in characters
+/// that take the most an encoding can make of them.
+fn largest_question(index: usize) -> AgentQuestion {
+    AgentQuestion::new(
+        "\"".repeat(1024),
+        (0..3)
+            .map(|sibling| {
+                Question::new(
+                    format!("pick_{index}_{sibling}"),
+                    "\"".repeat(1024),
+                    Some("\\".repeat(256)),
+                    AnswerShape::One,
+                    vec![
+                        AnswerOption::new("yes", "\"".repeat(1024), Some("\\".repeat(256)))
+                            .unwrap(),
+                    ],
+                    None,
+                    false,
+                )
+                .unwrap()
+            })
+            .collect(),
+    )
+    .unwrap()
+}
+
+/// A conversation whose turn waits on what `provider` asks, until `finish`.
+async fn asking(service: &ConversationService) -> ConversationId {
+    let id = id();
+    service
+        .create(
+            id.clone(),
+            caller("panel", "create"),
+            RequestedConversation::default(),
+        )
+        .await
+        .unwrap();
+    service
+        .submit(
+            id.clone(),
+            caller("panel", "send"),
+            "asks".into(),
+            SubmittedMessage {
+                text: "choose".into(),
+                images: Vec::new(),
+                files: Vec::new(),
+            },
+            SubmissionMode::Queue,
+        )
+        .await
+        .unwrap();
+    id
+}
+
+// A question is listed by a small entry under a key of its own, however
+// large it is: every one the agent may hold open, each at its largest, is
+// listed, and all it asks is read whole from the live owner. An answer
+// names the key, so one naming another is stale and changes nothing.
+#[tokio::test]
+async fn every_question_the_agent_may_hold_open_is_listed_read_whole_and_answered_by_its_key() {
+    use nessa_sdk::domain::agent_execution::questions::MAX_OPEN_QUESTIONS;
+    let (service, provider, _, _) = fixture(ConversationLimits::default());
+    *provider.ask_questions.lock().unwrap() =
+        (0..MAX_OPEN_QUESTIONS).map(largest_question).collect();
+    let (finish, gate) = oneshot::channel();
+    *provider.permission_gate.lock().unwrap() = Some(gate);
+    let id = asking(&service).await;
+    let view = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let view = service
+                .read(id.clone(), caller("panel", "read"))
+                .await
+                .unwrap();
+            if view.questions.len() == MAX_OPEN_QUESTIONS {
+                break view;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(view.interaction_view_error, None);
+    let mut keys = std::collections::HashSet::new();
+    for (index, entry) in view.questions.iter().enumerate() {
+        assert!(keys.insert(entry.question.clone()));
+        assert!("\"".repeat(1024).starts_with(&entry.message));
+        let mut whole = Vec::new();
+        loop {
+            let (range, total) = service
+                .question_review(
+                    id.clone(),
+                    caller("panel", "question"),
+                    entry.question.clone(),
+                    whole.len() as u64,
+                    32_768,
+                )
+                .await
+                .unwrap();
+            assert!(!range.is_empty() && range.len() <= 32_768);
+            whole.extend(range);
+            if whole.len() as u64 == total {
+                break;
+            }
+        }
+        let shown: serde_json::Value = serde_json::from_slice(&whole).unwrap();
+        assert_eq!(shown["question"], entry.question.as_str());
+        let question_id = if index == 0 {
+            "question".to_owned()
+        } else {
+            format!("question-{index}")
+        };
+        assert_eq!(shown["questionId"], question_id.as_str());
+        assert_eq!(shown["message"], "\"".repeat(1024).as_str());
+        assert_eq!(shown["questions"].as_array().unwrap().len(), 3);
+        assert_eq!(shown["questions"][2]["prompt"], "\"".repeat(1024).as_str());
+        assert_eq!(
+            shown["questions"][2]["options"][0]["label"],
+            "\"".repeat(1024).as_str()
+        );
+    }
+    let execution = view.messages[0].execution_id.clone();
+    let answer = |key: String| {
+        service.answer_question(
+            id.clone(),
+            caller("panel", "answer"),
+            execution.clone(),
+            "question".into(),
+            key,
+            None,
+        )
+    };
+    // Another question's key, or one no question has: the agent holding
+    // the question refuses it as stale, and nothing is answered.
+    for stale in [view.questions[1].question.clone(), "0".repeat(32)] {
+        assert!(matches!(
+            answer(stale).await,
+            Err(ConversationError::Agent(AgentError::StalePermission))
+        ));
+    }
+    assert!(provider.question_answers.lock().unwrap().is_empty());
+    answer(view.questions[0].question.clone()).await.unwrap();
+    assert_eq!(provider.question_answers.lock().unwrap().len(), 1);
+    // Answered, it is no longer listed or served.
+    let after = service
+        .read(id.clone(), caller("panel", "after"))
+        .await
+        .unwrap();
+    assert_eq!(after.questions, view.questions[1..]);
+    assert!(matches!(
+        service
+            .question_review(
+                id.clone(),
+                caller("panel", "late"),
+                view.questions[0].question.clone(),
+                0,
+                1,
+            )
+            .await,
+        Err(ConversationError::Agent(AgentError::StalePermission))
+    ));
+    finish.send(()).unwrap();
+    service.shutdown().await.unwrap();
+}
+
+// An answer or a cancel names the key of the review the person was shown;
+// one naming another key answers nothing, whatever waits under the same
+// identities, and that review waits on.
+#[tokio::test]
+async fn an_answer_naming_another_reviews_key_is_stale_and_answers_nothing() {
+    let (service, provider, _, _) = fixture(ConversationLimits::default());
+    provider.request_permission.store(2, Ordering::SeqCst);
+    provider.answer_succeeds.store(true, Ordering::SeqCst);
+    let (finish, gate) = oneshot::channel();
+    *provider.permission_gate.lock().unwrap() = Some(gate);
+    let id = asking(&service).await;
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while shown_reviews(&service, &id).await.len() != 2 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    let other = key_of(&service, &id, "permission-1").await;
+    let other_key = other.clone();
+    let execution = shown_reviews(&service, &id).await[0].execution_id.clone();
+    for stale in [other, "0".repeat(32)] {
+        assert!(matches!(
+            service
+                .answer(
+                    id.clone(),
+                    caller("panel", "answer"),
+                    execution.clone(),
+                    "permission".into(),
+                    stale.clone(),
+                    "allow".into(),
+                    PermissionCaller::Owner,
+                )
+                .await,
+            Err(ConversationError::PermissionAnswer {
+                error: AgentError::StalePermission,
+                selection: PermissionSelectionState::Pending,
+            })
+        ));
+        assert!(matches!(
+            service
+                .cancel_permission(
+                    id.clone(),
+                    caller("panel", "cancel"),
+                    execution.clone(),
+                    "permission".into(),
+                    stale,
+                    "no".into(),
+                )
+                .await,
+            Err(ConversationError::Agent(AgentError::StalePermission))
+        ));
+    }
+    // Each reached the agent naming its stale key, and the agent's own
+    // controller refused it there: both reviews still wait.
+    let stale_keys = provider
+        .permission_answers
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|answer| answer.key.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(stale_keys, [Some(other_key), Some("0".repeat(32))]);
+    assert_eq!(shown_reviews(&service, &id).await.len(), 2);
+    service
+        .answer(
+            id.clone(),
+            caller("panel", "answer"),
+            execution,
+            "permission".into(),
+            key_of(&service, &id, "permission").await,
+            "allow".into(),
+            PermissionCaller::Owner,
+        )
+        .await
+        .unwrap();
+    assert_eq!(provider.permission_answers.lock().unwrap().len(), 3);
+    finish.send(()).unwrap();
+    service.shutdown().await.unwrap();
 }
 
 #[test]

@@ -332,6 +332,8 @@ function panelConversation(
       approvalModes: [{ id: "ask", name: "Ask", description: "Asks." }],
       questions: [],
       running: false,
+      reviewsWaiting: [],
+      questionsWaiting: [],
       permissions: [],
       tools: [],
       pending: [],

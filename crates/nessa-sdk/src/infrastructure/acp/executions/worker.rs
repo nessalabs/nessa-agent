@@ -61,8 +61,9 @@ use crate::domain::agent_execution::executions::{
 use crate::domain::agent_execution::permissions::{
     PermissionCancellationReason, PermissionCancellationReasonView, PermissionDeadlineSettlement,
     PermissionDecision, PermissionEffect, PermissionId, PermissionOfferPolicy, PermissionOptionId,
-    PermissionScope, PermissionStateView, RefusalOutcome, ReviewDecline, ReviewDeclineId,
-    ReviewDeclineObservation, ReviewDeclineReason, ReviewDeclineStage,
+    PermissionScope, PermissionStateView, QuestionListing, RefusalOutcome, ReviewDecline,
+    ReviewDeclineId, ReviewDeclineObservation, ReviewDeclineReason, ReviewDeclineStage,
+    MAX_OPEN_REVIEWS, MAX_REVIEW_TOOL_NAME_BYTES,
 };
 use crate::domain::agent_execution::prompts::UserMessage;
 use crate::domain::agent_execution::questions::{
@@ -477,7 +478,7 @@ struct Worker<P> {
     /// Held beside the wire request because answering one means writing a
     /// response to it, and beside what was asked because an answer is only an
     /// answer if it chooses what that question offered.
-    questions: HashMap<QuestionId, OpenQuestion>,
+    questions: AskedQuestions,
     /// The review or ask this worker answered without registering one — a
     /// refusal.
     ///
@@ -602,7 +603,7 @@ pub(in crate::infrastructure::acp) async fn run<P: AcpProfile>(
         hold_remembered_allows,
         path_classification: Arc::new(Semaphore::new(1)),
         startup_advisory_session: None,
-        questions: HashMap::new(),
+        questions: AskedQuestions::default(),
         declined: None,
         stopped_prompts: Vec::new(),
         expired_stops: Vec::new(),
@@ -2319,6 +2320,18 @@ impl<P: AcpProfile> Worker<P> {
     ) -> Result<(), WorkerFailure> {
         let permission_id = answer.id.clone();
         let answered_execution = answer.execution_id.clone();
+        // A review shown under another key is not this one: nothing is
+        // remembered or answered for it.
+        if let Err(error) =
+            execution.shown_under(&answer.execution_id, &answer.id, answer.key.as_deref())
+        {
+            let _ = reply.send(Err(ProviderOperationFailure::permission_answer(
+                error,
+                ProviderSessionState::Usable,
+                PermissionSelectionState::Pending,
+            )));
+            return Ok(());
+        }
         let wire_option = match self.remember_and_map_answer(&answer) {
             Ok(option) => option,
             Err(error) => {
@@ -2869,7 +2882,9 @@ impl<P: AcpProfile> Worker<P> {
                 .await
                 .map_err(Into::into);
         }
-        if self.permissions.len() >= 128 || self.permissions.values().any(|id| *id == wire_id) {
+        if self.permissions.len() >= MAX_OPEN_REVIEWS
+            || self.permissions.values().any(|id| *id == wire_id)
+        {
             return Err(json_rpc::protocol("permission request limit or duplicate ID").into());
         }
         // A review this binding cannot put to a host is one tool's answer, not
@@ -2895,6 +2910,19 @@ impl<P: AcpProfile> Worker<P> {
         // the two would file a refusal under the wrong reason, and the reason
         // is most of what the record is for.
         let input = match self.profile.permission_input(&params) {
+            // A name longer than a review may carry could not be shown, so
+            // it is refused here rather than left waiting unseen.
+            Ok(input) if input.name.len() > MAX_REVIEW_TOOL_NAME_BYTES => {
+                return self
+                    .decline_review(
+                        execution,
+                        wire_id,
+                        &params,
+                        ReviewDeclineReason::UnreadableRequest,
+                        response_deadline,
+                    )
+                    .await
+            }
             Ok(input) => input,
             Err(error) => {
                 self.profile.note_declined_permission(&params);
@@ -3072,6 +3100,7 @@ impl<P: AcpProfile> Worker<P> {
                 },
             );
             let answer = PermissionAnswer {
+                key: None,
                 attribution: ApprovalAttribution::new(
                     rule.reference().granted_by().clone(),
                     ApprovalBasis::Rule(rule.reference().clone()),
@@ -3163,6 +3192,7 @@ impl<P: AcpProfile> Worker<P> {
             PermissionEffect::Deny => context.once_deny.clone(),
         }?;
         Some(PermissionAnswer {
+            key: None,
             attribution: ApprovalAttribution::new(
                 rule.reference().granted_by().clone(),
                 ApprovalBasis::Rule(rule.reference().clone()),
@@ -3986,6 +4016,7 @@ impl<P: AcpProfile> Worker<P> {
             .clone();
         let admitted = execution.ask_question(&execution_id, id, question)?;
         let event = admitted.event();
+        let listing = execution.question_listing();
         self.questions.insert(
             admitted.id().clone(),
             OpenQuestion {
@@ -3993,6 +4024,7 @@ impl<P: AcpProfile> Worker<P> {
                 admitted,
                 cancel_delivery: None,
             },
+            listing,
         );
         self.emit(event).map_err(Into::into)
     }
@@ -4027,6 +4059,19 @@ impl<P: AcpProfile> Worker<P> {
                 AgentError::InvalidInput(
                     "the answered question belongs to another execution".into(),
                 ),
+                ProviderSessionState::Usable,
+            )));
+            return Ok(());
+        }
+        // Shown under another key, it was another question that reused this
+        // one's ids: stale, and nothing is answered.
+        if answer
+            .key
+            .as_deref()
+            .is_some_and(|key| self.questions.key_of(&answer.id).as_deref() != Some(key))
+        {
+            let _ = reply.send(Err(ProviderOperationFailure::new(
+                AgentError::StalePermission,
                 ProviderSessionState::Usable,
             )));
             return Ok(());
@@ -4321,7 +4366,7 @@ impl<P: AcpProfile> Worker<P> {
         &mut self,
         cause: QuestionCancellation,
     ) -> Result<(), AgentError> {
-        let questions = std::mem::take(&mut self.questions);
+        let questions = self.questions.take();
         let mut failure = None;
         for mut open in questions.into_values() {
             let delivery = open
@@ -4378,6 +4423,63 @@ impl<P: AcpProfile> Worker<P> {
 /// which provider request the agent is waiting on, which execution asked — so
 /// an answer or a cancellation can name it after that execution is no longer
 /// active — and what was asked, which an answer is checked against.
+/// The asks this worker holds open, and the listing each is shown through:
+/// one owner, so a question leaves the listing exactly when it leaves here.
+#[derive(Default)]
+struct AskedQuestions {
+    open: HashMap<QuestionId, OpenQuestion>,
+    listings: HashMap<QuestionId, QuestionListing>,
+}
+impl AskedQuestions {
+    fn insert(&mut self, id: QuestionId, open: OpenQuestion, listing: Option<QuestionListing>) {
+        if let Some(listing) = listing {
+            self.listings.insert(id.clone(), listing);
+        }
+        self.open.insert(id, open);
+    }
+    fn remove(&mut self, id: &QuestionId) -> Option<OpenQuestion> {
+        if let Some(listing) = self.listings.remove(id) {
+            listing.unlist(id);
+        }
+        self.open.remove(id)
+    }
+    fn take(&mut self) -> HashMap<QuestionId, OpenQuestion> {
+        for (id, listing) in self.listings.drain() {
+            listing.unlist(&id);
+        }
+        std::mem::take(&mut self.open)
+    }
+    fn get(&self, id: &QuestionId) -> Option<&OpenQuestion> {
+        self.open.get(id)
+    }
+    /// The key ask `id` is listed under, while it is.
+    fn key_of(&self, id: &QuestionId) -> Option<String> {
+        self.listings.get(id)?.key_of(id)
+    }
+    // Only the unix-only worker tests read these.
+    #[cfg(all(test, unix))]
+    fn len(&self) -> usize {
+        self.open.len()
+    }
+    // Only the unix-only worker tests read these.
+    #[cfg(all(test, unix))]
+    fn is_empty(&self) -> bool {
+        self.open.is_empty()
+    }
+    fn get_mut(&mut self, id: &QuestionId) -> Option<&mut OpenQuestion> {
+        self.open.get_mut(id)
+    }
+    fn values(&self) -> std::collections::hash_map::Values<'_, QuestionId, OpenQuestion> {
+        self.open.values()
+    }
+    fn keys(&self) -> std::collections::hash_map::Keys<'_, QuestionId, OpenQuestion> {
+        self.open.keys()
+    }
+    fn iter(&self) -> std::collections::hash_map::Iter<'_, QuestionId, OpenQuestion> {
+        self.open.iter()
+    }
+}
+
 #[derive(Clone)]
 struct OpenQuestion {
     wire_id: RpcId,

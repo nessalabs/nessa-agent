@@ -21,6 +21,7 @@ function captured(conversationId: string) {
     conversationId,
     questions: [
       {
+        question: "0".repeat(32),
         executionId: "captured-turn",
         questionId: "captured-ask",
         message: "Ask",

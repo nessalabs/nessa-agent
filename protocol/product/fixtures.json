@@ -156,31 +156,8 @@
     "title": "Flights to Lisbon",
     "questions": [
       {
-        "executionId": "execution-1",
-        "questionId": "1",
-        "message": "Which environment should I deploy to?",
-        "questions": [
-          {
-            "key": "question_0",
-            "prompt": "Which environment should I deploy to?",
-            "header": "Environment",
-            "multiSelect": false,
-            "freeText": true,
-            "required": true,
-            "options": [
-              {
-                "value": "staging",
-                "label": "Staging",
-                "description": "Safe to break"
-              },
-              {
-                "value": "production",
-                "label": "Production",
-                "description": null
-              }
-            ]
-          }
-        ]
+        "question": "0123456789abcdef0123456789abcdef",
+        "message": "Which environment should I deploy to?"
       }
     ],
     "approvalMode": "ask",
@@ -272,6 +249,7 @@
     "conversationId": "00000000-0000-4000-8000-000000000001",
     "requestId": "action",
     "executionId": "execution",
+    "review": "0123456789abcdef0123456789abcdef",
     "permissionId": "permission",
     "optionId": "allow"
   },
@@ -279,6 +257,7 @@
     "conversationId": "00000000-0000-4000-8000-000000000001",
     "requestId": "action",
     "executionId": "execution",
+    "review": "0123456789abcdef0123456789abcdef",
     "permissionId": "permission",
     "reason": "User withdrew this review"
   },
@@ -338,6 +317,7 @@
     "conversationId": "00000000-0000-4000-8000-000000000001",
     "requestId": "action",
     "executionId": "execution",
+    "question": "0123456789abcdef0123456789abcdef",
     "questionId": "1",
     "choices": [
       {
@@ -893,5 +873,27 @@
     "requestId": "mode-1",
     "requestedModel": "claude-haiku-4-5-20251001",
     "status": "changing"
+  },
+  "ConversationPermissionReviewParams": {
+    "conversationId": "00000000-0000-4000-8000-000000000001",
+    "review": "0123456789abcdef0123456789abcdef",
+    "offset": 32768,
+    "maxBytes": 32768
+  },
+  "ConversationPermissionReviewResult": {
+    "offset": 32768,
+    "totalBytes": 32770,
+    "data": "e30="
+  },
+  "ConversationQuestionReviewParams": {
+    "conversationId": "00000000-0000-4000-8000-000000000001",
+    "question": "0123456789abcdef0123456789abcdef",
+    "offset": 0,
+    "maxBytes": 32768
+  },
+  "ConversationQuestionReviewResult": {
+    "offset": 0,
+    "totalBytes": 2,
+    "data": "e30="
   }
 }

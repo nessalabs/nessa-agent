@@ -828,6 +828,7 @@ impl JoinedOperation {
             Self::AnswerPermission => (
                 Box::pin(async move {
                     let answer = PermissionAnswer {
+                        key: None,
                         attribution: ApprovalAttribution::new(actor(), ApprovalBasis::Explicit),
                         execution_id: execution,
                         id: PermissionId::new("review").unwrap(),
@@ -840,6 +841,7 @@ impl JoinedOperation {
             Self::CancelPermission => (
                 Box::pin(async move {
                     let request = PermissionCancellationRequest {
+                        key: None,
                         execution_id: execution,
                         id: PermissionId::new("review").unwrap(),
                         reason: PermissionCancellationReason::custom(
@@ -855,6 +857,7 @@ impl JoinedOperation {
             Self::AnswerQuestion => (
                 Box::pin(async move {
                     let answer = QuestionAnswer {
+                        key: None,
                         actor: actor(),
                         execution_id: execution,
                         id: QuestionId::new("ask").unwrap(),

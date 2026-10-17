@@ -549,6 +549,10 @@ impl ResponseClass {
             | "conversation.archive"
             | "conversation.unarchive"
             | "conversation.answer"
+            // A person reads a long review or question before they answer
+            // it, so the read is never behind ordinary requests either.
+            | "conversation.permissionReview"
+            | "conversation.questionReview"
             | "conversation.answerQuestion"
             | "conversation.cancel"
             | "conversation.remove"
