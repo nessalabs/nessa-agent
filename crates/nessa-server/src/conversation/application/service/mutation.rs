@@ -271,6 +271,9 @@ impl ConversationService {
         let binding = if binding.operation() == MutationOperation::Stop
             && self.inner.ownership.get().is_some()
         {
+            ensure_live(self, &id, &caller)
+                .await
+                .map_err(MutationFailure::Target)?;
             self.selected_stop_lookup(storage.clone(), &binding).await?
         } else {
             binding

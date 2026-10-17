@@ -58,3 +58,156 @@ async fn thread_report_cleanup_preserves_other_ownership_and_clears_an_absent_ro
     drop(taken);
     service.shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn an_injected_report_waits_for_its_suspended_hosts_exact_successor() {
+    use crate::conversation::application::RequestedConversation;
+    use nessa_sdk::application::agent_execution::{
+        agents::{AttachmentRequest, Resumed},
+        permissions::ActionContext,
+        providers::{ExecutionReport, ProviderExecutionReply, ProviderSessionState},
+    };
+    use nessa_sdk::domain::agent_execution::executions::{ExecutionOutcome, MessageChunk};
+    use std::sync::atomic::Ordering;
+    let (service, provider, _, _) = fixture(ConversationLimits::default());
+    provider.native_steering.store(true, Ordering::SeqCst);
+    provider.inject_steers.store(true, Ordering::SeqCst);
+    let child = ConversationId::new(&uuid::Uuid::new_v4().to_string()).unwrap();
+    let caller = ConversationCaller {
+        organization_id: OrganizationId::new("org").unwrap(),
+        principal_id: PrincipalId::new("person").unwrap(),
+        surface_id: "panel".into(),
+        action_id: "host".into(),
+    };
+    service
+        .create(
+            child.clone(),
+            caller.clone(),
+            RequestedConversation::default(),
+        )
+        .await
+        .unwrap();
+    let (release, gate) = tokio::sync::oneshot::channel();
+    *provider.execution_gate.lock().unwrap() = Some(gate);
+    *provider.execution_reply.lock().unwrap() =
+        Some(ProviderExecutionReply::Finished(ExecutionReport::new(
+            Some(Ok(ExecutionOutcome::Cancelled)),
+            None,
+            ProviderSessionState::Usable,
+        )));
+    let input = |text: &str| SubmittedMessage {
+        text: text.into(),
+        images: vec![],
+        files: vec![],
+    };
+    service
+        .submit(
+            child.clone(),
+            caller.clone(),
+            "host".into(),
+            input("host work"),
+            SubmissionMode::Queue,
+        )
+        .await
+        .unwrap();
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        provider.execution_started.notified(),
+    )
+    .await
+    .unwrap();
+    service
+        .submit(
+            child.clone(),
+            caller.clone(),
+            "steer".into(),
+            input("also this"),
+            SubmissionMode::Steer,
+        )
+        .await
+        .unwrap();
+    let live = service.resolve(&child, &caller).await.unwrap();
+    let before = live.agent.session_manager().snapshot().await.unwrap();
+    let injected = invocation(&before.invocations, "steer").unwrap();
+    assert_eq!(
+        injected.scheduling.last().unwrap().stage,
+        InvocationStage::Injected
+    );
+    let closing = {
+        let agent = live.agent.clone();
+        tokio::spawn(async move {
+            agent
+                .suspend(ActionContext::new("person", "gateway", "shutdown").unwrap())
+                .await
+        })
+    };
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while provider.close_calls.load(Ordering::SeqCst) == 0 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    provider
+        .execution_updates
+        .lock()
+        .unwrap()
+        .push(ExecutionUpdate::Finished(ExecutionOutcome::Cancelled));
+    drop(release);
+    tokio::time::timeout(Duration::from_secs(5), closing)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let saved = live.agent.session_manager().snapshot().await.unwrap();
+    assert!(matches!(
+        in_record(
+            &saved.invocations,
+            invocation(&saved.invocations, "steer").unwrap(),
+            false
+        ),
+        Found::Continuing
+    ));
+    let owed = live
+        .agent
+        .owed_turns()
+        .await
+        .into_iter()
+        .find(|owed| owed.execution_id().as_str() == "host")
+        .unwrap();
+    let actor = caller.actor().unwrap();
+    let authorization = live
+        .agent
+        .authorize_attachment(AttachmentRequest::CallerRequested(actor.clone()))
+        .unwrap();
+    live.agent
+        .start_attachment(authorization)
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
+    provider.execution_updates.lock().unwrap().extend([
+        ExecutionUpdate::Message(MessageChunk::text("Successor answer.")),
+        ExecutionUpdate::Finished(ExecutionOutcome::Completed),
+    ]);
+    *provider.execution_reply.lock().unwrap() =
+        Some(ProviderExecutionReply::Finished(ExecutionReport::new(
+            Some(Ok(ExecutionOutcome::Completed)),
+            None,
+            ProviderSessionState::Usable,
+        )));
+    let Resumed::Continued(admission) = live.agent.resume_turn(&owed, actor).await.unwrap() else {
+        panic!("host continues")
+    };
+    assert_eq!(admission.wait().await.unwrap(), ExecutionOutcome::Completed);
+    let saved = live.agent.session_manager().snapshot().await.unwrap();
+    match in_record(
+        &saved.invocations,
+        invocation(&saved.invocations, "steer").unwrap(),
+        false,
+    ) {
+        Found::Finished("completed", Some(reply)) => assert_eq!(reply, "Successor answer."),
+        _ => panic!("the report must follow its injected host's exact successful successor"),
+    }
+    service.shutdown().await.unwrap();
+}

@@ -921,12 +921,7 @@ fn in_record(history: &[InvocationRecord], record: &InvocationRecord, failure: b
             let Some(host) = host else {
                 return Found::Waiting(None);
             };
-            match (settled(host), &host.result) {
-                (true, Some(result)) => Found::Finished(outcome(result), reply(host)),
-                (true, None) => Found::Finished("cancelled", None),
-                (false, Some(result)) => Found::Settling(Some((outcome(result), reply(host)))),
-                (false, None) => Found::Waiting(None),
-            }
+            in_record(history, host, failure)
         }
         _ => match &record.result {
             Some(result) => Found::Settling(Some((outcome(result), reply(record)))),

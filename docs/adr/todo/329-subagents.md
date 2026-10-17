@@ -102,6 +102,9 @@ a draft implementation is not evidence that those gates passed.
 | Deleted ancestor has cold descendants after restart | Reuse saved lease cleanup or exact environment accounting; Confirmed can settle ownership, NotHeld/unavailable stay unconfirmed | `deleting_a_cold_owned_tree_reconciles_confirmed_leases_and_cannot_reparent_children` |
 | A closed historical child is opened again | SDK publishes retained child identity; gateway refuses converting it into a fresh root | Same cold-tree regression |
 | Runner failure leaves a queued report target owed | Report waits for exact continuation or explicit host Stop/decline instead of publishing premature cancellation | `a_thread_turn_reports_its_outcome_and_reply_back_to_the_sender` |
+| Partial Stop lookup returns a child's unresolved receipt | Root access is checked before any aggregate receipt evidence is returned | Parent Stop partial-settlement regression with a foreign caller |
+| An injected report's host suspends and resumes | Follow the host through the SDK's exact continuation before publishing the injected report outcome | `an_injected_report_waits_for_its_suspended_hosts_exact_successor` |
+| Stop targets owed parent work and Attempted persistence fails | The mutation owner retains the owed turn until its effect is durably admitted; independent child targets still run | `stopping_owed_parent_work_cascades_only_after_command_attempt_is_durable` |
 | A newer opening has a hold but no published lease | Retained pending/error slots stay unresolved; the cold path only observes a session with no current slot. Opening checks the existing lifetime seal before environment effects | `an_opening_owner_prevents_historical_cleanup_from_closing_its_lifetime` |
 
 

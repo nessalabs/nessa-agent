@@ -1167,7 +1167,33 @@ async fn a_thread_turn_reports_its_outcome_and_reply_back_to_the_sender() {
     })
     .await
     .expect("the runner-dropped request remains owed");
-    assert_eq!(reports_in(&service, &source, 2).await.len(), 2);
+    let report_source = service
+        .resolve(&source, &caller("inspect-pending-report"))
+        .await
+        .unwrap();
+    let pending_history = report_source
+        .agent
+        .session_manager()
+        .snapshot()
+        .await
+        .unwrap();
+    assert_eq!(
+        pending_history
+            .invocations
+            .iter()
+            .filter(|record| record
+                .request
+                .user_message
+                .text_str()
+                .starts_with("[Thread report]"))
+            .count(),
+        2
+    );
+    assert_eq!(
+        service.inner.thread_reports.waiting(),
+        1,
+        "the owed request has not been reported as cancelled"
+    );
     let declined = client
         .call(
             "stop_thread",
@@ -1177,7 +1203,15 @@ async fn a_thread_turn_reports_its_outcome_and_reply_back_to_the_sender() {
         )
         .await;
     assert_eq!(declined["isError"], false, "{declined}");
-
+    assert!(
+        !live_worker
+            .agent
+            .owed_turns()
+            .await
+            .iter()
+            .any(|turn| turn.execution_id().as_str() == dropped),
+        "{declined}"
+    );
     let reports = reports_in(&service, &source, 3).await;
     assert_eq!(reports.len(), 3, "{reports:?}");
     assert!(reports[2].contains(&dropped), "{}", reports[2]);

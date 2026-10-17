@@ -571,6 +571,19 @@ async fn partial_child_settlement_and_lost_ack_keep_exact_retry_and_honest_looku
             "one child failure does not prevent the next captured child Stop"
         );
         let binding = ConversationService::stop_lookup(&parent, &caller("stop"), "parent").unwrap();
+        let mut foreign = caller("foreign-lookup");
+        foreign.principal_id = PrincipalId::new("stranger").unwrap();
+        assert!(
+            matches!(
+                service
+                    .lookup_command(storage.clone(), parent.clone(), foreign, binding.clone())
+                    .await,
+                Err(commands::MutationFailure::Target(
+                    ConversationError::NotFound
+                ))
+            ),
+            "current root access precedes aggregate child receipt evidence"
+        );
         let lookup = service
             .lookup_command(storage.clone(), parent.clone(), caller("read"), binding)
             .await;
@@ -1104,15 +1117,19 @@ async fn stopping_owed_parent_work_cascades_only_after_command_attempt_is_durabl
     bind(&service, &storage, &root, true).await;
     let parent = id();
     opened(&service, &provider, &parent).await;
-    let p = hold_turn(&service, &provider, &parent, "parent").await;
-    let child_id = child(&service, &parent, "parent", "child").await;
-    let c = hold_turn(&service, &provider, &child_id, "child").await;
     *provider.execution_reply.lock().unwrap() =
         Some(ProviderExecutionReply::Finished(ExecutionReport::new(
             Some(Err(AgentError::Transport("pipe".into()))),
             None,
             ProviderSessionState::Usable,
         )));
+    *provider.execution_observation_failure.lock().unwrap() = Some(
+        nessa_sdk::application::agent_execution::providers::ObservationFailure::new(
+            AgentError::Transport("pipe".into()),
+            nessa_sdk::application::agent_execution::providers::ObservationFailureCause::ExecutionFailed));
+    let p = hold_turn(&service, &provider, &parent, "parent").await;
+    let child_id = child(&service, &parent, "parent", "child").await;
+    let c = hold_turn(&service, &provider, &child_id, "child").await;
     drop(p);
     let live = service
         .resolve(&parent, &caller("inspect-owed"))
