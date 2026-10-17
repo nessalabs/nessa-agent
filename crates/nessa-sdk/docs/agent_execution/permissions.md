@@ -217,14 +217,15 @@ asked only after the review is checked: the answer's execution is the review's,
 and the once option of that effect was offered. Either miss refuses the choice
 and stores nothing. The host notes who is answering (`PermissionRules::note_answerer`)
 before the answer is queued; a missing note is not the owner. The audit
-basis is `ApprovalBasis::Rule`, naming the rule id, revision, and grantor. If
-that selection is not recorded, the binding withdraws the revision it just
-stored. Until it is acknowledged the revision is provisional and does not
-decide a later review, including when the withdrawal cannot be stored. A
-second remember of a key that is still provisional is refused. Withdrawing
-a replacement writes the previous rule back under a new revision. A later
-review of that tool in that workspace is answered the same way, without a
-card or a deadline, when a once option still exists. A shared user's turn is
+basis for this first selection stays `ApprovalBasis::Explicit`, and its selected
+option stays the original offered remember choice. Only the provider wire reply
+uses the mapped once option. This lets the exact receipt guard confirm the
+person's command without confusing logical intent with a protocol option.
+The rule and its creation audit commit together before selection; a later
+selection or delivery failure retains that grant and reports its own typed
+failure. A later review of that tool in that workspace is selected by the stored
+rule with `ApprovalBasis::Rule`, naming its id, revision and grantor, without a
+card or deadline when a once option still exists. A shared user's turn is
 not offered the remember options. The host stores, lists, and revokes the
 rules; this binding does not.
 
