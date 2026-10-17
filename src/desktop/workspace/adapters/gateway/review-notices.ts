@@ -22,6 +22,19 @@ export interface ReviewNotifier {
   clear(review: WaitingReview): void
 }
 
+/** Whether notices can be shown, as Settings reports it. */
+export type NoticeAccess = "unsupported" | "not-asked" | "allowed" | "denied"
+
+/**
+ * Where this window's notices are allowed. `ask` is Settings' Allow button,
+ * and `blocked` is what Settings says when the person has denied them.
+ */
+export interface NoticeAccessSource {
+  read(): Promise<NoticeAccess>
+  ask(): Promise<NoticeAccess>
+  readonly blocked: string
+}
+
 const OPEN_REVIEW_EVENT = "nessa-open-review"
 
 /** The window event a notice click sends, naming the conversation to open. */
@@ -117,6 +130,49 @@ export function waitingReviewNotices(notifier: ReviewNotifier): {
 let readConversationTitle: (conversationId: string) => string | null = () => null
 let showWaitingReviewsNow: (() => void) | undefined
 
+/** What a notice says: the tool, and the conversation by title or id. */
+function noticeText(review: WaitingReview): { title: string; body: string } {
+  const name = readConversationTitle(review.conversationId)?.trim()
+  return {
+    title: `${review.tool} needs a decision`,
+    body: name ? name : review.conversationId,
+  }
+}
+
+const permissionAccess = (permission: NotificationPermission): NoticeAccess =>
+  permission === "granted" ? "allowed" : permission === "denied" ? "denied" : "not-asked"
+
+/**
+ * The browser's notification permission. A prompt that arrives with the page
+ * is a WebKit console error, and one that arrives on the next click
+ * interrupts that click, so only `ask`, from Settings' own button, asks.
+ */
+export const browserNoticeAccess: NoticeAccessSource = {
+  read: () =>
+    Promise.resolve(
+      typeof Notification === "undefined"
+        ? "unsupported"
+        : permissionAccess(Notification.permission),
+    ),
+  ask: () =>
+    typeof Notification === "undefined"
+      ? Promise.resolve("unsupported")
+      : Notification.requestPermission().then(permissionAccess),
+  blocked: "Blocked in this browser. Allow notifications for this site to turn them on.",
+}
+
+let noticeAccessNow: NoticeAccessSource = browserNoticeAccess
+
+/** Point Settings at where this window's notices are allowed. */
+export function bindNoticeAccess(source: NoticeAccessSource): void {
+  noticeAccessNow = source
+}
+
+/** Where this window's notices are allowed: the browser's, until composition binds the host's. */
+export function noticeAccess(): NoticeAccessSource {
+  return noticeAccessNow
+}
+
 /** Point a waiting-review notice at the conversation's title, read when it is shown. */
 export function bindConversationTitles(
   read: (conversationId: string) => string | null,
@@ -155,11 +211,8 @@ export function browserReviewNotifier(
     const id = noticeKey(review)
     if (shown.has(id) || typeof Notification === "undefined") return
     if (Notification.permission !== "granted") return
-    const name = readConversationTitle(review.conversationId)?.trim()
-    const notice = new Notification(`${review.tool} needs a decision`, {
-      body: name ? name : review.conversationId,
-      tag: id,
-    })
+    const { title, body } = noticeText(review)
+    const notice = new Notification(title, { body, tag: id })
     notice.onclick = () => {
       open(review.conversationId)
       window.focus()
@@ -174,6 +227,64 @@ export function browserReviewNotifier(
       const id = noticeKey(review)
       shown.get(id)?.close()
       shown.delete(id)
+    },
+  }
+}
+
+/** A waiting review and what its notice says. */
+export interface WaitingNotice extends WaitingReview {
+  readonly title: string
+  readonly body: string
+}
+
+/** The host's review notices: the system's notification center. */
+export interface HostNotices {
+  /** Make the notices that are up the ones for this whole waiting set. */
+  sync(notices: readonly WaitingNotice[]): Promise<void>
+}
+
+/**
+ * Notices the desktop host shows, for a webview with no notifications of its
+ * own (WKWebView has none; WebKitGTK denies them). The host keeps which
+ * notices are up and diffs each set against them, so this sends every set
+ * whole, the empty one included, and a reloaded window cannot leave one
+ * behind. One set is in flight at a time and only the newest waiting set
+ * follows it: an older set landing after a newer one would put back a
+ * review that settled. `showWaiting` sends the newest set again, so the
+ * host retries what the system refused before (permission not yet granted).
+ */
+export function hostReviewNotices(host: HostNotices): {
+  apply: (reviews: readonly WaitingReview[]) => void
+  showWaiting: () => void
+} {
+  let latest: readonly WaitingReview[] = []
+  let sending = false
+  let queued = false
+  const send = () => {
+    if (sending) {
+      queued = true
+      return
+    }
+    sending = true
+    queued = false
+    const notices = latest.map((review) => ({ ...review, ...noticeText(review) }))
+    void host
+      .sync(notices)
+      .catch((cause: unknown) => {
+        console.warn("[nessa] review notices were not updated", cause)
+      })
+      .finally(() => {
+        sending = false
+        if (queued) send()
+      })
+  }
+  return {
+    apply(reviews) {
+      latest = reviews
+      send()
+    },
+    showWaiting() {
+      send()
     },
   }
 }

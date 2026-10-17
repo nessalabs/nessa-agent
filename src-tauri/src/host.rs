@@ -54,6 +54,11 @@ pub const LINK_NOT_OPENED: &str = "nessa://link-not-opened";
 /// [`GatewayStartup`]; a snapshot command carries the same revisioned value so
 /// subscribing before asking cannot lose or reorder a transition.
 pub const GATEWAY_STARTUP: &str = "nessa://gateway-startup";
+/// A waiting review's notice was opened. Sent to the desktop window, which has
+/// just been brought forward; the payload is the conversation id to open.
+/// Only the hosts with a notice center send it.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+pub const REVIEW_NOTICE_OPENED: &str = "nessa://review-notice-opened";
 
 /// Whether the host could put itself together at launch (ADR 221). Asked by
 /// the page before anything else; `Refused` means no other command that needs
