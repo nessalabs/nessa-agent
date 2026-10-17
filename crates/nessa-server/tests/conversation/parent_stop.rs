@@ -1899,18 +1899,81 @@ async fn failed_queued_report_withdrawal_keeps_root_active_and_retries_before_ro
             stage: MutationStage::Attempted,
             once: once.clone(),
         }),
-        once,
+        once: once.clone(),
         opens: opens.clone(),
     });
-    assert!(service
-        .stop_command(
-            faulty.clone(),
-            parent.clone(),
-            caller("stop-parent"),
-            "parent".into()
-        )
-        .await
-        .is_err());
+    // Exercise the same real admission contention that can precede the injected
+    // write failure on a loaded runner. That refusal is not the fault boundary.
+    let principal_lease = tokio::time::timeout(TURN_HOLD_HANG, async {
+        loop {
+            match storage.open_creation("person".into(), true).await {
+                Ok(Some(lease)) => break lease,
+                Err(commands::CreationStorageError::Storage(StorageError::Busy)) => {
+                    tokio::task::yield_now().await;
+                }
+                Ok(None) => panic!("command admission stream is absent"),
+                Err(error) => panic!("cannot hold command admission: {error:?}"),
+            }
+        }
+    })
+    .await
+    .expect("command admission becomes available");
+    assert!(matches!(
+        service
+            .stop_command(
+                faulty.clone(),
+                parent.clone(),
+                caller("stop-parent"),
+                "parent".into()
+            )
+            .await,
+        Err(commands::MutationFailure::Storage(
+            commands::CreationStorageError::Storage(StorageError::Busy)
+        ))
+    ));
+    assert!(
+        once.load(Ordering::SeqCst),
+        "admission Busy did not reach the injected write"
+    );
+    assert!(
+        opens.lock().unwrap().is_empty(),
+        "pre-fault Busy is not a post-fault independent attempt"
+    );
+    drop(principal_lease);
+    let failure = tokio::time::timeout(TURN_HOLD_HANG, async {
+        loop {
+            match service
+                .stop_command(
+                    faulty.clone(),
+                    parent.clone(),
+                    caller("stop-parent"),
+                    "parent".into(),
+                )
+                .await
+            {
+                Err(commands::MutationFailure::Storage(
+                    commands::CreationStorageError::Storage(StorageError::Busy),
+                )) if once.load(Ordering::SeqCst) => tokio::task::yield_now().await,
+                Err(error) => break error,
+                Ok(_) => panic!("the selected report withdrawal must reach the injected failure"),
+            }
+        }
+    })
+    .await
+    .expect("the original Stop reaches its selected write fault");
+    assert!(
+        !once.load(Ordering::SeqCst),
+        "the fault must fire before testing post-fault effects"
+    );
+    assert!(
+        matches!(
+            failure,
+            commands::MutationFailure::Storage(commands::CreationStorageError::Storage(
+                StorageError::Corrupt(_)
+            ))
+        ),
+        "unexpected fault result: {failure:?}"
+    );
     if provider
         .cancel_turns
         .lock()
