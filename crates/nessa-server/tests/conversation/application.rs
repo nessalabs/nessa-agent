@@ -2034,17 +2034,29 @@ async fn a_review_held_back_by_the_open_limit_is_offered_once_earlier_ones_are_a
             .await
             .unwrap();
     }
-    let view = service
-        .read(id.clone(), caller("panel", "after-answers"))
-        .await
-        .unwrap();
-    let shown: Vec<_> = view
-        .permissions
-        .iter()
-        .map(|review| review.permission_id.as_str())
-        .collect();
+    // The notice above shows once seventeen reviews are saved; the
+    // eighteenth may still be on its way to storage. So the end state is
+    // waited for itself: the sixteen still waiting, the last two among them.
     let expected: Vec<String> = (2..18).map(|index| format!("permission-{index}")).collect();
-    assert_eq!(shown, expected);
+    let view = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let view = service
+                .read(id.clone(), caller("panel", "after-answers"))
+                .await
+                .unwrap();
+            let shown: Vec<_> = view
+                .permissions
+                .iter()
+                .map(|review| review.permission_id.clone())
+                .collect();
+            if shown == expected {
+                break view;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the reviews held back are offered once earlier ones are answered");
     assert_eq!(view.interaction_view_error, None);
     finish.send(()).unwrap();
     service.shutdown().await.unwrap();

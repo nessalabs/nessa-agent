@@ -55,6 +55,7 @@ use nessa_sdk::domain::agent_execution::sessions::{
 use nessa_sdk::domain::agent_execution::tools::{
     McpCallArguments, McpTool, ToolCallId, ToolCallUpdate, ToolContent, ToolObservation, ToolStatus,
 };
+use std::collections::HashSet;
 use uuid::Uuid;
 
 fn said(text: &str) -> UserMessage {
@@ -1580,7 +1581,7 @@ fn a_review_answered_after_a_newer_fold_is_dropped_by_an_older_read() {
         &committed("earlier-incarnation", 1, 1, 1, Some(&older)),
         &[],
         Some(&ExecutionId::new("execution").unwrap()),
-        &std::collections::HashSet::new(),
+        &HashSet::new(),
     );
     assert!(!accepted);
     assert_eq!(shown_reviews(&projection.read()), ["0", "1", "2"]);
@@ -2988,7 +2989,6 @@ fn a_pending_review_shows_an_armed_deadline_and_a_restored_one_does_not() {
 
 #[test]
 fn a_saved_deadline_counts_down_while_this_process_holds_the_review() {
-    use std::collections::HashSet;
     use std::time::Duration;
     let ExecutionUpdate::PermissionRequested {
         id,
