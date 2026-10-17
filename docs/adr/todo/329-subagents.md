@@ -115,6 +115,27 @@ Reserved integration paths until the parent coordinates task
 callers. Independent settings parsing, this contract and ownership inspection do
 not release that reservation.
 
+### Empty-child preparation integration seam
+
+The coordinator gains `prepare_child(command, session)`: it uses the existing
+reservation, factory, publication, capacity and cleanup authorities, acknowledges
+`Ready`, and does not call `InitialSubmit` or invent a task receipt. The ordinary
+`SpawnCommand.task` supplies the retained description/configuration fingerprint
+for this operation. Preparation identity includes the fixed session and operation
+kind; using the same request for spawn or another session conflicts. `Ready`
+restores as acknowledged preparation; interrupted Reserved/Prepared/Attached
+progress retains its existing unconfirmed recovery. This primitive selects no
+gateway Stop or approval policy.
+
+| Ordering | Decision | Regression |
+| --- | --- | --- |
+| Prepared-only child reaches Attached | Publish Ready; no initial turn | `preparation_attaches_the_named_child_without_submitting_a_turn` |
+| Exact prepare retry or operation/session changes | Return original child, or typed conflict | Same regression |
+| Caller leaves during factory preparation | Original supervisor owns completion | `preparation_survives_its_callers_disconnect_without_dispatching` |
+| Parent lifetime closes after preparation | Existing lifetime drain retains child cleanup | `preparation_remains_owned_during_parent_close` |
+| Another request names an active session | Refuse before factory handoff | `preparation_refuses_reusing_an_active_session_before_the_factory` |
+| Restart after acknowledged Ready | Recover relationship/gate without dispatch | `preparation_readiness_round_trips_through_the_real_sqlite_owner` |
+
 ### Proposed ordering and regression acceptance
 
 Each row needs an actual public-primitives regression before runtime acceptance;

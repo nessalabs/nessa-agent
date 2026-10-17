@@ -76,6 +76,34 @@ pub struct SpawnCommand {
     pub origin: SpawnOrigin,
 }
 
+/// Internal operation identity: preparation and task submission cannot share a retry.
+#[derive(Clone)]
+struct ChildCommand {
+    command: SpawnCommand,
+    session: Option<SessionId>,
+}
+impl std::ops::Deref for ChildCommand {
+    type Target = SpawnCommand;
+    fn deref(&self) -> &Self::Target {
+        &self.command
+    }
+}
+impl ChildCommand {
+    fn digest(&self) -> Result<TaskDigest, OwnershipError> {
+        match &self.session {
+            None => task_digest(&self.task),
+            Some(session) => {
+                let mut digest = Sha256::new();
+                digest.update(b"nessa.child.preparation\0");
+                digest.update((session.as_str().len() as u64).to_be_bytes());
+                digest.update(session.as_str().as_bytes());
+                digest.update(self.task.as_bytes());
+                TaskDigest::new(HEXLOWER.encode(&digest.finalize()))
+            }
+        }
+    }
+}
+
 /// Child identity and how far its spawn chart has moved.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SpawnReceipt {
@@ -261,6 +289,25 @@ impl OwnershipCoordinator {
         })
     }
 
+    /// Read the active ownership lifetime for a session, including child sessions.
+    /// Private admissions and Closed history are excluded. This read grants no
+    /// attachment or submission authority; use [`Self::participation`] for a gate.
+    pub fn active_lifetime_for_session(&self, session: &SessionId) -> Option<AgentLifetimeId> {
+        self.inner.with_graph(|graph| {
+            graph.snapshot().lifetimes.into_iter().find_map(|row| {
+                (row.session_id == *session
+                    && row.state != LifetimeState::Closed
+                    && self
+                        .inner
+                        .publication
+                        .lock()
+                        .expect("ownership publication")
+                        .lifetime_eligible(graph, &row.lifetime_id))
+                .then_some(row.lifetime_id)
+            })
+        })
+    }
+
     /// Reserve, prepare, and admit one child. Identical retries do not call the factory again.
     /// A caller that arrives while the attempt is running joins it. Dropping one waiter
     /// leaves the attempt running.
@@ -272,6 +319,38 @@ impl OwnershipCoordinator {
     /// Stage-specific failure, capacity, and sealing semantics and their named
     /// enforcers are defined by the [ADR329 ordering table](https://github.com/nessalabs/nessa-agent/blob/main/docs/adr/todo/329-subagents.md#sdk-audit-eligibility-and-owned-root-delivery-628).
     pub async fn spawn(&self, command: SpawnCommand) -> Result<SpawnReceipt, OwnershipFailure> {
+        self.start_child(ChildCommand {
+            command,
+            session: None,
+        })
+        .await
+    }
+
+    /// Prepare an owned child on the supplied session without submitting a turn.
+    ///
+    /// `command.task` is retained as a configuration/task-description fingerprint
+    /// and passed to the factory; it is not sent to `InitialSubmit`. The session,
+    /// preparation operation and description are part of retry identity. A Ready
+    /// receipt records acknowledged preparation, not a fabricated task receipt.
+    /// Caller cancellation leaves the admitted preparation supervised. Lifetime
+    /// close still drains this child. The host owns later ordinary submissions.
+    ///
+    /// # Errors
+    /// Returns the same admission, audit, store, capacity and preparation failures
+    /// as [`Self::spawn`]. A retry changing session or operation conflicts.
+    pub async fn prepare_child(
+        &self,
+        command: SpawnCommand,
+        session: SessionId,
+    ) -> Result<SpawnReceipt, OwnershipFailure> {
+        self.start_child(ChildCommand {
+            command,
+            session: Some(session),
+        })
+        .await
+    }
+
+    async fn start_child(&self, command: ChildCommand) -> Result<SpawnReceipt, OwnershipFailure> {
         if command.task.trim().is_empty() {
             return Err(OwnershipFailure::EmptyTask);
         }
@@ -624,7 +703,7 @@ impl Shared {
         })
     }
 
-    fn lookup(&self, command: &SpawnCommand) -> Option<Result<SpawnReceipt, OwnershipFailure>> {
+    fn lookup(&self, command: &ChildCommand) -> Option<Result<SpawnReceipt, OwnershipFailure>> {
         self.with_graph(|graph| {
             let progress = graph.spawn_progress(&command.request_id).cloned()?;
             let Some(child) = graph.child_lifetime(&command.request_id).cloned() else {
@@ -636,7 +715,8 @@ impl Shared {
             let Some(session) = graph.session_id(&child).cloned() else {
                 return Some(Err(OwnershipFailure::Domain(OwnershipError::UnknownSpawn)));
             };
-            let digest_ok = task_digest(&command.task)
+            let digest_ok = command
+                .digest()
                 .map(|digest| digest_matches(graph, &command.request_id, &digest))
                 .unwrap_or(false);
             if stored_parent(graph, &command.request_id).as_ref() != Some(&command.parent)
@@ -694,7 +774,7 @@ impl Shared {
 
     async fn drive_spawn(
         self: &Arc<Self>,
-        command: SpawnCommand,
+        command: ChildCommand,
     ) -> Result<SpawnReceipt, OwnershipFailure> {
         if let Some(found) = self.lookup(&command) {
             return found;
@@ -781,7 +861,7 @@ impl Shared {
     fn admit_new(
         &self,
         graph: &mut OwnershipGraph,
-        command: &SpawnCommand,
+        command: &ChildCommand,
         _weak: Weak<Shared>,
     ) -> Result<Admitted, OwnershipFailure> {
         if graph.spawn_progress(&command.request_id).is_some() {
@@ -816,8 +896,8 @@ impl Shared {
             return Err(OwnershipFailure::Domain(OwnershipError::NoRoom));
         }
         let child = mint_lifetime();
-        let session = mint_session();
-        let digest = task_digest(&command.task).map_err(OwnershipFailure::Domain)?;
+        let session = command.session.clone().unwrap_or_else(mint_session);
+        let digest = command.digest().map_err(OwnershipFailure::Domain)?;
         let binding = SpawnBinding {
             parent_lifetime: command.parent.clone(),
             parent_session,
@@ -865,7 +945,7 @@ impl Shared {
 
     async fn preparing_factory(
         self: &Arc<Self>,
-        command: &SpawnCommand,
+        command: &ChildCommand,
         admitted: Admitted,
     ) -> Result<SpawnReceipt, OwnershipFailure> {
         let owned_lifetime = self.with_graph(|_| {
@@ -1054,6 +1134,11 @@ impl Shared {
             .await?;
         self.advance(&command.request_id, SpawnProgress::Attached)
             .await?;
+        if command.session.is_some() {
+            self.advance(&command.request_id, SpawnProgress::Ready)
+                .await?;
+            return self.receipt(&command.request_id);
+        }
         let submitted = effect(
             "initial_submission",
             || prepared.submit.submit(&command.task, &command.request_id),
