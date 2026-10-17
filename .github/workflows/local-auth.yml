@@ -389,6 +389,21 @@ jobs:
       # adapters, so each OS gives its own answer to them too.
       - run: cargo clippy -p nessa-local-database --all-targets -- -D warnings
       - run: cargo test -p nessa-local-database
+      # This owns the WKWebView nil-URL deadline acceptance independently of
+      # the shared server suite. Compile with warnings denied before running.
+      - name: Qualify the native missing-page deadline
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          echo "::add-matcher::src-tauri/examples/page_load_acceptance/rustc.json"
+          trap 'echo "::remove-matcher owner=page-load-compiler::"' EXIT
+          cargo clippy -p nessa-app --no-default-features --example page_load_acceptance --color never -- -D warnings
+          # A permissive temporary parent must not become the private log directory.
+          umask 022
+          cargo run -p nessa-app --no-default-features --example page_load_acceptance | tee "$RUNNER_TEMP/page-load-acceptance.txt"
+          while IFS= read -r line; do
+            printf '::notice title=Native load acceptance::%s\n' "$line"
+          done < "$RUNNER_TEMP/page-load-acceptance.txt"
       # A test that deadlocks here held this job for six hours, until GitHub's
       # job limit cancelled it (#366). Over 53 green runs this step took at most
       # 7 minutes on Linux, 11 on macOS and 19 on Windows, compile included, so
