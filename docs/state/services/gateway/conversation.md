@@ -213,7 +213,10 @@ is no Changing overlay or intent notification for a selection that is unchanged.
 | Original review still pending on active turn | No native preset call, unchanged cursor, review remains answerable; `an_active_permission_preset_keeps_the_original_review_and_native_turn` |
 | Owner stops during an awaited pending no-op read | Existing same-owner publication guard still refuses the view; no-op does not bypass lifetime checks |
 
-The current alpha metadata format remains version 6. Opening requires the
-current model-request table and columns before the gateway starts; an earlier
-shape is refused as a dataset error and left intact. Opening does not add the
+The current alpha metadata format is defined by the metadata schema. Opening
+requires the current model-request table, columns, and pending-request constraint
+before the gateway starts; an earlier shape at the current version is refused as
+a damaged dataset and left intact. The shape regressions capture a fresh
+dataset's version before corruption and verify that refusal leaves that version
+unchanged, without recreating the missing model journal. Opening does not add the
 new table to an existing dataset or reset user data.

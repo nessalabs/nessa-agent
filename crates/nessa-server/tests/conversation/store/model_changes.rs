@@ -268,8 +268,11 @@ async fn model_and_permission_intents_exclude_each_other_before_effects() {
 fn earlier_current_version_shape_is_refused_without_creating_a_model_journal() {
     let opened = opened();
     drop(opened.store);
+    let version_before: i64 = raw(&opened.path)
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .unwrap();
     raw(&opened.path)
-        .execute_batch("DROP TABLE model_requests; PRAGMA user_version=6;")
+        .execute_batch("DROP TABLE model_requests;")
         .unwrap();
     assert!(matches!(
         LocalConversationStore::open(&opened.path),
@@ -283,6 +286,10 @@ fn earlier_current_version_shape_is_refused_without_creating_a_model_journal() {
         )
         .unwrap();
     assert_eq!(tables, 0);
+    let version_after: i64 = raw(&opened.path)
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(version_after, version_before);
 }
 
 #[test]
@@ -293,9 +300,12 @@ fn a_partial_current_shape_or_missing_pending_constraint_is_refused_at_open() {
     ] {
         let opened=opened();
         drop(opened.store);
+        let version_before: i64 = raw(&opened.path)
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
         raw(&opened.path).execute_batch(mutation).unwrap();
         assert!(matches!(LocalConversationStore::open(&opened.path),Err(nessa_local_database::OpenError::Damaged(_))));
         let version:i64=raw(&opened.path).query_row("PRAGMA user_version",[],|row|row.get(0)).unwrap();
-        assert_eq!(version,6);
+        assert_eq!(version,version_before);
     }
 }
