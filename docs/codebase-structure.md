@@ -1799,6 +1799,9 @@ adapters; Claude, Codex and OpenCode native programs are downloaded explicitly.
 and packaged gateway. `product/agent_install.rs` owns wire mapping and worker
 admission. `src/onboarding/application/agent-installations.ts`, its gateway
 adapter and `ui/agent-downloads.tsx` supply setup and panel download controls.
+`ui/agent-download-progress.tsx` presents their shared indeterminate installation
+indicator and known archive size; the final-outcome API supplies no received-byte
+percentage.
 `ui/selected-agent-setup.tsx` supplies native panel/desktop first-use hints and
 refusal recovery through one provider. `ui/agent-api-key-save.tsx` keeps the
 existing API-key save audit warning visible after a successful save retires its

@@ -4,6 +4,7 @@ import type {
 } from "../application/agent-installations"
 import { AGENT_CHOICES } from "../model/onboarding"
 import { useAgentDownloads } from "./use-agent-downloads"
+import { AgentDownloadProgress } from "./agent-download-progress"
 
 export function installationOutcomeText(
   outcome: InstallationOutcome | undefined,
@@ -68,11 +69,18 @@ export function AgentDownloadsView({
         </div>
       ))}
       <p role="status" aria-live="polite" className="nessa-text-2 text-muted-foreground">
-        {pending
-          ? "Downloading and verifying the runtime. You can leave this view; installation will continue."
-          : unavailable
-            ? "Cannot check downloads. Connect to Nessa and try again."
-            : installationOutcomeText(outcome)}
+        {pending ? (
+          <AgentDownloadProgress
+            name={
+              AGENT_CHOICES.find((choice) => choice.id === pending)?.name ?? "the runtime"
+            }
+            archiveBytes={offers?.find((offer) => offer.agent === pending)?.archiveBytes}
+          />
+        ) : unavailable ? (
+          "Cannot check downloads. Connect to Nessa and try again."
+        ) : (
+          installationOutcomeText(outcome)
+        )}
       </p>
       <button
         type="button"

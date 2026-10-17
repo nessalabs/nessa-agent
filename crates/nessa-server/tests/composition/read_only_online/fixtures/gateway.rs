@@ -122,14 +122,28 @@ impl RecordReadSource for GatedRead {
                 ("timeout-head", Some(1)) => std::future::pending::<()>().await,
                 // A cold first head read, as a loaded gateway answers it
                 // (row W17); the next head read succeeds.
-                ("preparing-head", Some(1)) => return Err(RecordReadError::SourcePreparing),
+                ("preparing-head", Some(1)) => {
+                    eprintln!(
+                        "record fixture injected {:?}",
+                        RecordReadError::SourcePreparing
+                    );
+                    return Err(RecordReadError::SourcePreparing);
+                }
                 ("cumulative-head", Some(count)) if count > 1 => {
                     tokio::time::sleep(Duration::from_secs(3)).await
                 }
                 ("cumulative-head", None) => tokio::time::sleep(Duration::from_secs(7)).await,
                 _ => {}
             }
-            let response = self.source.read(admitted, operation, lease).await?;
+            let started = std::time::Instant::now();
+            let response = self.source.read(admitted, operation, lease).await;
+            if let Err(error) = &response {
+                eprintln!(
+                    "record fixture page={page} head={head:?} after {:?}: {error:?}",
+                    started.elapsed()
+                );
+            }
+            let response = response?;
             if !page && self.mode == "before-page" && head == Some(3) {
                 self.authority
                     .change(
@@ -544,6 +558,7 @@ async fn gateway_child() {
             heads,
         ));
     }
+    eprintln!("record fixture seed committed; publishing ONLINE_READY");
     println!("ONLINE_READY");
     io::stdout().flush().unwrap();
     // Serve until the test kills this process.

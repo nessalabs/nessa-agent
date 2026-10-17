@@ -1852,6 +1852,12 @@ the ordinary hint, while independent audit failures remain visible.
 At 360px the setup card, with a production-sized **Download Claude · 117 MB**
 beside **Retry**, keeps both buttons whole inside the card and the
 card inside the viewport, within 1 pixel.
+While installation waits, both setup and the downloads list display a labelled
+indeterminate progress indicator and the known 117 MB archive size in Chromium and
+WebKit. Neither supplies a numeric completion value; the indicator fits the 360px
+viewport and disappears on completion without replaying installation or messages.
+Its visible spinner animates with ordinary motion preferences and stops with
+reduced motion.
 The fixture’s `?clipboard=native` path uses the real host writer for isolated
 native window Copy verification rather than the browser test capture.
 

@@ -11,6 +11,7 @@ import type {
 } from "../application/ports"
 import { AGENT_CHOICES, type AgentId, type AgentReadiness } from "../model/onboarding"
 import { installationOutcomeText } from "./agent-downloads"
+import { AgentDownloadProgress } from "./agent-download-progress"
 import { useAgentDownloads } from "./use-agent-downloads"
 import { AgentApiKeyForm } from "./agent-api-key-form"
 import { AgentApiKeyAuditWarning, useAgentApiKeySave } from "./agent-api-key-save"
@@ -184,11 +185,13 @@ function SelectedSetup({
         label={`${name} setup steps`}
         title={
           <span role="status" aria-live="polite">
-            {downloads.pending
-              ? `Downloading and verifying ${name}. You can leave this view; installation will continue.`
-              : checking
-                ? `Checking ${name} setup…`
-                : readinessText(name)[readiness]}
+            {downloads.pending ? (
+              <AgentDownloadProgress name={name} archiveBytes={offer?.archiveBytes} />
+            ) : checking ? (
+              `Checking ${name} setup…`
+            ) : (
+              readinessText(name)[readiness]
+            )}
           </span>
         }
         actions={

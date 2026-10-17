@@ -20,7 +20,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use super::content_type::ContentTypes;
-use super::files::{ChosenFiles, Kind, OnDisk, Stored};
+use super::files::{ChosenFiles, DirectoryEntries, Kind, OnDisk, Stored};
 use super::picker::{FilePicker, Picked};
 #[cfg(target_os = "macos")]
 use super::readiness::{MakeReadable, Readied, ReadyFuture};
@@ -71,6 +71,7 @@ pub struct FakeFiles {
     arrives: bool,
     /// How many times `look` has been called, for `arrives`.
     looks: Mutex<usize>,
+    entry_budgets: Mutex<Vec<usize>>,
 }
 
 impl FakeFiles {
@@ -183,6 +184,7 @@ impl FakeFiles {
             kinds: HashMap::new(),
             arrives: false,
             looks: Mutex::new(0),
+            entry_budgets: Mutex::new(Vec::new()),
         }
     }
 
@@ -209,6 +211,10 @@ impl FakeFiles {
     /// Every path that was looked at.
     pub fn asked(&self) -> Vec<PathBuf> {
         self.asked.lock().expect("the paths asked about").clone()
+    }
+
+    pub fn entry_budgets(&self) -> Vec<usize> {
+        self.entry_budgets.lock().expect("entry budgets").clone()
     }
 
     /// Every read that was actually made, and how many bytes it was allowed.
@@ -247,18 +253,23 @@ impl ChosenFiles for FakeFiles {
         .map_err(Error::from)
     }
 
-    fn entries(&self, path: &Path) -> std::io::Result<Vec<PathBuf>> {
+    fn entries(&self, path: &Path, remaining: usize) -> std::io::Result<DirectoryEntries> {
+        self.entry_budgets.lock().unwrap().push(remaining);
         self.asked
             .lock()
             .expect("the paths asked about")
             .push(path.to_path_buf());
         std::thread::sleep(self.stall);
         match self.held.get(path) {
-            Some(entries) => Ok(entries.clone()),
+            Some(entries) if entries.len() > remaining => Ok(DirectoryEntries::TooMany),
+            Some(entries) => Ok(DirectoryEntries::Within(entries.clone())),
             // A directory this double was not told about reads as empty rather
             // than as an error: a test that stages one folder should not have
             // to stage every leaf it does not care about.
-            None => self.looked.map(|_| Vec::new()).map_err(Error::from),
+            None => self
+                .looked
+                .map(|_| DirectoryEntries::Within(Vec::new()))
+                .map_err(Error::from),
         }
     }
 
