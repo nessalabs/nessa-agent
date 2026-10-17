@@ -1196,6 +1196,25 @@ sequenceDiagram
   Its hold is the conversation's, released with its other files; the
   record stays as history.
 
+The Unix publisher retains the workspace directory identity when `FileOutbox`
+opens. Source resolution and descriptor-relative traversal precede staging;
+metadata and copied bytes come from the opened file. The requested alias still
+supplies the published name. The following orderings are covered in
+[`tests/env_serve/outbox.rs`](../../crates/nessa-server/tests/env_serve/outbox.rs).
+
+| Source ordering | Result | Regression |
+| --- | --- | --- |
+| Resolve an inside-workspace source, then replace an ancestor or final component with a symlink | Refuse before creating staged output | `a_directory_swapped_after_resolution_is_refused_without_staging`, `a_final_link_substituted_after_resolution_is_refused` |
+| Retain the workspace handle, then rename that directory and replace its old pathname | Stage bytes from the original workspace identity | `the_workspace_handle_survives_path_replacement` |
+| Resolve a regular source, then replace it with a FIFO | Refuse the non-regular descriptor before reading or staging | `a_fifo_substituted_after_resolution_is_refused` |
+| Publish through an admitted alias | Keep the requested alias name with the copied bytes | `a_file_published_through_a_link_keeps_the_name_it_was_asked_by` |
+
+Workspace selection at startup is trusted. Confinement follows retained directory
+identities, including after rename; it does not establish instantaneous pathname
+ancestry or protect against mounts, hard links, or concurrent changes to file
+bytes. These orderings concern the Unix publisher, not Windows artifact support
+or cancellation of a kernel-blocked filesystem operation.
+
 ### Reading a held file back (slice D2)
 
 A surface reads any file a conversation holds (an artifact its agent

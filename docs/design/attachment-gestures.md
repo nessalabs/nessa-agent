@@ -74,6 +74,22 @@ request is refused without replacing that request's captured destination.
 | AG19 | A host listener registration is pending while the provider changes; the old callback fires after unmount | Keep one host subscription for the mounted component, read the latest destination from committed refs, and ignore callbacks after disposal without a registration gap | host-drop and owner hook regressions |
 | AG20 | A folder walk is pending in provider A/c0; replace it with provider B/c0 and immediately send or drop a second folder without an intervening UI event | Query pending work against B's committed scope; capture B at the second folder's drop boundary; keep A's existing walk and result owned by A | actual App folder/send and folder/drop regressions |
 
+Before a native folder result reaches that destination, the host walk reserves
+queued siblings against `MOST_FOLDER_ENTRIES`. Its filesystem adapter bounds
+iteration before collecting or sorting. The host tests retain the existing
+whole-drop refusal and exact-limit behavior:
+
+| Native enumeration ordering | Result | Regression |
+| --- | --- | --- |
+| A directory has more entries than the remaining walk budget | Consume at most the budget plus one overflow witness; refuse the folder rather than collect its full listing | `wide_directory_consumption_stops_at_budget_plus_overflow`, `disk_directory_iterator_observes_only_budget_plus_one_entries` in [`files.rs`](../../src-tauri/src/attachments/files.rs) |
+| Earlier directory expansion has queued siblings before the next directory is read | Reserve those siblings before supplying the next enumeration budget | `queued_sibling_directories_reserve_the_remaining_budget` in [`dropping.rs`](../../src-tauri/src/attachments/dropping.rs) |
+| Entries fit the exact remaining bound, or iteration reports an error | Sort admitted entries; preserve read errors and admit an exact-bound tree | `bounded_directory_sorts_exact_limit_and_preserves_read_errors` in `files.rs`; `exact_entry_limit_with_empty_directories_and_one_file_is_admitted` in `dropping.rs` |
+
+This bounds consumed entries and retained listing size across the supported
+native platforms. It does not bound the duration of one filesystem iterator
+step or cancel a kernel-blocked operation; the existing filesystem-answer
+deadline remains separate from enumeration accounting.
+
 The host-drop adapter carries the captured destination as one value; it does
 not resolve it to a local string and hand that to a replacement hook. The App
 reveals a draft only for a destination owned by its current store.
