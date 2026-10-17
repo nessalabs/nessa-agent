@@ -1,6 +1,6 @@
-//! Existing SDK interest and UUID namespace adapters; no notification authority.
+//! The SDK's committed-record interest, adapted; no notification authority.
 
-use crate::conversation::application::{WatchNamespaces, WatchRecords};
+use crate::conversation::application::WatchRecords;
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_sdk::{
     application::agent_execution::sessions::{ChangeWatchError, CommittedChangeWatch},
@@ -8,7 +8,6 @@ use nessa_sdk::{
     infrastructure::session_storage::RecordStorage,
 };
 use std::sync::Arc;
-use uuid::Uuid;
 
 /// Retains the same physical RecordStorage composed for reads and writers.
 pub struct NessaRecordWatches {
@@ -34,14 +33,5 @@ impl WatchRecords for NessaRecordWatches {
 
     fn watch_any(&self) -> Result<CommittedChangeWatch, ChangeWatchError> {
         self.storage.watch_any_committed()
-    }
-}
-
-/// OS randomness is read only by this composed namespace adapter.
-pub struct UuidWatchNamespaces;
-
-impl WatchNamespaces for UuidWatchNamespaces {
-    fn mint(&self) -> Uuid {
-        Uuid::new_v4()
     }
 }

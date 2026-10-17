@@ -2,7 +2,6 @@
 
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_sdk::application::agent_execution::sessions::{ChangeWatchError, CommittedChangeWatch};
-use uuid::Uuid;
 
 /// Register payloadless record interest after current passive admission.
 ///
@@ -18,10 +17,4 @@ pub trait WatchRecords: Send + Sync {
     /// Install interest in a commit of any conversation: for a reader of
     /// something drawn from many, such as a list's `running` flags.
     fn watch_any(&self) -> Result<CommittedChangeWatch, ChangeWatchError>;
-}
-
-/// Connection namespace minting, injected separately from authority and source IO.
-pub trait WatchNamespaces: Send + Sync {
-    /// Mint a new opaque UUID namespace for one physical product connection.
-    fn mint(&self) -> Uuid;
 }

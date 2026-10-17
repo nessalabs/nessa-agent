@@ -712,10 +712,9 @@ async fn an_environment_is_paired_but_never_shared_with() {
 /// Row K3 (`docs/design/auth/peer-gateways.md`): a hosted worker holds no
 /// read grant outside its leases. Paired as an environment, its key and
 /// credential open a session on the gateway it serves, holding
-/// `environment.serve` alone, and the catalogue head, a conversation's
-/// records head, and a watch of either are each refused `forbidden`. A
-/// device the owner shared that conversation with is let past the same
-/// checks with the same calls.
+/// `environment.serve` alone, and the catalogue head and a conversation's
+/// records head are each refused `forbidden`. A device the owner shared that
+/// conversation with is let past the same checks with the same calls.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn k3_a_worker_reads_nothing_on_the_gateway_it_serves() {
     let fixture = Fixture::new().await;
@@ -788,18 +787,16 @@ async fn k3_a_worker_reads_nothing_on_the_gateway_it_serves() {
             let mut in_conversation = by_receiver.clone();
             in_conversation["conversationId"] = json!(conversation);
             let calls = [
-                ("conversation.catalogueHead", by_receiver.clone()),
-                ("conversation.watchCatalogue", by_receiver),
-                ("conversation.recordsHead", in_conversation.clone()),
-                ("conversation.watchRecords", in_conversation),
+                ("conversation.catalogueHead", by_receiver),
+                ("conversation.recordsHead", in_conversation),
             ]
             .map(|(method, params)| (method, probe.call(method, params).unwrap()));
             (ready, calls)
         })
     };
     // The device, shared with, is let past each check of who may read, as
-    // row H8 finds: its catalogue head is answered, its records head finds
-    // no history yet, and this fixture keeps no watches.
+    // row H8 finds: its catalogue head is answered, and its records head
+    // finds no history yet.
     let (_, by_device) = calls(&device).await;
     let device_codes: Vec<_> = by_device
         .iter()
@@ -809,15 +806,7 @@ async fn k3_a_worker_reads_nothing_on_the_gateway_it_serves() {
         device_codes,
         [
             ("conversation.catalogueHead", String::new()),
-            (
-                "conversation.watchCatalogue",
-                "temporarily_unavailable".into()
-            ),
             ("conversation.recordsHead", "history_pruned".into()),
-            (
-                "conversation.watchRecords",
-                "temporarily_unavailable".into()
-            ),
         ]
     );
     assert_eq!(by_device[0].1["ok"], true, "{}", by_device[0].1);
@@ -846,10 +835,9 @@ async fn k3_a_worker_reads_nothing_on_the_gateway_it_serves() {
 /// applies; an access answer about another credential, or one that
 /// contradicts itself, is still refused. The peer's record head on the
 /// granted conversation reaches the source, while the ungranted one is
-/// refused `wrong_owner`, as is a records watch on it; its catalogue head
-/// is the granted rows' revision and its manifest lists the granted
-/// conversation alone; the catalogue watch, which fires on all the owner's
-/// work, is refused it. An unshare takes the conversation away again.
+/// refused `wrong_owner`; its catalogue head is the granted rows' revision
+/// and its manifest lists the granted conversation alone. An unshare takes
+/// the conversation away again.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_peer_reads_only_what_it_was_granted() {
     let fixture = Fixture::new().await;
@@ -990,18 +978,14 @@ async fn a_peer_reads_only_what_it_was_granted() {
                     .unwrap()
             });
             let calls = [
-                ("conversation.watchCatalogue", by_receiver.clone()),
                 ("recordsHead granted", in_conversation(&granted)),
                 ("recordsHead ungranted", in_conversation(&ungranted)),
-                ("watchRecords ungranted", in_conversation(&ungranted)),
             ]
             .map(|(label, params)| {
-                let method = match label {
-                    "recordsHead granted" | "recordsHead ungranted" => "conversation.recordsHead",
-                    "watchRecords ungranted" => "conversation.watchRecords",
-                    method => method,
-                };
-                (label, probe.call(method, params).unwrap())
+                (
+                    label,
+                    probe.call("conversation.recordsHead", params).unwrap(),
+                )
             });
             (head, manifest, calls)
         })
@@ -1016,7 +1000,7 @@ async fn a_peer_reads_only_what_it_was_granted() {
             .map(|entry| entry["key"]["id"].as_str().unwrap().to_owned())
             .collect()
     };
-    let answer = |calls: &[(&str, Value); 4], label: &str| {
+    let answer = |calls: &[(&str, Value); 2], label: &str| {
         calls
             .iter()
             .find(|(name, _)| *name == label)
@@ -1029,10 +1013,8 @@ async fn a_peer_reads_only_what_it_was_granted() {
     let peer_head = head["payload"]["head"].as_str().unwrap().to_owned();
     assert_eq!(entries(&manifest), vec![id.to_string()]);
     for (label, expected) in [
-        ("conversation.watchCatalogue", "forbidden"),
         ("recordsHead granted", "history_pruned"),
         ("recordsHead ungranted", "wrong_owner"),
-        ("watchRecords ungranted", "wrong_owner"),
     ] {
         let answer = answer(&calls, label);
         assert_eq!(code(&answer), expected, "peer {label}: {answer}");
@@ -1056,10 +1038,6 @@ async fn a_peer_reads_only_what_it_was_granted() {
     );
     let (head, _, calls) = reads(&device).await;
     assert_ne!(head["payload"]["head"].as_str().unwrap(), peer_head);
-    // The device signs in as the owner, so its catalogue watch is admitted
-    // (this fixture has no watch storage, hence `temporarily_unavailable`).
-    let watch = answer(&calls, "conversation.watchCatalogue");
-    assert_eq!(code(&watch), "temporarily_unavailable", "{watch}");
     assert_eq!(code(&answer(&calls, "recordsHead granted")), "wrong_owner");
     let (head, _, _) = reads(&peer).await;
     assert_eq!(head["payload"]["head"].as_str().unwrap(), peer_head);

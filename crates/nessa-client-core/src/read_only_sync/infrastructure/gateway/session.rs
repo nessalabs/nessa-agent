@@ -7,18 +7,17 @@
 //! Product messages then travel one per length-prefixed frame (design
 //! "Protected reads over the native channel", rows PR1, PR3, PR9).
 //!
-//! A session may hold one record watch. Its hints are kept in the session's
-//! `WatchInbox` whenever they arrive, so an operation waiting for its own
-//! response never counts them as unexpected events (committed change watches,
-//! rows W6, W10, W15).
-//!
-//! It may also hold one `conversation.subscribe` feed. View and end frames are
-//! kept the same way, including a view that arrives in the same turn as the
-//! subscribe reply, before that reply has named the subscription.
+//! A session may hold one `conversation.subscribe` feed. Its view and end
+//! frames are kept whenever they arrive, so an operation waiting for its own
+//! response never counts them as unexpected events. That includes a view that
+//! arrives in the same turn as the subscribe reply, before that reply has
+//! named the subscription.
 use crate::protected::{io_cause, Channel, DeadlineStream};
 use crate::read_only_sync::application::{
-    held_file::busy, watch::Wait, Cancellation, GatewayConnector, GatewayError, GatewayOutcome,
-    GatewayPolicy, GatewayStream, HeldFileRefusal, SubscriptionCode, SubscriptionRefusal,
+    follow::{Ended, SubscriptionEnd, ViewCursor, Wait},
+    held_file::busy,
+    Cancellation, GatewayConnector, GatewayError, GatewayOutcome, GatewayPolicy, GatewayStream,
+    HeldFileRefusal, SubscriptionCode, SubscriptionRefusal,
 };
 use nessa_auth::adapters::pairing::{GatewayTrust, NativeIdentity, NativeTransport};
 use nessa_protocol::clock::Clock;
@@ -30,17 +29,15 @@ use nessa_protocol::pairing::{
 };
 use nessa_protocol::product::generated::{
     product_event, product_method, wire_shape_product_session_ready,
-    wire_shape_session_authenticate_params, wire_shape_session_challenge, ChangeWatchId,
-    ConversationChanged, ConversationSubscribeParams, ConversationSubscribeResult,
+    wire_shape_session_authenticate_params, wire_shape_session_challenge,
+    ConversationSubscribeParams, ConversationSubscribeResult, ConversationSubscriptionEndReason,
     ConversationSubscriptionEnded, ConversationUnsubscribeParams, ConversationViewCursor,
-    ConversationViewed, ConversationWatchEnded, ConversationWatchRecordsParams,
-    ConversationWatchResult, ProductClientMetadata, ProductSessionReady, ProductSurface,
-    ProductSurfaceKind, SessionAuthenticateParams, SessionChallenge, CHANGE_WATCH_ID_PATTERN,
+    ConversationViewed, ProductClientMetadata, ProductSessionReady, ProductSurface,
+    ProductSurfaceKind, SessionAuthenticateParams, SessionChallenge,
     CONVERSATION_SUBSCRIPTION_ID_PATTERN, MAX_AUTH_CREDENTIAL_CHARACTERS,
-    MAX_CHANGE_WATCH_ID_BYTES, MAX_CONVERSATION_SUBSCRIPTION_ID_CHARACTERS,
-    MAX_PRODUCT_CLIENT_ID_CHARACTERS, MAX_PRODUCT_SURFACE_INSTANCE_CHARACTERS,
-    MIN_CONVERSATION_SUBSCRIPTION_ID_CHARACTERS, PRODUCT_HANDSHAKE_METHOD, PRODUCT_VERSION,
-    TRANSCRIPT_STATES,
+    MAX_CONVERSATION_SUBSCRIPTION_ID_CHARACTERS, MAX_PRODUCT_CLIENT_ID_CHARACTERS,
+    MAX_PRODUCT_SURFACE_INSTANCE_CHARACTERS, MIN_CONVERSATION_SUBSCRIPTION_ID_CHARACTERS,
+    PRODUCT_HANDSHAKE_METHOD, PRODUCT_VERSION, TRANSCRIPT_STATES,
 };
 use nessa_protocol::product::handshake::{
     accepted_termination, authentication_close_reason, supports_product_version,
@@ -49,8 +46,7 @@ use nessa_protocol::product::passive_read::{
     conforming_view_cursor, encode_request, view_cursor_behind, ReadEncodeError,
 };
 use nessa_protocol::product_contract::generated::{
-    CatalogueReadErrorCode, ChangeWatchEndReason, ChangeWatchErrorCode, ConversationErrorCode,
-    RecordReadErrorCode,
+    CatalogueReadErrorCode, ConversationErrorCode, RecordReadErrorCode,
 };
 use nessa_protocol::protocol::{EventFrame, OutgoingMessage, ResponseFrame};
 use serde::de::DeserializeOwned;
@@ -109,18 +105,8 @@ pub(super) enum RpcKind {
     Authentication,
     Record,
     Catalogue,
-    Watch,
     HeldFile,
     Subscribe,
-}
-
-/// What the session holds for its one registered watch: whether any hint
-/// arrived since the last wait took it (many hints are one bit), and the
-/// watch's end, once the gateway sends it.
-struct WatchInbox {
-    watch: ChangeWatchId,
-    dirty: bool,
-    ended: Option<ChangeWatchEndReason>,
 }
 
 /// Views kept until the caller takes them. Each one replaces what the caller
@@ -165,15 +151,14 @@ pub(crate) enum SubscriptionDelivery {
     Ended(ConversationSubscriptionEnded),
 }
 
-/// How events are read for one session: the watch's own events go to its
-/// inbox, and a subscription's views and end go to its inbox. A view that
+/// How events are read for one session: a subscription's views and end go to
+/// its inbox. A view that
 /// arrives before the subscribe reply is parked on `opening` and taken when
 /// that reply names the subscription. Every other event counts toward the
 /// operation's capacity.
 struct Events {
     policy: GatewayPolicy,
     unexpected: usize,
-    inbox: Option<WatchInbox>,
     subscription: Option<SubscriptionInbox>,
     /// Set while `conversation.subscribe` is unanswered.
     opening: Option<Parked>,
@@ -189,55 +174,27 @@ impl Events {
         Self {
             policy,
             unexpected: 0,
-            inbox: None,
             subscription: None,
             opening: None,
             opening_conversation: None,
             floor: None,
         }
     }
-    /// A watch event names a watch this connection minted, or the connection
-    /// is broken: identities are per connection, so none can be foreign
-    /// (rows U2, W15). `session.terminated` is this connection's close, the
-    /// same acceptance the product worker uses. It is not queued and it does
-    /// not count as unexpected. A malformed payload is a protocol failure.
+    /// `session.terminated` is this connection's close, the same acceptance
+    /// the product worker uses. It is not queued and it does not count as
+    /// unexpected. A malformed termination is a protocol failure.
     fn observe(&mut self, event: EventFrame) -> Result<(), GatewayError> {
-        let watch = match event.event.as_str() {
-            product_event::SESSION_TERMINATED => {
-                return match accepted_termination(&event.payload) {
-                    Some(termination) => Err(GatewayError::Closed(Some(termination.code))),
-                    None => Err(GatewayError::Protocol),
-                };
-            }
-            product_event::CONVERSATION_CHANGED => {
-                strict_decode::<ConversationChanged>(event.payload)?.watch_id
-            }
-            product_event::CONVERSATION_WATCH_ENDED => {
-                let ended = strict_decode::<ConversationWatchEnded>(event.payload)?;
-                let inbox = self.own_inbox(&ended.watch_id)?;
-                inbox.ended.get_or_insert(ended.reason);
-                return Ok(());
-            }
-            product_event::CONVERSATION_VIEW => return self.observe_view(event.payload),
+        match event.event.as_str() {
+            product_event::SESSION_TERMINATED => match accepted_termination(&event.payload) {
+                Some(termination) => Err(GatewayError::Closed(Some(termination.code))),
+                None => Err(GatewayError::Protocol),
+            },
+            product_event::CONVERSATION_VIEW => self.observe_view(event.payload),
             product_event::CONVERSATION_SUBSCRIPTION_ENDED => {
-                return self.observe_subscription_end(event.payload)
+                self.observe_subscription_end(event.payload)
             }
-            _ => {
-                if self.unexpected >= self.policy.unexpected_events() {
-                    return Err(GatewayError::EventCapacity);
-                }
-                self.unexpected += 1;
-                return Ok(());
-            }
-        };
-        self.own_inbox(&watch)?.dirty = true;
-        Ok(())
-    }
-    fn own_inbox(&mut self, watch: &str) -> Result<&mut WatchInbox, GatewayError> {
-        self.inbox
-            .as_mut()
-            .filter(|inbox| inbox.watch == watch)
-            .ok_or(GatewayError::Protocol)
+            _ => self.count_unexpected(),
+        }
     }
     /// A view outside the generated shape, including a cursor this client
     /// could not pass back to `follow` or a `transcriptState` outside the
@@ -615,63 +572,6 @@ impl Session {
         let result = self.rpc_inner(method, params, kind);
         result.map_err(|error| self.fail(error))
     }
-    /// Register this connection's one record watch inside the current
-    /// operation. Its hints are kept from the acknowledgement on.
-    pub(crate) fn watch_records(
-        &mut self,
-        params: &ConversationWatchRecordsParams,
-    ) -> Result<ChangeWatchId, GatewayError> {
-        let value = self.rpc(
-            product_method::CONVERSATION_WATCH_RECORDS,
-            params,
-            RpcKind::Watch,
-        )?;
-        let result = strict_decode::<ConversationWatchResult>(value)
-            .and_then(|result| {
-                // The complete published identity contract, so the inbox and
-                // the `registered` line hold only a conforming identity.
-                conforming_watch_id(&result.watch_id)
-                    .then_some(result)
-                    .ok_or(GatewayError::Protocol)
-            })
-            .map_err(|error| self.fail(error))?;
-        self.events.inbox = Some(WatchInbox {
-            watch: result.watch_id.clone(),
-            dirty: false,
-            ended: None,
-        });
-        Ok(result.watch_id)
-    }
-    /// Wait, inside the current operation and under its deadline, until the
-    /// watch has a hint or has ended. A hint already kept from an earlier
-    /// operation returns at once; the watch's end comes before a hint.
-    pub(crate) fn wait_hint(&mut self) -> Result<Wait, GatewayError> {
-        let active = self.active.as_ref().ok_or(GatewayError::Busy)?;
-        if let Some(error) = active.failure {
-            return Err(error);
-        }
-        let result = self.wait_inner();
-        result.map_err(|error| self.fail(error))
-    }
-    fn wait_inner(&mut self) -> Result<Wait, GatewayError> {
-        let mut during_pass = true;
-        loop {
-            let inbox = self.events.inbox.as_mut().ok_or(GatewayError::Busy)?;
-            if let Some(reason) = inbox.ended {
-                return Ok(Wait::Ended(reason));
-            }
-            if std::mem::take(&mut inbox.dirty) {
-                return Ok(Wait::Hint { during_pass });
-            }
-            during_pass = false;
-            let socket = self.socket.as_mut().ok_or(GatewayError::Transport)?;
-            match read_frame(socket)? {
-                // Nothing is pending while waiting (row W15).
-                OutgoingMessage::Response(_) => return Err(GatewayError::Correlation),
-                OutgoingMessage::Event(event) => self.events.observe(event)?,
-            }
-        }
-    }
     /// Open this connection's conversation subscription. A view that arrived
     /// with the reply is kept and comes out of [`Self::next_delivery`] first.
     pub(crate) fn subscribe(
@@ -768,6 +668,67 @@ impl Session {
             }
             let socket = self.socket.as_mut().ok_or(GatewayError::Transport)?;
             match read_frame(socket)? {
+                OutgoingMessage::Response(_) => return Err(GatewayError::Correlation),
+                OutgoingMessage::Event(event) => self.events.observe(event)?,
+            }
+        }
+    }
+    /// Wait, inside the current operation and under its deadline, for the
+    /// subscription's newest view or its end. A view kept from an earlier
+    /// operation returns at once with `during_pass`; the older kept views are
+    /// dropped, because each view replaces the one before it. The end comes
+    /// before a view, as the subscription delivers nothing after it.
+    pub(crate) fn wait_view(&mut self) -> Result<Wait, GatewayError> {
+        let active = self.active.as_ref().ok_or(GatewayError::Busy)?;
+        if let Some(error) = active.failure {
+            return Err(error);
+        }
+        let result = self.wait_view_inner();
+        result.map_err(|error| self.fail(error))
+    }
+    fn wait_view_inner(&mut self) -> Result<Wait, GatewayError> {
+        let mut during_pass = true;
+        loop {
+            let inbox = self
+                .events
+                .subscription
+                .as_mut()
+                .ok_or(GatewayError::Busy)?;
+            if inbox.closed {
+                return Err(GatewayError::Closed(None));
+            }
+            if let Some(ended) = inbox.parked.ended.take() {
+                inbox.closed = true;
+                inbox.parked.views.clear();
+                let reason = match ended.reason {
+                    ConversationSubscriptionEndReason::Lagging => SubscriptionEnd::Lagging,
+                    ConversationSubscriptionEndReason::Refused => SubscriptionEnd::Refused,
+                    ConversationSubscriptionEndReason::SourceClosed => {
+                        SubscriptionEnd::SourceClosed
+                    }
+                    ConversationSubscriptionEndReason::TooLarge => SubscriptionEnd::TooLarge,
+                };
+                let cause = (reason == SubscriptionEnd::Refused).then(|| {
+                    ended
+                        .code
+                        .map_or(GatewayError::Protocol, subscription_refusal)
+                });
+                return Ok(Wait::Ended(Ended { reason, cause }));
+            }
+            if let Some(viewed) = inbox.parked.views.pop() {
+                inbox.parked.views.clear();
+                return Ok(Wait::View {
+                    cursor: ViewCursor {
+                        incarnation: viewed.cursor.incarnation,
+                        position: viewed.cursor.position,
+                    },
+                    during_pass,
+                });
+            }
+            during_pass = false;
+            let socket = self.socket.as_mut().ok_or(GatewayError::Transport)?;
+            match read_frame(socket)? {
+                // Nothing is pending while waiting.
                 OutgoingMessage::Response(_) => return Err(GatewayError::Correlation),
                 OutgoingMessage::Event(event) => self.events.observe(event)?,
             }
@@ -886,7 +847,7 @@ fn shape_decode<T: DeserializeOwned>(
     }
     serde_json::from_value(value).map_err(|_| GatewayError::Protocol)
 }
-/// The generated watch DTOs refuse unknown fields; no other shape check exists.
+/// The generated DTOs refuse unknown fields; no other shape check exists.
 fn strict_decode<T: DeserializeOwned>(value: Value) -> Result<T, GatewayError> {
     serde_json::from_value(value).map_err(|_| GatewayError::Protocol)
 }
@@ -953,9 +914,6 @@ fn response_payload(response: ResponseFrame, kind: RpcKind) -> Result<Value, Gat
                 .map(GatewayError::Catalogue)
                 .map_or_else(|_| Err(GatewayError::Protocol), Err)
         }
-        RpcKind::Watch => serde_json::from_value::<ChangeWatchErrorCode>(Value::String(error.code))
-            .map(GatewayError::Watch)
-            .map_or_else(|_| Err(GatewayError::Protocol), Err),
         RpcKind::HeldFile => Err(held_file_refusal(error.code)),
         RpcKind::Subscribe => Err(subscription_refusal(error.code)),
         RpcKind::Authentication => Err(GatewayError::Authentication(authentication_close_reason(
@@ -1020,18 +978,6 @@ fn conforming_subscription_id(id: &str) -> bool {
             .get_or_init(|| {
                 regex::Regex::new(CONVERSATION_SUBSCRIPTION_ID_PATTERN)
                     .expect("generated pattern compiles")
-            })
-            .is_match(id)
-}
-
-/// Whether `id` is within the published change-watch identity contract: its
-/// byte bound and its generated pattern.
-fn conforming_watch_id(id: &str) -> bool {
-    static PATTERN: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    id.len() <= MAX_CHANGE_WATCH_ID_BYTES
-        && PATTERN
-            .get_or_init(|| {
-                regex::Regex::new(CHANGE_WATCH_ID_PATTERN).expect("generated pattern compiles")
             })
             .is_match(id)
 }

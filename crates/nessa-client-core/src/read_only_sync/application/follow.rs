@@ -1,44 +1,88 @@
-//! The bounded `watch` loop: register one record watch, run the recheck pass
-//! from the durable checkpoint, then one pass per hint until the pass budget,
-//! an idle wait, or the connection ends (committed change watches, rows
-//! W2–W15).
+//! The bounded `follow` loop: subscribe to one conversation, run the recheck
+//! pass from the durable checkpoint, then one pass per view whose cursor
+//! moved, until the pass budget, an idle wait, or the subscription ends
+//! (read-only sync example, "Following a conversation", rows W1–W17).
 //!
 //! ```text
-//! register --> recheck pass --> wait --> hint --> pass --> wait ...
+//! subscribe --> recheck pass --> wait --> view (cursor moved) --> pass --> wait ...
 //!     |              |            |
 //!  refused        failed       idle / ended / closed
 //!                    |
 //!          source_preparing --> the same pass again (bounded)
 //! ```
 //! Arrows are calls in order on one connection, one operation at a time. The
-//! session keeps hints that arrive during a pass, so `wait` returns at once
-//! when one is held. This loop decides only what ends the run; composition
-//! asks the pinned status again for an end whose cause `asks_status` names
-//! (row PC5).
+//! session keeps views that arrive during a pass, so `wait` returns at once
+//! when one is held. A view is what `conversation.read` would return now, so
+//! one whose cursor did not move changed only live facts (title, agent
+//! state) and no record: it runs no pass. This loop decides only what ends
+//! the run; composition asks the pinned status again for an end whose cause
+//! `asks_status` names (row PC5).
 use super::{device::asks_status, GatewayAttempt, GatewayError};
-use nessa_protocol::product_contract::generated::{ChangeWatchEndReason, RecordReadErrorCode};
+use nessa_protocol::product_contract::generated::RecordReadErrorCode;
 use std::num::NonZeroUsize;
 
-/// What one wait for a hint found.
+/// Where the gateway's fold had read when it took a view: the committed
+/// position in one stored history. Two views at the same cursor saw the same
+/// records.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ViewCursor {
+    pub(crate) incarnation: String,
+    pub(crate) position: String,
+}
+
+/// The reasons the product schema publishes for `conversation.subscriptionEnded`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SubscriptionEnd {
+    Lagging,
+    Refused,
+    SourceClosed,
+    TooLarge,
+}
+impl SubscriptionEnd {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Lagging => "lagging",
+            Self::Refused => "refused",
+            Self::SourceClosed => "source_closed",
+            Self::TooLarge => "too_large",
+        }
+    }
+}
+
+/// How the gateway ended the subscription. `cause` is the typed refusal a
+/// `refused` end carries, so an authority refusal asks the pinned status
+/// again as a refused read does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Ended {
+    pub(crate) reason: SubscriptionEnd,
+    pub(crate) cause: Option<GatewayError>,
+}
+
+/// What one wait for a view found.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Wait {
-    /// At least one hint: kept from an earlier operation (`during_pass`), or
-    /// read while waiting.
-    Hint { during_pass: bool },
-    /// The gateway ended the watch; nothing more will be hinted.
-    Ended(ChangeWatchEndReason),
+    /// The newest view: kept from an earlier operation (`during_pass`), or
+    /// read while waiting. Older kept views are dropped: each view replaces
+    /// the one before it.
+    View {
+        cursor: ViewCursor,
+        during_pass: bool,
+    },
+    /// The gateway ended the subscription; no view follows.
+    Ended(Ended),
 }
 
 /// Why a pass ran.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Trigger {
-    /// The pass after registration, from the durable checkpoint (row W4).
+    /// The pass after subscribing, from the durable checkpoint.
     Recheck,
-    Hint,
-    /// The previous pass stopped at its page budget (row W7).
+    /// A view whose cursor moved.
+    View,
+    /// The previous pass stopped at its page budget.
     Incomplete,
     /// The previous attempt was answered `source_preparing`: the same pass
-    /// again, at once (row W17).
+    /// again, at once.
     Preparing,
 }
 
@@ -54,7 +98,7 @@ fn preparing(cause: GatewayError) -> bool {
     cause == GatewayError::Record(RecordReadErrorCode::SourcePreparing)
 }
 
-/// Discovery before registration (row W17): an attempt answered
+/// Discovery before subscribing: an attempt answered
 /// `source_preparing` kept the session and the gateway's progress, so it is
 /// asked again at once, up to `PREPARING_ATTEMPTS` attempts. Returns the last
 /// attempt, whatever it answered; an `Err` from `attempt` is returned as is.
@@ -88,52 +132,57 @@ pub(crate) enum PassResult {
 }
 
 /// One pass: its presentation and what it means for the loop.
-pub(crate) struct WatchPass<R> {
+pub(crate) struct FollowPass<R> {
     pub(crate) report: R,
     pub(crate) result: PassResult,
 }
 
-/// An admitted registration: the watch identity and the connection operation
-/// that registered it.
+/// An admitted subscription: its identity, the connection operation that
+/// opened it, and its first frame. The gateway answers a subscribe after its
+/// first read and sends that view right after the reply, so the first frame
+/// was taken before the recheck pass starts.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct Registered {
-    pub(crate) watch: String,
+pub(crate) struct Subscribed {
+    pub(crate) subscription: String,
     pub(crate) operation: u64,
+    pub(crate) first: Wait,
 }
 
 /// The one connection, its cache and its finite driver, one operation per call.
-pub(crate) trait WatchSession {
+pub(crate) trait FollowSession {
     type Report;
-    fn register(&mut self) -> Result<Registered, GatewayError>;
+    /// Subscribe and take the first frame, in one operation.
+    fn subscribe(&mut self) -> Result<Subscribed, GatewayError>;
     /// Under the ordinary operation deadline; `TimedOut` means nothing came.
     fn wait(&mut self) -> Result<Wait, GatewayError>;
     /// `Err` when the pass could not begin: nothing was read or saved, so it
     /// has no report.
-    fn pass(&mut self) -> Result<WatchPass<Self::Report>, GatewayError>;
+    fn pass(&mut self) -> Result<FollowPass<Self::Report>, GatewayError>;
 }
 
 /// The standard output could not take a line.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct OutputLost;
 
-/// Lines in arrival order. A refused line stops the loop (row W14).
-pub(crate) trait WatchEvents<R> {
-    fn registered(&mut self, registered: &Registered) -> Result<(), OutputLost>;
+/// Lines in arrival order. A refused line stops the loop.
+pub(crate) trait FollowEvents<R> {
+    fn subscribed(&mut self, subscribed: &Subscribed) -> Result<(), OutputLost>;
     fn pass(&mut self, trigger: Trigger, report: &R) -> Result<(), OutputLost>;
-    fn hint(&mut self, during_pass: bool) -> Result<(), OutputLost>;
+    /// A view whose cursor moved; a pass follows.
+    fn view(&mut self, cursor: &ViewCursor, during_pass: bool) -> Result<(), OutputLost>;
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum EndReason {
     PassesExhausted,
     Idle,
-    RegistrationRefused,
+    SubscribeRefused,
     Unauthorized,
     Unavailable,
     PassFailed,
-    WatchEnded(ChangeWatchEndReason),
+    SubscriptionEnded(SubscriptionEnd),
     /// The gateway closed the connection. On the native profile a close
-    /// carries no reason, so this claims nothing about why (row W11).
+    /// carries no reason, so this claims nothing about why.
     ConnectionClosed,
 }
 
@@ -150,21 +199,27 @@ impl End {
     }
 }
 
-/// Run the watch until one of the `EndReason`s. Every pass counts toward
-/// `max_passes`, the recheck included.
-pub(crate) fn follow<S: WatchSession, E: WatchEvents<S::Report>>(
+/// Run the follow loop until one of the `EndReason`s. Every pass counts
+/// toward `max_passes`, the recheck included.
+pub(crate) fn follow<S: FollowSession, E: FollowEvents<S::Report>>(
     session: &mut S,
     events: &mut E,
     max_passes: NonZeroUsize,
 ) -> Result<End, OutputLost> {
-    let registered = match session.register() {
-        Ok(registered) => registered,
-        Err(cause @ GatewayError::Watch(_)) => {
-            return Ok(end(EndReason::RegistrationRefused, Some(cause)))
+    let subscribed = match session.subscribe() {
+        Ok(subscribed) => subscribed,
+        Err(cause @ GatewayError::Subscription(_)) => {
+            return Ok(end(EndReason::SubscribeRefused, Some(cause)))
         }
         Err(cause) => return Ok(failed(cause)),
     };
-    events.registered(&registered)?;
+    events.subscribed(&subscribed)?;
+    // The recheck pass reads at least what the first view saw, so a later
+    // view at the same cursor brings no record the cache lacks.
+    let mut seen = match subscribed.first {
+        Wait::View { cursor, .. } => cursor,
+        Wait::Ended(ended) => return Ok(subscription_ended(ended)),
+    };
     let mut trigger = Trigger::Recheck;
     let mut passes = 0_usize;
     let mut attempts = 0_usize;
@@ -176,7 +231,7 @@ pub(crate) fn follow<S: WatchSession, E: WatchEvents<S::Report>>(
         events.pass(trigger, &pass.report)?;
         attempts += 1;
         match pass.result {
-            // Row W17: not ready yet. The same pass again, uncounted, until
+            // Not ready yet. The same pass again, uncounted, until
             // its attempts are spent; then the cause ends the run.
             PassResult::Failed(Some(cause))
                 if preparing(cause) && attempts < PREPARING_ATTEMPTS =>
@@ -204,16 +259,29 @@ pub(crate) fn follow<S: WatchSession, E: WatchEvents<S::Report>>(
             }
             PassResult::Complete => {}
         }
-        match session.wait() {
-            Ok(Wait::Hint { during_pass }) => {
-                events.hint(during_pass)?;
-                trigger = Trigger::Hint;
+        loop {
+            match session.wait() {
+                Ok(Wait::View {
+                    cursor,
+                    during_pass,
+                }) if cursor != seen => {
+                    events.view(&cursor, during_pass)?;
+                    seen = cursor;
+                    trigger = Trigger::View;
+                    break;
+                }
+                // Live facts changed, no record did: nothing to copy.
+                Ok(Wait::View { .. }) => {}
+                Ok(Wait::Ended(ended)) => return Ok(subscription_ended(ended)),
+                Err(GatewayError::TimedOut) => return Ok(end(EndReason::Idle, None)),
+                Err(cause) => return Ok(failed(cause)),
             }
-            Ok(Wait::Ended(reason)) => return Ok(end(EndReason::WatchEnded(reason), None)),
-            Err(GatewayError::TimedOut) => return Ok(end(EndReason::Idle, None)),
-            Err(cause) => return Ok(failed(cause)),
         }
     }
+}
+
+fn subscription_ended(ended: Ended) -> End {
+    end(EndReason::SubscriptionEnded(ended.reason), ended.cause)
 }
 
 fn end(reason: EndReason, cause: Option<GatewayError>) -> End {
@@ -230,5 +298,5 @@ fn failed(cause: GatewayError) -> End {
 }
 
 #[cfg(test)]
-#[path = "../../../tests/read_only_sync/application/watch.rs"]
+#[path = "../../../tests/read_only_sync/application/follow.rs"]
 mod tests;

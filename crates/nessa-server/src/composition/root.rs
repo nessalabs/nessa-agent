@@ -9,7 +9,7 @@ use crate::desktop_runtime::{
 };
 use crate::env::Environment;
 use crate::mcp_servers::application::Unfinished;
-use crate::product::{ProductRouteState, WatchTaskFault};
+use crate::product::ProductRouteState;
 use crate::server::entrypoint::http;
 use crate::{
     app::dependencies::RuntimeDependencies,
@@ -508,8 +508,8 @@ impl CompositionRoot {
             if let Some(native) = native.as_mut() {
                 native.signal_stop();
             }
-            // Then watch admission closes before any physical cleanup is
-            // polled (cleanup_product), and every outcome joins one report.
+            // Then admission closes before any physical cleanup is polled
+            // (cleanup_product), and every outcome joins one report.
             cleanup_product(
                 &slot,
                 &shutdown_product,
@@ -689,11 +689,11 @@ enum ShutdownRead {
     Unconfirmed(Option<ShutdownFailure>),
 }
 
-/// Normal host consumer: close watch admission before polling physical cleanup.
-/// ProductRouteState retains the original WatchOwners throughout this owned future.
-// Each argument is one independently owned cleanup stage (watches, two
-// readers, conversations, MCP, native) or the shared deadline; the report
-// orders them, so they stay separate parameters.
+/// Normal host consumer: close the product sockets and review-audit and MCP
+/// server admission before polling physical cleanup.
+// Each argument is one independently owned cleanup stage (two readers,
+// conversations, MCP, native) or the shared deadline; the report orders them,
+// so they stay separate parameters.
 #[allow(clippy::too_many_arguments)]
 async fn cleanup_product(
     slot: &ReportSlot,
@@ -705,7 +705,7 @@ async fn cleanup_product(
     native: impl Future<Output = Result<(), NativeShutdownFailure>>,
     deadline: Duration,
 ) {
-    product.close_watch_admission();
+    product.close_sockets();
     if let Some(auditor) = &product.review_auditor {
         auditor.close();
     }
@@ -717,7 +717,6 @@ async fn cleanup_product(
     passive_cleanup(
         slot,
         product.review_auditor.as_deref(),
-        product.drain_watches(),
         record,
         catalogue,
         conversations,
@@ -732,14 +731,13 @@ async fn cleanup_product(
 /// The report is published before the first await, and each result is
 /// recorded in it synchronously before the next await, so an owner that ends
 /// early leaves every known outcome behind and the rest `Unknown`.
-// Each argument is one independently owned cleanup stage (watches, two
-// readers, conversations, MCP, native) or the shared deadline; the report
-// orders them, so they stay separate parameters.
+// Each argument is one independently owned cleanup stage (two readers,
+// conversations, MCP, native) or the shared deadline; the report orders them,
+// so they stay separate parameters.
 #[allow(clippy::too_many_arguments)]
 async fn passive_cleanup(
     slot: &ReportSlot,
     review_auditor: Option<&ReviewNoticeAuditor>,
-    watches: impl Future<Output = Result<(), WatchTaskFault>>,
     record: impl Future<Output = Result<(), RecordReadError>>,
     catalogue: impl Future<Output = Result<(), CatalogueReadError>>,
     conversations: Option<impl Future<Output = Result<(), ConversationError>>>,
@@ -754,24 +752,22 @@ async fn passive_cleanup(
             None => Ok(()),
         }
     };
-    tokio::pin!(record, catalogue, watches, review_audit);
+    tokio::pin!(record, catalogue, review_audit);
     let timeout = tokio::time::sleep(deadline);
     tokio::pin!(timeout);
     // One deadline covers every drain: it stays armed while any is pending and
     // fires once, recording evidence only against the drains still pending.
     let mut deadline_passed = false;
     loop {
-        let (record_pending, catalogue_pending, watch_pending, audit_pending) =
-            read_report(slot, |report| {
-                (
-                    !report.readers().record().is_known(),
-                    !report.readers().catalogue().is_known(),
-                    !report.watches().outcome().is_known(),
-                    !report.review_audit().is_known(),
-                )
-            });
+        let (record_pending, catalogue_pending, audit_pending) = read_report(slot, |report| {
+            (
+                !report.readers().record().is_known(),
+                !report.readers().catalogue().is_known(),
+                !report.review_audit().is_known(),
+            )
+        });
         let deadline_pending = !deadline_passed;
-        if !record_pending && !catalogue_pending && !watch_pending && !audit_pending {
+        if !record_pending && !catalogue_pending && !audit_pending {
             break;
         }
         // Ready completions win over a simultaneous deadline, including zero.
@@ -780,7 +776,6 @@ async fn passive_cleanup(
             biased;
             result = &mut record, if record_pending => update_report(slot, |report| report.observe_record(result)),
             result = &mut catalogue, if catalogue_pending => update_report(slot, |report| report.observe_catalogue(result)),
-            result = &mut watches, if watch_pending => update_report(slot, |report| report.observe_watches(result)),
             result = &mut review_audit, if audit_pending => update_report(slot, |report| report.observe_review_audit(result)),
             _ = &mut timeout, if deadline_pending => {
                 deadline_passed = true;
@@ -919,7 +914,7 @@ mod tests {
         let failure = failure(result);
         let report = failure.report();
         assert_eq!(report.stage(), ShutdownStage::Complete);
-        assert!(report.readers().confirmed() && report.watches().confirmed());
+        assert!(report.readers().confirmed());
         assert!(report.servers().is_ok() && report.native().is_ok());
         report
             .conversations()
@@ -933,7 +928,6 @@ mod tests {
         let mut report = ShutdownReport::default();
         report.observe_record(Ok(()));
         report.observe_catalogue(Ok(()));
-        report.observe_watches(Ok(()));
         report.observe_review_audit(Ok(()));
         report.observe_conversations(conversations);
         report.observe_servers(Ok(()));
@@ -961,7 +955,6 @@ mod tests {
             passive_cleanup(
                 &task_report,
                 None,
-                std::future::ready(Ok(())),
                 async { Ok(()) },
                 async { Ok(()) },
                 conversations,
@@ -981,7 +974,6 @@ mod tests {
         let pending = report.lock().unwrap().as_ref().is_some_and(|report| {
             report.stage() == ShutdownStage::Servers
                 && report.readers().confirmed()
-                && report.watches().confirmed()
                 && if conversation_failure {
                     matches!(
                         report.conversations(),
@@ -1037,7 +1029,6 @@ mod tests {
         assert_eq!(report.stage(), ShutdownStage::Servers);
         assert!(!report.servers().is_known());
         assert!(!report.native().is_known());
-        assert!(report.watches().confirmed());
         assert_eq!(
             report.readers().record(),
             &if reader_failure {
@@ -1068,7 +1059,6 @@ mod tests {
                     passive_cleanup(
                         &task_report,
                         None,
-                        std::future::ready(Ok(())),
                         async {
                             if reader_failure {
                                 Err(RecordReadError::WorkerPanicked)
@@ -1105,7 +1095,6 @@ mod tests {
                     let stop = passive_cleanup(
                         &report,
                         None,
-                        std::future::ready(Ok(())),
                         async {
                             if reader_failure {
                                 Err(RecordReadError::WorkerPanicked)
@@ -1184,7 +1173,6 @@ mod tests {
                 passive_cleanup(
                     &slot,
                     None,
-                    std::future::ready(Ok(())),
                     async {
                         started.notify_one();
                         reader.await.unwrap();
@@ -1241,7 +1229,6 @@ mod tests {
                 passive_cleanup(
                     &slot,
                     None,
-                    std::future::ready(Ok(())),
                     async { Ok(()) },
                     async { Ok(()) },
                     Some(async { Ok(()) }),
@@ -1356,7 +1343,6 @@ mod tests {
                     passive_cleanup(
                         &report,
                         None,
-                        std::future::ready(Ok(())),
                         std::future::ready(record),
                         std::future::ready(catalogue.clone()),
                         Some(async {
@@ -1390,7 +1376,6 @@ mod tests {
                         &catalogue.map_or_else(Outcome::Failed, |()| Outcome::Ok)
                     );
                     assert!(!report.readers().deadline_exceeded());
-                    assert!(report.watches().confirmed());
                     assert_eq!(
                         matches!(
                             report.conversations(),
@@ -1416,7 +1401,6 @@ mod tests {
             passive_cleanup(
                 &output,
                 None,
-                std::future::ready(Ok(())),
                 std::future::ready(Err(RecordReadError::WorkerPanicked)),
                 async {
                     waiting.await.unwrap();
@@ -1455,7 +1439,6 @@ mod tests {
             &Outcome::Failed(CatalogueReadError::WorkerPanicked)
         );
         assert!(report.readers().deadline_exceeded());
-        assert!(report.watches().confirmed());
     }
 
     #[tokio::test(start_paused = true)]
@@ -1468,7 +1451,6 @@ mod tests {
                     let stop = passive_cleanup(
                         &report,
                         None,
-                        std::future::ready(Ok(())),
                         std::future::ready(result),
                         std::future::pending(),
                         Some(async {
@@ -1517,7 +1499,6 @@ mod tests {
                 let stop = passive_cleanup(
                     &report,
                     None,
-                    std::future::ready(Ok(())),
                     std::future::pending(),
                     std::future::pending(),
                     Some(std::future::ready(Ok(()))),
@@ -1544,8 +1525,6 @@ mod tests {
             assert_eq!(report.readers().record(), &Outcome::Unknown);
             assert_eq!(report.readers().catalogue(), &Outcome::Unknown);
             assert_eq!(report.readers().deadline_exceeded(), after_deadline);
-            // The watch drain returned before the deadline: no deadline evidence.
-            assert!(report.watches().confirmed());
             assert!(!report.conversations().is_known());
             assert!(!report.servers().is_known());
             assert!(!report.native().is_known());
@@ -1560,7 +1539,6 @@ mod tests {
                 let stop = passive_cleanup(
                     &report,
                     None,
-                    std::future::ready(Ok(())),
                     std::future::ready(result),
                     std::future::ready(Ok(())),
                     Some(std::future::pending()),
@@ -1577,7 +1555,6 @@ mod tests {
             let failure = failure(shutdown_result(&report));
             let report = failure.report();
             assert_eq!(report.stage(), ShutdownStage::Conversations);
-            assert!(report.watches().confirmed());
             assert_eq!(
                 report.readers().record(),
                 &result.map_or_else(Outcome::Failed, |()| Outcome::Ok)
@@ -1594,7 +1571,6 @@ mod tests {
         passive_cleanup(
             &report,
             None,
-            std::future::ready(Ok(())),
             async {
                 tokio::time::sleep(Duration::from_secs(31)).await;
                 Ok(())
@@ -1612,7 +1588,6 @@ mod tests {
         assert!(report.readers().deadline_exceeded());
         assert_eq!(report.readers().record(), &Outcome::Ok);
         assert_eq!(report.readers().catalogue(), &Outcome::Ok);
-        assert!(report.watches().confirmed());
         assert!(report.conversations().is_ok());
     }
 
@@ -1624,7 +1599,6 @@ mod tests {
             let stop = passive_cleanup(
                 &report,
                 None,
-                std::future::ready(Ok(())),
                 std::future::ready(Ok(())),
                 async {
                     waiting.await.unwrap();
@@ -1653,7 +1627,6 @@ mod tests {
         let failure = failure(shutdown_result(&report));
         let report = failure.report();
         assert_eq!(report.stage(), ShutdownStage::Conversations);
-        assert!(report.watches().confirmed());
         assert!(report.readers().deadline_exceeded());
         assert_eq!(report.readers().record(), &Outcome::Ok);
         assert_eq!(
@@ -1671,7 +1644,6 @@ mod tests {
         passive_cleanup(
             &report,
             None,
-            std::future::ready(Ok(())),
             std::future::ready(Ok(())),
             std::future::ready(Ok(())),
             Some(std::future::ready(Ok(()))),
@@ -1801,7 +1773,6 @@ mod tests {
         let mut native_report = ShutdownReport::default();
         native_report.observe_record(Ok(()));
         native_report.observe_catalogue(Ok(()));
-        native_report.observe_watches(Ok(()));
         native_report.observe_review_audit(Ok(()));
         native_report.observe_conversations(Ok(()));
         native_report.observe_servers(Ok(()));
@@ -1854,7 +1825,6 @@ mod tests {
             None,
             std::future::ready(Ok(())),
             std::future::ready(Ok(())),
-            std::future::ready(Ok(())),
             Some(std::future::ready(Ok(()))),
             async { Ok(()) },
             std::future::ready(Ok(())),
@@ -1867,7 +1837,6 @@ mod tests {
         passive_cleanup(
             &failed,
             None,
-            std::future::ready(Ok(())),
             std::future::ready(Ok(())),
             std::future::ready(Ok(())),
             Some(std::future::ready(Err(ConversationError::Audit))),
@@ -1917,7 +1886,6 @@ mod tests {
                 None,
                 std::future::ready(Ok(())),
                 std::future::ready(Ok(())),
-                std::future::ready(Ok(())),
                 Some(std::future::ready(if conversation_fails {
                     Err(ConversationError::Audit)
                 } else {
@@ -1939,7 +1907,7 @@ mod tests {
             let report = failure.report();
             assert_eq!(report.stage(), ShutdownStage::Complete);
             assert_eq!(report.native(), &Outcome::Failed(fault));
-            assert!(report.readers().confirmed() && report.watches().confirmed());
+            assert!(report.readers().confirmed());
             assert!(report.servers().is_ok());
             assert_eq!(
                 report.conversations().failed().is_some(),
@@ -1951,7 +1919,6 @@ mod tests {
         passive_cleanup(
             &report,
             None,
-            std::future::ready(Ok(())),
             std::future::ready(Ok(())),
             std::future::ready(Ok(())),
             None::<Ready<Result<(), ConversationError>>>,
@@ -1974,7 +1941,6 @@ mod tests {
                 None,
                 std::future::ready(Ok(())),
                 std::future::ready(Ok(())),
-                std::future::ready(Ok(())),
                 Some(std::future::ready(Err(ConversationError::Audit))),
                 async { Ok(()) },
                 std::future::pending(),
@@ -1989,7 +1955,7 @@ mod tests {
         let report = failure.report();
         assert_eq!(report.stage(), ShutdownStage::Native);
         assert!(!report.native().is_known());
-        assert!(report.readers().confirmed() && report.watches().confirmed());
+        assert!(report.readers().confirmed());
         assert!(report.servers().is_ok());
         assert!(matches!(
             report.conversations(),
@@ -1997,17 +1963,16 @@ mod tests {
         ));
     }
 
-    /// Rows S12 and H2 together: a watch task fault and a native drain failure
-    /// in the same shutdown are both kept in the one report.
+    /// Row S12: a drain failure and a native drain failure in the same
+    /// shutdown are both kept in the one report.
     #[tokio::test]
-    async fn watch_and_native_shutdown_failures_are_both_retained() {
+    async fn reader_and_native_shutdown_failures_are_both_retained() {
         let fault = NativeShutdownFailure::ListenerFault(PairingWorkerFault::Panic);
         let report = Mutex::new(None);
         passive_cleanup(
             &report,
             None,
-            std::future::ready(Err(WatchTaskFault::Panic)),
-            std::future::ready(Ok(())),
+            std::future::ready(Err(RecordReadError::WorkerPanicked)),
             std::future::ready(Ok(())),
             None::<Ready<Result<(), ConversationError>>>,
             async { Ok(()) },
@@ -2019,9 +1984,11 @@ mod tests {
         let report = failure.report();
         assert_eq!(report.stage(), ShutdownStage::Complete);
         assert_eq!(report.native(), &Outcome::Failed(fault));
-        assert_eq!(report.watches().fault(), Some(WatchTaskFault::Panic));
-        assert!(!report.watches().deadline_exceeded());
-        assert!(report.readers().confirmed());
+        assert_eq!(
+            report.readers().record(),
+            &Outcome::Failed(RecordReadError::WorkerPanicked)
+        );
+        assert!(!report.readers().deadline_exceeded());
         assert!(report.conversations().is_ok() && report.servers().is_ok());
     }
 
@@ -2096,8 +2063,8 @@ mod tests {
 }
 
 #[cfg(test)]
-#[path = "../../tests/composition/watch_shutdown.rs"]
-mod watch_shutdown_tests;
+#[path = "../../tests/composition/reader_shutdown.rs"]
+mod reader_shutdown_tests;
 
 #[cfg(all(test, unix))]
 #[path = "../../tests/composition/mcp_shutdown.rs"]

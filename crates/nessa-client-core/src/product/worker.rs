@@ -265,7 +265,7 @@ mod tests {
                 )))
             );
         }
-        let ordinary = EventFrame::push("conversation.changed", &json!({}), 1, 0).unwrap();
+        let ordinary = EventFrame::push("conversation.listed", &json!({}), 1, 0).unwrap();
         assert_eq!(session_termination(&ordinary), None);
         assert_eq!(
             session_termination(&frame(

@@ -636,7 +636,7 @@ impl Sent {
     }
 
     /// The subscription's one terminal frame. Written by its deadline or the
-    /// socket closes, as a watch's terminal notice does.
+    /// socket closes.
     fn end(&self, reason: ConversationSubscriptionEndReason, code: Option<String>) {
         let payload = serde_json::to_value(ConversationSubscriptionEnded {
             subscription_id: self.id.clone(),
@@ -920,10 +920,9 @@ pub(super) async fn run(run: Run) {
                 );
                 // The reply is this subscription's first frame, so it is
                 // written before any event of it (row S1). It is owed by
-                // the request's reply deadline, as a watch's reply is: one
-                // written later than the client waits would leave it a live
-                // subscription it cannot name, so missing it closes the
-                // socket (row S31).
+                // the request's reply deadline: one written later than the
+                // client waits would leave it a live subscription it cannot
+                // name, so missing it closes the socket (row S31).
                 if deliveries
                     .offer(
                         &id,

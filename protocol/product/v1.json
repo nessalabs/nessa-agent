@@ -27,12 +27,6 @@
     "argMaxBytes": 8192,
     "environmentNameMaxBytes": 256
   },
-  "x-changeWatchLimits": {
-    "globalOwners": 64,
-    "principalOwners": 8,
-    "recordTargets": 1,
-    "catalogueTargets": 1
-  },
   "x-subscriptionLimits": {
     "conversationTargets": 8,
     "listTargets": 2,
@@ -216,7 +210,7 @@
         "methods": {
           "type": "array",
           "items": { "type": "string" },
-          "maxItems": 77,
+          "maxItems": 74,
           "description": "Registered product methods; permission is checked for every command."
         }
       },
@@ -2599,7 +2593,7 @@
     "ConversationCapability": {
       "type": "string",
       "enum": ["read", "comment", "drive"],
-      "description": "One capability a conversation grant may include. read: list, read and watch the conversation's records. comment: leave notes with conversation.message and ask where its own note stands with conversation.messageStatus. drive: start, steer and stop turns, answer or cancel their permission requests, answer their questions and look up those commands' receipts (conversation.send, steer, stop, answer, answerQuestion, cancel, receipt), with text only and under the grant's constraints. The only sets are read; read and comment; and read, comment and drive. Comment and drive are refused for a gateway principal. No capability deletes, archives, exports, re-shares or changes the model: those stay the owner's."
+      "description": "One capability a conversation grant may include. read: list, read and follow the conversation's records. comment: leave notes with conversation.message and ask where its own note stands with conversation.messageStatus. drive: start, steer and stop turns, answer or cancel their permission requests, answer their questions and look up those commands' receipts (conversation.send, steer, stop, answer, answerQuestion, cancel, receipt), with text only and under the grant's constraints. The only sets are read; read and comment; and read, comment and drive. Comment and drive are refused for a gateway principal. No capability deletes, archives, exports, re-shares or changes the model: those stay the owner's."
     },
     "ConversationToolPreset": {
       "type": "string",
@@ -2654,7 +2648,7 @@
     "ConversationShareParams": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Grant (conversation.share) one paired device or peer gateway a capability set on one of the caller's conversations, or change the capabilities and constraints it already holds there. Nothing is granted by default or by list: a paired party sees only the conversations granted to it, one grant per conversation, and an ungranted one is not listed, not readable and not watchable. The only sets are read; read and comment; and read, comment and drive. drive needs a policy and the others take none, and either mistake is refused invalid_request. Comment and drive are written only when Cedar permits grant.comment and grant.drive for the target principal. A denial writes nothing and is refused capabilities_refused; details.policies are the Cedar policy ids, empty when no permit matched. The share does not decide by the principal's kind. A grant is refused share_target_not_paired unless the credential is an active paired device or peer gateway of the conversation's owner that holds conversation.read (an environment's credential never does), and conversation_deleted on a deleted conversation. The result names the grant's policyRevision, the grant epoch, once the share is made; applied is false when nothing changed: granting the capabilities and constraints already held, whose epoch is kept. With expectedPolicyRevision, a grant that is no longer at that epoch (changed or revoked since) is refused share_grant_changed, and nothing is changed. A conversation holds at most 64 grants, and at most 8 drive grants; one more is refused invalid_request. A retried requestId answers what it answered the first time, its policyRevision included, before expectedPolicyRevision is compared, so a share retried after a later unshare grants nothing; the same requestId naming another device, another capability set or policy, or the other change is refused invalid_request. A retried share is checked like a new one first, so once the conversation is deleted or the device unpaired it is refused conversation_deleted or share_target_not_paired and changes nothing.",
+      "description": "Grant (conversation.share) one paired device or peer gateway a capability set on one of the caller's conversations, or change the capabilities and constraints it already holds there. Nothing is granted by default or by list: a paired party sees only the conversations granted to it, one grant per conversation, and an ungranted one is not listed, not readable and cannot be followed. The only sets are read; read and comment; and read, comment and drive. drive needs a policy and the others take none, and either mistake is refused invalid_request. Comment and drive are written only when Cedar permits grant.comment and grant.drive for the target principal. A denial writes nothing and is refused capabilities_refused; details.policies are the Cedar policy ids, empty when no permit matched. The share does not decide by the principal's kind. A grant is refused share_target_not_paired unless the credential is an active paired device or peer gateway of the conversation's owner that holds conversation.read (an environment's credential never does), and conversation_deleted on a deleted conversation. The result names the grant's policyRevision, the grant epoch, once the share is made; applied is false when nothing changed: granting the capabilities and constraints already held, whose epoch is kept. With expectedPolicyRevision, a grant that is no longer at that epoch (changed or revoked since) is refused share_grant_changed, and nothing is changed. A conversation holds at most 64 grants, and at most 8 drive grants; one more is refused invalid_request. A retried requestId answers what it answered the first time, its policyRevision included, before expectedPolicyRevision is compared, so a share retried after a later unshare grants nothing; the same requestId naming another device, another capability set or policy, or the other change is refused invalid_request. A retried share is checked like a new one first, so once the conversation is deleted or the device unpaired it is refused conversation_deleted or share_target_not_paired and changes nothing.",
       "properties": {
         "conversationId": {
           "type": "string",
@@ -5973,149 +5967,6 @@
       ],
       "description": "Why the gateway refused a peer method it dispatched. peer_not_configured: native pairing is off in this gateway's configuration, so it has no key to enroll with. peer_not_found: no peer with that key. peer_exists: a record for that peer is already kept; forget it first. peer_capacity: this gateway keeps as many peers as it may. peer_busy: another enrollment or forget is running; retry once it ends. A read of a peer makes a command busy only if a stopped read does not give back its turn within peer.preempt: the command stops the read and takes its turn once the read gives it back, and the read carries on later. peer_unreachable: nothing answered at the address, the connection failed, or what answered is not a gateway enrolling peers; an open port is not told from a closed one. peer_invitation_refused: the peer refused the code: no open invitation, or an expired, used or wrong code; it does not say which. peer_wrong_invitation: the code is for a device, not a gateway. peer_own_gateway: the address is this gateway's own. peer_unavailable: storage, the key or a worker failed, or the gateway is stopping and refused the command before any effect; retry later. peer_audit_unavailable: the command's audit record could not be kept; if that was before its effect nothing changed, and if after, the effect stands and peer.list shows it."
     },
-    "ChangeWatchId": {
-      "type": "string",
-      "minLength": 38,
-      "maxLength": 57,
-      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-[1-9][0-9]{0,19}$",
-      "description": "Opaque current-connection watch identity. It grants no permission, is not a source position, and must be discarded on connection replacement."
-    },
-    "ConversationWatchCatalogueParams": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "receiverId": {
-          "type": "string",
-          "minLength": 1,
-          "description": "Server-bound receiver identity requesting this owner catalogue.",
-          "x-core-utf8-bound": "id_max_utf8_bytes",
-          "x-utf8MaxBytes": 128
-        },
-        "accessEpoch": {
-          "type": "string",
-          "pattern": "^[1-9][0-9]{0,19}$",
-          "maxLength": 20,
-          "description": "Positive current numeric receiver binding epoch."
-        }
-      },
-      "required": ["receiverId", "accessEpoch"],
-      "description": "Register catalogue interest before the final authorized head recheck. Acknowledgement precedes notices; no head or source read is performed."
-    },
-    "ConversationWatchRecordsParams": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "conversationId": {
-          "type": "string",
-          "minLength": 36,
-          "maxLength": 36,
-          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
-          "description": "Conversation selected under authenticated ownership."
-        },
-        "receiverId": {
-          "type": "string",
-          "minLength": 1,
-          "description": "Trusted receiver binding selector; the actual physical scope is returned by the authenticated head read.",
-          "x-core-utf8-bound": "id_max_utf8_bytes",
-          "x-utf8MaxBytes": 128
-        },
-        "accessEpoch": {
-          "type": "string",
-          "pattern": "^[1-9][0-9]{0,19}$",
-          "maxLength": 20,
-          "description": "Positive current numeric receiver binding epoch."
-        }
-      },
-      "required": ["conversationId", "receiverId", "accessEpoch"],
-      "description": "Register stable conversation interest before final head recheck. Reset notices do not carry a source incarnation."
-    },
-    "ConversationWatchResult": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "watchId": {
-          "$ref": "#/$defs/ChangeWatchId",
-          "description": "Opaque identity minted for this physical connection after producer installation; retain it only for this connection."
-        }
-      },
-      "required": ["watchId"],
-      "description": "A physically delivered acknowledgement activates this connection-local registration."
-    },
-    "ConversationUnwatchParams": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "watchId": {
-          "$ref": "#/$defs/ChangeWatchId",
-          "description": "Exact identity minted on this connection whose source interest is to be removed."
-        }
-      },
-      "required": ["watchId"],
-      "description": "Remove only this connection’s watch interest. Repeating an allocated identity is idempotent."
-    },
-    "ConversationUnwatchResult": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "watchId": {
-          "$ref": "#/$defs/ChangeWatchId",
-          "description": "Original connection identity echoed after interest removal; previously admitted authority or physical frame work may remain."
-        }
-      },
-      "required": ["watchId"],
-      "description": "Removal acknowledgement. An already-started frame may finish before this response; no subsequent hint is admitted."
-    },
-    "ConversationChanged": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "watchId": {
-          "$ref": "#/$defs/ChangeWatchId",
-          "description": "Opaque connection identity of the advisory hint; this field carries no source progress or authority."
-        }
-      },
-      "required": ["watchId"],
-      "description": "Advisory payloadless dirty notice. Reauthorize and recheck heads; never advance progress from this event."
-    },
-    "ChangeWatchEndReason": {
-      "type": "string",
-      "enum": ["closed", "notification_failed"],
-      "description": "Terminal advisory producer state. Neither outcome proves current source freshness or lost permission."
-    },
-    "ConversationWatchEnded": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "watchId": {
-          "$ref": "#/$defs/ChangeWatchId",
-          "description": "Opaque connection identity of the producer interest that ended."
-        },
-        "reason": {
-          "$ref": "#/$defs/ChangeWatchEndReason",
-          "description": "Typed terminal producer outcome; neither value proves source freshness or permission revocation."
-        }
-      },
-      "required": ["watchId", "reason"],
-      "description": "Terminal producer notice under the same bounded delivery owner as changed notices. Recover with explicit reads/fallback."
-    },
-    "ChangeWatchErrorCode": {
-      "type": "string",
-      "enum": [
-        "invalid_request",
-        "unauthorized",
-        "forbidden",
-        "wrong_owner",
-        "wrong_receiver",
-        "stale_epoch",
-        "unverifiable",
-        "temporarily_unavailable",
-        "watch_duplicate",
-        "watch_capacity",
-        "watch_closed",
-        "invalid_watch"
-      ],
-      "description": "Typed watch admission/refusal. Watch state never changes downloaded/applied progress."
-    },
     "ConversationSubscriptionId": {
       "type": "string",
       "minLength": 1,
@@ -6256,7 +6107,7 @@
         "unknown_subscription",
         "cursor_ahead"
       ],
-      "description": "Refusals of subscribe and unsubscribe beside the conversation error codes a refused first read carries. subscription_capacity: the connection's published limit, or the gateway's watch capacity, is full. subscription_duplicate: this connection already follows that target; the agent catalog is one target, so a connection follows it at most once. unknown_subscription: no such live subscription on this connection, or one the other unsubscribe stops. cursor_ahead: after names a position past the stored history."
+      "description": "Refusals of subscribe and unsubscribe beside the conversation error codes a refused first read carries. subscription_capacity: the connection's published limit, or a gateway-wide watch capacity (record.change_watches, or conversation.catalogue_watches for a list subscription), is full. subscription_duplicate: this connection already follows that target; the agent catalog is one target, so a connection follows it at most once. unknown_subscription: no such live subscription on this connection, or one the other unsubscribe stops. cursor_ahead: after names a position past the stored history."
     },
     "ConversationMessageDelivery": {
       "type": "string",
