@@ -11,7 +11,6 @@ import { composerModels } from "../../../model/composer-options"
 import { messageText } from "../../model/transcript"
 import { defaultModel } from "../../model/workspace-index"
 import {
-  activeExecution,
   approvalId,
   inputId,
   modelFor,
@@ -1471,33 +1470,4 @@ describe("user attachment references across conversation reads", () => {
       })
     }
   }
-})
-
-describe("the execution Stop names", () => {
-  it("names the running turn, not a turn queued behind it", () => {
-    expect(
-      activeExecution(
-        view("c", {
-          messages: [
-            turn({ executionId: "a", status: "running" }),
-            turn({ executionId: "b", status: "queued" }),
-          ],
-        }),
-      ),
-    ).toBe("a")
-  })
-
-  it("names the next queued turn when none runs", () => {
-    expect(
-      activeExecution(
-        view("c", {
-          messages: [
-            turn({ executionId: "a" }),
-            turn({ executionId: "b", status: "queued" }),
-            turn({ executionId: "c", status: "queued" }),
-          ],
-        }),
-      ),
-    ).toBe("b")
-  })
 })

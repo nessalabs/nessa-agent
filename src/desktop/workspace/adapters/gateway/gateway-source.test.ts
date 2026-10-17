@@ -13,7 +13,6 @@ import {
   NessaConversationControlError,
   NessaConversationMutationError,
   NessaRpcError,
-  executionTargetConversation,
   questionTargetConversation,
   type ConversationPermission,
 } from "@nessa/client"
@@ -714,7 +713,7 @@ describe("conversations", () => {
     expect(gateway.count("answerQuestion")).toBe(1)
   })
 
-  it("stops the running turn of a view that left a review out past its limit", async () => {
+  it("stops the execution the gateway's peek names, in a view that left a review out", async () => {
     const { gateway, source, updates, follow } = started()
     gateway.rows.set("a", row("a", { running: true }))
     gateway.views.set(
@@ -726,49 +725,31 @@ describe("conversations", () => {
           "A pending tool review exceeds the display limit; no choices were silently removed.",
       }),
     )
+    gateway.active.set("a", "turn")
     await source.index()
     follow()
     const shown = await source.transcript("a")
     expect(shown.approval).toBeNull()
     expect(atWork(shown)).toBe(true)
     await source.stop("a", "person")
-    const stopCall = gateway.calls.find((call) => call.method === "stop")
-    if (!stopCall) throw new Error("expected the gateway to be asked to stop")
-    const [target] = stopCall.args as [Parameters<typeof executionTargetConversation>[0]]
-    expect(executionTargetConversation(target)).toBe("a")
-    expect(target.executionId).toBe("turn")
+    // The conversation alone: the peek, not the view, picks the execution.
+    expect(gateway.calls.find((call) => call.method === "stop")?.args).toEqual(["a"])
     gateway.publish("a")
     await flush()
     expect(atWork(transcriptsOf(updates, "a").at(-1))).toBe(false)
   })
 
-  it("stops the execution a shown review holds open when its turn is outside the view", async () => {
+  it("says there is nothing to stop when a message still says running after its turn stopped", async () => {
     const { gateway, source } = started()
-    gateway.views.set(
-      "a",
-      view("a", {
-        messages: [],
-        permissions: [permission({ executionId: "earlier" })],
-      }),
-    )
+    // The projection keeps a stopped turn running until its result is
+    // committed; the peek knows no turn is active.
+    gateway.views.set("a", view("a", { messages: [running()] }))
     expect(atWork(await source.transcript("a"))).toBe(true)
-    await source.stop("a", "agent")
-    const [target] = (gateway.calls.find((call) => call.method === "stop")?.args ??
-      []) as [{ executionId: string }]
-    expect(target.executionId).toBe("earlier")
-  })
-
-  it("refuses a stop when no turn is at work, and asks the gateway nothing", async () => {
-    const { gateway, source } = started()
-    gateway.views.set(
-      "a",
-      view("a", { messages: [{ ...running(), status: "completed" }] }),
-    )
-    expect(atWork(await source.transcript("a"))).toBe(false)
     await expect(source.stop("a", "person")).rejects.toMatchObject({
       reason: "not-waiting",
     })
-    expect(gateway.count("stop")).toBe(0)
+    expect(gateway.count("stop")).toBe(1)
+    expect(gateway.views.get("a")?.messages[0]?.status).toBe("running")
   })
 
   it("maps synchronous stale-choice validation without mapping later TypeErrors", async () => {

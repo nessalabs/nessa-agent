@@ -94,7 +94,6 @@
  * app's calls go on that client too (`connected`).
  */
 import {
-  executionTargets,
   prepareSubmission,
   permissionTargets,
   questionTargets,
@@ -117,6 +116,7 @@ import {
   type ConversationViewCursor,
   type Subscription,
   type SubscriptionApi,
+  type StopThreadResult,
   type SubscriptionEnd,
   type ViewFrame,
 } from "@nessa/client"
@@ -132,7 +132,6 @@ import type { WorkspaceFailureReason } from "../../model/failure"
 import type { Transcript } from "../../model/transcript"
 import type { SessionSummary, WorkspaceIndex } from "../../model/workspace-index"
 import {
-  activeExecution,
   gatewayChannel,
   gatewaySection,
   modelFor,
@@ -154,11 +153,12 @@ export interface GatewayClient {
     | "submit"
     | "answer"
     | "answerQuestion"
-    | "stop"
     | "setApprovalMode"
     | "archive"
   >
   readonly subscriptions: Pick<SubscriptionApi, "view" | "list">
+  /** Stops the active execution, which the gateway names from its own peek. */
+  stopThread(threadId: string): Promise<StopThreadResult>
   readonly connectionState: ConnectionState
   onConnectionStateChange(handler: (state: ConnectionState) => void): () => void
   /** Server pushes, when the client has them. Absent on a client that only answers calls. */
@@ -1377,23 +1377,18 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
           }
         })
       }),
+    // The gateway's own peek names the active execution (`stopThread`): a
+    // view's message can still say running after its turn stopped, so the
+    // view is not asked which turn that is.
     stop: (sessionId, _initiator) =>
       within(async (live) => {
-        await transcriptOf(sessionId, "person")
-        const view = reads.get(sessionId)?.view
-        const executionId = view && activeExecution(view)
-        if (!view || executionId === undefined)
-          throw new WorkspaceSourceError("not-waiting")
-        // Captured from this view, so the stop names the turn the window shows.
-        const [target] = executionTargets({
-          conversationId: view.conversationId,
-          messages: [{ executionId }],
-          pending: [],
-        })
-        await dispatch(live, (connected) => {
+        held(sessionId)
+        const result = await dispatch(live, (connected) => {
           held(sessionId)
-          return connected.conversation.stop(target)
+          return connected.stopThread(sessionId)
         })
+        if (result.outcome === "no_active_turn")
+          throw new WorkspaceSourceError("not-waiting")
       }),
     // Committed by the gateway, which refuses it while a turn runs. The
     // conversation saying so follows as a frame, as an answer's does (D12).

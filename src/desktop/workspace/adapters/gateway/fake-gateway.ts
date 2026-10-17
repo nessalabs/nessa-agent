@@ -199,6 +199,12 @@ export interface FakeGateway {
   readonly calls: Call[]
   readonly rows: Map<string, ConversationSummary>
   readonly views: Map<string, ConversationView>
+  /**
+   * The execution each conversation's peek says is active, which a stop
+   * names. Apart from the views on purpose: a view's message can still say
+   * running after its turn stopped.
+   */
+  readonly active: Map<string, string>
   /** Whether a list names every conversation. */
   complete: boolean
   /**
@@ -269,6 +275,7 @@ export function fakeGateway(
   const calls: FakeGateway["calls"] = []
   const rows = new Map<string, ConversationSummary>()
   const views = new Map<string, ConversationView>()
+  const active = new Map<string, string>()
   const overrides = new Map<Exclude<Method, "answer">, Behaviour[]>()
   const answerOverrides: AnswerBehaviour[] = []
   const observers = new Set<(state: ConnectionState) => void>()
@@ -464,28 +471,6 @@ export function fakeGateway(
         const behaviour = overrides.get("answerQuestion")?.shift()
         return (behaviour ? behaviour(normal) : Promise.resolve().then(normal)) as never
       },
-      // The turn named ends cancelled, and what it waited on goes with it.
-      stop: (...args) =>
-        answer("stop", args, () => {
-          const [target] = args
-          const current = views.get(target.conversationId)
-          if (current)
-            views.set(target.conversationId, {
-              ...current,
-              messages: current.messages.map((turn) =>
-                turn.executionId === target.executionId
-                  ? { ...turn, status: "cancelled" }
-                  : turn,
-              ),
-              permissions: current.permissions.filter(
-                (asked) => asked.executionId !== target.executionId,
-              ),
-              questions: current.questions.filter(
-                (asked) => asked.executionId !== target.executionId,
-              ),
-            })
-          return { requestId: "stop", stage: "accepted" }
-        }) as never,
       // Committed as asked; the view says it from now on.
       setApprovalMode: (...args) =>
         answer("setApprovalMode", args, () => {
@@ -507,6 +492,29 @@ export function fakeGateway(
           applied: false,
         })) as never,
     },
+    // The peek names the active execution; it ends cancelled, with what it waited on.
+    stopThread: (...args) =>
+      answer("stop", args, () => {
+        const [conversationId] = args
+        const executionId = active.get(conversationId)
+        if (executionId === undefined) return { outcome: "no_active_turn" as const }
+        active.delete(conversationId)
+        const current = views.get(conversationId)
+        if (current)
+          views.set(conversationId, {
+            ...current,
+            messages: current.messages.map((turn) =>
+              turn.executionId === executionId ? { ...turn, status: "cancelled" } : turn,
+            ),
+            permissions: current.permissions.filter(
+              (asked) => asked.executionId !== executionId,
+            ),
+            questions: current.questions.filter(
+              (asked) => asked.executionId !== executionId,
+            ),
+          })
+        return { requestId: "stop", stage: "accepted" }
+      }) as never,
     subscriptions: {
       view: (conversationId, handlers, { signal, ...options } = {}) =>
         gated(`view:${conversationId}`, signal, () => {
@@ -577,6 +585,7 @@ export function fakeGateway(
     calls,
     rows,
     views,
+    active,
     once(method: Exclude<Method, "answer">, behaviour: Behaviour) {
       overrides.set(method, [...(overrides.get(method) ?? []), behaviour])
     },

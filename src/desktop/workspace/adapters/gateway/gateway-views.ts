@@ -540,25 +540,6 @@ export function transcriptFrom(
 }
 
 /**
- * The execution Stop stops: the turn running, else the next one queued, else
- * the one a shown review or question holds open. A queued turn is never
- * named while one runs — stopping it would withdraw it and leave the running
- * turn going. These are the marks `transcriptFrom` turns into `atWork`'s
- * activity, working reply, approval and questions, so Stop is offered
- * exactly where it has a turn to name.
- */
-export function activeExecution(view: ConversationView): string | undefined {
-  const running = view.messages.find((turn) => turn.status === "running")
-  const queued = view.messages.find((turn) => turn.status === "queued")
-  return (
-    running?.executionId ??
-    queued?.executionId ??
-    view.permissions[0]?.executionId ??
-    questionsFrom(view)[0]?.executionId
-  )
-}
-
-/**
  * A terminal status the gateway reported. The mark stays on the message,
  * including a typed authentication refusal: the pane hides a pure refusal's
  * mark only while the sign-in card is showing, and a local retry can hide
