@@ -96,6 +96,8 @@ verification/
         apps.mjs            an MCP App's documents, read through Playwright's frames; the window's card for an app's review, by its whole head
         apps.test.mjs       apps.mjs's rules, no browser: one inline mount, the one locator for an app's review card, and the wait for it to go
         settings.mjs        Settings › Integrations reached, and its fit measured at a width (responsive.mjs, mcp-servers-gateway.mjs)
+        review-notices.mjs  Settings notification permission and accessible Allow-button evidence
+        review-notices.test.mjs default/denied/granted/unsupported row contracts, without a browser
         cli.test.mjs        the scripts' own contract, no browser: arguments, exit status, run-all's sum
         gateway-stack.mjs   a real gateway, the dev server or a production preview before it, and a client on it, for the real-gateway checks, or the scripted agent signed out; the panel's credential; an agent turn sent and waited out
         scripted-evidence.mjs the scripted command's verdict line and the pull-request summary; page lines are read from the checks' own results
@@ -174,6 +176,39 @@ holds, run the whole set once (`pnpm verify:desktop`, about 5 minutes without
 perf): every engine, layout and size. `safe-area` runs its scenarios four at a
 time (`--jobs`), each worker reusing one page per engine, layout and size, and
 ends each step once its motion has, not after a fixed wait.
+
+## Scenario results and preview ownership
+
+A scenario owns its result; a missing optional assertion list cannot replace the
+scenario's original error. `report.add` normalizes `failures` after accepting the
+result fields, then derives `ok` and the existing process verdict. Page diagnostic
+lines still belong to the existing page-lines owner.
+
+A check that needs a source fixture in production owns the preview that includes
+that fixture. `run-all` delegates that choice through `ownsPreview` and passes the
+production mode rather than substituting its ordinary application preview.
+Settings uses `desktop/fixtures/native-hooks-on/vite.config.ts`, which extends the
+application build with the controlled Settings HTML input. An explicit `--url`
+remains externally owned: it starts no server and must already serve the fixture.
+
+| Row | Input or ordering | Required result |
+| --- | --- | --- |
+| V1 | Result omits `failures`, or supplies `undefined`, with no error | Normalize to an empty assertion list; derive `ok: true` and exit 0 |
+| V2 | Result supplies `failures: undefined` alongside an original scenario error | Preserve that error in the entry and stderr; derive `ok: false` and exit 1 rather than throwing from the reporter |
+| V3 | Assertions fail alongside an error, or an explicit input `ok: true` contradicts them | Preserve both diagnostics; derive false and exit 1 from the owned evidence |
+| V4 | Result cannot run, or is intentionally skipped, with missing assertions | Keep the existing distinction: cannot-run is not passed even without a diagnostic and exits 2; a skipped row is not passed and does not count toward a successful run |
+| V5 | Standalone Settings uses `--mode prod` without a URL | Build its application-plus-Settings fixture inputs and close its own preview |
+| V6 | `run-all --mode prod` schedules Settings | Let Settings own that same preview; pass production mode without a shared application URL |
+| V7 | Settings receives an explicit URL in standalone or full-run mode | Forward the exact URL; leave server/build lifetime with its caller, including when mode is explicitly production |
+| V8 | Ordinary functional check runs through `run-all` | Keep the shared page URL and its actual dev/production mode |
+| V9 | Settings runs in dev mode, or an existing preview owner runs | Settings uses the source-serving dev page; committed-transcript, message-sync and perf retain their established preview ownership |
+| V10 | Full-run `--runs` accompanies fixture-owned functional checks and perf | Forward the run count only to perf-budget, whose CLI owns that option; preserve Settings and other functional argument validity |
+| V11 | Settings reads the browser notification permission before checking its row | Default offers exactly one accessible Allow button and explains waiting reviews; denied shows blocked copy with no Allow button, even though the copy mentions Allow; granted shows waiting-review status with no Allow button; unsupported has no notification row |
+
+Bare-Node reporter/routing tests cover V1–V4 and the full-run argument decisions.
+V5–V9's actual fixture and server lifetime also require production browser
+qualification; helper tests alone do not establish that the built fixture renders.
+No frame budget, RPC deadline or browser readiness wait changes with this routing.
 
 ## Output
 
