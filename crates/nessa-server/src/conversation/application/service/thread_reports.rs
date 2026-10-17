@@ -369,7 +369,7 @@ impl ThreadReports {
     }
 
     /// Reports registered or being queued.
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) fn waiting(&self) -> usize {
         self.lock().values().map(Vec::len).sum::<usize>() + self.delivering.load(Ordering::SeqCst)
     }

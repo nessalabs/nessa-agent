@@ -3,9 +3,10 @@ use super::*;
 #[cfg(unix)]
 use crate::composition::conversation_tools::ConversationTools;
 use crate::conversation::application::{
-    AgentToolAudit, AgentToolAuditRecord, AgentToolRequest, ConversationFuture, ReportRegistration,
-    ThreadReport,
+    AgentToolAudit, AgentToolAuditRecord, AgentToolRequest, ConversationFuture,
 };
+#[cfg(unix)]
+use crate::conversation::application::{ReportRegistration, ThreadReport};
 #[cfg(unix)]
 use crate::mcp_servers::{
     domain::ConfigurationKey,
@@ -13,6 +14,7 @@ use crate::mcp_servers::{
         built_in_digest, read_line, write_line, Answer, ConversationGrants, Hello, OsTokens, Relay,
     },
 };
+#[cfg(unix)]
 use nessa_sdk::application::agent_execution::providers;
 #[cfg(unix)]
 use nessa_sdk::{
@@ -1335,11 +1337,13 @@ fn a_long_reply_is_cut_so_the_whole_report_fits_the_input_limit() {
 
 /// Holds a save that wrote its row, so a test can act between a send's save
 /// and its registration. A save that found the row already there is not held.
+#[cfg(unix)]
 struct HeldSave {
     store: Arc<crate::conversation::infrastructure::LocalThreadReports>,
     saved: tokio::sync::Notify,
     release: tokio::sync::Semaphore,
 }
+#[cfg(unix)]
 impl crate::conversation::application::ThreadReportStore for HeldSave {
     fn save(
         &self,
