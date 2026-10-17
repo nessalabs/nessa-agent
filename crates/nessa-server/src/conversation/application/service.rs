@@ -2066,6 +2066,17 @@ impl ConversationService {
             return Ok(());
         };
         let mut request = pending_for(id, &record, request)?;
+        if request.prior == request.requested {
+            match request.application {
+                None
+                | Some(
+                    ConversationModeApplication::Applied | ConversationModeApplication::Deferred,
+                ) => {}
+                Some(
+                    ConversationModeApplication::Refused | ConversationModeApplication::Uncertain,
+                ) => return Err(ConversationError::ApprovalModeUncertain),
+            }
+        }
         if request.prior != request.requested {
             self.finish_stopped_selection(id).await?;
         }

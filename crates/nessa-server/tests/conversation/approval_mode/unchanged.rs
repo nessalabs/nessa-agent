@@ -165,3 +165,129 @@ async fn an_unchanged_preset_does_not_notify_a_changing_selection() {
     assert!(provider.mode_updates.lock().unwrap().is_empty());
     service.shutdown().await.unwrap();
 }
+
+async fn recover_unchanged_preset_with_retained_application(
+    application: Option<ConversationModeApplication>,
+) {
+    let directory = tempfile::tempdir().unwrap();
+    let private = directory.path().join("conversations");
+    nessa_local_storage::create_directory(&private).unwrap();
+    let metadata = Arc::new(
+        LocalConversationStore::open(&private.join("metadata.sqlite3"))
+            .unwrap()
+            .with_access_policy(access_policy()),
+    );
+    let (mut service, provider, _, _, audit) = mode_fixture();
+    Arc::get_mut(&mut service.inner).unwrap().metadata = metadata.clone();
+    let id = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
+    service
+        .create(id.clone(), caller(), RequestedConversation::default())
+        .await
+        .unwrap();
+    let before = service
+        .read_at(id.clone(), caller(), ReadOpening::Open)
+        .await
+        .unwrap();
+    let mode = before.0.selection.as_ref().unwrap().approval_mode;
+    let actor = caller();
+    let intent = ConversationModeRequest {
+        conversation_id: id.clone(),
+        organization_id: actor.organization_id.clone(),
+        request_id: actor.action_id.clone(),
+        initiator_principal_id: actor.principal_id.clone(),
+        initiator_surface_id: actor.surface_id.clone(),
+        prior: mode,
+        requested: mode,
+        state: ConversationModeRequestState::Pending,
+        application: None,
+        requested_at_ms: 1,
+    };
+    metadata.begin_mode_change(intent.clone()).await.unwrap();
+    if let Some(application) = application {
+        metadata
+            .observe_mode_application(&id, &actor.action_id, application)
+            .await
+            .unwrap();
+    }
+    let retained = ConversationModeRequest {
+        application,
+        ..intent
+    };
+    assert_eq!(
+        metadata.pending_mode_change(&id).await.unwrap(),
+        Some(retained.clone())
+    );
+    let after = service
+        .read_at(id.clone(), caller(), ReadOpening::Open)
+        .await
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(&after.0).unwrap(),
+        serde_json::to_value(&before.0).unwrap()
+    );
+    assert_eq!(after.1, before.1);
+    let saved = metadata
+        .mode_change(&id, &actor.action_id)
+        .await
+        .unwrap()
+        .unwrap();
+    match application {
+        None
+        | Some(ConversationModeApplication::Applied | ConversationModeApplication::Deferred) => {
+            let observed = ConversationModeRequest {
+                application: Some(application.unwrap_or(ConversationModeApplication::Applied)),
+                ..retained
+            };
+            assert_eq!(
+                saved,
+                ConversationModeRequest {
+                    state: ConversationModeRequestState::Applied,
+                    ..observed.clone()
+                }
+            );
+            assert!(metadata.pending_mode_change(&id).await.unwrap().is_none());
+            assert_eq!(
+                *audit.records.lock().unwrap(),
+                vec![(observed, ConversationModeAuditPhase::RecoveryApplied)]
+            );
+        }
+        Some(ConversationModeApplication::Refused | ConversationModeApplication::Uncertain) => {
+            assert_eq!(saved, retained);
+            assert_eq!(
+                metadata.pending_mode_change(&id).await.unwrap(),
+                Some(retained)
+            );
+            assert!(
+                audit.records.lock().unwrap().is_empty(),
+                "a contradictory retained application must not produce a recovery audit"
+            );
+        }
+    }
+    assert!(provider.mode_updates.lock().unwrap().is_empty());
+    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(provider.close_calls.load(Ordering::SeqCst), 0);
+    service.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn an_unchanged_preset_recovers_compatible_retained_applications() {
+    for application in [
+        None,
+        Some(ConversationModeApplication::Applied),
+        Some(ConversationModeApplication::Deferred),
+    ] {
+        recover_unchanged_preset_with_retained_application(application).await;
+    }
+}
+
+#[tokio::test]
+async fn an_unchanged_preset_preserves_a_retained_refusal() {
+    recover_unchanged_preset_with_retained_application(Some(ConversationModeApplication::Refused))
+        .await;
+}
+
+#[tokio::test]
+async fn an_unchanged_preset_preserves_a_retained_uncertainty() {
+    recover_unchanged_preset_with_retained_application(Some(ConversationModeApplication::Uncertain))
+        .await;
+}

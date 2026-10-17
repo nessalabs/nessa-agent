@@ -179,6 +179,8 @@ is no Changing overlay or intent notification for a selection that is unchanged.
 | --- | --- |
 | Intent pending while control lock held | Stable view and cursor through Open and LiveOnly; no waiting behind the control; `an_unchanged_preset_pending_read_keeps_its_publication` |
 | Terminal write lost before commit | Exact validated journal settles Applied on Open without native replay or retirement; `an_unchanged_preset_recovers_its_exact_request_without_retiring` |
+| Retained no-op application is absent, Applied, or Deferred | Open settles Applied, preserving a saved application and original actor, without native work or retirement; `an_unchanged_preset_recovers_compatible_retained_applications` |
+| Retained no-op application is Refused or Uncertain | Recovery refuses before observing or auditing Applied; the request remains Pending with its original actor/application. Open retains the stable guarded view and cursor; `an_unchanged_preset_preserves_a_retained_refusal`, `an_unchanged_preset_preserves_a_retained_uncertainty` |
 | Original actor retries or reuses request for a different preset | Same no-op result, or RequestConflict for different intent; same test |
 | Original review still pending on active turn | No native preset call, unchanged cursor, review remains answerable; `an_active_permission_preset_keeps_the_original_review_and_native_turn` |
 | Owner stops during an awaited pending no-op read | Existing same-owner publication guard still refuses the view; no-op does not bypass lifetime checks |
