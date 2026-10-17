@@ -40,7 +40,17 @@ export interface SessionAccess {
 export type AccessChoice =
   | {
       readonly mode: AccessMode
-      readonly state: "chosen" | "changing" | "taken"
+      readonly state: "chosen"
+      /**
+       * A first message on its way carries it to the source's create. A pick
+       * made after that is not carried: the session begins at the captured
+       * mode, and the later pick is the person's newer word.
+       */
+      readonly captured?: boolean
+    }
+  | {
+      readonly mode: AccessMode
+      readonly state: "changing" | "taken"
     }
   | {
       readonly mode: AccessMode
@@ -74,11 +84,15 @@ export function shownAccess(
 
 /**
  * The choice once the source's conversation `transcript` has arrived: let go
- * when that conversation says what it asked for, or — for a session's first
- * choice — says anything at all, since a create the gateway reopened keeps
- * its own preset. A refusal is let go by a conversation with no turn at
- * work: what it refused is history. One pending or on its way is kept: the
- * pending one is sent (`effects.ts`), and the call settles the other.
+ * when that conversation says what it asked for. A session's first choice,
+ * captured by its first message, is let go once the conversation says any
+ * access at all, since a create the gateway reopened keeps its own preset.
+ * One made after that capture is the person's newer word: it becomes
+ * pending, and is asked of the source once no turn is at work — or is let go
+ * when the source already runs it. A refusal is let go by a conversation
+ * with no turn at work: what it refused is history. One pending or on its
+ * way is kept: the pending one is sent (`effects.ts`), and the call settles
+ * the other.
  */
 export function settledBy(
   choice: AccessChoice | undefined,
@@ -88,7 +102,10 @@ export function settledBy(
   if (!choice) return choice
   if (choice.state === "refused") return atWork(transcript) ? choice : undefined
   if (!source) return choice
-  if (choice.state === "chosen") return undefined
+  if (choice.state === "chosen")
+    return choice.captured || source.mode === choice.mode
+      ? undefined
+      : { mode: choice.mode, state: "pending" }
   if (choice.state === "taken" && source.mode === choice.mode) return undefined
   return choice
 }

@@ -4,7 +4,7 @@
  * is the newer word; one for a session not begun goes with its first message.
  */
 import { describe, expect, it } from "vitest"
-import { fakeSource, settle, testStore, type FakeSource } from "../../testing"
+import { fakeSource, settle, summary, testStore, type FakeSource } from "../../testing"
 import { WorkspaceSourceError } from "../../application/ports"
 import { emptyTranscript, type Transcript } from "../../model/transcript"
 import {
@@ -255,6 +255,53 @@ describe("access chosen while the agent is at work", () => {
 })
 
 describe("a new session's access", () => {
+  it("keeps a pick made after the first message carried another, and applies it once the turn ends", async () => {
+    const { store, source } = await ready()
+    const draftId = store.dispatch(newSession())
+    if (!draftId) throw new Error("no draft")
+    await store.dispatch(
+      chooseAccess({ sessionId: draftId, mode: "full", initiator: "person" }),
+    )
+    source.hold("send")
+    const first = store.dispatch(
+      sendMessage({ initiator: "person", sessionId: draftId, text: "Fix the rain" }),
+    )
+    await settle()
+    expect(source.calls.find((call) => call[0] === "send")?.[1]).toMatchObject({
+      start: { access: "full" },
+    })
+    // Chosen after the first message captured Full: the person's newer word.
+    await store.dispatch(
+      chooseAccess({ sessionId: draftId, mode: "ask", initiator: "person" }),
+    )
+    const running: Transcript = {
+      ...emptyTranscript(draftId),
+      revision: 1,
+      activity: { label: "Thinking", since: 1 },
+      access: { mode: "full", modes: ["ask", "auto", "full"] },
+    }
+    source.transcripts.set(draftId, running)
+    source.emit({
+      kind: "session",
+      session: summary(draftId, "desktop", 2000, "running", { revision: 1 }),
+    })
+    await source.release("send")
+    await first
+    await settle(10)
+    expect(store.getState().workspace.transcripts[draftId]?.access?.mode).toBe("full")
+    expect(selectAccess(store.getState(), draftId)).toBe("ask")
+    expect(selectAccessNotice(store.getState(), draftId)?.state).toBe("pending")
+    expect(source.calls.some((call) => call[0] === "setAccess")).toBe(false)
+    const idle: Transcript = { ...running, activity: null, revision: 2 }
+    source.transcripts.set(draftId, idle)
+    source.emit({ kind: "transcript", transcript: idle })
+    await settle(10)
+    expect(source.calls.filter((call) => call[0] === "setAccess")).toEqual([
+      ["setAccess", draftId, "ask", "person"],
+    ])
+    expect(selectAccess(store.getState(), draftId)).toBe("ask")
+  })
+
   it("stays chosen when a refused first message is discarded and the home comes back", async () => {
     const { store, source } = await ready()
     const draftId = store.dispatch(newSession())

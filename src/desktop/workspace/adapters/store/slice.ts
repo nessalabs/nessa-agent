@@ -245,6 +245,10 @@ const workspaceSlice = createSlice({
       state,
       { payload }: Payload<{ sessionId: string; mode: AccessMode }>,
     ) => access.accessChosen(state, payload),
+    accessCaptured: (
+      state,
+      { payload }: Payload<{ sessionId: string; mode: AccessMode }>,
+    ) => access.accessCaptured(state, payload),
     accessPending: (
       state,
       { payload }: Payload<{ sessionId: string; mode: AccessMode }>,

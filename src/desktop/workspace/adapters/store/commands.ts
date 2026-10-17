@@ -102,6 +102,7 @@ const {
   approvalAnswering,
   approvalFailed,
   indexRequested,
+  accessCaptured,
 } = workspaceActions
 
 export type WorkspaceCommand<Result = void> = ThunkAction<
@@ -419,12 +420,6 @@ export function openChannel({
   }
 }
 
-/** The access a session begins at, when one was chosen before it began. */
-function startAccess(state: WorkspaceState, sessionId: string) {
-  const access = accessToStart(state, sessionId)
-  return access ? { access } : {}
-}
-
 /**
  * Asks the source to take a message already in the outbox. While the source
  * has not spoken of the session — it began here, at revision 0 — the message
@@ -440,6 +435,11 @@ function deliver(
   return async (dispatch, getState, { workspace }) => {
     const session = sessionOf(getState().workspace, sessionId)
     if (!session) return "not-asked"
+    const access = knownToSource(session)
+      ? undefined
+      : accessToStart(getState().workspace, sessionId)
+    // Captured by this message: a pick after it is the newer word, not this one.
+    if (access) dispatch(accessCaptured({ sessionId, mode: access }))
     try {
       await workspace.send({
         sessionId,
@@ -452,7 +452,7 @@ function deliver(
           : {
               channelId: session.channelId,
               title: session.title,
-              ...startAccess(getState().workspace, sessionId),
+              ...(access ? { access } : {}),
             },
       })
       dispatch(messageDelivered({ sessionId, messageId: message.id }))

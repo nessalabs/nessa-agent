@@ -117,6 +117,19 @@ export function pendingAccess(
   })
 }
 
+/**
+ * A first message carries the chosen access to the source's create: that
+ * choice is captured. A pick after this one is not, and stays the newer word.
+ */
+export function accessCaptured(
+  state: WorkspaceState,
+  { sessionId, mode }: Change,
+): WorkspaceState {
+  const held = entry(state.accessChoices, sessionId)
+  if (held?.state !== "chosen" || held.mode !== mode || held.captured) return state
+  return withChoice(state, sessionId, { mode, state: "chosen", captured: true })
+}
+
 /** Asked of the source; shown as chosen while it is on its way. */
 export function accessChanging(
   state: WorkspaceState,
