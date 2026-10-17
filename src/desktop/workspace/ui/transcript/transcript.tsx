@@ -299,6 +299,7 @@ export const Transcript = memo(function Transcript({
           ))}
           {transcript?.approval && model ? (
             <ApprovalCard
+              key={transcript.approval.id}
               sessionId={sessionId}
               approval={transcript.approval}
               model={model}

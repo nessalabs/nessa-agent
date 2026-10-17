@@ -1,8 +1,10 @@
 /**
  * What an agent's command touches, read from its words so the card can say
- * it at a glance (`approval-card.tsx`): the programs it runs and the sites it
- * names. The command itself stays the authority; the gist only points at it,
- * and the card's Details show it whole.
+ * it at a glance (`approval-card.tsx`): the programs it names and the sites it
+ * names. The command itself stays the authority, and the card always shows
+ * it: the gist only points at parts of it. A program can run another that
+ * no word names (`rg --pre`, a hook, a file the same command wrote to a
+ * folder on `PATH`), so the gist never claims to list everything it runs.
  *
  * A command arrives as the agent's shell words (`cargo test -p gateway`) or
  * as a tool and its JSON input (`mcp__nessa__shell {"command":"curl …"}`).
@@ -10,15 +12,11 @@
  * `["bash", "-lc", "…"]` list — is read as that script; any other tool is
  * only its name.
  *
- * The reading is a sketch, not a shell, so the gist is `plain` — complete
- * enough to stand for the command until the person opens it — only where it
- * cannot be wrong: plain words, quotes, escapes and the operators that start
- * a new program (`;`, `&&`, `||`, `|`, `&`, a newline), each program named
- * bare and among those that run nothing but themselves (`contained`), and
- * no assignment. Anything else — a substitution, a block, a heredoc, a
- * comment, a variable, glob or brace where a program is named, a program
- * that can run another — and the card opens the whole command at once
- * rather than let the summary stand for it.
+ * The reading is a sketch, not a shell. It follows plain words, quotes,
+ * escapes and the operators between programs (`;`, `&&`, `||`, `|`, `&`, a
+ * newline); where it meets anything else — a substitution, a subshell, a
+ * heredoc, a comment, an ANSI-C quote, a quote left open — it is not
+ * `lined`, and the script is shown exactly as sent.
  */
 
 /** A program the command runs, and how many times. */
@@ -32,7 +30,7 @@ export interface CommandGist {
   readonly tool?: string
   /**
    * The shell script it runs, when there is one: one step per line where the
-   * gist is `plain` (`scriptLines`), and exactly as sent where it is not.
+   * script is `lined` (`scriptLines`), and exactly as sent where it is not.
    */
   readonly script?: string
   /** The input's other fields, shown beside the script: `[name, JSON value]`. */
@@ -47,92 +45,14 @@ export interface CommandGist {
    */
   readonly hosts: readonly string[]
   /**
-   * Every program the script runs is among `programs`: it has only what the
-   * sketch reads. When false, the gist may leave a program out, and the
-   * whole command is what the person reads first.
+   * The sketch followed every quote and operator in the script, so `script`
+   * is set one step per line. When false, `script` is exactly as sent, and
+   * `programs` may leave out a program the sketch could not see.
    */
-  readonly plain: boolean
+  readonly lined: boolean
 }
 
 const shells = new Set(["bash", "sh", "zsh", "dash", "fish", "ksh"])
-
-/**
- * Programs that run nothing but themselves: given any words, they read,
- * print, compare, move or fetch, and never run a program, a script, a hook
- * or a pager of someone's choosing. Only these, named bare, make a gist
- * plain; any other program — `git` (hooks, pagers), `npm` (scripts), `sed`
- * (its `e` command), `find -exec`, `sudo`, an interpreter, a shell builtin
- * that evaluates or assigns (`let`, `trap`, `declare`, `printf -v`) — may run
- * what the gist cannot see, and opens the whole command.
- */
-const contained = new Set([
-  "cat",
-  "head",
-  "tail",
-  "grep",
-  "egrep",
-  "fgrep",
-  "rg",
-  "ls",
-  "wc",
-  "sort",
-  "uniq",
-  "cut",
-  "tr",
-  "jq",
-  "echo",
-  "curl",
-  "wget",
-  "pwd",
-  "cd",
-  "date",
-  "whoami",
-  "file",
-  "stat",
-  "du",
-  "df",
-  "diff",
-  "cmp",
-  "basename",
-  "dirname",
-  "realpath",
-  "readlink",
-  "true",
-  "false",
-  "sleep",
-  "mkdir",
-  "touch",
-  "cp",
-  "mv",
-  "rm",
-  "rmdir",
-  "ln",
-  "chmod",
-  "tee",
-  "base64",
-  "shasum",
-  "sha256sum",
-  "md5sum",
-  "column",
-  "nl",
-  "rev",
-  "fold",
-  "comm",
-  "paste",
-  "join",
-  "expand",
-  "unexpand",
-  "seq",
-  "yes",
-  "uname",
-  "hostname",
-  "id",
-  "printenv",
-  "tree",
-])
-
-/** A program named as a plain word: no path, variable, glob or brace to make it another. */
-const bareName = /^[A-Za-z0-9][A-Za-z0-9._+-]*$/
 
 /** A shell list such as `["bash", "-lc", "…"]` is its script; any other list has none. */
 function scriptOf(value: unknown): string | undefined {
@@ -173,13 +93,13 @@ interface Word {
 interface Reading {
   readonly words: readonly Word[]
   /** Nothing in the script was outside what the sketch reads. */
-  readonly plain: boolean
+  readonly lined: boolean
 }
 
 /** The script's words, unquoted, each marked where a new program starts. */
 function read(script: string): Reading {
   const words: Word[] = []
-  let plain = true
+  let lined = true
   let text = ""
   let inWord = false
   let starts = true
@@ -204,7 +124,7 @@ function read(script: string): Reading {
       quote !== "'" &&
       (char === "`" || (char === "$" && (next === "(" || next === "'" || next === '"')))
     )
-      plain = false
+      lined = false
     if (quote) {
       if (char === quote) quote = undefined
       else if (char === "\\" && quote === '"' && next !== undefined)
@@ -223,10 +143,10 @@ function read(script: string): Reading {
       inWord = inWord || next !== "\n"
       continue
     }
-    if (char === "#" && !inWord) plain = false
-    if (char === "<" && (next === "<" || next === "(")) plain = false
-    if (char === ">" && next === "(") plain = false
-    if (char === "(" || char === ")") plain = false
+    if (char === "#" && !inWord) lined = false
+    if (char === "<" && (next === "<" || next === "(")) lined = false
+    if (char === ">" && next === "(") lined = false
+    if (char === "(" || char === ")") lined = false
     // `2>&1` and `&>` redirect; they do not start a program. Only an unquoted,
     // unescaped `<` or `>` just before makes the `&` a redirect's.
     const redirect = char === "&" && (wasRedirect || next === ">")
@@ -243,9 +163,9 @@ function read(script: string): Reading {
     text += char
     inWord = true
   }
-  if (quote) plain = false
+  if (quote) lined = false
   end()
-  return { words, plain }
+  return { words, lined }
 }
 
 /** `NAME=value` before a program sets its environment; it is not the program. */
@@ -273,7 +193,7 @@ function hostsIn(word: string): string[] {
  * `||` outside quotes, and before each `|`, which is indented under the
  * step it feeds. Only the unquoted spaces beside those operators change,
  * which a shell does not read, so the lines mean what the script means. For
- * a plain script only, whose quotes this reading follows.
+ * a `lined` script only, whose quotes this reading follows.
  */
 export function scriptLines(script: string): string {
   let out = ""
@@ -331,32 +251,27 @@ export function commandGist(command: string): CommandGist {
         .filter(([name]) => script === undefined || name !== "command")
         .map(([name, value]) => [name, JSON.stringify(value)] as const)
     : []
-  const reading = script === undefined ? { words: [], plain: false } : read(script)
-  // Plain only for a script and nothing beside it: a tool's other input (a
-  // file and its content, an environment, a list of words) is what it does,
-  // and is read whole. A `${…@…}` expansion evaluates its value.
-  let plain = reading.plain && fields.length === 0 && !/\$\{[^}]*@/.test(script ?? "")
+  const reading = script === undefined ? { words: [], lined: false } : read(script)
   const programs = new Map<string, number>()
   const hosts: string[] = []
   let awaiting = true
   for (const word of reading.words) {
     if (word.starts) awaiting = true
-    // An assignment, alone or before a program, can change what a later
-    // program is or does (`PATH=…`, `GIT_SSH_COMMAND=…`).
-    if (awaiting && assignment.test(word.text)) plain = false
+    // `NAME=value` before a program sets its environment; the next word is the program.
     if (awaiting && !assignment.test(word.text)) {
       awaiting = false
-      if (!bareName.test(word.text) || !contained.has(word.text)) plain = false
       programs.set(word.text, (programs.get(word.text) ?? 0) + 1)
     }
     for (const host of hostsIn(word.text)) if (!hosts.includes(host)) hosts.push(host)
   }
   return {
     ...(call ? { tool: call.tool } : {}),
-    ...(script !== undefined ? { script: plain ? scriptLines(script) : script } : {}),
+    ...(script !== undefined
+      ? { script: reading.lined ? scriptLines(script) : script }
+      : {}),
     fields,
     programs: [...programs].map(([name, count]) => ({ name, count })),
     hosts,
-    plain,
+    lined: reading.lined,
   }
 }

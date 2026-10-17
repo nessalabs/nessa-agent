@@ -27,14 +27,18 @@ const endingSeconds = 10
 const shownHosts = 2
 const shownPrograms = 4
 
+/** A script longer than `foldAfter` lines shows its first `foldedLines` until Show All. */
+const foldAfter = 6
+const foldedLines = 4
+
 /**
  * What waits on the person: a command the agent — or an MCP App, which the
  * head then names (`approvalHead`) — waits to run, and its answers,
- * arranged for the card's width (`approval-request.tsx`). An agent's command
- * is said at a glance — the sites it reaches and the programs it runs
- * (`approval-gist.ts`) — and shown whole, one step per line, under Details;
- * an app's tool and a message to send as the person are shown whole at once,
- * as their words are what is asked. While an answer is on its way the
+ * arranged for the card's width (`approval-request.tsx`). Every command is
+ * shown as it is: an agent's, one step per line where its quotes allow,
+ * under a row naming the sites and programs it names (`approval-gist.ts`),
+ * which points at the command and never stands in for it; an app's tool and
+ * a message to send as the person, whole. While an answer is on its way the
  * buttons rest; a failed answer says why.
  */
 export const ApprovalCard = memo(function ApprovalCard({
@@ -80,7 +84,7 @@ export const ApprovalCard = memo(function ApprovalCard({
         </p>
       )}
       {gist ? (
-        <ApprovalDetails command={approval.command} gist={gist} />
+        <ApprovalScript command={approval.command} gist={gist} />
       ) : (
         <ApprovalCommand
           command={approval.command}
@@ -178,24 +182,29 @@ function DeadlineRing({ deadline }: { deadline: ApprovalDeadline }) {
 }
 
 /**
- * An agent's command at a glance, and whole under Details — opened at once
- * when the gist cannot read every program the command runs (`plain`): the
- * sites it names, each by its own icon where the site has one, and the programs it
- * runs; opened, its script one step per line, the tool it calls and that
- * tool's other input, and a way to copy the command exactly as it came.
+ * An agent's command: a row naming the sites it names, each by its own icon
+ * where the site has one, and the programs it names; then the script itself,
+ * the tool it calls and that tool's other input, and a way to copy the
+ * command exactly as it came. A long script shows its first lines and says
+ * how many there are until Show All; nothing else is ever folded away.
  */
-function ApprovalDetails({ command, gist }: { command: string; gist: CommandGist }) {
-  // A command the gist cannot read whole opens whole: the summary never stands for it.
-  const [open, setOpen] = useState(!gist.plain)
-  const details = useId()
+function ApprovalScript({ command, gist }: { command: string; gist: CommandGist }) {
+  const [unfolded, setUnfolded] = useState(false)
+  const script = useId()
   const hosts = gist.hosts.slice(0, shownHosts)
   const programs = gist.programs.slice(0, shownPrograms)
   const moreHosts = gist.hosts.length - hosts.length
   const morePrograms = gist.programs.length - programs.length
+  const shown = gist.script ?? command
+  const lines = shown.split("\n")
+  const folds = lines.length > foldAfter
+  const folded = folds && !unfolded
+  // One program run once, and no site, is the command's first word: the row would only repeat it.
+  const names = hosts.length > 0 || programs.length > 1 || (programs[0]?.count ?? 0) > 1
   return (
     <>
-      <div className="workspace-approval-gist" data-open={open ? "" : undefined}>
-        <div className="workspace-approval-facts">
+      {names ? (
+        <div className="workspace-approval-gist">
           {hosts.length > 0 ? (
             <span className="workspace-approval-fact" aria-label="Sites named">
               {hosts.map((host) => (
@@ -214,7 +223,7 @@ function ApprovalDetails({ command, gist }: { command: string; gist: CommandGist
             </span>
           ) : null}
           {programs.length > 0 ? (
-            <span className="workspace-approval-fact" aria-label="Programs">
+            <span className="workspace-approval-fact" aria-label="Programs named">
               <DesktopIcon name="terminal" />
               {programs.map((program) => (
                 <span key={program.name} className="workspace-approval-program">
@@ -226,58 +235,51 @@ function ApprovalDetails({ command, gist }: { command: string; gist: CommandGist
                 <span className="workspace-approval-more-count">+{morePrograms}</span>
               ) : null}
             </span>
-          ) : gist.tool ? (
-            <span className="workspace-approval-fact" aria-label="Tool">
-              <DesktopIcon name="terminal" />
-              <span className="workspace-approval-program">
-                <bdi>{shownName(gist.tool)}</bdi>
-              </span>
-            </span>
           ) : null}
         </div>
-        <button
-          type="button"
-          className="workspace-approval-disclose"
-          aria-expanded={open}
-          aria-controls={details}
-          onClick={() => setOpen((shown) => !shown)}
-        >
-          Details
-          <DesktopIcon name="chevronDown" />
-        </button>
-      </div>
+      ) : null}
       <div
-        id={details}
-        className="workspace-approval-details"
-        data-open={open ? "" : undefined}
-        inert={!open}
+        id={script}
+        className="workspace-approval-script"
+        data-folded={folded ? "" : undefined}
       >
-        <div className="workspace-approval-details-body">
-          <ApprovalCommand command={gist.script ?? command} />
-          <div className="workspace-approval-meta-row">
-            <dl className="workspace-approval-meta">
-              {gist.tool ? (
-                <div>
-                  <dt>Tool</dt>
-                  <dd>
-                    <bdi>{shownName(gist.tool)}</bdi>
-                  </dd>
+        <ApprovalCommand
+          command={folded ? lines.slice(0, foldedLines).join("\n") : shown}
+        />
+      </div>
+      <div className="workspace-approval-meta-row">
+        <dl className="workspace-approval-meta">
+          {gist.tool ? (
+            <div>
+              <dt>Tool</dt>
+              <dd>
+                <bdi>{shownName(gist.tool)}</bdi>
+              </dd>
+            </div>
+          ) : null}
+          {gist.script !== undefined
+            ? gist.fields.map(([name, value]) => (
+                <div key={name}>
+                  <dt>
+                    <bdi>{shownName(name)}</bdi>
+                  </dt>
+                  <dd>{shownJson(value)}</dd>
                 </div>
-              ) : null}
-              {gist.script !== undefined
-                ? gist.fields.map(([name, value]) => (
-                    <div key={name}>
-                      <dt>
-                        <bdi>{shownName(name)}</bdi>
-                      </dt>
-                      <dd>{shownJson(value)}</dd>
-                    </div>
-                  ))
-                : null}
-            </dl>
-            <CopyCommand command={command} />
-          </div>
-        </div>
+              ))
+            : null}
+        </dl>
+        {folds ? (
+          <button
+            type="button"
+            className="workspace-approval-disclose"
+            aria-expanded={unfolded}
+            aria-controls={script}
+            onClick={() => setUnfolded((open) => !open)}
+          >
+            {unfolded ? "Show Less" : `Show All ${lines.length} Lines`}
+          </button>
+        ) : null}
+        <CopyCommand command={command} />
       </div>
     </>
   )

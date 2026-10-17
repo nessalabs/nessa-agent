@@ -156,7 +156,7 @@ const checks = {
       throw new CannotRun(`no session row "${names.approvalSession}" in the list`)
     await row.click()
     await need(page, css.approvalCard, "the approval card")
-    // An agent's command is whole under Details: open them, so its words are measured shown.
+    // A long script shows its first lines until Show All: unfold it, so every word is measured.
     const disclose = page.locator(css.approvalDisclose).first()
     if (await disclose.count()) await disclose.click()
     await settled(page)

@@ -699,14 +699,18 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   command broken, no button label wrapped, nothing overflowing.
   _ADR 238 › Decision_ (`ui/`, `approval-request.tsx`).
   _Check:_ `responsive.mjs --only approval-card --shots <dir>`, then look at the shots.
-- [ ] **An agent's command is said at a glance, and whole under Details.** The
-  card's row names the sites the command reaches (each by the site's own icon
-  once it loads, a globe until then and where it has none) and the programs it
-  runs; Details opens the script one step per line, the tool it calls, the
-  tool's other input, and Copy Command. A title that only repeats the tool's
-  name is not shown as a reason (`approval-card.tsx`, `approval-gist.ts`).
+- [ ] **An agent's command is always shown, with what it names above it.**
+  The card's row names the sites the command names (each by the site's own
+  icon once it loads, a globe until then and where it has none) and the
+  programs it names (no row when it would only repeat the command's first
+  word); under it the script, one step per line where the card
+  follows its quotes and exactly as sent where it does not, then the tool it
+  calls, the tool's other input, and Copy Command. A script over six lines
+  shows its first four and Show All N Lines; the next approval starts folded.
+  A title that only repeats the tool's name is not shown as a reason
+  (`approval-card.tsx`, `approval-gist.ts`).
   _Check:_ `transcript.test.tsx`, `approval-gist.test.ts`; `responsive.mjs
-  --only approval-card` opens Details before it measures.
+  --only approval-card` unfolds a long script before it measures.
 - [ ] **An armed review counts down, then the card is the automatic notice**
   (#141): the deadline ring shows the seconds left ("Denies in Ns" in its last
   ten) and is named "If nobody answers within N seconds, this is denied

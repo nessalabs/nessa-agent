@@ -99,25 +99,14 @@
   stroke: var(--desktop-needs);
 }
 
-/* What the agent's command touches, in one row, and the way to all of it. */
+/* What the agent's command names, in one row, above the command itself. */
 .workspace-approval-gist {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-  padding: 8px 6px 8px 12px;
-  border-radius: var(--desktop-radius-md);
-  background: color-mix(in oklab, var(--background) 45%, transparent);
-  box-shadow: var(--desktop-card-rim);
-}
-
-.workspace-approval-facts {
-  flex: 1;
-  min-width: 0;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 6px 14px;
+  min-width: 0;
+  padding: 0 2px;
 }
 
 .workspace-approval-fact {
@@ -216,45 +205,15 @@
   color: var(--foreground);
 }
 
-.workspace-approval-disclose svg {
-  width: 12px;
-  height: 12px;
-  stroke-width: 2;
-  transition: transform var(--desktop-base) var(--desktop-ease);
-}
-
-.workspace-approval-gist[data-open] .workspace-approval-disclose svg {
-  transform: rotate(180deg);
-}
-
-/* Details: opened in place, the row's height following its content. */
-.workspace-approval-details {
-  display: grid;
-  grid-template-rows: 0fr;
-  margin-top: -10px;
-  transition:
-    grid-template-rows var(--desktop-base) var(--desktop-ease),
-    margin-top var(--desktop-base) var(--desktop-ease);
-}
-
-.workspace-approval-details[data-open] {
-  grid-template-rows: 1fr;
-  margin-top: 0;
-}
-
-.workspace-approval-details-body {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
+/* A folded script fades out at its last shown line: there is more below. */
+.workspace-approval-script {
   min-width: 0;
-  min-height: 0;
-  overflow: hidden;
-  opacity: 0;
-  transition: opacity var(--desktop-medium) ease;
 }
 
-.workspace-approval-details[data-open] .workspace-approval-details-body {
-  opacity: 1;
+/* On the wrapper, so it adds to the command's own sideways fade. */
+.workspace-approval-script[data-folded] {
+  -webkit-mask-image: linear-gradient(to bottom, #000 55%, transparent);
+  mask-image: linear-gradient(to bottom, #000 55%, transparent);
 }
 
 .workspace-approval-meta-row {

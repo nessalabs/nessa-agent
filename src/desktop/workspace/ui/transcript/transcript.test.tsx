@@ -1047,7 +1047,7 @@ describe("a transcript", () => {
     )
   })
 
-  it("says at a glance what an agent's command reaches and runs, the whole of it under Details", async () => {
+  it("names what an agent's command reaches and runs, above the command itself", async () => {
     const approval = conversation.approval
     if (!approval) throw new Error("the sample asks for nothing")
     const script =
@@ -1073,44 +1073,73 @@ describe("a transcript", () => {
     expect(card?.querySelector('[aria-label="Sites named"]')?.textContent).toBe(
       "tad2026.eventive.org",
     )
-    expect(card?.querySelector('[aria-label="Programs"]')?.textContent).toBe("curl×2head")
+    expect(card?.querySelector('[aria-label="Programs named"]')?.textContent).toBe(
+      "curl×2head",
+    )
     // The last seconds say what will happen.
     const deadline = card?.querySelector<HTMLElement>("[data-deadline]")
     expect(deadline?.textContent).toBe("Denies in 6s")
     expect(deadline?.hasAttribute("data-ending")).toBe(true)
-    // Closed, Details are out of reach; opened, they show the script a step per line.
-    const disclose = card?.querySelector<HTMLButtonElement>(
-      ".workspace-approval-disclose",
-    )
-    const details = card?.querySelector<HTMLElement>(".workspace-approval-details")
-    expect(disclose?.getAttribute("aria-expanded")).toBe("false")
-    expect(details?.hasAttribute("inert")).toBe(true)
-    await act(async () => disclose?.click())
-    expect(disclose?.getAttribute("aria-expanded")).toBe("true")
-    expect(details?.hasAttribute("inert")).toBe(false)
-    expect(details?.querySelector(".workspace-approval-command")?.textContent).toBe(
+    // The command is always shown, a step per line, with the tool it calls.
+    expect(card?.querySelector(".workspace-approval-command")?.textContent).toBe(
       '$ curl -s "https://tad2026.eventive.org/api"\n  | head -c 1000;\ncurl -I https://tad2026.eventive.org/',
     )
-    expect(details?.querySelector(".workspace-approval-meta dd")?.textContent).toBe(
+    expect(card?.querySelector(".workspace-approval-meta dd")?.textContent).toBe(
       "mcp__nessa__shell",
     )
+    // Short enough to show whole: nothing to unfold.
+    expect(card?.querySelector(".workspace-approval-disclose")).toBeNull()
   })
 
-  it("opens the whole command at once where the gist cannot read every program it runs", async () => {
+  it("shows a script it cannot follow exactly as sent", async () => {
     const approval = conversation.approval
     if (!approval) throw new Error("the sample asks for nothing")
     await shown(fakeSource(), {
       ...conversation,
-      approval: { ...approval, command: 'echo "$(rm -rf ~)"' },
+      approval: { ...approval, command: 'echo "$(echo "a; b")"' },
     })
-    const details = host.querySelector<HTMLElement>(".workspace-approval-details")
+    expect(host.querySelector(".workspace-approval-command")?.textContent).toBe(
+      '$ echo "$(echo "a; b")"',
+    )
+  })
+
+  it("folds a long script to its first lines, and says how many there are", async () => {
+    const approval = conversation.approval
+    if (!approval) throw new Error("the sample asks for nothing")
+    const steps = Array.from({ length: 8 }, (_, step) => `echo ${step}`)
+    await shown(fakeSource(), {
+      ...conversation,
+      approval: { ...approval, command: steps.join("; ") },
+    })
+    const command = () => host.querySelector(".workspace-approval-command")?.textContent
+    const unfold = host.querySelector<HTMLButtonElement>(".workspace-approval-disclose")
+    expect(unfold?.textContent).toBe("Show All 8 Lines")
+    expect(unfold?.getAttribute("aria-expanded")).toBe("false")
+    expect(command()).toBe("$ echo 0;\necho 1;\necho 2;\necho 3;")
+    await act(async () => unfold?.click())
+    expect(unfold?.getAttribute("aria-expanded")).toBe("true")
+    expect(command()).toBe(`$ ${steps.join(";\n")}`)
+  })
+
+  it("starts the next approval folded, whatever the last one showed", async () => {
+    const approval = conversation.approval
+    if (!approval) throw new Error("the sample asks for nothing")
+    const long = Array.from({ length: 8 }, (_, step) => `echo ${step}`).join("; ")
+    const source = fakeSource()
+    await shown(source, {
+      ...conversation,
+      approval: { ...approval, command: long },
+    })
+    await act(async () =>
+      host.querySelector<HTMLButtonElement>(".workspace-approval-disclose")?.click(),
+    )
+    await shown(source, {
+      ...conversation,
+      approval: { ...approval, id: `${approval.id}-next`, command: `${long}; echo 8` },
+    })
     expect(
       host.querySelector(".workspace-approval-disclose")?.getAttribute("aria-expanded"),
-    ).toBe("true")
-    expect(details?.hasAttribute("inert")).toBe(false)
-    expect(details?.querySelector(".workspace-approval-command")?.textContent).toBe(
-      '$ echo "$(rm -rf ~)"',
-    )
+    ).toBe("false")
   })
 
   it("answers an approval once, resting its buttons while the answer is on its way", async () => {
