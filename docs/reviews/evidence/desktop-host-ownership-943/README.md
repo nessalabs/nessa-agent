@@ -1,6 +1,8 @@
 # Desktop host ownership: cloud qualification
 
-Issue #943. Base `839b1d50352c833c888254130456ac1355cccfa6`.
+Issue #943. Initial qualification base `839b1d50352c833c888254130456ac1355cccfa6`.
+The branch subsequently rebased onto `cf551b6a922b9b95b7f5f98b8d9720d7f3138c80`
+(#957); desktop production/test sources and their eight hashes are unchanged.
 [Ordering contract](../../../design/desktop-host-ownership.md).
 `source-sha256.json` identifies the source, including the new Mac-only label test.
 No installed service, Login Items, bundle, credential or conversation was changed.
@@ -58,7 +60,16 @@ open. Older binaries that do not implement the cooperative lease can still
 mutate the service; this change does not claim to exclude them retroactively.
 
 The code changes desktop host reconciliation, not the gateway wire/ACP/MCP or
-rendered UI. `pnpm test:e2e:scripted` was attempted but stopped before browser execution:
-the package-manager prerequisite could not create its default pnpm data directory.
-See `scripted-e2e-prerequisite-failure.log`; the browser result is **unverified**,
-not a pass. It cannot replace the pending native acceptance.
+rendered UI. The initial `pnpm test:e2e:scripted` attempt stopped before browser
+execution because the package manager could not create its default data directory;
+`scripted-e2e-prerequisite-failure.log` preserves that result. A later isolated run
+at `5ac5fe6b` used workspace-local pnpm 11.9.0, built the real fixture gateway,
+and passed all three Chromium checks (MCP apps, gateway window, scripted
+scenarios). All three WebKit checks could not run because six Linux libraries
+were missing. Overall verdict: **could-not-run**, exit 2. Package inspection hit a
+denied system-config read and that setup path stopped without bypass.
+Raw evidence: `/workspace/scratch/nessa-943-scripted-evidence`; log:
+`/tmp/nessa-943-scripted-isolated.log`. Those earlier-head results do not qualify
+the rebased #957 permission scenario; assembled-tree checks are recorded on the
+PR. No browser result replaces pending native acceptance. The legacy-host
+release decision and residual risk are in the ordering contract above.
