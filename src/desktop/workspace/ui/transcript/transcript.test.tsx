@@ -83,18 +83,20 @@ const conversation: TranscriptValue = {
       ],
     },
   ],
-  approval: {
-    id: "ap",
-    command: "cargo test",
-    reason: "Runs the tests.",
-    origin: { kind: "agent" },
-    options: [
-      { id: "deny", label: "Deny", choice: "deny" },
-      { id: "always", label: "Always Allow", choice: "always" },
-      { id: "once", label: "Allow Once", choice: "once" },
-    ],
-    ask: "tool",
-  },
+  approvals: [
+    {
+      id: "ap",
+      command: "cargo test",
+      reason: "Runs the tests.",
+      origin: { kind: "agent" },
+      options: [
+        { id: "deny", label: "Deny", choice: "deny" },
+        { id: "always", label: "Always Allow", choice: "always" },
+        { id: "once", label: "Allow Once", choice: "once" },
+      ],
+      ask: "tool",
+    },
+  ],
 }
 
 async function shown(
@@ -306,7 +308,7 @@ describe("a transcript", () => {
           terminal: { status: "unresolved" },
         },
       ],
-      approval: null,
+      approvals: [],
     })
     const marks = [...host.querySelectorAll<HTMLElement>("[data-turn-terminal]")]
     expect(marks.map((mark) => mark.dataset.turnTerminal)).toEqual([
@@ -332,7 +334,7 @@ describe("a transcript", () => {
   it("shows the gateway's interaction notice in its own words", async () => {
     await shown(fakeSource(), {
       ...conversation,
-      approval: null,
+      approvals: [],
       interactionNotice: "A review was left out of this view.",
     })
     expect(host.querySelector("[data-interaction-notice]")?.textContent).toBe(
@@ -344,7 +346,7 @@ describe("a transcript", () => {
     const source = fakeSource()
     const { store } = await shown(source, {
       ...conversation,
-      approval: null,
+      approvals: [],
       questions: [
         {
           executionId: "e1",
@@ -416,7 +418,7 @@ describe("a transcript", () => {
     source.hold("answerQuestion")
     const { store } = await shown(source, {
       ...conversation,
-      approval: null,
+      approvals: [],
       questions: [
         {
           executionId: "e1",
@@ -456,7 +458,7 @@ describe("a transcript", () => {
     source.hold("answerQuestion")
     const { store } = await shown(source, {
       ...conversation,
-      approval: null,
+      approvals: [],
       questions: [
         {
           executionId: "e1",
@@ -543,7 +545,7 @@ describe("a transcript", () => {
     }
     const { store } = await shown(source, {
       ...conversation,
-      approval: null,
+      approvals: [],
       questions: [question],
     })
     await act(async () => {
@@ -612,7 +614,7 @@ describe("a transcript", () => {
     }
     const { store } = await shown(source, {
       ...conversation,
-      approval: null,
+      approvals: [],
       questions: [question],
     })
     await act(async () => {
@@ -690,7 +692,7 @@ describe("a transcript", () => {
     const open = async (source: ReturnType<typeof fakeSource>) => {
       source.transcripts.set("b", {
         ...conversation,
-        approval: null,
+        approvals: [],
         questions: [question],
       })
       const store = testStore(source)
@@ -730,7 +732,7 @@ describe("a transcript", () => {
     await store.dispatch(loadWorkspace())
     store.dispatch(
       workspaceActions.transcriptLoaded({
-        transcript: { ...conversation, approval: null, questions: [question] },
+        transcript: { ...conversation, approvals: [], questions: [question] },
       }),
     )
     await act(async () => {
@@ -757,7 +759,7 @@ describe("a transcript", () => {
     source.refuse("answerQuestion", "not-waiting")
     await shown(source, {
       ...conversation,
-      approval: null,
+      approvals: [],
       questions: [
         {
           executionId: "e1",
@@ -850,17 +852,19 @@ describe("a transcript", () => {
           app: { server: "evil\u202Egnp.exe", tool: "show" },
         },
       ],
-      approval: {
-        id: "app-ap",
-        command: `${tool} {"text":"keep \u202E this"}`,
-        reason: `An app asks to run ${tool} on evil\u202Egnp.exe`,
-        origin: { kind: "app", server: "evil\u202Egnp.exe", tool },
-        options: [
-          { id: "allow", label: "Allow", choice: "once" },
-          { id: "deny", label: "Deny", choice: "deny" },
-        ],
-        ask: "tool",
-      },
+      approvals: [
+        {
+          id: "app-ap",
+          command: `${tool} {"text":"keep \u202E this"}`,
+          reason: `An app asks to run ${tool} on evil\u202Egnp.exe`,
+          origin: { kind: "app", server: "evil\u202Egnp.exe", tool },
+          options: [
+            { id: "allow", label: "Allow", choice: "once" },
+            { id: "deny", label: "Deny", choice: "deny" },
+          ],
+          ask: "tool",
+        },
+      ],
     })
     const authors = [...host.querySelectorAll<HTMLElement>(".workspace-message-author")]
     expect(authors.map((author) => author.textContent)).toEqual([
@@ -1019,21 +1023,23 @@ describe("a transcript", () => {
   })
 
   it("shows the deadline that will answer a review nobody has answered", async () => {
-    const approval = conversation.approval
+    const approval = conversation.approvals[0]
     if (!approval) throw new Error("the sample asks for nothing")
     await shown(fakeSource(), {
       ...conversation,
-      approval: {
-        ...approval,
-        deadline: {
-          waitMs: 30_000,
-          dueAtMs: 31_000,
-          effect: "deny",
-          reason:
-            "No human answered in time. Continue without this tool or try another approach.",
-          stopsTurn: false,
+      approvals: [
+        {
+          ...approval,
+          deadline: {
+            waitMs: 30_000,
+            dueAtMs: 31_000,
+            effect: "deny",
+            reason:
+              "No human answered in time. Continue without this tool or try another approach.",
+            stopsTurn: false,
+          },
         },
-      },
+      ],
     })
     const deadline = host.querySelector<HTMLElement>("[data-deadline]")
     expect(deadline?.dataset.deadline).toBe("deny")
@@ -1065,19 +1071,95 @@ describe("a transcript", () => {
     ])
   })
 
-  it("answers the clicked option when two allow the same way", async () => {
+  it("offers no answer on an approval whose review is still being read, and offers reading it again when it could not be", async () => {
     const source = fakeSource()
-    const approval = conversation.approval
+    const approval = conversation.approvals[0]
     if (!approval) throw new Error("the sample asks for nothing")
     await shown(source, {
       ...conversation,
-      approval: {
-        ...approval,
-        options: [
-          { id: "ship", label: "Ship it", choice: "once" },
-          { id: "run", label: "Run it", choice: "once" },
-        ],
-      },
+      approvals: [{ ...approval, loading: "reading" }],
+    })
+    expect(host.querySelector(".workspace-approval-loading")?.textContent).toBe(
+      "Loading this review before you can answer…",
+    )
+    expect(buttons().every(([, disabled]) => disabled)).toBe(true)
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>(".workspace-approval [data-primary]")?.click()
+    })
+    expect(source.calls.filter((call) => call[0] === "approve")).toEqual([])
+    await shown(source, {
+      ...conversation,
+      approvals: [{ ...approval, loading: "failed" }],
+    })
+    expect(host.querySelector(".workspace-approval-loading")?.textContent).toContain(
+      "This review could not be loaded.",
+    )
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>(".workspace-approval-retry")?.click()
+    })
+    expect(source.calls.filter((call) => call[0] === "retryReview")).toEqual([
+      ["retryReview", conversation.sessionId, approval.id],
+    ])
+  })
+
+  it("shows a card for every review, in order, each loading and answered on its own", async () => {
+    const source = fakeSource()
+    source.hold("approve")
+    const approval = conversation.approvals[0]
+    if (!approval) throw new Error("the sample asks for nothing")
+    // Three reviews at once: the first could not be loaded, and holds back
+    // neither of the others.
+    await shown(source, {
+      ...conversation,
+      approvals: [
+        { ...approval, id: "first", loading: "failed" },
+        { ...approval, id: "second", command: "cargo build" },
+        { ...approval, id: "third", command: "cargo clippy" },
+      ],
+    })
+    const cards = () => [...host.querySelectorAll<HTMLElement>(".workspace-approval")]
+    expect(cards()).toHaveLength(3)
+    expect(
+      cards()[0].querySelector(".workspace-approval-loading")?.textContent,
+    ).toContain("This review could not be loaded.")
+    const allow = (card: HTMLElement) =>
+      card.querySelector<HTMLButtonElement>("[data-primary]")
+    expect(allow(cards()[0])?.disabled).toBe(true)
+    await act(async () => allow(cards()[1])?.click())
+    // The second's answer on its way rests only its own card.
+    expect(allow(cards()[1])?.disabled).toBe(true)
+    expect(allow(cards()[2])?.disabled).toBe(false)
+    await act(async () => allow(cards()[2])?.click())
+    await act(async () =>
+      cards()[0].querySelector<HTMLButtonElement>(".workspace-approval-retry")?.click(),
+    )
+    expect(
+      source.calls
+        .filter((call) => call[0] === "approve" || call[0] === "retryReview")
+        .map((call) => [call[0], call[2]]),
+    ).toEqual([
+      ["approve", "second"],
+      ["approve", "third"],
+      ["retryReview", "first"],
+    ])
+    await act(async () => source.release("approve"))
+  })
+
+  it("answers the clicked option when two allow the same way", async () => {
+    const source = fakeSource()
+    const approval = conversation.approvals[0]
+    if (!approval) throw new Error("the sample asks for nothing")
+    await shown(source, {
+      ...conversation,
+      approvals: [
+        {
+          ...approval,
+          options: [
+            { id: "ship", label: "Ship it", choice: "once" },
+            { id: "run", label: "Run it", choice: "once" },
+          ],
+        },
+      ],
     })
     const run = [...host.querySelectorAll("button")].find(
       (button) => button.textContent === "Run it",
@@ -1100,17 +1182,19 @@ describe("a transcript", () => {
     await act(async () => root.render(<></>))
     await shown(fakeSource(), {
       ...conversation,
-      approval: {
-        id: "app-ap",
-        command: "app_delete_row {}",
-        reason: "An app asks to run app_delete_row on mcptest",
-        origin: { kind: "app", server: "mcptest", tool: "app_delete_row" },
-        options: [
-          { id: "allow", label: "Allow", choice: "once" },
-          { id: "deny", label: "Deny", choice: "deny" },
-        ],
-        ask: "tool",
-      },
+      approvals: [
+        {
+          id: "app-ap",
+          command: "app_delete_row {}",
+          reason: "An app asks to run app_delete_row on mcptest",
+          origin: { kind: "app", server: "mcptest", tool: "app_delete_row" },
+          options: [
+            { id: "allow", label: "Allow", choice: "once" },
+            { id: "deny", label: "Deny", choice: "deny" },
+          ],
+          ask: "tool",
+        },
+      ],
     })
     expect(head()).toBe("The mcptest app wants to run app_delete_row")
     expect(head()).not.toContain(agent)
@@ -1127,17 +1211,19 @@ describe("a transcript", () => {
     const source = fakeSource()
     await shown(source, {
       ...conversation,
-      approval: {
-        id: "app-ap",
-        command: "app_delete_row {}",
-        reason: "An app asks to run app_delete_row on mcptest",
-        origin: { kind: "app", server: "mcptest", tool: "app_delete_row" },
-        options: [
-          { id: "allow", label: "Allow", choice: "once" },
-          { id: "deny", label: "Deny", choice: "deny" },
-        ],
-        ask: "tool",
-      },
+      approvals: [
+        {
+          id: "app-ap",
+          command: "app_delete_row {}",
+          reason: "An app asks to run app_delete_row on mcptest",
+          origin: { kind: "app", server: "mcptest", tool: "app_delete_row" },
+          options: [
+            { id: "allow", label: "Allow", choice: "once" },
+            { id: "deny", label: "Deny", choice: "deny" },
+          ],
+          ask: "tool",
+        },
+      ],
     })
     // Deny stays at the left; the review's allow is the primary button, in the review's words.
     expect(buttons()).toEqual([
@@ -1168,17 +1254,19 @@ describe("a transcript", () => {
     ).toBe("Claude wants to run a command")
     await shown(fakeSource(), {
       ...conversation,
-      approval: {
-        id: "app-message",
-        command: 'show_rows {"text":"Plot May next to April"}',
-        reason: "The show_rows app on mcptest asks to send a message as you",
-        origin: app,
-        options: [
-          { id: "allow", label: "Allow", choice: "once" },
-          { id: "deny", label: "Deny", choice: "deny" },
-        ],
-        ask: "message",
-      },
+      approvals: [
+        {
+          id: "app-message",
+          command: 'show_rows {"text":"Plot May next to April"}',
+          reason: "The show_rows app on mcptest asks to send a message as you",
+          origin: app,
+          options: [
+            { id: "allow", label: "Allow", choice: "once" },
+            { id: "deny", label: "Deny", choice: "deny" },
+          ],
+          ask: "message",
+        },
+      ],
     })
     const card = host.querySelector<HTMLElement>(".workspace-approval")
     expect(card?.querySelector(".workspace-approval-head")?.textContent).toBe(

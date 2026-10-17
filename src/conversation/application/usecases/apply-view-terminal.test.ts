@@ -35,6 +35,8 @@ const providerFailure = (revision: string): ConversationView => ({
     },
   ],
   pending: [],
+  reviewsWaiting: [],
+  questionsWaiting: [],
   permissions: [],
   tools: [],
   capabilities: {

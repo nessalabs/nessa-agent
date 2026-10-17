@@ -778,6 +778,14 @@ while True:
                 update({"sessionUpdate": "tool_call", **tool("Write")})
                 call = {key: value for key, value in tool().items() if key != "title"}
                 options = [{"optionId": "always", "kind": "not_a_kind", "name": "Always"}]
+            elif mode == "declined-long-label":
+                # A choice longer than a review may carry: no surface could
+                # show it, so it is refused at once rather than left waiting.
+                update({"sessionUpdate": "tool_call", **tool("Write")})
+                call = {key: value for key, value in tool().items() if key != "title"}
+                options = [
+                    {"optionId": "approve-one", "kind": "allow_once", "name": "x" * 2049},
+                    {"optionId": "deny-one", "kind": "reject_once", "name": "Deny once"}]
             elif mode == "declined-write-failure":
                 # Nothing can be written back: the refusal cannot reach the
                 # agent, and that has to be recorded as what it is.

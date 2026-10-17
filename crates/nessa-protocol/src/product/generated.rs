@@ -616,6 +616,7 @@ pub struct ConversationPermissionDeadline {
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConversationPermission {
+    pub review: String,
     pub execution_id: String,
     pub permission_id: String,
     pub tool_id: String,
@@ -627,6 +628,19 @@ pub struct ConversationPermission {
     pub arguments_json: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deadline: Option<ConversationPermissionDeadline>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationReviewEntry {
+    pub review: String,
+    pub origin: String,
+    pub tool_name: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationQuestionEntry {
+    pub question: String,
+    pub message: String,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -663,7 +677,7 @@ pub struct ConversationView {
     pub server_now_ms: u64,
     pub messages: Vec<ConversationMessage>,
     pub pending: Vec<ConversationPending>,
-    pub permissions: Vec<ConversationPermission>,
+    pub permissions: Vec<ConversationReviewEntry>,
     pub tools: Vec<ConversationTool>,
     pub capabilities: ConversationCapabilities,
     pub lifecycle: ConversationLifecycle,
@@ -682,7 +696,7 @@ pub struct ConversationView {
     pub unreadable_truncated: bool,
     #[serde(deserialize_with = "Option::deserialize")]
     pub title: Option<String>,
-    pub questions: Vec<ConversationQuestion>,
+    pub questions: Vec<ConversationQuestionEntry>,
     pub approval_mode: ApprovalMode,
     pub approval_modes: Vec<ApprovalModeChoice>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -931,8 +945,39 @@ pub struct ConversationAnswerParams {
     pub conversation_id: String,
     pub request_id: String,
     pub execution_id: String,
+    pub review: String,
     pub permission_id: String,
     pub option_id: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationPermissionReviewParams {
+    pub conversation_id: String,
+    pub review: String,
+    pub offset: u64,
+    pub max_bytes: u64,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationQuestionReviewParams {
+    pub conversation_id: String,
+    pub question: String,
+    pub offset: u64,
+    pub max_bytes: u64,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationPermissionReviewResult {
+    pub offset: u64,
+    pub total_bytes: u64,
+    pub data: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationQuestionReviewResult {
+    pub offset: u64,
+    pub total_bytes: u64,
+    pub data: String,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -940,6 +985,7 @@ pub struct ConversationCancelParams {
     pub conversation_id: String,
     pub request_id: String,
     pub execution_id: String,
+    pub review: String,
     pub permission_id: String,
     pub reason: String,
 }
@@ -1668,6 +1714,7 @@ pub struct ConversationAsked {
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConversationQuestion {
+    pub question: String,
     pub execution_id: String,
     pub question_id: String,
     pub message: String,
@@ -1687,6 +1734,7 @@ pub struct ConversationAnswerQuestionParams {
     pub conversation_id: String,
     pub request_id: String,
     pub execution_id: String,
+    pub question: String,
     pub question_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub choices: Option<Vec<ConversationQuestionChoice>>,
@@ -2769,6 +2817,14 @@ pub const MAX_RECORD_RESPONSE_BYTES: usize = 131072;
 /// Published bound from the product schema.
 pub const MAX_SHARE_PAGE: usize = 8;
 /// Published bound from the product schema.
+pub const MAX_REVIEW_RANGE_BYTES: usize = 32768;
+/// Published bound from the product schema.
+pub const MAX_LISTED_REVIEWS: usize = 144;
+/// Published bound from the product schema.
+pub const MAX_REVIEW_ENTRY_TOOL_NAME_BYTES: usize = 64;
+/// Published bound from the product schema.
+pub const MAX_QUESTION_ENTRY_MESSAGE_BYTES: usize = 48;
+/// Published bound from the product schema.
 pub const MAX_MCP_CONTEXT_BYTES: usize = 8192;
 /// Published bound from the product schema.
 pub const MIN_MCP_MESSAGE_CHARACTERS: usize = 1;
@@ -2813,6 +2869,8 @@ pub mod product_method {
     pub const CONVERSATION_MESSAGE: &str = "conversation.message";
     pub const CONVERSATION_MESSAGE_STATUS: &str = "conversation.messageStatus";
     pub const CONVERSATION_ANSWER: &str = "conversation.answer";
+    pub const CONVERSATION_PERMISSION_REVIEW: &str = "conversation.permissionReview";
+    pub const CONVERSATION_QUESTION_REVIEW: &str = "conversation.questionReview";
     pub const CONVERSATION_ANSWER_QUESTION: &str = "conversation.answerQuestion";
     pub const CONVERSATION_CANCEL: &str = "conversation.cancel";
     pub const CONVERSATION_CLOSE: &str = "conversation.close";
@@ -3061,7 +3119,7 @@ pub fn wire_shape_product_session_ready(value: &Value) -> bool {
         }) && object.get("methods").is_some_and(|field| {
             let _ = field;
             field.as_array().is_some_and(|items| {
-                items.len() <= 75
+                items.len() <= 77
                     && items.iter().all(|item| {
                         let _ = item;
                         item.is_string()
@@ -3105,6 +3163,8 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "conversation.message",
     "conversation.messageStatus",
     "conversation.answer",
+    "conversation.permissionReview",
+    "conversation.questionReview",
     "conversation.answerQuestion",
     "conversation.cancel",
     "conversation.close",
@@ -3217,6 +3277,8 @@ pub fn action_for_method(method: &str) -> Option<&'static str> {
         | "conversation.message"
         | "conversation.messageStatus"
         | "conversation.answer"
+        | "conversation.permissionReview"
+        | "conversation.questionReview"
         | "conversation.answerQuestion"
         | "conversation.cancel"
         | "conversation.close"

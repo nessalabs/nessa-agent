@@ -32,6 +32,8 @@ import {
   type SessionView,
 } from "../../model/session-groups"
 import type { WorkspaceFailureReason } from "../../model/failure"
+import type { AccessChoice, AccessMode } from "../../model/access"
+import { accessOf } from "../../application/usecases/access"
 import {
   agentsGlance,
   type AgentsGlance,
@@ -40,7 +42,7 @@ import {
 } from "../../model/overview/agents-glance"
 import type { AgentsFilter } from "../../model/overview/filter"
 import type { Draft } from "../../model/session-lifecycle"
-import type { Message, Transcript } from "../../model/transcript"
+import { atWork, type Message, type Transcript } from "../../model/transcript"
 import {
   channelOf,
   canChooseModel,
@@ -53,6 +55,7 @@ import {
   widgetIn,
   windowWidget,
   contentKind,
+  answerOf,
   type Answer,
   type ContentKind,
   type Chrome,
@@ -151,8 +154,28 @@ export const selectComposerText = (state: Root, sessionId: string): string =>
 export const selectNextModel = (state: Root, sessionId: string): ModelRef | undefined =>
   modelForNextTurn(state.workspace, sessionId)
 
+/** Whether a session's agent is at work on a turn its composer can stop (`atWork`). */
+export const selectAtWork = (state: Root, sessionId: string): boolean =>
+  atWork(selectTranscript(state, sessionId))
+
 export const selectCanChooseModel = (state: Root, sessionId: string): boolean =>
   canChooseModel(state.workspace, sessionId)
+
+/** The access a session's shield shows (`model/access.ts`): the choice while it is newer, else the source's. */
+export const selectAccess = (state: Root, sessionId: string): AccessMode =>
+  accessOf(state.workspace, sessionId).mode
+
+/**
+ * The choice of access the composer has something to say about, as held: one
+ * pending until the agent stops, or one the source refused. Absent otherwise.
+ */
+export const selectAccessNotice = (
+  state: Root,
+  sessionId: string,
+): AccessChoice | undefined => {
+  const choice = accessOf(state.workspace, sessionId).choice
+  return choice?.state === "pending" || choice?.state === "refused" ? choice : undefined
+}
 
 /** Whether a message the person sent to a session is still on its way. */
 export const selectSending = (state: Root, sessionId: string): boolean =>
@@ -176,10 +199,7 @@ export const selectAnswer = (
   state: Root,
   sessionId: string,
   approvalId: string,
-): Answer | undefined => {
-  const answer = entry(state.workspace.answers, sessionId)
-  return answer?.approvalId === approvalId ? answer : undefined
-}
+): Answer | undefined => answerOf(state.workspace, sessionId, approvalId)
 
 export const selectTranscriptFailure = (
   state: Root,

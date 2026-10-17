@@ -19,6 +19,10 @@ import {
   type ConnectionState,
   type ConversationApi,
   type ConversationListResult,
+  type ConversationPermission,
+  type ConversationQuestion,
+  type ConversationQuestionEntry,
+  type ConversationReviewEntry,
   type ConversationSummary,
   type ConversationView,
   type ConversationViewCursor,
@@ -63,6 +67,11 @@ type Method =
   | "send"
   | "answer"
   | "answerQuestion"
+  | "permissionReview"
+  | "questionReview"
+  | "stop"
+  | "withdraw"
+  | "setApprovalMode"
   | "archive"
   | "permissionRules"
   | "revokePermissionRule"
@@ -139,21 +148,123 @@ export function note(
   }
 }
 
+/**
+ * What a review or question shows, its key optional: a fake view lists it
+ * under the key it makes for it (`reviewKey`, `questionKey`).
+ */
+export type Unkeyed<T extends { review: string } | { question: string }> = Omit<
+  T,
+  "review" | "question"
+> &
+  Partial<Pick<T, keyof T & ("review" | "question")>>
+
 /** The gateway's time each fake view is stamped with, unless changed. */
 export const GATEWAY_NOW_MS = 1_700_000_000_000
 
 /** A conversation view: what a view frame says, empty unless changed. */
+/**
+ * The key a fake view lists `permission` under: the same for the same
+ * execution and review, so a test can name the approval before the view.
+ */
+export function reviewKey(permission: Unkeyed<ConversationPermission>): string {
+  return keyOf([permission.executionId, permission.permissionId])
+}
+
+/** 32 hex digits, the same for the same `seed`. */
+function keyOf(seed: readonly string[]): string {
+  let key = ""
+  for (const start of [0x811c9dc5, 0x01000193, 0x2545f491, 0x9e3779b9]) {
+    let hash = start
+    for (const char of JSON.stringify(seed))
+      hash = Math.imul(hash ^ char.charCodeAt(0), 0x01000193) >>> 0
+    key += hash.toString(16).padStart(8, "0")
+  }
+  return key
+}
+
+/**
+ * The key a fake view lists `question` under unless it names its own: the
+ * same for the same execution and ask, so a test can name it before the view.
+ */
+export function questionKey(
+  question: Pick<ConversationQuestion, "executionId" | "questionId">,
+): string {
+  return keyOf(["question", question.executionId, question.questionId])
+}
+
+/** How a fake view lists `question`. */
+export function questionEntry(
+  question: Unkeyed<ConversationQuestion>,
+): ConversationQuestionEntry {
+  return {
+    question: question.question ?? questionKey(question),
+    message: question.message.slice(0, 48),
+  }
+}
+
+/** All the question a fake view lists under `key` asks. */
+export function shownQuestion(key: string): ConversationQuestion | undefined {
+  return shownQuestions.get(key)
+}
+
+/** How a fake view lists `permission`. */
+export function reviewEntry(
+  permission: Unkeyed<ConversationPermission>,
+): ConversationReviewEntry {
+  return {
+    review: reviewKey(permission),
+    origin: permission.origin.kind,
+    toolName: permission.toolName,
+  }
+}
+
+// Every review a fake view was built with, by its key: what any fake
+// gateway's `permissionReview` answers with while a view lists it.
+const shownReviews = new Map<string, ConversationPermission>()
+// And every question, which `questionReview` answers with.
+const shownQuestions = new Map<string, ConversationQuestion>()
+
+/** What the review a fake view lists under `key` shows. */
+export function shownReview(key: string): ConversationPermission | undefined {
+  return shownReviews.get(key)
+}
+
+/**
+ * A gateway view. Its `permissions` may be what each review shows, and its
+ * `questions` all each question asks: the view lists each by its key, and
+ * `permissionReview` or `questionReview` answers with it.
+ */
 export function view(
   conversationId: string,
-  change: Partial<ConversationView> = {},
+  {
+    permissions = [],
+    questions = [],
+    ...change
+  }: Omit<Partial<ConversationView>, "permissions" | "questions"> & {
+    permissions?: readonly (ConversationReviewEntry | Unkeyed<ConversationPermission>)[]
+    questions?: readonly (ConversationQuestionEntry | Unkeyed<ConversationQuestion>)[]
+  } = {},
 ): ConversationView {
+  const entries = permissions.map((listed) => {
+    if (!("permissionId" in listed)) return listed
+    const entry = reviewEntry(listed)
+    shownReviews.set(entry.review, { ...listed, review: entry.review })
+    return entry
+  })
+  const asked = questions.map((listed) => {
+    if (!("questionId" in listed)) return listed
+    const entry = questionEntry(listed)
+    shownQuestions.set(entry.question, { ...listed, question: entry.question })
+    return entry
+  })
   return {
+    permissions: entries,
+    questions: asked,
     conversationId,
     revision: "r1",
     serverNowMs: GATEWAY_NOW_MS,
     messages: [],
     pending: [],
-    permissions: [],
     tools: [],
     artifacts: [],
     notes: [],
@@ -184,7 +295,6 @@ export function view(
     queueComplete: true,
     transcriptState: "complete",
     title: null,
-    questions: [],
     approvalMode: "ask",
     approvalModes: [{ id: "ask", name: "Ask", description: "Ask before tools." }],
     ...change,
@@ -197,6 +307,17 @@ export interface FakeGateway {
   readonly calls: Call[]
   readonly rows: Map<string, ConversationSummary>
   readonly views: Map<string, ConversationView>
+  /**
+   * The execution each conversation's peek says is active, which a stop
+   * names. Apart from the views on purpose: a view's message can still say
+   * running after its turn stopped.
+   */
+  readonly active: Map<string, string>
+  /**
+   * What each waiting review shows, by the key its view lists it under, that
+   * `permissionReview` answers with, as the review's live owner holds it.
+   */
+  readonly reviews: Map<string, Unkeyed<ConversationPermission>>
   /** Whether a list names every conversation. */
   complete: boolean
   /**
@@ -267,6 +388,8 @@ export function fakeGateway(
   const calls: FakeGateway["calls"] = []
   const rows = new Map<string, ConversationSummary>()
   const views = new Map<string, ConversationView>()
+  const active = new Map<string, string>()
+  const reviews = new Map<string, ConversationPermission>()
   const overrides = new Map<Exclude<Method, "answer">, Behaviour[]>()
   const answerOverrides: AnswerBehaviour[] = []
   const observers = new Set<(state: ConnectionState) => void>()
@@ -408,7 +531,13 @@ export function fakeGateway(
         answer("create", [options], () => {
           const conversationId = options?.conversationId ?? ""
           if (!views.has(conversationId))
-            views.set(conversationId, view(conversationId, { revision: "created" }))
+            views.set(
+              conversationId,
+              view(conversationId, {
+                revision: "created",
+                ...(options?.approvalMode ? { approvalMode: options.approvalMode } : {}),
+              }),
+            )
           return { conversationId }
         }) as never,
       submit: (prepared) => {
@@ -437,6 +566,28 @@ export function fakeGateway(
         const behaviour = answerOverrides.shift()
         return behaviour ? behaviour(normal, args) : Promise.resolve().then(normal)
       },
+      permissionReview: (...args) =>
+        answer("permissionReview", args, () => {
+          const [conversationId, key] = args
+          const review = reviews.get(key) ?? shownReviews.get(key)
+          const listed = views
+            .get(conversationId)
+            ?.permissions.some((entry) => entry.review === key)
+          if (review === undefined || !listed)
+            throw new NessaRpcError("stale_permission", "No such review is waiting")
+          return { ...review, review: key }
+        }) as never,
+      questionReview: (...args) =>
+        answer("questionReview", args, () => {
+          const [conversationId, key] = args
+          const question = shownQuestions.get(key)
+          const listed = views
+            .get(conversationId)
+            ?.questions.some((entry) => entry.question === key)
+          if (question === undefined || !listed)
+            throw new NessaRpcError("stale_permission", "No such question is waiting")
+          return question
+        }) as never,
       answerQuestion: (...args) => {
         calls.push({ method: "answerQuestion", args })
         const normal = (): AnswerQuestionResult => {
@@ -446,9 +597,7 @@ export function fakeGateway(
             views.set(target.conversationId, {
               ...current,
               questions: current.questions.filter(
-                (question) =>
-                  question.executionId !== target.executionId ||
-                  question.questionId !== target.questionId,
+                (question) => question.question !== target.question,
               ),
             })
           return { requestId: "answer-question", applied: true }
@@ -456,6 +605,33 @@ export function fakeGateway(
         const behaviour = overrides.get("answerQuestion")?.shift()
         return (behaviour ? behaviour(normal) : Promise.resolve().then(normal)) as never
       },
+      // A queued turn named is withdrawn: it ends cancelled and never runs.
+      stop: (...args) =>
+        answer("withdraw", args, () => {
+          const [target] = args
+          const current = views.get(target.conversationId)
+          if (current)
+            views.set(target.conversationId, {
+              ...current,
+              messages: current.messages.map((turn) =>
+                turn.executionId === target.executionId
+                  ? { ...turn, status: "cancelled" }
+                  : turn,
+              ),
+              pending: current.pending.filter(
+                (waiting) => waiting.executionId !== target.executionId,
+              ),
+            })
+          return { requestId: "withdraw", stage: "accepted" }
+        }) as never,
+      // Committed as asked; the view says it from now on.
+      setApprovalMode: (...args) =>
+        answer("setApprovalMode", args, () => {
+          const [conversationId, mode] = args
+          const current = views.get(conversationId)
+          if (current) views.set(conversationId, { ...current, approvalMode: mode })
+          return { requestId: "set-approval-mode", mode }
+        }) as never,
       archive: (...args) =>
         answer("archive", args, () => {
           rows.delete(args[0])
@@ -469,6 +645,29 @@ export function fakeGateway(
           applied: false,
         })) as never,
     },
+    // The peek names the active execution; it ends cancelled, with what it waited on.
+    stopThread: (...args) =>
+      answer("stop", args, () => {
+        const [conversationId] = args
+        const executionId = active.get(conversationId)
+        if (executionId === undefined) return { outcome: "no_active_turn" as const }
+        active.delete(conversationId)
+        const current = views.get(conversationId)
+        if (current)
+          views.set(conversationId, {
+            ...current,
+            messages: current.messages.map((turn) =>
+              turn.executionId === executionId ? { ...turn, status: "cancelled" } : turn,
+            ),
+            permissions: current.permissions.filter(
+              (entry) => reviews.get(entry.review)?.executionId !== executionId,
+            ),
+            questions: current.questions.filter(
+              (asked) => shownQuestions.get(asked.question)?.executionId !== executionId,
+            ),
+          })
+        return { requestId: "stop", stage: "accepted" }
+      }) as never,
     subscriptions: {
       view: (conversationId, handlers, { signal, ...options } = {}) =>
         gated(`view:${conversationId}`, signal, () => {
@@ -539,6 +738,8 @@ export function fakeGateway(
     calls,
     rows,
     views,
+    active,
+    reviews,
     once(method: Exclude<Method, "answer">, behaviour: Behaviour) {
       overrides.set(method, [...(overrides.get(method) ?? []), behaviour])
     },

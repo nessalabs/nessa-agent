@@ -1,8 +1,9 @@
 import type { ModelRef } from "./workspace-index"
 import type { FailureDiagnostic } from "./failure"
+import type { SessionAccess } from "./access"
 /**
  * A session's conversation: messages from the person and the agent, what the
- * agent is doing now, and the approval it is waiting on, if any. The agent's
+ * agent is doing now, and the approvals it is waiting on, if any. The agent's
  * messages are made of parts — prose, the steps it took, code, lists — and
  * the rules for reading them (grouping steps, inline code and emphasis, a
  * title from a first message) live here, not in the views.
@@ -122,6 +123,18 @@ export interface TranscriptAsked {
 
 /** A question the agent is waiting on. Identity is the execution and the ask. */
 export interface TranscriptQuestion {
+  /**
+   * The source's own key for this question, when it has one: an answer names
+   * it, so a question asked again under the same identities is never
+   * answered by mistake.
+   */
+  readonly key?: string
+  /**
+   * Present while all it asks is still being read (`reading`), or could not
+   * be (`failed`): it offers no answer, and its identities and fields are
+   * not known yet.
+   */
+  readonly loading?: "reading" | "failed"
   readonly executionId: string
   readonly questionId: string
   readonly message: string
@@ -305,6 +318,13 @@ export interface ApprovalDeadline {
 export interface Approval {
   readonly id: string
   readonly command: string
+  /**
+   * Present while what the review shows is still being read from its live
+   * owner ("reading"), or could not be and is being read again ("failed"):
+   * `command` is then only the tool's name, and no answer is offered until
+   * it is read whole (`shownWhole`).
+   */
+  readonly loading?: "reading" | "failed"
   readonly reason: string
   readonly origin: ApprovalOrigin
   /** The answers this review offers, in the order it offers them. */
@@ -321,6 +341,11 @@ export interface Approval {
 /** Whether `approval` offers `choice`. A button and an answer both ask this. */
 export function offersChoice(approval: Approval, choice: ApprovalChoice): boolean {
   return approval.options.some((option) => option.choice === choice)
+}
+
+/** Whether `approval` can be answered: all of what it allows is shown. */
+export function shownWhole(approval: Approval): boolean {
+  return approval.loading === undefined
 }
 
 /**
@@ -369,7 +394,12 @@ export interface Transcript {
   readonly sessionId: string
   readonly messages: readonly Message[]
   readonly activity: Activity | null
-  readonly approval: Approval | null
+  /**
+   * Every review the agent waits on, in the order the source lists them.
+   * Each is shown and answered on its own: one that cannot be read yet
+   * (`loading`) holds back none of the others.
+   */
+  readonly approvals: readonly Approval[]
   /**
    * What the bounded view left out (`historyExtent`). Absent when the source
    * did not say, or said this is the whole confirmed history.
@@ -393,13 +423,35 @@ export interface Transcript {
   readonly agent?: string
   /** Where its agent runs; absent until the gateway has recorded a lease. */
   readonly lease?: TranscriptLease
+  /** The approval preset its agent runs at; absent where the source did not say (`access.ts`). */
+  readonly access?: SessionAccess
   /** The source's count of changes to this conversation; see `revision.ts`. */
   readonly revision: number
 }
 
+/**
+ * Whether the conversation's agent is at work on a turn, as the source
+ * reported it: thinking or running a step (`activity`), writing a reply
+ * (`working`), or holding its turn on the person's answer (an approval or a
+ * question). This is what Stop is offered on, so it reads every one of the
+ * source's marks of a turn in progress, and nothing else: not the session
+ * list's status, not whether the view left a review out.
+ */
+export function atWork(transcript: Transcript | undefined): boolean {
+  if (!transcript) return false
+  return (
+    transcript.activity !== null ||
+    transcript.approvals.length > 0 ||
+    (transcript.questions?.length ?? 0) > 0 ||
+    transcript.messages.some(
+      (message) => "working" in message && message.working === true,
+    )
+  )
+}
+
 /** A conversation with nothing in it, before the source has said anything of it. */
 export function emptyTranscript(sessionId: string): Transcript {
-  return { sessionId, messages: [], activity: null, approval: null, revision: 0 }
+  return { sessionId, messages: [], activity: null, approvals: [], revision: 0 }
 }
 
 /**

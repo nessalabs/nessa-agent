@@ -39,16 +39,21 @@ use nessa_protocol::conversation::domain::{
     ConversationApprovalMode, ConversationId, ConversationModelId, ConversationSummary,
 };
 use nessa_protocol::conversation::{
-    projection::{bound_view, clipped, CommittedCursor, Projection, MAX_TEXT},
+    projection::{
+        agent_question, agent_review, bound_view, clipped, question_entry, review_entry,
+        CommittedCursor, Projection, MAX_TEXT,
+    },
     tool_uis::{McpToolUis, NoMcpToolUis},
     view::{
         ConversationApprovalModeChangeStatus, ConversationApprovalModeChangeView,
         ConversationAttachmentEvidenceFailure, ConversationAttachmentEvidenceFailureCode,
         ConversationCapabilities, ConversationDisposition, ConversationLifecycle,
         ConversationLifecyclePhase, ConversationList, ConversationListEntry,
-        ConversationObservation, ConversationObservationCursor, ConversationReorderOutcome,
-        ConversationRuntime, ConversationSelectionView, ConversationStartupFailure,
-        ConversationStartupFailureCode, ConversationView, SubmissionReceipt,
+        ConversationObservation, ConversationObservationCursor, ConversationPermission,
+        ConversationQuestion, ConversationQuestionEntry, ConversationReorderOutcome,
+        ConversationReviewEntry, ConversationReviewKind, ConversationRuntime,
+        ConversationSelectionView, ConversationStartupFailure, ConversationStartupFailureCode,
+        ConversationView, SubmissionReceipt,
     },
 };
 use nessa_protocol::product_contract::generated::MAX_MCP_MESSAGE_BYTES;
@@ -993,31 +998,108 @@ pub struct QuestionChoiceInput {
     pub own_words: Option<String>,
 }
 
-/// Reviews `agent` is still waiting on, as execution id and permission id.
-///
-/// A saved deadline is restored unarmed. The card counts one of these down,
-/// because this process's worker is still holding it.
-/// `a_saved_deadline_counts_down_while_this_process_holds_the_review`.
-fn reviews_this_process_holds(
+/// The reviews `agent`'s live invocation waits on, oldest first, as a view
+/// lists them. The live owner says which wait and what each shows; a review
+/// is listed once its request is on record in `snapshot` exactly as it waits
+/// (the SDK admits an answer only to a recorded request), and not if the
+/// owner cannot show it as what it is ([`agent_review`]). An unreadable
+/// owner lists none.
+fn agent_review_entries(
     agent: &Agent,
     snapshot: Option<&SessionSnapshot>,
-) -> HashSet<(String, String)> {
-    let mut holding = HashSet::new();
-    let Some(snapshot) = snapshot else {
-        return holding;
-    };
-    for record in &snapshot.invocations {
-        let execution = &record.request.execution_id;
+) -> Vec<ConversationReviewEntry> {
+    let reviews = agent.pending_reviews().unwrap_or_default();
+    if reviews.is_empty() {
+        return Vec::new();
+    }
+    let mut recorded = HashMap::new();
+    for record in snapshot.map_or(&[][..], |snapshot| &snapshot.invocations[..]) {
         for event in &record.events {
-            let ExecutionUpdate::PermissionRequested { id, .. } = event.update() else {
-                continue;
-            };
-            if agent.pending_permission(execution, id).unwrap_or(false) {
-                holding.insert((execution.as_str().to_owned(), id.as_str().to_owned()));
+            if let ExecutionUpdate::PermissionRequested {
+                id,
+                tool_id,
+                input,
+                options,
+                ..
+            } = event.update()
+            {
+                recorded.insert(
+                    (&record.request.execution_id, id),
+                    (tool_id, input, options),
+                );
             }
         }
     }
-    holding
+    reviews
+        .iter()
+        .filter(|review| {
+            recorded
+                .get(&(&review.execution_id, &review.id))
+                .is_some_and(|(tool, input, options)| {
+                    **tool == review.tool_id
+                        && **options == review.options
+                        && input.name == review.content.tool_name()
+                        && input.arguments_json == review.content.arguments_json()
+                })
+        })
+        .filter(|review| agent_review(review).is_some())
+        .map(|review| {
+            review_entry(
+                &review.content.key(),
+                ConversationReviewKind::Harness,
+                review.content.tool_name(),
+            )
+        })
+        .collect()
+}
+
+/// The questions `agent`'s live invocation waits on, oldest first, as a view
+/// lists them. The live owner says which wait and what each asks; one is
+/// listed once its ask is on record in `snapshot` exactly as it waits (the
+/// SDK admits an answer only to a recorded ask). An unreadable owner lists
+/// none.
+fn agent_question_entries(
+    agent: &Agent,
+    snapshot: Option<&SessionSnapshot>,
+) -> Vec<ConversationQuestionEntry> {
+    let questions = agent.pending_questions().unwrap_or_default();
+    if questions.is_empty() {
+        return Vec::new();
+    }
+    let mut recorded = HashMap::new();
+    for record in snapshot.map_or(&[][..], |snapshot| &snapshot.invocations[..]) {
+        for event in &record.events {
+            if let ExecutionUpdate::QuestionAsked { id, question } = event.update() {
+                recorded.insert((&record.request.execution_id, id), question);
+            }
+        }
+    }
+    questions
+        .iter()
+        .filter(|pending| {
+            recorded
+                .get(&(&pending.execution_id, &pending.id))
+                .is_some_and(|asked| **asked == *pending.question)
+        })
+        .map(|pending| question_entry(&pending.key(), pending.question.message()))
+        .collect()
+}
+
+/// The range of `shown`'s UTF-8 JSON from `offset`, at most `max_bytes`,
+/// and its whole length. `InvalidInput` for an offset past its end.
+fn range_of(
+    shown: &impl serde::Serialize,
+    offset: u64,
+    max_bytes: usize,
+) -> Result<(Vec<u8>, u64), ConversationError> {
+    let bytes = serde_json::to_vec(shown).map_err(|_| ConversationError::InvalidInput)?;
+    let total = bytes.len() as u64;
+    if offset > total || (offset == total && total != 0) {
+        return Err(ConversationError::InvalidInput);
+    }
+    let start = offset as usize;
+    let end = start.saturating_add(max_bytes).min(bytes.len());
+    Ok((bytes[start..end].to_vec(), total))
 }
 
 /// The export cut's hold on admission. Dropping it lets the next command in.
@@ -2406,18 +2488,8 @@ impl ConversationService {
             .transpose()?
             .unwrap_or_default();
         let active = live.agent.active_execution_id();
-        // Storage restores a deadline unarmed. A review this process is still
-        // waiting on is that worker's promise, so the card counts down.
-        // `a_saved_deadline_counts_down_while_this_process_holds_the_review`.
-        let holding = reviews_this_process_holds(&live.agent, committed.snapshot());
         let mut projection = live.projection.lock().await;
-        let accepted = projection.replace_committed_while_holding(
-            &committed,
-            &order,
-            active.as_ref(),
-            &holding,
-        );
-        if accepted {
+        if projection.replace_committed(&committed, &order, active.as_ref()) {
             projection.transcript_state(committed.state().into());
         }
         let operation_capabilities = live.agent.operation_capabilities();
@@ -2438,20 +2510,16 @@ impl ConversationService {
         let mut view = projection.read();
         let cursor = projection.committed_cursor();
         drop(projection);
-        view.permissions.retain(|review| {
-            let execution = ExecutionId::new(&review.execution_id);
-            let permission = PermissionId::new(&review.permission_id);
-            match (execution, permission) {
-                (Ok(execution), Ok(permission)) => live
-                    .agent
-                    .pending_permission(&execution, &permission)
-                    .unwrap_or(false),
-                _ => false,
-            }
-        });
         view.title = self.title(&id).await;
-        // Bounded there, before its app reviews are added beside it.
-        let view = app_calls::with_app_reviews(view, live.app_reviews.reviews());
+        // Every review waiting is listed from its live owner, never from
+        // history: an answer by a person or a remembered choice leaves no
+        // event there, so only the owner knows it is settled.
+        let view = app_calls::with_reviews(
+            view,
+            agent_review_entries(&live.agent, committed.snapshot()),
+            live.app_reviews.entries(),
+            agent_question_entries(&live.agent, committed.snapshot()),
+        );
         self.check_view_access(&id, &caller).await?;
         let slot = self
             .readable_slot(&id)
@@ -3699,6 +3767,7 @@ impl ConversationService {
         caller: ConversationCaller,
         execution: String,
         question: String,
+        key: String,
         choices: Option<Vec<QuestionChoiceInput>>,
     ) -> Result<(), ConversationError> {
         let service = self.clone();
@@ -3723,24 +3792,35 @@ impl ConversationService {
                 })
                 .transpose()?;
             let live = service.resolve(&id, &caller).await?;
+            // Only the question the person was shown: one asked again under
+            // the same identities has a key of its own, and the agent that
+            // holds it refuses another as stale.
             live.agent
                 .answer_question(QuestionAnswer {
+                    key: Some(key),
                     actor,
                     execution_id,
                     id: question_id,
                     choices,
                 })
                 .await
-                .map_err(|_| ConversationError::Unavailable)
+                .map_err(|error| match error {
+                    AgentError::StalePermission => error.into(),
+                    _ => ConversationError::Unavailable,
+                })
         })
         .await
     }
+    // The review is named three ways, each checked: its execution, its id,
+    // and the key it was shown under.
+    #[allow(clippy::too_many_arguments)]
     pub async fn answer(
         &self,
         id: ConversationId,
         caller: ConversationCaller,
         execution: String,
         permission: String,
+        review: String,
         option: String,
         permission_caller: PermissionCaller,
     ) -> Result<(), ConversationError> {
@@ -3768,17 +3848,23 @@ impl ConversationService {
             }
             let live = service.resolve(&id, &caller).await?;
             // An app's review first: it is the gateway's own, not the agent's.
-            match live
-                .app_reviews
-                .answer(&execution, &permission, &option, answerer(&caller))
-            {
+            match live.app_reviews.answer(
+                &execution,
+                &permission,
+                &review,
+                &option,
+                answerer(&caller),
+            ) {
                 ReviewAnswer::Ended => return Ok(()),
                 ReviewAnswer::Stale => return Err(AgentError::StalePermission.into()),
                 ReviewAnswer::NotAnAppReview => {}
             }
+            // Only the review the person was shown: the agent refuses another
+            // key as stale, and whatever waits under these identities waits on.
             let answer = live
                 .agent
                 .answer_permission(PermissionAnswer {
+                    key: Some(review),
                     attribution: ApprovalAttribution::new(actor, ApprovalBasis::Explicit),
                     execution_id,
                     id: permission_id,
@@ -3795,12 +3881,97 @@ impl ConversationService {
         })
         .await
     }
+    /// The waiting review a view lists under `review`, with all it shows,
+    /// from its live owner: the app review store, or the agent's live
+    /// invocation. `StalePermission` once nothing live holds it.
+    pub(crate) async fn waiting_review(
+        &self,
+        id: ConversationId,
+        caller: ConversationCaller,
+        review: &str,
+    ) -> Result<ConversationPermission, ConversationError> {
+        let _admission = self.admit().await?;
+        let stale = || ConversationError::from(AgentError::StalePermission);
+        let Some(live) = self.live_now(&id, &caller).await? else {
+            return Err(stale());
+        };
+        if let Some(shown) = live.app_reviews.review(review) {
+            return Ok(shown);
+        }
+        live.agent
+            .pending_reviews()
+            .unwrap_or_default()
+            .iter()
+            .find(|pending| pending.content.key() == review)
+            .and_then(agent_review)
+            .ok_or_else(stale)
+    }
+    /// One range of what the waiting review a view lists under `review`
+    /// shows: the UTF-8 JSON of its [`ConversationPermission`], from the
+    /// review's live owner — the app review store, or the agent's live
+    /// invocation — never from history, and the review's total length.
+    ///
+    /// # Errors
+    /// `StalePermission` once nothing live holds a review under that key;
+    /// `InvalidInput` for an offset past its end.
+    pub async fn permission_review(
+        &self,
+        id: ConversationId,
+        caller: ConversationCaller,
+        review: String,
+        offset: u64,
+        max_bytes: usize,
+    ) -> Result<(Vec<u8>, u64), ConversationError> {
+        let shown = self.waiting_review(id, caller, &review).await?;
+        range_of(&shown, offset, max_bytes)
+    }
+    /// The waiting question a view lists under `question`, with all it
+    /// asks, from the agent's live invocation. `StalePermission` once
+    /// nothing live holds it.
+    pub(crate) async fn waiting_question(
+        &self,
+        id: ConversationId,
+        caller: ConversationCaller,
+        question: &str,
+    ) -> Result<ConversationQuestion, ConversationError> {
+        let _admission = self.admit().await?;
+        let stale = || ConversationError::from(AgentError::StalePermission);
+        let Some(live) = self.live_now(&id, &caller).await? else {
+            return Err(stale());
+        };
+        live.agent
+            .pending_questions()
+            .unwrap_or_default()
+            .iter()
+            .find(|pending| pending.key() == question)
+            .map(agent_question)
+            .ok_or_else(stale)
+    }
+    /// One range of all the waiting question a view lists under `question`
+    /// asks: the UTF-8 JSON of its [`ConversationQuestion`], from the
+    /// agent's live invocation, never from history, and its total length.
+    ///
+    /// # Errors
+    /// `StalePermission` once nothing live holds a question under that key;
+    /// `InvalidInput` for an offset past its end.
+    pub async fn question_review(
+        &self,
+        id: ConversationId,
+        caller: ConversationCaller,
+        question: String,
+        offset: u64,
+        max_bytes: usize,
+    ) -> Result<(Vec<u8>, u64), ConversationError> {
+        let shown = self.waiting_question(id, caller, &question).await?;
+        range_of(&shown, offset, max_bytes)
+    }
     pub async fn cancel_permission(
         &self,
         id: ConversationId,
         caller: ConversationCaller,
         execution: String,
         permission: String,
+        review: String,
         reason: String,
     ) -> Result<(), ConversationError> {
         let service = self.clone();
@@ -3819,7 +3990,7 @@ impl ConversationService {
             let live = service.resolve(&id, &caller).await?;
             match live
                 .app_reviews
-                .cancel(&execution, &permission, answerer(&caller))
+                .cancel(&execution, &permission, &review, answerer(&caller))
             {
                 ReviewAnswer::Ended => return Ok(()),
                 ReviewAnswer::Stale => return Err(AgentError::StalePermission.into()),
@@ -3828,6 +3999,7 @@ impl ConversationService {
             let _cancellation = live
                 .agent
                 .cancel_permission(PermissionCancellationRequest {
+                    key: Some(review),
                     execution_id,
                     id: permission_id,
                     reason: PermissionCancellationReason::custom(reason),

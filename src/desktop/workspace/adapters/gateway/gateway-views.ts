@@ -24,6 +24,9 @@ import {
   type ImageAttachment,
   type LinkedFile,
   type ConversationPermission,
+  type ConversationReviewEntry,
+  type QuestionDetail,
+  type ReviewDetail,
   type ConversationSummary,
   type ConversationTool,
   type ConversationView,
@@ -36,7 +39,7 @@ import {
   shownNote,
 } from "../../../../conversation"
 import { composerModels } from "../../../model/composer-options"
-import { decodeId, encodeId } from "../../../model/id-encoding"
+import { encodeId } from "../../../model/id-encoding"
 import type {
   Approval,
   ApprovalChoice,
@@ -144,11 +147,11 @@ export function modelFor(known: ModelRef | undefined): ModelRef {
 }
 
 /**
- * An approval's id: the execution and the permission that name the review,
- * each encoded so the separator cannot occur in either (`id-encoding.ts`).
+ * An approval's id: the review's key as the view lists it, new for every
+ * review opened, so a review whose ids are used again is a new approval.
  */
-export function approvalId(permission: ConversationPermission): string {
-  return `${encodeId(permission.executionId)}/${encodeId(permission.permissionId)}`
+export function approvalId(entry: ConversationReviewEntry): string {
+  return entry.review
 }
 
 /**
@@ -201,17 +204,9 @@ const approvalOrigins: {
   }),
 }
 
-/** The review an approval id names, or `null` for an id this adapter did not write. */
-export function reviewOf(
-  id: string,
-): { readonly executionId: string; readonly permissionId: string } | null {
-  const halves = id.split("/")
-  if (halves.length !== 2) return null
-  const executionId = decodeId(halves[0])
-  const permissionId = decodeId(halves[1])
-  return executionId === null || permissionId === null
-    ? null
-    : { executionId, permissionId }
+/** The review key an approval id names, or `null` for an id this adapter did not write. */
+export function reviewOf(id: string): string | null {
+  return /^[0-9a-f]{32}$/.test(id) ? id : null
 }
 
 /**
@@ -338,6 +333,10 @@ export function transcriptFrom(
   seen: (messageId: string) => number,
   /** When the view arrived, on the window's clock: its deadline is put on that clock. */
   receivedAtMs: number,
+  /** What each review the view lists shows, as read so far (`reviewDetails`). */
+  details: readonly ReviewDetail[] = [],
+  /** All each question the view lists asks, as read so far (`questionDetails`). */
+  questionDetails: readonly QuestionDetail[] = [],
 ): Transcript {
   const tools = new Map(
     view.tools.map((tool) => [JSON.stringify([tool.executionId, tool.toolId]), tool]),
@@ -484,35 +483,54 @@ export function transcriptFrom(
     })
   const latestTurn = view.messages.at(-1)
   const history = historyExtent(view)
-  // What runs is the tool and its exact input, which the gateway offers a
-  // review only when it can show whole; why is the provider's title for it.
-  const asked = view.permissions[0]
-  const approval: Approval | null = asked
-    ? {
-        id: approvalId(asked),
-        command: `${asked.toolName} ${asked.argumentsJson}`,
-        reason: asked.title,
-        origin: approvalOrigins[asked.origin.kind](asked.origin),
-        options: approvalOptions(asked),
-        // The gateway's own word for what is asked, a closed set the client
-        // holds the view to (`conversation-validate.ts`, D19 on #390).
-        ask: asked.ask,
-        deadline: asked.deadline && {
-          waitMs: asked.deadline.waitMs,
-          // The gateway's clock's moment as the window's, so the card's
-          // countdown does not move with the difference between the two.
-          dueAtMs: clientDueAtMs(asked.deadline.dueAtMs, view.serverNowMs, receivedAtMs),
-          effect: asked.deadline.effect,
-          reason: asked.deadline.reason,
-          stopsTurn: asked.deadline.stopsTurn,
-        },
-      }
-    : null
+  // What runs is the tool and its exact input; why is the provider's title
+  // for it. The view lists a review by its key; what it shows is read from
+  // its live owner, and the card offers no answer until then (`loading`).
+  const approvals: Approval[] = view.permissions.map((entry): Approval => {
+    const detail = details.find((each) => each.entry.review === entry.review)
+    const asked = detail?.state === "loaded" ? detail.shown : undefined
+    return !asked
+      ? {
+          id: approvalId(entry),
+          command: entry.toolName,
+          loading: detail?.state === "failed" ? "failed" : "reading",
+          reason: "",
+          origin:
+            entry.origin === "app"
+              ? { kind: "app", server: "", tool: entry.toolName }
+              : { kind: "agent" },
+          options: [],
+          ask: "tool",
+        }
+      : {
+          id: approvalId(entry),
+          command: `${asked.toolName} ${asked.argumentsJson}`,
+          reason: asked.title,
+          origin: approvalOrigins[asked.origin.kind](asked.origin),
+          options: approvalOptions(asked),
+          // The gateway's own word for what is asked, a closed set the client
+          // holds the review to (`conversation-validate.ts`, D19 on #390).
+          ask: asked.ask,
+          deadline: asked.deadline && {
+            waitMs: asked.deadline.waitMs,
+            // The gateway's clock's moment as the window's, so the card's
+            // countdown does not move with the difference between the two.
+            dueAtMs: clientDueAtMs(
+              asked.deadline.dueAtMs,
+              view.serverNowMs,
+              receivedAtMs,
+            ),
+            effect: asked.deadline.effect,
+            reason: asked.deadline.reason,
+            stopsTurn: asked.deadline.stopsTurn,
+          },
+        }
+  })
   return {
     sessionId: view.conversationId,
     messages,
     activity,
-    approval,
+    approvals,
     revision,
     agent: view.runtime?.agent,
     lease: view.lease && {
@@ -522,10 +540,17 @@ export function transcriptFrom(
       cause: view.lease.cause,
       refusal: view.lease.refusal,
     },
+    access: {
+      mode: view.approvalMode,
+      modes: view.approvalModes.map((choice) => choice.id),
+      ...(view.approvalModeChange
+        ? { changing: view.approvalModeChange.requestedMode }
+        : {}),
+    },
     authenticationRefusal: latestTurn?.authenticationRequired
       ? latestTurn.executionId
       : undefined,
-    questions: questionsFrom(view),
+    questions: questionsFrom(view, questionDetails),
     interactionNotice: reportedText(view.interactionViewError),
     latestInputId,
     ...(history ? { history } : {}),
@@ -567,11 +592,30 @@ function reportedText(value: string | undefined): string | undefined {
 
 /**
  * Questions the view lists that name an ask and at least one field. One that
- * does not is left out; the rest of the conversation is still shown.
+ * does not is left out; the rest of the conversation is still shown. The view
+ * lists each by its key; all it asks is read from its live owner, and until
+ * then the card offers no answer (`loading`).
  */
-function questionsFrom(view: ConversationView): readonly TranscriptQuestion[] {
+function questionsFrom(
+  view: ConversationView,
+  details: readonly QuestionDetail[],
+): readonly TranscriptQuestion[] {
   const questions: TranscriptQuestion[] = []
-  for (const ask of view.questions) {
+  const read = new Map(details.map((detail) => [detail.entry.question, detail]))
+  for (const entry of view.questions) {
+    const detail = read.get(entry.question)
+    if (detail?.state !== "loaded") {
+      questions.push({
+        key: entry.question,
+        loading: detail?.state === "failed" ? "failed" : "reading",
+        executionId: "",
+        questionId: "",
+        message: reportedText(entry.message) ?? "The agent has a question",
+        questions: [],
+      })
+      continue
+    }
+    const ask = detail.shown
     if (!ask.executionId || !ask.questionId || !reportedText(ask.message)) continue
     const fields = ask.questions.flatMap((question) => {
       if (!question.key || !reportedText(question.prompt)) return []
@@ -602,6 +646,7 @@ function questionsFrom(view: ConversationView): readonly TranscriptQuestion[] {
     })
     if (fields.length === 0) continue
     questions.push({
+      key: ask.question,
       executionId: ask.executionId,
       questionId: ask.questionId,
       message: ask.message,

@@ -243,7 +243,7 @@ async fn worker_initial_and_fallback_cancellation_share_grace_with_a_full_pipe()
             armed_permissions: HashMap::new(),
             path_classification: std::sync::Arc::new(tokio::sync::Semaphore::new(1)),
             startup_advisory_session: None,
-            questions: HashMap::new(),
+            questions: AskedQuestions::default(),
             declined: None,
             stopped_prompts: Vec::new(),
             expired_stops: Vec::new(),

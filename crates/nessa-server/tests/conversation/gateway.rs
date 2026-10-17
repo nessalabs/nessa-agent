@@ -386,8 +386,8 @@ mod gateway {
         let (socket, mut peer) = test_socket(None);
         let task = tokio::spawn(run_authenticated(socket, state.clone(), session));
         let target = |request: &str| json!({"conversationId":"00000000-0000-4000-8000-000000000001","requestId":request});
-        let answer = json!({"conversationId":"00000000-0000-4000-8000-000000000001","requestId":"answer","executionId":"turn","permissionId":"p","optionId":"allow"});
-        let cancel = json!({"conversationId":"00000000-0000-4000-8000-000000000001","requestId":"cancel","executionId":"turn","permissionId":"p","reason":"no"});
+        let answer = json!({"conversationId":"00000000-0000-4000-8000-000000000001","requestId":"answer","executionId":"turn","review":"0123456789abcdef0123456789abcdef","permissionId":"p","optionId":"allow"});
+        let cancel = json!({"conversationId":"00000000-0000-4000-8000-000000000001","requestId":"cancel","executionId":"turn","review":"0123456789abcdef0123456789abcdef","permissionId":"p","reason":"no"});
 
         // Every delete slot taken, as a burst of slow deletes would leave
         // them: another delete is turned away, and a permission answer, a

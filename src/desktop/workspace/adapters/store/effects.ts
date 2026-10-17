@@ -13,20 +13,25 @@
 import {
   createListenerMiddleware,
   type ListenerMiddlewareInstance,
+  type ThunkDispatch,
   type UnknownAction,
 } from "@reduxjs/toolkit"
 import { failureReason, type WorkspaceDependencies } from "../../application/ports"
 import { shownSessionIds, unreadShown } from "../../application/usecases/updates"
+import { pendingAccess } from "../../application/usecases/access"
+import { applyPendingAccess } from "./access-commands"
 import { entry, sessionOf, type WorkspaceState } from "../../application/workspace-state"
 import { fromSource } from "../../model/revision"
 import { workspaceActions } from "./slice"
 
 type Root = { workspace: WorkspaceState }
+/** The store's own dispatch: thunks run with the window's dependencies (`store.ts`). */
+type Dispatch = ThunkDispatch<Root, WorkspaceDependencies, UnknownAction>
 
 export function workspaceEffects(
   dependencies: WorkspaceDependencies,
-): ListenerMiddlewareInstance<Root> {
-  const listener = createListenerMiddleware<Root>()
+): ListenerMiddlewareInstance<Root, Dispatch> {
+  const listener = createListenerMiddleware<Root, Dispatch>()
   // Reads in flight, so a session is asked for once however often panes
   // change. Each has its own token: a session let go while it was read — no
   // longer listed — forgets its read, and the answer, whenever it comes, is
@@ -176,6 +181,21 @@ export function workspaceEffects(
             console.warn("Could not mark a session read", sessionId, failureReason(error))
           })
       }
+    },
+  })
+
+  // A choice of access made while the agent was at work is asked of the
+  // source once its conversation has no turn at work: the gateway changes
+  // access only between turns. `askSource` marks it on its way first, so it
+  // is asked once.
+  listener.startListening({
+    predicate: (_action: UnknownAction, current, previous) =>
+      (current.workspace.accessChoices !== previous.workspace.accessChoices ||
+        current.workspace.transcripts !== previous.workspace.transcripts) &&
+      pendingAccess(current.workspace).length > 0,
+    effect: (_action, api) => {
+      for (const ready of pendingAccess(api.getState().workspace))
+        void api.dispatch(applyPendingAccess(ready))
     },
   })
 

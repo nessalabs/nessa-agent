@@ -37,11 +37,14 @@ use super::mcp_apps::{
     ContextDrop, DroppedContexts, McpAppAuditPhase, McpAppAuditRecord, McpAppInitiator, McpAppRef,
     McpAppWithdrawal,
 };
+use nessa_protocol::conversation::projection::{review_entry, MAX_LISTED_REVIEWS};
 use nessa_protocol::conversation::view::{
     ConversationPermission, ConversationPermissionAsk, ConversationPermissionOption,
-    ConversationPermissionOptionEffect, ConversationPermissionOrigin,
+    ConversationPermissionOptionEffect, ConversationPermissionOrigin, ConversationReviewEntry,
+    ConversationReviewKind,
 };
 use nessa_protocol::product_contract::generated::MCP_APP_REVIEW_DEADLINE_MS;
+use nessa_sdk::domain::agent_execution::permissions::MAX_OPEN_REVIEWS;
 use nessa_sdk::domain::agent_execution::prompts::{AppModelContext, UserMessage};
 use std::{
     collections::{BTreeMap, HashSet, VecDeque},
@@ -67,6 +70,8 @@ const OPTIONS: [(&str, &str, ConversationPermissionOptionEffect); 2] = [
 /// The most app reviews one conversation has open at once, so that with the
 /// agent's own they stay within the 64 a view carries.
 pub const MAX_OPEN_APP_REVIEWS: usize = 16;
+// A view lists every review the agent holds open and every app review.
+const _: () = assert!(MAX_OPEN_REVIEWS + MAX_OPEN_APP_REVIEWS == MAX_LISTED_REVIEWS);
 /// The most the open app reviews of one conversation may take of its view,
 /// encoded, together: as much as one review of the agent's may. Past it an
 /// app's reviews would push the transcript — and the app's own tool call —
@@ -157,6 +162,8 @@ pub enum ContextRefusal {
 }
 
 struct Pending {
+    /// What it shows, under its own key (`review.review`), new for every
+    /// review opened: what a view lists it by and an answer names.
     review: ConversationPermission,
     bytes: usize,
     app: McpAppRef,
@@ -459,7 +466,15 @@ impl AppReviews {
         arguments_json: &str,
     ) -> Result<Waiting, ReviewRefusal> {
         let (end, ended) = oneshot::channel();
-        let review = review_of(&permission_id, ask, app, server, tool, arguments_json);
+        let review = review_of(
+            &format!("{:032x}", Uuid::new_v4().as_u128()),
+            &permission_id,
+            ask,
+            app,
+            server,
+            tool,
+            arguments_json,
+        );
         let bytes = encoded_len(&review);
         if bytes > MAX_APP_REVIEW_BYTES {
             return Err(ReviewRefusal::TooLarge);
@@ -506,6 +521,7 @@ impl AppReviews {
     }
 
     /// The reviews open now, oldest first.
+    #[cfg(test)]
     pub fn reviews(&self) -> Vec<ConversationPermission> {
         self.state
             .lock()
@@ -516,11 +532,42 @@ impl AppReviews {
             .collect()
     }
 
-    /// The person's answer to the review `permission` of `execution`.
+    /// The reviews open now, oldest first, as a view lists them.
+    pub fn entries(&self) -> Vec<ConversationReviewEntry> {
+        self.state
+            .lock()
+            .expect("app reviews")
+            .pending
+            .values()
+            .map(|pending| {
+                review_entry(
+                    &pending.review.review,
+                    ConversationReviewKind::App,
+                    &pending.review.tool_name,
+                )
+            })
+            .collect()
+    }
+
+    /// The open review a view lists under `key`, with all it shows.
+    pub fn review(&self, key: &str) -> Option<ConversationPermission> {
+        self.state
+            .lock()
+            .expect("app reviews")
+            .pending
+            .values()
+            .find(|pending| pending.review.review == key)
+            .map(|pending| pending.review.clone())
+    }
+
+    /// The person's answer to the review `permission` of `execution`, which
+    /// they were shown under the key `review`: one open under another key
+    /// is a new review they were not shown, and is not answered.
     pub fn answer(
         &self,
         execution: &str,
         permission: &str,
+        review: &str,
         option: &str,
         by: ReviewAnswerer,
     ) -> ReviewAnswer {
@@ -528,7 +575,8 @@ impl AppReviews {
         let Some(key) = state.key(permission) else {
             return ReviewAnswer::NotAnAppReview;
         };
-        if state.pending[&key].review.execution_id != execution {
+        let open = &state.pending[&key].review;
+        if open.execution_id != execution || open.review != review {
             return ReviewAnswer::Stale;
         }
         let end = match OPTIONS.iter().find(|&&(id, ..)| id == option) {
@@ -544,8 +592,14 @@ impl AppReviews {
     }
 
     /// The person's cancellation of a review: a denial.
-    pub fn cancel(&self, execution: &str, permission: &str, by: ReviewAnswerer) -> ReviewAnswer {
-        self.answer(execution, permission, DENY, by)
+    pub fn cancel(
+        &self,
+        execution: &str,
+        permission: &str,
+        review: &str,
+        by: ReviewAnswerer,
+    ) -> ReviewAnswer {
+        self.answer(execution, permission, review, DENY, by)
     }
 
     /// Withdraw the review `permission` as its app's: its request went.
@@ -747,7 +801,9 @@ pub fn fits(
     tool: &str,
     arguments_json: &str,
 ) -> bool {
+    // Every key is as long as any other.
     encoded_len(&review_of(
+        &"0".repeat(32),
         permission_id,
         ask,
         app,
@@ -758,6 +814,7 @@ pub fn fits(
 }
 
 fn review_of(
+    key: &str,
     permission_id: &str,
     ask: ReviewAsk,
     app: &McpAppRef,
@@ -766,6 +823,7 @@ fn review_of(
     arguments_json: &str,
 ) -> ConversationPermission {
     ConversationPermission {
+        review: key.to_owned(),
         execution_id: app.execution_id.clone(),
         permission_id: permission_id.to_owned(),
         tool_id: app.tool_id.clone(),

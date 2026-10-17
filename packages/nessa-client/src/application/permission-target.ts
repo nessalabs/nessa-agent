@@ -10,6 +10,8 @@ declare const permissionTarget: unique symbol
  */
 export type PermissionTarget = {
   readonly conversationId: string
+  /** The key the view listed the review under; the answer names it. */
+  readonly review: string
   readonly executionId: string
   readonly permissionId: string
   readonly [permissionTarget]: true
@@ -18,6 +20,7 @@ export type PermissionTarget = {
 type PermissionView = {
   readonly conversationId: ConversationView["conversationId"]
   readonly permissions: readonly {
+    readonly review: string
     readonly executionId: string
     readonly permissionId: string
     readonly options: readonly { readonly id: string }[]
@@ -39,6 +42,7 @@ export function permissionTargets(view: PermissionView): readonly PermissionTarg
     view.permissions.map((permission) => {
       const target = Object.freeze({
         conversationId: view.conversationId,
+        review: permission.review,
         executionId: permission.executionId,
         permissionId: permission.permissionId,
       }) as PermissionTarget
@@ -59,6 +63,6 @@ export function permissionFields(target: PermissionTarget, optionId?: string) {
   if (!options) throw new TypeError("Use a permission target captured from a view")
   if (optionId !== undefined && !options.has(optionId))
     throw new TypeError("Select a choice offered by the captured review")
-  const { conversationId, executionId, permissionId } = target
-  return { conversationId, executionId, permissionId }
+  const { conversationId, review, executionId, permissionId } = target
+  return { conversationId, review, executionId, permissionId }
 }

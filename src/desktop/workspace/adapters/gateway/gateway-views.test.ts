@@ -3,12 +3,13 @@ import {
   deadlinePendingLine,
   type ConversationMessage,
   type ConversationPermission,
+  type ConversationView,
   type ConversationTool,
 } from "@nessa/client"
 import { describe, expect, it } from "vitest"
 import { appWidget } from "../../../widgets/app/model/app-ref"
 import { composerModels } from "../../../model/composer-options"
-import { messageText } from "../../model/transcript"
+import { messageText, shownWhole } from "../../model/transcript"
 import { defaultModel } from "../../model/workspace-index"
 import {
   approvalId,
@@ -25,7 +26,15 @@ import {
   summaryFrom,
   transcriptFrom,
 } from "./gateway-views"
-import { GATEWAY_NOW_MS, note, row, view } from "./fake-gateway"
+import {
+  GATEWAY_NOW_MS,
+  note,
+  questionKey,
+  row,
+  shownQuestion,
+  view,
+  type Unkeyed,
+} from "./fake-gateway"
 
 const at = () => 42
 
@@ -79,6 +88,36 @@ const textPart = (text: string, offset: number, messageId?: string) => ({
   noticeId: "",
   ...(messageId === undefined ? {} : { messageId }),
 })
+
+/** A review's key, as a view lists it. */
+const reviewKey = (index: number) => index.toString(16).padStart(32, "0")
+/**
+ * The transcript of a view whose reviews have each been read whole: the view
+ * lists them by key, and `permissions` are what each shows.
+ */
+function reviewedTranscript(
+  change: Omit<Partial<ConversationView>, "permissions"> & {
+    permissions: Unkeyed<ConversationPermission>[]
+  },
+  receivedAtMs = GATEWAY_NOW_MS,
+) {
+  const entries = change.permissions.map((permission, index) => ({
+    review: reviewKey(index),
+    origin: permission.origin.kind,
+    toolName: permission.toolName,
+  }))
+  return transcriptFrom(
+    view("c", { ...change, permissions: entries }),
+    1,
+    at,
+    receivedAtMs,
+    change.permissions.map((permission, index) => ({
+      state: "loaded" as const,
+      entry: entries[index]!,
+      shown: { ...permission, review: entries[index]!.review },
+    })),
+  )
+}
 
 describe("what a bounded view says about history it did not draw", () => {
   const states = [
@@ -637,29 +676,72 @@ describe("a conversation view as a transcript", () => {
       expect(reply(ended), ended).not.toHaveProperty("working")
   })
 
-  it("asks the first pending permission as the approval, under an id that names the review", () => {
-    const transcript = transcriptFrom(
-      view("c", {
-        messages: [turn({ status: "running" })],
-        permissions: [
-          {
-            executionId: "e/1",
-            permissionId: "p%2",
-            toolId: "t1",
-            title: "Tool permission",
-            options: [{ id: "a", label: "Allow", effect: "allow" }],
-            toolName: "bash",
-            origin: { kind: "harness" },
-            ask: "tool",
-            argumentsJson: '{"command":"rm -rf build"}',
-          },
-        ],
-      }),
-      1,
-      at,
-      GATEWAY_NOW_MS,
-    )
-    expect(transcript.approval).toMatchObject({
+  it("lists a review it has not read yet as loading, and offers no answer on it until it is read", () => {
+    const entry = { review: reviewKey(0), origin: "harness" as const, toolName: "Write" }
+    const listed = view("c", {
+      messages: [turn({ status: "running" })],
+      permissions: [entry],
+    })
+    for (const [details, loading] of [
+      [[], "reading"],
+      [[{ state: "loading", entry }], "reading"],
+      [[{ state: "failed", entry, error: new Error("unavailable") }], "failed"],
+    ] as const) {
+      const approval = transcriptFrom(listed, 1, at, GATEWAY_NOW_MS, details)
+        .approvals[0]!
+      expect(approval).toMatchObject({
+        id: reviewKey(0),
+        command: "Write",
+        loading,
+        options: [],
+      })
+      expect(shownWhole(approval)).toBe(false)
+    }
+  })
+
+  it("projects every review the view lists, in its order, each loading on its own", () => {
+    const entries = [0, 1, 2].map((index) => ({
+      review: reviewKey(index),
+      origin: "harness" as const,
+      toolName: `Tool${index}`,
+    }))
+    const listed = view("c", {
+      messages: [turn({ status: "running" })],
+      permissions: entries,
+    })
+    const failed = {
+      state: "failed",
+      entry: entries[0],
+      error: new Error("unavailable"),
+    } as const
+    const { approvals } = transcriptFrom(listed, 1, at, GATEWAY_NOW_MS, [failed])
+    expect(
+      approvals.map((approval) => [approval.id, approval.command, approval.loading]),
+    ).toEqual([
+      [reviewKey(0), "Tool0", "failed"],
+      [reviewKey(1), "Tool1", "reading"],
+      [reviewKey(2), "Tool2", "reading"],
+    ])
+  })
+
+  it("asks a pending permission as an approval, under an id that names the review", () => {
+    const transcript = reviewedTranscript({
+      messages: [turn({ status: "running" })],
+      permissions: [
+        {
+          executionId: "e/1",
+          permissionId: "p%2",
+          toolId: "t1",
+          title: "Tool permission",
+          options: [{ id: "a", label: "Allow", effect: "allow" }],
+          toolName: "bash",
+          origin: { kind: "harness" },
+          ask: "tool",
+          argumentsJson: '{"command":"rm -rf build"}',
+        },
+      ],
+    })
+    expect(transcript.approvals[0]).toMatchObject({
       // The exact input approved, whatever the provider titles the review.
       command: 'bash {"command":"rm -rf build"}',
       reason: "Tool permission",
@@ -668,37 +750,32 @@ describe("a conversation view as a transcript", () => {
       options: [{ id: "a", label: "Allow", choice: "once" }],
       ask: "tool",
     })
-    expect(transcript.approval?.deadline).toBeUndefined()
-    const waiting = transcriptFrom(
-      view("c", {
-        messages: [turn({ status: "running" })],
-        permissions: [
-          {
-            executionId: "e/1",
-            permissionId: "p%2",
-            toolId: "t1",
-            title: "Tool permission",
-            options: [{ id: "a", label: "Allow", effect: "allow" }],
-            toolName: "bash",
-            origin: { kind: "harness" },
-            ask: "tool",
-            argumentsJson: '{"command":"rm -rf build"}',
-            deadline: {
-              waitMs: 30_000,
-              dueAtMs: 1_700_000_030_000,
-              effect: "deny",
-              reason:
-                "No human answered in time. Continue without this tool or try another approach.",
-              stopsTurn: true,
-            },
+    expect(transcript.approvals[0]?.deadline).toBeUndefined()
+    const waiting = reviewedTranscript({
+      messages: [turn({ status: "running" })],
+      permissions: [
+        {
+          executionId: "e/1",
+          permissionId: "p%2",
+          toolId: "t1",
+          title: "Tool permission",
+          options: [{ id: "a", label: "Allow", effect: "allow" }],
+          toolName: "bash",
+          origin: { kind: "harness" },
+          ask: "tool",
+          argumentsJson: '{"command":"rm -rf build"}',
+          deadline: {
+            waitMs: 30_000,
+            dueAtMs: 1_700_000_030_000,
+            effect: "deny",
+            reason:
+              "No human answered in time. Continue without this tool or try another approach.",
+            stopsTurn: true,
           },
-        ],
-      }),
-      1,
-      at,
-      GATEWAY_NOW_MS,
-    )
-    expect(waiting.approval?.deadline).toEqual({
+        },
+      ],
+    })
+    expect(waiting.approvals[0]?.deadline).toEqual({
       waitMs: 30_000,
       dueAtMs: 1_700_000_030_000,
       effect: "deny",
@@ -706,18 +783,16 @@ describe("a conversation view as a transcript", () => {
         "No human answered in time. Continue without this tool or try another approach.",
       stopsTurn: true,
     })
-    expect(reviewOf(transcript.approval!.id)).toEqual({
-      executionId: "e/1",
-      permissionId: "p%2",
-    })
+    // The approval is the review's key, whatever its ids: they can be used again.
+    expect(reviewOf(transcript.approvals[0]!.id)).toBe(reviewKey(0))
   })
 
   it("puts the deadline on the window's clock, so a clock ahead or behind the gateway's counts down the same", () => {
     // Due 30 s after the gateway sent the view, on the gateway's clock.
     const asked = (skewMs: number) => {
       const receivedAtMs = GATEWAY_NOW_MS + skewMs
-      const transcript = transcriptFrom(
-        view("c", {
+      const transcript = reviewedTranscript(
+        {
           permissions: [
             {
               executionId: "e1",
@@ -738,12 +813,10 @@ describe("a conversation view as a transcript", () => {
               },
             },
           ],
-        }),
-        1,
-        at,
+        },
         receivedAtMs,
       )
-      return { deadline: transcript.approval!.deadline!, receivedAtMs }
+      return { deadline: transcript.approvals[0]!.deadline!, receivedAtMs }
     }
     for (const skewMs of [0, 60_000, -60_000]) {
       const { deadline, receivedAtMs } = asked(skewMs)
@@ -760,67 +833,57 @@ describe("who asks for an approval (#436)", () => {
     origin: ConversationPermission["origin"],
     ask: ConversationPermission["ask"] = "tool",
   ) =>
-    transcriptFrom(
-      view("c", {
-        messages: [turn({ status: "completed" })],
-        permissions: [
-          {
-            executionId: "e1",
-            permissionId: "app-1",
-            toolId: "t1",
-            title: "An app asks to run app_delete_row on mcptest",
-            options: [{ id: "allow", label: "Allow", effect: "allow" }],
-            toolName: "app_delete_row",
-            origin,
-            ask,
-            argumentsJson: "{}",
-          },
-        ],
-      }),
-      1,
-      at,
-      GATEWAY_NOW_MS,
-    ).approval
+    reviewedTranscript({
+      messages: [turn({ status: "completed" })],
+      permissions: [
+        {
+          executionId: "e1",
+          permissionId: "app-1",
+          toolId: "t1",
+          title: "An app asks to run app_delete_row on mcptest",
+          options: [{ id: "allow", label: "Allow", effect: "allow" }],
+          toolName: "app_delete_row",
+          origin,
+          ask,
+          argumentsJson: "{}",
+        },
+      ],
+    }).approvals[0]
 
   it("carries each offered answer in the view's order and words, and none it did not offer (#444)", () => {
     const approval = asked({ kind: "harness" })
     // The fixture lists only allow. A deny the view does not carry is not invented,
     // and neither is always.
     expect(approval?.options).toEqual([{ id: "allow", label: "Allow", choice: "once" }])
-    const remembered = transcriptFrom(
-      view("c", {
-        messages: [turn({ status: "completed" })],
-        permissions: [
-          {
-            executionId: "e1",
-            permissionId: "p",
-            toolId: "t1",
-            title: "Run it",
-            options: [
-              { id: "allow-once", label: "Allow", effect: "allow" },
-              { id: "allow_always", label: "Always allow", effect: "allow" },
-              {
-                id: "nessa.remember.allow",
-                label: "Always allow in this project",
-                effect: "allow",
-              },
-              {
-                id: "nessa.remember.deny",
-                label: "Always deny in this project",
-                effect: "deny",
-              },
-            ],
-            toolName: "bash",
-            origin: { kind: "harness" },
-            ask: "tool",
-            argumentsJson: "{}",
-          },
-        ],
-      }),
-      1,
-      at,
-      GATEWAY_NOW_MS,
-    ).approval
+    const remembered = reviewedTranscript({
+      messages: [turn({ status: "completed" })],
+      permissions: [
+        {
+          executionId: "e1",
+          permissionId: "p",
+          toolId: "t1",
+          title: "Run it",
+          options: [
+            { id: "allow-once", label: "Allow", effect: "allow" },
+            { id: "allow_always", label: "Always allow", effect: "allow" },
+            {
+              id: "nessa.remember.allow",
+              label: "Always allow in this project",
+              effect: "allow",
+            },
+            {
+              id: "nessa.remember.deny",
+              label: "Always deny in this project",
+              effect: "deny",
+            },
+          ],
+          toolName: "bash",
+          origin: { kind: "harness" },
+          ask: "tool",
+          argumentsJson: "{}",
+        },
+      ],
+    }).approvals[0]
     expect(remembered?.options).toEqual([
       { id: "allow-once", label: "Allow", choice: "once" },
       { id: "allow_always", label: "Always allow", choice: "once" },
@@ -831,30 +894,25 @@ describe("who asks for an approval (#436)", () => {
       },
       { id: "nessa.remember.deny", label: "Always deny in this project", choice: "deny" },
     ])
-    const both = transcriptFrom(
-      view("c", {
-        messages: [turn({ status: "completed" })],
-        permissions: [
-          {
-            executionId: "e1",
-            permissionId: "p",
-            toolId: "t1",
-            title: "Run it",
-            options: [
-              { id: "opt-b", label: "Nope", effect: "deny" },
-              { id: "opt-a", label: "Sure", effect: "allow" },
-            ],
-            toolName: "bash",
-            origin: { kind: "harness" },
-            ask: "tool",
-            argumentsJson: "{}",
-          },
-        ],
-      }),
-      1,
-      at,
-      GATEWAY_NOW_MS,
-    ).approval
+    const both = reviewedTranscript({
+      messages: [turn({ status: "completed" })],
+      permissions: [
+        {
+          executionId: "e1",
+          permissionId: "p",
+          toolId: "t1",
+          title: "Run it",
+          options: [
+            { id: "opt-b", label: "Nope", effect: "deny" },
+            { id: "opt-a", label: "Sure", effect: "allow" },
+          ],
+          toolName: "bash",
+          origin: { kind: "harness" },
+          ask: "tool",
+          argumentsJson: "{}",
+        },
+      ],
+    }).approvals[0]
     expect(both?.options).toEqual([
       { id: "opt-b", label: "Nope", choice: "deny" },
       { id: "opt-a", label: "Sure", choice: "once" },
@@ -881,12 +939,16 @@ describe("who asks for an approval (#436)", () => {
 
 describe("approval ids", () => {
   it("read back only what they wrote", () => {
-    const id = approvalId({
-      executionId: "x/y",
-      permissionId: "",
-    } as Parameters<typeof approvalId>[0])
-    expect(reviewOf(id)).toEqual({ executionId: "x/y", permissionId: "" })
-    for (const foreign of ["", "a", "a/b/c", "a%/b", "%zz/b"])
+    const id = approvalId({ review: reviewKey(7), origin: "harness", toolName: "bash" })
+    expect(reviewOf(id)).toBe(reviewKey(7))
+    for (const foreign of [
+      "",
+      "a",
+      "a/b/c",
+      "a%/b",
+      "%zz/b",
+      reviewKey(0xab).toUpperCase(),
+    ])
       expect(reviewOf(foreign)).toBeNull()
   })
 })
@@ -1284,8 +1346,60 @@ describe("questions and a withheld interaction", () => {
     options: [{ value: "here", label: "Here", description: "This machine" }],
   }
 
+  /** A transcript of `listed`, each question it lists read whole. */
+  const asked = (listed: ConversationView) =>
+    transcriptFrom(
+      listed,
+      1,
+      at,
+      GATEWAY_NOW_MS,
+      [],
+      listed.questions.map((entry) => ({
+        state: "loaded" as const,
+        entry,
+        shown: shownQuestion(entry.question)!,
+      })),
+    )
+
+  it("lists a question not read yet as loading, asking nothing, until it has been read", () => {
+    const question = {
+      executionId: "e1",
+      questionId: "q1",
+      message: "Where should this land?",
+      questions: [field],
+    }
+    const listed = view("c", {
+      messages: [turn({ status: "running" })],
+      questions: [question],
+    })
+    const [entry] = listed.questions
+    const waiting = {
+      key: questionKey(question),
+      executionId: "",
+      questionId: "",
+      message: "Where should this land?",
+      questions: [],
+    }
+    expect(transcriptFrom(listed, 1, at, GATEWAY_NOW_MS).questions).toEqual([
+      { ...waiting, loading: "reading" },
+    ])
+    expect(
+      transcriptFrom(
+        listed,
+        1,
+        at,
+        GATEWAY_NOW_MS,
+        [],
+        [{ state: "failed", entry: entry!, error: null }],
+      ).questions,
+    ).toEqual([{ ...waiting, loading: "failed" }])
+    expect(asked(listed).questions).toEqual([
+      expect.objectContaining({ key: questionKey(question), questionId: "q1" }),
+    ])
+  })
+
   it("keeps a question that names an ask, and the gateway's notice in its own words", () => {
-    const transcript = transcriptFrom(
+    const transcript = asked(
       view("c", {
         messages: [turn({ status: "running" })],
         questions: [
@@ -1298,12 +1412,10 @@ describe("questions and a withheld interaction", () => {
         ],
         interactionViewError: "A review was left out of this view.",
       }),
-      1,
-      at,
-      GATEWAY_NOW_MS,
     )
     expect(transcript.questions).toEqual([
       {
+        key: questionKey({ executionId: "e1", questionId: "q1" }),
         executionId: "e1",
         questionId: "q1",
         message: "Where should this land?",
@@ -1323,7 +1435,7 @@ describe("questions and a withheld interaction", () => {
   })
 
   it("skips a question, field, or option that names nothing, and a blank notice", () => {
-    const transcript = transcriptFrom(
+    const transcript = asked(
       view("c", {
         messages: [turn({ status: "running" })],
         questions: [
@@ -1362,12 +1474,10 @@ describe("questions and a withheld interaction", () => {
         ],
         interactionViewError: "  ",
       }),
-      1,
-      at,
-      GATEWAY_NOW_MS,
     )
     expect(transcript.questions).toEqual([
       {
+        key: questionKey({ executionId: "e1", questionId: "q3" }),
         executionId: "e1",
         questionId: "q3",
         message: "Where should this land?",
