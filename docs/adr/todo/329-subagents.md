@@ -27,6 +27,26 @@ Omitted block/field means true. False stops the exact parent only. Null, wrong
 types and unknown keys are refused at startup. This uses the existing settings
 owner; there is no YAML parser, dynamic reload or permission override.
 
+### Capacity owners and recovery
+
+The existing conversation service bounds its live and opening conversation map.
+Roots and children both pass that admission check. The SDK coordinator separately
+bounds retained child lifetimes through its injected `LiveRoom`; production uses
+`LiveCapacity` with the same configured limit. A new child must pass both bounds.
+A retained child quota reservation does not reserve a conversation-map entry.
+Cold roots and children follow the same ordinary admission rule and can return
+`Capacity` when that map is full. This slice adds no cold-child priority or unified
+persistent global resource reservation.
+
+Quiescent recovery restores the SDK child reservations before installing runnable
+history. Repeated recovery does not charge the same lifetime twice. Validated
+physical release, including absence, frees that reservation despite audit debt;
+uncertain cleanup retains it. Insufficient room refuses recovery and attempts to
+return only reservations whose acquisition was acknowledged in that attempt.
+Unacknowledged capacity effects remain uncertain; an extra release must not be
+invented to compensate them. Refused history cannot authorize a quota release.
+Available conversation-map space does not prove an earlier physical owner stopped.
+
 ### Admission, persistence and cancellation
 
 Gateway `owned_threads.rs` and `parent_stop.rs` serialize owned creation, agent
@@ -187,6 +207,10 @@ No live settings, security policy, credential or provider approval changes are
 needed to develop or verify this integration.
 
 ## Purpose
+
+The sections below retain the broader proposed design. The implementation contract
+above governs this Stop slice; proposed policy and capacity integration below are
+not runtime completion claims.
 
 A conversation can delegate work to other agents. Each child uses the ordinary SDK
 `Agent`, has its own conversation and history, and records which parent created
@@ -1132,15 +1156,6 @@ not remove the resource owner's ability to perform required cleanup.
 Each child consumes existing global live-conversation capacity. Count creating,
 starting and physically unconfirmed closing children. Reject a spawn with no
 room instead of waiting while the parent occupies the slots its children need.
-Restart restores those child reservations through the coordinator's existing
-live-room owner before admitting new children. Repeated recovery does not charge
-the same lifetime twice. Validated physical release or absence frees its slot
-even while audit debt remains; uncertain cleanup retains it. If the configured
-room cannot accommodate the retained children, recovery refuses admission and
-attempts to return only reservations whose acquisition was acknowledged in that
-attempt. Unacknowledged capacity effects remain uncertain; an extra release must
-not be invented to compensate them. Refused history cannot authorize a capacity
-release.
 Reserve before startup; two racing spawns cannot spend the same remaining slot.
 
 Publish finite direct-child and depth limits, retained request limits and child
