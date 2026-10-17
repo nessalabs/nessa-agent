@@ -112,6 +112,14 @@ must apply these merge gates together with [AGENTS.md](AGENTS.md),
     scan grants, or match names to reach the answer itself. What counts as
     policy, what does not, and what enforces this are in
     [policy goes through Cedar](#policy-goes-through-cedar).
+19. **A feature is flexed in the conversation stress check.** A change that
+    adds or alters what a person or an agent can do through a conversation —
+    sending, stopping, permissions and access modes, reviews and questions,
+    threads, resumption, anything the gateway or the window does with a turn —
+    adds a step to the conversation stress check, or shows which existing step
+    already drives it. Its tests alone do not count: each of the bugs that
+    check was built for had unit tests that passed. How is in
+    [conversation stress](#conversation-stress).
 
 If a gate fails, fix it in the same PR.
 
@@ -962,6 +970,45 @@ WKWebView, so Chrome alone is not evidence.
   the checks already record (`recordFailedRequest` in
   `verification/desktop/scripts/lib/browser.mjs`). Live provider checks that
   need an owner credential stay separate (`pnpm agent:e2e`).
+
+## Conversation stress
+
+A unit test checks one rule with everything else held still. What people hit
+is the sequence: a second message after a failed turn, an access change while
+the agent is working, a restart in the middle of a turn, two conversations
+created at the same moment. Each of those broke while every unit test passed.
+`pnpm test:e2e:stress` (`verification/desktop/scripts/conversation-stress.mjs`)
+plays those sequences: one conversation talked to for many rounds through the
+real gateway and the desktop window, with the scripted agent as the model, and
+background conversations running at the same time. Its plan is seeded, so a
+failure is replayed by passing the same numbers again.
+
+- **Every step goes through the surface a person uses.** Messages are typed
+  into the window's composer and sent with its button; cards are answered in
+  the window. The client library is for setup, background load and reading
+  results, never for the step under test: it makes fresh request ids and so
+  hid the desktop's own send bug.
+- **Add a step for a new feature.** Give the agent's side a turn in
+  `scripts/mcp-test-server/scenarios/stress.mjs` (a phrase in `STRESS`, what it
+  says in `SAYS`, and its steps), add the step kind and its count to `KNOBS`
+  and `plan` in `verification/desktop/scripts/lib/stress-plan.mjs`, and write
+  the step in `conversation-stress.mjs`: what the person does, then the end
+  state in both the window and the gateway's view. If the step needs the agent
+  to do something no scenario step can, add that step to `scripted-scenario.mjs`
+  with its test. Run it at its default numbers and at a raised count of the new
+  step before the pull request.
+- **Assert the end state, never a proxy.** A step waits for the turn's final
+  status and the text the window shows, and the run ends by checking that
+  every conversation is at rest: no turn left running, no review left open,
+  nothing denied automatically or hidden behind a display limit.
+- **The numbers are knobs.** Each count is a flag (`--rounds 60`) or an
+  environment variable (`NESSA_STRESS_ROUNDS=60`). Pull requests run the
+  defaults in the `conversation-stress` job; `conversation-stress-load.yml`
+  runs them raised every night, or by hand with any number changed.
+- **A failure is a bug until shown otherwise.** Fix it in the pull request
+  that found it, with a test at the layer that owns it, and keep the step.
+  The check gets its own CI job because it needs both the gateway build and a
+  browser, which no other job has.
 
 ## Adding a check to CI
 

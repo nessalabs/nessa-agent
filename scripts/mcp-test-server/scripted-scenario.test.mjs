@@ -18,6 +18,7 @@ import {
   ALLOW_ONCE,
   DENY_ONCE,
   branchFor,
+  filled,
   parseScenario,
   permissionCall,
   promptText,
@@ -762,4 +763,135 @@ test("text-reply answers any prompt with Ready, and show the server's app calls 
   assert.deepEqual(app?.steps[0], { do: "tool", tool: "review_rows", arguments: {} })
   const marked = turnFor(scenario, `A123: ${TEXT_REPLY_APP_PROMPT}`)
   assert.equal(marked, app)
+})
+
+test("a session in full access asks nothing: the permission runs its allow-once branch", async () => {
+  const agent = start("claude", {
+    turns: [
+      {
+        steps: [
+          {
+            do: "permission",
+            tool: "report_rows",
+            arguments: {},
+            title: "Report",
+            on: {
+              "allow-once": [{ do: "text", chunks: ["Allowed."] }],
+              "deny-once": [{ do: "text", chunks: ["Denied."] }],
+            },
+          },
+        ],
+      },
+    ],
+  })
+  await agent.request("initialize", {})
+  const sessionId = (await agent.request("session/new", claudeOpen)).result.sessionId
+  const set = await agent.request("session/set_config_option", {
+    sessionId,
+    configId: "mode",
+    value: "bypassPermissions",
+  })
+  assert.equal(
+    set.result.configOptions.find((option) => option.id === "mode").currentValue,
+    "bypassPermissions",
+  )
+  const done = await agent.request("session/prompt", { sessionId, prompt: [] })
+  assert.equal(done.result.stopReason, "end_turn")
+  assert.equal(
+    done.notes.some((note) => note.params.update.content?.text === "Allowed."),
+    true,
+  )
+})
+
+test("a pause holds the turn, and a cancel during it ends the turn cancelled", async () => {
+  const agent = start("claude", {
+    turns: [
+      {
+        steps: [
+          { do: "text", chunks: ["Before."] },
+          { do: "pause", ms: 60_000 },
+          { do: "text", chunks: ["After."] },
+        ],
+      },
+    ],
+  })
+  await agent.request("initialize", {})
+  const sessionId = (await agent.request("session/new", claudeOpen)).result.sessionId
+  const pending = agent.request("session/prompt", { sessionId, prompt: [] })
+  await new Promise((resolve) => setTimeout(resolve, 50))
+  agent.notify("session/cancel", { sessionId })
+  const cancelled = await pending
+  assert.equal(cancelled.result.stopReason, "cancelled")
+  assert.equal(
+    cancelled.notes.some((note) => note.params.update.content?.text === "After."),
+    false,
+  )
+  assert.throws(
+    () => parseScenario({ turns: [{ steps: [{ do: "pause", ms: -1 }] }] }),
+    /whole number of ms/,
+  )
+})
+
+test("a saved result fills later arguments and text, and a tool names its server", async () => {
+  const saved = new Map([["thread", { threadId: "t-1", nested: { count: 2 } }]])
+  assert.deepEqual(
+    filled(
+      { threadId: "${thread.threadId}", list: ["${thread.nested.count}"], n: 1 },
+      saved,
+    ),
+    { threadId: "t-1", list: [2], n: 1 },
+  )
+  assert.equal(filled("made ${thread.threadId}.", saved), "made t-1.")
+  assert.equal(filled("${missing.x}", saved), "${missing.x}")
+  const parsed = parseScenario({
+    turns: [
+      {
+        steps: [
+          {
+            do: "tool",
+            server: "nessa-agents",
+            tool: "create_thread",
+            arguments: {},
+            save: "thread",
+          },
+        ],
+      },
+    ],
+  })
+  assert.deepEqual(parsed.turns[0].steps[0], {
+    do: "tool",
+    tool: "create_thread",
+    arguments: {},
+    server: "nessa-agents",
+    save: "thread",
+  })
+  assert.throws(
+    () =>
+      parseScenario({
+        turns: [{ steps: [{ do: "tool", tool: "x", arguments: {}, server: "a b" }] }],
+      }),
+    /a tool name is/,
+  )
+})
+
+test("a saved call fills the next call's arguments through the real stand-in", async () => {
+  const agent = start("claude", {
+    turns: [
+      {
+        steps: [
+          { do: "tool", tool: "report_rows", arguments: {}, save: "rows" },
+          { do: "text", chunks: ["Saved ${rows.rows.length} rows."] },
+        ],
+      },
+    ],
+  })
+  await agent.request("initialize", {})
+  const sessionId = (await agent.request("session/new", claudeOpen)).result.sessionId
+  const done = await agent.request("session/prompt", { sessionId, prompt: [] })
+  assert.equal(done.result.stopReason, "end_turn")
+  const said = done.notes
+    .map((note) => note.params.update.content?.text)
+    .filter((text) => typeof text === "string" && text.startsWith("Saved"))
+  assert.equal(said.length, 1)
+  assert.doesNotMatch(said[0], /\$\{/)
 })

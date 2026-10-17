@@ -13,7 +13,7 @@ use sha2::{Digest, Sha256};
 use std::sync::{Arc, Mutex};
 
 impl ConversationService {
-    /// Create through the durable principal command owner. The caller has already
+    /// Create through the durable command owner of this request. The caller has already
     /// been authenticated by the host. The same request returns its original
     /// saved readiness or a typed interrupted attempt, without opening it again.
     ///
@@ -32,6 +32,9 @@ impl ConversationService {
         requested: RequestedConversation,
     ) -> Result<CreationReceipt, CreationFailure<ConversationError>> {
         let binding = binding(&id, &caller, &requested).map_err(CreationFailure::Target)?;
+        // Held until readiness is saved, by the task below when it runs, so
+        // the next request for this conversation finds it created.
+        let creation = self.inner.creations.lock(&id).await;
         if let Some(reopened) = self
             .reopen_owned(storage.clone(), &id, &caller, &requested, &binding)
             .await?
@@ -40,6 +43,7 @@ impl ConversationService {
         }
         let service = self.clone();
         tokio::spawn(async move {
+            let _creation = creation;
             let _admission = service
                 .admit()
                 .await
@@ -60,7 +64,7 @@ impl ConversationService {
     }
 
     /// Read saved creation progress after checking this caller's current target
-    /// access and deletion. No provider or command is admitted; missing principal
+    /// access and deletion. No provider or command is admitted; missing request
     /// control history is not created. `Attempted` means outcome is unconfirmed.
     pub async fn lookup_creation(
         &self,
@@ -96,7 +100,11 @@ impl ConversationService {
         binding: &CreationBinding,
     ) -> Result<Option<CreationReceipt>, CreationFailure<ConversationError>> {
         let saved = match storage
-            .open_creation(binding.actor().principal_id().into(), false)
+            .open_creation(
+                binding.actor().principal_id().into(),
+                binding.actor().request_id().into(),
+                false,
+            )
             .await
         {
             Ok(Some(lease)) => match lease.load(binding.actor().request_id()).await {

@@ -1,25 +1,30 @@
 //! Admission and full storage shutdown share one owner.
 
-use super::creation::CONTROL_STREAM_PREFIX;
 use crate::application::agent_execution::caller_wake::contain_caller_wake;
-use crate::application::agent_execution::{
-    commands::MAX_CREATION_OWNERS,
-    sessions::{StorageError, StorageShutdownFailure},
-};
+use crate::application::agent_execution::sessions::{StorageError, StorageShutdownFailure};
 use std::{
     collections::HashSet,
     sync::{Arc, Mutex, PoisonError},
     thread,
 };
-use tokio::sync::{oneshot, Notify};
+use tokio::sync::{oneshot, Notify, OwnedSemaphorePermit, Semaphore};
 
-/// Physical read workers at once; each runs one bounded read step.
+/// Physical read workers at once; each runs one bounded read step. Further
+/// reads wait for one to finish rather than being refused.
 const MAX_READS: usize = 4;
 type ReadTask = thread::JoinHandle<Result<(), StorageError>>;
 
 #[derive(Default)]
 pub(super) struct StorageOwner {
     state: Mutex<State>,
+    slots: ReadSlots,
+}
+/// The read threads' places. Closed at shutdown, which wakes every waiting read.
+struct ReadSlots(Arc<Semaphore>);
+impl Default for ReadSlots {
+    fn default() -> Self {
+        Self(Arc::new(Semaphore::new(MAX_READS)))
+    }
 }
 #[derive(Default)]
 struct State {
@@ -72,25 +77,9 @@ impl StorageOwner {
     }
 
     pub fn reserve(&self, id: &str) -> Result<(), StorageError> {
-        self.reserve_inner(id, false)
-    }
-    pub fn reserve_creation(&self, id: &str) -> Result<(), StorageError> {
-        self.reserve_inner(id, true)
-    }
-    fn reserve_inner(&self, id: &str, creation: bool) -> Result<(), StorageError> {
         let mut state = self.state.lock().map_err(poisoned)?;
         if state.shutdown.is_some() {
             return Err(StorageError::Closed);
-        }
-        if creation
-            && state
-                .leases
-                .iter()
-                .filter(|id| id.starts_with(CONTROL_STREAM_PREFIX))
-                .count()
-                >= MAX_CREATION_OWNERS
-        {
-            return Err(StorageError::Busy);
         }
         if !state.leases.insert(id.into()) {
             return Err(StorageError::Busy);
@@ -112,10 +101,13 @@ impl StorageOwner {
         state.initialized = true;
         Ok(())
     }
-    pub fn read<T: Send + 'static>(
+    /// Run `job` on a read thread, waiting for a free one. Dropping the
+    /// returned receipt does not stop the job; shutdown joins it.
+    pub async fn read<T: Send + 'static>(
         &self,
         job: impl FnOnce() -> Result<T, StorageError> + Send + 'static,
     ) -> Result<oneshot::Receiver<Result<T, StorageError>>, StorageError> {
+        let slot = self.slot().await?;
         let mut state = self.state.lock().map_err(poisoned)?;
         if state.shutdown.is_some() {
             return Err(StorageError::Closed);
@@ -131,13 +123,11 @@ impl StorageOwner {
                 index += 1;
             }
         }
-        if state.reads.len() == MAX_READS {
-            return Err(StorageError::ReadCapacity);
-        }
         let (reply, receipt) = oneshot::channel();
         let task = thread::Builder::new()
             .name("nessa-committed-read".into())
             .spawn(move || {
+                let _slot = slot;
                 let result = job();
                 let outcome = if matches!(result, Err(StorageError::ReadWorkerPanicked)) {
                     Err(StorageError::ReadWorkerPanicked)
@@ -151,11 +141,23 @@ impl StorageOwner {
         state.reads.push(task);
         Ok(receipt)
     }
+    async fn slot(&self) -> Result<OwnedSemaphorePermit, StorageError> {
+        if self.state.lock().map_err(poisoned)?.shutdown.is_some() {
+            return Err(StorageError::Closed);
+        }
+        self.slots
+            .0
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|_| StorageError::Closed)
+    }
     pub fn close(&self) -> Result<(Arc<ShutdownCompletion>, Option<ShutdownWork>), StorageError> {
         let mut state = self.state.lock().map_err(poisoned)?;
         if let Some(completion) = &state.shutdown {
             return Ok((completion.clone(), None));
         }
+        self.slots.0.close();
         let completion = Arc::new(ShutdownCompletion::default());
         state.shutdown = Some(completion.clone());
         let work = ShutdownWork {
@@ -215,9 +217,9 @@ mod tests {
     use super::*;
     use std::{sync::mpsc, time::Duration};
 
-    #[test]
-    fn read_admission_remains_bounded_until_join() {
-        let owner = StorageOwner::default();
+    #[tokio::test]
+    async fn a_read_past_the_running_ones_waits_for_a_thread_instead_of_failing() {
+        let owner = Arc::new(StorageOwner::default());
         let mut gates = Vec::new();
         for _ in 0..MAX_READS {
             let (release, gate) = mpsc::channel();
@@ -229,20 +231,57 @@ mod tests {
                         gate.recv().unwrap();
                         Ok(())
                     })
+                    .await
                     .unwrap(),
             );
         }
-        assert!(matches!(
-            owner.read(|| Ok(())),
-            Err(StorageError::ReadCapacity)
-        ));
+        let waiting = tokio::spawn({
+            let owner = owner.clone();
+            async move { owner.read(|| Ok(7)).await.unwrap().await.unwrap() }
+        });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(
+            !waiting.is_finished(),
+            "a fifth read runs only when a thread is free"
+        );
+        gates.pop().unwrap().send(()).unwrap();
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(10), waiting)
+                .await
+                .unwrap()
+                .unwrap(),
+            Ok(7)
+        );
+        // Fill the place the finished reads left, so the next one waits.
+        let (release, gate) = mpsc::channel();
+        gates.push(release);
+        drop(
+            owner
+                .read(move || {
+                    gate.recv().unwrap();
+                    Ok(())
+                })
+                .await
+                .unwrap(),
+        );
+        // A read still waiting when shutdown starts is refused, not left waiting.
+        let late = tokio::spawn({
+            let owner = owner.clone();
+            async move { owner.read(|| Ok(())).await.map(|_| ()) }
+        });
+        tokio::time::sleep(Duration::from_millis(50)).await;
         let (_, work) = owner.close().unwrap();
-        let work = work.unwrap();
-        assert_eq!(work.reads.len(), MAX_READS);
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(10), late)
+                .await
+                .unwrap()
+                .unwrap(),
+            Err(StorageError::Closed)
+        );
         for gate in gates {
             gate.send(()).unwrap();
         }
-        for task in work.reads {
+        for task in work.unwrap().reads {
             join(task).unwrap();
         }
     }
@@ -256,7 +295,10 @@ mod tests {
         assert!(work.unwrap().initialized);
         assert_eq!(owner.initialize(), Err(StorageError::Closed));
         assert_eq!(owner.reserve("new-writer"), Err(StorageError::Closed));
-        assert!(matches!(owner.read(|| Ok(())), Err(StorageError::Closed)));
+        assert!(matches!(
+            owner.read(|| Ok(())).await,
+            Err(StorageError::Closed)
+        ));
         let (second, work) = owner.close().unwrap();
         assert!(work.is_none());
         assert!(Arc::ptr_eq(&first, &second));
@@ -281,6 +323,7 @@ mod tests {
                     gate.recv().unwrap();
                     Ok(())
                 })
+                .await
                 .unwrap(),
         );
         let (completion, work) = owner.close().unwrap();
