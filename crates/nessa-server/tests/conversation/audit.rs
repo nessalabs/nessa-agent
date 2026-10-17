@@ -13,6 +13,7 @@ use nessa_sdk::application::agent_execution::{
         PermissionAnswerRecord, QuestionAnswerRecord, QuestionRefusalRecord, RefusedAsk,
         ReviewDeclineRecord,
     },
+    providers::ProviderOperationStage,
     sessions::SessionManager,
     tools::ToolReviewInput,
 };
@@ -1550,6 +1551,27 @@ async fn durable_queue_admission_keeps_the_admitted_model_after_selection_change
         })
         .collect::<Vec<_>>();
     assert_eq!(durable.len(), 3);
+    let refused = agent
+        .set_model(
+            Arc::new(Provider::new(factory.clone()).with_model("second-model")),
+            ActionContext::new("person", "window", "model-choice-while-queued").unwrap(),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(refused.error(), &AgentError::Busy);
+    assert_eq!(refused.stage(), ProviderOperationStage::BeforeEffect);
+    assert_eq!(agent.provider_identity(), admitted_model);
+    assert!(factory.model_updates.lock().unwrap().is_empty());
+    assert_eq!(*factory.executions.lock().unwrap(), vec!["active"]);
+    release.send(()).unwrap();
+    for receipt in [active, queued, boundary, steered] {
+        let id = receipt.id().clone();
+        assert_eq!(
+            receipt.wait().await,
+            Ok(ExecutionOutcome::Completed),
+            "admitted receipt {id:?} completes before the model choice"
+        );
+    }
     agent
         .set_model(
             Arc::new(Provider::new(factory.clone()).with_model("second-model")),
@@ -1558,7 +1580,7 @@ async fn durable_queue_admission_keeps_the_admitted_model_after_selection_change
         .await
         .unwrap();
     assert_eq!(agent.provider_identity().model_id(), "second-model");
-    assert_eq!(*factory.executions.lock().unwrap(), vec!["active"]);
+    assert_eq!(factory.model_updates.lock().unwrap().len(), 1);
     let mut modes = Vec::new();
     for (path, bytes) in durable {
         assert_eq!(fs::read(path).unwrap(), bytes);
@@ -1586,14 +1608,5 @@ async fn durable_queue_admission_keeps_the_admitted_model_after_selection_change
             ("steered".into(), "steering".into()),
         ]
     );
-    release.send(()).unwrap();
-    for receipt in [active, queued, boundary, steered] {
-        let id = receipt.id().clone();
-        assert_eq!(
-            receipt.wait().await,
-            Ok(ExecutionOutcome::Completed),
-            "admitted receipt {id:?} must complete after the model choice"
-        );
-    }
     agent.close(actor()).await.unwrap();
 }

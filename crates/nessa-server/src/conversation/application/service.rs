@@ -2547,6 +2547,12 @@ impl ConversationService {
         // Storage restores a deadline unarmed. A review this process is still
         // waiting on is that worker's promise, so the card counts down.
         // `a_saved_deadline_counts_down_while_this_process_holds_the_review`.
+        let record = load_conversation(self.inner.metadata.as_ref(), &id)
+            .await?
+            .ok_or(ConversationError::NotFound)?;
+        let model_effect = self
+            .confirmed_model_effect(&record, committed.snapshot())
+            .await?;
         let holding = reviews_this_process_holds(&live.agent, committed.snapshot());
         let mut projection = live.projection.lock().await;
         let accepted = projection.replace_committed_while_holding(
@@ -2573,6 +2579,13 @@ impl ConversationService {
             agent_features: operation_capabilities.into(),
         });
         projection.lifecycle(lifecycle_view(&live.agent));
+        if let Some(effect) = model_effect {
+            projection.model_selection(
+                record.model().as_str().into(),
+                record.approval_mode(),
+                effect,
+            );
+        }
         let mut view = projection.read();
         let cursor = projection.committed_cursor();
         drop(projection);
@@ -2651,7 +2664,22 @@ impl ConversationService {
             .ok_or(ConversationError::NotFound)?;
         self.access().admit(&record, caller)?;
         let (committed, order) = self.committed_with_order(id).await?;
-        let projection = self.detached(id, &committed, &order);
+        let mut projection = self.detached(id, &committed, &order);
+        projection.selection(ConversationSelectionView {
+            agent: record.agent().ok_or(ConversationError::AgentUnsupported)?,
+            model: record.model().as_str().into(),
+            approval_mode: record.approval_mode(),
+        });
+        if let Some(effect) = self
+            .confirmed_model_effect(&record, committed.snapshot())
+            .await?
+        {
+            projection.model_selection(
+                record.model().as_str().into(),
+                record.approval_mode(),
+                effect,
+            );
+        }
         let read = (projection.read(), projection.committed_cursor());
         self.read_only(read, &record, id, caller).await
     }
@@ -3115,12 +3143,7 @@ impl ConversationService {
                         .invocations
                         .iter()
                         .find(|record| record.request.execution_id == execution)
-                        .map(|record| {
-                            (
-                                record.request.user_message.app_model_context().to_vec(),
-                                record.initiation.clone(),
-                            )
-                        })
+                        .map(|record| (record.request.clone(), record.initiation.clone()))
                 });
             let (original, saved_initiation) = original.unzip();
             let known = original.is_some();
@@ -3247,20 +3270,32 @@ impl ConversationService {
                     .await
                     .map_err(|_| ConversationError::Audit)?;
             }
-            // Reserve the full effective context budget consistently across retries.
-            // ACP owns hidden context/tokenization; this is a conservative admission
-            // reservation, not a claim about actual token usage or provider billing.
-            let capabilities = live.agent.capabilities();
-            let limits = capabilities.limits();
-            let budget = live.model_budget.lock().await;
-            if budget.identity != live.agent.provider_identity() {
-                return Err(ConversationError::ModelChangeUncertain.into());
-            }
-            let reserved = budget.reserved_output_tokens;
-            drop(budget);
-            if reserved > limits.max_output() || reserved >= limits.max_context_window() {
-                return Err(ConversationError::InvalidInput.into());
-            }
+            // A saved request owns its admission budget after model changes.
+            // The incoming message is replaced below so SDK recovery still
+            // checks content, actor, initiation and operation conflicts.
+            let request = if let Some(original) = original {
+                original
+            } else {
+                // ACP owns hidden context/tokenization. Fresh submissions
+                // conservatively reserve the verified effective context budget.
+                let capabilities = live.agent.capabilities();
+                let limits = capabilities.limits();
+                let budget = live.model_budget.lock().await;
+                if budget.identity != live.agent.provider_identity() {
+                    return Err(ConversationError::ModelChangeUncertain.into());
+                }
+                let reserved = budget.reserved_output_tokens;
+                drop(budget);
+                if reserved > limits.max_output() || reserved >= limits.max_context_window() {
+                    return Err(ConversationError::InvalidInput.into());
+                }
+                ExecutionRequest {
+                    execution_id: execution.clone(),
+                    user_message: message.clone(),
+                    estimated_input_tokens: u64::from(limits.max_context_window() - reserved),
+                    reserved_output_tokens: reserved,
+                }
+            };
             // Just before the enqueue, still under the submission lock, which
             // every submission to this conversation takes: an app's message is
             // for the opening it was admitted in, its mount not released
@@ -3286,15 +3321,15 @@ impl ConversationService {
             // before the agent was asked, each is reported dropped unsent as
             // it goes (row C11).
             let mut taken = None;
-            let carried = match original {
-                Some(original) => original,
-                None if idle => {
+            let carried = match known {
+                true => request.user_message.app_model_context().to_vec(),
+                false if idle => {
                     let mut took = live.app_reviews.take_held();
                     let contexts = took.take_contexts();
                     taken = Some(took);
                     contexts
                 }
-                None => Vec::new(),
+                false => Vec::new(),
             };
             let message = message
                 .sent_by(writer.sender())
@@ -3308,10 +3343,8 @@ impl ConversationService {
                 );
             }
             let request = ExecutionRequest {
-                execution_id: execution,
                 user_message: message.clone(),
-                estimated_input_tokens: u64::from(limits.max_context_window() - reserved),
-                reserved_output_tokens: reserved,
+                ..request
             };
             // A fresh Drive turn names the grant and revision admission
             // read. The note verdict is taken before that grant is held, so

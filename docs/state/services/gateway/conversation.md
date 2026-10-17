@@ -14,6 +14,7 @@ sources:
   - "crates/nessa-server/tests/conversation/local_golden.rs"
   - "crates/nessa-server/tests/conversation/golden/local_conversation.txt"
   - "crates/nessa-server/tests/conversation/model_changes.rs"
+  - "crates/nessa-server/tests/conversation/model_changes/retained_identity.rs"
   - "crates/nessa-server/tests/conversation/store/model_changes.rs"
   - "crates/nessa-server/src/conversation/domain/value_objects/conversation_deletion.rs"
   - "crates/nessa-server/src/conversation/domain/entities/conversation.rs"
@@ -114,8 +115,12 @@ The conversation admission lock serializes model choices, permission presets
 and new messages. `model_requests` keeps the original request, actor, prior
 selection and observed result. The SDK's attributed `ModelChanged` record is
 the native application evidence. Metadata commits the acknowledged model and
-native approval preset together; admission then uses that binding's limits and
-configured output reservation.
+native approval preset together; fresh admission then uses that binding's limits
+and configured output reservation. A saved submission keeps its complete
+original request for retries, including the original reservation. Reopening and
+detached reads recover the last confirmed model effect only by joining the SDK
+fact to its Applied metadata request and the current committed model. A later
+independent preset choice does not alter that historical model timing.
 
 ```mermaid
 sequenceDiagram
@@ -170,7 +175,11 @@ controls; pending construction and final same-owner publication remain separate.
 | Original owner stops during pending title read | `a_pending_mode_view_rechecks_its_owner_after_the_title_wait`: no stale publication after retained stop or confirmed release |
 | Unknown result and failed cleanup | `failed_session_retirement_keeps_mode_recovery_pending_without_a_second_open`: intent retained, no second open while blocked, explicit Open retries after cleanup is released |
 | Known SDK acknowledgement and failed cleanup | `acknowledged_model_recovery_retries_the_stopped_owner` and `acknowledged_preset_recovery_retries_the_stopped_owner`: exact original fact settles without repeating native control |
-| Queued input or PromptRequired steering from a distinct checked share-grant initiation admitted under model A, then model B selected | SDK captures the admission identity under the shared scheduler/control lock; durable queue-admitted JSON retains A's name/modelId/context independently of the later selection; `durable_queue_admission_keeps_the_admitted_model_after_selection_changes` |
+| Queued input or PromptRequired steering from a distinct checked share-grant initiation admitted under model A, then model B requested | SDK refuses Busy before native effect while pending work remains. Drain all four A receipts, then select B; durable queue-admitted JSON retains A's name/modelId/context; `durable_queue_admission_keeps_the_admitted_model_after_selection_changes` |
+| Completed A submission retried after selecting B with different limits and reservation | Saved complete execution request owns retry admission fields; same message/actor/operation recovers original delivery, changed message/actor/operation conflicts; `a_submission_retry_keeps_its_original_budget_after_a_model_change` |
+| Confirmed model choice, then close/reopen, gateway restart or detached read | The existing live/detached publication read joins its already-read committed SDK model fact to its Applied metadata request and current committed model before restoring its effect; `a_confirmed_model_effect_survives_detached_reads_and_reopening` |
+| Confirmed model choice followed by an independent permission preset | Retain the historical model effect while publishing the newly committed preset; `a_confirmed_model_effect_survives_detached_reads_and_reopening` |
+| Durable model fact has no matching Applied metadata request, or its target is no longer the committed selection | Publish no confirmed effect; `a_model_effect_requires_the_matching_committed_request` |
 | Real local conversation writes its queue-admission audit | The generated golden evidence retains the captured model object with unchanged actor, ordering and other facts; `a_local_conversation_leaves_the_golden_records_audit_and_cleanup_evidence` |
 | Generic admission record has no captured model | Durable JSON retains an explicit null model, without inferring one; `audit_maps_attachment_and_admission_evidence_without_losing_correlation` |
 | Native review still held during model control | `a_pending_model_control_keeps_the_original_review_answerable_after_caller_loss`: same turn/review, no request replay |

@@ -684,3 +684,6 @@ mod adapted_environment;
 
 #[path = "model_changes/stopped_recovery.rs"]
 mod stopped_recovery;
+
+#[path = "model_changes/retained_identity.rs"]
+mod retained_identity;

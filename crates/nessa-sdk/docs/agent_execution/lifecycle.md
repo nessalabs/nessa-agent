@@ -423,9 +423,13 @@ an old effort under a new model name. Claude's output ceiling is a launch settin
 changing that ceiling requires another launch and is refused before a live model
 request. Changing its model with the same ceiling is supported.
 
-The scheduler serializes model/settings controls with admission. An already
-executing turn keeps its original execution and trace identity; later admission
-records the current configured model. The trace store belongs to the Agent
+The scheduler serializes model/settings controls with admission. Live model and
+changing approval-preset controls preserve the configuration of queued or retained pending input: while the
+existing scheduler owns that work, either control returns Busy before
+native effect. It does not reinterpret waiting input against a new selection.
+An active turn alone still permits supported native model control and keeps its
+original execution and trace identity; later admission records the current
+configured model. The trace store belongs to the Agent
 lifetime, so replacing a model factory cannot orphan a span started earlier.
 `Agent::set_approval_mode(mode, actor)` also permits an active owner turn. Neither
 control answers, replaces or cancels existing permission requests. A checked grant
@@ -483,6 +487,12 @@ snapshot validation both ask that owner.
 
 | State and event/order | Settlement and retained evidence | Regression |
 | --- | --- | --- |
+| Active A plus ordinary/boundary/PromptRequired input admitted under A; target B has smaller limits | Busy BeforeEffect, Requested/Refused audit, zero native model calls and no Applied/model fact; all admitted inputs complete under A | `queued_limits_keep_the_admitted_configuration_authority` |
+| Same ordering, target B removes the admitted image modality | Same refusal and preserved receipts; no dispatch-time reinterpretation | `queued_images_keep_the_admitted_configuration_authority` |
+| Same ordering, checked-grant input needs Ask and B would relax it | Same refusal and preserved checked grant; no queued tool-policy invalidation | `queued_checked_grants_keep_the_admitted_configuration_authority` |
+| Owner A active plus queued checked-grant Ask input; direct preset would relax Ask | Shared scheduler prerequisite returns Busy BeforeEffect for a changing preset and preserves all receipts. Before correction, Full succeeded and queued checked input failed Unsupported; active-only control remains allowed | `queued_preset_keeps_the_admitted_configuration_authority` |
+| Queued checked-grant Ask input and an unchanged Ask preset request | Existing same-value native control and audit behavior remains allowed; the pending-work prerequisite exempts an unchanged preset. Public before-probe passed | `queued_unchanged_preset_keeps_the_admitted_configuration_authority` |
+| Only a native-executing active input, no queued or retained pending owner | Supported native model control remains allowed; original active/review identities persist | `a_live_model_change_keeps_the_active_turn_and_context_and_changes_later_admission`; active checked-turn tests |
 | Native model ACK, then configured factory panics | Work-permit unwind fences admission; no Applied or committed model is published; explicit close owns physical cleanup | `post_ack_factory_panic_fences_admission_without_committing_model` |
 | Factory panics during preflight, before native entry | Zero native dispatch and no Applied/committed model; `CleanupRequired` fences subsequent admission until explicit close and restoration | `preflight_factory_panic_fences_admission_until_cleanup` |
 | Ordinary permit drop after completed settlement | No unwind and no fence; later model/settings controls remain usable | adjusted-ACK restore test |

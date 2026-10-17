@@ -573,6 +573,8 @@ impl Agent {
     /// docs/agent_execution/lifecycle.md.
     ///
     /// # Errors
+    /// Returns [`AgentError::Busy`] before effect when changing the preset while
+    /// queued or retained pending input waits. An unchanged preset remains allowed.
     /// Returns the provider's typed failure and lifecycle status. A pending
     /// response interrupted by close returns [`AgentError::Closed`] with
     /// [`ProviderSessionState::CleanupRequired`]. If the owned task is cancelled
@@ -601,7 +603,7 @@ impl Agent {
         mode: ApprovalMode,
         actor: ActionContext,
     ) -> ProviderOperationResult<()> {
-        let _scheduler = self.inner.scheduler.lock().await;
+        let scheduler = self.inner.scheduler.lock().await;
         let permit = self
             .inner
             .lifecycle
@@ -615,7 +617,15 @@ impl Agent {
         self.audit_configuration_control(
             &permit,
             control.clone(),
-            self.apply_approval_control(&permit, &control, mode, actor),
+            async {
+                if self.approval_mode() != Some(mode) {
+                    scheduler
+                        .require_no_pending_work()
+                        .map_err(ProviderOperationFailure::before_effect)?;
+                }
+                self.apply_approval_control(&permit, &control, mode, actor)
+                    .await
+            },
             |_| {
                 (
                     self.provider_identity(),

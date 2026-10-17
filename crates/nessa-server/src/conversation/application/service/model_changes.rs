@@ -2,7 +2,7 @@
 use super::{
     contain_mode_terminal, load_conversation, provider_approval_mode, supervised, AttachmentPhase,
     Conversation, ConversationCaller, ConversationError, ConversationId, ConversationModelId,
-    ConversationService, ExecutionId, LiveConversation, ModelBudget, PermissionId,
+    ConversationService, ExecutionId, LiveConversation, ModelBudget, PermissionId, SessionSnapshot,
 };
 use super::{lifecycle_view, reviews_this_process_holds, ActionContext, AgentError};
 use crate::conversation::application::{
@@ -308,45 +308,21 @@ impl ConversationService {
             .resolve_for(agent, record.model().as_str(), record.approval_mode())
             .await?;
         let (committed, _) = self.committed_with_order(id).await?;
-        let saved = committed
+        let matching = committed
             .snapshot()
-            .and_then(|snapshot| snapshot.model_change.as_ref());
-        let matching = saved.filter(|saved| {
-            saved.actor().principal_id() == request.initiator_principal_id.as_str()
-                && saved.actor().surface_id() == request.initiator_surface_id
-                && saved.actor().request_id() == request.request_id
-                && saved.change().before() == &request.prior_identity
-                && saved.change().after() == &request.requested_identity
-        });
-        let (application, target, identity) = if let Some(saved) = matching {
-            let approval_mode = match saved.configuration().approval_mode() {
-                Some(ApprovalMode::Ask) => ConversationApprovalMode::Ask,
-                Some(ApprovalMode::Auto) => ConversationApprovalMode::Auto,
-                Some(ApprovalMode::Full) => ConversationApprovalMode::Full,
-                None => return Err(ConversationError::ModelChangeUncertain),
-            };
+            .map(|snapshot| acknowledged_model_selection(&request, snapshot))
+            .transpose()?
+            .flatten();
+        let (application, target, identity) = if let Some(selection) = matching {
             let target = self
                 .inner
                 .agents
-                .resolve_for(agent, request.requested_model.as_str(), approval_mode)
+                .resolve_for(
+                    agent,
+                    request.requested_model.as_str(),
+                    selection.approval_mode,
+                )
                 .await?;
-            if committed
-                .snapshot()
-                .is_none_or(|snapshot| &snapshot.provider != saved.change().after())
-            {
-                return Err(ConversationError::ModelChangeUncertain);
-            }
-            let selection = ConversationModelSelection {
-                model: request.requested_model.clone(),
-                approval_mode,
-                effect: match saved.timing() {
-                    Some(ModelChangeTiming::SubsequentResponses) => {
-                        ConversationModelChangeEffect::SubsequentResponses
-                    }
-                    Some(ModelChangeTiming::NextTurn) => ConversationModelChangeEffect::NextTurn,
-                    None => return Err(ConversationError::ModelChangeUncertain),
-                },
-            };
             (
                 ConversationModelApplication::Applied(selection),
                 target,
@@ -450,6 +426,43 @@ impl ConversationService {
         }
         self.inner.live_changes.publish(id);
         Ok(())
+    }
+
+    /// Restore presentation only from the same native/request relationship
+    /// recovery uses, plus a matching terminal metadata commit. The preset in
+    /// that historical application may precede an independent preset choice.
+    pub(super) async fn confirmed_model_effect(
+        &self,
+        record: &Conversation,
+        snapshot: Option<&SessionSnapshot>,
+    ) -> Result<Option<ConversationModelChangeEffect>, ConversationError> {
+        let Some(snapshot) = snapshot else {
+            return Ok(None);
+        };
+        let Some(saved) = snapshot.model_change.as_ref() else {
+            return Ok(None);
+        };
+        let Some(request) = self
+            .inner
+            .metadata
+            .model_change(record.id(), saved.actor().request_id())
+            .await?
+        else {
+            return Ok(None);
+        };
+        let Ok(committed) = saved_selection(&request) else {
+            return Ok(None);
+        };
+        if request.conversation_id != *record.id()
+            || request.organization_id != *record.organization()
+            || committed.model != *record.model()
+        {
+            return Ok(None);
+        }
+        let Ok(Some(acknowledged)) = acknowledged_model_selection(&request, snapshot) else {
+            return Ok(None);
+        };
+        Ok((acknowledged == committed).then_some(committed.effect))
     }
 
     pub(super) async fn read_pending_model_change(
@@ -613,6 +626,44 @@ impl ConversationService {
             Ok(())
         }
     }
+}
+
+/// The SDK owns the validated native fact; the metadata request owns its
+/// original actor and intent. Recovery and publication join them here.
+fn acknowledged_model_selection(
+    request: &ConversationModelRequest,
+    snapshot: &SessionSnapshot,
+) -> Result<Option<ConversationModelSelection>, ConversationError> {
+    let Some(saved) = snapshot.model_change.as_ref().filter(|saved| {
+        saved.actor().principal_id() == request.initiator_principal_id.as_str()
+            && saved.actor().surface_id() == request.initiator_surface_id
+            && saved.actor().request_id() == request.request_id
+            && saved.change().before() == &request.prior_identity
+            && saved.change().after() == &request.requested_identity
+    }) else {
+        return Ok(None);
+    };
+    if &snapshot.provider != saved.change().after() {
+        return Err(ConversationError::ModelChangeUncertain);
+    }
+    let approval_mode = match saved.configuration().approval_mode() {
+        Some(ApprovalMode::Ask) => ConversationApprovalMode::Ask,
+        Some(ApprovalMode::Auto) => ConversationApprovalMode::Auto,
+        Some(ApprovalMode::Full) => ConversationApprovalMode::Full,
+        None => return Err(ConversationError::ModelChangeUncertain),
+    };
+    let effect = match saved.timing() {
+        Some(ModelChangeTiming::SubsequentResponses) => {
+            ConversationModelChangeEffect::SubsequentResponses
+        }
+        Some(ModelChangeTiming::NextTurn) => ConversationModelChangeEffect::NextTurn,
+        None => return Err(ConversationError::ModelChangeUncertain),
+    };
+    Ok(Some(ConversationModelSelection {
+        model: request.requested_model.clone(),
+        approval_mode,
+        effect,
+    }))
 }
 
 fn saved_selection(

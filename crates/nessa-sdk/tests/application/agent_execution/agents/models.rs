@@ -1,5 +1,7 @@
 //! Public same-provider control preserves an active execution and exact saved context.
 use nessa_sdk::application::agent_execution::traces::LocalTraceStore;
+use nessa_sdk::application::dto::ImageInputLimitsDto;
+use nessa_sdk::domain::common::value_objects::{ImageMediaType, Sha256Digest};
 use nessa_sdk::domain::model_metadata::value_objects::EffortLevel;
 
 use super::MemoryStorage;
@@ -13,6 +15,7 @@ use tokio::time::timeout;
 
 struct Backend {
     inner: RecordingSession,
+    image_input: bool,
     hold: Mutex<Option<oneshot::Receiver<()>>>,
     started: Notify,
     closes: AtomicUsize,
@@ -32,6 +35,7 @@ impl ProviderSessionBackend for Backend {
     fn operation_capabilities(&self) -> ProviderOperationCapabilities {
         ProviderOperationCapabilities {
             negotiated: true,
+            image_input: self.image_input,
             effort_levels: capabilities_for("small", 200)
                 .effort_levels()
                 .unwrap()
@@ -249,6 +253,14 @@ impl AgentProvider for Provider {
     }
 }
 fn capabilities_for(id: &str, maximum: u32) -> EffectiveCapabilities {
+    capabilities_with_images(id, maximum, None)
+}
+fn capabilities_with_images(
+    id: &str,
+    maximum: u32,
+    image_input: Option<ImageInputLimitsDto>,
+) -> EffectiveCapabilities {
+    let images = image_input.is_some();
     let text = ModalitiesDto {
         text: true,
         image: false,
@@ -258,8 +270,11 @@ fn capabilities_for(id: &str, maximum: u32) -> EffectiveCapabilities {
         provider: "anthropic".into(),
         model_id: id.into(),
         display_name: id.into(),
-        input: text,
-        image_input: None,
+        input: ModalitiesDto {
+            image: images,
+            ..text
+        },
+        image_input,
         output: text,
         tool_use: true,
         reasoning: Some(nessa_sdk::application::dto::ReasoningDto {
@@ -276,7 +291,13 @@ fn capabilities_for(id: &str, maximum: u32) -> EffectiveCapabilities {
     EffectiveCapabilities::new(
         &model,
         BindingRestrictions::new(
-            ModelFeatures::new(text, text, true, true, false),
+            ModelFeatures::new(
+                Modalities::new(true, images, false).unwrap(),
+                text,
+                true,
+                true,
+                false,
+            ),
             model.limits(),
         ),
         model.limits(),
@@ -319,10 +340,19 @@ async fn prepared_with_normalization(
     normalization: Normalization,
     host: Option<Arc<dyn HarnessHost>>,
 ) -> (Agent, Arc<Provider>, MemoryStorage) {
+    prepared_with_capabilities(hold, normalization, host, capabilities_for("large", 1000)).await
+}
+async fn prepared_with_capabilities(
+    hold: Option<oneshot::Receiver<()>>,
+    normalization: Normalization,
+    host: Option<Arc<dyn HarnessHost>>,
+    capabilities: EffectiveCapabilities,
+) -> (Agent, Arc<Provider>, MemoryStorage) {
     let backend = Arc::new(Backend {
         inner: RecordingSession {
             prompts: AtomicUsize::new(0),
         },
+        image_input: capabilities.features().input().image(),
         hold: Mutex::new(hold),
         started: Notify::new(),
         closes: AtomicUsize::new(0),
@@ -347,7 +377,7 @@ async fn prepared_with_normalization(
         normalization_host: Arc::new(UnstartedHost),
         effort: None,
         context: "workspace".into(),
-        capabilities: capabilities_for("large", 1000),
+        capabilities,
         backend,
         restores: Arc::new(Mutex::new(Vec::new())),
     });
@@ -1389,4 +1419,218 @@ async fn normalization_cannot_replace_the_captured_host_owner() {
     assert_eq!(reopened.approval_mode(), Some(ApprovalMode::Auto));
     assert_eq!(prior.restores.lock().unwrap().len(), opens + 1);
     reopened.close(close_action()).await.unwrap();
+}
+
+#[derive(Clone, Copy)]
+enum QueuedConfiguration {
+    SmallerLimits,
+    RemovedImages,
+    RelaxedPreset,
+    DirectPreset,
+    UnchangedPreset,
+}
+async fn queued_configuration_keeps_admission_authority(case: QueuedConfiguration) {
+    let capabilities = match case {
+        QueuedConfiguration::RemovedImages => capabilities_with_images(
+            "large",
+            1000,
+            Some(ImageInputLimitsDto {
+                media_types: vec!["image/png".into()],
+                max_encoded_bytes: 8,
+                max_edge_px: 8000,
+                many_images_max_edge_px: 2000,
+                native_long_edge_px: 1568,
+            }),
+        ),
+        _ => capabilities_for("large", 1000),
+    };
+    let (release, hold) = oneshot::channel();
+    let (agent, prior, _) =
+        prepared_with_capabilities(Some(hold), Normalization::Exact, None, capabilities).await;
+    let active = agent
+        .enqueue(input("active", 1), Submitter::owner(close_action()))
+        .await
+        .unwrap();
+    timeout(Duration::from_secs(3), prior.backend.started.notified())
+        .await
+        .unwrap();
+    let active_id = agent.active_execution_id();
+    let waiting_input = |id: &str| {
+        let mut request = input(
+            id,
+            if matches!(case, QueuedConfiguration::SmallerLimits) {
+                400
+            } else {
+                1
+            },
+        );
+        if matches!(case, QueuedConfiguration::RemovedImages) {
+            request.user_message = UserMessage::new(
+                request.user_message.text().cloned(),
+                vec![ImageReference::new(
+                    Sha256Digest::from_bytes([1; 32]),
+                    ImageMediaType::Png,
+                    1,
+                )
+                .unwrap()],
+                Vec::new(),
+            )
+            .unwrap();
+        }
+        request
+    };
+    let checked = || {
+        Submitter::new(
+            ActionContext::new("driver", "phone", "queued").unwrap(),
+            Initiation::checked_grant(GrantInitiator::new("queued-driver", 1).unwrap()),
+        )
+    };
+    let submitter = || {
+        if matches!(
+            case,
+            QueuedConfiguration::RelaxedPreset
+                | QueuedConfiguration::DirectPreset
+                | QueuedConfiguration::UnchangedPreset
+        ) {
+            checked()
+        } else {
+            Submitter::owner(close_action())
+        }
+    };
+    let queued = agent
+        .enqueue(waiting_input("queued"), submitter())
+        .await
+        .unwrap();
+    let boundary = agent
+        .enqueue_steering(waiting_input("boundary"), submitter())
+        .await
+        .unwrap();
+    let steered = match agent
+        .steer(waiting_input("steered"), checked())
+        .await
+        .unwrap()
+    {
+        SteeringDelivery::Queued(receipt) => receipt,
+        SteeringDelivery::Injected { .. } => panic!("a distinct grant must wait for its own turn"),
+    };
+    let mut chosen = (*target(&prior)).clone();
+    if matches!(case, QueuedConfiguration::RelaxedPreset) {
+        chosen.mode = ApprovalMode::Auto;
+        *prior.backend.model_mode.lock().unwrap() = ApprovalMode::Auto;
+    }
+    let control = match case {
+        QueuedConfiguration::DirectPreset => {
+            agent
+                .set_approval_mode(ApprovalMode::Full, close_action())
+                .await
+        }
+        QueuedConfiguration::UnchangedPreset => {
+            agent
+                .set_approval_mode(ApprovalMode::Ask, close_action())
+                .await
+        }
+        _ => agent
+            .set_model(Arc::new(chosen), close_action())
+            .await
+            .map(|_| ()),
+    };
+    assert_eq!(agent.active_execution_id(), active_id);
+    release.send(()).unwrap();
+    assert_eq!(
+        timeout(Duration::from_secs(3), active.wait())
+            .await
+            .unwrap(),
+        Ok(ExecutionOutcome::Completed)
+    );
+    let mut outcomes = Vec::new();
+    for receipt in [queued, boundary, steered] {
+        let id = receipt.id().clone();
+        outcomes.push((
+            id,
+            timeout(Duration::from_secs(3), receipt.wait())
+                .await
+                .unwrap(),
+        ));
+    }
+    assert!(
+        outcomes
+            .iter()
+            .all(|(_, result)| *result == Ok(ExecutionOutcome::Completed)),
+        "admitted work was invalidated: {outcomes:?}; configuration control: {control:?}; preset: {:?}; native model/preset calls: {}/{}",
+        agent.approval_mode(),
+        prior.backend.model_calls.load(Ordering::SeqCst),
+        prior.backend.approval_calls.load(Ordering::SeqCst),
+    );
+    if matches!(case, QueuedConfiguration::UnchangedPreset) {
+        assert!(
+            control.is_ok(),
+            "unchanged preset remains supported: {control:?}"
+        );
+    } else {
+        let failure =
+            control.expect_err("queued work retains its admitted configuration authority");
+        assert_eq!(failure.error(), &AgentError::Busy);
+        assert_eq!(failure.stage(), ProviderOperationStage::BeforeEffect);
+        assert_eq!(failure.session_state(), &ProviderSessionState::Usable);
+    }
+    assert_eq!(prior.backend.model_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        prior.backend.approval_calls.load(Ordering::SeqCst),
+        usize::from(matches!(case, QueuedConfiguration::UnchangedPreset)),
+    );
+    assert_eq!(prior.backend.closes.load(Ordering::SeqCst), 0);
+    assert_eq!(agent.provider_identity(), prior.identity());
+    assert_eq!(agent.approval_mode(), Some(ApprovalMode::Ask));
+    let snapshot = agent.session_manager().snapshot().await.unwrap();
+    assert_eq!(snapshot.provider, prior.identity());
+    assert!(snapshot.model_change.is_none());
+    let stages = prior
+        .backend
+        .audit
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(|record| match record {
+            ExecutionAuditRecord::ConfigurationControlled(record) => Some(record.stage()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        stages,
+        if matches!(case, QueuedConfiguration::UnchangedPreset) {
+            vec![
+                ConfigurationControlStage::Requested,
+                ConfigurationControlStage::Acknowledged,
+                ConfigurationControlStage::Applied,
+            ]
+        } else {
+            vec![
+                ConfigurationControlStage::Requested,
+                ConfigurationControlStage::Refused,
+            ]
+        }
+    );
+    agent.close(close_action()).await.unwrap();
+}
+#[tokio::test]
+async fn queued_limits_keep_the_admitted_configuration_authority() {
+    queued_configuration_keeps_admission_authority(QueuedConfiguration::SmallerLimits).await;
+}
+#[tokio::test]
+async fn queued_images_keep_the_admitted_configuration_authority() {
+    queued_configuration_keeps_admission_authority(QueuedConfiguration::RemovedImages).await;
+}
+#[tokio::test]
+async fn queued_checked_grants_keep_the_admitted_configuration_authority() {
+    queued_configuration_keeps_admission_authority(QueuedConfiguration::RelaxedPreset).await;
+}
+
+#[tokio::test]
+async fn queued_preset_keeps_the_admitted_configuration_authority() {
+    queued_configuration_keeps_admission_authority(QueuedConfiguration::DirectPreset).await;
+}
+
+#[tokio::test]
+async fn queued_unchanged_preset_keeps_the_admitted_configuration_authority() {
+    queued_configuration_keeps_admission_authority(QueuedConfiguration::UnchangedPreset).await;
 }

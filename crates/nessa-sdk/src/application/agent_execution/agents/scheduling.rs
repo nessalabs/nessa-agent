@@ -254,6 +254,13 @@ impl Scheduler {
     fn has_no_work(&self) -> bool {
         self.queue.is_empty() && self.pending.is_empty()
     }
+    pub(super) fn require_no_pending_work(&self) -> Result<(), AgentError> {
+        if self.has_no_work() {
+            Ok(())
+        } else {
+            Err(AgentError::Busy)
+        }
+    }
     pub(super) fn is_idle(&self) -> bool {
         !self.running && self.queue.is_empty()
     }

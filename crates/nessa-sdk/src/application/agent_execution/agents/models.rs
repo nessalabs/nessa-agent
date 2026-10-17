@@ -149,6 +149,8 @@ impl Agent {
     /// other configuration controls are serialized by the scheduler lock.
     ///
     /// # Errors
+    /// Queued or retained pending input returns [`AgentError::Busy`] before
+    /// native effect; an active turn alone still allows supported model control.
     /// Unsupported or different-context targets are refused before sending.
     /// Provider, persistence and close failures carry explicit cleanup state;
     /// an uncertain generation cannot authorize subsequent work. If an admitted
@@ -179,7 +181,7 @@ impl Agent {
         target: Arc<dyn AgentProvider>,
         actor: ActionContext,
     ) -> ProviderOperationResult<ModelChangeEffect> {
-        let _scheduler = self.inner.scheduler.lock().await;
+        let scheduler = self.inner.scheduler.lock().await;
         let permit = self
             .inner
             .lifecycle
@@ -193,7 +195,12 @@ impl Agent {
         self.audit_configuration_control(
             &permit,
             control.clone(),
-            self.change_model_on(&permit, &control, target, actor),
+            async {
+                scheduler
+                    .require_no_pending_work()
+                    .map_err(ProviderOperationFailure::before_effect)?;
+                self.change_model_on(&permit, &control, target, actor).await
+            },
             |effect| (effect.identity().clone(), effect.configuration()),
         )
         .await
