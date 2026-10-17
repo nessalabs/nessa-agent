@@ -34,6 +34,35 @@ the returned `executionId`; without it a changed active turn produces a conflict
 rather than proving that the earlier stop completed. An omitted `requestId`
 means a new command on each call.
 
+## Reports back
+
+A queued or steering `send_message` reports back when its turn ends
+(`reportsBack: true`). The report is a new queued owner turn in the sending
+conversation, admitted under the same caller its send was, that names the
+thread and execution, the outcome, and the thread's final visible reply: the
+text after its last tool step, thinking left out, cut at 8 KB. It queues behind
+whatever the sender is doing, so a sender that ended its turn is woken, and one
+still running reads it next. A passive note starts no turn and reports nothing.
+
+`service/thread_reports.rs` owns this. The send registers its report before it
+submits, so a turn that ends at once is not missed, and looks once after the
+submit, so a retry of a turn that already ended still reports. Every opened
+agent carries `ThreadReportHook`; after each invocation it asks the service to
+look at that thread when a report waits on it. The look reads the thread's saved
+invocations through the report's caller (a person who can no longer view the
+thread is told nothing): a watched execution is finished when it settled, was
+cancelled, or was injected into a turn that has since ended, in which case that
+turn's outcome and reply are its own. The hook can run before its settlement is
+saved, so a look after an invocation tries again for up to two seconds. The
+report's execution identity derives from the send's source, request and purpose,
+so a second look or a retried send answers from the first receipt. One person's
+commands are taken one at a time without a queue, so a report that meets the
+person's own command retries while the store answers busy, for up to five seconds.
+
+Registrations are process-local: at most 256 wait at once, and one waits at
+most a day. A full registry answers `reportsBack: false`; a restart forgets
+them, and the sender can still `subscribe`. A thread cannot report to itself.
+
 For example, call `send_message({threadId, message: "Review the change"})`, then
 `subscribe({threadId, replay: true})`. Continue with the returned `cursor` as
 `after` until `more` is false; use `waitMs` when waiting for later changes.

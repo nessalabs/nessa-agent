@@ -1,6 +1,7 @@
 mod agent_tools;
 mod creation;
 mod mutation;
+mod thread_reports;
 use super::metadata_target::{load_conversation, validate_target};
 use super::session_key::conversation_session;
 use super::{
@@ -98,6 +99,9 @@ use std::{
         Arc, OnceLock, Weak,
     },
     time::Duration,
+};
+pub use thread_reports::{
+    ReportRegistration, ThreadReport, MAX_REPORT_REPLY_BYTES, MAX_THREAD_REPORTS,
 };
 
 use tokio::{
@@ -725,6 +729,8 @@ struct Inner {
     agent_tool_audit: OnceLock<Arc<dyn AgentToolAudit>>,
     /// Physical source admission owners retain their slot after response loss.
     agent_tool_admissions: Arc<Semaphore>,
+    /// Agent sends waiting to report their thread's finished turn.
+    thread_reports: thread_reports::ThreadReports,
     /// Decides every command's admission to a conversation.
     access_policy: Arc<dyn ConversationAccessPolicyEvaluator>,
     limits: ConversationLimits,
@@ -1114,6 +1120,7 @@ impl ConversationService {
                 clock,
                 agent_tool_audit: OnceLock::new(),
                 agent_tool_admissions: Arc::new(Semaphore::new(super::MAX_AGENT_TOOL_ADMISSIONS)),
+                thread_reports: Default::default(),
                 access_policy,
                 limits,
                 conversations: Mutex::new(HashMap::new()),
@@ -1614,6 +1621,14 @@ impl ConversationService {
                                     source,
                                 }));
                             }
+                            // Every agent: whether a send to this thread
+                            // waits on a report is decided as each turn ends.
+                            agent.add_invocation_hook(Arc::new(
+                                thread_reports::ThreadReportHook {
+                                    service: Arc::downgrade(&service.inner),
+                                    child: id.clone(),
+                                },
+                            ));
                             let issued = issue(
                                 agent.session_manager(),
                                 environment.as_ref(),

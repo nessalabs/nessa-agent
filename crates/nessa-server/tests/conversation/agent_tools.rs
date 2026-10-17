@@ -3,7 +3,8 @@ use super::*;
 #[cfg(unix)]
 use crate::composition::conversation_tools::ConversationTools;
 use crate::conversation::application::{
-    AgentToolAudit, AgentToolAuditRecord, AgentToolRequest, ConversationFuture,
+    AgentToolAudit, AgentToolAuditRecord, AgentToolRequest, ConversationFuture, ReportRegistration,
+    ThreadReport,
 };
 #[cfg(unix)]
 use crate::mcp_servers::{
@@ -18,6 +19,7 @@ use nessa_sdk::{
         ExecutionUpdate, SubmissionMode as InvocationSubmissionMode,
     },
     domain::agent_execution::{
+        executions::MessageChunk,
         sessions::SessionId,
         tools::{McpTool, ToolCallId, ToolCallUpdate, ToolStatus},
     },
@@ -717,6 +719,15 @@ async fn agent_tools_relay_create_send_replay_and_refuse_a_foreign_target() {
     })
     .await
     .expect("queued steering settles before another source uses the provider gate");
+    // The sends above report back into the source. Let those land, so the
+    // refusal below meets no other command of the same person.
+    tokio::time::timeout(TURN_HOLD_HANG, async {
+        while service.inner.thread_reports.waiting() > 0 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("reports of the earlier sends were queued");
     let foreign = id();
     let mut stranger = caller("foreign-create");
     stranger.principal_id = PrincipalId::new("stranger").unwrap();
@@ -913,5 +924,168 @@ async fn admitted_agent_tool_audit_finishes_after_its_response_caller_is_lost() 
     .await
     .unwrap();
     drop(release_turn);
+    retire(service, storage, metadata).await;
+}
+
+/// The source's saved turns whose message is a thread report, once there are
+/// `count` of them and no report waits.
+#[cfg(unix)]
+async fn reports_in(
+    service: &ConversationService,
+    source: &ConversationId,
+    count: usize,
+) -> Vec<String> {
+    tokio::time::timeout(TURN_HOLD_HANG, async {
+        loop {
+            let live = service.resolve(source, &caller("reports")).await.unwrap();
+            let snapshot = live.agent.session_manager().snapshot().await.unwrap();
+            let reports: Vec<_> = snapshot
+                .invocations
+                .iter()
+                .map(|record| record.request.user_message.text_str().to_owned())
+                .filter(|text| text.starts_with("[Thread report]"))
+                .collect();
+            if reports.len() >= count && service.inner.thread_reports.waiting() == 0 {
+                return reports;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the reports were queued into the source")
+}
+
+/// A turn an agent sends to another thread reports back when it ends: its
+/// outcome and final reply are queued into the sender as a new turn, once,
+/// however often the send is retried; a steering send reports as well.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_thread_turn_reports_its_outcome_and_reply_back_to_the_sender() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("data");
+    let provider = Arc::new(ProviderFactory::default());
+    provider.turn_cancel.store(true, Ordering::SeqCst);
+    let (service, storage, metadata) = fixture(&root, provider.clone());
+    service.bind_commands(storage.clone());
+    service.bind_agent_tool_audit(Arc::new(Audit::default()));
+    let source = id();
+    opened(&service, &provider, &source).await;
+    let release = hold_turn(&service, &provider, &source, "source-turn").await;
+    let tools = ConversationTools::new();
+    tools.attach(service.clone());
+    let servers = McpServers::new(Vec::new(), Arc::new(RuntimeClock::new())).unwrap();
+    let grants = ConversationGrants::new(servers.clone(), Arc::new(OsTokens));
+    let grant = grants.grant(&SessionId::new(source.to_string()).unwrap());
+    let key = ConfigurationKey::new([9; 32]);
+    let digest = built_in_digest(&key, tools.as_ref());
+    let relay = Arc::new(Relay::new(servers, grants.clone(), key).with_built_in(tools));
+    let (mut client, serving) =
+        McpClient::connect(relay, digest, grant.environment()[0].1.clone()).await;
+    let created = client
+        .call("create_thread", json!({"requestId":"report-create"}))
+        .await;
+    assert_eq!(created["isError"], false, "{created}");
+    let worker = created["structuredContent"]["threadId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let worker_id = ConversationId::new(&worker).unwrap();
+    provider.execution_updates.lock().unwrap().extend([
+        ExecutionUpdate::Message(MessageChunk::thought("weighing it")),
+        ExecutionUpdate::Message(MessageChunk::text("Let me look that up.")),
+        ExecutionUpdate::Tool(ToolCallUpdate::new(
+            ToolCallId::new("lookup").unwrap(),
+            None,
+            None,
+            Some(ToolStatus::Completed),
+            None,
+            None,
+        )),
+        ExecutionUpdate::Message(MessageChunk::text("The answer ")),
+        ExecutionUpdate::Message(MessageChunk::text("is 42.")),
+    ]);
+    let sent = client
+        .call(
+            "send_message",
+            json!({"threadId":worker,"message":"work","requestId":"report-send"}),
+        )
+        .await;
+    assert_eq!(sent["isError"], false, "{sent}");
+    assert_eq!(sent["structuredContent"]["reportsBack"], true);
+    let execution = sent["structuredContent"]["executionId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let reports = reports_in(&service, &source, 1).await;
+    assert_eq!(reports.len(), 1, "{reports:?}");
+    assert!(reports[0].contains(&worker), "{}", reports[0]);
+    assert!(reports[0].contains(&execution), "{}", reports[0]);
+    assert!(reports[0].contains(": completed."), "{}", reports[0]);
+    assert!(
+        reports[0].contains("Its reply:\nThe answer is 42."),
+        "the final visible answer is carried: {}",
+        reports[0]
+    );
+    assert!(
+        !reports[0].contains("Let me look") && !reports[0].contains("weighing"),
+        "text before the last tool step and thinking stay out: {}",
+        reports[0]
+    );
+    // A retry of the finished send answers from the same report.
+    let retried = client
+        .call(
+            "send_message",
+            json!({"threadId":worker,"message":"work","requestId":"report-send"}),
+        )
+        .await;
+    assert_eq!(retried["structuredContent"]["executionId"], execution);
+    assert_eq!(reports_in(&service, &source, 1).await.len(), 1);
+    // A refused retry of the same request leaves nothing waiting.
+    let conflict = client
+        .call(
+            "send_message",
+            json!({"threadId":worker,"message":"changed","requestId":"report-send"}),
+        )
+        .await;
+    assert_eq!(conflict["structuredContent"]["error"], "request_conflict");
+    assert_eq!(service.inner.thread_reports.waiting(), 0);
+
+    // Steering into a running turn reports once that turn has ended.
+    let release_worker = hold_turn(&service, &provider, &worker_id, "worker-active").await;
+    let steered = client
+        .call(
+            "send_message",
+            json!({"threadId":worker,"message":"also this","mode":"steering","requestId":"report-steer"}),
+        )
+        .await;
+    assert_eq!(steered["isError"], false, "{steered}");
+    assert_eq!(steered["structuredContent"]["reportsBack"], true);
+    let steer = steered["structuredContent"]["executionId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(service.inner.thread_reports.waiting(), 1);
+    drop(release_worker);
+    let reports = reports_in(&service, &source, 2).await;
+    assert_eq!(reports.len(), 2, "{reports:?}");
+    assert!(reports[1].contains(&steer), "{}", reports[1]);
+
+    // A thread cannot report to itself.
+    assert_eq!(
+        service.report_thread_turn(
+            source.clone(),
+            "own".into(),
+            ThreadReport {
+                parent: source.clone(),
+                caller: caller("own"),
+                execution: "own-report".into(),
+            },
+        ),
+        ReportRegistration::Refused
+    );
+    drop(client);
+    drop(grant);
+    serving.await.unwrap();
+    drop(release);
     retire(service, storage, metadata).await;
 }
