@@ -1,0 +1,3 @@
+        let _lease = lease;
+BECOMES
+        // deliberate omission: no stop-worker lease capture

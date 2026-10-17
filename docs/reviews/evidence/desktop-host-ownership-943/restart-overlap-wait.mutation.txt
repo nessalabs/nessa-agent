@@ -1,0 +1,3 @@
+DesktopHostClaim::Busy if wait() => {}
+BECOMES
+DesktopHostClaim::Busy if false => {}

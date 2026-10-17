@@ -1,0 +1,3 @@
+if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+BECOMES
+if true {

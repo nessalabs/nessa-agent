@@ -1,0 +1,50 @@
+[
+  {
+    "selection": "unix",
+    "umask": "000",
+    "exit": 0,
+    "log": "/workspace/scratch/nessa-943-independent-diagnosis/umask000-unix-after.log"
+  },
+  {
+    "selection": "unix",
+    "umask": "022",
+    "exit": 0,
+    "log": "/workspace/scratch/nessa-943-independent-diagnosis/umask022-unix-after.log"
+  },
+  {
+    "selection": "unix",
+    "umask": "077",
+    "exit": 0,
+    "log": "/workspace/scratch/nessa-943-independent-diagnosis/umask077-unix-after.log"
+  },
+  {
+    "selection": "full",
+    "umask": "000",
+    "exit": 0,
+    "log": "/workspace/scratch/nessa-943-independent-diagnosis/umask000-full-after.log"
+  },
+  {
+    "selection": "full",
+    "umask": "022",
+    "exit": 0,
+    "log": "/workspace/scratch/nessa-943-independent-diagnosis/umask022-full-after.log"
+  },
+  {
+    "selection": "full",
+    "umask": "077",
+    "exit": 0,
+    "log": "/workspace/scratch/nessa-943-independent-diagnosis/umask077-full-after.log"
+  },
+  {
+    "selection": "unix",
+    "kind": "strict-clippy",
+    "exit": 0,
+    "log": "/workspace/scratch/nessa-943-independent-diagnosis/unix-fixture-fix-clippy.log"
+  },
+  {
+    "selection": "full",
+    "kind": "strict-clippy",
+    "exit": 101,
+    "log": "/workspace/scratch/nessa-943-independent-diagnosis/full-fixture-fix-clippy.log"
+  }
+]
