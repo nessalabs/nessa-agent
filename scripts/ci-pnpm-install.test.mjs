@@ -25,7 +25,7 @@ test("workflow installs go through the shared pnpm action", () => {
     assert.equal(text.includes("corepack enable"), false, path)
     assert.equal(text.includes("pnpm install --frozen-lockfile"), false, path)
   }
-  assert.equal(localAuth.match(/uses: \.\/\.github\/actions\/pnpm-install/g)?.length, 3)
+  assert.equal(localAuth.match(/uses: \.\/\.github\/actions\/pnpm-install/g)?.length, 4)
   assert.equal(
     localAuth.match(/save: \$\{\{ github\.ref == 'refs\/heads\/main' \}\}/g)?.length,
     2,
