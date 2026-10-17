@@ -409,7 +409,11 @@ _ADR 238 › What fills the content region_ (the overview is workspace state).
   clear of it. _Check:_ `responsive.mjs --only
   overview-edge` (Chromium and WebKit); its place in the tab order, by hand.
 - [ ] **One press answers one request** (_ADR 238 › What fills the content
-  region_): a held ⌘↩ answers one; two presses 80ms apart answer one; a held ↩
+  region_): a held ⌘↩ answers one; two queued ⌘↩ events stamped within
+  250ms answer one, even as the first moves focus to the next request. The
+  queued pair uses synthetic DOM events (`isTrusted: false`), records its actual
+  timestamps and targets, and tests browser routing and the guard; the held-key
+  check keeps real browser input coverage. A held ↩
   on a pane card's Allow Once answers one and sends nothing typed; a double
   click on Deny or Always Allow answers one. _Check:_ `focus.mjs`
   (`focus-answers-overview`, `focus-answers-card`); unit tests `walk.test.ts`,
