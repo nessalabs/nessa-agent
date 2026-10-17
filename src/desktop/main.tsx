@@ -20,6 +20,8 @@ import { environmentFromVite } from "../env/vite"
 import { connectBrowserSession, createBrowserAuth } from "../session"
 import { StartupMounted } from "../startup/ui/mounted-signal"
 import { createDesktopDependencies } from "./dependencies"
+import { faviconSiteIcon } from "./workspace/adapters/favicon-site-icon"
+import { SiteIconProvider } from "./workspace/ui/transcript/site-icon"
 import { hostGateway } from "./adapters/host-gateway"
 import { workspaceBackend, type WorkspaceBackend } from "./model/workspace-backend"
 import { seededWindow } from "./seeded-window"
@@ -135,17 +137,21 @@ createRoot(container).render(
                 <McpServersProvider gateway={dependencies.mcpServers}>
                   <LinkedDevicesProvider gateway={dependencies.linkedDevices}>
                     <ClipboardProvider write={writeClipboardText}>
-                      <HeldFilesProvider read={dependencies.heldFiles} save={saveFile}>
-                        <NativeHooksProvider gateway={dependencies.nativeHooks}>
-                          <PermissionRulesProvider gateway={dependencies.permissionRules}>
-                            <DesktopWindow
-                              hostKind={host.kind}
-                              browserSurface={host.kind === "browser"}
-                              inspectable={import.meta.env.DEV}
-                            />
-                          </PermissionRulesProvider>
-                        </NativeHooksProvider>
-                      </HeldFilesProvider>
+                      <SiteIconProvider render={faviconSiteIcon}>
+                        <HeldFilesProvider read={dependencies.heldFiles} save={saveFile}>
+                          <NativeHooksProvider gateway={dependencies.nativeHooks}>
+                            <PermissionRulesProvider
+                              gateway={dependencies.permissionRules}
+                            >
+                              <DesktopWindow
+                                hostKind={host.kind}
+                                browserSurface={host.kind === "browser"}
+                                inspectable={import.meta.env.DEV}
+                              />
+                            </PermissionRulesProvider>
+                          </NativeHooksProvider>
+                        </HeldFilesProvider>
+                      </SiteIconProvider>
                     </ClipboardProvider>
                   </LinkedDevicesProvider>
                 </McpServersProvider>

@@ -75,6 +75,8 @@ const desktopRoles = [
   "file",
   "edit",
   "terminal",
+  // A website, where its own icon cannot be shown
+  "site",
   // Settings categories
   "preferences",
   "appearance",
