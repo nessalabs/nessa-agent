@@ -330,7 +330,15 @@ jobs:
         with:
           node-version: 24
       - shell: bash
-        run: node scripts/cargo-test-parallel.mjs --concurrency 2 --partition server-lib -- -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk
+        run: |
+          set +e
+          diagnostic_path="$RUNNER_TEMP/nessa-fresh-windows-server.log"
+          node scripts/cargo-test-parallel.mjs --concurrency 2 --partition server-lib -- -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk 2>&1 | tee "$diagnostic_path"
+          native_status=${PIPESTATUS[0]}
+          if [ "$native_status" -ne 0 ]; then
+            python scripts/desktop/fresh-native-diagnostic.py "$diagnostic_path"
+          fi
+          exit "$native_status"
         timeout-minutes: 45
 
   local-auth:
