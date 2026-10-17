@@ -54,7 +54,12 @@ jobs:
         run: pnpm exec playwright install --with-deps chromium webkit 2>&1 | tee "$BROWSER_EVIDENCE/browser-install.log"
         timeout-minutes: 15
       - name: Run the canonical signed-out suite in both engines
-        run: pnpm test:e2e:scripted -- --channel bundled --evidence "$BROWSER_EVIDENCE" 2>&1 | tee "$BROWSER_EVIDENCE/canonical.log"
+        run: |
+          set +e
+          pnpm test:e2e:scripted -- --channel bundled --evidence "$BROWSER_EVIDENCE" 2>&1 | tee "$BROWSER_EVIDENCE/canonical.log"
+          canonical_status=$?
+          FRESH_COMMAND_STATUS="$canonical_status" python3 scripts/desktop/fresh-native-diagnostic.py "$BROWSER_EVIDENCE/canonical.log" --browser-evidence "$BROWSER_EVIDENCE"
+          exit "$canonical_status"
         timeout-minutes: 35
       - name: Preserve provenance and complete browser evidence
         if: always()
