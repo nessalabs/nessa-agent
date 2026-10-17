@@ -2,8 +2,8 @@
 use crate::conversation::application::{
     error_code, event_error_code, project_events, validate_event_cursor, AgentToolRequest,
     ConversationCaller, ConversationError, ConversationEventError, ConversationService,
-    EventProgress, ReportRegistration, RequestedAgent, RequestedConversation, SubmissionMode,
-    SubmittedMessage, ThreadReport,
+    EventProgress, ReportRegistration, RequestedAgent, RequestedConversation, SourcePermits,
+    SubmissionMode, SubmittedMessage, ThreadReport, MAX_EVENT_READERS,
 };
 use crate::mcp_servers::application::{BuiltInFuture, BuiltInServer};
 use nessa_protocol::agents::AgentId;
@@ -14,7 +14,8 @@ use nessa_sdk::application::agent_execution::{
         MutationStage,
     },
     sessions::{
-        CommittedEventCursor, EventRead, EventReadLimits, EventStart, NoteDelivery, NoteState,
+        CommittedEventCursor, EventRead, EventReadError, EventReadLimits, EventStart, NoteDelivery,
+        NoteState,
     },
 };
 use nessa_sdk::domain::agent_execution::{executions::Initiator, sessions::SessionId};
@@ -27,7 +28,7 @@ use std::{
     time::Duration,
 };
 use tokio::{
-    sync::{watch, Semaphore},
+    sync::watch,
     time::{sleep, sleep_until, Instant},
 };
 
@@ -35,18 +36,19 @@ pub(super) const SERVER_NAME: &str = "nessa-agents";
 const MAX_WAIT_MS: u64 = 30_000;
 const DEFAULT_LIMIT: usize = 50;
 const MAX_LIMIT: usize = 100;
-const MAX_EVENT_READERS: usize = 4;
 const SUBSCRIPTION_SETUP_TIMEOUT: Duration = Duration::from_secs(10);
+/// The wait before retrying a read step every physical read worker refused.
+const READ_RETRY: Duration = Duration::from_millis(25);
 
 pub(crate) struct ConversationTools {
     service: OnceLock<ConversationService>,
-    readers: Arc<Semaphore>,
+    readers: Arc<SourcePermits>,
 }
 impl ConversationTools {
     pub(crate) fn new() -> Arc<Self> {
         Arc::new(Self {
             service: OnceLock::new(),
-            readers: Arc::new(Semaphore::new(MAX_EVENT_READERS)),
+            readers: Arc::new(SourcePermits::new(MAX_EVENT_READERS)),
         })
     }
     pub(crate) fn attach(&self, service: ConversationService) {
@@ -146,12 +148,12 @@ impl BuiltInServer for ConversationTools {
             let (Some(service), Ok(source)) = (service, source) else {
                 return failed("agent_tools_unavailable");
             };
-            // At most four waiting reads across this server, leaving room in
-            // the relay's eight-call connection bound for command/control calls.
+            // Bounded per source, not across the server, so the readers grow
+            // with the agents.
             let _reader = if tool == "subscribe" {
-                match readers.try_acquire_owned() {
-                    Ok(permit) => Some(permit),
-                    Err(_) => return failed("subscription_capacity"),
+                match readers.try_acquire(&source) {
+                    Some(permit) => Some(permit),
+                    None => return failed("subscription_capacity"),
                 }
             } else {
                 None
@@ -676,6 +678,14 @@ async fn observe(
             Err(ended) => return control.finish(target, ended),
         }
         let read = match control.step(reader.read(limits)).await {
+            // Every physical read worker is busy: a moment's wait, not a
+            // refusal, within this call's own deadline.
+            Ok(Err(EventReadError::Capacity)) => {
+                if let Err(ended) = control.step(sleep(READ_RETRY)).await {
+                    return control.finish(target, ended);
+                }
+                continue;
+            }
             Ok(result) => result.map_err(|error| {
                 event_error_code(&ConversationEventError::Events(error)).to_owned()
             })?,

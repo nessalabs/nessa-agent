@@ -7,6 +7,7 @@ mod thread_report_admission;
 mod thread_reports;
 use super::metadata_target::{load_conversation, validate_target};
 use super::session_key::conversation_session;
+use super::source_permits::SourcePermits;
 use super::{
     app_reviews::{AppReviews, ReviewAnswer, ReviewAnswerer},
     drive_tools::{checked_source, AdmittedPolicies, DriveToolHook, DriveTools},
@@ -743,7 +744,7 @@ struct Inner {
     /// Acknowledges a source turn's delegation decision before target work.
     agent_tool_audit: OnceLock<Arc<dyn AgentToolAudit>>,
     /// Physical source admission owners retain their slot after response loss.
-    agent_tool_admissions: Arc<Semaphore>,
+    agent_tool_admissions: Arc<SourcePermits>,
     /// Agent sends waiting to report their thread's finished turn.
     thread_reports: thread_reports::ThreadReports,
     ownership: OnceLock<owned_threads::Ownership>,
@@ -1228,7 +1229,9 @@ impl ConversationService {
                 environment,
                 clock,
                 agent_tool_audit: OnceLock::new(),
-                agent_tool_admissions: Arc::new(Semaphore::new(super::MAX_AGENT_TOOL_ADMISSIONS)),
+                agent_tool_admissions: Arc::new(SourcePermits::new(
+                    super::MAX_AGENT_TOOL_ADMISSIONS,
+                )),
                 thread_reports: Default::default(),
                 ownership: OnceLock::new(),
                 thread_admission: Arc::new(Mutex::new(())),

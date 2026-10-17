@@ -78,6 +78,11 @@ objc2-foundation = { version = "0.3", features = [
   # `startDownloadingUbiquitousItemAtURL:` begins the fetch and
   # `NSURLUbiquitousItemDownloadingStatusKey` says when it has landed.
   "NSFileManager",
+  # `review_notices` names the notices it takes back in an `NSArray`, and
+  # asks `NSBundle` whether this process is an app the notification center
+  # will serve.
+  "NSArray",
+  "NSBundle",
   "block2",
 ] }
 # The one genuinely new crate here, and the sibling of the objc2 crates above.
@@ -87,6 +92,21 @@ objc2-foundation = { version = "0.3", features = [
 # which is the thing this exists to stop.
 objc2-uniform-type-identifiers = { version = "0.3", features = ["UTType"] }
 block2 = "0.6"
+# Already in the tree under the same objc2 crates. `review_notices` posts and
+# takes back the notice for a waiting permission review through it: WKWebView
+# has no web notifications to do it from the page.
+objc2-user-notifications = { version = "0.3", default-features = false, features = [
+  "std",
+  "block2",
+  "UNNotification",
+  "UNNotificationContent",
+  "UNNotificationRequest",
+  "UNNotificationResponse",
+  "UNNotificationSettings",
+  "UNNotificationSound",
+  "UNNotificationTrigger",
+  "UNUserNotificationCenter",
+] }
 # Already in the tree under objc2-app-kit. `CFRunLoop` is how
 # `traffic_lights.rs` puts the buttons back each time the main run loop is about
 # to sleep, after whatever AppKit moved without saying so.

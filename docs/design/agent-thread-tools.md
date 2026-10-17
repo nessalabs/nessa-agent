@@ -186,13 +186,15 @@ The tool returns up to 16 semantic facts per read step, with a maximum 256 MiB
 logical input budget because a stored semantic fact may span physical records.
 Only the metadata projection is returned, and tool result JSON is bounded to
 32 KiB before the MCP text/structured duplication. At most four observation calls
-run across the built-in tool server, leaving capacity under the relay's eight
-concurrent calls per connection. Independently, one conversation service admits
-at most eight physical source-admission owners across all tools. The permit is
+run at once for one source conversation, leaving capacity under the relay's
+eight concurrent calls per connection. Independently, one source conversation
+holds at most eight physical source-admission owners across all tools. Both
+bounds are per source, never a gateway total, so they grow with the agents; a
+source's entry leaves with its last permit (`SourcePermits`). The permit is
 acquired without waiting before spawning and is retained inside the detached
 owner until metadata/admission/audit work physically ends. Cancelling an observer
 releases its observation slot but does not free that physical permit. Further
-admission refuses unavailable while all eight are retained. Shutdown still waits
+admission from that source refuses unavailable while all eight are retained. Shutdown still waits
 for retained service admission, or reports its existing bounded drain failure.
 Initial source certification has a ten-second preparation bound beginning before
 source admission; setup, reauthorization and reads share cancellation and their
@@ -235,7 +237,7 @@ is not a claim that an external effect was rolled back.
 | Slow or oversized observation | Reader permits, step/response budgets and timeout refuse explicitly. |
 | Delayed stop versus newer execution | Existing exact-execution stop coordinator owns cancellation; `tests/conversation/mutation_commands.rs`. |
 | Running parent followed by enough Injected steering children to leave the message window; idle with queued work | Authoritative application snapshot resolves the parent or no active turn; shared service regression and the Relay active-stop regression in `tests/conversation/agent_tools.rs`. |
-| Repeated observer cancellation during blocked source metadata | Four observation slots return, but eight detached source owners retain separate permits and service admission; the ninth fails before metadata I/O, and shutdown drains only after release; same tests. |
+| Repeated observer cancellation during blocked source metadata | Four observation slots return, but eight detached source owners retain separate permits and service admission; that source's ninth fails before metadata I/O, and shutdown drains only after release; same tests. |
 | Target deleted or policy revoked while Page/Idle read is blocked | The final delivery check refuses before any event or cursor is returned; `tests/composition/conversation_tools_subscription.rs`. |
 | Prior Idle checkpoint, then target revoked during another read, reauthorization, or idle sleep as deadline expires | The cached checkpoint still passes final delivery admission; refusal returns no prior cursor; same tests. |
 | Final delivery authorization is blocked while source cancels or its delivery budget expires | Cancellation returns cancelled; ten-second delivery timeout returns unavailable, without events/cursor; same tests. |

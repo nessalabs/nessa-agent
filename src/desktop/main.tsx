@@ -6,8 +6,12 @@ import * as React from "react"
 import { createRoot } from "react-dom/client"
 import { Provider } from "react-redux"
 import {
+  askReviewNoticeAccess,
   host,
   loadAssignedGatewayEndpoint,
+  onReviewNoticeOpened,
+  reviewNoticeAccess,
+  syncReviewNotices,
   sandboxSchemeRegistered,
   signInToProvider,
   providerLoginAvailable,
@@ -36,7 +40,12 @@ import { DesktopIconFamilyProvider } from "./ui/icons"
 import { DesktopWindow } from "./ui/desktop-window"
 import { platformFor, sandboxFor, WidgetRegistryProvider } from "./widgets"
 import { SubagentsProvider } from "./subagents"
-import { bindConversationTitles } from "./workspace/adapters/gateway/review-notices"
+import {
+  bindConversationTitles,
+  bindNoticeAccess,
+  openReviewEvent,
+  showWaitingReviews,
+} from "./workspace/adapters/gateway/review-notices"
 import { followWorkspace, loadWorkspace } from "./workspace"
 
 import "@fontsource-variable/geist"
@@ -88,10 +97,30 @@ function windowGateway(
       return undefined
   }
 }
+// In the app on macOS and Linux, a waiting review is the system's notice,
+// which the host shows and takes back: the webview has no notifications of
+// its own there. Opening one brings this window forward on its conversation.
+// Coming back to the window sends the waiting set again, so a notice the
+// system refused before notifications were allowed (in System Settings, say)
+// is shown.
+const nativeNotices = host.kind === "macos" || host.kind === "linux"
+if (nativeNotices) {
+  bindNoticeAccess({
+    read: reviewNoticeAccess,
+    ask: askReviewNoticeAccess,
+    blocked:
+      "Blocked in System Settings › Notifications. Allow Nessa there to turn them on.",
+  })
+  void onReviewNoticeOpened((conversationId) => {
+    window.dispatchEvent(openReviewEvent(conversationId))
+  })
+  window.addEventListener("focus", showWaitingReviews)
+}
 const dependencies = createDesktopDependencies({
   signInToProvider,
   providerLoginAvailable,
   gateway,
+  reviewNotices: nativeNotices ? { sync: syncReviewNotices } : undefined,
   workspace: seeded?.workspace,
   now: seeded?.now,
   apps: {
