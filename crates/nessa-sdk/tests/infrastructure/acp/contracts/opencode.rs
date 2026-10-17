@@ -173,6 +173,12 @@ async fn silent_provider_reaches_inner_rpc_deadline_and_is_reaped() {
     run_python_harness(&["silent-provider"]).await;
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn immediate_inner_rpc_deadline_reaps_child_without_startup_evidence() {
+    run_python_harness(&["silent-provider", "0"]).await;
+}
+
 async fn run_live_opencode_harness(mode: &str, arguments: &[PathBuf]) {
     let binary = std::env::var_os("NESSA_PINNED_OPENCODE_BINARY")
         .expect("set NESSA_PINNED_OPENCODE_BINARY to an audited 1.18.31 executable");

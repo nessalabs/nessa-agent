@@ -96,19 +96,26 @@ def stop_child(process: subprocess.Popen) -> None:
             process.wait(timeout=2)
 
 
-def acp_session(
-    binary: pathlib.Path,
-    workspace: pathlib.Path,
-    environment: dict[str, str],
-    restore: str | None = None,
-    deadline_seconds: float = RPC_DEADLINE_SECONDS,
-) -> str:
+@contextlib.contextmanager
+def acp_process(binary: pathlib.Path, workspace: pathlib.Path, environment: dict[str, str]):
     process = subprocess.Popen(
         [binary, "acp"], cwd=workspace, env=environment,
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
     )
     try:
-        rpc = RpcClient(process, deadline_seconds)
+        yield process
+    finally:
+        stop_child(process)
+
+
+def acp_session(
+    binary: pathlib.Path,
+    workspace: pathlib.Path,
+    environment: dict[str, str],
+    restore: str | None = None,
+) -> str:
+    with acp_process(binary, workspace, environment) as process:
+        rpc = RpcClient(process)
         initialized = rpc.call(1, "initialize", {
             "protocolVersion": 1,
             "clientInfo": {"name": "nessa-boundary-harness", "version": "0"},
@@ -122,39 +129,25 @@ def acp_session(
             params["sessionId"] = restore
         result = rpc.call(2, method, params)
         return result.get("sessionId", restore)
-    finally:
-        stop_child(process)
 
 
-def silent_provider(root: pathlib.Path) -> None:
+def silent_provider(root: pathlib.Path, deadline_seconds: float) -> None:
     provider = root / "silent_provider.py"
-    pid_file = root / "pid"
     provider.write_text(
         "#!/usr/bin/env python3\n"
-        "import os,pathlib,signal,sys\n"
-        f"pathlib.Path({str(pid_file)!r}).write_text(str(os.getpid()))\n"
+        "import signal,sys\n"
         "sys.stdin.buffer.readline()\n"
         "signal.pause()\n"
     )
     provider.chmod(0o700)
-    try:
-        acp_session(
-            provider,
-            root,
-            {**os.environ},
-            deadline_seconds=1,
-        )
-    except TimeoutError as error:
-        assert "initialize" in str(error)
-    else:
-        raise AssertionError("silent provider did not reach the RPC deadline")
-    pid = int(pid_file.read_text())
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        pass
-    else:
-        raise AssertionError("silent provider survived RPC deadline cleanup")
+    with acp_process(provider, root, dict(os.environ)) as process:
+        try:
+            RpcClient(process, deadline_seconds).call(1, "initialize", {})
+        except TimeoutError as error:
+            assert "initialize" in str(error)
+        else:
+            raise AssertionError("silent provider did not reach the RPC deadline")
+    assert process.returncode is not None, "silent provider survived RPC deadline cleanup"
 
 
 def outer_timeout(root: pathlib.Path) -> None:
@@ -326,7 +319,7 @@ def catalogue(
 
 def run(root: pathlib.Path, command: str, rest: list[str]) -> None:
     if command == "silent-provider":
-        silent_provider(root)
+        silent_provider(root, float(rest[0]) if rest else 1)
         return
     if command == "outer-timeout":
         outer_timeout(root)
