@@ -1010,27 +1010,34 @@ fn the_end_comes_first_and_a_refused_end_keeps_its_code() {
     ] {
         let (endpoint, gateway) = peer(move |socket| {
             admit(socket, "1");
+            // A view and then the end, both during another read.
+            let read = request(socket);
             send_view(socket, "1", "2", "two");
             match code {
                 Some(code) => send_refused_end(socket, "1", code),
                 None => send_end(socket, "1"),
             }
+            send(
+                socket,
+                OutgoingMessage::Response(
+                    ResponseFrame::success(&read.id, &json!({"head":"2"})).unwrap(),
+                ),
+            );
             while !socket.ended() {}
         });
         let mut session = connect(&endpoint);
         subscribed(&mut session);
+        session.begin().unwrap();
+        assert_eq!(head(&mut session).unwrap(), json!({"head":"2"}));
+        assert_eq!(session.finish().unwrap().failure, None);
         session.begin().unwrap();
         let reason = if code.is_some() {
             SubscriptionEnd::Refused
         } else {
             SubscriptionEnd::SourceClosed
         };
-        // The end may arrive in a later read than the view: wait until it does.
-        let ended = loop {
-            match session.wait_view().unwrap() {
-                Wait::Ended(ended) => break ended,
-                Wait::View { cursor, .. } => assert_eq!(cursor, at("2")),
-            }
+        let Ok(Wait::Ended(ended)) = session.wait_view() else {
+            panic!("the end comes before the view kept with it")
         };
         assert_eq!(ended, Ended { reason, cause });
         session.finish().unwrap();

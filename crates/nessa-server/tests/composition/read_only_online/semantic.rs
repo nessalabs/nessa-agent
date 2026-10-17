@@ -94,7 +94,7 @@ fn online_semantic_corpus_converges_after_receiver_restart_and_live_suffix() {
     gateway.act("hold");
     gateway.act("settle");
     let terminal = oracle("terminal");
-    follow_view(&mut receiver, &subscription, false);
+    follow_view(&mut receiver, &subscription, Some(false));
     gateway.act("release");
     let terminal_facts = terminal["progress"]["facts"]
         .as_str()

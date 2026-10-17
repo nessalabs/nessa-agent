@@ -32,12 +32,14 @@ async fn observed(report: &ReportSlot, ready: impl Fn(&ShutdownReport) -> bool) 
 }
 
 /// A record read held inside its physical work keeps host cleanup at the
-/// drains: conversations and MCP stop do not begin until the read is joined,
+/// drains: the product sockets are told to close before the drain is first
+/// polled, conversations and MCP stop do not begin until the read is joined,
 /// and once it is, the report confirms and the read's capacity is back.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn ordinary_host_joins_a_held_record_read_before_later_cleanup() {
     let fixture = HostProductFixture::new().await;
     let state = fixture.state();
+    let sockets = state.clone();
     let storage = fixture.storage();
     let (source, read_work) = NessaRecordReadSource::held_for_host_shutdown(
         storage.clone(),
@@ -65,7 +67,12 @@ async fn ordinary_host_joins_a_held_record_read_before_later_cleanup() {
         cleanup_product(
             &output,
             &state,
-            async { source.shutdown().await },
+            async {
+                // Every authenticated socket is already closing
+                // (`host_cleanup_closes_every_authenticated_socket_retryably`).
+                assert!(*sockets.closing.borrow());
+                source.shutdown().await
+            },
             async { Ok(()) },
             Some(async {
                 cleaned.store(true, Ordering::SeqCst);
@@ -86,6 +93,7 @@ async fn ordinary_host_joins_a_held_record_read_before_later_cleanup() {
             && r.readers().catalogue().is_ok()
     })
     .await;
+    assert!(*fixture.state().closing.borrow());
     assert!(!conversations.load(Ordering::SeqCst));
     assert!(!servers.load(Ordering::SeqCst));
     read_work.release();

@@ -638,12 +638,16 @@ fn follow_pass_report(child: &mut FollowChild, trigger: &str, facts: u64) -> (Va
     );
     (line["report"].clone(), at)
 }
-/// A view whose cursor moved, on this subscription.
-fn follow_view(child: &mut FollowChild, subscription: &Value, during_pass: bool) {
+/// A view whose cursor moved, on this subscription. `during_pass` is `None`
+/// where the gateway's view may come before or after the pass ends.
+fn follow_view(child: &mut FollowChild, subscription: &Value, during_pass: Option<bool>) {
     let (line, _) = follow_line(child, "view");
     assert_eq!(line["subscriptionId"], *subscription, "{line}");
     assert!(line["cursor"]["position"].is_string(), "{line}");
-    assert_eq!(line["duringPass"], during_pass, "{line}");
+    assert!(line["duringPass"].is_boolean(), "{line}");
+    if let Some(during_pass) = during_pass {
+        assert_eq!(line["duringPass"], during_pass, "{line}");
+    }
 }
 /// The admitted subscription, and the identity it names.
 fn follow_subscribed(child: &mut FollowChild) -> Value {
@@ -776,14 +780,16 @@ fn online_two_devices_follow_live_views_and_converge() {
     // Steps 2–3 (W2, W4, W6): A subscribes; a commit lands while its
     // recheck pass is reading the head (the fixture holds that read until
     // the commit is acknowledged). The recheck already holds it, and the
-    // view that moved, read during that pass, causes exactly one more pass.
+    // view that moved causes exactly one more pass. That view is taken by
+    // the gateway's own subscription task, so it may reach the client during
+    // the pass or after it; the session test pins the during-pass case.
     gateway.act("hold");
     let mut a = follow(&profile_a, "2");
     let sub_a = follow_subscribed(&mut a);
     gateway.act("commit");
     gateway.act("release");
     follow_pass(&mut a, "recheck", 2);
-    follow_view(&mut a, &sub_a, true);
+    follow_view(&mut a, &sub_a, None);
     follow_pass(&mut a, "view", 2);
     assert!(follow_end(a, "passesExhausted"));
 
@@ -804,7 +810,7 @@ fn online_two_devices_follow_live_views_and_converge() {
         gateway.act("commit");
         let acknowledged = Instant::now();
         for (child, subscription) in [(&mut a, &sub_a), (&mut b, &sub_b)] {
-            follow_view(child, subscription, false);
+            follow_view(child, subscription, Some(false));
             let visible = follow_pass(child, "view", 2 + commit);
             samples.push(
                 visible
@@ -825,7 +831,7 @@ fn online_two_devices_follow_live_views_and_converge() {
     let sub_a = follow_subscribed(&mut a);
     follow_pass(&mut a, "recheck", 13);
     gateway.act("commit");
-    follow_view(&mut a, &sub_a, false);
+    follow_view(&mut a, &sub_a, Some(false));
     follow_pass(&mut a, "view", 14);
     assert!(follow_end(a, "passesExhausted"));
 
@@ -876,7 +882,7 @@ fn online_two_devices_follow_live_views_and_converge() {
     follow_pass(&mut b, "recheck", 14);
     gateway.act("revoke b");
     gateway.act("commit");
-    follow_view(&mut a, &sub_a, false);
+    follow_view(&mut a, &sub_a, Some(false));
     follow_pass(&mut a, "view", 15);
     assert!(follow_end(a, "passesExhausted"));
     let (ended, _) = follow_line(&mut b, "ended");
