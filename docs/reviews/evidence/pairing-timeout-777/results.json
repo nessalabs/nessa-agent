@@ -1,0 +1,140 @@
+{
+  "provenance": "Precommit source checkpoint; hashes identify the source subsequently committed with this evidence. Not an exact Windows failure reproduction.",
+  "base": "e650b901b30b64745cd43920b5b87e82d5442981",
+  "diagnostic_head": "685622b2baad2a458276155f809fd5427529ac13",
+  "source_sha256": {
+    ".github/workflows/local-auth.yml": "a2e29901158a8391776c785a787af84b07808eec9fff5adb88435e81766d9280",
+    "crates/nessa-server/tests/native_enrollment.rs": "4fe03b879f03cea17b310c55fa1b836cb19701a9fde8f6cd84eb65eeee4beb55",
+    "crates/nessa-server/tests/device_pairing/infrastructure/enrollment.rs": "ac8649438cfd84e6f9e6bc0d8d0b98f0c2b27c33a518d3814c5bf021f8762753",
+    "crates/nessa-server/tests/device_pairing/infrastructure/one_thread.rs": "af27328dcbc357e94c4ea539f130fc8fd3009ec7830878502afa4d656d794dfe",
+    "docs/design/auth/device-pairing.md": "c04bbcb141895cecd203829334fe734a28de966d0b1a1a1b93b0ba72283a1c4b"
+  },
+  "environment": "Linux x86_64; rustc 1.99.1; temporary isolated CARGO_HOME/RUSTUP_HOME/target; dev debug=0; incremental=0",
+  "isolated_tests": {
+    "passed": 8,
+    "failed": 0,
+    "seconds": 0.42
+  },
+  "native_enrollment_with_ci_package_selection": {
+    "passed": 115,
+    "failed": 0,
+    "seconds": 15.66,
+    "scope": "Only native_enrollment integration binary; not every test in the seven packages"
+  },
+  "cargo_checks": [
+    {
+      "check": "restored-isolated",
+      "exit": 0,
+      "command": [
+        "/tmp/nessa-777-cargo/bin/cargo",
+        "test",
+        "-p",
+        "nessa-server",
+        "--test",
+        "native_enrollment",
+        "one_thread",
+        "--",
+        "--nocapture"
+      ]
+    },
+    {
+      "check": "restored-package",
+      "exit": 0,
+      "command": [
+        "/tmp/nessa-777-cargo/bin/cargo",
+        "test",
+        "-p",
+        "nessa-local-storage",
+        "-p",
+        "nessa-auth",
+        "-p",
+        "nessa-server",
+        "-p",
+        "nessa-protocol",
+        "-p",
+        "nessa-client-core",
+        "-p",
+        "nessa-device-client",
+        "-p",
+        "nessa-sdk",
+        "--test",
+        "native_enrollment",
+        "--",
+        "--nocapture"
+      ]
+    },
+    {
+      "check": "all-target-clippy",
+      "exit": 0,
+      "command": [
+        "/tmp/nessa-777-cargo/bin/cargo",
+        "clippy",
+        "-p",
+        "nessa-local-storage",
+        "-p",
+        "nessa-auth",
+        "-p",
+        "nessa-server",
+        "-p",
+        "nessa-protocol",
+        "-p",
+        "nessa-client-core",
+        "-p",
+        "nessa-device-client",
+        "-p",
+        "nessa-sdk",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ]
+    }
+  ],
+  "mutations": [
+    {
+      "name": "stop-sender",
+      "status": 101,
+      "test": "one_thread::timeout_stops_listener_and_joins_device"
+    },
+    {
+      "name": "device-join",
+      "status": 101,
+      "test": "one_thread::timeout_stops_listener_and_joins_device"
+    },
+    {
+      "name": "gateway-drain",
+      "status": 101,
+      "test": "one_thread::timeout_stops_listener_and_joins_device"
+    },
+    {
+      "name": "initialization-owner",
+      "status": 101,
+      "test": "one_thread::timeout_before_fixture_completion_retains_initialization"
+    },
+    {
+      "name": "cleanup-verdict",
+      "status": 101,
+      "test": "one_thread::finished_work_does_not_hide_device_join_failure"
+    },
+    {
+      "name": "ready-order",
+      "status": 101,
+      "test": "one_thread::finished_work_wins_a_ready_deadline_and_still_drains"
+    }
+  ],
+  "other_checks": {
+    "workflow_harness_tests": 26,
+    "architecture_tests": 104,
+    "architecture_check": "passed",
+    "cargo_fmt_package_selection": "passed",
+    "actionlint": "1.7.12 passed",
+    "workflow_pipeline": "exit0 runs both commands; exit7 preserved and stops before second command"
+  },
+  "historical_five_second_probe": {
+    "scope": "Linux budget-only comparison at diagnostic head, source restored afterwards",
+    "passed": 1,
+    "seconds": 0.57,
+    "diagnosis": "Did not reproduce historical Windows stall"
+  },
+  "remaining": "Original Windows stall unreproduced; fresh final-head Windows cleanup tests, independent review and required CI outstanding. No merge or issue closure."
+}
