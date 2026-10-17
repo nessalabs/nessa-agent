@@ -158,6 +158,11 @@ impl ConversationService {
             ordered.extend(rest);
             for binding in ordered {
                 let is_root = binding == root_binding;
+                // Earlier entries withdraw queued reports from this parent.
+                // Keep its invocation slot until every withdrawal is confirmed.
+                if is_root && failure.is_some() {
+                    continue;
+                }
                 let result = service
                     .execute_selected_stop(storage.clone(), binding, &caller)
                     .await;

@@ -1425,3 +1425,144 @@ async fn owned_creation_retry_cannot_report_a_sealed_child_as_ready() {
     drop((held, live));
     retire(service, storage, metadata).await;
 }
+
+#[tokio::test]
+async fn failed_queued_report_withdrawal_keeps_root_active_and_retries_before_root_stop() {
+    use crate::conversation::application::{ThreadReport, ThreadReportStore};
+    use crate::conversation::infrastructure::LocalThreadReports;
+    use nessa_sdk::application::agent_execution::agents::{turn_continuation, TurnContinuation};
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("data");
+    let provider = Arc::new(ProviderFactory::default());
+    provider.turn_cancel.store(true, Ordering::SeqCst);
+    let (service, storage, metadata) = fixture(&root, provider.clone());
+    bind(&service, &storage, &root, true).await;
+    let reports = Arc::new(LocalThreadReports::open(&root.join("reports.sqlite3")).unwrap());
+    service.bind_thread_reports(reports.clone());
+    let parent = id();
+    opened(&service, &provider, &parent).await;
+    let held_parent = hold_turn(&service, &provider, &parent, "parent").await;
+    let finished_child = child(&service, &parent, "parent", "create-reporter").await;
+    let reporting = hold_turn(&service, &provider, &finished_child, "report-source").await;
+    service
+        .report_thread_turn(
+            finished_child.clone(),
+            "report-source".into(),
+            ThreadReport {
+                parent: parent.clone(),
+                caller: caller("report-action"),
+                execution: "queued-report".into(),
+            },
+        )
+        .await;
+    reporting.send(()).unwrap();
+    service.look_for_reports(finished_child, false).await;
+    let live = service.resolve(&parent, &caller("inspect")).await.unwrap();
+    let queued = ExecutionId::new("queued-report").unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !live.agent.queued_ids().await.contains(&queued) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    let independent = child(&service, &parent, "parent", "create-independent").await;
+    let held_independent = hold_turn(&service, &provider, &independent, "independent").await;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let (committed, _) = service.committed_with_order(&independent).await.unwrap();
+            if committed.snapshot().is_some_and(|history| {
+                history.invocations.iter().any(|record| {
+                    record.request.execution_id.as_str() == "independent"
+                        && turn_continuation(&history.invocations, &record.request.execution_id)
+                            == TurnContinuation::Pending
+                })
+            }) {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the independent child is committed before capturing Stop targets");
+    let faulty: Arc<dyn commands::CreationStorage> = Arc::new(FaultyCommands {
+        storage: storage.clone(),
+        target: parent.clone(),
+        commit: false,
+        stage: MutationStage::Attempted,
+        once: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+    });
+    assert!(service
+        .stop_command(
+            faulty.clone(),
+            parent.clone(),
+            caller("stop-parent"),
+            "parent".into()
+        )
+        .await
+        .is_err());
+    if provider
+        .cancel_turns
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|id| id == "parent")
+    {
+        drop(held_parent);
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !provider
+                .executions
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|id| id == "queued-report")
+            {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the failed prerequisite exposes queued report dispatch after root settlement");
+        panic!("root cancellation executed its queued report after withdrawal failed");
+    }
+    assert_eq!(
+        live.agent
+            .active_execution_id()
+            .as_ref()
+            .map(ExecutionId::as_str),
+        Some("parent"),
+        "an unconfirmed report withdrawal must not release the root invocation slot"
+    );
+    assert!(live.agent.queued_ids().await.contains(&queued));
+    assert_eq!(
+        provider.cancel_turns.lock().unwrap().as_slice(),
+        ["independent"],
+        "independent descendants still receive their captured Stop"
+    );
+    assert_eq!(reports.pending().await.unwrap().len(), 1);
+    service
+        .stop_command(
+            faulty,
+            parent.clone(),
+            caller("stop-parent"),
+            "parent".into(),
+        )
+        .await
+        .unwrap();
+    assert!(!provider
+        .executions
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|id| id == "queued-report"));
+    assert_eq!(
+        provider.cancel_turns.lock().unwrap().as_slice(),
+        ["independent", "parent"]
+    );
+    assert_eq!(
+        reports.pending().await.unwrap().len(),
+        1,
+        "the withdrawn report remains durable until later person input"
+    );
+    drop((held_parent, held_independent, live));
+    retire(service, storage, metadata).await;
+}

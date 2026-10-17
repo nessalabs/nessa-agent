@@ -108,6 +108,7 @@ a draft implementation is not evidence that those gates passed.
 | A newer opening has a hold but no published lease | Retained pending/error slots stay unresolved; the cold path only observes a session with no current slot. Opening checks the existing lifetime seal before environment effects | `an_opening_owner_prevents_historical_cleanup_from_closing_its_lifetime` |
 | One principal has admitted Stop selections in multiple organizations | Principal identity selects its control stream; each binding's target metadata supplies its organization to existing Cedar authorization | `accepted_parent_stops_recover_each_targets_organization_for_one_principal` |
 | An exact creation retry follows child lifetime closure | SDK preparation progress and current lifetime state jointly authorize a Ready creation response; cached Ready does not reopen a sealed child | `owned_creation_retry_cannot_report_a_sealed_child_as_ready` |
+| A queued report's Stop fails before its effect or confirmation | Same-parent report withdrawal is a root cancellation prerequisite. Leave the root Accepted for retry on failure; continue independent descendant attempts | `failed_queued_report_withdrawal_keeps_root_active_and_retries_before_root_stop` |
 
 
 
