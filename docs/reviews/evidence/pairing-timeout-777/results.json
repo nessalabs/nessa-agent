@@ -1,0 +1,151 @@
+{
+  "provenance": "Precommit source checkpoint; hashes identify the source subsequently committed with this evidence. Not an exact Windows failure reproduction.",
+  "base": "e650b901b30b64745cd43920b5b87e82d5442981",
+  "diagnostic_head": "685622b2baad2a458276155f809fd5427529ac13",
+  "source_sha256": {
+    ".github/workflows/local-auth.yml": "b8fc62c1b57d314a67aab046f5eae5b44dd2f25fd907308d3b4c849ded832d8f",
+    "crates/nessa-server/tests/native_enrollment.rs": "3e352c8bec52f677dba7d707975b8991a4b8640dde6402ac90f44a697ae5d37b",
+    "crates/nessa-server/tests/device_pairing/infrastructure/enrollment.rs": "ac8649438cfd84e6f9e6bc0d8d0b98f0c2b27c33a518d3814c5bf021f8762753",
+    "crates/nessa-server/tests/device_pairing/infrastructure/one_thread.rs": "608e4d94c821c2d6efcf2a94a785a8229ebb7bf83b1a5fc34f9c23dbed4760e4",
+    "docs/design/auth/device-pairing.md": "c9bfac7e993951a9bf4d916aaf1e8c709b6d537b23fffe87b1b7440ac38e5c4a"
+  },
+  "environment": "Linux x86_64; rustc 1.99.1; temporary isolated CARGO_HOME/RUSTUP_HOME/target; dev debug=0; incremental=0",
+  "isolated_tests": {
+    "passed": 9,
+    "failed": 0,
+    "seconds": 0.42
+  },
+  "native_enrollment_with_ci_package_selection": {
+    "passed": 116,
+    "failed": 0,
+    "seconds": 16.11,
+    "scope": "Only native_enrollment integration binary; not every test in the seven packages"
+  },
+  "cargo_checks": [
+    {
+      "check": "restored-isolated",
+      "exit": 0,
+      "command": [
+        "/tmp/nessa-777-cargo/bin/cargo",
+        "test",
+        "-p",
+        "nessa-server",
+        "--test",
+        "native_enrollment",
+        "one_thread",
+        "--",
+        "--nocapture"
+      ]
+    },
+    {
+      "check": "restored-package",
+      "exit": 0,
+      "command": [
+        "/tmp/nessa-777-cargo/bin/cargo",
+        "test",
+        "-p",
+        "nessa-local-storage",
+        "-p",
+        "nessa-auth",
+        "-p",
+        "nessa-server",
+        "-p",
+        "nessa-protocol",
+        "-p",
+        "nessa-client-core",
+        "-p",
+        "nessa-device-client",
+        "-p",
+        "nessa-sdk",
+        "--test",
+        "native_enrollment",
+        "--",
+        "--nocapture"
+      ]
+    },
+    {
+      "check": "all-target-clippy",
+      "exit": 0,
+      "command": [
+        "/tmp/nessa-777-cargo/bin/cargo",
+        "clippy",
+        "-p",
+        "nessa-local-storage",
+        "-p",
+        "nessa-auth",
+        "-p",
+        "nessa-server",
+        "-p",
+        "nessa-protocol",
+        "-p",
+        "nessa-client-core",
+        "-p",
+        "nessa-device-client",
+        "-p",
+        "nessa-sdk",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ]
+    }
+  ],
+  "mutations": [
+    {
+      "name": "stop-sender",
+      "status": 101,
+      "test": "one_thread::timeout_stops_listener_and_joins_device"
+    },
+    {
+      "name": "device-join",
+      "status": 101,
+      "test": "one_thread::timeout_stops_listener_and_joins_device"
+    },
+    {
+      "name": "gateway-drain",
+      "status": 101,
+      "test": "one_thread::timeout_stops_listener_and_joins_device"
+    },
+    {
+      "name": "initialization-owner",
+      "status": 101,
+      "test": "one_thread::timeout_before_fixture_completion_retains_initialization"
+    },
+    {
+      "name": "cleanup-verdict",
+      "status": 101,
+      "test": "one_thread::finished_work_does_not_hide_device_join_failure"
+    },
+    {
+      "name": "late-initialization-panic",
+      "status": 101,
+      "test": "one_thread::late_initialization_panic_preserves_timeout_and_cleanup_failure"
+    },
+    {
+      "name": "ready-order",
+      "status": 101,
+      "test": "one_thread::finished_work_wins_a_ready_deadline_and_still_drains"
+    }
+  ],
+  "other_checks": {
+    "workflow_harness_tests": 26,
+    "architecture_tests": 104,
+    "architecture_check": "passed",
+    "cargo_fmt_package_selection": "passed",
+    "actionlint": "1.7.12 passed",
+    "workflow_pipeline": "exit0 runs both commands; exit7 preserved and stops before second command. More than24 phase lines plus final cleanup and result retained in one escaped notice per invocation, with percent/CR/newline escaping."
+  },
+  "historical_five_second_probe": {
+    "scope": "Linux budget-only comparison at diagnostic head, source restored afterwards",
+    "passed": 1,
+    "seconds": 0.57,
+    "diagnosis": "Did not reproduce historical Windows stall"
+  },
+  "remaining": "Historical Windows stall unreproduced. Final cleanup-head Windows qualification, independent fresh review and required CI outstanding. No merge or issue closure.",
+  "late_initialization_panic": {
+    "review_head": "3e312e69ff6906163fcf7b18443617b0f839fcc6",
+    "before_exit": 101,
+    "before_result": "1 failed: late constructor panic replaced saved timeout",
+    "after_result": "completion TimedOut plus typed separate initialization cleanup panic; isolated9/9 and suite116/116 passed"
+  }
+}
