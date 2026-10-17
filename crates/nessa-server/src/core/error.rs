@@ -238,6 +238,7 @@ pub enum Dataset {
     ReceiverAccess,
     BrowserSessions,
     PermissionRules,
+    ThreadReports,
 }
 
 impl fmt::Display for Dataset {
@@ -247,6 +248,7 @@ impl fmt::Display for Dataset {
             Self::ReceiverAccess => "receiver access",
             Self::BrowserSessions => "browser sessions",
             Self::PermissionRules => "permission rules",
+            Self::ThreadReports => "thread reports",
         })
     }
 }
