@@ -4,8 +4,9 @@ The person's offered choice and the provider's wire option are different facts.
 A person choosing **Always allow in this project** explicitly selects Nessa's
 remember option. The permission-rule port first commits the scoped rule and its
 creation audit. ACP receives the provider's one-time option of the same effect.
-The first permission resolution retains the person's original option and Explicit
-attribution; a later automatic decision made by the stored rule has Rule basis.
+The first permission resolution retains the original offered option and host
+attribution (Explicit for this user action). A later automatic decision made by
+the stored rule has Rule basis.
 
 Previously the worker rewrote the command into the wire option and Rule basis.
 The exact receipt validator then correctly rejected that different command, even

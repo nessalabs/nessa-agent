@@ -3707,6 +3707,9 @@ impl ConversationService {
                     option_id,
                 })
                 .await;
+            // Permission selection changes live authority without an execution
+            // event. A consumed failure must wake readers just like success.
+            service.inner.live_changes.publish(&id);
             answer.map(|_| ()).map_err(|failure| {
                 let (error, selection) = failure.into_parts();
                 ConversationError::PermissionAnswer { error, selection }
