@@ -21,7 +21,11 @@ The actual gateway executable used Cargo's dev profile, SHA256
 - Focused Codex capability profile, production frontend, Chromium and WebKit:
   **4/4 passed on repeat**. The first run passed 3/4; WebKit override
   failed initial conversation admission before Stop assertions. Its cause remains
-  unresolved, and the failed run is retained with the verification logs.
+  unresolved, and the failed run is retained with the verification logs. The retained
+  ACP trace stops before WebKit's initial parent scenario, page opening, or Stop.
+  The helper retained only a generic mutation message; no raw RPC cause/code or
+  request identity survived, so create versus submit and the underlying cause
+  cannot be determined. No Stop assertion ran in that failed scenario.
 - MCP Apps requires dev sandbox metadata and is intentionally skipped by the
   canonical production runner. Its separate dev frontend run in Chromium and
   WebKit: **16/16 passed**.

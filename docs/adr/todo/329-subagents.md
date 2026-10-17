@@ -109,6 +109,7 @@ a draft implementation is not evidence that those gates passed.
 | One principal has admitted Stop selections in multiple organizations | Principal identity selects its control stream; each binding's target metadata supplies its organization to existing Cedar authorization | `accepted_parent_stops_recover_each_targets_organization_for_one_principal` |
 | An exact creation retry follows child lifetime closure | SDK preparation progress and current lifetime state jointly authorize a Ready creation response; cached Ready does not reopen a sealed child | `owned_creation_retry_cannot_report_a_sealed_child_as_ready` |
 | A queued report's Stop fails before its effect or confirmation | Same-parent report withdrawal is a root cancellation prerequisite. Leave the root Accepted for retry on failure; continue independent descendant attempts | `failed_queued_report_withdrawal_keeps_root_active_and_retries_before_root_stop` |
+| Captured descendant queued work dispatches during active cancellation | Withdraw a still-queued identity or cancel that same identity after dispatch; preserve Open lifetimes and later explicit work. The override preserves descendant active and queued inputs | `parent_stop_cancels_owned_active_and_queued_turns_and_keeps_threads_reusable` |
 
 
 

@@ -159,6 +159,182 @@ async fn parent_stop_default_override_grandchildren_and_unrelated_execution() {
 }
 
 #[tokio::test]
+async fn parent_stop_cancels_owned_active_and_queued_turns_and_keeps_threads_reusable() {
+    for (cascade, handoff) in [(true, false), (true, true), (false, false)] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("data");
+        let provider = Arc::new(ProviderFactory::default());
+        provider.turn_cancel.store(true, Ordering::SeqCst);
+        let (service, storage, metadata) = fixture(&root, provider.clone());
+        let coordinator = bind(&service, &storage, &root, cascade).await;
+        let parent = id();
+        opened(&service, &provider, &parent).await;
+        let p = hold_turn(&service, &provider, &parent, "parent").await;
+        let child_id = child(&service, &parent, "parent", "create-child").await;
+        let mut c = Some(hold_turn(&service, &provider, &child_id, "child").await);
+        let grandchild = child(&service, &child_id, "child", "create-grandchild").await;
+        let mut g = Some(hold_turn(&service, &provider, &grandchild, "grandchild").await);
+        for (target, execution) in [
+            (&child_id, "child-queued"),
+            (&grandchild, "grandchild-queued"),
+        ] {
+            service
+                .submit_command(
+                    storage.clone(),
+                    target.clone(),
+                    caller(execution),
+                    Initiation::owner(),
+                    false,
+                    execution.into(),
+                    message("queued work captured by parent Stop"),
+                    SubmissionMode::Queue,
+                )
+                .await
+                .unwrap();
+        }
+        let first_queued = if child_id.to_string() < grandchild.to_string() {
+            "child-queued"
+        } else {
+            "grandchild-queued"
+        };
+        let mut queued_release = None;
+        if handoff {
+            let (release_root_cancel, root_cancel) = oneshot::channel();
+            *provider.cancel_gate.lock().unwrap() = Some(root_cancel);
+            let root_started = provider.cancel_started.notified();
+            let stop = tokio::spawn({
+                let service = service.clone();
+                let storage = storage.clone();
+                let parent = parent.clone();
+                async move {
+                    service
+                        .stop_command(storage, parent, caller("stop"), "parent".into())
+                        .await
+                }
+            });
+            tokio::time::timeout(TURN_HOLD_HANG, root_started)
+                .await
+                .unwrap();
+            let (release_child_cancel, child_cancel) = oneshot::channel();
+            *provider.cancel_gate.lock().unwrap() = Some(child_cancel);
+            let child_started = provider.cancel_started.notified();
+            release_root_cancel.send(()).unwrap();
+            tokio::time::timeout(TURN_HOLD_HANG, child_started)
+                .await
+                .unwrap();
+            let (release, queued) = oneshot::channel();
+            queued_release = Some(release);
+            *provider.execution_gate.lock().unwrap() = Some(queued);
+            // Settle the active invocation while its cancellation ACK waits.
+            // The captured queued identity then becomes the active identity.
+            if first_queued == "child-queued" {
+                c.take().unwrap().send(()).unwrap();
+            } else {
+                g.take().unwrap().send(()).unwrap();
+            }
+            tokio::time::timeout(TURN_HOLD_HANG, async {
+                while !provider
+                    .executions
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|id| id == first_queued)
+                {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("the captured queued turn dispatches during active cancellation");
+            release_child_cancel.send(()).unwrap();
+            stop.await.unwrap().unwrap();
+        } else {
+            service
+                .stop_command(
+                    storage.clone(),
+                    parent.clone(),
+                    caller("stop"),
+                    "parent".into(),
+                )
+                .await
+                .unwrap();
+        }
+        for (target, execution) in [
+            (&child_id, "child-queued"),
+            (&grandchild, "grandchild-queued"),
+        ] {
+            let live = service.resolve(target, &caller("inspect")).await.unwrap();
+            assert_eq!(
+                live.agent
+                    .queued_ids()
+                    .await
+                    .contains(&ExecutionId::new(execution).unwrap()),
+                !cascade,
+                "recursive Stop leaves no captured descendant turn pending in the queue"
+            );
+            assert_eq!(
+                provider
+                    .executions
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|id| id == execution),
+                handoff && execution == first_queued
+            );
+        }
+        let cancelled = provider.cancel_turns.lock().unwrap().clone();
+        assert!(cancelled.iter().any(|id| id == "parent"));
+        for execution in ["child", "grandchild"] {
+            assert_eq!(cancelled.iter().any(|id| id == execution), cascade);
+        }
+        for execution in ["child-queued", "grandchild-queued"] {
+            assert_eq!(
+                cancelled.iter().any(|id| id == execution),
+                handoff && execution == first_queued,
+                "a dispatched queued turn is cancelled using its captured exact identity"
+            );
+        }
+        assert_eq!(provider.close_calls.load(Ordering::SeqCst), 0);
+        for target in [&parent, &child_id, &grandchild] {
+            let lifetime = coordinator
+                .active_lifetime_for_session(&conversation_session(target))
+                .unwrap();
+            assert_eq!(
+                coordinator.lifetime_state(&lifetime),
+                Some(nessa_sdk::domain::agent_execution::subagents::LifetimeState::Open)
+            );
+        }
+        drop((p, c, g, queued_release));
+        if cascade {
+            for (target, execution) in [
+                (&parent, "parent-next"),
+                (&child_id, "child-next"),
+                (&grandchild, "grandchild-next"),
+            ] {
+                let live = service
+                    .resolve(target, &caller("inspect-idle"))
+                    .await
+                    .unwrap();
+                tokio::time::timeout(TURN_HOLD_HANG, async {
+                    while !live.agent.is_idle().await {
+                        tokio::task::yield_now().await;
+                    }
+                })
+                .await
+                .expect("the stopped exact turn retires before new work");
+                finish_turn(&service, &provider, target, execution).await;
+                assert!(provider
+                    .executions
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|id| id == execution));
+            }
+        }
+        retire(service, storage, metadata).await;
+    }
+}
+
+#[tokio::test]
 async fn a_stale_parent_stop_does_not_stop_its_child_or_fence_new_reports() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("data");
