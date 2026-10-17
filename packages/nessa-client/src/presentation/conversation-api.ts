@@ -25,6 +25,7 @@ import type {
   ConversationObserveCursor,
   ConversationObserveResult,
   ConversationView,
+  ConversationPermission,
   ConversationReceipt,
   ConversationMutationResult,
   ConversationQuestionChoice,
@@ -63,7 +64,9 @@ import {
   conversationShares,
   maxPolicyRevision,
   minExpectedPolicyRevision,
-  permissionInputRange,
+  conversationPermission,
+  permissionReviewRange,
+  reviewKeyPattern,
 } from "../protocol/conversation-validate.js"
 import { decimal } from "../protocol/passive-read-validate.js"
 import {
@@ -225,24 +228,27 @@ export type ConversationApi = {
     options?: ConversationActionOptions,
   ) => Promise<ConversationMutationResult>
   /**
-   * Read the whole input of one waiting review.
+   * Read what one waiting review shows: who asked, its whole input, every
+   * choice, and any deadline.
    *
-   * A view carries a review's whole input only when `argumentsComplete` is
-   * true; otherwise `argumentsJson` is its start. Ask for the rest here, and
-   * offer no choice on the review until this returns. Ranges of
-   * `bounds.maxReviewInputRangeBytes` are asked one after another, each held
-   * to the range asked; the assembled bytes are returned only when they are
-   * the whole length and UTF-8.
-   * @param target - A review captured from a view.
+   * A view lists each waiting review by its key alone. Read it here, and offer
+   * no choice on it until this returns. Ranges of
+   * `bounds.maxReviewRangeBytes` are asked one after another, each held to the
+   * range asked; the assembled bytes are parsed only when they are the whole
+   * length and UTF-8, and returned only when they are a valid review.
+   * @param conversationId - The conversation whose view lists the review.
+   * @param review - The review's key, as the view lists it.
    * @param options - `signal` abandons the read between ranges.
-   * @returns The input, exactly as the agent gave it.
+   * @returns The review, as its live owner holds it.
    * @throws The session's refusal, `stale_permission` once the review no
-   * longer waits; `Error` for an answer that is not the range asked for.
+   * longer waits; `Error` for an answer that is not the range asked for or
+   * not a review.
    */
-  permissionInput: (
-    target: PermissionTarget,
+  permissionReview: (
+    conversationId: string,
+    review: string,
     options?: { signal?: AbortSignal },
-  ) => Promise<string>
+  ) => Promise<ConversationPermission>
   /**
    * Answer one question the agent asked, or decline it.
    *
@@ -878,20 +884,20 @@ export function createConversationApi(
         true,
       )
     },
-    permissionInput: async (target, options = {}) => {
-      const { conversationId, executionId, permissionId } = permissionFields(target)
+    permissionReview: async (conversationId, review, options = {}) => {
       validConversationId(conversationId)
-      const maxBytes = bounds.maxReviewInputRangeBytes
+      if (!reviewKeyPattern.test(review))
+        throw new TypeError("Use a review key from a view")
+      const maxBytes = bounds.maxReviewRangeBytes
       const parts: Uint8Array[] = []
       let offset = 0
       let totalBytes: number | undefined
       do {
         options.signal?.throwIfAborted()
-        const range = permissionInputRange(
-          await session.request(ProductMethod.ConversationPermissionInput, {
+        const range = permissionReviewRange(
+          await session.request(ProductMethod.ConversationPermissionReview, {
             conversationId,
-            executionId,
-            permissionId,
+            review,
             offset,
             maxBytes,
           }),
@@ -909,7 +915,9 @@ export function createConversationApi(
         whole.set(part, at)
         at += part.byteLength
       }
-      return new TextDecoder("utf-8", { fatal: true }).decode(whole)
+      return conversationPermission(
+        JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(whole)),
+      )
     },
     cancel: (target, reason, options) => {
       const { conversationId, executionId, permissionId } = permissionFields(target)

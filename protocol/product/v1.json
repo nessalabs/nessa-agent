@@ -1303,7 +1303,7 @@
     "ConversationPermission": {
       "type": "object",
       "additionalProperties": false,
-      "description": "A pending review with its complete offered choices.",
+      "description": "A pending review with all it shows, as conversation.permissionReview reads it for one entry of a view.",
       "properties": {
         "executionId": {
           "type": "string",
@@ -1356,19 +1356,9 @@
         },
         "argumentsJson": {
           "type": "string",
-          "maxLength": 32768,
-          "x-utf8MaxBytes": 32768,
-          "description": "The reviewed input, exactly as the agent gave it, when argumentsComplete is true. Otherwise only its start, cut at a character boundary and possibly empty; read the whole with conversation.permissionInput."
-        },
-        "argumentsComplete": {
-          "type": "boolean",
-          "description": "Whether argumentsJson is the whole input. A surface offers no choice on a review until it holds the whole input."
-        },
-        "argumentsBytes": {
-          "type": "integer",
-          "minimum": 0,
-          "maximum": 33554432,
-          "description": "Length of the whole input, in UTF-8 bytes."
+          "maxLength": 33554432,
+          "x-utf8MaxBytes": 33554432,
+          "description": "The reviewed input, exactly as the agent or the app gave it."
         },
         "deadline": {
           "$ref": "#/$defs/ConversationPermissionDeadline",
@@ -1383,11 +1373,35 @@
         "options",
         "toolName",
         "argumentsJson",
-        "argumentsComplete",
-        "argumentsBytes",
         "origin",
         "ask"
       ]
+    },
+    "ConversationReviewEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One review waiting on a person, as a view lists it: its key, who asked, and the start of the tool's name. A view never leaves one out for its size. Read what it shows with conversation.permissionReview, and offer no answer until that has loaded.",
+      "properties": {
+        "review": {
+          "type": "string",
+          "minLength": 32,
+          "maxLength": 32,
+          "pattern": "^[0-9a-f]{32}$",
+          "description": "The review's own key: new for every review opened, so a review whose identities are reused is a new entry."
+        },
+        "origin": {
+          "type": "string",
+          "enum": ["harness", "app"],
+          "description": "Who asked: the agent, or an MCP App."
+        },
+        "toolName": {
+          "type": "string",
+          "maxLength": 64,
+          "x-utf8MaxBytes": 64,
+          "description": "The start of the reviewed tool's name, to say what the review is while the rest is read."
+        }
+      },
+      "required": ["review", "origin", "toolName"]
     },
     "ConversationTool": {
       "type": "object",
@@ -1542,9 +1556,9 @@
         },
         "permissions": {
           "type": "array",
-          "items": { "$ref": "#/$defs/ConversationPermission" },
-          "maxItems": 128,
-          "description": "Every permission review waiting on an answer. The agent holds no more open at once (the SDK's MAX_OPEN_REVIEWS), so none is left out."
+          "items": { "$ref": "#/$defs/ConversationReviewEntry" },
+          "maxItems": 144,
+          "description": "Every review waiting on a person now, oldest first: the agent's (the SDK holds at most MAX_OPEN_REVIEWS open) and then the MCP Apps'. Each entry is small and of fixed size, and a bounded view gives up everything else before any of them, so none is ever left out."
         },
         "tools": {
           "type": "array",
@@ -2303,10 +2317,10 @@
         "optionId"
       ]
     },
-    "ConversationPermissionInputParams": {
+    "ConversationPermissionReviewParams": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Read one range of a waiting review's whole input, named as the view names the review. A surface reads from 0 until argumentsBytes and checks the assembled length before showing it. Refused with stale_permission once the review no longer waits.",
+      "description": "Read one range of what a waiting review shows: the UTF-8 JSON of its ConversationPermission, from the live owner of the review. A surface reads from 0 until totalBytes, checks the whole is that long, and offers no answer until it has. Refused with stale_permission once the view no longer lists the review.",
       "properties": {
         "conversationId": {
           "type": "string",
@@ -2315,39 +2329,32 @@
           "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
           "description": "Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization."
         },
-        "executionId": {
+        "review": {
           "type": "string",
-          "minLength": 1,
-          "maxLength": 256,
-          "x-utf8MaxBytes": 256,
-          "description": "Stable invocation identifier retained for retries of one logical message, at most 256 UTF-8 bytes."
-        },
-        "permissionId": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 256,
-          "x-utf8MaxBytes": 256,
-          "description": "Pending permission identity."
+          "minLength": 32,
+          "maxLength": 32,
+          "pattern": "^[0-9a-f]{32}$",
+          "description": "The review's key, as the view lists it."
         },
         "offset": {
           "type": "integer",
           "minimum": 0,
-          "maximum": 33554431,
-          "description": "First byte of the range: 0, or less than the input's length."
+          "maximum": 268435455,
+          "description": "First byte of the range: 0, or less than the review's length."
         },
         "maxBytes": {
           "type": "integer",
           "minimum": 1,
           "maximum": 32768,
-          "description": "Most bytes to answer with. The answer carries fewer only at the end of the input."
+          "description": "Most bytes to answer with. The answer carries fewer only at the end of the review."
         }
       },
-      "required": ["conversationId", "executionId", "permissionId", "offset", "maxBytes"]
+      "required": ["conversationId", "review", "offset", "maxBytes"]
     },
-    "ConversationPermissionInputResult": {
+    "ConversationPermissionReviewResult": {
       "type": "object",
       "additionalProperties": false,
-      "description": "One range of a waiting review's input. Assemble the ranges, check the whole is totalBytes long and is UTF-8, then show it.",
+      "description": "One range of what a waiting review shows. Assemble the ranges, check the whole is totalBytes long, is UTF-8 and is the ConversationPermission of the review asked for, then show it.",
       "properties": {
         "offset": {
           "type": "integer",
@@ -2357,14 +2364,14 @@
         "totalBytes": {
           "type": "integer",
           "minimum": 0,
-          "maximum": 33554432,
-          "description": "Length of the whole input, in UTF-8 bytes."
+          "maximum": 268435456,
+          "description": "Length of the whole review, in UTF-8 bytes."
         },
         "data": {
           "type": "string",
           "maxLength": 43692,
           "contentEncoding": "base64",
-          "description": "The range's bytes, standard base64 with padding: at most maxBytes, and fewer only when the input ends first."
+          "description": "The range's bytes, standard base64 with padding: at most maxBytes, and fewer only when the review ends first."
         }
       },
       "required": ["offset", "totalBytes", "data"]

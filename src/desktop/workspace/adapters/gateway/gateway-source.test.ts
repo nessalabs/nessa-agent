@@ -31,6 +31,7 @@ import {
   gatewayConversationIds,
   fakeGateway,
   GATEWAY_NOW_MS,
+  reviewEntry,
   row,
   view,
   type FakeGateway,
@@ -135,8 +136,6 @@ const permission = (
   origin: { kind: "harness" },
   ask: "tool",
   argumentsJson: "{}",
-  argumentsComplete: true,
-  argumentsBytes: 2,
   ...change,
 })
 
@@ -598,6 +597,9 @@ describe("conversations", () => {
         ],
       }),
     )
+    await source.transcript(conversationA)
+    // Read whole from its live owner, then put on the window's clock.
+    await flush()
     const transcript = await source.transcript(conversationA)
     expect(transcript.approval?.deadline?.dueAtMs).toBe(1_000_000 + 30_000)
   })
@@ -1583,7 +1585,13 @@ describe("a connection that could not be made says why (#419)", () => {
       error: new NessaConnectionClosedError(4001, ""),
     })
     await expect(
-      source.approve(conversationA, approvalId(permission()), "once", "person", "opt-a"),
+      source.approve(
+        conversationA,
+        approvalId(reviewEntry(permission())),
+        "once",
+        "person",
+        "opt-a",
+      ),
     ).rejects.toMatchObject({ reason: "signed-out" })
     expect(gateway.count("answer")).toBe(0)
     warn.mockRestore()
@@ -2052,7 +2060,7 @@ describe("a connection that could not be made says why (#419)", () => {
       (source: ReturnType<typeof started>["source"]) =>
         source.approve(
           conversationA,
-          approvalId(permission()),
+          approvalId(reviewEntry(permission())),
           "once",
           "person",
           "opt-a",
@@ -2305,7 +2313,14 @@ describe("writes", () => {
     )
     await source.transcript(conversationA)
     follow()
-    await source.approve(conversationA, approvalId(asked), "once", "person", "opt-a")
+    await flush()
+    await source.approve(
+      conversationA,
+      approvalId(reviewEntry(asked)),
+      "once",
+      "person",
+      "opt-a",
+    )
     expect(gateway.calls.find((call) => call.method === "answer")?.args).toEqual([
       { conversationId: conversationA, executionId: "turn", permissionId: "p1" },
       "opt-a",
@@ -2317,52 +2332,99 @@ describe("writes", () => {
     )
     gateway.publish(conversationA)
     await flush()
+    // Its first count listed the review loading, its second showed it read.
     expect(updates).toContainEqual({
       kind: "transcript",
-      transcript: expect.objectContaining({ approval: null, revision: 2 }),
+      transcript: expect.objectContaining({ approval: null, revision: 3 }),
     })
   })
 
-  it("a 100 KB Write review shows its start, offers no answer, and is approved once its whole input has loaded", async () => {
+  it("a 100 KB Write review is listed as loading, offers no answer, and is approved once it has loaded whole", async () => {
     const { gateway, source, updates, follow } = started()
     const whole = JSON.stringify({
       file_path: "/tmp/big.txt",
       content: "x".repeat(100_000),
     })
-    const start = whole.slice(0, 1024)
-    const asked = permission({
-      toolName: "Write",
-      argumentsJson: start,
-      argumentsComplete: false,
-      argumentsBytes: whole.length,
-    })
-    gateway.reviewInputs.set("p1", whole)
+    const asked = permission({ toolName: "Write", argumentsJson: whole })
     let release = () => {}
     const loading = new Promise<void>((resolve) => (release = resolve))
-    gateway.once("permissionInput", (normal) => loading.then(normal))
+    gateway.once("permissionReview", (normal) => loading.then(normal))
     gateway.views.set(
       conversationA,
       view(conversationA, { revision: "1", messages: [running()], permissions: [asked] }),
     )
     follow()
     const shown = await source.transcript(conversationA)
-    expect(shown.approval).toMatchObject({ command: `Write ${start}`, partial: true })
+    expect(shown.approval).toMatchObject({ command: "Write", loading: "reading" })
     // Nothing is answered before the person could see all of what it allows.
     await expect(
-      source.approve(conversationA, approvalId(asked), "once", "person", "opt-a"),
+      source.approve(
+        conversationA,
+        approvalId(reviewEntry(asked)),
+        "once",
+        "person",
+        "opt-a",
+      ),
     ).rejects.toMatchObject({ reason: "not-supported" })
     expect(gateway.count("answer")).toBe(0)
     release()
     await flush()
     const loaded = transcriptsOf(updates, conversationA).at(-1)
     expect(loaded?.approval?.command).toBe(`Write ${whole}`)
-    expect(loaded?.approval?.partial).toBeUndefined()
-    expect(gateway.count("permissionInput")).toBe(1)
-    await source.approve(conversationA, approvalId(asked), "once", "person", "opt-a")
+    expect(loaded?.approval?.loading).toBeUndefined()
+    expect(gateway.count("permissionReview")).toBe(1)
+    await source.approve(
+      conversationA,
+      approvalId(reviewEntry(asked)),
+      "once",
+      "person",
+      "opt-a",
+    )
     expect(gateway.calls.find((call) => call.method === "answer")?.args).toEqual([
       { conversationId: conversationA, executionId: "turn", permissionId: "p1" },
       "opt-a",
     ])
+  })
+
+  it("a review that could not be read says so, and is read again at once when asked", async () => {
+    const { gateway, source, updates, follow } = started()
+    const asked = permission()
+    gateway.once("permissionReview", async () => {
+      throw new NessaRpcError("unavailable", "The gateway could not be reached")
+    })
+    gateway.views.set(
+      conversationA,
+      view(conversationA, { revision: "1", messages: [running()], permissions: [asked] }),
+    )
+    follow()
+    await source.transcript(conversationA)
+    await flush()
+    expect(transcriptsOf(updates, conversationA).at(-1)?.approval).toMatchObject({
+      loading: "failed",
+    })
+    await expect(
+      source.approve(
+        conversationA,
+        approvalId(reviewEntry(asked)),
+        "once",
+        "person",
+        "opt-a",
+      ),
+    ).rejects.toMatchObject({ reason: "not-supported" })
+    source.retryReview?.(conversationA, approvalId(reviewEntry(asked)))
+    await flush()
+    expect(gateway.count("permissionReview")).toBe(2)
+    const loaded = transcriptsOf(updates, conversationA).at(-1)
+    expect(loaded?.approval?.loading).toBeUndefined()
+    await source.approve(
+      conversationA,
+      approvalId(reviewEntry(asked)),
+      "once",
+      "person",
+      "opt-a",
+    )
+    expect(gateway.count("answer")).toBe(1)
+    source.dispose()
   })
 
   it("W3: approving one of two allow options answers that option", async () => {
@@ -2378,7 +2440,13 @@ describe("writes", () => {
       view(conversationA, { revision: "1", messages: [running()], permissions: [asked] }),
     )
     await source.transcript(conversationA)
-    await source.approve(conversationA, approvalId(asked), "once", "person", "second")
+    await source.approve(
+      conversationA,
+      approvalId(reviewEntry(asked)),
+      "once",
+      "person",
+      "second",
+    )
     expect(gateway.calls.find((call) => call.method === "answer")?.args[1]).toBe("second")
   })
 
@@ -2387,7 +2455,7 @@ describe("writes", () => {
     await expect(
       source.approve(
         conversationA,
-        approvalId(permission()),
+        approvalId(reviewEntry(permission())),
         "always",
         "person",
         "opt-a",
@@ -2415,7 +2483,7 @@ describe("writes", () => {
     await source.transcript("a")
     await source.approve(
       "a",
-      approvalId(asked),
+      approvalId(reviewEntry(asked)),
       "always",
       "person",
       "nessa.remember.allow",
@@ -2432,7 +2500,7 @@ describe("writes", () => {
       conversationA,
       view(conversationA, { revision: "1", messages: [running()], permissions: [asked] }),
     )
-    await source.deny(conversationA, approvalId(asked), "person", "opt-b")
+    await source.deny(conversationA, approvalId(reviewEntry(asked)), "person", "opt-b")
     expect(gateway.calls.find((call) => call.method === "answer")?.args[1]).toBe("opt-b")
     const allowOnly = permission({
       permissionId: "p2",
@@ -2449,7 +2517,7 @@ describe("writes", () => {
     gateway.publish(conversationA)
     await flush()
     await expect(
-      source.deny(conversationA, approvalId(allowOnly), "person", "only"),
+      source.deny(conversationA, approvalId(reviewEntry(allowOnly)), "person", "only"),
     ).rejects.toMatchObject({
       reason: "not-supported",
     })
@@ -2460,7 +2528,13 @@ describe("writes", () => {
     const { gateway, source } = started()
     gateway.views.set(conversationA, view(conversationA, { messages: [running()] }))
     await expect(
-      source.approve(conversationA, approvalId(permission()), "once", "person", "opt-a"),
+      source.approve(
+        conversationA,
+        approvalId(reviewEntry(permission())),
+        "once",
+        "person",
+        "opt-a",
+      ),
     ).rejects.toMatchObject({ reason: "not-waiting" })
     await expect(
       source.deny(conversationA, "not-an-id", "person", "opt-b"),
@@ -2483,7 +2557,13 @@ describe("writes", () => {
       await source.transcript(`o${i}`)
     }
     expect(gateway.live(conversationA)).toBe(0)
-    await source.approve(conversationA, approvalId(asked), "once", "person", "opt-a")
+    await source.approve(
+      conversationA,
+      approvalId(reviewEntry(asked)),
+      "once",
+      "person",
+      "opt-a",
+    )
     expect(subscribesOf(gateway, conversationA)).toHaveLength(2)
     expect(gateway.count("answer")).toBe(1)
   })
@@ -2715,7 +2795,7 @@ describe("writes", () => {
     const held = deferred<void>()
     gateway.once("subscribe", (normal) => held.promise.then(normal))
     const approving = source
-      .approve(conversationA, approvalId(asked), "once", "person", "opt-a")
+      .approve(conversationA, approvalId(reviewEntry(asked)), "once", "person", "opt-a")
       .catch((error: unknown) => error)
     await advance(timing.callMs)
     expect(await approving).toMatchObject({ reason: "unavailable" })
@@ -2723,7 +2803,7 @@ describe("writes", () => {
     await flush()
     expect(gateway.count("answer")).toBe(0)
     // The person answers again, and that is the answer taken.
-    await source.deny(conversationA, approvalId(asked), "person", "opt-b")
+    await source.deny(conversationA, approvalId(reviewEntry(asked)), "person", "opt-b")
     expect(
       gateway.calls
         .filter((call) => call.method === "answer")
@@ -3365,7 +3445,7 @@ describe("an app's review is shown after its turn ended (#436)", () => {
       transcript: expect.objectContaining({
         sessionId: conversationA,
         approval: {
-          id: approvalId(appReview),
+          id: approvalId(reviewEntry(appReview)),
           command: "app_delete_row {}",
           reason: "An app asks to run app_delete_row on mcptest",
           origin: { kind: "app", server: "mcptest", tool: "app_delete_row" },
@@ -3401,7 +3481,13 @@ describe("an app's review is shown after its turn ended (#436)", () => {
       answer.resolve("allowed")
       return normal()
     })
-    await source.approve(conversationA, approvalId(appReview), "once", "person", "allow")
+    await source.approve(
+      conversationA,
+      approvalId(reviewEntry(appReview)),
+      "once",
+      "person",
+      "allow",
+    )
     expect(gateway.calls.find((call) => call.method === "answer")?.args).toEqual([
       { conversationId: conversationA, executionId: "turn", permissionId: "app-1" },
       "allow",
@@ -3414,7 +3500,7 @@ describe("an app's review is shown after its turn ended (#436)", () => {
     await flush()
     expect(updates).toContainEqual({
       kind: "transcript",
-      transcript: expect.objectContaining({ approval: null, revision: 2 }),
+      transcript: expect.objectContaining({ approval: null, revision: 3 }),
     })
   })
 

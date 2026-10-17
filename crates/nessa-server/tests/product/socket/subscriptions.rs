@@ -2734,7 +2734,7 @@ const DRIVE_COMMANDS: [&str; 8] = [
     "conversation.steer",
     "conversation.stop",
     "conversation.answer",
-    "conversation.permissionInput",
+    "conversation.permissionReview",
     "conversation.answerQuestion",
     "conversation.cancel",
     "conversation.receipt",
@@ -2773,11 +2773,11 @@ fn drive_params(method: &str, id: &ConversationId, execution: &str) -> Value {
             params["permissionId"] = json!("permission");
             params["reason"] = json!("no");
         }
-        "conversation.permissionInput" => {
+        "conversation.permissionReview" => {
+            let _ = execution;
             params = json!({
                 "conversationId": id.to_string(),
-                "executionId": execution,
-                "permissionId": "permission",
+                "review": "0123456789abcdef0123456789abcdef",
                 "offset": 0,
                 "maxBytes": 1,
             });
@@ -5195,11 +5195,19 @@ async fn a_drivers_tool_call_is_checked_against_the_grants_policy() {
                     .read(fixture.id.clone(), caller(&fixture.session, "read".into()))
                     .await
                     .unwrap();
-                if view
-                    .permissions
-                    .iter()
-                    .any(|permission| permission.execution_id == execution)
-                {
+                let mut waiting = false;
+                for entry in &view.permissions {
+                    waiting |= fixture
+                        .service
+                        .waiting_review(
+                            fixture.id.clone(),
+                            caller(&fixture.session, "read".into()),
+                            &entry.review,
+                        )
+                        .await
+                        .is_ok_and(|review| review.execution_id == execution);
+                }
+                if waiting {
                     break;
                 }
                 tokio::time::sleep(Duration::from_millis(10)).await;

@@ -8,11 +8,13 @@ import {
   NessaConversationControlError,
   NessaConversationMutationError,
   NessaRpcError,
+  reviewDetails,
   type AttachmentBeginRefusal,
   type ConversationErrorCode,
   type ConversationView as GatewayConversationView,
   type ConversationViewCursor,
   type NessaClient,
+  type ReviewDetail,
   type StoredAttachment,
 } from "@nessa/client"
 import type { ConversationView } from "../../application/view"
@@ -27,7 +29,6 @@ import {
 } from "../../application/ports"
 import type { CommandFailure, ConversationSelection, ReadFailure } from "../../model"
 import { heldFileReader } from "./held-files"
-import { reviewInputs } from "./review-inputs"
 import { shownNote } from "./notes"
 
 /**
@@ -38,13 +39,33 @@ import { shownNote } from "./notes"
  * machines' clocks.
  */
 export function conversationView(
-  { serverNowMs, ...value }: GatewayConversationView,
+  { serverNowMs, permissions: listed, ...value }: GatewayConversationView,
   receivedAtMs: number,
+  details: readonly ReviewDetail[] = [],
 ): ConversationView {
   const features = value.capabilities.agentFeatures
+  // A listed review is shown once what it shows has been read whole from its
+  // live owner (`reviewDetails`); until then it waits, offering no answer.
+  const read = new Map(details.map((detail) => [detail.entry.review, detail]))
+  const loaded = listed.flatMap((entry) => {
+    const detail = read.get(entry.review)
+    return detail?.state === "loaded" ? [detail.permission] : []
+  })
   return {
     ...value,
-    permissions: value.permissions.map((permission) =>
+    reviewsWaiting: listed.flatMap((entry) => {
+      const detail = read.get(entry.review)
+      return detail?.state === "loaded"
+        ? []
+        : [
+            {
+              review: entry.review,
+              toolName: entry.toolName,
+              failed: detail?.state === "failed",
+            },
+          ]
+    }),
+    permissions: loaded.map((permission) =>
       permission.deadline === undefined
         ? permission
         : {
@@ -664,13 +685,19 @@ export function gatewayEffects(
       // so following again is never refused as a duplicate of this follow.
       let giveUp: AbortController | undefined
       let cursor: ConversationViewCursor | undefined
-      // The last frame applied, and when it arrived: shown again, whole, once
-      // a review's input it named has been read.
+      // The last frame applied, and when it arrived: shown again once a
+      // review it lists has been read.
       let last: { view: GatewayConversationView; receivedAtMs: number } | undefined
-      const inputs = reviewInputs((target) => api().permissionInput(target))
+      // What each listed review shows, read from its live owner and read
+      // again while a read fails; the view is shown again as each arrives.
+      const reviews = reviewDetails({
+        read: (review, signal) =>
+          api().permissionReview(conversationId, review, { signal }),
+        changed: () => show(),
+      })
       const show = () => {
         if (stopped || !last) return
-        follower.view(conversationView(inputs.complete(last.view), last.receivedAtMs))
+        follower.view(conversationView(last.view, last.receivedAtMs, reviews.details()))
       }
       const failed = (error: unknown) => {
         if (stopped) return
@@ -699,12 +726,9 @@ export function gatewayEffects(
                 view: (frame) => {
                   if (!current()) return
                   cursor = frame.cursor
-                  const applied = { view: frame.view, receivedAtMs: now() }
-                  last = applied
+                  last = { view: frame.view, receivedAtMs: now() }
+                  reviews.follow(frame.view.permissions)
                   show()
-                  inputs.read(frame.view, () => {
-                    if (last === applied) show()
-                  })
                 },
                 ended: (end) => {
                   if (!current()) return
@@ -741,6 +765,7 @@ export function gatewayEffects(
         if (stopped) return
         stopped = true
         giveUp?.abort()
+        reviews.dispose()
       }
       open()
       return stop

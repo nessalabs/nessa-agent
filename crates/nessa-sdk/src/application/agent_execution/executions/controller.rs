@@ -300,15 +300,23 @@ impl ExecutionController {
             .validate_permission_admission(&request)
             .map_err(domain_error)?;
         self.observe_tool(execution, tool)?;
-        self.session
-            .request_permission(request)
-            .map_err(domain_error)?;
         let observation = self
             .session
             .tool(&tool_id)
             .expect("accepted observed tool")
             .observation()
             .clone();
+        // What a person is shown of it is held with the review itself, so the
+        // one owner of whether it waits is also the one that says what it is.
+        let request = request.with_content(ReviewContent::new(
+            observation.title().clone(),
+            input.name.clone(),
+            input.arguments_json.clone(),
+            deadline.clone(),
+        ));
+        self.session
+            .request_permission(request)
+            .map_err(domain_error)?;
         self.review_inputs
             .insert(id.clone(), (input.clone(), charged_bytes));
         self.retained_review_bytes = review_bytes;
@@ -1497,6 +1505,57 @@ mod tests {
             next.pending(&permission),
             Err(PermissionAuthorityError::Unavailable)
         );
+    }
+
+    #[test]
+    fn a_waiting_review_is_listed_with_what_it_shows_under_a_key_of_its_own() {
+        let mut first_owner = controller();
+        let authority = first_owner
+            .permission_authority_source()
+            .read()
+            .unwrap()
+            .unwrap();
+        assert!(authority.reviews().unwrap().is_empty());
+        request(&mut first_owner, "permission", "Write big.txt").unwrap();
+        request(&mut first_owner, "second", "Write small.txt").unwrap();
+        let listed = authority.reviews().unwrap();
+        assert_eq!(
+            listed
+                .iter()
+                .map(|review| review.id.as_str())
+                .collect::<Vec<_>>(),
+            ["permission", "second"]
+        );
+        let first = &listed[0];
+        assert_eq!(first.execution_id.as_str(), "execution");
+        assert_eq!(first.content.title(), Some("Write big.txt"));
+        assert_eq!(first.content.arguments_json(), input().arguments_json);
+        assert_eq!(first.content.key().len(), 32);
+        assert_ne!(first.content.key(), listed[1].content.key());
+        first_owner.answer_permission(answer("permission")).unwrap();
+        assert_eq!(
+            authority
+                .reviews()
+                .unwrap()
+                .iter()
+                .map(|review| review.id.as_str())
+                .collect::<Vec<_>>(),
+            ["second"]
+        );
+        // The same identities asked again after a restart, by a new owner:
+        // a new review, under a new key, showing what it asks now.
+        let mut restarted = controller();
+        let after = restarted
+            .permission_authority_source()
+            .read()
+            .unwrap()
+            .unwrap();
+        request(&mut restarted, "permission", "Write other.txt").unwrap();
+        let again = &after.reviews().unwrap()[0];
+        assert_eq!(again.id.as_str(), "permission");
+        assert_eq!(again.execution_id, first.execution_id);
+        assert_eq!(again.content.title(), Some("Write other.txt"));
+        assert_ne!(again.content.key(), first.content.key());
     }
 
     #[test]

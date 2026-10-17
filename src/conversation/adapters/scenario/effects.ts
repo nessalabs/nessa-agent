@@ -208,6 +208,7 @@ export function scenarioEffects(scenario: "echo" | "offline"): ConversationEffec
           revision: "0",
           messages: [],
           pending: [],
+          reviewsWaiting: [],
           permissions: [],
           questions: [],
           tools: [],

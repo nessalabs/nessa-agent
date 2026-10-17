@@ -44,8 +44,9 @@ use crate::application::agent_execution::tools::ToolReviewInput;
 use crate::application::agent_execution::traces::GenAiSpan;
 use crate::domain::agent_execution::executions::{Initiation, Initiator, ToolChecking};
 use crate::domain::agent_execution::permissions::{
-    CustomPermissionCancellationReason, PermissionAuthorityError, PermissionCancellationReason,
-    PermissionEffect, PermissionId, PermissionOptionId, PermissionScope, RefusalOutcome,
+    CustomPermissionCancellationReason, PendingReview, PermissionAuthorityError,
+    PermissionCancellationReason, PermissionEffect, PermissionId, PermissionOptionId,
+    PermissionScope, RefusalOutcome,
 };
 use crate::domain::agent_execution::tools::ToolCallId;
 use crate::domain::model_metadata::value_objects::{EffortLevel, EffortLevels};
@@ -532,6 +533,39 @@ impl Agent {
             return Ok(false);
         }
         pending
+    }
+    /// The reviews the live invocation still waits on, oldest first, each
+    /// with what a person is shown of it. Empty when no execution is active,
+    /// the backend exposes no review authority, or the lifecycle changed
+    /// while reading. The same owner as [`Self::pending_permission`]: a
+    /// committed review alone is never listed.
+    ///
+    /// # Errors
+    /// Refuses foreign handles and reports typed owner/carrier faults.
+    pub fn pending_reviews(&self) -> Result<Vec<PendingReview>, PermissionAuthorityError> {
+        let Some(execution) = self.inner.lifecycle.active() else {
+            return Ok(Vec::new());
+        };
+        let Some((origin, attached)) = self.inner.lifecycle.permission_read_context(&execution)
+        else {
+            return Ok(Vec::new());
+        };
+        let Some(authority) = attached.session.permission_authority()? else {
+            return Ok(Vec::new());
+        };
+        if authority.execution_id() != &execution {
+            return Err(PermissionAuthorityError::IdentityMismatch);
+        }
+        let reviews = authority.reviews();
+        if self
+            .inner
+            .lifecycle
+            .permission_read_context(&execution)
+            .is_none_or(|(current, _)| current != origin)
+        {
+            return Ok(Vec::new());
+        }
+        reviews
     }
     /// Whether this Agent currently has no running or queued work. This
     /// snapshot does not reserve admission; a host must serialize subsequent

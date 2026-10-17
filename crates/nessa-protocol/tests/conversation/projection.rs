@@ -4,12 +4,12 @@
 use crate::agents::AgentId;
 use crate::conversation::domain::{ConversationApprovalMode, ConversationId};
 use crate::conversation::projection::{
-    bound_view, bound_view_within, clipped, Projection, MAX_REVIEW_PREVIEW_BYTES, MAX_TEXT,
-    MAX_VIEW_BYTES,
+    agent_review, bound_view, bound_view_within, clipped, review_entry, Projection,
+    MAX_REVIEW_ENTRY_BYTES, MAX_REVIEW_ENTRY_TOOL_NAME_BYTES, MAX_TEXT, MAX_VIEW_BYTES,
 };
 use crate::conversation::view::{
-    ConversationPermissionAsk, ConversationPermissionOptionEffect, ConversationRuntime,
-    ConversationSelectionView, ConversationTranscriptState,
+    ConversationPermissionAsk, ConversationPermissionOptionEffect, ConversationReviewKind,
+    ConversationRuntime, ConversationSelectionView, ConversationTranscriptState,
 };
 use crate::conversation::{
     projection::retained_view,
@@ -40,11 +40,12 @@ use nessa_sdk::domain::agent_execution::executions::{
     MessageId, QueueMutation, SchedulingCause,
 };
 use nessa_sdk::domain::agent_execution::permissions::{
-    PermissionApplicationId, PermissionCancellationReason, PermissionDecision, PermissionEffect,
-    PermissionId, PermissionOfferPolicy, PermissionOption, PermissionOptionId, PermissionOptions,
-    PermissionReviewDeadline, PermissionScope, PermissionSessionId, PermissionToolClass,
-    ReviewDecline, ReviewDeclineId, ReviewDeclineObservation, ReviewDeclineReason,
-    ReviewDeclineStage, MAX_OPEN_REVIEWS, STANDARD_DENY_REASON, STANDARD_STOP_REASON,
+    PendingReview, PermissionApplicationId, PermissionCancellationReason, PermissionDecision,
+    PermissionEffect, PermissionId, PermissionOfferPolicy, PermissionOption, PermissionOptionId,
+    PermissionOptions, PermissionReviewDeadline, PermissionScope, PermissionSessionId,
+    PermissionToolClass, ReviewContent, ReviewDecline, ReviewDeclineId, ReviewDeclineObservation,
+    ReviewDeclineReason, ReviewDeclineStage, MAX_OPEN_REVIEWS, STANDARD_DENY_REASON,
+    STANDARD_STOP_REASON,
 };
 use nessa_sdk::domain::agent_execution::prompts::{PromptText, UserMessage};
 use nessa_sdk::domain::agent_execution::questions::{
@@ -56,7 +57,6 @@ use nessa_sdk::domain::agent_execution::sessions::{
 use nessa_sdk::domain::agent_execution::tools::{
     McpCallArguments, McpTool, ToolCallId, ToolCallUpdate, ToolContent, ToolObservation, ToolStatus,
 };
-use std::collections::HashSet;
 use uuid::Uuid;
 
 fn said(text: &str) -> UserMessage {
@@ -1020,7 +1020,6 @@ fn a_turn_admitted_after_open_stays_running_until_its_result() {
     let live = projection.read();
     assert_eq!(live.messages[0].status, ConversationMessageStatus::Running);
     assert_eq!(live.questions.len(), 1);
-    assert_eq!(live.permissions.len(), 1);
 
     assert!(projection.replace_committed(
         &committed("incarnation", 3, 3, 3, Some(&admitted)),
@@ -1398,7 +1397,6 @@ fn a_turn_this_process_runs_stays_running_after_it_stops_being_active() {
     let live = projection.read();
     assert_eq!(live.messages[0].status, ConversationMessageStatus::Running);
     assert_eq!(live.questions.len(), 1);
-    assert_eq!(live.permissions.len(), 1);
 
     assert!(projection.replace_committed(
         &committed("incarnation", 3, 3, 3, Some(&snapshot)),
@@ -1460,6 +1458,40 @@ fn committed_partial_progress_cannot_be_replaced_by_an_older_complete_read() {
     assert!(!projection.read().capabilities.permissions);
 }
 
+/// Options that each decide this one request.
+fn once_options() -> PermissionOptions {
+    PermissionOptions::new(
+        vec![PermissionOption::new(
+            PermissionOptionId::new("allow").unwrap(),
+            "Allow once",
+            PermissionDecision::new(PermissionEffect::Allow, PermissionScope::request()),
+        )
+        .unwrap()],
+        &PermissionOfferPolicy::once_only(),
+    )
+    .unwrap()
+}
+
+/// A review as its live owner holds it while it waits.
+fn pending_review(
+    options: PermissionOptions,
+    arguments: &str,
+    deadline: Option<PermissionReviewDeadline>,
+) -> PendingReview {
+    PendingReview {
+        execution_id: ExecutionId::new("execution").unwrap(),
+        id: PermissionId::new("7").unwrap(),
+        tool_id: ToolCallId::new("tool").unwrap(),
+        options,
+        content: std::sync::Arc::new(ReviewContent::new(
+            None,
+            "write_file".into(),
+            arguments.into(),
+            deadline,
+        )),
+    }
+}
+
 #[test]
 fn a_review_reaching_beyond_its_request_is_not_offered() {
     let scoped = PermissionDecision::new(
@@ -1479,24 +1511,37 @@ fn a_review_reaching_beyond_its_request_is_not_offered() {
         &PermissionOfferPolicy::new(vec![scoped]).unwrap(),
     )
     .unwrap();
-    let ExecutionUpdate::PermissionRequested {
-        id,
-        tool_id,
-        observation,
-        input,
-        ..
-    } = review("{}".into()).update().clone()
-    else {
-        unreachable!()
-    };
-    let snapshot = review_snapshot(vec![event(ExecutionUpdate::PermissionRequested {
-        id,
-        tool_id,
-        observation,
-        input,
-        options,
-        deadline: None,
-    })]);
+    // Its allow would read as one for this request alone: no choice is offered.
+    assert!(agent_review(&pending_review(options, "{}", None)).is_none());
+}
+
+// What a review shows comes from its live owner, never from the folded
+// history: a long history of reviews costs the view nothing.
+#[test]
+fn a_folded_history_lists_no_reviews() {
+    let snapshot = review_snapshot(
+        (0..MAX_OPEN_REVIEWS * 4)
+            .map(|index| {
+                let ExecutionUpdate::PermissionRequested {
+                    observation,
+                    input,
+                    options,
+                    ..
+                } = review("{}".into()).update().clone()
+                else {
+                    unreachable!()
+                };
+                event(ExecutionUpdate::PermissionRequested {
+                    id: PermissionId::new(index.to_string()).unwrap(),
+                    tool_id: ToolCallId::new(format!("tool-{index}")).unwrap(),
+                    observation,
+                    input,
+                    options,
+                    deadline: None,
+                })
+            })
+            .collect(),
+    );
     let mut projection = projection();
     projection.replace_committed(
         &committed("incarnation", 1, 1, 1, Some(&snapshot)),
@@ -1505,173 +1550,38 @@ fn a_review_reaching_beyond_its_request_is_not_offered() {
     );
     projection.transcript_state(ConversationTranscriptState::Complete);
     let view = projection.read();
-    // Its allow would read as one for this request alone: no choice is offered.
     assert!(view.permissions.is_empty());
-    assert!(view.interaction_view_error.is_some());
-}
-
-/// `count` reviews asked one after another in one running turn, with ids
-/// `"0"`, `"1"`, ..., each for its own tool call, folded with the live
-/// authority saying which of them still wait.
-fn many_reviews(count: usize, waiting: impl Fn(usize) -> bool) -> Projection {
-    many_reviews_of(count, "{}", waiting)
-}
-
-/// [`many_reviews`], each reviewing `arguments`, all of them waiting.
-fn many_reviews_with(count: usize, arguments: &str) -> Projection {
-    many_reviews_of(count, arguments, |_| true)
-}
-
-fn many_reviews_of(count: usize, arguments: &str, waiting: impl Fn(usize) -> bool) -> Projection {
-    let ExecutionUpdate::PermissionRequested {
-        observation,
-        input,
-        options,
-        ..
-    } = review(arguments.into()).update().clone()
-    else {
-        unreachable!()
-    };
-    let events = (0..count)
-        .map(|index| {
-            event(ExecutionUpdate::PermissionRequested {
-                id: PermissionId::new(index.to_string()).unwrap(),
-                tool_id: ToolCallId::new(format!("tool-{index}")).unwrap(),
-                observation: observation.clone(),
-                input: input.clone(),
-                options: options.clone(),
-                deadline: None,
-            })
-        })
-        .collect();
-    let holding = (0..count)
-        .filter(|index| waiting(*index))
-        .map(|index| ("execution".to_owned(), index.to_string()))
-        .collect();
-    let snapshot = review_snapshot(events);
-    let mut projection = projection();
-    projection.replace_committed_while_holding(
-        &committed("incarnation", 1, 1, 1, Some(&snapshot)),
-        &[],
-        Some(&ExecutionId::new("execution").unwrap()),
-        &holding,
-    );
-    projection.transcript_state(ConversationTranscriptState::Complete);
-    projection
-}
-
-fn shown_reviews(view: &ConversationView) -> Vec<&str> {
-    view.permissions
-        .iter()
-        .map(|review| review.permission_id.as_str())
-        .collect()
-}
-
-// A person's answer, or a remembered choice, leaves no event in the history
-// the view folds. Counting the reviews that history leaves open hid every
-// new review once a long turn had asked sixteen, and each hidden one waited
-// out its deadline with nobody shown it. Keeping them would also grow the
-// projection with every review a turn ever asked.
-#[test]
-fn answered_reviews_are_not_kept_or_counted_against_the_open_limit() {
-    let projection = many_reviews(2000, |index| index == 1999);
-    assert_eq!(projection.view().permissions.len(), 1);
-    let view = projection.read();
-    assert_eq!(shown_reviews(&view), ["1999"]);
     assert_eq!(view.interaction_view_error, None);
     assert!(!view.truncated);
 }
 
+// A review's input is never cut: its whole is read from the live owner.
 #[test]
-fn a_review_answered_after_a_newer_fold_is_dropped_by_an_older_read() {
-    let mut projection = many_reviews(3, |_| true);
-    // A fold is held that this read's history cannot replace, so it is refused.
-    let older = review_snapshot(vec![]);
-    let accepted = projection.replace_committed_while_holding(
-        &committed("earlier-incarnation", 1, 1, 1, Some(&older)),
-        &[],
-        Some(&ExecutionId::new("execution").unwrap()),
-        &HashSet::new(),
-    );
-    assert!(!accepted);
-    assert_eq!(shown_reviews(&projection.read()), ["0", "1", "2"]);
-    // Review "1" was answered since; the authority's answer still applies.
-    let before = projection.read().revision;
-    projection.hold(|execution, permission| execution == "execution" && permission != "1");
-    let view = projection.read();
-    assert_eq!(shown_reviews(&view), ["0", "2"]);
-    assert_ne!(view.revision, before);
-}
-
-// A review is never left out for the size of its input. The card carries the
-// input's start and its length; the whole is read while the review waits.
-#[test]
-fn a_review_of_a_large_write_is_offered_with_the_start_of_its_input() {
-    let content = "x".repeat(100_000);
+fn a_review_of_a_large_write_carries_its_whole_input() {
     let arguments =
-        serde_json::json!({"file_path": "/tmp/big.txt", "content": content}).to_string();
-    let snapshot = review_snapshot(vec![review(arguments.clone())]);
-    let mut projection = projection();
-    projection.replace_committed_while_holding(
-        &committed("incarnation", 1, 1, 1, Some(&snapshot)),
-        &[],
-        Some(&ExecutionId::new("execution").unwrap()),
-        &HashSet::from([("execution".to_owned(), "7".to_owned())]),
-    );
-    projection.transcript_state(ConversationTranscriptState::Complete);
-    let view = bound_view(projection.read());
-    assert_eq!(view.interaction_view_error, None);
-    assert_eq!(shown_reviews(&view), ["7"]);
-    let review = &view.permissions[0];
-    assert!(!review.arguments_complete);
-    assert_eq!(review.arguments_bytes, arguments.len() as u64);
-    assert_eq!(review.arguments_json.len(), MAX_REVIEW_PREVIEW_BYTES);
-    assert!(arguments.starts_with(&review.arguments_json));
+        serde_json::json!({"file_path": "/tmp/big.txt", "content": "x".repeat(100_000)})
+            .to_string();
+    let shown = agent_review(&pending_review(once_options(), &arguments, None)).unwrap();
+    assert_eq!(shown.arguments_json, arguments);
+    assert_eq!(shown.tool_name, "write_file");
+    assert_eq!(shown.permission_id, "7");
 }
 
-// Whole reviews are the last thing a full view gives up. Before any is left
-// out, each gives up the start of its input, which is still read whole.
+// An entry is small and of one size whatever its tool is named, so every
+// waiting review fits in the room the view keeps for them.
 #[test]
-fn a_full_view_gives_up_review_input_starts_before_any_review() {
-    let arguments = serde_json::json!({"content": "y".repeat(5_000)}).to_string();
-    let view = many_reviews_with(MAX_OPEN_REVIEWS, &arguments).read();
-    assert_eq!(view.permissions.len(), MAX_OPEN_REVIEWS);
-    let bounded = bound_view(view);
-    assert!(serde_json::to_vec(&bounded).unwrap().len() <= MAX_VIEW_BYTES);
-    assert_eq!(bounded.permissions.len(), MAX_OPEN_REVIEWS);
-    assert_eq!(bounded.interaction_view_error, None);
-    assert!(bounded
-        .permissions
-        .iter()
-        .any(|review| review.arguments_json.is_empty()));
-    for review in &bounded.permissions {
-        assert!(!review.arguments_complete);
-        assert_eq!(review.arguments_bytes, arguments.len() as u64);
+fn a_review_entry_clips_its_tool_name_to_a_fixed_encoded_size() {
+    for name in ["\"".repeat(500), "\u{1}".repeat(500), "é".repeat(500)] {
+        let entry = review_entry(
+            "0123456789abcdef0123456789abcdef",
+            ConversationReviewKind::App,
+            &name,
+        );
+        let encoded = serde_json::to_string(&entry.tool_name).unwrap();
+        assert!(encoded.len() - 2 <= MAX_REVIEW_ENTRY_TOOL_NAME_BYTES);
+        assert!(name.starts_with(&entry.tool_name));
+        assert!(serde_json::to_vec(&entry).unwrap().len() < MAX_REVIEW_ENTRY_BYTES);
     }
-}
-
-// The SDK holds no more open than `MAX_OPEN_REVIEWS`; a saved history from
-// elsewhere past it shows the oldest, and says so.
-#[test]
-fn reviews_past_the_open_limit_wait_their_turn_and_the_view_says_so() {
-    let all = many_reviews(MAX_OPEN_REVIEWS + 1, |_| true).read();
-    let expected: Vec<String> = (0..MAX_OPEN_REVIEWS)
-        .map(|index| index.to_string())
-        .collect();
-    assert_eq!(shown_reviews(&all), expected);
-    assert!(all.truncated);
-    assert_eq!(
-        all.interaction_view_error.as_deref(),
-        Some("A pending tool review exceeds the display limit; no choices were silently removed.")
-    );
-    // Once the oldest is answered, the one held back is offered.
-    let after = many_reviews(MAX_OPEN_REVIEWS + 1, |index| index != 0).read();
-    let expected: Vec<String> = (1..=MAX_OPEN_REVIEWS)
-        .map(|index| index.to_string())
-        .collect();
-    assert_eq!(shown_reviews(&after), expected);
-    assert_eq!(after.interaction_view_error, None);
-    assert!(!after.truncated);
 }
 
 #[test]
@@ -1694,47 +1604,19 @@ fn a_review_says_what_each_offered_option_decides() {
         &PermissionOfferPolicy::once_only(),
     )
     .unwrap();
-    let ExecutionUpdate::PermissionRequested {
-        id,
-        tool_id,
-        observation,
-        input,
-        ..
-    } = review("{}".into()).update().clone()
-    else {
-        unreachable!()
-    };
-    let snapshot = review_snapshot(vec![event(ExecutionUpdate::PermissionRequested {
-        id,
-        tool_id,
-        observation,
-        input,
-        options,
-        deadline: None,
-    })]);
-    let mut projection = projection();
-    projection.replace_committed(
-        &committed("incarnation", 1, 1, 1, Some(&snapshot)),
-        &[],
-        Some(&ExecutionId::new("execution").unwrap()),
-    );
-    projection.transcript_state(ConversationTranscriptState::Complete);
-    let view = projection.read();
-    let offered: Vec<_> = view.permissions[0]
+    let shown = agent_review(&pending_review(options, "{}", None)).unwrap();
+    let offered: Vec<_> = shown
         .options
         .iter()
         .map(|option| (option.id.as_str(), option.effect))
         .collect();
     // On the wire as the schema names it.
-    let wire = serde_json::to_value(&view.permissions[0].options).unwrap();
+    let wire = serde_json::to_value(&shown.options).unwrap();
     assert_eq!(wire[0]["effect"], "deny");
     assert_eq!(wire[1]["effect"], "allow");
     // The agent's review asks a tool, and says so (D19 on #390).
-    assert_eq!(view.permissions[0].ask, ConversationPermissionAsk::Tool);
-    assert_eq!(
-        serde_json::to_value(&view.permissions[0]).unwrap()["ask"],
-        "tool"
-    );
+    assert_eq!(shown.ask, ConversationPermissionAsk::Tool);
+    assert_eq!(serde_json::to_value(&shown).unwrap()["ask"], "tool");
     // The effect is the domain's decision, whatever the label or the order.
     assert_eq!(
         offered,
@@ -1770,7 +1652,6 @@ fn only_the_exact_live_execution_can_offer_a_committed_interaction() {
     );
     projection.transcript_state(ConversationTranscriptState::Complete);
     assert_eq!(projection.read().questions.len(), 1);
-    assert_eq!(projection.read().permissions.len(), 1);
     assert!(!projection.replace_committed(
         &committed("replacement-incarnation", 2, 2, 2, Some(&snapshot)),
         &[],
@@ -1914,12 +1795,10 @@ fn active_interactions_survive_recent_message_window_without_copying_the_message
     assert!(view.messages.len() <= 24);
     assert_eq!(view.questions.len(), 1);
     assert_eq!(view.questions[0].questions.len(), 3);
-    assert_eq!(view.permissions.len(), 1);
     let view = bound_view(view);
     assert!(serde_json::to_vec(&view).unwrap().len() <= 60_000);
     assert!(projection.replace_committed(&current, &order, Some(&active)));
     assert_eq!(projection.read().questions.len(), 1);
-    assert_eq!(projection.read().permissions.len(), 1);
     assert!(projection.replace_committed(&current, &order, None));
     assert!(projection.read().questions.is_empty());
     assert!(projection.read().permissions.is_empty());
@@ -2003,15 +1882,8 @@ fn active_interactions_survive_recent_message_window_without_copying_the_message
             assert_eq!(asked.options[0].label.len(), 1024);
         }
     }
-    // Every review is still offered: a long input travels as its start, and
-    // the whole is read while the review waits.
-    assert_eq!(view.permissions.len(), 8);
-    for permission in &view.permissions {
-        assert_eq!(permission.options.len(), 1);
-        assert!(!permission.arguments_complete);
-        assert_eq!(permission.arguments_bytes, 6002);
-        assert!(permission.arguments_json.len() <= MAX_REVIEW_PREVIEW_BYTES);
-    }
+    // Reviews are not part of the folded view; their live owner lists them.
+    assert!(view.permissions.is_empty());
     let mut owner = ExecutionController::new(ExecutionSessionId::new("provider-session").unwrap());
     owner.begin_execution(active.clone()).unwrap();
     let ExecutionUpdate::PermissionRequested {
@@ -2065,7 +1937,6 @@ fn active_interactions_survive_recent_message_window_without_copying_the_message
     assert!(reset.replace_committed(&current, &order, Some(&active)));
     reset.transcript_state(ConversationTranscriptState::Complete);
     assert_eq!(reset.read().questions[0].questions.len(), 3);
-    assert_eq!(reset.read().permissions.len(), 1);
 }
 
 #[test]
@@ -2981,19 +2852,9 @@ fn selection_and_runtime_replacements_own_revision_without_transcript_output() {
 }
 
 #[test]
-fn a_pending_review_shows_an_armed_deadline_and_a_restored_one_does_not() {
+fn a_waiting_review_counts_down_from_the_deadline_its_live_owner_keeps() {
     use std::time::Duration;
-    let ExecutionUpdate::PermissionRequested {
-        id,
-        tool_id,
-        observation,
-        input,
-        options,
-        ..
-    } = review("{}".into()).update().clone()
-    else {
-        unreachable!()
-    };
+    let due = 1_700_000_030_000;
     let armed = PermissionReviewDeadline::new(
         PermissionToolClass::Other,
         Duration::from_secs(30),
@@ -3001,73 +2862,20 @@ fn a_pending_review_shows_an_armed_deadline_and_a_restored_one_does_not() {
         STANDARD_DENY_REASON,
     )
     .unwrap()
-    .promise(1_700_000_030_000)
+    .promise(due)
     .unwrap();
-    let show = |deadline| {
-        let snapshot = review_snapshot(vec![event(ExecutionUpdate::PermissionRequested {
-            id: id.clone(),
-            tool_id: tool_id.clone(),
-            observation: observation.clone(),
-            input: input.clone(),
-            options: options.clone(),
-            deadline,
-        })]);
-        let mut projection = projection();
-        projection.replace_committed(
-            &committed("incarnation", 1, 1, 1, Some(&snapshot)),
-            &[],
-            Some(&ExecutionId::new("execution").unwrap()),
-        );
-        projection.transcript_state(ConversationTranscriptState::Complete);
-        projection.read()
-    };
-    let pending = show(Some(armed));
-    let deadline = pending.permissions[0]
+    let shown = agent_review(&pending_review(once_options(), "{}", Some(armed))).unwrap();
+    let deadline = shown
         .deadline
         .as_ref()
-        .expect("an armed deadline is on the pending review");
+        .expect("an armed deadline is on the waiting review");
     assert_eq!(deadline.wait_ms, 30_000);
-    assert_eq!(deadline.due_at_ms, 1_700_000_030_000);
+    assert_eq!(deadline.due_at_ms, due);
     assert_eq!(deadline.effect, ConversationPermissionOptionEffect::Deny);
     assert_eq!(deadline.reason, STANDARD_DENY_REASON);
     assert!(!deadline.stops_turn);
-    let due = 1_700_000_030_000;
-    let restored = PermissionReviewDeadline::new(
-        PermissionToolClass::Other,
-        Duration::from_secs(30),
-        PermissionEffect::Deny,
-        STANDARD_DENY_REASON,
-    )
-    .unwrap()
-    .promise(due)
-    .unwrap()
-    .restored(false, Some(due))
-    .expect("a continuing deny deadline restores");
-    assert!(!restored.armed());
-    assert_eq!(restored.due_at_ms(), Some(due));
-    assert!(
-        show(Some(restored.clone())).permissions[0]
-            .deadline
-            .is_none(),
-        "a restored deadline is not on the card"
-    );
-}
-
-#[test]
-fn a_saved_deadline_counts_down_while_this_process_holds_the_review() {
-    use std::time::Duration;
-    let ExecutionUpdate::PermissionRequested {
-        id,
-        tool_id,
-        observation,
-        input,
-        options,
-        ..
-    } = review("{}".into()).update().clone()
-    else {
-        unreachable!()
-    };
-    let due = 1_700_000_030_000;
+    // A deadline restored from storage is shown only because the live owner
+    // waits on it now; history alone never puts a review on the card.
     let restored = PermissionReviewDeadline::new(
         PermissionToolClass::Other,
         Duration::from_secs(30),
@@ -3081,68 +2889,14 @@ fn a_saved_deadline_counts_down_while_this_process_holds_the_review() {
     .restored(true, Some(due))
     .expect("a stopping deny deadline restores");
     assert!(!restored.armed());
-    let snapshot = review_snapshot(vec![event(ExecutionUpdate::PermissionRequested {
-        id,
-        tool_id,
-        observation,
-        input,
-        options,
-        deadline: Some(restored),
-    })]);
-    let active = ExecutionId::new("execution").unwrap();
-    let show = |holding: HashSet<(String, String)>| {
-        let mut projection = projection();
-        projection.replace_committed_while_holding(
-            &committed("incarnation", 1, 1, 1, Some(&snapshot)),
-            &[],
-            Some(&active),
-            &holding,
-        );
-        projection.transcript_state(ConversationTranscriptState::Complete);
-        projection.read()
-    };
-    let absent = show(HashSet::new());
-    assert!(
-        absent.permissions.is_empty(),
-        "a review this process is not holding is not offered"
-    );
-    let other = show(HashSet::from([("execution".into(), "other".into())]));
-    assert!(
-        other.permissions.is_empty(),
-        "holding a different review does not offer this one"
-    );
-    let mut unasked = projection();
-    unasked.replace_committed(
-        &committed("incarnation", 1, 1, 1, Some(&snapshot)),
-        &[],
-        Some(&active),
-    );
-    unasked.transcript_state(ConversationTranscriptState::Complete);
-    assert!(
-        unasked.read().permissions[0].deadline.is_none(),
-        "a saved deadline stays off the card when no worker was asked about it"
-    );
-    let pending = show(HashSet::from([("execution".into(), "7".into())]));
-    let deadline = pending.permissions[0]
+    let shown = agent_review(&pending_review(once_options(), "{}", Some(restored))).unwrap();
+    let deadline = shown
         .deadline
         .as_ref()
-        .expect("a review this process holds counts down from the saved deadline");
-    assert_eq!(deadline.wait_ms, 30_000);
+        .expect("a review the live owner holds counts down from its saved deadline");
     assert_eq!(deadline.due_at_ms, due);
-    assert_eq!(deadline.effect, ConversationPermissionOptionEffect::Deny);
     assert_eq!(deadline.reason, STANDARD_STOP_REASON);
     assert!(deadline.stops_turn);
-    let mut idle = projection();
-    idle.replace_committed_while_holding(
-        &committed("incarnation", 1, 1, 1, Some(&snapshot)),
-        &[],
-        None,
-        &HashSet::from([("execution".into(), "7".into())]),
-    );
-    assert!(
-        idle.read().permissions.is_empty(),
-        "a held review that is not the active execution is not offered"
-    );
 }
 
 #[test]
@@ -3276,8 +3030,8 @@ fn a_deadline_notice_is_shown_only_as_the_one_settlement_its_review_published() 
             .flat_map(|message| &message.parts)
             .filter(|part| part.kind == "local_notice")
             .map(|part| part.text.clone())
-            .collect::<Vec<_>>();
-        (notices, view.permissions.len())
+            .collect::<Vec<String>>();
+        notices
     };
     let deny = || notice(PermissionEffect::Deny, STANDARD_DENY_REASON);
     let denied = format!("Denied automatically: {STANDARD_DENY_REASON}");
@@ -3285,28 +3039,28 @@ fn a_deadline_notice_is_shown_only_as_the_one_settlement_its_review_published() 
 
     assert_eq!(
         shown(vec![review("{}".into()), deny()]),
-        (vec![], 1),
-        "a review that published no deadline was not settled by one, and stays pending"
+        Vec::<String>::new(),
+        "a review that published no deadline was not settled by one"
     );
     assert_eq!(
         shown(vec![
             published(),
             notice(PermissionEffect::Allow, STANDARD_ALLOW_REASON)
         ]),
-        (vec![], 1),
-        "a notice that contradicts the published effect is not shown and removes nothing"
+        Vec::<String>::new(),
+        "a notice that contradicts the published effect is not shown"
     );
     assert_eq!(
         shown(vec![
             published(),
             notice(PermissionEffect::Deny, STANDARD_STOP_REASON)
         ]),
-        (vec![], 1),
+        Vec::<String>::new(),
         "a notice whose reason is not the published one is not shown"
     );
     assert_eq!(
         shown(vec![published(), deny(), deny()]),
-        (vec![denied.clone()], 0),
+        vec![denied.clone()],
         "a duplicate notice is shown once"
     );
     assert_eq!(
@@ -3318,7 +3072,7 @@ fn a_deadline_notice_is_shown_only_as_the_one_settlement_its_review_published() 
             ),
             deny(),
         ]),
-        (vec![], 0),
+        Vec::<String>::new(),
         "a review cancelled for another reason was not settled by its deadline"
     );
     assert_eq!(
@@ -3330,7 +3084,7 @@ fn a_deadline_notice_is_shown_only_as_the_one_settlement_its_review_published() 
             ),
             deny(),
         ]),
-        (vec![], 0),
+        Vec::<String>::new(),
         "an execution timeout shares the reason, but the review's deadline did not settle it"
     );
     let deadline_after = |wait, effect, reason| {
@@ -3383,7 +3137,7 @@ fn a_deadline_notice_is_shown_only_as_the_one_settlement_its_review_published() 
             deadline_cancelled_review(deadline(PermissionEffect::Deny, STANDARD_DENY_REASON)),
             deny(),
         ]),
-        (vec![denied], 0),
+        vec![denied],
         "a review its deadline cancelled has that deadline's notice"
     );
 }

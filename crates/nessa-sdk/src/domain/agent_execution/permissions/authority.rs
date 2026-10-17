@@ -1,6 +1,9 @@
 //! Read-only access to the live aggregate's existing pending review collection.
 #![deny(missing_docs)]
-use super::{PermissionId, PermissionRequest};
+use super::{
+    PermissionId, PermissionOptions, PermissionRequest, PermissionStateView, ReviewContent,
+};
+use crate::domain::agent_execution::tools::ToolCallId;
 use crate::domain::agent_execution::{executions::ExecutionId, sessions::ExecutionSessionId};
 use std::{
     collections::HashMap,
@@ -68,6 +71,53 @@ impl PermissionAuthority {
             .lock()
             .map_err(|_| PermissionAuthorityError::Poisoned)?;
         Ok(pending.contains_key(id))
+    }
+}
+
+/// One review still waiting in the owning collection, as a person is shown
+/// it: its identities, its offered choices and its content.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PendingReview {
+    /// The execution that waits on it.
+    pub execution_id: ExecutionId,
+    /// The review's identity within its execution.
+    pub id: PermissionId,
+    /// The tool whose input is reviewed.
+    pub tool_id: ToolCallId,
+    /// The choices it offers, exactly.
+    pub options: PermissionOptions,
+    /// What a person is shown of it.
+    pub content: Arc<ReviewContent>,
+}
+impl PermissionAuthority {
+    /// Every review still waiting whose content was recorded, oldest first.
+    /// This reserves nothing; an answer must still validate its owner.
+    ///
+    /// # Errors
+    /// Reports dropped ownership or a poisoned collection without awaiting I/O.
+    pub fn reviews(&self) -> Result<Vec<PendingReview>, PermissionAuthorityError> {
+        let pending = self
+            .pending
+            .upgrade()
+            .ok_or(PermissionAuthorityError::Unavailable)?;
+        let pending = pending
+            .lock()
+            .map_err(|_| PermissionAuthorityError::Poisoned)?;
+        let mut reviews: Vec<PendingReview> = pending
+            .values()
+            .filter(|request| matches!(request.state(), PermissionStateView::Pending))
+            .filter_map(|request| {
+                Some(PendingReview {
+                    execution_id: self.execution.clone(),
+                    id: request.id().clone(),
+                    tool_id: request.tool_id().clone(),
+                    options: request.options().clone(),
+                    content: request.content()?.clone(),
+                })
+            })
+            .collect();
+        reviews.sort_by_key(|review| review.content.opened());
+        Ok(reviews)
     }
 }
 

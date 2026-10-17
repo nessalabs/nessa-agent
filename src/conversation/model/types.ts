@@ -430,18 +430,20 @@ type ConversationState = {
     }
     /** Last gateway view reports an invocation still running, even before its first chunk. */
     running: boolean
+    /**
+     * Reviews the view lists whose content has not been read yet: no answer
+     * is offered on one until it has. `failed` while a read is being retried.
+     */
+    reviewsWaiting: { review: string; toolName: string; failed: boolean }[]
+    /** Waiting reviews, each read whole from its live owner. */
     permissions: {
       executionId: string
       permissionId: string
       toolId: string
       title: string
       toolName: string
-      /** The whole input when `argumentsComplete`; otherwise only its start. */
+      /** The whole input, read from the review\'s live owner. */
       argumentsJson: string
-      /** Whether `argumentsJson` is the whole input. No choice is offered until it is. */
-      argumentsComplete: boolean
-      /** Length of the whole input, in UTF-8 bytes. */
-      argumentsBytes: number
       options: { id: string; label: string }[]
       /**
        * Present when the review answers itself if nobody does.

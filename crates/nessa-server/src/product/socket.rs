@@ -551,7 +551,7 @@ impl ResponseClass {
             | "conversation.answer"
             // A person reads a long review's input before they answer it, so
             // the read is never behind ordinary requests either.
-            | "conversation.permissionInput"
+            | "conversation.permissionReview"
             | "conversation.answerQuestion"
             | "conversation.cancel"
             | "conversation.remove"

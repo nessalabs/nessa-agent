@@ -26,14 +26,14 @@ use nessa_protocol::product::generated::{
     ConversationDeleteParams, ConversationListParams, ConversationListResult,
     ConversationMutationResult, ConversationObserveCursor, ConversationObserveParams,
     ConversationObserveResult, ConversationPermissionAnswerErrorDetails,
-    ConversationPermissionInputParams, ConversationPermissionInputResult,
+    ConversationPermissionReviewParams, ConversationPermissionReviewResult,
     ConversationPermissionRulesParams, ConversationPermissionRulesResult,
     ConversationPermissionSelectionState, ConversationReadParams, ConversationReceiptParams,
     ConversationReceiptResult, ConversationRemoveParams, ConversationReorderParams,
     ConversationRevokePermissionRuleParams, ConversationRevokePermissionRuleResult,
     ConversationSendParams, ConversationSetApprovalModeParams, ConversationSetApprovalModeResult,
     ConversationStopParams, ConversationSummary, ConversationView as WireConversationView,
-    PermissionRule, PermissionRuleEffect, MAX_REVIEW_INPUT_RANGE_BYTES,
+    PermissionRule, PermissionRuleEffect, MAX_REVIEW_RANGE_BYTES,
 };
 use nessa_protocol::product::generated::{
     ConversationMessageDelivery, ConversationMessageParams, ConversationMessageReceipt,
@@ -518,25 +518,32 @@ pub(crate) async fn dispatch(
                     },
                 ))
             }
-            "conversation.permissionInput" => {
-                let params = target_params!(ConversationPermissionInputParams);
+            "conversation.permissionReview" => {
+                let params = target_params!(ConversationPermissionReviewParams);
                 let max_bytes = usize::try_from(params.max_bytes)
                     .ok()
-                    .filter(|bytes| (1..=MAX_REVIEW_INPUT_RANGE_BYTES).contains(bytes))
+                    .filter(|bytes| (1..=MAX_REVIEW_RANGE_BYTES).contains(bytes))
                     .ok_or(ConversationError::InvalidInput)?;
+                if params.review.len() != 32
+                    || !params
+                        .review
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+                {
+                    return Err(ConversationError::InvalidInput);
+                }
                 let (data, total_bytes) = service
-                    .permission_input(
+                    .permission_review(
                         conversation_id(&params.conversation_id)?,
                         caller(frame.id.clone()),
-                        params.execution_id,
-                        params.permission_id,
+                        params.review,
                         params.offset,
                         max_bytes,
                     )
                     .await?;
                 Ok(success(
                     &frame.id,
-                    &ConversationPermissionInputResult {
+                    &ConversationPermissionReviewResult {
                         offset: params.offset,
                         total_bytes,
                         data: base64::engine::general_purpose::STANDARD.encode(data),

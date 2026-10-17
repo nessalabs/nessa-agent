@@ -35,6 +35,7 @@ function attached(
     ],
     questions: [],
     running: false,
+    reviewsWaiting: [],
     permissions: [],
     tools: [],
     pending: [],

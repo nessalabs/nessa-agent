@@ -66,6 +66,7 @@ import { followWorkspace, loadWorkspace } from "../../../../src/desktop/workspac
 import {
   fakeGateway,
   row,
+  shownReview,
   view,
 } from "../../../../src/desktop/workspace/adapters/gateway/fake-gateway"
 
@@ -152,8 +153,6 @@ function reviewOf(permissionId: string, tool: string): ConversationPermission {
     title: `An app asks to run ${tool} on ${server}`,
     toolName: tool,
     argumentsJson: "{}",
-    argumentsComplete: true,
-    argumentsBytes: 2,
     origin: { kind: "app", server, tool },
     ask: "tool",
     options: [
@@ -176,8 +175,6 @@ function messageReviewOf(permissionId: string, text: string): ConversationPermis
     title: `The ${asking.tool} app on ${asking.server} asks to send a message as you`,
     toolName: asking.tool,
     argumentsJson: JSON.stringify({ text }),
-    argumentsComplete: true,
-    argumentsBytes: new TextEncoder().encode(JSON.stringify({ text })).byteLength,
     origin: { kind: "app", ...asking },
     ask: "message",
     options: [
@@ -336,7 +333,8 @@ Object.assign(window, {
   __appReview: {
     /** Probe correlation with an SDK-issued target that names another review. */
     answerOther(field: "conversationId" | "executionId" | "permissionId") {
-      const open = gateway.views.get(conversation)?.permissions[0]
+      const listed = gateway.views.get(conversation)?.permissions[0]
+      const open = listed && shownReview(listed.review)
       if (!open) throw new Error("no review is open")
       const other = {
         conversationId:
@@ -389,7 +387,8 @@ Object.assign(window, {
         })
     },
     snapshot: () => {
-      const open = gateway.views.get(conversation)?.permissions[0]
+      const listed = gateway.views.get(conversation)?.permissions[0]
+      const open = listed && shownReview(listed.review)
       return {
         settled,
         // Every subscription the window opened: none at rest.

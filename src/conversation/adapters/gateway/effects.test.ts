@@ -306,25 +306,12 @@ it("P1: tells the follower each frame, and after lagging follows on at once from
   expect(said).toHaveLength(1)
 })
 
-it("shows a 100 KB Write review's start, reads its whole input, and shows it again whole", async () => {
+it("lists a 100 KB Write review as loading, reads what it shows from its live owner, and only then shows it", async () => {
   const gateway = subscribing()
   const whole = JSON.stringify({
     file_path: "/tmp/big.txt",
     content: "x".repeat(100_000),
   })
-  const start = whole.slice(0, 1024)
-  let release = () => {}
-  const loading = new Promise<void>((resolve) => (release = resolve))
-  const permissionInput = vi.fn(() => loading.then(() => whole))
-  Object.assign(gateway.client, { conversation: { permissionInput } })
-  const effects = gatewayEffects(
-    () => gateway.client,
-    unexpectedWait,
-    () => SERVER_NOW_MS,
-  )
-  const { said, follower } = told()
-  const stop = effects.follow("00000000-0000-4000-8000-000000000001", follower)
-  await settle()
   const review = {
     executionId: "e1",
     permissionId: "p1",
@@ -334,30 +321,51 @@ it("shows a 100 KB Write review's start, reads its whole input, and shows it aga
     toolName: "Write",
     origin: { kind: "harness" as const },
     ask: "tool" as const,
-    argumentsJson: start,
-    argumentsComplete: false,
-    argumentsBytes: whole.length,
+    argumentsJson: whole,
   }
+  const key = "0123456789abcdef0123456789abcdef"
+  let release = () => {}
+  const loading = new Promise<void>((resolve) => (release = resolve))
+  const permissionReview = vi.fn(() => loading.then(() => review))
+  Object.assign(gateway.client, { conversation: { permissionReview } })
+  const effects = gatewayEffects(
+    () => gateway.client,
+    unexpectedWait,
+    () => SERVER_NOW_MS,
+  )
+  const { said, follower } = told()
+  const conversationId = "00000000-0000-4000-8000-000000000001"
+  const stop = effects.follow(conversationId, follower)
+  await settle()
+  const entry = { review: key, origin: "harness" as const, toolName: "Write" }
   gateway.opens[0]!.handlers.view({
     cursor: cursor("1"),
-    view: { ...gatewayView(), permissions: [review] },
+    view: { ...gatewayView(), permissions: [entry] },
   })
-  const shown = (index: number) =>
-    (said[index] as { view: ConversationViewOf }).view.permissions[0]!
+  const shown = (index: number) => (said[index] as { view: ConversationViewOf }).view
   expect(said).toHaveLength(1)
-  expect(shown(0)).toMatchObject({ argumentsJson: start, argumentsComplete: false })
+  expect(shown(0).permissions).toEqual([])
+  expect(shown(0).reviewsWaiting).toEqual([
+    { review: key, toolName: "Write", failed: false },
+  ])
   release()
   await settle()
-  expect(permissionInput).toHaveBeenCalledOnce()
+  expect(permissionReview).toHaveBeenCalledOnce()
+  expect(permissionReview.mock.calls[0]).toEqual([
+    conversationId,
+    key,
+    { signal: expect.any(AbortSignal) },
+  ])
   expect(said).toHaveLength(2)
-  expect(shown(1)).toMatchObject({ argumentsJson: whole, argumentsComplete: true })
-  // The next frame naming the review carries it whole without reading again.
+  expect(shown(1).reviewsWaiting).toEqual([])
+  expect(shown(1).permissions).toEqual([review])
+  // The next frame listing the review shows it without reading it again.
   gateway.opens[0]!.handlers.view({
     cursor: cursor("2"),
-    view: { ...gatewayView(), revision: "2", permissions: [review] },
+    view: { ...gatewayView(), revision: "2", permissions: [entry] },
   })
-  expect(shown(2)).toMatchObject({ argumentsJson: whole, argumentsComplete: true })
-  expect(permissionInput).toHaveBeenCalledOnce()
+  expect(shown(2).permissions).toEqual([review])
+  expect(permissionReview).toHaveBeenCalledOnce()
   stop()
 })
 
@@ -374,39 +382,39 @@ it("puts a review's deadline on the panel's clock as the view arrives, so skew b
     const { said, follower } = told()
     const stop = effects.follow("00000000-0000-4000-8000-000000000001", follower)
     await settle()
+    const permissionReview = vi.fn(async () => ({
+      executionId: "e1",
+      permissionId: "p1",
+      toolId: "t1",
+      title: "Tool permission",
+      options: [{ id: "d", label: "Deny", effect: "deny" }],
+      toolName: "bash",
+      origin: { kind: "harness" },
+      ask: "tool",
+      argumentsJson: "{}",
+      // Due 30 s after the gateway sent the view, on its clock.
+      deadline: {
+        waitMs: 30_000,
+        dueAtMs: SERVER_NOW_MS + 30_000,
+        effect: "deny",
+        reason: "No human answered in time.",
+        stopsTurn: false,
+      },
+    }))
+    Object.assign(gateway.client, { conversation: { permissionReview } })
+    const key = "0123456789abcdef0123456789abcdef"
     gateway.opens[0]!.handlers.view({
       cursor: cursor("1"),
       view: {
         ...gatewayView(),
-        permissions: [
-          {
-            executionId: "e1",
-            permissionId: "p1",
-            toolId: "t1",
-            title: "Tool permission",
-            options: [{ id: "d", label: "Deny", effect: "deny" }],
-            toolName: "bash",
-            origin: { kind: "harness" },
-            ask: "tool",
-            argumentsJson: "{}",
-            argumentsComplete: true,
-            argumentsBytes: 2,
-            // Due 30 s after the gateway sent the view, on its clock.
-            deadline: {
-              waitMs: 30_000,
-              dueAtMs: SERVER_NOW_MS + 30_000,
-              effect: "deny",
-              reason: "No human answered in time.",
-              stopsTurn: false,
-            },
-          },
-        ],
+        permissions: [{ review: key, origin: "harness", toolName: "bash" }],
       },
     })
+    await settle()
     // Read once, as the frame arrives: a later reading changes nothing told.
     const receivedAtMs = panelMs
     panelMs += 5_000
-    const heard = said[0] as { view: ConversationViewOf }
+    const heard = said.at(-1) as { view: ConversationViewOf }
     const deadline = heard.view.permissions[0]!.deadline!
     expect(deadline.dueAtMs - receivedAtMs, `skew ${skewMs}`).toBe(30_000)
     expect(deadlinePendingLine(deadline, receivedAtMs)).toBe(

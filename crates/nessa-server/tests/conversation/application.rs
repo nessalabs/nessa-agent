@@ -1957,12 +1957,9 @@ async fn settled_permission_answers_wake_readers_and_expose_the_next_review() {
             "settled permission must wake its conversation reader"
         );
         changes.borrow_and_update();
-        let view = service
-            .read(id.clone(), caller("panel", "after-answer"))
-            .await
-            .unwrap();
-        assert_eq!(view.permissions.len(), 1);
-        assert_eq!(view.permissions[0].permission_id, "permission-1");
+        let shown = shown_reviews(&service, &id).await;
+        assert_eq!(shown.len(), 1);
+        assert_eq!(shown[0].permission_id, "permission-1");
         assert_eq!(provider.permission_answers.lock().unwrap().len(), 1);
         finish.send(()).unwrap();
         service.shutdown().await.unwrap();
@@ -2043,12 +2040,12 @@ async fn every_review_the_agent_may_hold_open_is_offered_and_answered_ones_leave
                 .read(id.clone(), caller("panel", "after-answers"))
                 .await
                 .unwrap();
-            let shown: Vec<_> = view
-                .permissions
-                .iter()
-                .map(|review| review.permission_id.clone())
+            let shown: Vec<_> = shown_reviews(&service, &id)
+                .await
+                .into_iter()
+                .map(|review| review.permission_id)
                 .collect();
-            if shown == expected {
+            if shown == expected && view.permissions.len() == expected.len() {
                 break view;
             }
             tokio::task::yield_now().await;
@@ -2065,7 +2062,7 @@ async fn every_review_the_agent_may_hold_open_is_offered_and_answered_ones_leave
 // start, and the whole is read range by range while the review waits, so a
 // person can see all of it before they choose.
 #[tokio::test]
-async fn a_large_write_review_is_offered_and_its_whole_input_is_read_before_it_is_answered() {
+async fn a_large_write_review_is_listed_and_read_whole_from_its_live_owner_before_it_is_answered() {
     let (service, provider, _, _) = fixture(ConversationLimits::default());
     let arguments =
         serde_json::json!({"file_path": "/tmp/big.txt", "content": "é".repeat(50_000)}).to_string();
@@ -2098,68 +2095,84 @@ async fn a_large_write_review_is_offered_and_its_whole_input_is_read_before_it_i
         )
         .await
         .unwrap();
-    let review = tokio::time::timeout(Duration::from_secs(2), async {
+    let entry = tokio::time::timeout(Duration::from_secs(2), async {
         loop {
             let view = service
                 .read(id.clone(), caller("panel", "read"))
                 .await
                 .unwrap();
-            if let Some(review) = view.permissions.into_iter().next() {
-                break review;
+            if let Some(entry) = view.permissions.into_iter().next() {
+                break entry;
             }
             tokio::task::yield_now().await;
         }
     })
     .await
     .unwrap();
-    assert!(!review.arguments_complete);
-    assert_eq!(review.arguments_bytes, arguments.len() as u64);
-    assert!(arguments.starts_with(&review.arguments_json));
+    // The view lists it by a key of its own, whatever the size of its input.
+    assert_eq!(entry.review.len(), 32);
+    assert_eq!(entry.tool_name, "write_file");
+    let read = |offset: u64, caller_id: &'static str| {
+        service.permission_review(
+            id.clone(),
+            caller("panel", caller_id),
+            entry.review.clone(),
+            offset,
+            32_768,
+        )
+    };
     let mut whole = Vec::new();
-    while (whole.len() as u64) < review.arguments_bytes {
-        let (range, total) = service
-            .permission_input(
-                id.clone(),
-                caller("panel", "input"),
-                review.execution_id.clone(),
-                review.permission_id.clone(),
-                whole.len() as u64,
-                32_768,
-            )
-            .await
-            .unwrap();
-        assert_eq!(total, review.arguments_bytes);
+    loop {
+        let (range, total) = read(whole.len() as u64, "review").await.unwrap();
         assert!(!range.is_empty() && range.len() <= 32_768);
         whole.extend(range);
+        if whole.len() as u64 == total {
+            break;
+        }
     }
-    assert_eq!(String::from_utf8(whole).unwrap(), arguments);
+    let shown: serde_json::Value = serde_json::from_slice(&whole).unwrap();
+    assert_eq!(shown["argumentsJson"], arguments.as_str());
+    assert_eq!(shown["toolName"], "write_file");
+    let permission = shown["permissionId"].as_str().unwrap().to_owned();
     service
         .answer(
             id.clone(),
             caller("panel", "answer"),
             "reviews".into(),
-            review.permission_id.clone(),
+            permission,
             "allow".into(),
             PermissionCaller::Owner,
         )
         .await
         .unwrap();
-    // Once answered, the input is no longer served.
+    // Once answered, it is no longer listed or served.
     assert!(matches!(
-        service
-            .permission_input(
-                id.clone(),
-                caller("panel", "late"),
-                review.execution_id.clone(),
-                review.permission_id.clone(),
-                0,
-                32_768,
-            )
-            .await,
+        read(0, "late").await,
         Err(ConversationError::Agent(AgentError::StalePermission))
     ));
     finish.send(()).unwrap();
     service.shutdown().await.unwrap();
+}
+
+/// Every review a read lists, each as its live owner shows it.
+async fn shown_reviews(
+    service: &ConversationService,
+    id: &ConversationId,
+) -> Vec<nessa_protocol::conversation::view::ConversationPermission> {
+    let view = service
+        .read(id.clone(), caller("panel", "listed"))
+        .await
+        .unwrap();
+    let mut shown = Vec::new();
+    for entry in view.permissions {
+        if let Ok(review) = service
+            .waiting_review(id.clone(), caller("panel", "review"), &entry.review)
+            .await
+        {
+            shown.push(review);
+        }
+    }
+    shown
 }
 
 #[test]

@@ -19,6 +19,8 @@ import {
   type ConnectionState,
   type ConversationApi,
   type ConversationListResult,
+  type ConversationPermission,
+  type ConversationReviewEntry,
   type ConversationSummary,
   type ConversationView,
   type ConversationViewCursor,
@@ -63,7 +65,7 @@ type Method =
   | "send"
   | "answer"
   | "answerQuestion"
-  | "permissionInput"
+  | "permissionReview"
   | "stop"
   | "withdraw"
   | "setApprovalMode"
@@ -147,17 +149,65 @@ export function note(
 export const GATEWAY_NOW_MS = 1_700_000_000_000
 
 /** A conversation view: what a view frame says, empty unless changed. */
+/**
+ * The key a fake view lists `permission` under: the same for the same
+ * execution and review, so a test can name the approval before the view.
+ */
+export function reviewKey(permission: ConversationPermission): string {
+  let key = ""
+  for (const seed of [0x811c9dc5, 0x01000193, 0x2545f491, 0x9e3779b9]) {
+    let hash = seed
+    for (const char of JSON.stringify([permission.executionId, permission.permissionId]))
+      hash = Math.imul(hash ^ char.charCodeAt(0), 0x01000193) >>> 0
+    key += hash.toString(16).padStart(8, "0")
+  }
+  return key
+}
+
+/** How a fake view lists `permission`. */
+export function reviewEntry(permission: ConversationPermission): ConversationReviewEntry {
+  return {
+    review: reviewKey(permission),
+    origin: permission.origin.kind,
+    toolName: permission.toolName,
+  }
+}
+
+// Every review a fake view was built with, by its key: what any fake
+// gateway's `permissionReview` answers with while a view lists it.
+const shownReviews = new Map<string, ConversationPermission>()
+
+/** What the review a fake view lists under `key` shows. */
+export function shownReview(key: string): ConversationPermission | undefined {
+  return shownReviews.get(key)
+}
+
+/**
+ * A gateway view. Its `permissions` may be what each review shows: the view
+ * lists each by its key, and `permissionReview` answers with it.
+ */
 export function view(
   conversationId: string,
-  change: Partial<ConversationView> = {},
+  {
+    permissions = [],
+    ...change
+  }: Omit<Partial<ConversationView>, "permissions"> & {
+    permissions?: readonly (ConversationReviewEntry | ConversationPermission)[]
+  } = {},
 ): ConversationView {
+  const entries = permissions.map((listed) => {
+    if ("review" in listed) return listed
+    const entry = reviewEntry(listed)
+    shownReviews.set(entry.review, listed)
+    return entry
+  })
   return {
+    permissions: entries,
     conversationId,
     revision: "r1",
     serverNowMs: GATEWAY_NOW_MS,
     messages: [],
     pending: [],
-    permissions: [],
     tools: [],
     artifacts: [],
     notes: [],
@@ -208,11 +258,10 @@ export interface FakeGateway {
    */
   readonly active: Map<string, string>
   /**
-   * Each waiting review's whole input, by permission id, that
-   * `permissionInput` answers with. A view carries a long one as its start
-   * (`argumentsComplete` false).
+   * What each waiting review shows, by the key its view lists it under, that
+   * `permissionReview` answers with, as the review's live owner holds it.
    */
-  readonly reviewInputs: Map<string, string>
+  readonly reviews: Map<string, ConversationPermission>
   /** Whether a list names every conversation. */
   complete: boolean
   /**
@@ -284,7 +333,7 @@ export function fakeGateway(
   const rows = new Map<string, ConversationSummary>()
   const views = new Map<string, ConversationView>()
   const active = new Map<string, string>()
-  const reviewInputs = new Map<string, string>()
+  const reviews = new Map<string, ConversationPermission>()
   const overrides = new Map<Exclude<Method, "answer">, Behaviour[]>()
   const answerOverrides: AnswerBehaviour[] = []
   const observers = new Set<(state: ConnectionState) => void>()
@@ -461,12 +510,16 @@ export function fakeGateway(
         const behaviour = answerOverrides.shift()
         return behaviour ? behaviour(normal, args) : Promise.resolve().then(normal)
       },
-      permissionInput: (...args) =>
-        answer("permissionInput", args, () => {
-          const whole = reviewInputs.get(args[0].permissionId)
-          if (whole === undefined)
+      permissionReview: (...args) =>
+        answer("permissionReview", args, () => {
+          const [conversationId, key] = args
+          const review = reviews.get(key) ?? shownReviews.get(key)
+          const listed = views
+            .get(conversationId)
+            ?.permissions.some((entry) => entry.review === key)
+          if (review === undefined || !listed)
             throw new NessaRpcError("stale_permission", "No such review is waiting")
-          return whole
+          return review
         }) as never,
       answerQuestion: (...args) => {
         calls.push({ method: "answerQuestion", args })
@@ -542,7 +595,7 @@ export function fakeGateway(
               turn.executionId === executionId ? { ...turn, status: "cancelled" } : turn,
             ),
             permissions: current.permissions.filter(
-              (asked) => asked.executionId !== executionId,
+              (entry) => reviews.get(entry.review)?.executionId !== executionId,
             ),
             questions: current.questions.filter(
               (asked) => asked.executionId !== executionId,
@@ -621,7 +674,7 @@ export function fakeGateway(
     rows,
     views,
     active,
-    reviewInputs,
+    reviews,
     once(method: Exclude<Method, "answer">, behaviour: Behaviour) {
       overrides.set(method, [...(overrides.get(method) ?? []), behaviour])
     },

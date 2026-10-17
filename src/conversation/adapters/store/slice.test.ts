@@ -49,6 +49,7 @@ const view = (id: string, text = ""): ConversationView => ({
   revision: text,
   messages: [],
   pending: [],
+  reviewsWaiting: [],
   permissions: [],
   questions: [],
   tools: [],

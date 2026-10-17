@@ -123,6 +123,8 @@ createRoot(rootElement).render(
 
 const panelConversation = applyView(newConversation("panel"), {
   ...wireView,
+  reviewsWaiting: [],
+  permissions: [],
   notes: wireView.notes.map(shownNote),
 })
 const panelStore = {

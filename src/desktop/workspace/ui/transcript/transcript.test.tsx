@@ -1065,19 +1065,32 @@ describe("a transcript", () => {
     ])
   })
 
-  it("offers no answer on an approval showing only the start of what it allows", async () => {
+  it("offers no answer on an approval whose review is still being read, and offers reading it again when it could not be", async () => {
     const source = fakeSource()
     const approval = conversation.approval
     if (!approval) throw new Error("the sample asks for nothing")
-    await shown(source, { ...conversation, approval: { ...approval, partial: true } })
+    await shown(source, {
+      ...conversation,
+      approval: { ...approval, loading: "reading" },
+    })
     expect(host.querySelector(".workspace-approval-loading")?.textContent).toBe(
-      "Loading the whole input before you can answer…",
+      "Loading this review before you can answer…",
     )
     expect(buttons().every(([, disabled]) => disabled)).toBe(true)
     await act(async () => {
       host.querySelector<HTMLButtonElement>(".workspace-approval [data-primary]")?.click()
     })
     expect(source.calls.filter((call) => call[0] === "approve")).toEqual([])
+    await shown(source, { ...conversation, approval: { ...approval, loading: "failed" } })
+    expect(host.querySelector(".workspace-approval-loading")?.textContent).toContain(
+      "This review could not be loaded.",
+    )
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>(".workspace-approval-retry")?.click()
+    })
+    expect(source.calls.filter((call) => call[0] === "retryReview")).toEqual([
+      ["retryReview", conversation.sessionId, approval.id],
+    ])
   })
 
   it("answers the clicked option when two allow the same way", async () => {

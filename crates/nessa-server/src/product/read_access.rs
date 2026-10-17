@@ -369,7 +369,7 @@ fn paired_action(method: &str) -> AccessAction {
         | "conversation.steer"
         | "conversation.stop"
         | "conversation.answer"
-        | "conversation.permissionInput"
+        | "conversation.permissionReview"
         | "conversation.answerQuestion"
         | "conversation.cancel"
         | "conversation.receipt" => AccessAction::Drive,

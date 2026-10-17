@@ -24,6 +24,8 @@ import {
   type ImageAttachment,
   type LinkedFile,
   type ConversationPermission,
+  type ConversationReviewEntry,
+  type ReviewDetail,
   type ConversationSummary,
   type ConversationTool,
   type ConversationView,
@@ -36,7 +38,7 @@ import {
   shownNote,
 } from "../../../../conversation"
 import { composerModels } from "../../../model/composer-options"
-import { decodeId, encodeId } from "../../../model/id-encoding"
+import { encodeId } from "../../../model/id-encoding"
 import type {
   Approval,
   ApprovalChoice,
@@ -144,11 +146,11 @@ export function modelFor(known: ModelRef | undefined): ModelRef {
 }
 
 /**
- * An approval's id: the execution and the permission that name the review,
- * each encoded so the separator cannot occur in either (`id-encoding.ts`).
+ * An approval's id: the review's key as the view lists it, new for every
+ * review opened, so a review whose ids are used again is a new approval.
  */
-export function approvalId(permission: ConversationPermission): string {
-  return `${encodeId(permission.executionId)}/${encodeId(permission.permissionId)}`
+export function approvalId(entry: ConversationReviewEntry): string {
+  return entry.review
 }
 
 /**
@@ -201,17 +203,9 @@ const approvalOrigins: {
   }),
 }
 
-/** The review an approval id names, or `null` for an id this adapter did not write. */
-export function reviewOf(
-  id: string,
-): { readonly executionId: string; readonly permissionId: string } | null {
-  const halves = id.split("/")
-  if (halves.length !== 2) return null
-  const executionId = decodeId(halves[0])
-  const permissionId = decodeId(halves[1])
-  return executionId === null || permissionId === null
-    ? null
-    : { executionId, permissionId }
+/** The review key an approval id names, or `null` for an id this adapter did not write. */
+export function reviewOf(id: string): string | null {
+  return /^[0-9a-f]{32}$/.test(id) ? id : null
 }
 
 /**
@@ -338,6 +332,8 @@ export function transcriptFrom(
   seen: (messageId: string) => number,
   /** When the view arrived, on the window's clock: its deadline is put on that clock. */
   receivedAtMs: number,
+  /** What each review the view lists shows, as read so far (`reviewDetails`). */
+  details: readonly ReviewDetail[] = [],
 ): Transcript {
   const tools = new Map(
     view.tools.map((tool) => [JSON.stringify([tool.executionId, tool.toolId]), tool]),
@@ -485,31 +481,49 @@ export function transcriptFrom(
   const latestTurn = view.messages.at(-1)
   const history = historyExtent(view)
   // What runs is the tool and its exact input; why is the provider's title
-  // for it. A long input is its start until it is read whole, and the card
-  // offers no answer until then (`complete`).
-  const asked = view.permissions[0]
-  const approval: Approval | null = asked
-    ? {
-        id: approvalId(asked),
-        command: `${asked.toolName} ${asked.argumentsJson}`,
-        ...(asked.argumentsComplete ? {} : { partial: true as const }),
-        reason: asked.title,
-        origin: approvalOrigins[asked.origin.kind](asked.origin),
-        options: approvalOptions(asked),
-        // The gateway's own word for what is asked, a closed set the client
-        // holds the view to (`conversation-validate.ts`, D19 on #390).
-        ask: asked.ask,
-        deadline: asked.deadline && {
-          waitMs: asked.deadline.waitMs,
-          // The gateway's clock's moment as the window's, so the card's
-          // countdown does not move with the difference between the two.
-          dueAtMs: clientDueAtMs(asked.deadline.dueAtMs, view.serverNowMs, receivedAtMs),
-          effect: asked.deadline.effect,
-          reason: asked.deadline.reason,
-          stopsTurn: asked.deadline.stopsTurn,
-        },
-      }
-    : null
+  // for it. The view lists a review by its key; what it shows is read from
+  // its live owner, and the card offers no answer until then (`loading`).
+  const entry = view.permissions[0]
+  const detail = entry && details.find((each) => each.entry.review === entry.review)
+  const asked = detail?.state === "loaded" ? detail.permission : undefined
+  const approval: Approval | null = !entry
+    ? null
+    : !asked
+      ? {
+          id: approvalId(entry),
+          command: entry.toolName,
+          loading: detail?.state === "failed" ? "failed" : "reading",
+          reason: "",
+          origin:
+            entry.origin === "app"
+              ? { kind: "app", server: "", tool: entry.toolName }
+              : { kind: "agent" },
+          options: [],
+          ask: "tool",
+        }
+      : {
+          id: approvalId(entry),
+          command: `${asked.toolName} ${asked.argumentsJson}`,
+          reason: asked.title,
+          origin: approvalOrigins[asked.origin.kind](asked.origin),
+          options: approvalOptions(asked),
+          // The gateway's own word for what is asked, a closed set the client
+          // holds the review to (`conversation-validate.ts`, D19 on #390).
+          ask: asked.ask,
+          deadline: asked.deadline && {
+            waitMs: asked.deadline.waitMs,
+            // The gateway's clock's moment as the window's, so the card's
+            // countdown does not move with the difference between the two.
+            dueAtMs: clientDueAtMs(
+              asked.deadline.dueAtMs,
+              view.serverNowMs,
+              receivedAtMs,
+            ),
+            effect: asked.deadline.effect,
+            reason: asked.deadline.reason,
+            stopsTurn: asked.deadline.stopsTurn,
+          },
+        }
   return {
     sessionId: view.conversationId,
     messages,

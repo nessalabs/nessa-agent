@@ -36,14 +36,17 @@ use nessa_protocol::conversation::domain::{
     ConversationApprovalMode, ConversationId, ConversationModelId, ConversationSummary,
 };
 use nessa_protocol::conversation::{
-    projection::{bound_view, clipped, CommittedCursor, Projection, MAX_TEXT},
+    projection::{
+        agent_review, bound_view, clipped, review_entry, CommittedCursor, Projection, MAX_TEXT,
+    },
     tool_uis::{McpToolUis, NoMcpToolUis},
     view::{
         ConversationApprovalModeChangeStatus, ConversationApprovalModeChangeView,
         ConversationAttachmentEvidenceFailure, ConversationAttachmentEvidenceFailureCode,
         ConversationCapabilities, ConversationDisposition, ConversationLifecycle,
         ConversationLifecyclePhase, ConversationList, ConversationListEntry,
-        ConversationObservation, ConversationObservationCursor, ConversationReorderOutcome,
+        ConversationObservation, ConversationObservationCursor, ConversationPermission,
+        ConversationReorderOutcome, ConversationReviewEntry, ConversationReviewKind,
         ConversationRuntime, ConversationSelectionView, ConversationStartupFailure,
         ConversationStartupFailureCode, ConversationView, SubmissionReceipt,
     },
@@ -972,31 +975,59 @@ pub struct QuestionChoiceInput {
     pub own_words: Option<String>,
 }
 
-/// Reviews `agent` is still waiting on, as execution id and permission id.
-///
-/// A saved deadline is restored unarmed. The card counts one of these down,
-/// because this process's worker is still holding it.
-/// `a_saved_deadline_counts_down_while_this_process_holds_the_review`.
-fn reviews_this_process_holds(
+/// The reviews `agent`'s live invocation waits on, oldest first, as a view
+/// lists them. The live owner says which wait and what each shows; a review
+/// is listed once its request is on record in `snapshot` exactly as it waits
+/// (the SDK admits an answer only to a recorded request), and not if the
+/// owner cannot show it as what it is ([`agent_review`]). An unreadable
+/// owner lists none.
+fn agent_review_entries(
     agent: &Agent,
     snapshot: Option<&SessionSnapshot>,
-) -> HashSet<(String, String)> {
-    let mut holding = HashSet::new();
-    let Some(snapshot) = snapshot else {
-        return holding;
-    };
-    for record in &snapshot.invocations {
-        let execution = &record.request.execution_id;
+) -> Vec<ConversationReviewEntry> {
+    let reviews = agent.pending_reviews().unwrap_or_default();
+    if reviews.is_empty() {
+        return Vec::new();
+    }
+    let mut recorded = HashMap::new();
+    for record in snapshot.map_or(&[][..], |snapshot| &snapshot.invocations[..]) {
         for event in &record.events {
-            let ExecutionUpdate::PermissionRequested { id, .. } = event.update() else {
-                continue;
-            };
-            if agent.pending_permission(execution, id).unwrap_or(false) {
-                holding.insert((execution.as_str().to_owned(), id.as_str().to_owned()));
+            if let ExecutionUpdate::PermissionRequested {
+                id,
+                tool_id,
+                input,
+                options,
+                ..
+            } = event.update()
+            {
+                recorded.insert(
+                    (&record.request.execution_id, id),
+                    (tool_id, input, options),
+                );
             }
         }
     }
-    holding
+    reviews
+        .iter()
+        .filter(|review| {
+            recorded
+                .get(&(&review.execution_id, &review.id))
+                .is_some_and(|(tool, input, options)| {
+                    **tool == review.tool_id
+                        && **options == review.options
+                        && input.name == review.content.tool_name()
+                        && input.arguments_json == review.content.arguments_json()
+                })
+        })
+        .filter(|review| agent_review(review).is_some())
+        .map(|review| {
+            review_entry(
+                &review.content.key(),
+                ConversationReviewKind::Harness,
+                review.content.tool_name(),
+            )
+        })
+        .collect()
 }
 
 /// The export cut's hold on admission. Dropping it lets the next command in.
@@ -2356,34 +2387,8 @@ impl ConversationService {
             .unwrap_or_default();
         let active = live.agent.active_execution_id();
         let mut projection = live.projection.lock().await;
-        // The agent's permission authority, asked once the projection is held:
-        // only the reviews it still waits on are offered, since an answer by a
-        // person or a remembered choice leaves no event in history. Storage
-        // restores a deadline unarmed; a review this process is still waiting
-        // on is that worker's promise, so the card counts down.
-        // `a_saved_deadline_counts_down_while_this_process_holds_the_review`.
-        let holding = reviews_this_process_holds(&live.agent, committed.snapshot());
-        let accepted = projection.replace_committed_while_holding(
-            &committed,
-            &order,
-            active.as_ref(),
-            &holding,
-        );
-        if accepted {
+        if projection.replace_committed(&committed, &order, active.as_ref()) {
             projection.transcript_state(committed.state().into());
-        } else {
-            // The history read here is older than the fold already held, but
-            // the authority's answer is not: a review answered since is
-            // dropped from that fold too.
-            projection.hold(|execution, permission| {
-                match (ExecutionId::new(execution), PermissionId::new(permission)) {
-                    (Ok(execution), Ok(permission)) => live
-                        .agent
-                        .pending_permission(&execution, &permission)
-                        .unwrap_or(false),
-                    _ => false,
-                }
-            });
         }
         let operation_capabilities = live.agent.operation_capabilities();
         // The last known answer stands while the agent is being restored, so the
@@ -2404,8 +2409,14 @@ impl ConversationService {
         let cursor = projection.committed_cursor();
         drop(projection);
         view.title = self.title(&id).await;
-        // Bounded there, before its app reviews are added beside it.
-        let view = app_calls::with_app_reviews(view, live.app_reviews.reviews());
+        // Every review waiting is listed from its live owner, never from
+        // history: an answer by a person or a remembered choice leaves no
+        // event there, so only the owner knows it is settled.
+        let view = app_calls::with_reviews(
+            view,
+            agent_review_entries(&live.agent, committed.snapshot()),
+            live.app_reviews.entries(),
+        );
         self.check_view_access(&id, &caller).await?;
         let slot = self
             .readable_slot(&id)
@@ -3722,76 +3733,56 @@ impl ConversationService {
         })
         .await
     }
-    /// One range of a waiting review's whole input, and the input's length,
-    /// in UTF-8 bytes: at most `max_bytes` from `offset`. A view carries only
-    /// the start of a long input (`ConversationPermission::arguments_complete`),
-    /// and a person reads the rest here before they choose. Served only while
-    /// the agent's permission authority still waits on the review; afterwards
-    /// it is `StalePermission`. Opens nothing: a conversation nobody has open
-    /// has no review waiting.
-    pub async fn permission_input(
+    /// One range of what the waiting review a view lists under `review`
+    /// shows: the UTF-8 JSON of its [`ConversationPermission`], from the
+    /// review's live owner — the app review store, or the agent's live
+    /// invocation — never from history, and the review's total length.
+    ///
+    /// # Errors
+    /// `StalePermission` once nothing live holds a review under that key;
+    /// `InvalidInput` for an offset past its end.
+    /// The waiting review a view lists under `review`, with all it shows,
+    /// from its live owner: the app review store, or the agent's live
+    /// invocation. `StalePermission` once nothing live holds it.
+    pub(crate) async fn waiting_review(
         &self,
         id: ConversationId,
         caller: ConversationCaller,
-        execution: String,
-        permission: String,
-        offset: u64,
-        max_bytes: usize,
-    ) -> Result<(Vec<u8>, u64), ConversationError> {
+        review: &str,
+    ) -> Result<ConversationPermission, ConversationError> {
         let _admission = self.admit().await?;
-        let execution_id =
-            ExecutionId::new(&execution).map_err(|_| ConversationError::InvalidInput)?;
-        let permission_id =
-            PermissionId::new(&permission).map_err(|_| ConversationError::InvalidInput)?;
         let stale = || ConversationError::from(AgentError::StalePermission);
         let Some(live) = self.live_now(&id, &caller).await? else {
             return Err(stale());
         };
-        let range = |input: &[u8]| {
-            let total = input.len() as u64;
-            if offset > total || (offset == total && total != 0) {
-                return Err(ConversationError::InvalidInput);
-            }
-            let start = offset as usize;
-            let end = start.saturating_add(max_bytes).min(input.len());
-            Ok((input[start..end].to_vec(), total))
-        };
-        // An app's review first: it is the gateway's own, not the agent's.
-        if let Some(review) =
-            live.app_reviews.reviews().into_iter().find(|review| {
-                review.execution_id == execution && review.permission_id == permission
-            })
-        {
-            return range(review.arguments_json.as_bytes());
+        if let Some(shown) = live.app_reviews.review(review) {
+            return Ok(shown);
         }
-        if !live
-            .agent
-            .pending_permission(&execution_id, &permission_id)
-            .unwrap_or(false)
-        {
-            return Err(stale());
+        live.agent
+            .pending_reviews()
+            .unwrap_or_default()
+            .iter()
+            .find(|pending| pending.content.key() == review)
+            .and_then(agent_review)
+            .ok_or_else(stale)
+    }
+    pub async fn permission_review(
+        &self,
+        id: ConversationId,
+        caller: ConversationCaller,
+        review: String,
+        offset: u64,
+        max_bytes: usize,
+    ) -> Result<(Vec<u8>, u64), ConversationError> {
+        let shown = self.waiting_review(id, caller, &review).await?;
+        let bytes = serde_json::to_vec(&shown).map_err(|_| ConversationError::InvalidInput)?;
+        let total = bytes.len() as u64;
+        if offset > total || (offset == total && total != 0) {
+            return Err(ConversationError::InvalidInput);
         }
-        let (committed, _) = self.committed_with_order(&id).await?;
-        let input = committed
-            .snapshot()
-            .and_then(|snapshot| {
-                snapshot
-                    .invocations
-                    .iter()
-                    .find(|record| record.request.execution_id == execution_id)
-            })
-            .and_then(|record| {
-                record.events.iter().find_map(|event| match event.update() {
-                    ExecutionUpdate::PermissionRequested { id, input, .. }
-                        if *id == permission_id =>
-                    {
-                        Some(input.arguments_json.as_bytes())
-                    }
-                    _ => None,
-                })
-            })
-            .ok_or_else(stale)?;
-        range(input)
+        let start = offset as usize;
+        let end = start.saturating_add(max_bytes).min(bytes.len());
+        Ok((bytes[start..end].to_vec(), total))
     }
     pub async fn cancel_permission(
         &self,

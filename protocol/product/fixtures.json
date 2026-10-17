@@ -877,14 +877,13 @@
       }
     ]
   },
-  "ConversationPermissionInputParams": {
+  "ConversationPermissionReviewParams": {
     "conversationId": "00000000-0000-4000-8000-000000000001",
-    "executionId": "execution",
-    "permissionId": "permission",
+    "review": "0123456789abcdef0123456789abcdef",
     "offset": 32768,
     "maxBytes": 32768
   },
-  "ConversationPermissionInputResult": {
+  "ConversationPermissionReviewResult": {
     "offset": 32768,
     "totalBytes": 32770,
     "data": "e30="

@@ -620,6 +620,18 @@ export function approve({
   )
 }
 
+/** Reads again, now, a review whose content could not be read. */
+export function retryReview({
+  sessionId,
+  approvalId,
+}: {
+  sessionId: string
+  approvalId: string
+}): WorkspaceCommand {
+  return (_dispatch, _getState, { workspace }) =>
+    workspace.retryReview?.(sessionId, approvalId)
+}
+
 /**
  * What became of an answer to a question the agent asked. `sent` once the
  * source has taken it. `not-asked` when this window is not showing that

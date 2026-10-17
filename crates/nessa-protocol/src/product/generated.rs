@@ -625,10 +625,15 @@ pub struct ConversationPermission {
     pub origin: ConversationPermissionOrigin,
     pub ask: ConversationPermissionAsk,
     pub arguments_json: String,
-    pub arguments_complete: bool,
-    pub arguments_bytes: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deadline: Option<ConversationPermissionDeadline>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationReviewEntry {
+    pub review: String,
+    pub origin: String,
+    pub tool_name: String,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -665,7 +670,7 @@ pub struct ConversationView {
     pub server_now_ms: u64,
     pub messages: Vec<ConversationMessage>,
     pub pending: Vec<ConversationPending>,
-    pub permissions: Vec<ConversationPermission>,
+    pub permissions: Vec<ConversationReviewEntry>,
     pub tools: Vec<ConversationTool>,
     pub capabilities: ConversationCapabilities,
     pub lifecycle: ConversationLifecycle,
@@ -938,16 +943,15 @@ pub struct ConversationAnswerParams {
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ConversationPermissionInputParams {
+pub struct ConversationPermissionReviewParams {
     pub conversation_id: String,
-    pub execution_id: String,
-    pub permission_id: String,
+    pub review: String,
     pub offset: u64,
     pub max_bytes: u64,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ConversationPermissionInputResult {
+pub struct ConversationPermissionReviewResult {
     pub offset: u64,
     pub total_bytes: u64,
     pub data: String,
@@ -2787,7 +2791,11 @@ pub const MAX_RECORD_RESPONSE_BYTES: usize = 131072;
 /// Published bound from the product schema.
 pub const MAX_SHARE_PAGE: usize = 8;
 /// Published bound from the product schema.
-pub const MAX_REVIEW_INPUT_RANGE_BYTES: usize = 32768;
+pub const MAX_REVIEW_RANGE_BYTES: usize = 32768;
+/// Published bound from the product schema.
+pub const MAX_LISTED_REVIEWS: usize = 144;
+/// Published bound from the product schema.
+pub const MAX_REVIEW_ENTRY_TOOL_NAME_BYTES: usize = 64;
 /// Published bound from the product schema.
 pub const MAX_MCP_CONTEXT_BYTES: usize = 8192;
 /// Published bound from the product schema.
@@ -2833,7 +2841,7 @@ pub mod product_method {
     pub const CONVERSATION_MESSAGE: &str = "conversation.message";
     pub const CONVERSATION_MESSAGE_STATUS: &str = "conversation.messageStatus";
     pub const CONVERSATION_ANSWER: &str = "conversation.answer";
-    pub const CONVERSATION_PERMISSION_INPUT: &str = "conversation.permissionInput";
+    pub const CONVERSATION_PERMISSION_REVIEW: &str = "conversation.permissionReview";
     pub const CONVERSATION_ANSWER_QUESTION: &str = "conversation.answerQuestion";
     pub const CONVERSATION_CANCEL: &str = "conversation.cancel";
     pub const CONVERSATION_CLOSE: &str = "conversation.close";
@@ -3126,7 +3134,7 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "conversation.message",
     "conversation.messageStatus",
     "conversation.answer",
-    "conversation.permissionInput",
+    "conversation.permissionReview",
     "conversation.answerQuestion",
     "conversation.cancel",
     "conversation.close",
@@ -3239,7 +3247,7 @@ pub fn action_for_method(method: &str) -> Option<&'static str> {
         | "conversation.message"
         | "conversation.messageStatus"
         | "conversation.answer"
-        | "conversation.permissionInput"
+        | "conversation.permissionReview"
         | "conversation.answerQuestion"
         | "conversation.cancel"
         | "conversation.close"

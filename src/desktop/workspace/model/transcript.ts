@@ -307,11 +307,12 @@ export interface Approval {
   readonly id: string
   readonly command: string
   /**
-   * Present when `command` is only the start of what runs: a long input is
-   * shown so while the rest is read, and no answer is offered until it is
-   * whole (`shownWhole`).
+   * Present while what the review shows is still being read from its live
+   * owner ("reading"), or could not be and is being read again ("failed"):
+   * `command` is then only the tool's name, and no answer is offered until
+   * it is read whole (`shownWhole`).
    */
-  readonly partial?: true
+  readonly loading?: "reading" | "failed"
   readonly reason: string
   readonly origin: ApprovalOrigin
   /** The answers this review offers, in the order it offers them. */
@@ -332,7 +333,7 @@ export function offersChoice(approval: Approval, choice: ApprovalChoice): boolea
 
 /** Whether `approval` can be answered: all of what it allows is shown. */
 export function shownWhole(approval: Approval): boolean {
-  return approval.partial !== true
+  return approval.loading === undefined
 }
 
 /**

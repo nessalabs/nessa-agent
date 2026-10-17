@@ -10,7 +10,8 @@ use super::view::{
     ConversationPendingMode, ConversationPermission, ConversationPermissionAsk,
     ConversationPermissionDeadline, ConversationPermissionOption,
     ConversationPermissionOptionEffect, ConversationPermissionOrigin, ConversationQuestion,
-    ConversationRuntime, ConversationSelectionView, ConversationTool, ConversationTranscriptState,
+    ConversationReviewEntry, ConversationReviewKind, ConversationRuntime,
+    ConversationSelectionView, ConversationTool, ConversationTranscriptState,
     ConversationUnreadable, ConversationView, NativeHooksChoice, MAX_STRUCTURED_CONTENT_BYTES,
 };
 use nessa_sdk::application::agent_execution::permissions::CancellationOrigin;
@@ -30,9 +31,8 @@ use nessa_sdk::domain::agent_execution::tools::McpTool;
 use nessa_sdk::domain::agent_execution::{
     executions::{ExecutionId, ExecutionOutcome, InvocationStage, MessageKind},
     permissions::{
-        PermissionEffect, PermissionReviewDeadline, PermissionScope, RefusalOutcome, ReviewDecline,
-        ReviewDeclineId, ReviewDeclineReason, ReviewDeclineStage, MAX_OPEN_REVIEWS,
-        MAX_REVIEW_OPTIONS, MAX_REVIEW_OPTION_LABEL_BYTES, MAX_REVIEW_TOOL_NAME_BYTES,
+        PendingReview, PermissionEffect, PermissionReviewDeadline, PermissionScope, RefusalOutcome,
+        ReviewDecline, ReviewDeclineId, ReviewDeclineReason, ReviewDeclineStage,
     },
     questions::{AnswerShape, MAX_OPEN_QUESTIONS},
     tools::{ToolContentView, ToolKind, ToolStatus},
@@ -53,10 +53,15 @@ pub const MAX_VIEW_ARTIFACTS: usize = 64;
 pub const MAX_VIEW_NOTES: usize = 64;
 // Application transcript body; product catalog enrichment is serialized afterward.
 pub const MAX_VIEW_BYTES: usize = 60_000;
-/// How much of a review's input its card carries in the view, in UTF-8 bytes.
-/// The rest is read with `conversation.permissionInput`, so no input is too
-/// large for a review to be offered.
-pub const MAX_REVIEW_PREVIEW_BYTES: usize = 1024;
+pub use crate::product::generated::{MAX_LISTED_REVIEWS, MAX_REVIEW_ENTRY_TOOL_NAME_BYTES};
+/// The most one review entry takes of a view, encoded, with the comma that
+/// separates it from the next.
+pub const MAX_REVIEW_ENTRY_BYTES: usize = 160;
+/// What the most reviews a view can list take of it. A bounded view gives up
+/// everything else before any of them, and never gives one up, so this
+/// leaves the rest of the view most of its budget.
+pub const MAX_REVIEW_LIST_BYTES: usize = MAX_LISTED_REVIEWS * MAX_REVIEW_ENTRY_BYTES;
+const _: () = assert!(MAX_REVIEW_LIST_BYTES <= MAX_VIEW_BYTES * 2 / 5);
 /// The schema's bound on `ConversationTool.input`, in UTF-8 bytes. An input
 /// past it is left off the tool row; its review still offers all of it.
 const MAX_TOOL_INPUT_BYTES: usize = 32_768;
@@ -264,17 +269,6 @@ pub struct Projection {
     /// offered an interaction. It does not, by itself, decide that every
     /// other unfinished record was interrupted.
     live_here: HashSet<String>,
-    /// Reviews this process's worker is still waiting on, as execution id and
-    /// permission id, as the live permission authority answered when this
-    /// fold began; `None` when no authority was asked. Storage restores a
-    /// deadline unarmed. One of these is still the promise that worker made,
-    /// so its card counts down
-    /// (`a_saved_deadline_counts_down_while_this_process_holds_the_review`).
-    /// When the authority was asked, no other review is offered or kept:
-    /// a person's answer or a remembered choice leaves no event in history,
-    /// so only the authority knows it is settled
-    /// (`answered_reviews_are_not_kept_or_counted_against_the_open_limit`).
-    holding_reviews: Option<HashSet<(String, String)>>,
     /// Unfinished executions present when this projection first accepted a
     /// snapshot, except any this process has since run. A record admitted
     /// later is absent, so a read while it is saved but not active — or no
@@ -466,7 +460,6 @@ pub fn retained_view(
         HashSet::new(),
         revision,
         None,
-        None,
     );
     projection.transcript_state(status.view_state().into());
     bound_view(projection.read())
@@ -478,7 +471,7 @@ impl Projection {
         capabilities: ConversationCapabilities,
         snapshot: Option<&SessionSnapshot>,
     ) -> Self {
-        Self::from_snapshot(id, capabilities, snapshot, HashSet::new(), None, None)
+        Self::from_snapshot(id, capabilities, snapshot, HashSet::new(), None)
     }
 
     fn from_snapshot(
@@ -487,7 +480,6 @@ impl Projection {
         snapshot: Option<&SessionSnapshot>,
         live_here: HashSet<String>,
         carried_unfinished: Option<HashSet<String>>,
-        holding_reviews: Option<&HashSet<(String, String)>>,
     ) -> Self {
         Self::from_snapshot_with_epoch(
             id,
@@ -496,7 +488,6 @@ impl Projection {
             live_here,
             Uuid::new_v4(),
             carried_unfinished,
-            holding_reviews,
         )
     }
 
@@ -507,7 +498,6 @@ impl Projection {
         live_here: HashSet<String>,
         epoch: Uuid,
         carried_unfinished: Option<HashSet<String>>,
-        holding_reviews: Option<&HashSet<(String, String)>>,
     ) -> Self {
         let history_accepted = carried_unfinished.is_some() || snapshot.is_some();
         let unfinished_at_fold = match carried_unfinished {
@@ -528,7 +518,6 @@ impl Projection {
             tool_parts: HashMap::new(),
             execution_hooks: HashMap::new(),
             live_here: live_here.clone(),
-            holding_reviews: holding_reviews.cloned(),
             unfinished_at_fold,
             history_accepted,
             tool_uis: Arc::new(NoMcpToolUis),
@@ -618,24 +607,7 @@ impl Projection {
         order: &[ExecutionId],
         active: Option<&ExecutionId>,
     ) -> bool {
-        self.replace(committed, order, active, None)
-    }
-
-    /// As [`Self::replace_committed`], and `holding` names each review this
-    /// process's worker is still waiting on, as execution id and permission
-    /// id, as the live permission authority says. Only these are offered. A
-    /// saved deadline is restored unarmed. One of these is still that
-    /// worker's promise, so its card counts down.
-    /// `a_saved_deadline_counts_down_while_this_process_holds_the_review`,
-    /// `answered_reviews_are_not_kept_or_counted_against_the_open_limit`.
-    pub fn replace_committed_while_holding(
-        &mut self,
-        committed: &CommittedSession,
-        order: &[ExecutionId],
-        active: Option<&ExecutionId>,
-        holding: &HashSet<(String, String)>,
-    ) -> bool {
-        self.replace(committed, order, active, Some(holding))
+        self.replace(committed, order, active)
     }
 
     fn replace(
@@ -643,7 +615,6 @@ impl Projection {
         committed: &CommittedSession,
         order: &[ExecutionId],
         active: Option<&ExecutionId>,
-        holding: Option<&HashSet<(String, String)>>,
     ) -> bool {
         let incarnation = committed.incarnation();
         let position = committed.position();
@@ -672,7 +643,6 @@ impl Projection {
             snapshot,
             active_set,
             carried,
-            holding,
         )
         .with_tool_uis(self.tool_uis.clone());
         next.epoch = self.epoch;
@@ -904,30 +874,9 @@ impl Projection {
         self.view.pending.retain(|value| value.execution_id != id);
         self.bump();
     }
-    /// Keep only the reviews `waiting` says the live permission authority
-    /// still waits on, by execution id and permission id. For a read whose
-    /// committed history was older than this fold and so not accepted: the
-    /// authority's answer is still newer than the fold's, and a review
-    /// answered since is no longer offered.
-    /// `a_review_answered_after_a_newer_fold_is_dropped_by_an_older_read`.
-    pub fn hold(&mut self, waiting: impl Fn(&str, &str) -> bool) {
-        let before = self.view.permissions.len();
-        self.view
-            .permissions
-            .retain(|review| waiting(&review.execution_id, &review.permission_id));
-        if let Some(holding) = &mut self.holding_reviews {
-            holding.retain(|(execution, permission)| waiting(execution, permission));
-        }
-        if self.view.permissions.len() != before {
-            self.bump();
-        }
-    }
     pub fn resolved_permission(&mut self, execution: &str, id: &str) {
         self.resolved_permissions
             .insert((execution.to_owned(), id.to_owned()));
-        self.view
-            .permissions
-            .retain(|value| value.execution_id != execution || value.permission_id != id);
         self.bump();
     }
 
@@ -937,9 +886,6 @@ impl Projection {
     /// against the open limits and crowded out an ask somebody could answer.
     fn stop_waiting(&mut self, execution: &str) {
         self.live_here.remove(execution);
-        self.view
-            .permissions
-            .retain(|permission| permission.execution_id != execution);
         self.view
             .questions
             .retain(|question| question.execution_id != execution);
@@ -1011,61 +957,27 @@ impl Projection {
         let ExecutionUpdate::PermissionRequested {
             id: permission,
             tool_id,
-            observation,
             input,
-            options,
             deadline,
+            ..
         } = event.update()
         else {
             return;
         };
         let execution = event.execution_id().as_str();
-        // Recorded before a card is skipped. A later notice still names a
-        // request this execution saw, even when the card could not be shown.
+        // A later notice still names a request this execution saw.
         self.requested_permissions.insert(
             (execution.to_owned(), permission.as_str().to_owned()),
             deadline.clone(),
         );
         let key = (execution.to_owned(), permission.as_str().to_owned());
-        if self.resolved_permissions.contains(&key)
-            || self.terminal_executions.contains(execution)
-            || self
-                .holding_reviews
-                .as_ref()
-                .is_some_and(|waiting| !waiting.contains(&key))
+        if self.resolved_permissions.contains(&key) || self.terminal_executions.contains(execution)
         {
             return;
         }
-        // The SDK refuses a live review past these bounds when it arrives
-        // (`MAX_REVIEW_OPTIONS` and the rest are its own), so only a saved
-        // history from elsewhere can hold one. The input has no bound here:
-        // the card carries its start, and the rest is read while it waits.
-        if permission.as_str().len() > 256
-            || tool_id.as_str().len() > 256
-            || options.choices().len() > MAX_REVIEW_OPTIONS
-            || options.choices().iter().any(|option| {
-                option.id().as_str().len() > 256
-                    || option.label().len() > MAX_REVIEW_OPTION_LABEL_BYTES
-            })
-            || input.name.len() > MAX_REVIEW_TOOL_NAME_BYTES
-        {
-            self.view.interaction_view_error = Some("The complete tool input cannot be displayed safely; this review has no actionable choices in this view.".into());
-            self.view.truncated = true;
-            return;
-        }
-        // An option says what it decides (`effect`), not how far it reaches. Live
-        // offers decide one request (`once_only`, and the ACP parser admits no
-        // persistent kind); a restored one that reached further would read as
-        // one that does not, so its review is not offered here.
-        if options
-            .choices()
-            .iter()
-            .any(|option| *option.decision().scope() != PermissionScope::request())
-        {
-            self.view.interaction_view_error = Some("This review offers a choice beyond this one request, which this view cannot show; this review has no actionable choices in this view.".into());
-            self.view.truncated = true;
-            return;
-        }
+        // The review itself is not listed from history: whether it still
+        // waits, and what it shows, is the live owner's to say
+        // (`agent_review`). Its tool's row shows the input it was asked with.
         if let Some(tool) = self
             .view
             .tools
@@ -1077,44 +989,6 @@ impl Projection {
             } else {
                 String::new()
             };
-        }
-        let holding = self
-            .holding_reviews
-            .as_ref()
-            .is_some_and(|waiting| waiting.contains(&key));
-        let value = ConversationPermission {
-            execution_id: execution.into(),
-            permission_id: permission.as_str().into(),
-            tool_id: tool_id.as_str().into(),
-            title: clipped(
-                observation.title().as_deref().unwrap_or("Tool permission"),
-                512,
-            ),
-            tool_name: input.name.clone(),
-            arguments_json: clipped(&input.arguments_json, MAX_REVIEW_PREVIEW_BYTES),
-            arguments_complete: input.arguments_json.len() <= MAX_REVIEW_PREVIEW_BYTES,
-            arguments_bytes: input.arguments_json.len() as u64,
-            origin: ConversationPermissionOrigin::Harness,
-            ask: ConversationPermissionAsk::Tool,
-            deadline: deadline
-                .as_ref()
-                .and_then(|deadline| permission_deadline(deadline, holding)),
-            options: options
-                .choices()
-                .iter()
-                .map(|option| ConversationPermissionOption {
-                    id: option.id().as_str().into(),
-                    label: option.label().into(),
-                    effect: ConversationPermissionOptionEffect::from(option.decision().effect()),
-                })
-                .collect(),
-        };
-        // How many reviews are open is counted where the view is read, over
-        // the reviews offered then (`Self::read_with_mode_change`).
-        if !self.view.permissions.iter().any(|known| {
-            known.execution_id == execution && known.permission_id == value.permission_id
-        }) {
-            self.view.permissions.push(value);
         }
     }
 
@@ -1662,40 +1536,80 @@ impl Projection {
             .filter(|question| offered(&view, &question.execution_id))
             .cloned()
             .collect();
-        let mut permissions: Vec<_> = view
-            .permissions
-            .iter()
-            .filter(|permission| offered(&view, &permission.execution_id))
-            .cloned()
-            .collect();
-        // The SDK holds no more open than this (`MAX_OPEN_REVIEWS` is its
-        // own), so for a live execution this never leaves one out. A history
-        // from elsewhere past it shows the oldest, and says so.
-        if permissions.len() > MAX_OPEN_REVIEWS {
-            permissions.truncate(MAX_OPEN_REVIEWS);
-            view.truncated = true;
-            view.interaction_view_error = Some(UNSHOWN_REVIEW.into());
-        }
         view.questions = questions;
-        view.permissions = permissions;
         view
     }
 }
 
-/// `review` carrying at most the start of its input, so it takes little of a
-/// view: the whole is read with `conversation.permissionInput` while the
-/// review waits, and a surface offers no choice until it has.
-pub fn review_summary(mut review: ConversationPermission) -> ConversationPermission {
-    if review.arguments_json.len() > MAX_REVIEW_PREVIEW_BYTES {
-        review.arguments_json = clipped(&review.arguments_json, MAX_REVIEW_PREVIEW_BYTES);
-        review.arguments_complete = false;
+/// One entry of a view's review list: `key`, who asked, and the start of
+/// `tool_name`, clipped at a character so its encoding (without the quotes)
+/// takes at most [`MAX_REVIEW_ENTRY_TOOL_NAME_BYTES`]. The entry, encoded
+/// with its comma, takes at most [`MAX_REVIEW_ENTRY_BYTES`].
+pub fn review_entry(
+    key: &str,
+    origin: ConversationReviewKind,
+    tool_name: &str,
+) -> ConversationReviewEntry {
+    let mut end = tool_name.len();
+    loop {
+        while !tool_name.is_char_boundary(end) {
+            end -= 1;
+        }
+        let encoded = serde_json::to_string(&tool_name[..end]).map_or(usize::MAX, |e| e.len());
+        if encoded.saturating_sub(2) <= MAX_REVIEW_ENTRY_TOOL_NAME_BYTES {
+            break;
+        }
+        end -= 1;
     }
-    review
+    ConversationReviewEntry {
+        review: key.to_owned(),
+        origin,
+        tool_name: tool_name[..end].to_owned(),
+    }
 }
 
-/// What a view says of reviews it holds back past the open-review limit.
-const UNSHOWN_REVIEW: &str =
-    "A pending tool review exceeds the display limit; no choices were silently removed.";
+/// What a person is shown of one review the agent's live invocation waits
+/// on, from that owner's own record: none when it offers a choice reaching
+/// past this one request, which no surface can show as what it is.
+pub fn agent_review(review: &PendingReview) -> Option<ConversationPermission> {
+    // An option says what it decides (`effect`), not how far it reaches. Live
+    // offers decide one request (`once_only`, and the ACP parser admits no
+    // persistent kind); one that reached further would read as one that does
+    // not, so it is not offered.
+    if review
+        .options
+        .choices()
+        .iter()
+        .any(|option| *option.decision().scope() != PermissionScope::request())
+    {
+        return None;
+    }
+    let content = &review.content;
+    Some(ConversationPermission {
+        execution_id: review.execution_id.as_str().into(),
+        permission_id: review.id.as_str().into(),
+        tool_id: review.tool_id.as_str().into(),
+        title: clipped(content.title().unwrap_or("Tool permission"), 512),
+        tool_name: content.tool_name().into(),
+        arguments_json: content.arguments_json().into(),
+        origin: ConversationPermissionOrigin::Harness,
+        ask: ConversationPermissionAsk::Tool,
+        // The live owner holds it, so its deadline is that worker's promise.
+        deadline: content
+            .deadline()
+            .and_then(|deadline| permission_deadline(deadline, true)),
+        options: review
+            .options
+            .choices()
+            .iter()
+            .map(|option| ConversationPermissionOption {
+                id: option.id().as_str().into(),
+                label: option.label().into(),
+                effect: ConversationPermissionOptionEffect::from(option.decision().effect()),
+            })
+            .collect(),
+    })
+}
 
 /// What a view bounded to its size says of the interactions it left out.
 const UNSHOWN_INTERACTIONS: &str =
@@ -1797,18 +1711,10 @@ pub fn bound_view_within(
         } else if !view.pending.is_empty() {
             view.pending.remove(0);
             view.queue_complete = false;
-        } else if let Some(review) = view.permissions.iter_mut().find(|review| {
-            matches!(review.origin, ConversationPermissionOrigin::Harness)
-                && !review.arguments_json.is_empty()
-        }) {
-            // A review's input start yields before any review does: the
-            // whole is still read with `conversation.permissionInput`.
-            review.arguments_json.clear();
-            review.arguments_complete = false;
-        } else if !view.permissions.is_empty() {
-            view.permissions.pop();
-            view.interaction_view_error = Some(UNSHOWN_INTERACTIONS.into());
         } else if !view.questions.is_empty() {
+            // The reviews listed are never given up: each entry is small and
+            // of fixed size, and room for the most a view can list is kept
+            // (`MAX_REVIEW_LIST_BYTES`).
             view.questions.pop();
             view.interaction_view_error = Some(UNSHOWN_INTERACTIONS.into());
         } else {

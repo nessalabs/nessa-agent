@@ -37,12 +37,8 @@ use crate::mcp_servers::domain::{
     ResourceTicketDigest, MAX_APP_RESULT_BYTES,
 };
 use nessa_protocol::conversation::domain::ConversationId;
-use nessa_protocol::conversation::projection::{
-    bound_view, bound_view_within, review_summary, MAX_VIEW_BYTES,
-};
-use nessa_protocol::conversation::view::{
-    ConversationPermission, ConversationTranscriptState, ConversationView,
-};
+use nessa_protocol::conversation::projection::bound_view;
+use nessa_protocol::conversation::view::{ConversationReviewEntry, ConversationView};
 use nessa_sdk::domain::agent_execution::{
     executions::ExecutionId,
     prompts::{AppModelContext, McpAppSource},
@@ -1235,108 +1231,37 @@ impl From<AppRefusal> for McpAppError {
     }
 }
 
-/// The view, bounded, with the app reviews open beside it.
+/// The view, bounded, listing every review waiting on a person: the
+/// agent's own (`agent`, as its live invocation holds them), then the open
+/// app reviews (`apps`), each oldest first.
 ///
-/// - **What comes first.** The agent's own reviews and questions, exactly
-///   as the view shows them with no app review open: an app's server must
-///   not be able to hide or displace what the agent is asking.
-/// - **What is shown.** The oldest app reviews that fit beside them, room
-///   made out of the view's transcript, tool calls and queue — only as much
-///   as the reviews shown, and the notice, need.
-/// - **What is not.** Those that do not fit wait unseen, and the view says
-///   so where that notice fits beside the agent's own and the view says
-///   nothing more specific of its own.
-/// - **The revision.** Replaced by a digest of it, every app review open,
-///   shown or not, and how many are shown: any change in which are open or
-///   shown changes it, so a window holding a revision holds what it showed.
-///   The digest is no longer than the revision it replaces — the view needs
-///   no room for it — and, all hex, never equal to a revision without apps.
-///
-/// Shown only in a view whose transcript is confirmed complete: the client
-/// refuses one of unconfirmed history that offers any control.
-pub(super) fn with_app_reviews(
-    view: ConversationView,
-    reviews: Vec<ConversationPermission>,
+/// - **Every one is listed.** An entry is small and of fixed size, and room
+///   for the most a view lists is kept out of its budget
+///   (`MAX_REVIEW_LIST_BYTES`): the view gives up its transcript, tool calls
+///   and queue before any entry, and never gives one up. What each review
+///   shows is read with `conversation.permissionReview`.
+/// - **The revision.** Replaced by a digest of it and every key listed, so
+///   any change in which reviews wait changes it. The digest is no longer
+///   than the revision it replaces — the view needs no room for it — and,
+///   all hex, never equal to a revision listing none.
+pub(super) fn with_reviews(
+    mut view: ConversationView,
+    agent: Vec<ConversationReviewEntry>,
+    apps: Vec<ConversationReviewEntry>,
 ) -> ConversationView {
-    let view = bound_view(view);
-    if reviews.is_empty() || view.transcript_state != ConversationTranscriptState::Complete {
-        return view;
+    view.permissions = agent;
+    view.permissions.extend(apps);
+    if !view.permissions.is_empty() {
+        let mut digest = Sha256::new();
+        digest.update((view.revision.len() as u64).to_be_bytes());
+        digest.update(view.revision.as_bytes());
+        for entry in &view.permissions {
+            digest.update(entry.review.as_bytes());
+        }
+        let digits = view.revision.len().clamp(16, 64);
+        view.revision = hex_of(digest)[..digits].to_owned();
     }
-    // A review is never left out for the size of its input. When they do not
-    // all fit whole, each carries the start of its input, and the whole is
-    // read with `conversation.permissionInput` (`ConversationService::permission_input`).
-    let whole = reviews.iter().fold(encoded_len(&view), |total, review| {
-        total.saturating_add(serde_json::to_vec(review).map_or(usize::MAX, |bytes| bytes.len() + 1))
-    });
-    let reviews: Vec<ConversationPermission> = if whole <= MAX_VIEW_BYTES {
-        reviews
-    } else {
-        reviews.into_iter().map(review_summary).collect()
-    };
-    let sizes: Vec<usize> = reviews
-        .iter()
-        .map(|review| serde_json::to_vec(review).map_or(usize::MAX, |bytes| bytes.len() + 1))
-        .collect();
-    let all = sizes
-        .iter()
-        .fold(0, |total: usize, size| total.saturating_add(*size));
-    // What cannot be given up for them: the view with all but its
-    // interactions given up. Where every one fits as it is, no need to look.
-    let floor = if encoded_len(&view).saturating_add(all) <= MAX_VIEW_BYTES {
-        encoded_len(&view)
-    } else {
-        encoded_len(&bound_view_within(view.clone(), 0, false))
-    };
-    // The notice, where the view has none of its own and it fits beside
-    // the agent's own. It joins the view's object as `,"key":"value"`: one
-    // comma, not the two braces of an object of its own.
-    let notice = Some(
-        serde_json::to_vec(&serde_json::json!({ "interactionViewError": UNSHOWN_APP_REVIEWS }))
-            .map_or(usize::MAX, |bytes| bytes.len() - 1),
-    )
-    .filter(|&notice| {
-        view.interaction_view_error.is_none() && floor.saturating_add(notice) <= MAX_VIEW_BYTES
-    });
-    // The most of them, oldest first, that fit on that floor.
-    let room_for = |count: usize| {
-        let unshown = if count < reviews.len() {
-            notice.unwrap_or(0)
-        } else {
-            0
-        };
-        sizes[..count]
-            .iter()
-            .fold(unshown, |total, size| total.saturating_add(*size))
-    };
-    let shown = (0..=reviews.len())
-        .rev()
-        .find(|&count| floor.saturating_add(room_for(count)) <= MAX_VIEW_BYTES)
-        .unwrap_or(0);
-    let mut view = bound_view_within(view, MAX_VIEW_BYTES.saturating_sub(room_for(shown)), false);
-    let mut digest = Sha256::new();
-    digest.update((view.revision.len() as u64).to_be_bytes());
-    digest.update(view.revision.as_bytes());
-    for review in &reviews {
-        digest.update((review.permission_id.len() as u64).to_be_bytes());
-        digest.update(review.permission_id.as_bytes());
-    }
-    digest.update((shown as u64).to_be_bytes());
-    let digits = view.revision.len().clamp(16, 64);
-    view.revision = hex_of(digest)[..digits].to_owned();
-    if shown < reviews.len() && notice.is_some() {
-        view.interaction_view_error = Some(UNSHOWN_APP_REVIEWS.into());
-    }
-    view.permissions.extend(reviews.into_iter().take(shown));
-    view
-}
-
-/// What a view says of the app reviews it leaves out: they wait, unseen,
-/// until there is room or they end — no Stop of the agent's ends them.
-const UNSHOWN_APP_REVIEWS: &str =
-    "Some requests from apps do not fit this view. They wait until there is room, or expire.";
-
-fn encoded_len(view: &ConversationView) -> usize {
-    serde_json::to_vec(view).map_or(usize::MAX, |bytes| bytes.len())
+    bound_view(view)
 }
 
 fn hex_of(digest: Sha256) -> String {

@@ -206,6 +206,9 @@ export function fakeSource(index: WorkspaceIndex = testIndex()): FakeSource {
       answer("deny", [sessionId, approvalId, initiator, optionId], () =>
         answered(sessionId, approvalId),
       ),
+    retryReview: (sessionId, approvalId) => {
+      calls.push(["retryReview", sessionId, approvalId])
+    },
     answerQuestion: (sessionId, executionId, questionId, choices, initiator) =>
       answer(
         "answerQuestion",

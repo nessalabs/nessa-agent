@@ -16,6 +16,7 @@ const dispatch = vi.fn()
 vi.mock("../adapters/store/hooks", () => ({ useConversationDispatch: () => dispatch }))
 vi.mock("../adapters/store/slice", () => ({
   controlConversation: (request: unknown) => ({ type: "control", request }),
+  refollowConversation: (id: string) => ({ type: "refollow", id }),
 }))
 
 const { ConversationControls } = await import("./conversation-controls")
@@ -50,6 +51,7 @@ function waiting(dueAtMs: number): Conversation {
       notes: [],
       questions: [],
       running: true,
+      reviewsWaiting: [],
       permissions: [
         {
           executionId: "run",
@@ -58,8 +60,6 @@ function waiting(dueAtMs: number): Conversation {
           title: "Run tests",
           toolName: "Shell",
           argumentsJson: "{}",
-          argumentsComplete: true,
-          argumentsBytes: 2,
           options: [{ id: "cancel", label: "Cancel" }],
           deadline: {
             waitMs: 30_000,
@@ -193,21 +193,23 @@ it("captures the displayed review's conversation for both answer and dismiss", a
   }
 })
 
-it("offers no answer on a review until its whole input is shown, and then offers it", async () => {
+it("offers no answer on a review until it has loaded whole, and offers trying again when it could not", async () => {
   const base = waiting(time + 30_000)
   const remote = base.remote
   const [review] = remote?.permissions ?? []
   if (!remote || !review) throw new Error("the sample asks for nothing")
-  const withInput = (
-    argumentsJson: string,
-    argumentsComplete: boolean,
-  ): Conversation => ({
+  const key = "0123456789abcdef0123456789abcdef"
+  const listed = (failed: boolean | null): Conversation => ({
     ...base,
     remote: {
       ...remote,
-      permissions: [
-        { ...review, argumentsJson, argumentsComplete, argumentsBytes: 100_000 },
-      ],
+      reviewsWaiting:
+        failed === null ? [] : [{ review: key, toolName: review.toolName, failed }],
+      // A 100 KB Write, once loaded.
+      permissions:
+        failed === null
+          ? [{ ...review, argumentsJson: `{"content":"${"x".repeat(99_986)}"}` }]
+          : [],
     },
   })
   const show = (conversation: Conversation) =>
@@ -218,19 +220,18 @@ it("offers no answer on a review until its whole input is shown, and then offers
         </ClockProvider>,
       )
     })
-  const answer = () => {
-    const button = [...host.querySelectorAll("button")].find(
-      (each) => each.textContent === "Cancel",
-    )
-    if (!button) throw new Error("no answer is drawn")
-    return button
-  }
-  await show(withInput('{"content":"xxx', false))
-  expect(host.textContent).toContain("Loading the whole input before you can answer")
-  expect(answer().disabled).toBe(true)
-  await act(async () => answer().click())
-  expect(dispatch).not.toHaveBeenCalled()
-  await show(withInput(`{"content":"${"x".repeat(99_986)}"}`, true))
-  expect(host.textContent).not.toContain("Loading the whole input")
-  expect(answer().disabled).toBe(false)
+  const button = (label: string) =>
+    [...host.querySelectorAll("button")].find((each) => each.textContent === label)
+  await show(listed(false))
+  expect(host.textContent).toContain("Loading this review before you can answer")
+  expect(button("Cancel")).toBeUndefined()
+  expect(button("Try again")).toBeUndefined()
+  await show(listed(true))
+  expect(host.textContent).toContain("This review could not be loaded")
+  expect(button("Cancel")).toBeUndefined()
+  await act(async () => button("Try again")?.click())
+  expect(dispatch).toHaveBeenCalledWith({ type: "refollow", id: base.id })
+  await show(listed(null))
+  expect(host.textContent).not.toContain("this review")
+  expect(button("Cancel")?.disabled).toBe(false)
 })

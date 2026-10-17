@@ -220,6 +220,8 @@ function showPanel() {
     { ...newConversation(conversation), serverConversationId: conversation },
     {
       ...current,
+      reviewsWaiting: [],
+      permissions: [],
       notes: current.notes.map(shownNote),
     },
   )

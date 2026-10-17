@@ -89,7 +89,7 @@ export const RequestRow = memo(function RequestRow({
   const agent = agentName(agentOf(summary.model))
   const agentCommand =
     approval && approval.origin.kind !== "app" ? shownCommand(approval.command) : ""
-  // Not before all of what it allows is shown (`Approval.partial`).
+  // Not before all of what it allows is shown (`Approval.loading`).
   const answerable =
     approval !== null &&
     shownWhole(approval) &&

@@ -69,6 +69,7 @@ function view(
       files: [],
       mode: "queued" as const,
     })),
+    reviewsWaiting: [],
     permissions: [],
     tools: [],
     capabilities: {

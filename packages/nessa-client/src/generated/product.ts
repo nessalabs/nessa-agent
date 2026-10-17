@@ -562,7 +562,7 @@ export interface ConversationPermissionDeadline {
   /** True when the only refusal this agent offered stops the turn; never true for an allow. The pending line and the notice say that, rather than that the turn continues without the tool. */
   stopsTurn: boolean
 }
-/** A pending review with its complete offered choices. */
+/** A pending review with all it shows, as conversation.permissionReview reads it for one entry of a view. */
 export interface ConversationPermission {
   /** Stable invocation identifier retained for retries of one logical message, at most 256 UTF-8 bytes. */
   executionId: string
@@ -580,14 +580,19 @@ export interface ConversationPermission {
   origin: ConversationPermissionOrigin
   /** What the review asks the person to allow. */
   ask: ConversationPermissionAsk
-  /** The reviewed input, exactly as the agent gave it, when argumentsComplete is true. Otherwise only its start, cut at a character boundary and possibly empty; read the whole with conversation.permissionInput. */
+  /** The reviewed input, exactly as the agent or the app gave it. */
   argumentsJson: string
-  /** Whether argumentsJson is the whole input. A surface offers no choice on a review until it holds the whole input. */
-  argumentsComplete: boolean
-  /** Length of the whole input, in UTF-8 bytes. */
-  argumentsBytes: number
   /** Present when the review answers itself if nobody does. Absent for a review that waits for a person, including an app review. */
   deadline?: ConversationPermissionDeadline
+}
+/** One review waiting on a person, as a view lists it: its key, who asked, and the start of the tool's name. A view never leaves one out for its size. Read what it shows with conversation.permissionReview, and offer no answer until that has loaded. */
+export interface ConversationReviewEntry {
+  /** The review's own key: new for every review opened, so a review whose identities are reused is a new entry. */
+  review: string
+  /** Who asked: the agent, or an MCP App. */
+  origin: "harness" | "app"
+  /** The start of the reviewed tool's name, to say what the review is while the rest is read. */
+  toolName: string
 }
 /** Bounded presentation of an observed tool call. */
 export interface ConversationTool {
@@ -646,8 +651,8 @@ export interface ConversationView {
   messages: ConversationMessage[]
   /** Current removable queue entries. */
   pending: ConversationPending[]
-  /** Every permission review waiting on an answer. The agent holds no more open at once (the SDK's MAX_OPEN_REVIEWS), so none is left out. */
-  permissions: ConversationPermission[]
+  /** Every review waiting on a person now, oldest first: the agent's (the SDK holds at most MAX_OPEN_REVIEWS open) and then the MCP Apps'. Each entry is small and of fixed size, and a bounded view gives up everything else before any of them, so none is ever left out. */
+  permissions: ConversationReviewEntry[]
   /** Recent tool states. */
   tools: ConversationTool[]
   /** Agent operation support. */
@@ -922,26 +927,24 @@ export interface ConversationAnswerParams {
   /** Exact provider-offered option identity. */
   optionId: string
 }
-/** Read one range of a waiting review's whole input, named as the view names the review. A surface reads from 0 until argumentsBytes and checks the assembled length before showing it. Refused with stale_permission once the review no longer waits. */
-export interface ConversationPermissionInputParams {
+/** Read one range of what a waiting review shows: the UTF-8 JSON of its ConversationPermission, from the live owner of the review. A surface reads from 0 until totalBytes, checks the whole is that long, and offers no answer until it has. Refused with stale_permission once the view no longer lists the review. */
+export interface ConversationPermissionReviewParams {
   /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
   conversationId: string
-  /** Stable invocation identifier retained for retries of one logical message, at most 256 UTF-8 bytes. */
-  executionId: string
-  /** Pending permission identity. */
-  permissionId: string
-  /** First byte of the range: 0, or less than the input's length. */
+  /** The review's key, as the view lists it. */
+  review: string
+  /** First byte of the range: 0, or less than the review's length. */
   offset: number
-  /** Most bytes to answer with. The answer carries fewer only at the end of the input. */
+  /** Most bytes to answer with. The answer carries fewer only at the end of the review. */
   maxBytes: number
 }
-/** One range of a waiting review's input. Assemble the ranges, check the whole is totalBytes long and is UTF-8, then show it. */
-export interface ConversationPermissionInputResult {
+/** One range of what a waiting review shows. Assemble the ranges, check the whole is totalBytes long, is UTF-8 and is the ConversationPermission of the review asked for, then show it. */
+export interface ConversationPermissionReviewResult {
   /** First byte of this range, as asked. */
   offset: number
-  /** Length of the whole input, in UTF-8 bytes. */
+  /** Length of the whole review, in UTF-8 bytes. */
   totalBytes: number
-  /** The range's bytes, standard base64 with padding: at most maxBytes, and fewer only when the input ends first. */
+  /** The range's bytes, standard base64 with padding: at most maxBytes, and fewer only when the review ends first. */
   data: string
 }
 /** Cancel one permission review with a caller reason. */
@@ -2875,11 +2878,14 @@ export const bounds = {
     "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
   maxMcpArgumentsBytes: 32768,
   maxOpenReviews: 128,
+  maxListedReviews: 144,
+  maxReviewEntryToolNameBytes: 64,
+  maxReviewInputBytes: 33554432,
   maxReviewOptions: 64,
   maxReviewOptionLabelBytes: 2048,
   maxReviewToolNameBytes: 256,
-  maxReviewInputBytes: 33554432,
-  maxReviewInputRangeBytes: 32768,
+  maxReviewBytes: 268435456,
+  maxReviewRangeBytes: 32768,
   maxMcpResultBytes: 57344,
   maxMcpMessageBytes: 8192,
   minMcpMessageCharacters: 1,
@@ -3056,7 +3062,7 @@ export const ProductMethod = {
   ConversationMessage: "conversation.message",
   ConversationMessageStatus: "conversation.messageStatus",
   ConversationAnswer: "conversation.answer",
-  ConversationPermissionInput: "conversation.permissionInput",
+  ConversationPermissionReview: "conversation.permissionReview",
   ConversationAnswerQuestion: "conversation.answerQuestion",
   ConversationCancel: "conversation.cancel",
   ConversationClose: "conversation.close",
@@ -3147,7 +3153,7 @@ export const productReadyMethods = [
   "conversation.message",
   "conversation.messageStatus",
   "conversation.answer",
-  "conversation.permissionInput",
+  "conversation.permissionReview",
   "conversation.answerQuestion",
   "conversation.cancel",
   "conversation.close",
@@ -3227,7 +3233,7 @@ export const productMethodGrants = {
   "conversation.message": "conversation.write",
   "conversation.messageStatus": "conversation.write",
   "conversation.answer": "conversation.write",
-  "conversation.permissionInput": "conversation.write",
+  "conversation.permissionReview": "conversation.write",
   "conversation.answerQuestion": "conversation.write",
   "conversation.cancel": "conversation.write",
   "conversation.close": "conversation.write",

@@ -45,6 +45,9 @@ const wire = {
     ],
   }),
   notes: [],
+  // Nothing waits on a review here, and the panel lists only what it read.
+  reviewsWaiting: [],
+  permissions: [],
 }
 const value = applyView(conversation("panel-auth"), {
   ...wire,

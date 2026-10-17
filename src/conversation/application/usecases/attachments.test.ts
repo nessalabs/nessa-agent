@@ -118,6 +118,7 @@ const remote = {
     },
   ],
   running: false,
+  reviewsWaiting: [],
   permissions: [],
   questions: [],
   tools: [],

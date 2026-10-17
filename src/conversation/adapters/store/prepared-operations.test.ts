@@ -92,6 +92,7 @@ function acceptedView(conversationId: string, executionId: string): Conversation
         status: "queued",
       },
     ],
+    reviewsWaiting: [],
     permissions: [],
     questions: [],
     tools: [],

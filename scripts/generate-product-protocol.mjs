@@ -512,8 +512,17 @@ const reviewLimit = (constant) => {
   return owned
 }
 const permission = schema.$defs.ConversationPermission.properties
+// A view lists every review the agent holds open and every app review beside
+// them; the gateway holds the second number and asserts the sum where it
+// lists them (`MAX_LISTED_REVIEWS`).
+if (
+  !(
+    schema.$defs.ConversationView.properties.permissions.maxItems >
+    reviewLimit("MAX_OPEN_REVIEWS")
+  )
+)
+  throw new Error("The product schema lists fewer reviews than the SDK holds open")
 for (const [published, constant] of [
-  [schema.$defs.ConversationView.properties.permissions.maxItems, "MAX_OPEN_REVIEWS"],
   [permission.options.maxItems, "MAX_REVIEW_OPTIONS"],
   [
     schema.$defs.ConversationPermissionOption.properties.label["x-utf8MaxBytes"],
@@ -650,20 +659,23 @@ const bounds = {
   // carries of a call the connection saw: one bound.
   maxMcpArgumentsBytes: agreeing("app arguments and review bytes", [
     mcpCall.argumentsJson["x-utf8MaxBytes"],
-    schema.$defs.ConversationPermission.properties.argumentsJson["x-utf8MaxBytes"],
     schema.$defs.ConversationMcpTool.properties.argumentsJson["x-utf8MaxBytes"],
   ]),
-  maxOpenReviews: schema.$defs.ConversationView.properties.permissions.maxItems,
+  maxOpenReviews: reviewLimit("MAX_OPEN_REVIEWS"),
+  maxListedReviews: schema.$defs.ConversationView.properties.permissions.maxItems,
+  maxReviewEntryToolNameBytes:
+    schema.$defs.ConversationReviewEntry.properties.toolName["x-utf8MaxBytes"],
+  maxReviewInputBytes: permission.argumentsJson["x-utf8MaxBytes"],
   maxReviewOptions: permission.options.maxItems,
   maxReviewOptionLabelBytes:
     schema.$defs.ConversationPermissionOption.properties.label["x-utf8MaxBytes"],
   maxReviewToolNameBytes: permission.toolName["x-utf8MaxBytes"],
-  maxReviewInputBytes: agreeing("review input bytes", [
-    permission.argumentsBytes.maximum,
-    schema.$defs.ConversationPermissionInputResult.properties.totalBytes.maximum,
+  maxReviewBytes: agreeing("review bytes", [
+    schema.$defs.ConversationPermissionReviewResult.properties.totalBytes.maximum,
+    schema.$defs.ConversationPermissionReviewParams.properties.offset.maximum + 1,
   ]),
-  maxReviewInputRangeBytes:
-    schema.$defs.ConversationPermissionInputParams.properties.maxBytes.maximum,
+  maxReviewRangeBytes:
+    schema.$defs.ConversationPermissionReviewParams.properties.maxBytes.maximum,
   maxMcpResultBytes:
     schema.$defs.McpCallToolResult.properties.resultJson["x-utf8MaxBytes"],
   // An app's message is held to what the person's own may take.
@@ -721,8 +733,12 @@ for (const name of [
   "maxRecordPagePayloadBytes",
   "maxRecordResponseBytes",
   "maxSharePage",
-  // The most of a review's input one conversation.permissionInput answers.
-  "maxReviewInputRangeBytes",
+  // The most of a review one conversation.permissionReview answers.
+  "maxReviewRangeBytes",
+  // The most reviews a view lists, the agent's and the apps' together.
+  "maxListedReviews",
+  // How much of a tool's name a view's review entry carries.
+  "maxReviewEntryToolNameBytes",
   // Each part of an app's context past it is refused at the wire, before
   // anything is recorded; both together are the gateway's to bound.
   "maxMcpContextBytes",

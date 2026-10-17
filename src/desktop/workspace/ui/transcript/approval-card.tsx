@@ -2,7 +2,7 @@ import { deadlinePendingLine } from "@nessa/client"
 import { memo } from "react"
 import { useNow } from "../../../../clock"
 import { DesktopIcon } from "../../../ui/icons"
-import { approve, deny } from "../../adapters/store/commands"
+import { approve, deny, retryReview } from "../../adapters/store/commands"
 import { useWorkspaceDispatch, useWorkspaceSelector } from "../../adapters/store/hooks"
 import { selectAnswer } from "../../adapters/store/selectors"
 import { answering } from "../../application/workspace-state"
@@ -67,11 +67,24 @@ export const ApprovalCard = memo(function ApprovalCard({
           <Saying said={[deadlinePendingLine(approval.deadline, now)]} />
         </p>
       ) : null}
-      {shownWhole(approval) ? null : (
+      {approval.loading === "reading" ? (
         <p className="workspace-approval-loading" role="status">
-          Loading the whole input before you can answer…
+          Loading this review before you can answer…
         </p>
-      )}
+      ) : approval.loading === "failed" ? (
+        <p className="workspace-approval-loading" role="status">
+          This review could not be loaded. Trying again…{" "}
+          <button
+            type="button"
+            className="workspace-button workspace-approval-retry"
+            onClick={() =>
+              void dispatch(retryReview({ sessionId, approvalId: approval.id }))
+            }
+          >
+            Try again
+          </button>
+        </p>
+      ) : null}
       {answer?.failure ? (
         <p className="workspace-approval-failure" role="status">
           {failureCopy(answer.failure)}
@@ -79,7 +92,7 @@ export const ApprovalCard = memo(function ApprovalCard({
       ) : null}
       <ApprovalActions
         options={approval.options}
-        // Not before all of what it allows is shown (`Approval.partial`).
+        // Not before all of what it allows is shown (`Approval.loading`).
         disabled={waiting || !shownWhole(approval)}
         onAnswer={(option) =>
           void dispatch(

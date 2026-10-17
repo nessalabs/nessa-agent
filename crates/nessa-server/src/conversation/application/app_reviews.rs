@@ -37,11 +37,14 @@ use super::mcp_apps::{
     ContextDrop, DroppedContexts, McpAppAuditPhase, McpAppAuditRecord, McpAppInitiator, McpAppRef,
     McpAppWithdrawal,
 };
+use nessa_protocol::conversation::projection::{review_entry, MAX_LISTED_REVIEWS};
 use nessa_protocol::conversation::view::{
     ConversationPermission, ConversationPermissionAsk, ConversationPermissionOption,
-    ConversationPermissionOptionEffect, ConversationPermissionOrigin,
+    ConversationPermissionOptionEffect, ConversationPermissionOrigin, ConversationReviewEntry,
+    ConversationReviewKind,
 };
 use nessa_protocol::product_contract::generated::MCP_APP_REVIEW_DEADLINE_MS;
+use nessa_sdk::domain::agent_execution::permissions::MAX_OPEN_REVIEWS;
 use nessa_sdk::domain::agent_execution::prompts::{AppModelContext, UserMessage};
 use std::{
     collections::{BTreeMap, HashSet, VecDeque},
@@ -67,6 +70,8 @@ const OPTIONS: [(&str, &str, ConversationPermissionOptionEffect); 2] = [
 /// The most app reviews one conversation has open at once, so that with the
 /// agent's own they stay within the 64 a view carries.
 pub const MAX_OPEN_APP_REVIEWS: usize = 16;
+// A view lists every review the agent holds open and every app review.
+const _: () = assert!(MAX_OPEN_REVIEWS + MAX_OPEN_APP_REVIEWS == MAX_LISTED_REVIEWS);
 /// The most the open app reviews of one conversation may take of its view,
 /// encoded, together: as much as one review of the agent's may. Past it an
 /// app's reviews would push the transcript — and the app's own tool call —
@@ -157,6 +162,8 @@ pub enum ContextRefusal {
 }
 
 struct Pending {
+    /// Its own key, new for every review opened: what a view lists it by.
+    key: String,
     review: ConversationPermission,
     bytes: usize,
     app: McpAppRef,
@@ -476,6 +483,7 @@ impl AppReviews {
         state.pending.insert(
             key,
             Pending {
+                key: format!("{:032x}", Uuid::new_v4().as_u128()),
                 review,
                 bytes,
                 app: app.clone(),
@@ -506,6 +514,7 @@ impl AppReviews {
     }
 
     /// The reviews open now, oldest first.
+    #[cfg(test)]
     pub fn reviews(&self) -> Vec<ConversationPermission> {
         self.state
             .lock()
@@ -514,6 +523,34 @@ impl AppReviews {
             .values()
             .map(|pending| pending.review.clone())
             .collect()
+    }
+
+    /// The reviews open now, oldest first, as a view lists them.
+    pub fn entries(&self) -> Vec<ConversationReviewEntry> {
+        self.state
+            .lock()
+            .expect("app reviews")
+            .pending
+            .values()
+            .map(|pending| {
+                review_entry(
+                    &pending.key,
+                    ConversationReviewKind::App,
+                    &pending.review.tool_name,
+                )
+            })
+            .collect()
+    }
+
+    /// The open review a view lists under `key`, with all it shows.
+    pub fn review(&self, key: &str) -> Option<ConversationPermission> {
+        self.state
+            .lock()
+            .expect("app reviews")
+            .pending
+            .values()
+            .find(|pending| pending.key == key)
+            .map(|pending| pending.review.clone())
     }
 
     /// The person's answer to the review `permission` of `execution`.
@@ -777,10 +814,6 @@ fn review_of(
         },
         tool_name: tool.to_owned(),
         arguments_json: arguments_json.to_owned(),
-        // An app's call is bounded where it arrives, so its review always
-        // carries the whole input.
-        arguments_complete: true,
-        arguments_bytes: arguments_json.len() as u64,
         options: OPTIONS
             .iter()
             .map(|&(id, label, effect)| ConversationPermissionOption {

@@ -163,6 +163,12 @@ export interface WorkspaceSource {
     optionId: string,
   ): Promise<void>
   /**
+   * Reads again, now, a review whose content could not be read
+   * (`Approval.loading` "failed"). A source that reads nothing after a view
+   * leaves it out.
+   */
+  retryReview?(sessionId: string, approvalId: string): void
+  /**
    * Answers a question the session's agent is waiting on, or declines it
    * (`choices` null). Resolves once the source has taken the answer. The
    * question leaves the conversation when a later read no longer lists it.

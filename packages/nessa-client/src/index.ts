@@ -115,6 +115,14 @@ export {
   permissionTargetConversation,
   type PermissionTarget,
 } from "./application/permission-target.js"
+export {
+  reviewDetails,
+  REVIEW_RETRY_FIRST_MS,
+  REVIEW_RETRY_MOST_MS,
+  type ReviewDetail,
+  type ReviewDetails,
+  type ReviewDetailsTimer,
+} from "./application/review-details.js"
 
 export {
   captureQuestionChoices,
@@ -321,6 +329,7 @@ export type {
   ConversationRuntime,
   ConversationPending,
   ConversationPermission,
+  ConversationReviewEntry,
   ConversationPermissionOption,
   ConversationTool,
   ConversationCapabilities,

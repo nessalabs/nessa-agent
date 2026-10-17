@@ -13,6 +13,7 @@
 mod deadline;
 mod identity;
 mod permission;
+mod review_content;
 mod review_decline;
 mod review_limits;
 pub(crate) use deadline::checked_deadline_reason;
@@ -30,6 +31,7 @@ pub use permission::{
     PermissionCancellationReasonView, PermissionDecision, PermissionEffect, PermissionOfferPolicy,
     PermissionOption, PermissionOptions, PermissionScope, PermissionScopeView,
 };
+pub use review_content::ReviewContent;
 pub use review_decline::{
     RefusalOutcome, ReviewDecline, ReviewDeclineId, ReviewDeclineObservation, ReviewDeclineReason,
     ReviewDeclineStage,

@@ -43,6 +43,7 @@ const view: ConversationView = {
       mode: "queued",
     },
   ],
+  reviewsWaiting: [],
   permissions: [
     {
       executionId: "run",
@@ -51,8 +52,6 @@ const view: ConversationView = {
       title: "Read",
       toolName: "Read",
       argumentsJson: '{"path":"/exact/path"}',
-      argumentsComplete: true,
-      argumentsBytes: 22,
       options: [
         { id: "allow", label: "Allow once" },
         { id: "deny", label: "Deny" },

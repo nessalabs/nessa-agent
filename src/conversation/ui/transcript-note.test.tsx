@@ -80,6 +80,7 @@ function conversation(notes: Note[], turns: Turn[]): Conversation {
       approvalModes: [{ id: "ask", name: "Provider asks", description: "Asks." }],
       questions: [],
       running: false,
+      reviewsWaiting: [],
       permissions: [],
       tools: [],
       pending: [],

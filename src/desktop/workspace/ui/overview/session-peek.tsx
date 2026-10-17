@@ -98,7 +98,7 @@ export const SessionPeek = memo(function SessionPeek({
   const line = nowLine(summary)
   // What the agent is doing now, while it works: the story's last line, where its reply will appear.
   const running = summary.status === "running" ? (peek?.activity ?? null) : null
-  // Not before all of what it allows is shown (`Approval.partial`).
+  // Not before all of what it allows is shown (`Approval.loading`).
   const answerable =
     approval !== null &&
     shownWhole(approval) &&

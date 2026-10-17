@@ -44,7 +44,11 @@ pub struct ConversationView {
     pub revision: String,
     pub messages: Vec<ConversationMessage>,
     pub pending: Vec<ConversationPending>,
-    pub permissions: Vec<ConversationPermission>,
+    /// Every review waiting on a person now, as the live review owners hold
+    /// them, oldest first: a small entry of fixed size each, never given up
+    /// for the view's size. What each shows is read with
+    /// `conversation.permissionReview`.
+    pub permissions: Vec<ConversationReviewEntry>,
     /// Questions the agent is waiting on, oldest first.
     pub questions: Vec<ConversationQuestion>,
     pub tools: Vec<ConversationTool>,
@@ -284,6 +288,29 @@ impl From<&LinkedFile> for ConversationLinkedFile {
         }
     }
 }
+/// One review waiting on a person, as a view lists it: its key and who asked,
+/// with the start of the tool's name to say what it is while the rest is
+/// read. Its encoding never exceeds `MAX_REVIEW_ENTRY_BYTES`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationReviewEntry {
+    /// The review's own key, 32 lowercase hex digits: new for every review
+    /// opened, so a review whose identities are reused is a new entry.
+    pub review: String,
+    pub origin: ConversationReviewKind,
+    /// The start of the reviewed tool's name, clipped so its encoding takes
+    /// at most `MAX_REVIEW_ENTRY_TOOL_NAME_BYTES`.
+    pub tool_name: String,
+}
+/// Who asked for a review an entry lists.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ConversationReviewKind {
+    Harness,
+    App,
+}
+/// A pending review with all it shows: what `conversation.permissionReview`
+/// reads for one entry of the view.
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConversationPermission {
@@ -292,15 +319,8 @@ pub struct ConversationPermission {
     pub tool_id: String,
     pub title: String,
     pub tool_name: String,
-    /// The reviewed input when `arguments_complete`; otherwise only its
-    /// start, clipped at a character, and the whole is read with
-    /// `conversation.permissionInput` while the review waits.
+    /// The reviewed input, exactly as the agent gave it.
     pub arguments_json: String,
-    /// Whether `arguments_json` is the whole input. A surface does not offer
-    /// a choice on a review until it holds the whole input.
-    pub arguments_complete: bool,
-    /// Length of the whole input, in UTF-8 bytes.
-    pub arguments_bytes: u64,
     pub options: Vec<ConversationPermissionOption>,
     /// Who asked for the review: the agent, or an MCP App.
     pub origin: ConversationPermissionOrigin,

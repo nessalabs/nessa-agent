@@ -1,6 +1,6 @@
 import { deadlinePendingLine, permissionTargets } from "@nessa/client"
 import { historyExtent, historyNotices, type Conversation } from "../model"
-import { controlConversation } from "../adapters/store/slice"
+import { controlConversation, refollowConversation } from "../adapters/store/slice"
 import { useConversationDispatch } from "../adapters/store/hooks"
 import { useNow } from "../../clock"
 
@@ -18,9 +18,10 @@ import {
 } from "@nessa-ui/react/tool-approval"
 
 /**
- * Render exact offered choices. A review's input is shown whole before any
- * choice is offered: one whose input has not been read whole yet shows its
- * start and offers nothing but dismissing it.
+ * Render exact offered choices. A review is shown, and its choices offered,
+ * only once all it shows has been read whole from its live owner; until then
+ * it says it is loading, or that it could not be loaded, and offers trying
+ * again.
  */
 export function ConversationControls({
   conversation,
@@ -46,6 +47,42 @@ export function ConversationControls({
           {notice.text}
         </p>
       ))}
+      {remote?.reviewsWaiting.map((waiting) => (
+        // Listed, but what it shows is still being read: nothing is offered
+        // on a review nobody has seen (`reviewDetails`).
+        <ToolApproval
+          key={waiting.review}
+          variant="floating"
+          aria-label={`Approve ${waiting.toolName}`}
+          aria-busy={!waiting.failed}
+          className="self-center"
+        >
+          <ToolApprovalHeader>
+            <ToolApprovalIcon>
+              <ShieldCheck aria-hidden="true" />
+            </ToolApprovalIcon>
+            <ToolApprovalHeading>
+              <ToolApprovalTitle>{waiting.toolName}</ToolApprovalTitle>
+              <ToolApprovalDescription role="status">
+                {waiting.failed
+                  ? "This review could not be loaded. Trying again…"
+                  : "Loading this review before you can answer…"}
+              </ToolApprovalDescription>
+            </ToolApprovalHeading>
+          </ToolApprovalHeader>
+          {waiting.failed ? (
+            <ToolApprovalActions>
+              <ToolApprovalAction
+                variant="ghost"
+                disabled={!gatewayAvailable}
+                onClick={() => void dispatch(refollowConversation(conversation.id))}
+              >
+                Try again
+              </ToolApprovalAction>
+            </ToolApprovalActions>
+          ) : null}
+        </ToolApproval>
+      ))}
       {remote?.permissions.map((permission, index) => (
         <ToolApproval
           key={JSON.stringify([permission.executionId, permission.permissionId])}
@@ -68,11 +105,6 @@ export function ConversationControls({
             </ToolApprovalHeading>
           </ToolApprovalHeader>
           <ToolApprovalCommand json={permission.argumentsJson} />
-          {permission.argumentsComplete ? null : (
-            // Only the start is here. No choice is offered on what has not
-            // been seen whole; the rest is being read (`review-inputs.ts`).
-            <p role="status">Loading the whole input before you can answer…</p>
-          )}
           <ToolApprovalActions>
             {permission.options.map((option) => (
               <ToolApprovalAction
@@ -80,8 +112,7 @@ export function ConversationControls({
                 disabled={
                   !gatewayAvailable ||
                   conversation.controlPending ||
-                  !remote.capabilities.permissions ||
-                  !permission.argumentsComplete
+                  !remote.capabilities.permissions
                 }
                 onClick={() => {
                   const target = targets[index]

@@ -53,8 +53,6 @@ function armed(): ConversationPermission {
     title: "Run the release tests",
     toolName: "bash",
     argumentsJson: '{"command":"cargo test"}',
-    argumentsComplete: true,
-    argumentsBytes: 24,
     origin: { kind: "harness" },
     ask: "tool",
     options: [
