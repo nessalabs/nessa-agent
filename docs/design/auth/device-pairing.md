@@ -23,6 +23,29 @@ in the persisted auth DTO/registry mapping, independently of these width values.
 | Live published object | Original PublishedPrivateFile remains alive while acknowledgement compares exact bytes and original named identity, syncs that same file, rechecks identity and syncs directory under original lock. | Wrong bytes/name/lock refuse; reopened equivalent bytes cannot substitute for original live identity. Public pending-state fixtures cover same-save retry and restart. Direct retained-handle failed acknowledgement is not publicly reproduced by this producer. |
 | Restart acknowledgement | Reopen existing canonical name through private reopen_for_acknowledgement using existing storage OpenMode::ReadWrite; then invoke the same acknowledgement implementation. | Never create missing canonical name. Public save/load/reopen checks exact original bytes and intent. Direct writable-handle reflush and read-only substitution evidence is withdrawn; the storage owner retains the writable-open contract. |
 
+### Retained replacement recovery verification (#324)
+
+The consumer implementation shipped after the shared storage slice. The following
+synthetic adapter tests exercise its recovery helpers with real retained files;
+they do not inject a failed native acknowledgement or prove the dispatch from
+`PrivatePublicationFailure`. Shared storage's W06/W07 tests own that failure fact.
+The existing public pending-store tests own expected-old CAS and key/pin retention.
+
+| Row | State/event | Expected result and evidence |
+| --- | --- | --- |
+| C324-1 | New or replacement publication, original live handle retained | Accept exact name/bytes through `reconcile_live`; no temporary remains. `live_reconciliation_accepts_original_publication` |
+| C324-2 | Canonical name replaced with identical bytes while original published handle remains open | Refuse original identity even though bytes agree; preserve replacement and original handle. `live_reconciliation_refuses_same_bytes_at_a_different_identity` |
+| C324-3 | Original handle retained, wrong expected bytes or destination name | Refuse without changing canonical bytes. `live_reconciliation_refuses_wrong_bytes_or_name` |
+| C324-4 | Process owner drained; exact pending save retried through reopened owner | Acknowledge with writable existing-file handle, retain original key/pin/attempt; stale CAS still refuses. `restart_reconciliation_reflushes_existing_record` |
+| C324-5 | Canonical file absent at reconciliation | Return Uncertain without recreating a file or reservation. `restart_reconciliation_does_not_create_a_missing_record` |
+| C324-6 | Windows canonical destination pinned by a mutation-capable handle | Typed NotPublished/Rename failure; preserve old bytes; remove only unpublished reservation; accepted replacement and exact retry after release. `windows_pending_replacement_recovers_after_pinned_destination` |
+
+Windows file flushing requires writable access; a read-only reopen is a meaningful
+native counterfactual for C324-4. Unix may allow fsync on a read-only descriptor.
+Windows directory sync still only verifies bindings and supplies no directory-fsync
+or arbitrary power-loss guarantee. Hosted administrator execution is separate from
+ordinary-user acceptance.
+
 ## Decision
 
 Recommend **OPAQUE-3DH through `opaque-ke = "=4.0.1"`**, with the Ristretto255/SHA512 suite and explicit Argon2id configuration below. Run enrollment over TLS 1.3 with RFC 7250 raw Ed25519 public keys using the **already locked** rustls 0.23.45/ring 0.17.14/tokio-rustls 0.26.5. Bind the TLS channel, both actual public keys and exact enrollment intent in OPAQUE's built-in authenticated context. Use TLS record protection to deliver claims and receipts; do not add an application encryption protocol or send the PAKE session key over the network.

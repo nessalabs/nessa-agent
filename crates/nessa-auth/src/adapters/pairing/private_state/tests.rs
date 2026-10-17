@@ -22,6 +22,9 @@ use std::{
 use std::{thread, time::Duration};
 use tempfile::TempDir;
 
+#[path = "recovery_tests.rs"]
+mod recovery;
+
 struct Fixture {
     _root: TempDir,
     anchor: PathBuf,
