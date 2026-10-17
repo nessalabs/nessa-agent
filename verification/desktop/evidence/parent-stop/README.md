@@ -11,15 +11,17 @@ scripted assertions prove the ownership and delivery behavior.
 
 ## Final runtime verification
 
-Runtime source `3541e761a0a86c00f036b16708f3f303b3fd5ca5`, including main
-`82bc38e7a1715cc7b3440f4f24e5d6e46522d4a4`, was clean throughout verification.
+Runtime source `fd0a02e680d6d5371718921e5badf5693ffcc95b`, including main
+`db681dbbc1d9650201433bc7cdd6842d3aefc3dd`, was clean throughout verification.
 The actual gateway executable used Cargo's dev profile, SHA256
-`5ea0849d60a47f7cf8b895afc5976162eb081d08a0dc371c9844b955683f2329`.
+`8b614b2b9fcc0fc7685a1ecbf7be33b96c917365b92e1783e39607f37bcf68bd`.
 
 - Production frontend, Chromium and WebKit: window 11/11, permission/failure/
   cancellation scenarios 8/8, parent Stop 4/4; **23/23 passed**.
 - Focused Codex capability profile, production frontend, Chromium and WebKit:
-  **4/4 passed**.
+  **4/4 passed on repeat**. The first run passed 3/4; WebKit override
+  failed initial conversation admission before Stop assertions. Its cause remains
+  unresolved, and the failed run is retained with the verification logs.
 - MCP Apps requires dev sandbox metadata and is intentionally skipped by the
   canonical production runner. Its separate dev frontend run in Chromium and
   WebKit: **16/16 passed**.

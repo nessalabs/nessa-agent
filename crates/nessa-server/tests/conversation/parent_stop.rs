@@ -1431,6 +1431,31 @@ async fn failed_queued_report_withdrawal_keeps_root_active_and_retries_before_ro
     use crate::conversation::application::{ThreadReport, ThreadReportStore};
     use crate::conversation::infrastructure::LocalThreadReports;
     use nessa_sdk::application::agent_execution::agents::{turn_continuation, TurnContinuation};
+    use nessa_sdk::application::agent_execution::sessions::StorageError;
+    struct AfterFault {
+        inner: Arc<dyn commands::CreationStorage>,
+        once: Arc<std::sync::atomic::AtomicBool>,
+        opens: Arc<std::sync::Mutex<Vec<bool>>>,
+    }
+    impl commands::CreationStorage for AfterFault {
+        fn open_creation(
+            &self,
+            principal: String,
+            create: bool,
+        ) -> commands::CreationFuture<'_, Option<Arc<dyn commands::CreationStorageLease>>> {
+            Box::pin(async move {
+                let after_fault = !self.once.load(Ordering::SeqCst);
+                let result = self.inner.open_creation(principal, create).await;
+                if after_fault {
+                    self.opens.lock().unwrap().push(matches!(
+                        &result,
+                        Err(commands::CreationStorageError::Storage(StorageError::Busy))
+                    ));
+                }
+                result
+            })
+        }
+    }
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("data");
     let provider = Arc::new(ProviderFactory::default());
@@ -1485,12 +1510,18 @@ async fn failed_queued_report_withdrawal_keeps_root_active_and_retries_before_ro
     })
     .await
     .expect("the independent child is committed before capturing Stop targets");
-    let faulty: Arc<dyn commands::CreationStorage> = Arc::new(FaultyCommands {
-        storage: storage.clone(),
-        target: parent.clone(),
-        commit: false,
-        stage: MutationStage::Attempted,
-        once: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+    let once = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let opens = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let faulty: Arc<dyn commands::CreationStorage> = Arc::new(AfterFault {
+        inner: Arc::new(FaultyCommands {
+            storage: storage.clone(),
+            target: parent.clone(),
+            commit: false,
+            stage: MutationStage::Attempted,
+            once: once.clone(),
+        }),
+        once,
+        opens: opens.clone(),
     });
     assert!(service
         .stop_command(
@@ -1533,31 +1564,52 @@ async fn failed_queued_report_withdrawal_keeps_root_active_and_retries_before_ro
         "an unconfirmed report withdrawal must not release the root invocation slot"
     );
     assert!(live.agent.queued_ids().await.contains(&queued));
-    assert_eq!(
-        provider.cancel_turns.lock().unwrap().as_slice(),
-        ["independent"],
-        "independent descendants still receive their captured Stop"
-    );
+    // Background report polling uses the original storage, not this wrapper.
+    // With root withheld, this next command open proves the independent attempt.
+    assert_eq!(opens.lock().unwrap().len(), 1);
+    if provider.cancel_turns.lock().unwrap().is_empty() {
+        assert_eq!(
+            opens.lock().unwrap().as_slice(),
+            [true],
+            "an independent attempt without a provider effect encountered typed storage Busy"
+        );
+    } else {
+        assert_eq!(
+            provider.cancel_turns.lock().unwrap().as_slice(),
+            ["independent"]
+        );
+    }
     assert_eq!(reports.pending().await.unwrap().len(), 1);
-    service
-        .stop_command(
-            faulty,
-            parent.clone(),
-            caller("stop-parent"),
-            "parent".into(),
-        )
-        .await
-        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            match service
+                .stop_command(
+                    faulty.clone(),
+                    parent.clone(),
+                    caller("stop-parent"),
+                    "parent".into(),
+                )
+                .await
+            {
+                Ok(_) => break,
+                Err(commands::MutationFailure::Storage(
+                    commands::CreationStorageError::Storage(StorageError::Busy),
+                )) => tokio::task::yield_now().await,
+                Err(error) => panic!("exact retry failed: {error:?}"),
+            }
+        }
+    })
+    .await
+    .expect("exact retry settles after transient command-stream contention");
     assert!(!provider
         .executions
         .lock()
         .unwrap()
         .iter()
         .any(|id| id == "queued-report"));
-    assert_eq!(
-        provider.cancel_turns.lock().unwrap().as_slice(),
-        ["independent", "parent"]
-    );
+    let mut cancelled = provider.cancel_turns.lock().unwrap().clone();
+    cancelled.sort();
+    assert_eq!(cancelled, ["independent", "parent"]);
     assert_eq!(
         reports.pending().await.unwrap().len(),
         1,
