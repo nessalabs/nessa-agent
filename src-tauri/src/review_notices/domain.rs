@@ -108,6 +108,7 @@ pub(crate) enum NoticeAccess {
     /// The person has not been asked yet. Only macOS asks.
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     NotAsked,
+    #[cfg_attr(not(any(target_os = "macos", target_os = "linux")), allow(dead_code))]
     Allowed,
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     Denied,
