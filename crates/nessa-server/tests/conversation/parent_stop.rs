@@ -355,13 +355,16 @@ async fn queued_child_report_is_retained_across_stop_restart_and_only_person_wor
         .unwrap();
     let live = service.resolve(&parent, &caller("read")).await.unwrap();
     let history = live.agent.session_manager().snapshot().await.unwrap();
-    assert!(
-        service
-            .reports_paused(&parent, &caller("read"), &history.invocations)
-            .await
-            .unwrap(),
-        "automated work does not release the person's Stop"
-    );
+    {
+        let _admission = service.inner.thread_admission.clone().lock_owned().await;
+        assert!(
+            service
+                .reports_paused(&parent, &caller("read"), &history.invocations)
+                .await
+                .unwrap(),
+            "automated work does not release the person's Stop"
+        );
+    }
     assert_eq!(reports.pending().await.unwrap().len(), 1);
     service
         .submit_command(
@@ -814,5 +817,81 @@ async fn foreign_callers_and_report_id_collisions_do_not_cancel_unrelated_user_w
         1
     );
     drop(live);
+    retire(service, storage, metadata).await;
+}
+
+#[tokio::test]
+async fn deleting_an_owned_child_releases_ownership_and_does_not_block_parent_stop() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("data");
+    let provider = Arc::new(ProviderFactory::default());
+    provider.turn_cancel.store(true, Ordering::SeqCst);
+    let (service, storage, metadata) = fixture_with_sessions(
+        &root,
+        provider.clone(),
+        crate::conversation::infrastructure::in_process_environment().into(),
+        crate::conversation_test_support::access_policy(),
+        crate::conversation_test_support::claude_erasers(),
+    );
+    let coordinator = bind(&service, &storage, &root, true).await;
+    let parent = id();
+    opened(&service, &provider, &parent).await;
+    let p = hold_turn(&service, &provider, &parent, "parent").await;
+    let removed = child(&service, &parent, "parent", "removed-child").await;
+    let lifetime = coordinator
+        .active_lifetime_for_session(&conversation_session(&removed))
+        .unwrap();
+    let sibling = child(&service, &parent, "parent", "surviving-child").await;
+    let s = hold_turn(&service, &provider, &sibling, "sibling").await;
+    let owned_store = SqliteOwnershipStore::open(&root.join("ownership.sqlite3")).unwrap();
+    let before_erasure_close =
+        nessa_sdk::application::agent_execution::subagents::OwnershipStore::read(&owned_store)
+            .await
+            .unwrap();
+    assert!(service
+        .delete(removed, caller("delete-child"))
+        .await
+        .unwrap());
+    assert_eq!(
+        coordinator.lifetime_state(&lifetime),
+        Some(nessa_sdk::domain::agent_execution::subagents::LifetimeState::Closed)
+    );
+    service
+        .stop_command(
+            storage.clone(),
+            parent,
+            caller("stop-after-delete"),
+            "parent".into(),
+        )
+        .await
+        .unwrap();
+    let cancelled = provider.cancel_turns.lock().unwrap().clone();
+    assert!(cancelled.contains(&"parent".to_owned()));
+    assert!(cancelled.contains(&"sibling".to_owned()));
+    drop((p, s));
+    retire(service, storage, metadata).await;
+    // Restore the exact valid ownership snapshot from before close, leaving
+    // deletion's saved erased tombstone: the crash/lost-close-write boundary.
+    nessa_sdk::application::agent_execution::subagents::OwnershipStore::write(
+        &owned_store,
+        &before_erasure_close,
+    )
+    .await
+    .unwrap();
+    let provider = Arc::new(ProviderFactory::default());
+    let (service, storage, metadata) = fixture(&root, provider.clone());
+    let coordinator = bind(&service, &storage, &root, false).await;
+    assert_eq!(
+        service
+            .recover_deleted_ownership(&before_erasure_close)
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        coordinator.lifetime_state(&lifetime),
+        Some(nessa_sdk::domain::agent_execution::subagents::LifetimeState::Closed)
+    );
+    assert!(provider.executions.lock().unwrap().is_empty());
     retire(service, storage, metadata).await;
 }

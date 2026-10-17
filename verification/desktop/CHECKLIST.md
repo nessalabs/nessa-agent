@@ -1887,7 +1887,7 @@ with a typed failure.
   `parent-stop.mjs` creates them through the actual source-bound `nessa-agents`
   tools and clicks the window composer's ordinary Stop button. Chromium and
   WebKit assert one cancelled parent turn, cancelled descendants, an unrelated
-  turn still running, and no new parent turn during a 1500 ms report-delivery
+  turn still running with its queued report-watch turn preserved, and no new parent turn during a 1500 ms report-delivery
   observation, then a later person command releases the retained child report.
   A second isolated gateway sets
   `subagents.stopChildrenOnParentStop:false` and asserts the descendants remain

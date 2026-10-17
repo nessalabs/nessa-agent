@@ -80,6 +80,15 @@ partial target failures, lost acknowledgements and restart with changed settings
 Browser acceptance, exact-head review and current-main CI remain release gates;
 a draft implementation is not evidence that those gates passed.
 
+### Review orderings added during runtime validation
+
+| Ordering | Owner and decision | Regression |
+| --- | --- | --- |
+| A failed original already has a canonical successor, then later person work arrives | SDK continuation follows the admitted successor; later work only suppresses a new retry | `a_saved_failed_turn_successor_is_still_followed_after_later_person_work` |
+| Automatic resume races Stop capture | Both hold application admission before mode changes through successor admission | Parent Stop recovery plus existing resume conformance |
+| Report polling races ordinary person submit | Person command retains the same supervised admission scope as report delivery | `queued_child_report_is_retained_across_stop_restart_and_only_person_work_releases_it` and actual browser continuation |
+| Owned child is successfully deleted before parent Stop | Durable erasure proves its attachment was stopped; existing ownership drain ends that lifetime and returns capacity. Selection still traverses graph descendants before ignoring erased work | `deleting_an_owned_child_releases_ownership_and_does_not_block_parent_stop` |
+
 ### Empty-child preparation integration seam
 
 The coordinator gains `prepare_child(command, session)`: it uses the existing

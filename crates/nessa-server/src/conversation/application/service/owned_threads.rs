@@ -18,8 +18,8 @@ use nessa_sdk::application::agent_execution::{
     agents::OwnedLifetime,
     commands::{CreationFailure, CreationReceipt},
     subagents::{
-        ChildFactory, ChildResources, InitialSubmit, OwnershipCoordinator, PortFailure,
-        PrepareFailure, PrepareRequest, PreparedChild, ResourceReport, SpawnCommand,
+        ChildFactory, ChildResources, CloseCommand, InitialSubmit, OwnershipCoordinator,
+        PortFailure, PrepareFailure, PrepareRequest, PreparedChild, ResourceReport, SpawnCommand,
     },
 };
 use nessa_sdk::domain::agent_execution::subagents::{
@@ -222,6 +222,82 @@ impl ConversationService {
             .ok_or(CreationFailure::Target(ConversationError::Unavailable))
     }
 
+    /// Rebind existing cleanup adapters and replay deletion's existing close
+    /// after a crash between the erasure tombstone and ownership settlement.
+    pub async fn recover_deleted_ownership(
+        &self,
+        snapshot: &nessa_sdk::domain::agent_execution::subagents::OwnershipSnapshot,
+    ) -> Result<usize, ConversationError> {
+        let Some(ownership) = self.inner.ownership.get() else {
+            return Ok(0);
+        };
+        for row in &snapshot.lifetimes {
+            let id = ConversationId::new(row.session_id.as_str())
+                .map_err(|_| ConversationError::InvalidInput)?;
+            let _ = ownership.coordinator.bind_resources(
+                row.lifetime_id.clone(),
+                Arc::new(Resources {
+                    service: Arc::downgrade(&self.inner),
+                    id,
+                }),
+            );
+        }
+        let mut attempted = 0;
+        for row in &snapshot.lifetimes {
+            let id = ConversationId::new(row.session_id.as_str())
+                .map_err(|_| ConversationError::InvalidInput)?;
+            let Some(record) = super::load_conversation(self.inner.metadata.as_ref(), &id).await?
+            else {
+                continue;
+            };
+            if let Some(deletion) = record.deletion().filter(|deletion| deletion.erased()) {
+                attempted += 1;
+                let actor = super::deletion_actor(deletion)?;
+                if let Err(error) = self.end_deleted_ownership(&id, &actor).await {
+                    tracing::warn!(conversation_id = %id, %error, "deleted ownership cleanup remains unconfirmed");
+                }
+            }
+        }
+        Ok(attempted)
+    }
+
+    pub(super) async fn end_deleted_ownership(
+        &self,
+        id: &ConversationId,
+        actor: &ActionContext,
+    ) -> Result<(), ConversationError> {
+        let Some(ownership) = self.inner.ownership.get() else {
+            return Ok(());
+        };
+        let Some(lifetime) = ownership
+            .coordinator
+            .active_lifetime_for_session(&conversation_session(id))
+        else {
+            return Ok(());
+        };
+        let resources = Arc::new(Resources {
+            service: Arc::downgrade(&self.inner),
+            id: id.clone(),
+        });
+        let _ = ownership
+            .coordinator
+            .bind_resources(lifetime.clone(), resources);
+        ownership
+            .coordinator
+            .end_lifetime(CloseCommand {
+                lifetime,
+                cause: LifetimeCause::Deletion,
+                initiator: Initiator::Host(
+                    HostActor::new(actor.principal_id(), actor.surface_id(), actor.request_id())
+                        .map_err(|_| ConversationError::InvalidInput)?,
+                ),
+                external_attachment: false,
+                timeout: Some(std::time::Duration::from_secs(5)),
+            })
+            .await
+            .map_err(|_| ConversationError::Unavailable)
+    }
+
     pub(super) async fn ownership_gate(
         &self,
         id: &ConversationId,
@@ -378,6 +454,21 @@ impl ChildResources for Resources {
             return failed;
         };
         let service = ConversationService { inner };
+        // Successful deletion already confirmed physical cleanup and persisted
+        // its erasure tombstone before asking ownership to release capacity.
+        if super::load_conversation(service.inner.metadata.as_ref(), &self.id)
+            .await
+            .is_ok_and(|record| {
+                record.is_some_and(|record| {
+                    record.deletion().is_some_and(|deletion| deletion.erased())
+                })
+            })
+        {
+            return ResourceReport {
+                physical: PhysicalFact::Released,
+                evidence: EvidenceFact::Acknowledged,
+            };
+        }
         let actor = match initiator {
             Initiator::Host(actor) => {
                 ActionContext::new(actor.principal_id(), actor.surface_id(), actor.request_id())

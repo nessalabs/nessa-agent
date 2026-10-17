@@ -27,9 +27,9 @@ const meta = {
   help: "Needs a built gateway (or MCP_LIVE_NESSA). Signed out, isolated temporary settings, Chromium and WebKit. No live configuration changes.",
 }
 // Mirrors the boundary's deterministic UUID in conversation_tools::identity.
-function childOf(source, request) {
+function identity(source, request, purpose = "thread") {
   const hex = createHash("sha256")
-    .update(JSON.stringify([source, request, "thread"]))
+    .update(JSON.stringify([source, request, purpose]))
     .digest("hex")
     .slice(0, 32)
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
@@ -56,14 +56,15 @@ await main(
       const runs = Object.fromEntries(
         options.engines.map((engine) => {
           const parent = randomUUID()
-          const child = childOf(parent, "child")
+          const child = identity(parent, "child")
           return [
             engine,
             {
               parent,
               child,
-              grandchild: childOf(child, "grandchild"),
+              grandchild: identity(child, "grandchild"),
               unrelated: randomUUID(),
+              unownedExecution: identity(parent, "unowned", "execution"),
               marker: `PARENT-${engine}-${policy}`,
             },
           ]
@@ -78,6 +79,11 @@ await main(
               threadId: run.child,
               message: `CHILD-${run.child}`,
               requestId: "work",
+            }),
+            tool("send_message", {
+              threadId: run.unrelated,
+              message: `UNRELATED-${run.unrelated}`,
+              requestId: "unowned",
             }),
             text(run.marker),
             { do: "wait-cancel" },
@@ -122,12 +128,18 @@ await main(
           const run = runs[engine]
           let opened
           try {
-            await agentTurn(stack.client, run.unrelated, `UNRELATED-${run.unrelated}`, {
-              agent: options.agent,
-              create: true,
-              seconds: 60,
-              ready: (_, turn) => turn.status === "running",
-            })
+            const unrelatedStart = await agentTurn(
+              stack.client,
+              run.unrelated,
+              `UNRELATED-${run.unrelated}`,
+              {
+                agent: options.agent,
+                create: true,
+                seconds: 60,
+                ready: (_, turn) => turn.status === "running",
+              },
+            )
+            const unrelatedExecution = unrelatedStart.turn.executionId
             await agentTurn(stack.client, run.parent, run.marker, {
               agent: options.agent,
               create: true,
@@ -200,8 +212,20 @@ await main(
               failures.push(
                 `parent restarted: ${after.messages.length} turns, ${status(after)}`,
               )
-            if (!running(unrelated))
-              failures.push(`unrelated turn became ${status(unrelated)}`)
+            const unrelatedActive = unrelated.messages.find(
+              (turn) => turn.executionId === unrelatedExecution,
+            )
+            if (unrelatedActive?.status !== "running")
+              failures.push(
+                `unrelated active turn became ${unrelatedActive?.status ?? "missing"}`,
+              )
+            const unrelatedQueued = unrelated.pending.filter(
+              (turn) => turn.executionId === run.unownedExecution,
+            ).length
+            if (unrelatedQueued !== 1)
+              failures.push(
+                `unowned report-watch target retained ${unrelatedQueued} of its queued turns`,
+              )
             if (!cascade && (!running(stopped.child) || !running(stopped.grandchild)))
               failures.push("override stopped an owned descendant")
             for (const [name, view] of Object.entries({
@@ -217,14 +241,21 @@ await main(
                 .first()
                 .screenshot({
                   path: join(options.shots, `parent-stop-${engine}-${policy}.png`),
+                  scale: "css",
                 })
             }
             let releasedReport = null
             if (cascade && failures.length === 0) {
-              await agentTurn(stack.client, run.parent, "PERSON CONTINUE", {
-                agent: options.agent,
-                seconds: 30,
-              })
+              try {
+                await stack.client.conversation.submit(
+                  stack.client.conversation.prepare(run.parent, "PERSON CONTINUE"),
+                )
+              } catch (error) {
+                throw new Error(
+                  `later person submission refused: code=${error.code ?? "unknown"}, rpc=${error.cause?.code ?? "unknown"}, uncertain=${error.uncertain}`,
+                  { cause: error },
+                )
+              }
               const continued = await waitFor(async () => {
                 const view = await stack.client.conversation.read(run.parent)
                 return view.messages.some(
@@ -251,7 +282,8 @@ await main(
                 parent: status(after),
                 child: status(stopped.child),
                 grandchild: status(stopped.grandchild),
-                unrelated: status(unrelated),
+                unrelated: unrelatedActive?.status ?? null,
+                unrelatedQueued,
                 observationMs: 1500,
                 releasedReport,
               },

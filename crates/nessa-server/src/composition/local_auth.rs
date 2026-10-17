@@ -1334,6 +1334,10 @@ async fn conversations(
         .await
         .map_err(|error| RunError::Agent(format!("ownership read: {error:?}")))?;
     service
+        .recover_deleted_ownership(&ownership_snapshot)
+        .await
+        .map_err(|error| RunError::Agent(format!("deleted ownership recovery: {error:?}")))?;
+    service
         .recover_parent_stops(&ownership_snapshot)
         .await
         .map_err(|error| RunError::Agent(error.to_string()))?;

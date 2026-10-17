@@ -67,18 +67,25 @@ impl ConversationService {
         message: SubmittedMessage,
         mode: SubmissionMode,
     ) -> Result<SubmittedCommand, MutationFailure<ConversationError>> {
-        self.submit_command_origin(
-            storage,
-            id,
-            caller,
-            initiation,
-            offers_remember,
-            execution_id,
-            message,
-            mode,
-            false,
-        )
+        let service = self.clone();
+        tokio::spawn(async move {
+            let _threads = service.inner.thread_admission.clone().lock_owned().await;
+            service
+                .submit_command_origin(
+                    storage,
+                    id,
+                    caller,
+                    initiation,
+                    offers_remember,
+                    execution_id,
+                    message,
+                    mode,
+                    false,
+                )
+                .await
+        })
         .await
+        .map_err(|error| MutationFailure::TaskFault(CreationTaskFault::from_join_error(error)))?
     }
 
     #[allow(clippy::too_many_arguments)]

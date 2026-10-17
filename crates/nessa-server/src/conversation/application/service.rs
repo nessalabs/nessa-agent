@@ -4251,7 +4251,18 @@ impl ConversationService {
                     deleting,
                 } => (*record, applied, deleting),
                 // Whoever erased it has already told the worker it is done.
-                Fence::FinishedByAnother { applied } => return Ok(applied),
+                Fence::FinishedByAnother { applied } => {
+                    if let Some(record) =
+                        load_conversation(service.inner.metadata.as_ref(), &id).await?
+                    {
+                        if let Some(deletion) = record.deletion() {
+                            service
+                                .end_deleted_ownership(&id, &deletion_actor(deletion)?)
+                                .await?;
+                        }
+                    }
+                    return Ok(applied);
+                }
                 Fence::LeftByAnother => {
                     return Err(ConversationError::DeletionIncomplete(Box::new(
                         DeletionFailures {
@@ -4610,7 +4621,9 @@ impl ConversationService {
             .cloned()
             .ok_or(ConversationError::Metadata)?;
         if deletion.erased() {
-            return Ok(());
+            return self
+                .end_deleted_ownership(&id, &deletion_actor(&deletion)?)
+                .await;
         }
         let actor = deletion_actor(&deletion)?;
         let slot = self.inner.conversations.lock().await.get(&id).cloned();
@@ -4796,7 +4809,7 @@ impl ConversationService {
                 .and_then(ConversationDeletion::after_erasure)
             {
                 Some(finished) => match self.inner.metadata.record_deletion(&id, finished).await {
-                    Ok(_) => return Ok(()),
+                    Ok(_) => return self.end_deleted_ownership(&id, &actor).await,
                     Err(error) => failures.tombstone = Some(error),
                 },
                 None => failures.tombstone = Some(ConversationError::Metadata),

@@ -258,6 +258,15 @@ impl ConversationService {
                             pending.push(child.lifetime);
                             let child_id = ConversationId::new(child.session.as_str())
                                 .map_err(|_| unavailable())?;
+                            if super::load_conversation(self.inner.metadata.as_ref(), &child_id)
+                                .await
+                                .map_err(MutationFailure::Target)?
+                                .is_some_and(|record| {
+                                    record.deletion().is_some_and(|deletion| deletion.erased())
+                                })
+                            {
+                                continue;
+                            }
                             // Read committed identities without opening a provider or
                             // admitting automatic resumption during selection. Each
                             // physical target still receives its ordinary Cedar check.
