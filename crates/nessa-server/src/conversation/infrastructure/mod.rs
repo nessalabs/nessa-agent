@@ -110,7 +110,6 @@ mod receiver_authority;
 pub(crate) mod ssh_environment;
 mod store;
 mod thread_reports;
-pub use catalogue_changes::MAX_CATALOGUE_CHANGE_WATCHES;
 pub use receiver_authority::{
     export_receivers, ExportedReceiver, LocalReceiverAuthority, ReceiverChangeError,
     ReceiverSnapshot, ReceiverSnapshotError,

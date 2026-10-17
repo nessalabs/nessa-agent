@@ -145,9 +145,7 @@ pub(crate) use audit_records::audit_records;
 pub use change_watch::WatchRecords;
 mod catalogue;
 pub(crate) mod catalogue_watch;
-pub use catalogue_watch::{
-    CatalogueChangeWatch, CatalogueWatchError, CatalogueWatchState, WatchCatalogue,
-};
+pub use catalogue_watch::{CatalogueChangeWatch, CatalogueWatchState, WatchCatalogue};
 mod access_policy;
 mod agent_tools;
 pub use agent_tools::{

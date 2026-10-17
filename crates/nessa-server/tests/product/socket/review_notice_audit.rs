@@ -1303,9 +1303,11 @@ async fn review_notice_durable_audit_failure_prevents_publication_and_preserves_
     );
 }
 
+/// #979: the close reason has its own slot, so a control lane already full
+/// of answers cannot crowd it out. The peer reads every queued answer and
+/// then the typed close, never a bare end of stream.
 #[tokio::test]
 async fn review_notice_audit_failure_with_full_control_lane_ends_connection() {
-    let (captured, _logging) = limit_log();
     let (audit, acknowledge) = GatedAudit::one();
     let fixture = ReviewFixture::new(audit.clone(), Arc::new(MonotonicReviewNoticeClock::new()));
     let session = authenticate(&fixture.state).await;
@@ -1319,21 +1321,18 @@ async fn review_notice_audit_failure_with_full_control_lane_ends_connection() {
         .await
         .unwrap()
         .unwrap();
-    for index in 0..fixture.state.limits.control_lane() {
+    let lane = fixture.state.limits.control_lane();
+    for index in 0..lane {
         admit(&peer, "conversation.cancel", &format!("control-{index}")).await;
     }
     acknowledge
         .send(Err(ReviewNoticeAuditFailure::Unavailable))
         .unwrap();
-    // This event is emitted only after the real close enqueue observes Full.
-    // Requiring it proves the regression actually filled the control lane.
-    timeout(Duration::from_secs(2), async {
-        while !limit_text(&captured).contains("socket.control_lane") {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .expect("fatal audit close must encounter the full control lane");
+    // The writer is still held, so nothing leaves the lane while the owner
+    // takes the failure and ends: give it those turns before the release.
+    for _ in 0..64 {
+        tokio::task::yield_now().await;
+    }
     assert!(
         !peer.input.is_closed(),
         "the peer input remains live during the held physical write"
@@ -1341,13 +1340,36 @@ async fn review_notice_audit_failure_with_full_control_lane_ends_connection() {
     release.send(()).unwrap();
     timeout(Duration::from_secs(2), task)
         .await
-        .expect("the connection owner must terminate despite a rejected close enqueue")
+        .expect("the connection owner must terminate while its control lane is full")
         .unwrap();
     assert!(
         peer.input.is_closed(),
         "the owner must stop receiving while the peer still owns its sender"
     );
-    while peer.output.recv().await.is_some() {}
+    let mut answers = 0;
+    let mut close = None;
+    while let Some(message) = peer.output.recv().await {
+        assert!(close.is_none(), "nothing follows the close");
+        match message {
+            Message::Text(text) => {
+                let frame: Value = serde_json::from_str(&text).unwrap();
+                if frame["id"].as_str().is_some_and(|id| id.starts_with("control-")) {
+                    answers += 1;
+                }
+            }
+            Message::Close(Some(frame)) => {
+                close = Some(serde_json::from_str::<SessionTermination>(&frame.reason).unwrap());
+            }
+            other => panic!("unexpected frame {other:?}"),
+        }
+    }
+    // Every answer was queued: the lane was full when the owner ended.
+    assert_eq!(answers, lane, "the queued control answers go first");
+    assert_eq!(
+        close.expect("a typed close, not a bare end of stream").code,
+        ReviewNoticePublicationFailure::Audit(ReviewNoticeAuditFailure::Unavailable)
+            .close_reason()
+    );
 }
 
 struct PanickingReviewPolicy;
