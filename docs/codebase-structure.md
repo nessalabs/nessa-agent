@@ -29,6 +29,10 @@ snapshot for retention and preview eviction. The immutable resource value carrie
 byte identity and authoritative metadata together; storage and accounting use
 that value's object identity.
 
+Desktop gateway service-label ownership is described in
+[desktop host ownership](design/desktop-host-ownership.md); its application lease
+precedes macOS recovery and shared writes, separate from registration locking.
+
 ## Today
 
 Nessa has a Rust desktop host (window, tray, settings, OS integration), a React

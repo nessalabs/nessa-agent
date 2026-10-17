@@ -65,3 +65,8 @@ stateDiagram-v2
 ## Further reading
 
 [Source](../../../../../src-tauri/src/gateway/application/service.rs) · [Related source](../../../../../src-tauri/src/gateway/infrastructure/commands.rs) · [Related tests](../../../../../src/startup/application/gateway-startup.test.ts)
+
+Desktop host arbitration and its ordering evidence are owned by
+[desktop host ownership](../../../../design/desktop-host-ownership.md). A second
+participating macOS host is refused before lifecycle recovery and shared writes;
+native installed-app acceptance remains separate.
