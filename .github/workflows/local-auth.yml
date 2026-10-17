@@ -330,24 +330,7 @@ jobs:
         with:
           node-version: 24
       - shell: bash
-        run: |
-          set +e
-          node scripts/cargo-test-parallel.mjs --concurrency 2 --partition server-lib -- -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk 2>&1 | tee "$RUNNER_TEMP/c324-server-lib.txt"
-          result=${PIPESTATUS[0]}
-          set -e
-          if [ "$result" -ne 0 ]; then
-            tail -n 80 "$RUNNER_TEMP/c324-server-lib.txt" | awk '
-              BEGIN { printf "::error title=C324 server-lib failure tail::" }
-              {
-                line = substr($0, 1, 200)
-                gsub(/%/, "%25", line)
-                gsub(/\r/, "%0D", line)
-                printf "%s%%0A", line
-              }
-              END { print "" }
-            '
-          fi
-          exit "$result"
+        run: node scripts/cargo-test-parallel.mjs --concurrency 2 --partition server-lib -- -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk
         timeout-minutes: 45
 
   local-auth:
