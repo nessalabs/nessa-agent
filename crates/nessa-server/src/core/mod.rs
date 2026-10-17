@@ -51,5 +51,5 @@ pub use error::{
 pub use launch::Launch;
 pub use shutdown::{
     NativeShutdownFailure, Outcome, ReaderDrain, ServersOutcome, ShutdownFailure, ShutdownReport,
-    ShutdownStage, WatchDrain,
+    ShutdownStage,
 };

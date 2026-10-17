@@ -1559,8 +1559,6 @@ fn an_unknown_send_refusal_closes_the_session() {
 mod held_files;
 #[path = "session/subscribe.rs"]
 mod subscribe;
-#[path = "session/watch.rs"]
-mod watch;
 
 #[test]
 fn canonical_tls_observer_keeps_original_socket_failure_for_retained_caller() {

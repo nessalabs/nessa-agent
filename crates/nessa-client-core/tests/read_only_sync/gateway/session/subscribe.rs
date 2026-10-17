@@ -1,6 +1,8 @@
 //! `conversation.subscribe` on the pinned session: the reply, a view that
-//! arrives before that reply, and the end that follows every kept view.
+//! arrives before that reply, the end that follows every kept view, and the
+//! follow loop's wait for the newest view.
 use super::*;
+use crate::read_only_sync::application::follow::{Ended, SubscriptionEnd, ViewCursor, Wait};
 use crate::read_only_sync::application::{SubscriptionCode, SubscriptionRefusal};
 use crate::read_only_sync::infrastructure::gateway::SubscriptionDelivery;
 use nessa_protocol::product::generated::{
@@ -899,4 +901,191 @@ fn a_failed_open_releases_the_stop_socket() {
     assert_ne!(failed.failure(), ReadFailure::Away);
     peer.join().unwrap();
     drop(stop);
+}
+
+fn send_refused_end(socket: &mut PeerSocket, id: &str, code: &str) {
+    send(
+        socket,
+        OutgoingMessage::Event(
+            EventFrame::push(
+                product_event::CONVERSATION_SUBSCRIPTION_ENDED,
+                &json!({
+                    "subscriptionId": id,
+                    "reason": ConversationSubscriptionEndReason::Refused,
+                    "code": code,
+                }),
+                1,
+                0,
+            )
+            .unwrap(),
+        ),
+    );
+}
+fn head(session: &mut Session) -> Result<serde_json::Value, GatewayError> {
+    session.rpc(
+        product_method::CONVERSATION_RECORDS_HEAD,
+        &json!({}),
+        RpcKind::Record,
+    )
+}
+fn at(position: &str) -> ViewCursor {
+    ViewCursor {
+        incarnation: "inc".into(),
+        position: position.into(),
+    }
+}
+fn subscribed(session: &mut Session) {
+    session.begin().unwrap();
+    session.subscribe(&params(None)).unwrap();
+    assert_eq!(session.finish().unwrap().failure, None);
+}
+
+/// Views that arrive during another operation, beyond the policy's
+/// unexpected events, are kept and do not count as events. The next wait
+/// returns the newest at once as kept during a pass and drops the older ones;
+/// the wait after that reads a new view.
+#[test]
+fn views_during_a_read_come_out_newest_first_and_once() {
+    let (endpoint, gateway) = peer(|socket| {
+        admit(socket, "1");
+        let read = request(socket);
+        for position in ["2", "3", "4", "5", "6"] {
+            send_view(socket, "1", position, position);
+        }
+        send(
+            socket,
+            OutgoingMessage::Response(
+                ResponseFrame::success(&read.id, &json!({"head":"7"})).unwrap(),
+            ),
+        );
+        send_view(socket, "1", "7", "seven");
+        while !socket.ended() {}
+    });
+    let mut session = connect(&endpoint);
+    subscribed(&mut session);
+    session.begin().unwrap();
+    assert_eq!(head(&mut session).unwrap(), json!({"head":"7"}));
+    assert_eq!(session.finish().unwrap().failure, None);
+    session.begin().unwrap();
+    assert_eq!(
+        session.wait_view(),
+        Ok(Wait::View {
+            cursor: at("6"),
+            during_pass: true
+        })
+    );
+    session.finish().unwrap();
+    session.begin().unwrap();
+    assert_eq!(
+        session.wait_view(),
+        Ok(Wait::View {
+            cursor: at("7"),
+            during_pass: false
+        })
+    );
+    assert_eq!(session.finish().unwrap().failure, None);
+    drop(session);
+    gateway.join().unwrap();
+}
+
+/// The end comes before views kept with it, and a later wait finds the
+/// subscription closed. A refused end carries its typed refusal, so an
+/// authority refusal asks the pinned status again; other ends carry none.
+#[test]
+fn the_end_comes_first_and_a_refused_end_keeps_its_code() {
+    for (code, cause) in [
+        (
+            Some("forbidden"),
+            Some(GatewayError::Subscription(SubscriptionRefusal::Forbidden)),
+        ),
+        (
+            Some("conversation_not_found"),
+            Some(GatewayError::Subscription(
+                SubscriptionRefusal::Conversation(
+                    nessa_protocol::product_contract::generated::ConversationErrorCode::ConversationNotFound,
+                ),
+            )),
+        ),
+        (None, None),
+    ] {
+        let (endpoint, gateway) = peer(move |socket| {
+            admit(socket, "1");
+            // A view and then the end, both during another read.
+            let read = request(socket);
+            send_view(socket, "1", "2", "two");
+            match code {
+                Some(code) => send_refused_end(socket, "1", code),
+                None => send_end(socket, "1"),
+            }
+            send(
+                socket,
+                OutgoingMessage::Response(
+                    ResponseFrame::success(&read.id, &json!({"head":"2"})).unwrap(),
+                ),
+            );
+            while !socket.ended() {}
+        });
+        let mut session = connect(&endpoint);
+        subscribed(&mut session);
+        session.begin().unwrap();
+        assert_eq!(head(&mut session).unwrap(), json!({"head":"2"}));
+        assert_eq!(session.finish().unwrap().failure, None);
+        session.begin().unwrap();
+        let reason = if code.is_some() {
+            SubscriptionEnd::Refused
+        } else {
+            SubscriptionEnd::SourceClosed
+        };
+        let Ok(Wait::Ended(ended)) = session.wait_view() else {
+            panic!("the end comes before the view kept with it")
+        };
+        assert_eq!(ended, Ended { reason, cause });
+        session.finish().unwrap();
+        session.begin().unwrap();
+        assert_eq!(session.wait_view(), Err(GatewayError::Closed(None)));
+        drop(session);
+        gateway.join().unwrap();
+    }
+}
+
+/// The gateway closing the connection while the client waits is an untyped
+/// close (row W11); a response while only waiting is a correlation failure;
+/// a wait with no subscription is refused before any read.
+#[test]
+fn a_wait_fails_on_close_stray_response_or_no_subscription() {
+    let (endpoint, gateway) = peer(|socket| {
+        admit(socket, "1");
+    });
+    let mut session = connect(&endpoint);
+    subscribed(&mut session);
+    session.begin().unwrap();
+    assert_eq!(session.wait_view(), Err(GatewayError::Closed(None)));
+    assert_eq!(
+        session.finish().unwrap().failure,
+        Some(GatewayError::Closed(None))
+    );
+    drop(session);
+    gateway.join().unwrap();
+
+    let (endpoint, gateway) = peer(|socket| {
+        admit(socket, "1");
+        send(
+            socket,
+            OutgoingMessage::Response(ResponseFrame::success("9", &json!({})).unwrap()),
+        );
+        while !socket.ended() {}
+    });
+    let mut session = connect(&endpoint);
+    subscribed(&mut session);
+    session.begin().unwrap();
+    assert_eq!(session.wait_view(), Err(GatewayError::Correlation));
+    drop(session);
+    gateway.join().unwrap();
+
+    let (endpoint, gateway) = peer(|socket| while !socket.ended() {});
+    let mut session = connect(&endpoint);
+    session.begin().unwrap();
+    assert_eq!(session.wait_view(), Err(GatewayError::Busy));
+    drop(session);
+    gateway.join().unwrap();
 }

@@ -178,7 +178,7 @@ fn foreign_last_parent_drop_closes_child_and_preserves_original_ready_response_e
         assert_eq!(request.params, json!({"original": [null, "request"]}));
         wire.send(OutgoingMessage::Event(
             EventFrame::push(
-                "conversation.changed",
+                "conversation.listed",
                 &json!({"original":null}),
                 u64::MAX,
                 u64::MAX - 1,
@@ -368,7 +368,7 @@ fn foreign_delivered_event_handle_retains_count_and_byte_capacity() {
     for byte_limited in [false, true] {
         let root = fixtures::root(true);
         let event =
-            EventFrame::push("conversation.changed", &json!({"value":null}), u64::MAX, 1).unwrap();
+            EventFrame::push("conversation.listed", &json!({"value":null}), u64::MAX, 1).unwrap();
         let text_len = OutgoingMessage::Event(event.clone())
             .to_wire_text()
             .unwrap()
@@ -800,7 +800,7 @@ fn parent_last_owner_drop_waits_for_child_cleanup_with_escaped_foreign_facts() {
     let (address, peer) = fixtures::peer(|wire| {
         let request = wire.request().unwrap();
         wire.send(OutgoingMessage::Event(
-            EventFrame::push("conversation.changed", &json!({"saved":true}), u64::MAX, 3).unwrap(),
+            EventFrame::push("conversation.listed", &json!({"saved":true}), u64::MAX, 3).unwrap(),
         ));
         wire.send(OutgoingMessage::Response(
             ResponseFrame::success(&request.id, &json!({"lateFact":true})).unwrap(),

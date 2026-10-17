@@ -1615,8 +1615,7 @@ async fn metadata_query_target_fences_passive_admission_and_shares() {
 
 /// A paired read the access policy cannot decide is unverifiable, never a
 /// conversation the reader may not see, and touches no source; one it
-/// refuses is the answer a missing conversation gets. A catalogue watch it
-/// cannot decide is unverifiable too, and one it refuses is forbidden.
+/// refuses is the answer a missing conversation gets.
 #[tokio::test]
 async fn a_paired_read_the_access_policy_cannot_decide_is_unverifiable() {
     use crate::conversation::application::{
@@ -1644,23 +1643,9 @@ async fn a_paired_read_the_access_policy_cannot_decide_is_unverifiable() {
     );
     let bindings = Bindings(Mutex::new(Ok(Some(binding()))));
     let session = device_session().await;
-    let scope = nessa_protocol::conversation::read_scope::CatalogueReadScope {
-        receiver_id: "receiver".into(),
-        organization_id: OrganizationId::new("org").unwrap(),
-        owner_id: PrincipalId::new("owner").unwrap(),
-        access_epoch: 7,
-    };
-    for (denial, refusal, watch_refusal) in [
-        (
-            AccessDenial::Unavailable,
-            ReadRefusal::Unverifiable,
-            ReadRefusal::Unverifiable,
-        ),
-        (
-            AccessDenial::NotPermitted,
-            ReadRefusal::WrongOwner,
-            ReadRefusal::Forbidden,
-        ),
+    for (denial, refusal) in [
+        (AccessDenial::Unavailable, ReadRefusal::Unverifiable),
+        (AccessDenial::NotPermitted, ReadRefusal::WrongOwner),
     ] {
         let answers = std::sync::Arc::new(Answers(denial));
         let admit = AdmitPassiveRead {
@@ -1700,7 +1685,6 @@ async fn a_paired_read_the_access_policy_cannot_decide_is_unverifiable() {
             Err(refusal)
         );
         assert_eq!(calls.load(Ordering::SeqCst), 0, "no source was touched");
-        assert_eq!(admit.catalogue_watch(&session, &scope), Err(watch_refusal));
     }
 }
 

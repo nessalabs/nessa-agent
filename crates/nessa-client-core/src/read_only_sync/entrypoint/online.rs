@@ -14,7 +14,7 @@ use nessa_sync::replication::catalogue::{CatalogueError, CatalogueProgress};
 use serde_json::{json, Value};
 use std::io::Write;
 mod causes;
-pub(crate) use causes::{cache_failure, gateway_failure, watch_ended};
+pub(crate) use causes::{cache_failure, gateway_failure, subscription_ended};
 use causes::{catalogue_failure, core_failure};
 
 /// `device` carries the enrollment evidence the run was admitted under, and
@@ -36,7 +36,7 @@ pub(crate) fn write_records(
 }
 /// The one presentation of a records attempt with the device's fields
 /// (`enrollment`, `recheck`), and whether it succeeded: `sync-records` writes
-/// it, and each `watch` pass line carries it.
+/// it, and each `follow` pass line carries it.
 pub(crate) fn records_report(
     attempt: &GatewayAttempt<Result<RecordRun, RecordDriverError>>,
     saved: Result<Option<(CachedProgress, CommittedStatus)>, CacheError>,

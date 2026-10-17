@@ -2,7 +2,7 @@
 //! Bounds are validated at the transport boundary; these are payload types only.
 //! Variant names are the schema's wire spellings, so a shared prefix is the wire's.
 #![allow(dead_code, clippy::enum_variant_names)]
-use crate::product_contract::generated::{ChangeWatchEndReason, SessionCloseReason};
+use crate::product_contract::generated::SessionCloseReason;
 use nessa_auth::application::dto::{
     CredentialGrantDto, CredentialMetadataDto, MembershipInputDto, PrincipalInputDto,
 };
@@ -2383,46 +2383,6 @@ impl PeerErrorCode {
         }
     }
 }
-pub type ChangeWatchId = String;
-#[derive(Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ConversationWatchCatalogueParams {
-    pub receiver_id: String,
-    pub access_epoch: String,
-}
-#[derive(Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ConversationWatchRecordsParams {
-    pub conversation_id: String,
-    pub receiver_id: String,
-    pub access_epoch: String,
-}
-#[derive(Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ConversationWatchResult {
-    pub watch_id: ChangeWatchId,
-}
-#[derive(Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ConversationUnwatchParams {
-    pub watch_id: ChangeWatchId,
-}
-#[derive(Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ConversationUnwatchResult {
-    pub watch_id: ChangeWatchId,
-}
-#[derive(Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ConversationChanged {
-    pub watch_id: ChangeWatchId,
-}
-#[derive(Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ConversationWatchEnded {
-    pub watch_id: ChangeWatchId,
-    pub reason: ChangeWatchEndReason,
-}
 pub type ConversationSubscriptionId = String;
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -2766,14 +2726,6 @@ pub struct ConversationEvents {
     pub cursor: ConversationEventCursor,
     pub events: Vec<ConversationEvent>,
 }
-pub const MAX_CHANGE_WATCH_ID_BYTES: usize = 57;
-pub const CHANGE_WATCH_ID_PATTERN: &str =
-    "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-[1-9][0-9]{0,19}$";
-pub const MAX_GLOBAL_CHANGE_WATCHES: usize = 64;
-pub const MAX_PRINCIPAL_CHANGE_WATCHES: usize = 8;
-pub const MAX_CONNECTION_RECORD_WATCHES: usize = 1;
-pub const MAX_CONNECTION_CATALOGUE_WATCHES: usize = 1;
-pub const MAX_CONNECTION_CHANGE_WATCHES: usize = 2;
 pub const MAX_PEERS: usize = 64;
 pub const MAX_CONNECTION_CONVERSATION_SUBSCRIPTIONS: usize = 8;
 pub const MAX_CONNECTION_LIST_SUBSCRIPTIONS: usize = 2;
@@ -2914,9 +2866,6 @@ pub mod product_method {
     pub const PEER_LIST: &str = "peer.list";
     pub const PEER_FORGET: &str = "peer.forget";
     pub const PEER_RELAY: &str = "peer.relay";
-    pub const CONVERSATION_WATCH_RECORDS: &str = "conversation.watchRecords";
-    pub const CONVERSATION_WATCH_CATALOGUE: &str = "conversation.watchCatalogue";
-    pub const CONVERSATION_UNWATCH: &str = "conversation.unwatch";
     pub const CONVERSATION_SUBSCRIBE: &str = "conversation.subscribe";
     pub const CONVERSATION_SUBSCRIBE_LIST: &str = "conversation.subscribeList";
     pub const CONVERSATION_UNSUBSCRIBE: &str = "conversation.unsubscribe";
@@ -2931,8 +2880,6 @@ pub mod product_method {
 pub mod product_event {
     pub const SESSION_CHALLENGE: &str = "session.challenge";
     pub const SESSION_TERMINATED: &str = "session.terminated";
-    pub const CONVERSATION_CHANGED: &str = "conversation.changed";
-    pub const CONVERSATION_WATCH_ENDED: &str = "conversation.watchEnded";
     pub const CONVERSATION_VIEW: &str = "conversation.view";
     pub const CONVERSATION_LISTED: &str = "conversation.listed";
     pub const AGENTS_LISTED: &str = "agents.listed";
@@ -3119,7 +3066,7 @@ pub fn wire_shape_product_session_ready(value: &Value) -> bool {
         }) && object.get("methods").is_some_and(|field| {
             let _ = field;
             field.as_array().is_some_and(|items| {
-                items.len() <= 77
+                items.len() <= 74
                     && items.iter().all(|item| {
                         let _ = item;
                         item.is_string()
@@ -3208,9 +3155,6 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "peer.list",
     "peer.forget",
     "peer.relay",
-    "conversation.watchRecords",
-    "conversation.watchCatalogue",
-    "conversation.unwatch",
     "conversation.subscribe",
     "conversation.subscribeList",
     "conversation.unsubscribe",
@@ -3230,8 +3174,7 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
 /// catalogue asks for `conversation.read`. Running a configured server with
 /// the gateway's authority, and enrolling a device, asks for
 /// `credential.manage`; Auth asks again for the exact consent. `None`
-/// means another owner admits the method: the handshake, `auth.session`, or
-/// a watch.
+/// means another owner admits the method: the handshake or `auth.session`.
 pub fn action_for_method(method: &str) -> Option<&'static str> {
     match method {
         "server.health"

@@ -178,12 +178,10 @@ fn the_checked_in_bundle_validates_and_names_every_action() {
     let (org, owner) = (organization("org"), principal("owner"));
     for action in AccessAction::ALL {
         let resource = match action {
-            AccessAction::List | AccessAction::CatalogueWatch | AccessAction::Write => {
-                AccessResource::Catalogue {
-                    organization: &org,
-                    owner: &owner,
-                }
-            }
+            AccessAction::List | AccessAction::Write => AccessResource::Catalogue {
+                organization: &org,
+                owner: &owner,
+            },
             _ => on(&live),
         };
         let subject = match action {
@@ -203,8 +201,7 @@ fn the_checked_in_bundle_validates_and_names_every_action() {
             AccessAction::CatalogueEntry
             | AccessAction::Comment
             | AccessAction::Drive
-            | AccessAction::Write
-            | AccessAction::CatalogueWatch => AccessSubject::PairedReader {
+            | AccessAction::Write => AccessSubject::PairedReader {
                 organization: &org,
                 signed_in_as: &owner,
                 binding_owner: &owner,
@@ -578,34 +575,6 @@ fn drive_text_only_refuses_what_a_driver_could_name_unshared() {
 }
 
 #[test]
-fn grant_catalogue_watch_is_a_devices_and_never_a_peers() {
-    let policy = policy();
-    let (org, owner) = (organization("org"), principal("owner"));
-    let catalogue = AccessResource::Catalogue {
-        organization: &org,
-        owner: &owner,
-    };
-    assert_eq!(
-        allowed_by(&paired(
-            &policy,
-            AccessAction::CatalogueWatch,
-            catalogue,
-            &Paired::default()
-        )),
-        Some(&["grant.catalogue_watch".to_owned()][..])
-    );
-    assert!(!allowed(&paired(
-        &policy,
-        AccessAction::CatalogueWatch,
-        catalogue,
-        &Paired {
-            signed_in_as: "gateway:peer",
-            ..Paired::default()
-        }
-    )));
-}
-
-#[test]
 fn grant_note_deliver_needs_comment_or_drive_on_a_live_conversation() {
     let policy = policy();
     let deliver = |held: Option<Capabilities>, deleted: bool| {
@@ -794,8 +763,8 @@ fn owner_access_the_policy_cannot_decide_is_unavailable() {
 /// What a paired reader may do, for every binding, signer, deletion and
 /// role: it reads its grantor's live conversation with any role; comments
 /// with Comment or Drive and drives with Drive, as a device and never as a
-/// peer gateway; sees a granted tombstone in its catalogue; never writes,
-/// lists or shares; and watches the catalogue only as a device.
+/// peer gateway; sees a granted tombstone in its catalogue; and never writes,
+/// lists or shares.
 #[test]
 fn paired_access_answers_its_truth_table() {
     let policy = policy();
@@ -858,9 +827,8 @@ fn paired_access_answers_its_truth_table() {
                     ] {
                         assert!(!allowed(&paired(&policy, action, on(&record), &facts)));
                     }
-                    // A catalogue watch is refused unless the binding's
-                    // owner is who signed in; no other owner command is
-                    // ever a paired reader's.
+                    // No owner command no grant role names is ever a paired
+                    // reader's.
                     let catalogue = AccessResource::Catalogue {
                         organization: &borg,
                         owner: &bowner,
@@ -871,15 +839,6 @@ fn paired_access_answers_its_truth_table() {
                         catalogue,
                         &facts
                     )));
-                    assert_eq!(
-                        allowed(&paired(
-                            &policy,
-                            AccessAction::CatalogueWatch,
-                            catalogue,
-                            &facts
-                        )),
-                        device
-                    );
                 }
             }
         }

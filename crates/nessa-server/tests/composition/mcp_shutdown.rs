@@ -13,7 +13,7 @@ use crate::mcp_servers::infrastructure::settings_test_support::{
     config, entry, initiator, inspected_over, server, settings_for, settings_over, LeapingClock,
     ManualClock, MemoryFiles, RecordingAudit, ScriptedInspector,
 };
-use crate::product::HostWatchFixture;
+use crate::product::HostProductFixture;
 use nessa_sdk::infrastructure::mcp::McpError;
 use std::sync::atomic::Ordering;
 
@@ -55,7 +55,7 @@ fn stage(report: &ReportSlot) -> Option<ShutdownStage> {
 /// replacement, and the report has the MCP stop `Ok`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_mcp_stop_drains_admitted_writes_before_the_servers_stop() {
-    let fixture = HostWatchFixture::idle().await;
+    let fixture = HostProductFixture::new().await;
     let files = MemoryFiles::holding(config(vec![]));
     let audit = Arc::new(RecordingAudit::default());
     let (settings, servers) = settings_for(files.clone(), audit.clone());
@@ -142,7 +142,7 @@ async fn the_mcp_stop_drains_admitted_writes_before_the_servers_stop() {
 /// not confirm.
 #[tokio::test]
 async fn an_unfinished_drain_is_an_unconfirmed_shutdown() {
-    let fixture = HostWatchFixture::idle().await;
+    let fixture = HostProductFixture::new().await;
     let files = MemoryFiles::holding(config(vec![]));
     let audit = Arc::new(RecordingAudit::default());
     // The lock's wait is on this clock, which nothing advances.
@@ -204,7 +204,7 @@ async fn an_unfinished_drain_is_an_unconfirmed_shutdown() {
 /// drained and the MCP stop has not begun; only then do the servers stop.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn x_early_admission_closes_and_inspections_are_cut_while_conversations_drain() {
-    let fixture = HostWatchFixture::idle().await;
+    let fixture = HostProductFixture::new().await;
     let files = MemoryFiles::holding(config(vec![entry("a")]));
     let audit = Arc::new(RecordingAudit::default());
     let inspector = Arc::new(ScriptedInspector::default());

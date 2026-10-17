@@ -90,7 +90,7 @@ impl HeadHold {
     pub(super) fn release(&self) {
         self.release.notify_one();
     }
-    /// Hold the second head read from now: a `watch`'s discovery reads the
+    /// Hold the second head read from now: a `follow`'s discovery reads the
     /// first, its recheck pass the second.
     fn hold_recheck(&self) {
         let next = self.count.load(Ordering::SeqCst) + 2;
@@ -113,7 +113,7 @@ impl RecordReadSource for GatedRead {
                 ("delayed-head", Some(1)) => tokio::time::sleep(Duration::from_secs(6)).await,
                 // The recheck pass `hold` named answers only after `release`,
                 // so a commit acknowledged in between lands while it reads
-                // the head (committed change watches L9).
+                // the head (read-only sync example, row W6).
                 ("live" | "semantic", Some(count))
                     if count == self.heads.held.load(Ordering::SeqCst) =>
                 {
@@ -338,10 +338,13 @@ async fn gateway_child() {
     let receiver_slot = Arc::new(OnceLock::new());
     let heads = Arc::new(HeadHold::default());
     // Built before bind: the socket answers `conversation.subscribe` from
-    // this service. Other modes keep conversations unset, so they still
-    // answer `conversations_not_configured`.
+    // this service. The modes a `follow` runs against get one over the same
+    // owners; the others keep conversations unset, so they still answer
+    // `conversations_not_configured`.
     let semantic =
         (mode == "semantic").then(|| super::semantic::prepare(storage.clone(), metadata.clone()));
+    let follows = matches!(mode.as_str(), "live" | "preparing-head")
+        .then(|| super::semantic::reader(storage.clone(), metadata.clone()));
     let mut state = ProductRouteState::new(
         ResourceId::new(gateway.clone()).unwrap(),
         OrganizationId::new(organization.clone()).unwrap(),
@@ -387,6 +390,12 @@ async fn gateway_child() {
         crate::conversation_test_support::access_policy(),
         Id::new(&gateway).unwrap(),
     )));
+    if let Some(service) = follows {
+        state = state
+            .with_conversations(service)
+            // The model the setup conversation was created with.
+            .with_agents_catalog(super::semantic::catalog_for("model"));
+    }
     if let Some(corpus) = &semantic {
         state = state
             .with_conversations(corpus.service.clone())
@@ -576,10 +585,10 @@ struct LiveDevices {
 /// Live mode's control lines, each answered with `DONE <line>` once its effect
 /// is durable: `commit` appends one provider-context save to the conversation
 /// through this process's own storage owner, so its committed-change watch
-/// publishes; `revoke` removes the first device's receiver binding, as an
+/// wakes the subscriptions; `revoke` removes the first device's receiver binding, as an
 /// owner would, and `revoke b` the second device's. `revoke-credential b`
 /// revokes that device's issued credential, the same registry write mode
-/// `revoke` uses for the first device. `hold` makes the next `watch`'s
+/// `revoke` uses for the first device. `hold` makes the next `follow`'s
 /// recheck pass wait at its head read until `release`.
 async fn live_control(
     storage: Arc<RecordStorage>,

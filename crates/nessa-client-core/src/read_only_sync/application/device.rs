@@ -22,9 +22,7 @@ use nessa_auth::{
     domain::{pairing::PublicIntent, CredentialId, ResourceId},
 };
 use nessa_protocol::pairing::wire::NativePairingStatus;
-use nessa_protocol::product_contract::generated::{
-    CatalogueReadErrorCode, ChangeWatchErrorCode, RecordReadErrorCode,
-};
+use nessa_protocol::product_contract::generated::{CatalogueReadErrorCode, RecordReadErrorCode};
 use nessa_protocol::product_contract::ConnectionOutcome;
 use nessa_sync::replication::domain::Id;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -207,12 +205,6 @@ pub(crate) fn asks_status(error: GatewayError) -> bool {
                     | CatalogueReadErrorCode::Forbidden
                     | CatalogueReadErrorCode::WrongReceiver
                     | CatalogueReadErrorCode::StaleEpoch
-            )
-            | GatewayError::Watch(
-                ChangeWatchErrorCode::Unauthorized
-                    | ChangeWatchErrorCode::Forbidden
-                    | ChangeWatchErrorCode::WrongReceiver
-                    | ChangeWatchErrorCode::StaleEpoch
             )
             | GatewayError::HeldFile(HeldFileRefusal::Unauthorized | HeldFileRefusal::Forbidden)
             | GatewayError::Subscription(
