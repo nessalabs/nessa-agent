@@ -1,7 +1,7 @@
 //! Ownership coordinator regressions for ADR 329 rows S1–S7, S11, S13, C1, C4–C8, C11, C12, C14, and R1–R5.
 //! Feature children own publication eligibility, supervised effect phases, Ready
-//! transfers, exact settlement generations, live admission absence exclusion
-//! and SDK-issued participation-gate notification.
+//! transfers, exact settlement generations, live admission absence exclusion,
+//! SDK-issued participation-gate notification, and restored live-room reservations.
 use std::{
     collections::VecDeque,
     sync::{
@@ -608,6 +608,24 @@ async fn rejected_startup_without_owner_then_parent_close_settles() {
     assert_eq!(world.factory.prepares(), 1);
     assert_eq!(world.factory.submits(), 0);
     assert!(world.factory.children.lock().expect("children").is_empty());
+
+    let session = world
+        .store
+        .read()
+        .await
+        .unwrap()
+        .spawns
+        .into_iter()
+        .find(|row| row.child_lifetime == child)
+        .unwrap()
+        .child_session;
+    assert!(
+        world
+            .coordinator
+            .child_lifetime_for_session(&session)
+            .is_none(),
+        "validated absence is not ownership of the reserved session"
+    );
 
     let closed = tokio::time::timeout(Duration::from_secs(2), world.close(&root))
         .await
@@ -1876,3 +1894,7 @@ mod publication;
 mod settlement;
 mod supervision;
 mod transfers;
+
+mod preparation;
+
+mod capacity;

@@ -938,3 +938,6 @@ export const userAttachments = {
   pictures: "img",
   controls: "button",
 }
+
+/** The parent Stop acceptance scenario uses the composer's ordinary Stop control. */
+export const parentStop = { stop: { role: "button", name: "Stop", exact: true } }

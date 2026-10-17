@@ -184,3 +184,6 @@ pub(crate) use record_read::TestReadGate;
 
 mod agent_tool_audit;
 pub use agent_tool_audit::DurableAgentToolAudit;
+
+mod ownership_audit;
+pub use ownership_audit::DurableOwnershipAudit;

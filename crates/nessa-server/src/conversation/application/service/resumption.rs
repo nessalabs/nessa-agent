@@ -299,6 +299,7 @@ impl ConversationService {
         let Ok(_admission) = self.admit().await else {
             return false;
         };
+        let _threads = self.inner.thread_admission.clone().lock_owned().await;
         let _submissions = self.inner.mode_changes.lock(id).await;
         let Some(live) = waiting.upgrade() else {
             return false;
@@ -315,7 +316,34 @@ impl ConversationService {
         let non_default_mode = non_default_mode(&live).await;
         let mut resumed = Vec::new();
         let mut unsettled = false;
+        let Ok(Some(owner)) = load_conversation(self.inner.metadata.as_ref(), id).await else {
+            return false;
+        };
         for turn in live.agent.owed_turns().await {
+            let stop_caller = ConversationCaller {
+                organization_id: live.organization_id.clone(),
+                principal_id: owner.owner().clone(),
+                surface_id: turn.submitted_by().surface_id().into(),
+                action_id: turn.submitted_by().request_id().into(),
+            };
+            match self
+                .captured_stop_actor(id, turn.execution_id().as_str(), &stop_caller)
+                .await
+            {
+                Ok(Some(_)) => {
+                    // The admitted exact Stop owns its decline and receipt.
+                    // Resumption waits rather than creating a successor or
+                    // performing an effect outside the mutation owner.
+                    unsettled = true;
+                    continue;
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    tracing::warn!(conversation_id = %id, %error, "captured Stop selection cannot be checked");
+                    unsettled = true;
+                    continue;
+                }
+            }
             let held = match self
                 .resume_decision(&live, id, &turn, non_default_mode)
                 .await
@@ -360,6 +388,8 @@ impl ConversationService {
         if !unsettled {
             self.clear_if_nothing_owed(id, &live).await;
         }
+        drop(_submissions);
+        drop(_threads);
         for admission in resumed {
             self.watch_receipt(id, live.clone(), admission, true).await;
         }

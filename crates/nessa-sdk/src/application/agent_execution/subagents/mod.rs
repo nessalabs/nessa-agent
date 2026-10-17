@@ -17,6 +17,9 @@
 //! output has entered those existing owners. Captured Ready failures keep their
 //! primary result; destruction faults are independently diagnosed. Registered drain generations own
 //! intent publication, Closing safety writes and immutable waiter outcomes.
+//! `prepare_child` shares the reservation/factory/cleanup pipeline but publishes
+//! Ready without calling InitialSubmit. Ready is persistent acknowledged
+//! preparation, distinct from TaskAdmitted; it is not gateway cascade policy.
 //! The coordinator does not run a model loop.
 #![deny(missing_docs)]
 

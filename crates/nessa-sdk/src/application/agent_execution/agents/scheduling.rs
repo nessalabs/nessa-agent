@@ -518,6 +518,45 @@ impl Agent {
         })
         .await
     }
+    /// Copy locally owned unfinished execution identities under the scheduler
+    /// boundary, including the dequeue-to-dispatch handoff and the active turn.
+    /// This grants no cancellation authority and never retargets to a later turn.
+    /// A copied execution may finish immediately afterward; exact controls must
+    /// recheck it. Restored work without a local receipt is excluded.
+    pub async fn unsettled_execution_ids(&self) -> Vec<ExecutionId> {
+        let waiter = CallerWaiter::QueuedIds(self.inner.manager.id().clone());
+        contain_caller_wake(waiter, async {
+            let scheduler = self.inner.scheduler.lock().await;
+            let mut ids = self
+                .inner
+                .manager
+                .pick_invocations(|_, record, _| {
+                    (scheduler.has_receipt(&record.request.execution_id)
+                        && record.result.is_none()
+                        && record.scheduling.last().is_some_and(|edge| {
+                            matches!(
+                                edge.stage,
+                                InvocationStage::Queued | InvocationStage::Running
+                            )
+                        }))
+                    .then(|| record.request.execution_id.clone())
+                })
+                .await;
+            for (id, _) in scheduler.queue.pending() {
+                if !ids.contains(&id) {
+                    ids.push(id);
+                }
+            }
+            if let Some(active) = self.inner.lifecycle.active() {
+                if !ids.contains(&active) {
+                    ids.push(active);
+                }
+            }
+            ids
+        })
+        .await
+    }
+
     /// Atomically replace the complete pending order requested by verified `actor`.
     /// Steering retains priority; identities, requests, receipts and kinds remain
     /// unchanged. Membership races, including dispatch or withdrawal while the

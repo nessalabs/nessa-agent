@@ -105,6 +105,26 @@ fn fixture_admitted_by(
     Arc<RecordStorage>,
     Arc<LocalConversationStore>,
 ) {
+    fixture_with_sessions(
+        root,
+        provider,
+        environment,
+        policy,
+        ProviderSessionErasers::default(),
+    )
+}
+
+fn fixture_with_sessions(
+    root: &Path,
+    provider: Arc<ProviderFactory>,
+    environment: crate::conversation::application::Environments,
+    policy: Arc<dyn ConversationAccessPolicyEvaluator>,
+    provider_sessions: ProviderSessionErasers,
+) -> (
+    ConversationService,
+    Arc<RecordStorage>,
+    Arc<LocalConversationStore>,
+) {
     nessa_local_storage::create_directory(root).unwrap();
     let storage = Arc::new(RecordStorage::new(root.join("records")).unwrap());
     let metadata = Arc::new(
@@ -125,7 +145,7 @@ fn fixture_admitted_by(
             summaries: metadata.clone(),
             listing: metadata.clone(),
             deletion_audit: Arc::new(AcceptingDeletionAudit),
-            provider_sessions: ProviderSessionErasers::default(),
+            provider_sessions,
             deletion_budgets: DELETION_BUDGETS,
             message_commit_clock: Arc::new(RuntimeMessageCommitClock::new()),
             clock: Arc::new(TestClock),
@@ -1477,3 +1497,6 @@ async fn active_execution_ignores_truncated_display_and_opens_no_provider() {
     let _ = release.send(());
     service.shutdown().await.unwrap();
 }
+
+#[path = "parent_stop.rs"]
+mod parent_stop;

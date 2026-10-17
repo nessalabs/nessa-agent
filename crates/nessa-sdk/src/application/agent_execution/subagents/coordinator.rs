@@ -7,6 +7,7 @@
 
 use std::{
     collections::{HashMap, HashSet},
+    ops::Deref,
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Mutex, Weak,
@@ -74,6 +75,38 @@ pub struct SpawnCommand {
     pub model: Option<crate::domain::agent_execution::subagents::ModelChoice>,
     /// Verified origin. A retry that changes it conflicts.
     pub origin: SpawnOrigin,
+}
+
+/// Internal operation identity: preparation and task submission cannot share a retry.
+#[derive(Clone)]
+struct ChildCommand {
+    command: SpawnCommand,
+    session: Option<SessionId>,
+}
+impl Deref for ChildCommand {
+    type Target = SpawnCommand;
+    fn deref(&self) -> &Self::Target {
+        &self.command
+    }
+}
+impl ChildCommand {
+    fn digest(&self) -> Result<TaskDigest, OwnershipError> {
+        match &self.session {
+            None => task_digest(&self.task),
+            Some(session) => {
+                let mut digest = Sha256::new();
+                // Ordinary task preimages are UTF-8. This tag makes preparation
+                // preimages disjoint without changing stored ordinary task digests.
+                // `preparation_and_spawn_have_disjoint_bindings_for_crafted_utf8_tasks`.
+                digest.update([0xff]);
+                digest.update(b"nessa.child.preparation\0");
+                digest.update((session.as_str().len() as u64).to_be_bytes());
+                digest.update(session.as_str().as_bytes());
+                digest.update(self.task.as_bytes());
+                TaskDigest::new(HEXLOWER.encode(&digest.finalize()))
+            }
+        }
+    }
 }
 
 /// Child identity and how far its spawn chart has moved.
@@ -261,6 +294,72 @@ impl OwnershipCoordinator {
         })
     }
 
+    /// Read the active ownership lifetime for a session, including child sessions.
+    /// Private admissions and Closed history are excluded. This read grants no
+    /// attachment or submission authority; use [`Self::participation`] for a gate.
+    pub fn active_lifetime_for_session(&self, session: &SessionId) -> Option<AgentLifetimeId> {
+        self.inner.with_graph(|graph| {
+            graph.snapshot().lifetimes.into_iter().find_map(|row| {
+                (row.session_id == *session
+                    && row.state != LifetimeState::Closed
+                    && self
+                        .inner
+                        .publication
+                        .lock()
+                        .expect("ownership publication")
+                        .lifetime_eligible(graph, &row.lifetime_id))
+                .then_some(row.lifetime_id)
+            })
+        })
+    }
+
+    /// Read a retained child session identity, including closed history.
+    /// This grants no admission authority. Hosts can distinguish an ordinary
+    /// root opening from a session whose existing child ancestry is sealed.
+    /// A closed reservation with validated absence never acquired that session.
+    pub fn child_lifetime_for_session(&self, session: &SessionId) -> Option<AgentLifetimeId> {
+        self.inner.with_graph(|graph| {
+            graph
+                .snapshot()
+                .spawns
+                .into_iter()
+                .find(|row| {
+                    row.child_session == *session
+                        && !(graph.lifetime_state(&row.child_lifetime)
+                            == Some(LifetimeState::Closed)
+                            && graph.has_absence(&row.child_lifetime))
+                })
+                .map(|row| row.child_lifetime)
+        })
+    }
+
+    /// Read the original spawn binding for a child lifetime, including retained
+    /// history. Roots return `None`. This immutable correlation grants no
+    /// preparation, attachment, cancellation or resource-cleanup authority.
+    pub fn spawn_binding_for_lifetime(&self, lifetime: &AgentLifetimeId) -> Option<SpawnBinding> {
+        self.inner.with_graph(|graph| {
+            graph
+                .snapshot()
+                .spawns
+                .into_iter()
+                .find(|row| &row.child_lifetime == lifetime)
+                .map(|row| row.binding)
+        })
+    }
+
+    /// Whether this coordinator retains a cleanup adapter for the lifetime.
+    /// This observes an existing transfer; it grants no attachment or cleanup
+    /// authority and does not imply physical release.
+    pub fn has_bound_resources(&self, lifetime: &AgentLifetimeId) -> bool {
+        self.inner.with_graph(|_| {
+            self.inner
+                .resources
+                .lock()
+                .expect("child resources")
+                .contains_key(lifetime)
+        })
+    }
+
     /// Reserve, prepare, and admit one child. Identical retries do not call the factory again.
     /// A caller that arrives while the attempt is running joins it. Dropping one waiter
     /// leaves the attempt running.
@@ -272,6 +371,48 @@ impl OwnershipCoordinator {
     /// Stage-specific failure, capacity, and sealing semantics and their named
     /// enforcers are defined by the [ADR329 ordering table](https://github.com/nessalabs/nessa-agent/blob/main/docs/adr/todo/329-subagents.md#sdk-audit-eligibility-and-owned-root-delivery-628).
     pub async fn spawn(&self, command: SpawnCommand) -> Result<SpawnReceipt, OwnershipFailure> {
+        self.start_child(ChildCommand {
+            command,
+            session: None,
+        })
+        .await
+    }
+
+    /// Prepare an owned child on the supplied session without submitting a turn.
+    ///
+    /// `command.task` is retained as a configuration/task-description fingerprint
+    /// and passed to the factory; it is not sent to `InitialSubmit`. The session,
+    /// preparation operation and description are part of retry identity. A Ready
+    /// receipt records acknowledged preparation, not a fabricated task receipt.
+    /// Caller cancellation leaves the admitted preparation supervised. Lifetime
+    /// close still drains this child. The host owns later ordinary submissions.
+    ///
+    /// ```no_run
+    /// # use nessa_sdk::application::agent_execution::subagents::{OwnershipCoordinator, OwnershipFailure, SpawnCommand};
+    /// # use nessa_sdk::domain::agent_execution::sessions::SessionId;
+    /// # async fn prepare(coordinator: OwnershipCoordinator, command: SpawnCommand, session: SessionId) -> Result<(), OwnershipFailure> {
+    /// let prepared = coordinator.prepare_child(command, session).await?;
+    /// let child_session = prepared.session; // Use ordinary Agent APIs for later work.
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Errors
+    /// Returns the same admission, audit, store, capacity and preparation failures
+    /// as [`Self::spawn`]. A retry changing session or operation conflicts.
+    pub async fn prepare_child(
+        &self,
+        command: SpawnCommand,
+        session: SessionId,
+    ) -> Result<SpawnReceipt, OwnershipFailure> {
+        self.start_child(ChildCommand {
+            command,
+            session: Some(session),
+        })
+        .await
+    }
+
+    async fn start_child(&self, command: ChildCommand) -> Result<SpawnReceipt, OwnershipFailure> {
         if command.task.trim().is_empty() {
             return Err(OwnershipFailure::EmptyTask);
         }
@@ -443,6 +584,14 @@ impl OwnershipCoordinator {
 
     /// Reload the store. Reserved, prepared, and attached spawns become unconfirmed
     /// and are not sent to the factory. A closing root resumes its drain.
+    ///
+    /// Call during quiescent startup, before admitting work or binding restored resources.
+    /// Retained children reserve live room until validated physical release; roots do not.
+    /// Repeating a quiescent reload does not reserve the same child twice. Insufficient
+    /// room returns `NoRoom` after acknowledged rollback, without installing the snapshot.
+    /// A room-adapter panic returns `Startup(Uncertain)`; an unacknowledged reservation
+    /// or release is never compensated by inventing an extra release.
+    /// Refused history is installed sealed and cannot release existing reservations.
     pub async fn resume(&self) -> Result<(), OwnershipFailure> {
         Arc::clone(&self.inner).resume_from_store().await
     }
@@ -624,7 +773,7 @@ impl Shared {
         })
     }
 
-    fn lookup(&self, command: &SpawnCommand) -> Option<Result<SpawnReceipt, OwnershipFailure>> {
+    fn lookup(&self, command: &ChildCommand) -> Option<Result<SpawnReceipt, OwnershipFailure>> {
         self.with_graph(|graph| {
             let progress = graph.spawn_progress(&command.request_id).cloned()?;
             let Some(child) = graph.child_lifetime(&command.request_id).cloned() else {
@@ -636,7 +785,8 @@ impl Shared {
             let Some(session) = graph.session_id(&child).cloned() else {
                 return Some(Err(OwnershipFailure::Domain(OwnershipError::UnknownSpawn)));
             };
-            let digest_ok = task_digest(&command.task)
+            let digest_ok = command
+                .digest()
                 .map(|digest| digest_matches(graph, &command.request_id, &digest))
                 .unwrap_or(false);
             if stored_parent(graph, &command.request_id).as_ref() != Some(&command.parent)
@@ -694,7 +844,7 @@ impl Shared {
 
     async fn drive_spawn(
         self: &Arc<Self>,
-        command: SpawnCommand,
+        command: ChildCommand,
     ) -> Result<SpawnReceipt, OwnershipFailure> {
         if let Some(found) = self.lookup(&command) {
             return found;
@@ -781,7 +931,7 @@ impl Shared {
     fn admit_new(
         &self,
         graph: &mut OwnershipGraph,
-        command: &SpawnCommand,
+        command: &ChildCommand,
         _weak: Weak<Shared>,
     ) -> Result<Admitted, OwnershipFailure> {
         if graph.spawn_progress(&command.request_id).is_some() {
@@ -816,8 +966,8 @@ impl Shared {
             return Err(OwnershipFailure::Domain(OwnershipError::NoRoom));
         }
         let child = mint_lifetime();
-        let session = mint_session();
-        let digest = task_digest(&command.task).map_err(OwnershipFailure::Domain)?;
+        let session = command.session.clone().unwrap_or_else(mint_session);
+        let digest = command.digest().map_err(OwnershipFailure::Domain)?;
         let binding = SpawnBinding {
             parent_lifetime: command.parent.clone(),
             parent_session,
@@ -865,7 +1015,7 @@ impl Shared {
 
     async fn preparing_factory(
         self: &Arc<Self>,
-        command: &SpawnCommand,
+        command: &ChildCommand,
         admitted: Admitted,
     ) -> Result<SpawnReceipt, OwnershipFailure> {
         let owned_lifetime = self.with_graph(|_| {
@@ -1054,6 +1204,24 @@ impl Shared {
             .await?;
         self.advance(&command.request_id, SpawnProgress::Attached)
             .await?;
+        if command.session.is_some() {
+            self.advance(&command.request_id, SpawnProgress::Ready)
+                .await?;
+            // Ready publication can await audit/storage while the parent closes.
+            // Reuse the graph's admission decision after that publication.
+            match self
+                .with_graph(|graph| graph.dispatch_after_prepare(&command.request_id))
+                .map_err(OwnershipFailure::Domain)?
+            {
+                Dispatch::Allowed => return self.receipt(&command.request_id),
+                Dispatch::Drain => {
+                    return Err(OwnershipFailure::Domain(OwnershipError::ParentClosing))
+                }
+                Dispatch::ChildUnavailable => {
+                    return Err(OwnershipFailure::Domain(OwnershipError::ChildUnavailable))
+                }
+            }
+        }
         let submitted = effect(
             "initial_submission",
             || prepared.submit.submit(&command.task, &command.request_id),
@@ -1999,9 +2167,51 @@ impl Shared {
             })
             .map(|row| row.child_lifetime.clone())
             .collect();
+        let retained: HashSet<_> = restored_snapshot
+            .spawns
+            .iter()
+            .filter(|row| {
+                // Match the existing resource-transfer and slot-release authorities.
+                // Audit delivery alone never proves physical release.
+                !restored_snapshot.settlements.iter().any(|settlement| {
+                    settlement.target == row.child_lifetime
+                        && settlement.physical == PhysicalFact::Released
+                }) && !(restored.lifetime_state(&row.child_lifetime) == Some(LifetimeState::Open)
+                    && matches!(
+                        row.progress,
+                        SpawnProgress::Ended {
+                            known: KnownMilestone::Reserved
+                        }
+                    ))
+            })
+            .map(|row| row.child_lifetime.clone())
+            .collect();
         let rows = restored_snapshot.lifetimes;
         let weak = Arc::downgrade(self);
         self.with_graph(|graph| {
+            let mut held = self.held.lock().expect("live slots");
+            let mut release_uncertain = false;
+            if !refused {
+                for (acquired, _) in retained.difference(&held).enumerate() {
+                    let reservation = synchronous(|| self.room.try_reserve());
+                    if reservation != Some(true) {
+                        // A panicked call has an unknown outcome. Release only the
+                        // reservations whose successful acquisition was observed.
+                        for _ in 0..acquired {
+                            release_uncertain |= synchronous(|| self.room.release()).is_none();
+                        }
+                        return Err(if reservation == Some(false) && !release_uncertain {
+                            OwnershipFailure::Domain(OwnershipError::NoRoom)
+                        } else {
+                            OwnershipFailure::Startup(PortFailure::Uncertain)
+                        });
+                    }
+                }
+                for _ in held.difference(&retained) {
+                    release_uncertain |= synchronous(|| self.room.release()).is_none();
+                }
+                *held = retained;
+            }
             *graph = restored;
             *self.publication.lock().expect("ownership publication") = publication;
             // A restored identity cannot prove never-bound absence.
@@ -2018,7 +2228,12 @@ impl Shared {
                         || nonrunnable_children.contains(&row.lifetime_id),
                 );
             }
-        });
+            if release_uncertain {
+                Err(OwnershipFailure::Startup(PortFailure::Uncertain))
+            } else {
+                Ok(())
+            }
+        })?;
         if refused {
             return Ok(());
         }
@@ -2359,6 +2574,15 @@ mod process_cleanup {
 
     #[tokio::test]
     async fn parent_close_kills_the_child_process_group() {
+        physical_child_cleanup(false).await;
+    }
+
+    #[tokio::test]
+    async fn parent_close_kills_the_prepared_child_process_group() {
+        physical_child_cleanup(true).await;
+    }
+
+    async fn physical_child_cleanup(prepare_only: bool) {
         let factory = Arc::new(ProcessFactory {
             child: Mutex::new(None),
         });
@@ -2375,20 +2599,25 @@ mod process_cleanup {
         coordinator
             .bind_resources(root.clone(), Arc::new(ReleasedRoot))
             .unwrap();
-        coordinator
-            .spawn(SpawnCommand {
-                parent: root.clone(),
-                request_id: SpawnRequestId::new("proc-req").unwrap(),
-                task: "sleep".to_owned(),
-                policy: PolicyRead::Committed(
-                    ApprovalPolicy::new("read-only", "ask", "rev-1").unwrap(),
-                ),
-                child_supports_policy: true,
-                model: None,
-                origin: SpawnOrigin::Host(HostActor::new("person", "desktop", "spawn").unwrap()),
-            })
-            .await
-            .unwrap();
+        let command = SpawnCommand {
+            parent: root.clone(),
+            request_id: SpawnRequestId::new("proc-req").unwrap(),
+            task: "sleep".to_owned(),
+            policy: PolicyRead::Committed(
+                ApprovalPolicy::new("read-only", "ask", "rev-1").unwrap(),
+            ),
+            child_supports_policy: true,
+            model: None,
+            origin: SpawnOrigin::Host(HostActor::new("person", "desktop", "spawn").unwrap()),
+        };
+        if prepare_only {
+            coordinator
+                .prepare_child(command, SessionId::new("prepared-process").unwrap())
+                .await
+                .unwrap();
+        } else {
+            coordinator.spawn(command).await.unwrap();
+        }
         let process = factory.child.lock().expect("process").clone().unwrap();
         assert_eq!(unsafe { libc::kill(process.pid, 0) }, 0);
         coordinator

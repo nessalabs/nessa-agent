@@ -1,5 +1,191 @@
 # 329. Subagents use ordinary Agents with parent ownership
 
+## Parent turn Stop implementation — 17 October 2026
+
+The confirmed contract is recursive child Stop by default, with an explicit user
+settings override. Stop targets exact executions; it does not end an ownership
+lifetime, inherit approvals, delete conversations or turn cancellation into owed
+work. Issue [#329](https://github.com/nessalabs/nessa-agent/issues/329), tracking
+[#325](https://github.com/nessalabs/nessa-agent/issues/325), and extension seam
+[#337](https://github.com/nessalabs/nessa-agent/issues/337) own those decisions.
+
+The gateway now composes the existing SDK ownership coordinator and SQLite graph.
+`create_thread` prepares an ordinary empty child through that coordinator without
+a placeholder model turn. Report watches and sends do not create ownership edges.
+Ordinary creation keeps Ask approval and the existing Cedar checks still decide
+source and each target access.
+
+### Settings
+
+The existing namespace `config.json` accepts one optional strict block:
+
+```json
+{ "subagents": { "stopChildrenOnParentStop": false } }
+```
+
+Omitted block/field means true. False stops the exact parent only. Null, wrong
+types and unknown keys are refused at startup. This uses the existing settings
+owner; there is no YAML parser, dynamic reload or permission override.
+
+### Admission, persistence and cancellation
+
+Gateway `owned_threads.rs` and `parent_stop.rs` serialize owned creation, agent
+send, report submission and Stop selection at one application admission boundary.
+The SDK graph remains the only ownership authority. Stop traverses descendants,
+including idle intermediates, and captures each unsettled execution identity.
+The SDK's atomic `unsettled_execution_ids` read includes dispatch handoff work.
+No lifetime seal or new scheduler is involved. Later explicit person input can
+run on the same open lifetime.
+
+Child preparation uses the existing creation coordinator with a distinct
+fingerprint derived from the ownership graph's retained preparation digest.
+Ordinary creation still reopens existing conversations; child initialization
+requires a new target under the same creation mutex and repository outcome.
+An ordinary Ready receipt cannot stand in for child preparation. Cleanup binding
+requires the matching original child receipt and metadata origin, including after
+restart. A closed reservation with validated absence never acquired the session
+and does not prevent that unrelated conversation from opening later.
+
+Existing mutation receipts persist each exact child Stop before the root complete
+selection marker. The marker fingerprints that immutable selection. Retry and
+startup recovery use those original targets even after settings change; an
+incomplete publication refuses recapture. Each target is checked independently,
+remaining targets are attempted after failures, and aggregate lookup does not
+claim completion while a child receipt remains unresolved. Supervised admission
+survives caller disconnect. A lost acknowledgement remains uncertain until the
+original receipt/history confirms the effect. Physical release and audit facts
+remain separate.
+
+### Reports and suspension
+
+After merged #982 released the report paths, report delivery was integrated with
+the same admission boundary. The existing durable waiting row remains through
+parent settlement. Stop first withdraws already queued report work belonging to
+that report, without cancelling unrelated user submissions, then cancels parent
+and descendants. Child cancellation cannot immediately enqueue a parent model
+turn. A later person Submit admitted after the Stop marker releases delivery;
+agent messages and earlier queued person submissions do not. Transcript identity
+and the existing waiting row reconcile delivery/restart; there is no new ledger.
+
+SDK continuation reads follow the exact saved original-to-successor relationship
+for legitimate suspended work. A person's Stop stays final and is declined rather
+than resumed if recovered as owed work. The coordinator's existing lifetime
+cleanup still owns physical process teardown; ordinary Stop does not permanently
+close those resources.
+
+Lock order is application admission, then the per-conversation mode lock.
+Automatic resume holds that same order through successor admission, so an owed
+turn cannot gain a successor between Stop capture and its exact cancellation.
+
+An unreadable descendant history refuses selection before any effect; it is not
+a claimed partial success. Known targets whose access or provider effect fails
+remain independent attempts after admission. An unknown-target durable partial
+selection would require a further command-owner representation and is outside
+this draft's completion claim.
+
+Owed-work decline is an ordinary StopTarget effect, after the existing mutation
+owner has durably recorded Accepted and Attempted. Selection reads it as work;
+its exact root actor is retained. Automatic resumption waits for the admitted command owner instead of declining
+work itself or admitting a successor.
+
+Cold cleanup observes the existing environment/lease owner's exact confirmation.
+It does not claim to end or rewrite that owner's lower lease history. `NotHeld`
+remains unknown for physical release, because an earlier process may outlive an
+environment connection.
+
+The runtime draft has focused tests for default/override, descendants, stale ids,
+caller loss, spawn fencing, queued reports, unrelated work, authorization,
+partial target failures, lost acknowledgements and restart with changed settings.
+Browser acceptance, exact-head review and current-main CI remain release gates;
+a draft implementation is not evidence that those gates passed.
+
+### Review orderings added during runtime validation
+
+| Ordering | Owner and decision | Regression |
+| --- | --- | --- |
+| A failed original already has a canonical successor, then later person work arrives | SDK continuation follows the admitted successor; later work only suppresses a new retry | `a_saved_failed_turn_successor_is_still_followed_after_later_person_work` |
+| Automatic resume races Stop capture | Both hold application admission before mode changes through successor admission | Parent Stop recovery plus existing resume conformance |
+| Report polling races ordinary person submit | Person command retains the same supervised admission scope as report delivery | `queued_child_report_is_retained_across_stop_restart_and_only_person_work_releases_it` and actual browser continuation |
+| Owned child is successfully deleted before parent Stop | Durable erasure proves its attachment was stopped; existing ownership drain ends that lifetime and returns capacity. Selection still traverses graph descendants before ignoring erased work | `deleting_an_owned_child_releases_ownership_and_does_not_block_parent_stop` |
+| Descendant access is refused before capture | Existing Cedar admission runs before committed invocation history is read; the selection refuses before effects | Existing authorization fixtures and exact-head access-path review |
+| Deleted ancestor has cold descendants after restart | Reuse saved lease cleanup or exact environment accounting; Confirmed can settle ownership, NotHeld/unavailable stay unconfirmed | `deleting_a_cold_owned_tree_reconciles_confirmed_leases_and_cannot_reparent_children` |
+| A closed historical child is opened again | SDK publishes retained child identity; gateway refuses converting it into a fresh root | Same cold-tree regression |
+| Runner failure leaves a queued report target owed | Report waits for exact continuation or explicit host Stop/decline instead of publishing premature cancellation | `a_thread_turn_reports_its_outcome_and_reply_back_to_the_sender` |
+| Partial Stop lookup returns a child's unresolved receipt | Root access is checked before any aggregate receipt evidence is returned | Parent Stop partial-settlement regression with a foreign caller |
+| An injected report's host suspends and resumes | Follow the host through the SDK's exact continuation before publishing the injected report outcome | `an_injected_report_waits_for_its_suspended_hosts_exact_successor` |
+| Stop targets owed parent work and Attempted persistence fails | The mutation owner retains the owed turn until its effect is durably admitted; independent child targets still run | `stopping_owed_parent_work_cascades_only_after_command_attempt_is_durable` |
+| A newer opening has a hold but no published lease | Retained pending/error slots stay unresolved; the cold path only observes a session with no current slot. Opening checks the existing lifetime seal before environment effects | `an_opening_owner_prevents_historical_cleanup_from_closing_its_lifetime` |
+| One principal has admitted Stop selections in multiple organizations | Principal identity selects its control stream; each binding's target metadata supplies its organization to existing Cedar authorization | `accepted_parent_stops_recover_each_targets_organization_for_one_principal` |
+| An exact creation retry follows child lifetime closure | SDK preparation progress and current lifetime state jointly authorize a Ready creation response; cached Ready does not reopen a sealed child | `owned_creation_retry_cannot_report_a_sealed_child_as_ready` |
+| A queued report's Stop fails before its effect or confirmation | Same-parent report withdrawal is a root cancellation prerequisite. Leave the root Accepted for retry on failure; continue independent descendant attempts | `failed_queued_report_withdrawal_keeps_root_active_and_retries_before_root_stop` |
+| Captured descendant queued work dispatches during active cancellation | Withdraw a still-queued identity or cancel that same identity after dispatch; preserve Open lifetimes and later explicit work. The override preserves descendant active and queued inputs | `parent_stop_cancels_owned_active_and_queued_turns_and_keeps_threads_reusable` |
+| Child preparation names an existing ordinary conversation, including one created concurrently | The existing creation owner refuses adoption before reopening or binding cleanup. Exact saved Ready retries remain valid; Attempted is not re-executed. Parent Stop/deletion cannot affect the unrelated target | `owned_preparation_cannot_adopt_an_existing_unowned_conversation` and creation-owner collision regression |
+| Restart reads an original Attempted child creation | Keep that lifetime unconfirmed without binding cleanup or replaying initialization; continue starting the gateway and unrelated work | `startup_retains_attempted_child_creation_without_binding_or_replaying_it` |
+| Child creation audit fails after metadata but before a slot is acquired | Transfer no cleanup owner; definite absence releases the reservation and capacity. Slot acquisition follows audit/admission checks | `child_creation_audit_failure_cannot_strand_unacquired_cleanup` |
+
+
+
+### Empty-child preparation integration seam
+
+The coordinator gains `prepare_child(command, session)`: it uses the existing
+reservation, factory, publication, capacity and cleanup authorities, acknowledges
+`Ready`, and does not call `InitialSubmit` or invent a task receipt. The ordinary
+`SpawnCommand.task` supplies the retained description/configuration fingerprint
+for this operation. Preparation identity includes the fixed session and operation
+kind; using the same request for spawn or another session conflicts. `Ready`
+restores as acknowledged preparation; interrupted Reserved/Prepared/Attached
+progress retains its existing unconfirmed recovery. This primitive selects no
+gateway Stop or approval policy.
+
+| Ordering | Decision | Regression |
+| --- | --- | --- |
+| Prepared-only child reaches Attached | Publish Ready; no initial turn | `preparation_attaches_the_named_child_without_submitting_a_turn` |
+| Exact prepare retry or operation/session changes | Return original child, or typed conflict | Same regression |
+| Caller leaves during factory preparation | Original supervisor owns completion | `preparation_survives_its_callers_disconnect_without_dispatching` |
+| Parent lifetime closes after preparation | Existing lifetime drain retains child cleanup | `preparation_remains_owned_during_parent_close` |
+| Another request names an active session | Refuse before factory handoff | `preparation_refuses_reusing_an_active_session_before_the_factory` |
+| Restart after acknowledged Ready | Recover relationship/gate without dispatch | `preparation_readiness_round_trips_through_the_real_sqlite_owner` |
+| Ordinary task bytes imitate the preparation description encoding | Operation preimages remain disjoint through an invalid-UTF-8 preparation tag; preserve existing ordinary task digests | `preparation_and_spawn_have_disjoint_bindings_for_crafted_utf8_tasks` |
+| Ready audit rejects/is uncertain, or Ready write rejects/is uncertain | No initial turn; retain sealed cleanup ownership and original failure | `failed_ready_audit_or_store_keeps_cleanup_and_never_submits` |
+| Parent closes while Ready audit waits | Recheck the graph after publication; no runnable preparation returned | `parent_close_during_ready_publication_keeps_the_child_nonrunnable` |
+| Parent lifetime closes a prepared process | Existing process-group cleanup kills and reaps it | `parent_close_kills_the_prepared_child_process_group` |
+
+### Ordering and regression acceptance
+
+Each row requires actual public-primitives evidence before runtime acceptance;
+portable provider fixtures and document checks cannot establish these guarantees.
+
+| Case | Required decision/effect | Owning regression boundary |
+| --- | --- | --- |
+| Missing settings/block/field; explicit true | Capture recursive default | Runtime parser and gateway Stop |
+| Explicit false | Stop exact parent; children and grandchildren continue | Runtime parser and gateway Stop |
+| Null, wrong type, misspelled field | Refuse configuration, no silent default | Runtime parser |
+| Owned child and grandchild; idle intermediate | Capture and cancel running/queued descendants | Gateway + real coordinator |
+| Unrelated thread or report/send-only target | Exclude from cascade | Ownership + thread tools |
+| Already final/stale parent id | No new cascade; never substitute current execution | Stop command receipts |
+| Child finishes during capture | Retain final outcome; no successor cancellation | Stop + execution history |
+| Spawn reserves before Stop | Reconcile returned child before stop completion | Coordinator/factory barriers |
+| Stop fences before spawn reservation | Refuse spawn from stopped execution before dispatch | Coordinator admission |
+| Factory/initial submit acknowledgement lost | Retain original child and uncertainty; no duplicate dispatch | Ownership recovery + creation receipts |
+| Queued child starts while Stop captures it | Cancel that same id or withdraw before dispatch | Scheduling + exact Stop |
+| Caller disconnects after admission | Supervised operation continues; retry reads same selection | Command admission barriers |
+| Target acknowledgement lost; identical retry | Reconcile exact receipts, preserve actor and cause | Mutation persistence |
+| Restart with unfinished cascade | Resume captured obligations; do not recapture newer work | Actual SQLite restart |
+| Settings changed before retry/restart | Use admitted setting and selection | Actual configuration + restart |
+| One child fails or refuses authorization | Other admitted targets attempted; partial outcome visible | Cedar + Stop supervisor |
+| Parent/child access revoked during admission | Existing access checks remain authoritative | Current Cedar integration |
+| Child settles before/after parent cancellation | Durable report retained; no report-driven parent restart | Report owner + Stop barriers |
+| Report queued before Stop, or delivery waits on submission admission | Identify and withdraw/suppress only correlated report work; no stopped-parent wake and no unrelated user-turn cancellation | Report owner + submission/Stop barriers |
+| Report delivery loses acknowledgement then restarts | One retained/delivered report; no stopped-parent wake | Report owner persistence |
+| Legitimate suspension has a resumed successor | Report follows saved successor; Stop cancellation stays final | Resumption + reports |
+| Later explicit user turn | Same conversation can run; old Stop cannot target it | Public submit/Stop APIs |
+| Cleanup pending/fails; audit unavailable | Preserve separate physical/audit evidence, retain recovery ownership | Real provider and audit adapters |
+
+Runtime completion also requires supported Rust/Clippy/doc checks, current-main CI,
+exact-head independent review, and the scripted Chromium/WebKit gateway run.
+No live settings, security policy, credential or provider approval changes are
+needed to develop or verify this integration.
+
 ## Purpose
 
 A conversation can delegate work to other agents. Each child uses the ordinary SDK
@@ -946,6 +1132,15 @@ not remove the resource owner's ability to perform required cleanup.
 Each child consumes existing global live-conversation capacity. Count creating,
 starting and physically unconfirmed closing children. Reject a spawn with no
 room instead of waiting while the parent occupies the slots its children need.
+Restart restores those child reservations through the coordinator's existing
+live-room owner before admitting new children. Repeated recovery does not charge
+the same lifetime twice. Validated physical release or absence frees its slot
+even while audit debt remains; uncertain cleanup retains it. If the configured
+room cannot accommodate the retained children, recovery refuses admission and
+attempts to return only reservations whose acquisition was acknowledged in that
+attempt. Unacknowledged capacity effects remain uncertain; an extra release must
+not be invented to compensate them. Refused history cannot authorize a capacity
+release.
 Reserve before startup; two racing spawns cannot spend the same remaining slot.
 
 Publish finite direct-child and depth limits, retained request limits and child

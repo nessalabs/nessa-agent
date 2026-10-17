@@ -403,7 +403,7 @@ async fn agent_tools_relay_create_send_replay_and_refuse_a_foreign_target() {
     let provider = Arc::new(ProviderFactory::default());
     provider.turn_cancel.store(true, Ordering::SeqCst);
     let (service, storage, metadata) = fixture(&root, provider.clone());
-    service.bind_commands(storage.clone());
+    super::parent_stop::bind(&service, &storage, &root, true).await;
     let audit = Arc::new(Audit::default());
     service.bind_agent_tool_audit(audit.clone());
     let source = id();
@@ -969,7 +969,7 @@ async fn a_thread_turn_reports_its_outcome_and_reply_back_to_the_sender() {
     let provider = Arc::new(ProviderFactory::default());
     provider.turn_cancel.store(true, Ordering::SeqCst);
     let (service, storage, metadata) = fixture(&root, provider.clone());
-    service.bind_commands(storage.clone());
+    super::parent_stop::bind(&service, &storage, &root, true).await;
     service.bind_agent_tool_audit(Arc::new(Audit::default()));
     let source = id();
     opened(&service, &provider, &source).await;
@@ -1123,8 +1123,8 @@ async fn a_thread_turn_reports_its_outcome_and_reply_back_to_the_sender() {
     .expect("the queued turn ran");
     assert_eq!(reports_in(&service, &source, 2).await.len(), 2);
 
-    // A queued turn the thread drops because the turn ahead of it failed
-    // reports as cancelled, though no invocation follows the drop.
+    // Runner failure leaves queued work owed. Its report must wait for the
+    // host's exact Stop decision instead of reporting a premature cancellation.
     *provider.execution_reply.lock().unwrap() = Some(providers::ProviderExecutionReply::Finished(
         providers::ExecutionReport::new(
             Some(Err(AgentError::Unsupported("worker failed".into()))),
@@ -1150,6 +1150,68 @@ async fn a_thread_turn_reports_its_outcome_and_reply_back_to_the_sender() {
         .unwrap()
         .to_owned();
     drop(release_failing);
+    let live_worker = service
+        .resolve(&worker_id, &caller("inspect-owed"))
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !live_worker
+            .agent
+            .owed_turns()
+            .await
+            .iter()
+            .any(|turn| turn.execution_id().as_str() == dropped)
+        {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the runner-dropped request remains owed");
+    let report_source = service
+        .resolve(&source, &caller("inspect-pending-report"))
+        .await
+        .unwrap();
+    let pending_history = report_source
+        .agent
+        .session_manager()
+        .snapshot()
+        .await
+        .unwrap();
+    assert_eq!(
+        pending_history
+            .invocations
+            .iter()
+            .filter(|record| record
+                .request
+                .user_message
+                .text_str()
+                .starts_with("[Thread report]"))
+            .count(),
+        2
+    );
+    assert_eq!(
+        service.inner.thread_reports.waiting(),
+        1,
+        "the owed request has not been reported as cancelled"
+    );
+    let declined = client
+        .call(
+            "stop_thread",
+            json!({
+                "threadId":worker,"executionId":dropped,"requestId":"report-decline-owed"
+            }),
+        )
+        .await;
+    assert_eq!(declined["isError"], false, "{declined}");
+    assert!(
+        !live_worker
+            .agent
+            .owed_turns()
+            .await
+            .iter()
+            .any(|turn| turn.execution_id().as_str() == dropped),
+        "{declined}"
+    );
     let reports = reports_in(&service, &source, 3).await;
     assert_eq!(reports.len(), 3, "{reports:?}");
     assert!(reports[2].contains(&dropped), "{}", reports[2]);

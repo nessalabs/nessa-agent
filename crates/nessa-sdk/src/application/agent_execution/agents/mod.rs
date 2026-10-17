@@ -58,7 +58,7 @@ pub use error::{
 };
 pub use initialization::AgentInitializationError;
 pub use lifetime::{lifetime_disposition, LifetimeDisposition, OwnedLifetime};
-pub use resumption::{OwedTurn, Resumed};
+pub use resumption::{turn_continuation, OwedTurn, Resumed, TurnContinuation};
 pub use scheduling::{
     AdmissionEvidence, AdmissionEvidenceFailure, QueueAdmission, QueueRemoval, QueueReorder,
     SteeringDelivery, SteeringEvidence,

@@ -2405,3 +2405,14 @@ admission evidence and its audit port; `infrastructure/agent_tool_audit.rs`
 persists it. The built-in collection in relay composition keeps these tools
 independent of optional environment commands. See the [ordering and ownership
 contract](design/agent-thread-tools.md).
+
+Gateway parent/child Stop orchestration lives in
+`conversation/application/service/owned_threads.rs` (ordinary empty-child
+preparation), `parent_stop.rs` (durable exact target selection and supervision),
+and `thread_report_admission.rs` (person admission and report delivery fences).
+They reuse the SDK ownership graph and existing command receipts.
+`conversation/infrastructure/ownership_audit.rs` persists coordinator transition
+evidence through the ordinary durable audit owner. Namespace
+`composition/runtime_config.rs` owns `subagents.stopChildrenOnParentStop`.
+The real coordinator/SQLite regressions live in `tests/conversation/parent_stop.rs`;
+`verification/desktop/scripts/parent-stop.mjs` exercises the ordinary Stop button.

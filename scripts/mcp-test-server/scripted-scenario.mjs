@@ -50,7 +50,7 @@ const BRANCH_KINDS = ["text", "tool", "fail", "end"]
 const FIELDS = {
   text: ["do", "chunks"],
   permission: ["do", "tool", "arguments", "title", "on"],
-  tool: ["do", "tool", "arguments"],
+  tool: ["do", "tool", "arguments", "server"],
   fail: ["do", "message"],
   "wait-cancel": ["do"],
   end: ["do"],
@@ -121,7 +121,7 @@ function parseStep(step, branch) {
   const unknown = Object.keys(step).filter((key) => !allowed.includes(key))
   if (unknown.length > 0) throw new Error(`unknown ${step.do} field ${unknown[0]}`)
   for (const key of allowed)
-    if (key !== "do" && !Object.hasOwn(step, key))
+    if (key !== "do" && key !== "server" && !Object.hasOwn(step, key))
       throw new Error(`a ${step.do} step needs ${key}`)
   switch (step.do) {
     case "text":
@@ -135,6 +135,7 @@ function parseStep(step, branch) {
     case "tool":
       return {
         do: "tool",
+        ...(step.server === undefined ? {} : { server: toolName(step.server) }),
         tool: toolName(step.tool),
         arguments: argumentsOf(step.arguments),
       }
@@ -272,11 +273,14 @@ export function branchFor(result, cancelled, on) {
  * Claude's harness names the tool `mcp__<server>__<tool>`; Codex marks an
  * MCP call and puts the server and the tool in `rawInput`.
  */
-export function permissionCall(agent, { id, tool, title, arguments: args }) {
-  const rawInput = agent === "codex" ? { server: SERVER, tool, arguments: args } : args
+export function permissionCall(
+  agent,
+  { id, tool, title, arguments: args, server = SERVER },
+) {
+  const rawInput = agent === "codex" ? { server, tool, arguments: args } : args
   const meta =
     agent === "claude"
-      ? { claudeCode: { toolName: `mcp__${SERVER}__${tool}` } }
+      ? { claudeCode: { toolName: `mcp__${server}__${tool}` } }
       : { is_mcp_tool_call: true }
   const toolCall = {
     toolCallId: id,
@@ -378,6 +382,7 @@ async function callTool(step, ctx, existing) {
       tool: step.tool,
       title: step.tool,
       arguments: step.arguments,
+      server: step.server,
     })
     ctx.update(announced.update)
   }
@@ -385,6 +390,7 @@ async function callTool(step, ctx, existing) {
   try {
     result = await ctx.callTool(
       mcpArguments(ctx.agent, { id, tool: step.tool, arguments: step.arguments }),
+      step.server,
     )
   } catch (error) {
     if (ctx.cancelled()) return { stopReason: "cancelled" }

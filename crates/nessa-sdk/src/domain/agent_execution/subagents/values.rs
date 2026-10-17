@@ -414,6 +414,8 @@ pub enum SpawnProgress {
     Prepared,
     /// Ownership attachment acknowledged.
     Attached,
+    /// Preparation acknowledged without an initial task submission.
+    Ready,
     /// Initial task admitted once.
     TaskAdmitted {
         /// Submission receipt.
@@ -448,7 +450,7 @@ impl SpawnProgress {
         match self {
             Self::Reserved => KnownMilestone::Reserved,
             Self::Prepared => KnownMilestone::Prepared,
-            Self::Attached => KnownMilestone::Attached,
+            Self::Attached | Self::Ready => KnownMilestone::Attached,
             Self::TaskAdmitted { receipt } => KnownMilestone::TaskAdmitted {
                 receipt: receipt.clone(),
             },
@@ -517,6 +519,8 @@ pub enum OwnershipMeaning {
     Prepared,
     /// Spawn attached.
     Attached,
+    /// Preparation acknowledged, without an initial task.
+    Ready,
     /// Initial task admitted.
     TaskAdmitted,
     /// Progress uncertain.

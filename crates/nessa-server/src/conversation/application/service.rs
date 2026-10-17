@@ -1,6 +1,9 @@
 mod agent_tools;
 mod creation;
 mod mutation;
+mod owned_threads;
+mod parent_stop;
+mod thread_report_admission;
 mod thread_reports;
 use super::metadata_target::{load_conversation, validate_target};
 use super::session_key::conversation_session;
@@ -61,8 +64,8 @@ use nessa_protocol::product_contract::generated::MAX_MCP_MESSAGE_BYTES;
 use nessa_sdk::application::agent_execution::{
     agents::{
         AdmissionEvidence, AdmissionEvidenceFailure, Agent, AgentError, AttachmentFailure,
-        AttachmentFailureCode, AttachmentPhase, AttachmentRequest, QueueAdmission, QueueRemoval,
-        QueueReorder, SteeringDelivery, SteeringEvidence,
+        AttachmentFailureCode, AttachmentPhase, AttachmentRequest, OwnedLifetime, QueueAdmission,
+        QueueRemoval, QueueReorder, SteeringDelivery, SteeringEvidence,
     },
     commands::{CreationStorage, CreationTaskFault},
     executions::{
@@ -93,7 +96,7 @@ use nessa_sdk::domain::agent_execution::{
     },
     prompts::{ImageReference, LinkedFile, McpAppSource, MessageSender, PromptText, UserMessage},
     questions::{QuestionChoice, QuestionId},
-    sessions::ExecutionSessionId,
+    sessions::{ExecutionSessionId, SessionId},
 };
 use nessa_sdk::domain::common::value_objects::{ImageMediaType, Sha256Digest};
 use std::{
@@ -554,6 +557,10 @@ pub(super) enum Writer {
     /// the share grant that admitted it. The flag is whether this membership
     /// may use a remember choice. A grant turn is not offered one.
     Person(Initiation, bool),
+    /// Retain report admission through its supervised queue write.
+    ThreadReport {
+        _admission: Arc<OwnedMutexGuard<()>>,
+    },
     App {
         sender: McpAppSource,
         apps: Arc<AppReviews>,
@@ -572,7 +579,7 @@ impl Writer {
     fn initiation(&self) -> Initiation {
         match self {
             Self::Person(initiation, _) => initiation.clone(),
-            Self::App { .. } => Initiation::owner(),
+            Self::App { .. } | Self::ThreadReport { .. } => Initiation::owner(),
         }
     }
     /// Whether this message may be offered a remember choice. An app writes
@@ -582,11 +589,12 @@ impl Writer {
         match self {
             Self::Person(_, offered) => *offered,
             Self::App { .. } => true,
+            Self::ThreadReport { .. } => false,
         }
     }
     fn sender(&self) -> MessageSender {
         match self {
-            Self::Person(_, _) => MessageSender::Person,
+            Self::Person(_, _) | Self::ThreadReport { .. } => MessageSender::Person,
             Self::App { sender, .. } => MessageSender::App(sender.clone()),
         }
     }
@@ -607,7 +615,7 @@ impl Writer {
     /// admitted in ended or its mount was released. Never the person's.
     fn opening_ended(&self) -> bool {
         match self {
-            Self::Person(_, _) => false,
+            Self::Person(_, _) | Self::ThreadReport { .. } => false,
             Self::App {
                 apps, epoch, mount, ..
             } => apps.admit(*epoch, mount).is_err(),
@@ -739,6 +747,10 @@ struct Inner {
     agent_tool_admissions: Arc<SourcePermits>,
     /// Agent sends waiting to report their thread's finished turn.
     thread_reports: thread_reports::ThreadReports,
+    ownership: OnceLock<owned_threads::Ownership>,
+    thread_admission: Arc<Mutex<()>>,
+    ownership_preparations: Mutex<HashMap<SessionId, owned_threads::PendingPreparation>>,
+
     /// Decides every command's admission to a conversation.
     access_policy: Arc<dyn ConversationAccessPolicyEvaluator>,
     limits: ConversationLimits,
@@ -1221,6 +1233,9 @@ impl ConversationService {
                     super::MAX_AGENT_TOOL_ADMISSIONS,
                 )),
                 thread_reports: Default::default(),
+                ownership: OnceLock::new(),
+                thread_admission: Arc::new(Mutex::new(())),
+                ownership_preparations: Mutex::new(HashMap::new()),
                 access_policy,
                 limits,
                 conversations: Mutex::new(HashMap::new()),
@@ -1266,7 +1281,7 @@ impl ConversationService {
         supervised(async move {
             let _admission = service.admit().await?;
             service
-                .create_admitted(id, caller, requested)
+                .create_admitted(id, caller, requested, false)
                 .await
                 .map(|_| ())
         })
@@ -1279,6 +1294,7 @@ impl ConversationService {
         id: ConversationId,
         caller: ConversationCaller,
         requested: RequestedConversation,
+        new_only: bool,
     ) -> Result<Arc<LiveConversation>, ConversationError> {
         let service = self.clone();
         // Asked of every creation, not only the ones that build a
@@ -1299,7 +1315,18 @@ impl ConversationService {
             // A deleted conversation is not created again under its
             // identity, whoever asks; only its owner is told why
             // (`a_deleted_conversation_refuses_every_command_on_it`).
-            service.access().admit(&record, &caller)?;
+            service.access().admit(&record, &caller).map_err(|cause| {
+                if new_only {
+                    ConversationError::ChildCreationRefused(Box::new(cause.into()))
+                } else {
+                    ConversationError::from(cause)
+                }
+            })?;
+            if new_only {
+                return Err(ConversationError::ChildCreationRefused(Box::new(
+                    ConversationError::RequestConflict,
+                )));
+            }
             drop(creation_guard);
             // Acknowledge the original creation from its stored creator
             // evidence before attributing this reopen to its caller, and
@@ -1410,7 +1437,18 @@ impl ConversationService {
         let outcome = service.inner.metadata.create(proposed.clone()).await?;
         let record = &outcome.conversation;
         validate_target(&id, record)?;
-        service.access().admit(record, &caller)?;
+        service.access().admit(record, &caller).map_err(|cause| {
+            if new_only && outcome.disposition == super::ConversationCreationDisposition::Existing {
+                ConversationError::ChildCreationRefused(Box::new(cause.into()))
+            } else {
+                ConversationError::from(cause)
+            }
+        })?;
+        if new_only && outcome.disposition == super::ConversationCreationDisposition::Existing {
+            return Err(ConversationError::ChildCreationRefused(Box::new(
+                ConversationError::RequestConflict,
+            )));
+        }
         // Created acknowledges this exact admitted proposal. Existing alone
         // retains another creator's historical evidence. The regressions are
         // `creation_created_acknowledgement_preserves_the_admitted_origin` and
@@ -1452,6 +1490,11 @@ impl ConversationService {
                 return Err(ConversationError::Capacity);
             }
             match owners.entry(id.clone()) {
+                std::collections::hash_map::Entry::Occupied(_) if new_only => {
+                    return Err(ConversationError::ChildCreationRefused(Box::new(
+                        ConversationError::RequestConflict,
+                    )));
+                }
                 std::collections::hash_map::Entry::Occupied(entry) => entry.get().clone(),
                 std::collections::hash_map::Entry::Vacant(entry) => {
                     let slot = Arc::new(Slot {
@@ -1460,8 +1503,16 @@ impl ConversationService {
                         started: AtomicBool::new(false),
                         stopping: AtomicBool::new(false),
                     });
+                    // Audit and admission checks already passed. From this
+                    // transfer through publication/start there is no fallible
+                    // I/O and no unowned slot can supply this preparation.
+                    let owned_preparation = if new_only {
+                        service.claim_owned_preparation(&id, &actor).await?
+                    } else {
+                        None
+                    };
                     entry.insert(slot.clone());
-                    service.start_slot(id.clone(), slot.clone(), actor.clone());
+                    service.start_slot(id.clone(), slot.clone(), actor.clone(), owned_preparation);
                     slot
                 }
             }
@@ -1565,14 +1616,20 @@ impl ConversationService {
                     stopping: AtomicBool::new(false),
                 });
                 owners.insert(id.clone(), slot.clone());
-                self.start_slot(id.clone(), slot.clone(), actor);
+                self.start_slot(id.clone(), slot.clone(), actor, None);
                 slot
             }
         };
         let live = self.wait_for_slot(id, slot.clone()).await?;
         Ok((slot, live))
     }
-    fn start_slot(&self, id: ConversationId, slot: Arc<Slot>, actor: ActionContext) {
+    fn start_slot(
+        &self,
+        id: ConversationId,
+        slot: Arc<Slot>,
+        actor: ActionContext,
+        owned_preparation: Option<Arc<dyn OwnedLifetime>>,
+    ) {
         let service = self.clone();
         let owner = slot.clone();
         if !slot.started.swap(true, Ordering::SeqCst) {
@@ -1689,6 +1746,14 @@ impl ConversationService {
                                     cause,
                                     holds: false,
                                 })?;
+                            let ownership = match owned_preparation {
+                                Some(ref gate) => Some(gate.clone()),
+                                None => service.ownership_gate(&id, &actor).await
+                                    .map_err(|cause| OpeningFailure { cause, holds: false })?,
+                            };
+                            if ownership.as_ref().is_some_and(|gate| gate.is_sealed()) {
+                                return Err(OpeningFailure { cause: ConversationError::Unavailable, holds: false });
+                            }
                             let opening = open_lease(
                                 environment.as_ref(),
                                 LeaseRequest {
@@ -1713,6 +1778,9 @@ impl ConversationService {
                                     holds: error.needs_cleanup(),
                                 }
                             })?;
+                            if let Some(gate) = ownership {
+                                agent.install_owned_lifetime(gate).map_err(|error| OpeningFailure { cause: ConversationError::Agent(error), holds: true })?;
+                            }
                             // Before anything can run: every call a Drive
                             // grant's turn asks about is checked against its
                             // policy. An agent that does not ask about every
@@ -4236,7 +4304,18 @@ impl ConversationService {
                     deleting,
                 } => (*record, applied, deleting),
                 // Whoever erased it has already told the worker it is done.
-                Fence::FinishedByAnother { applied } => return Ok(applied),
+                Fence::FinishedByAnother { applied } => {
+                    if let Some(record) =
+                        load_conversation(service.inner.metadata.as_ref(), &id).await?
+                    {
+                        if let Some(deletion) = record.deletion() {
+                            service
+                                .end_deleted_ownership(&id, &deletion_actor(deletion)?)
+                                .await?;
+                        }
+                    }
+                    return Ok(applied);
+                }
                 Fence::LeftByAnother => {
                     return Err(ConversationError::DeletionIncomplete(Box::new(
                         DeletionFailures {
@@ -4595,7 +4674,9 @@ impl ConversationService {
             .cloned()
             .ok_or(ConversationError::Metadata)?;
         if deletion.erased() {
-            return Ok(());
+            return self
+                .end_deleted_ownership(&id, &deletion_actor(&deletion)?)
+                .await;
         }
         let actor = deletion_actor(&deletion)?;
         let slot = self.inner.conversations.lock().await.get(&id).cloned();
@@ -4781,7 +4862,7 @@ impl ConversationService {
                 .and_then(ConversationDeletion::after_erasure)
             {
                 Some(finished) => match self.inner.metadata.record_deletion(&id, finished).await {
-                    Ok(_) => return Ok(()),
+                    Ok(_) => return self.end_deleted_ownership(&id, &actor).await,
                     Err(error) => failures.tombstone = Some(error),
                 },
                 None => failures.tombstone = Some(ConversationError::Metadata),

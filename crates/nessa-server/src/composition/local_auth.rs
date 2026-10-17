@@ -302,6 +302,9 @@ pub(super) async fn product_state(
                     packaged_agents,
                     record_origin.clone(),
                     ConversationSettings {
+                        stop_children_on_parent_stop: settings
+                            .subagents
+                            .stop_children_on_parent_stop,
                         read_work_budget: limits.read_work_budget(),
                         ssh_hosts: settings.ssh_hosts()?,
                         command_policy: settings.command_policy()?,
@@ -574,6 +577,7 @@ type PairedParts = (
 // Read only where conversations run: Unix process supervision.
 #[cfg_attr(not(unix), allow(dead_code))]
 struct ConversationSettings {
+    stop_children_on_parent_stop: bool,
     /// How much work one passive read may do.
     read_work_budget: std::time::Duration,
     /// The SSH hosts a conversation may be created on.
@@ -914,6 +918,7 @@ async fn conversations(
     settings: ConversationSettings,
 ) -> Result<BuiltConversations, RunError> {
     let ConversationSettings {
+        stop_children_on_parent_stop,
         read_work_budget,
         ssh_hosts,
         command_policy,
@@ -1293,6 +1298,49 @@ async fn conversations(
                 )
             })?,
     ));
+    let ownership_path = root.join("ownership.sqlite3");
+    let ownership_store = Arc::new(
+        nessa_sdk::infrastructure::session_storage::SqliteOwnershipStore::open(&ownership_path)
+            .map_err(|error| RunError::Agent(format!("ownership store: {error}")))?,
+    );
+    let ownership = nessa_sdk::application::agent_execution::subagents::OwnershipCoordinator::new(
+        nessa_sdk::application::agent_execution::subagents::OwnershipDependencies {
+            store: ownership_store.clone(),
+            audit: Arc::new(
+                crate::conversation::infrastructure::DurableOwnershipAudit::new(
+                    root.join("audit").join("ownership"),
+                )
+                .map_err(|error| RunError::Agent(error.to_string()))?,
+            ),
+            factory: service.owned_thread_factory(),
+            room: Arc::new(
+                nessa_sdk::application::agent_execution::subagents::LiveCapacity::new(
+                    ConversationLimits::default().max_conversations,
+                ),
+            ),
+        },
+    );
+    ownership
+        .resume()
+        .await
+        .map_err(|error| RunError::Agent(error.to_string()))?;
+    service
+        .bind_owned_threads(ownership, stop_children_on_parent_stop)
+        .map_err(|error| RunError::Agent(error.to_string()))?;
+    let ownership_snapshot =
+        nessa_sdk::application::agent_execution::subagents::OwnershipStore::read(
+            ownership_store.as_ref(),
+        )
+        .await
+        .map_err(|error| RunError::Agent(format!("ownership read: {error:?}")))?;
+    service
+        .recover_deleted_ownership(&ownership_snapshot)
+        .await
+        .map_err(|error| RunError::Agent(format!("deleted ownership recovery: {error:?}")))?;
+    service
+        .recover_parent_stops(&ownership_snapshot)
+        .await
+        .map_err(|error| RunError::Agent(error.to_string()))?;
     conversation_tools.attach(service.clone());
     // A note's author is checked against the same grant table the socket
     // admits it by (row J23).

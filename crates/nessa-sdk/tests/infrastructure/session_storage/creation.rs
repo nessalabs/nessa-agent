@@ -520,3 +520,62 @@ async fn direct_sdk_caller_loss_retains_the_original_initializer_and_lease() {
     assert_eq!(target.calls.load(Ordering::SeqCst), 1);
     storage.shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn mutation_enumeration_is_principal_scoped_read_only_and_keeps_latest_progress() {
+    use crate::application::agent_execution::commands::{
+        MutationBinding, MutationOperation, MutationReceipt, MutationStage,
+    };
+    let directory = tempfile::tempdir().unwrap();
+    let storage = RecordStorage::new(directory.path().join("records")).unwrap();
+    let lease = storage
+        .open_creation("person".into(), true)
+        .await
+        .unwrap()
+        .unwrap();
+    lease
+        .save(CreationReceipt::accepted(binding("creation")))
+        .await
+        .unwrap();
+    let command = MutationBinding::new(
+        ActionContext::new("person", "panel", "stop").unwrap(),
+        MutationOperation::Stop,
+        SessionId::new("target").unwrap(),
+        "turn",
+        [3; 32],
+    )
+    .unwrap();
+    let accepted = MutationReceipt::accepted(command);
+    lease.save_mutation(accepted.clone()).await.unwrap();
+    let later = MutationReceipt::accepted(
+        MutationBinding::new(
+            ActionContext::new("person", "panel", "later").unwrap(),
+            MutationOperation::Stop,
+            SessionId::new("target").unwrap(),
+            "later-turn",
+            [4; 32],
+        )
+        .unwrap(),
+    );
+    lease.save_mutation(later.clone()).await.unwrap();
+    let attempted = accepted.advance(MutationStage::Attempted, None).unwrap();
+    lease.save_mutation(attempted.clone()).await.unwrap();
+    assert_eq!(
+        lease.mutations().await.unwrap(),
+        [attempted.clone(), later.clone()]
+    );
+    drop(lease);
+    let lease = storage
+        .open_creation("person".into(), false)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(lease.mutations().await.unwrap(), [attempted, later]);
+    drop(lease);
+    assert!(storage
+        .open_creation("other".into(), false)
+        .await
+        .unwrap()
+        .is_none());
+    storage.shutdown().await.unwrap();
+}

@@ -763,3 +763,59 @@ test("text-reply answers any prompt with Ready, and show the server's app calls 
   const marked = turnFor(scenario, `A123: ${TEXT_REPLY_APP_PROMPT}`)
   assert.equal(marked, app)
 })
+
+test("a scenario tool selects its server in both ACP metadata and actual dispatch", async () => {
+  const { runSteps } = await import("./scripted-scenario.mjs")
+  const step = {
+    do: "tool",
+    server: "nessa-agents",
+    tool: "create_thread",
+    arguments: {},
+  }
+  const parsed = parseScenario({ turns: [{ steps: [step] }] })
+  assert.deepEqual(parsed.turns[0].steps, [step])
+  for (const agent of ["claude", "codex"]) {
+    const updates = []
+    let selected
+    const outcome = await runSteps(parsed.turns[0].steps, {
+      agent,
+      cancelled: () => false,
+      openCall: () => undefined,
+      toolId: () => "call",
+      clearCall: () => {},
+      update: (frame) => updates.push(frame),
+      callTool: async (args, server) => {
+        selected = { args, server }
+        return { content: [] }
+      },
+    })
+    assert.equal(outcome.stopReason, "end_turn")
+    assert.equal(selected.server, "nessa-agents")
+    assert.equal(selected.args.name, "create_thread")
+    if (agent === "claude")
+      assert.equal(
+        updates[0]._meta.claudeCode.toolName,
+        "mcp__nessa-agents__create_thread",
+      )
+    else assert.equal(updates[0].rawInput.server, "nessa-agents")
+  }
+  assert.throws(() =>
+    parseScenario({ turns: [{ steps: [{ ...step, server: "bad/server" }] }] }),
+  )
+})
+
+test("the scripted process refuses an absent selected server instead of calling mcptest", async () => {
+  const agent = start("claude", {
+    turns: [
+      {
+        steps: [
+          { do: "tool", server: "nessa-agents", tool: "report_rows", arguments: {} },
+        ],
+      },
+    ],
+  })
+  await agent.request("initialize", {})
+  const sessionId = (await agent.request("session/new", claudeOpen)).result.sessionId
+  const result = await agent.request("session/prompt", { sessionId, prompt: [] })
+  assert.match(result.error.message, /no nessa-agents server/)
+})

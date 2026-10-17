@@ -130,7 +130,7 @@ export function scriptedLaunch(agent, { tool, scenario, evidence } = {}) {
 export async function startGatewayStack(
   options,
   instance,
-  { as = "owner", scripted, scenario, evidence } = {},
+  { as = "owner", scripted, scenario, evidence, stopChildrenOnParentStop } = {},
 ) {
   const agent = options.agent
   if (!["claude", "codex"].includes(agent))
@@ -151,6 +151,7 @@ export async function startGatewayStack(
     path: command.path,
     mcpServer: launch?.mcp ?? { command: process.execPath, args: [serverScript] },
     signedOut: launch?.signedOut ?? false,
+    stopChildrenOnParentStop,
   }).catch((error) => {
     // What it said as it failed, on stderr; the result keeps one line.
     if (error.gatewayLog) log(error.gatewayLog.slice(-4000))

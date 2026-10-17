@@ -92,12 +92,30 @@ cleanup confirmation is a separate result.
 An agent that participates in a parent/child ownership tree installs one
 `OwnedLifetime` before attachment. `Agent::close` still stops only this
 attachment and can reopen. `Agent::end_owned_lifetime` seals descendant admission,
-stops this attachment, and joins the descendant drain. Dropping the last session
-handles selects the same owned ending. Explicit close, execution failure, session
+stops this attachment, and joins the descendant drain. The host retains the
+coordinator and ends the lifetime explicitly. Explicit close, execution failure, session
 failure, deadline, and a dropped event consumer stay attachment-only. A second
 install is refused. The coordinator keeps the gate; the agent does not keep the
 coordinator. A child whose lifetime closes during preparation does not receive
 its initial task, and that refusal is not reported as the parent closing.
+
+`OwnershipCoordinator::prepare_child(command, session)` reserves and prepares an
+owned child on a fixed session without calling `InitialSubmit`. Its `Ready`
+receipt and SQLite state record acknowledged preparation, not task admission.
+The command's description/configuration fingerprint, fixed session and operation
+kind participate in retry identity. A later task uses ordinary Agent submission.
+The coordinator rechecks parent/child admission after Ready publication, retains
+cleanup on publication failure, and keeps admitted preparation supervised when
+its caller disconnects. Gateway Stop-cascade policy and settings remain outside
+this primitive; preparing a child changes no approval decision.
+
+`OwnershipCoordinator::child_lifetime_for_session` reads retained child ancestry,
+including closed history. It grants no admission authority; host policy can use
+it to refuse turning a sealed child session into a new root. Closed
+reservations with validated absence are excluded: they never acquired
+the session and cannot seal an unrelated ordinary conversation. The gateway's
+`deleting_a_cold_owned_tree_reconciles_confirmed_leases_and_cannot_reparent_children`
+regression verifies that distinction across an actual SQLite restart.
 
 ## Model capabilities and provider operations
 
@@ -637,3 +655,20 @@ combined evidence. Confirmed release cannot be undone by a competing uncertain
 result, and independent confirmation cannot erase failed audit delivery. Close
 callers use the final combined report. A real cleanup retry on resources still
 owned can acknowledge an earlier failed attempt.
+
+## Exact execution observation for host orchestration
+
+`Agent::unsettled_execution_ids()` reads admitted queued/running identities under
+one scheduler lock, including a dequeued invocation awaiting provider dispatch.
+It is observation, not a cancellation capability: hosts still authorize and use
+the ordinary exact execution Stop controls. Completed work may disappear before
+the host acts. The conformance regression
+`unsettled_selection_includes_dequeued_work_before_active_provider_dispatch`
+holds the actual before-invocation boundary to verify that handoff.
+
+`turn_continuation(history, original)` returns `Final`, `Pending`, or the exact
+saved `Successor` according to the same SDK owed-turn rules used for resumption.
+A host report owner can wait for legitimate suspended work without following an
+unrelated later turn. Explicit Stop stays final. The conformance regression
+`continuation_read_waits_for_the_exact_original_successor_and_keeps_person_stop_final`
+covers those distinctions. These reads choose no host cascade or delivery policy.
