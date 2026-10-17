@@ -1,0 +1,8 @@
+        let _lease = claim_host_ownership(
+            &self.gateway.host_ownership,
+            self.gateway.host.as_ref(),
+            self.gateway.clock.as_ref(),
+        )
+        .map_err(ClaudeConfigurationChangeError::Gateway)?;
+
+BECOMES

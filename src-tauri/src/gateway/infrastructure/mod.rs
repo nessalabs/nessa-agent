@@ -1,3 +1,6 @@
+//! `host_ownership` supplies the private service-label file lease for the macOS
+//! application owner; its Unix lock/process tests also run on Linux. The lease
+//! is distinct from the transaction reconciliation lock and is not unlinked.
 //! Native background service adapters. The desktop composition root selects launchd
 //! on macOS and the account's systemd user manager on Linux. macOS reconciliation
 //! holds a service-label lock through retirement, replacement, and matching process
@@ -47,6 +50,8 @@
 //! is ready (`GatewayReader`). Each native
 //! manager adapter owns its background process lifetime.
 mod commands;
+#[cfg(any(target_os = "macos", all(test, unix)))]
+mod host_ownership;
 #[cfg(any(target_os = "linux", all(test, target_os = "macos")))]
 mod linux;
 mod login_shell;

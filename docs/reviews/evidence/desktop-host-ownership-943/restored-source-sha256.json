@@ -1,0 +1,5 @@
+{
+  "src-tauri/src/gateway/application/service.rs": "e62c033f8ea3509c64218405ab92ba68980c6f81efec1d27f684169792ebf421",
+  "src-tauri/src/gateway/application/host_ownership.rs": "fef56a72f77e688633f36be1ff0fda9ca07596936ab2fb0746e19441dedeec4f",
+  "src-tauri/src/gateway/infrastructure/host_ownership.rs": "2ba9ee8757788c75f69d35ae4d4ddf9c071176ddf262af89321b6a3a6f137dca"
+}
