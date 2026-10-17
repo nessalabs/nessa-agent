@@ -13,8 +13,7 @@ use crate::{
 };
 use fs2::FileExt;
 use nessa_local_storage::{
-    is_unsafe_file, OpenMode, PrivateDirectory, PrivatePublicationFailure, PrivatePublicationStage,
-    PublishedPrivateFile,
+    is_unsafe_file, OpenMode, PrivateDirectory, PrivatePublicationStage, PublishedPrivateFile,
 };
 use std::{
     ffi::OsStr,
@@ -176,16 +175,21 @@ impl FilePairingState {
                 drop(published);
                 acknowledged
             }
-            Err(failure) => self.publication_failure(name, bytes, failure),
+            Err(failure) => self.publication_failure(name, bytes, failure.into_parts()),
         }
     }
     fn publication_failure(
         &self,
         name: &str,
         expected: &[u8],
-        failure: PrivatePublicationFailure,
+        failure: (
+            PrivatePublicationStage,
+            io::Error,
+            Option<PublishedPrivateFile>,
+            Option<io::Error>,
+        ),
     ) -> Result<(), PrivateStateError> {
-        let (step, primary, published, cleanup) = failure.into_parts();
+        let (step, primary, published, cleanup) = failure;
         let step = publication_step(step);
         let primary = storage_failure(&primary);
         let cleanup = cleanup.as_ref().map(storage_failure);
