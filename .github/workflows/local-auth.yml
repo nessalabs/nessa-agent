@@ -396,6 +396,8 @@ jobs:
           echo "::add-matcher::src-tauri/examples/page_load_acceptance/rustc.json"
           trap 'echo "::remove-matcher owner=page-load-compiler::"' EXIT
           cargo clippy -p nessa-app --no-default-features --example page_load_acceptance --color never -- -D warnings
+          # A permissive temporary parent must not become the private log directory.
+          umask 022
           cargo run -p nessa-app --no-default-features --example page_load_acceptance | tee "$RUNNER_TEMP/page-load-acceptance.txt"
           while IFS= read -r line; do
             printf '::notice title=Native load acceptance::%s\n' "$line"

@@ -87,7 +87,8 @@ with the corrected fixture path and a macOS target selector. That is context
 code generation, not native Rust compilation or WKWebView execution.
 
 The existing macOS `local-auth` job lints and runs this example before the shared
-server suite. During that step a standard Rust compiler
+server suite. Its native invocation explicitly uses process umask022 to retain
+the public temporary-parent/private log-child regression. During that step a standard Rust compiler
 [problem matcher](https://github.com/actions/toolkit/blob/main/docs/problem-matchers.md) publishes
 compiler message/code/source-span annotations; its registration is removed on
 step exit. The executable publishes escaped failure verdicts and the step records

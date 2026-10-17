@@ -123,7 +123,9 @@ pub fn check(
                 ));
             }
             host_log::flush();
-            let logged = std::fs::read_to_string(log).map_err(|error| error.to_string())?;
+            let logged = std::fs::read_to_string(log).map_err(|error| {
+                format!("read temporary startup log {}: {error}", log.display())
+            })?;
             let expected = host_refusal::fill("document-unserved", &[("page", &configured)]);
             if !logged.contains(&expected) {
                 return Err(
@@ -163,7 +165,7 @@ fn native_url(app: &AppHandle, label: &str) -> Result<Option<String>, String> {
             });
         let _ = sender.send(result);
     })
-    .map_err(|error| error.to_string())?;
+    .map_err(|error| format!("request native URL for {label}: {error}"))?;
     receiver
         .recv_timeout(Duration::from_secs(2))
         .map_err(|error| format!("native URL callback: {error}"))?

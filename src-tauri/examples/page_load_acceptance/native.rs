@@ -18,8 +18,13 @@ pub fn run() -> Result<(), String> {
     if navigation::serving() != Serving::DevServer {
         return Err("run this fixture with --no-default-features (the real dev deadline)".into());
     }
-    let directory = tempfile::tempdir().map_err(|error| error.to_string())?;
-    host_log::install(Some(directory.path()));
+    let directory = tempfile::tempdir()
+        .map_err(|error| format!("create temporary fixture directory: {error}"))?;
+    // A tempfile parent follows the runner's umask. The logger creates its
+    // own private child and publishes the path that the probe must read.
+    host_log::install(None);
+    let log = host_log::open(&directory.path().join("logs"))
+        .map_err(|error| format!("open temporary startup log: {error}"))?;
     let server = Server::start()?;
     let (sender, receiver) = mpsc::channel();
     let policy_events = sender.clone();
@@ -91,7 +96,6 @@ pub fn run() -> Result<(), String> {
         }
     });
     let handle = app.handle().clone();
-    let log = directory.path().join("host.log");
     let served = server.served.clone();
     let check = thread::spawn(move || {
         let result = probe::check(&handle, receiver, served, &log);
