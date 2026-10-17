@@ -1,7 +1,9 @@
 //! The no-navigation WKWebView case from #916. Run with:
 //! `cargo test -p nessa-app --no-default-features --test page_load`.
-//! The state machine tests run on every host; macOS also creates an empty
-//! WKWebView on the main thread and establishes that its native URL is nil.
+//! On macOS this creates an empty WKWebView on the main thread, establishes
+//! that its native URL is nil, and checks the diagnostic state controls. Other
+//! hosts report unsupported; separate portable and production unit tests cover
+//! the state machine.
 //! This is not a full native app/bootstrap or normal-server acceptance test.
 
 #[cfg(target_os = "macos")]

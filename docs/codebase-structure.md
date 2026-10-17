@@ -62,13 +62,13 @@ src-tauri/src/
   app_sandbox/origin.rs   sandbox origin constants consumed by navigation
   page_load.rs            dev-only page when the document never arrives
   page_load/state.rs      callback-published load facts; no native URL lookup
-src-tauri/examples/
-  page_load_acceptance/   disposable macOS Tauri lifecycle, deadline and origin controls
   <context>/
     domain/               rules, entities, value objects, events
     application/          use cases + ports (traits) the use case needs
     adapters/             storage, OS, IPC command handlers, clock
     contracts/            what other contexts and the frontend may see
+src-tauri/examples/
+  page_load_acceptance/   disposable macOS Tauri lifecycle, deadline and origin controls
 verification/             scripts that drive real browsers against the running app
   desktop/                the desktop window: CHECKLIST.md, scripts/, scripts/lib/
 ```
