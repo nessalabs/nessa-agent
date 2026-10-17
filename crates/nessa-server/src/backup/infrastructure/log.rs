@@ -13,9 +13,7 @@ use async_trait::async_trait;
 use crate::backup::application::{
     Authenticator, DeletionLogStore, InventoryReconciliationLease, LogStoreError, MacKey,
 };
-use crate::backup::domain::{
-    CredentialKind, DeletionEntry, DeletionFence, DeletionLog, Fingerprint, GrantRole,
-};
+use crate::backup::domain::DeletionLog;
 
 /// `directory/deletion-inventory.txt` plus `directory/mac.key`.
 pub struct FileDeletionLog {
@@ -218,7 +216,7 @@ fn read_log(path: &Path, key: MacKey) -> Result<DeletionLog, ()> {
     if expected.hex() != mac_hex {
         return Err(());
     }
-    parse_log(canonical)
+    DeletionLog::decode(canonical).map_err(|_| ())
 }
 
 fn split_mac(text: &str) -> Result<(&str, &str), ()> {
@@ -229,104 +227,11 @@ fn split_mac(text: &str) -> Result<(&str, &str), ()> {
     Ok((canonical, hex))
 }
 
-fn parse_log(canonical: &str) -> Result<DeletionLog, ()> {
-    let mut lines = canonical.lines();
-    if lines.next() != Some("nessa-deletion-inventory/1") {
-        return Err(());
-    }
-    let mut entries = Vec::new();
-    for (index, line) in lines.enumerate() {
-        if line.is_empty() {
-            continue;
-        }
-        let sequence = (index as u64) + 1;
-        let fence = parse_entry(line, sequence)?;
-        entries.push(DeletionEntry::from_persisted(sequence, fence).map_err(|_| ())?);
-    }
-    DeletionLog::new(entries).map_err(|_| ())
-}
-
-fn parse_entry(line: &str, sequence: u64) -> Result<DeletionFence, ()> {
-    let mut parts = line.split(' ');
-    let got = parts.next().ok_or(())?.parse::<u64>().map_err(|_| ())?;
-    if got != sequence {
-        return Err(());
-    }
-    match parts.next().ok_or(())? {
-        "conversation" => {
-            let id = decode(parts.next().ok_or(())?)?;
-            if parts.next().is_some() {
-                return Err(());
-            }
-            DeletionFence::conversation(id).map_err(|_| ())
-        }
-        "grant" => {
-            let conversation_id = decode(parts.next().ok_or(())?)?;
-            let receiver_id = decode(parts.next().ok_or(())?)?;
-            let credential_id = decode(parts.next().ok_or(())?)?;
-            let role = GrantRole::parse(parts.next().ok_or(())?).ok_or(())?;
-            let grant_sequence = parts.next().ok_or(())?.parse::<u64>().map_err(|_| ())?;
-            if parts.next().is_some() {
-                return Err(());
-            }
-            DeletionFence::share_grant(
-                conversation_id,
-                receiver_id,
-                credential_id,
-                role,
-                grant_sequence,
-            )
-            .map_err(|_| ())
-        }
-        "credential" => {
-            let kind = CredentialKind::parse(parts.next().ok_or(())?).ok_or(())?;
-            let credential_id = decode(parts.next().ok_or(())?)?;
-            let hex = parts.next().ok_or(())?;
-            if parts.next().is_some() {
-                return Err(());
-            }
-            DeletionFence::credential(kind, credential_id, fingerprint_hex(hex)?).map_err(|_| ())
-        }
-        _ => Err(()),
-    }
-}
-
-fn fingerprint_hex(hex: &str) -> Result<Fingerprint, ()> {
-    if hex.len() != 64 {
-        return Err(());
-    }
-    let mut bytes = [0u8; 32];
-    for (index, byte) in bytes.iter_mut().enumerate() {
-        *byte = u8::from_str_radix(&hex[index * 2..index * 2 + 2], 16).map_err(|_| ())?;
-    }
-    Ok(Fingerprint::from_digest(bytes))
-}
-
-fn decode(value: &str) -> Result<String, ()> {
-    let bytes = value.as_bytes();
-    let mut out = Vec::new();
-    let mut index = 0;
-    while index < bytes.len() {
-        if bytes[index] == b'%' {
-            if index + 2 >= bytes.len() {
-                return Err(());
-            }
-            let hex = std::str::from_utf8(&bytes[index + 1..index + 3]).map_err(|_| ())?;
-            out.push(u8::from_str_radix(hex, 16).map_err(|_| ())?);
-            index += 3;
-        } else {
-            out.push(bytes[index]);
-            index += 1;
-        }
-    }
-    String::from_utf8(out).map_err(|_| ())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    use crate::backup::domain::DeletionFence;
+    use crate::backup::domain::{DeletionFence, GrantRole};
 
     fn inventory() -> (tempfile::TempDir, PathBuf, PathBuf) {
         let root = tempfile::tempdir().unwrap();

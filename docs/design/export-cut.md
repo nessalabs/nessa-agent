@@ -6,6 +6,10 @@ inventory is the authenticated list of fences that a later restore must not
 undo (#272). This document is the ordering table for both. Restore,
 quarantine, and upload are not this cut: they wait on the cut landing.
 
+[Standalone verification](backup-verification.md) checks supplied cuts and an
+explicit trusted MAC key. It implements format and integrity verification only;
+restore, quarantine, key recovery and inventory freshness remain separate work.
+
 ```text
 caller ── hold ──▶ conversation admission (write)
                       │

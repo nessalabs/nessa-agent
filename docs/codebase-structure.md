@@ -1609,6 +1609,16 @@ snapshots. `infrastructure/` reads the namespace, including `device/outbox/` and
 mac key stays beside the deletion inventory and is not part of the bundle.
 Restore and quarantine are not in this module.
 
+The separate `nessa-backup-verify` binary enters through `backup_verify_main.rs`
+and `composition/backup_verification.rs`, without gateway bootstrap.
+`backup/entrypoint/arguments.rs` parses explicit input paths; `application/verification.rs`
+authenticates and streams the supplied cut through read-only ports;
+`domain/verification.rs` owns its current manifest grammar. The directory and
+key readers live in `infrastructure/verification.rs`. Tests follow these owners
+under `tests/backup/verification*.rs`; `tests/backup_verifier.rs` exercises the
+actual binary. [Standalone verification](design/backup-verification.md) defines
+the limits and the remaining restore contracts (#270).
+
 ## Attachments
 
 `crates/nessa-server/src/attachments/` owns the files a conversation uploads so

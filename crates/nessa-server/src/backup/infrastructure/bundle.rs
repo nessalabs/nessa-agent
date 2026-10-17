@@ -2,6 +2,8 @@
 //! Redacted records have no file. On Unix, directories are mode `0700` and
 //! files are mode `0600` (`a_published_bundle_is_owner_only`).
 
+use crate::backup::domain::encode_identity as encode;
+
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -130,24 +132,6 @@ fn record_path(root: &Path, store: StoreKind, identity: &str) -> Result<PathBuf,
         return Err(());
     }
     Ok(root.join("records").join(store.as_str()).join(name))
-}
-
-fn encode(value: &str) -> String {
-    const HEX: &[u8; 16] = b"0123456789ABCDEF";
-    let mut out = String::new();
-    for byte in value.bytes() {
-        match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(byte as char);
-            }
-            _ => {
-                out.push('%');
-                out.push(HEX[(byte >> 4) as usize] as char);
-                out.push(HEX[(byte & 0xf) as usize] as char);
-            }
-        }
-    }
-    out
 }
 
 #[cfg(test)]
