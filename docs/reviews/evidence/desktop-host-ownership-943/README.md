@@ -73,3 +73,12 @@ Raw evidence: `/workspace/scratch/nessa-943-scripted-evidence`; log:
 the rebased #957 permission scenario; assembled-tree checks are recorded on the
 PR. No browser result replaces pending native acceptance. The legacy-host
 release decision and residual risk are in the ordering contract above.
+
+## Unix fixture correction after fresh native reproduction
+
+[Umask fixture evidence](umask-fixture/README.md) records the new permitted CI
+annotations, matching local failure under022, explicit-private fixture correction,
+13/158 positive selections under000/022/077, preserved baseline lint exclusions,
+and current source hashes. The initial157-test record above remains historical;
+current headless selection is158 with the additional unsafe-directory refusal.
+No production code or private-storage guard changed in this follow-up.

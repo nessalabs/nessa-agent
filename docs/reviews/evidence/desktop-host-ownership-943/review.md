@@ -58,3 +58,15 @@ after #957. #957 changes SDK/server permission behavior and browser verification
 only the codebase map overlaps and merged cleanly. Desktop production/test sources
 and all eight qualification hashes remain unchanged. Exact-head platform and
 assembled browser checks still need their current results recorded on the PR.
+
+## Fresh full review of the umask fixture correction
+
+Fresh independent FULL review against base `cf551b6a`, at diagnostic head
+`2dff21e4` plus the disclosed fixture/docs/scaffold-removal changes, found no
+actionable defect. It inspected the combined production lease/application/native
+diff, H1–H14, journal/settings/quit retention, service-label identity, fork/exec,
+platform gating and legacy limits. It verified seven unchanged qualification
+hashes, the intended fixture-only change, exact original workflow restoration,
+scaffold deletion, and all six13/158-test umask runs. Qualified full-test Clippy
+passes; the broader partial-harness baseline-lint failure is retained explicitly.
+Final native CI and actual installed-Mac acceptance remain separate gates.
