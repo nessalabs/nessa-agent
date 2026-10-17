@@ -20,6 +20,7 @@ import { transcriptFrom } from "../../adapters/gateway/gateway-views"
 import { GATEWAY_NOW_MS, view } from "../../adapters/gateway/fake-gateway"
 import { workspaceActions } from "../../adapters/store/slice"
 import { ClockProvider } from "../../../../clock"
+import { ClipboardProvider } from "../../../../conversation"
 import {
   emptyTranscript,
   type Transcript as TranscriptValue,
@@ -99,6 +100,9 @@ const conversation: TranscriptValue = {
   ],
 }
 
+/** The host's clipboard, as every test's window supplies it. */
+const clipboardWrite = vi.fn((_text: string) => Promise.resolve())
+
 async function shown(
   source = fakeSource(),
   shownConversation = conversation,
@@ -114,12 +118,14 @@ async function shown(
       <StrictMode>
         <Provider store={store}>
           <ClockProvider now={() => 1000}>
-            <Transcript
-              sessionId="b"
-              scrollRef={createRef()}
-              onHeadingVisible={onHeadingVisible}
-            />
-            <WorkspaceSendFailure sessionId="b" />
+            <ClipboardProvider write={clipboardWrite}>
+              <Transcript
+                sessionId="b"
+                scrollRef={createRef()}
+                onHeadingVisible={onHeadingVisible}
+              />
+              <WorkspaceSendFailure sessionId="b" />
+            </ClipboardProvider>
           </ClockProvider>
         </Provider>
       </StrictMode>,
@@ -1054,24 +1060,26 @@ describe("a transcript", () => {
   })
 
   it("names what an agent's command reaches and runs, above the command itself", async () => {
-    const approval = conversation.approval
+    const approval = conversation.approvals[0]
     if (!approval) throw new Error("the sample asks for nothing")
     const script =
       'curl -s "https://tad2026.eventive.org/api" | head -c 1000; curl -I https://tad2026.eventive.org/'
     await shown(fakeSource(), {
       ...conversation,
-      approval: {
-        ...approval,
-        command: `mcp__nessa__shell ${JSON.stringify({ command: script })}`,
-        reason: "mcp__nessa__shell",
-        deadline: {
-          waitMs: 30_000,
-          dueAtMs: 7_000,
-          effect: "deny",
-          reason: "No human answered in time.",
-          stopsTurn: false,
+      approvals: [
+        {
+          ...approval,
+          command: `mcp__nessa__shell ${JSON.stringify({ command: script })}`,
+          reason: "mcp__nessa__shell",
+          deadline: {
+            waitMs: 30_000,
+            dueAtMs: 7_000,
+            effect: "deny",
+            reason: "No human answered in time.",
+            stopsTurn: false,
+          },
         },
-      },
+      ],
     })
     const card = host.querySelector<HTMLElement>(".workspace-approval")
     // A title that only names the tool is not repeated as a reason.
@@ -1098,11 +1106,11 @@ describe("a transcript", () => {
   })
 
   it("shows a script it cannot follow exactly as sent", async () => {
-    const approval = conversation.approval
+    const approval = conversation.approvals[0]
     if (!approval) throw new Error("the sample asks for nothing")
     await shown(fakeSource(), {
       ...conversation,
-      approval: { ...approval, command: 'echo "$(echo "a; b")"' },
+      approvals: [{ ...approval, command: 'echo "$(echo "a; b")"' }],
     })
     expect(host.querySelector(".workspace-approval-command")?.textContent).toBe(
       '$ echo "$(echo "a; b")"',
@@ -1110,12 +1118,12 @@ describe("a transcript", () => {
   })
 
   it("folds a long script to its first lines, and says how many there are", async () => {
-    const approval = conversation.approval
+    const approval = conversation.approvals[0]
     if (!approval) throw new Error("the sample asks for nothing")
     const steps = Array.from({ length: 8 }, (_, step) => `echo ${step}`)
     await shown(fakeSource(), {
       ...conversation,
-      approval: { ...approval, command: steps.join("; ") },
+      approvals: [{ ...approval, command: steps.join("; ") }],
     })
     const command = () => host.querySelector(".workspace-approval-command")?.textContent
     const unfold = host.querySelector<HTMLButtonElement>(".workspace-approval-disclose")
@@ -1125,32 +1133,25 @@ describe("a transcript", () => {
     // It unfolds the block it names.
     const block = document.getElementById(unfold?.getAttribute("aria-controls") ?? "")
     expect(block?.contains(host.querySelector(".workspace-approval-command"))).toBe(true)
-    // Folded or not, Copy Command copies the command as the agent sent it.
-    const writeText = vi.fn(() => Promise.resolve())
-    Object.defineProperty(navigator, "clipboard", {
-      value: { writeText },
-      configurable: true,
-    })
-    try {
-      await act(async () =>
-        host.querySelector<HTMLButtonElement>(".workspace-approval-copy")?.click(),
-      )
-      expect(writeText).toHaveBeenCalledWith(steps.join("; "))
-    } finally {
-      Reflect.deleteProperty(navigator, "clipboard")
-    }
+    // Folded or not, Copy Command copies the command as the agent sent it,
+    // through the host's clipboard.
+    clipboardWrite.mockClear()
+    await act(async () =>
+      host.querySelector<HTMLButtonElement>(".workspace-approval-copy")?.click(),
+    )
+    expect(clipboardWrite).toHaveBeenCalledWith(steps.join("; "))
     await act(async () => unfold?.click())
     expect(unfold?.getAttribute("aria-expanded")).toBe("true")
     expect(command()).toBe(`$ ${steps.join(";\n")}`)
   })
 
   it("folds a script it cannot follow by its own lines, as sent", async () => {
-    const approval = conversation.approval
+    const approval = conversation.approvals[0]
     if (!approval) throw new Error("the sample asks for nothing")
     const lines = Array.from({ length: 6 }, (_, line) => `echo $(date) ${line}`)
     await shown(fakeSource(), {
       ...conversation,
-      approval: { ...approval, command: `${lines.join("\n")}\n` },
+      approvals: [{ ...approval, command: `${lines.join("\n")}\n` }],
     })
     // Six lines and the newline that ends them: short enough to show whole.
     expect(host.querySelector(".workspace-approval-disclose")).toBeNull()
@@ -1162,20 +1163,20 @@ describe("a transcript", () => {
   })
 
   it("starts the next approval folded, whatever the last one showed", async () => {
-    const approval = conversation.approval
+    const approval = conversation.approvals[0]
     if (!approval) throw new Error("the sample asks for nothing")
     const long = Array.from({ length: 8 }, (_, step) => `echo ${step}`).join("; ")
     const source = fakeSource()
     await shown(source, {
       ...conversation,
-      approval: { ...approval, command: long },
+      approvals: [{ ...approval, command: long }],
     })
     await act(async () =>
       host.querySelector<HTMLButtonElement>(".workspace-approval-disclose")?.click(),
     )
     await shown(source, {
       ...conversation,
-      approval: { ...approval, id: `${approval.id}-next`, command: `${long}; echo 8` },
+      approvals: [{ ...approval, id: `${approval.id}-next`, command: `${long}; echo 8` }],
     })
     expect(
       host.querySelector(".workspace-approval-disclose")?.getAttribute("aria-expanded"),
@@ -1213,6 +1214,8 @@ describe("a transcript", () => {
     expect(host.querySelector(".workspace-approval-loading")?.textContent).toBe(
       "Loading this review before you can answer…",
     )
+    // Its command is only the tool's name until it is read: not shown as the command.
+    expect(host.querySelector(".workspace-approval-command")).toBeNull()
     expect(buttons().every(([, disabled]) => disabled)).toBe(true)
     await act(async () => {
       host.querySelector<HTMLButtonElement>(".workspace-approval [data-primary]")?.click()

@@ -120,17 +120,12 @@
 }
 
 .workspace-approval-fact > svg,
-.workspace-approval-favicon svg {
+.workspace-approval-site > svg {
   flex: none;
   width: 13px;
   height: 13px;
   stroke-width: 1.8;
   color: var(--desktop-faint);
-}
-
-.workspace-approval-favicon {
-  width: 13px;
-  height: 13px;
 }
 
 .workspace-approval-site {

@@ -197,6 +197,24 @@ export function read(script: string): Reading {
   return { words, breaks, lined }
 }
 
+/** Reserved words after which the next word is a program. */
+const leadsProgram = new Set([
+  "if",
+  "then",
+  "else",
+  "elif",
+  "while",
+  "until",
+  "do",
+  "!",
+  "time",
+  "{",
+])
+/** Reserved words that close what they opened; no program follows them. */
+const endsCompound = new Set(["fi", "done", "}", "esac"])
+/** Reserved words whose next words are names and values, not a program. */
+const opensList = new Set(["for", "select", "case", "function"])
+
 /** `NAME=value` before a program sets its environment; it is not the program. */
 const assignment = /^[A-Za-z_][A-Za-z0-9_]*=/
 
@@ -273,7 +291,11 @@ export function commandGist(command: string): CommandGist {
     if (word.starts) awaiting = true
     // `NAME=value` before a program sets its environment; the next word is the program.
     if (awaiting && !assignment.test(word.text)) {
+      // A reserved word is the shell's own, not a program: after `then` or
+      // `do` the next word is the program, and after `for` or `case` none is.
+      if (leadsProgram.has(word.text)) continue
       awaiting = false
+      if (endsCompound.has(word.text) || opensList.has(word.text)) continue
       programs.set(word.text, (programs.get(word.text) ?? 0) + 1)
     }
     for (const host of hostsIn(word.text)) if (!hosts.includes(host)) hosts.push(host)

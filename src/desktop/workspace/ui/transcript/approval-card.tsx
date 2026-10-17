@@ -1,5 +1,4 @@
 import { deadlinePendingLine } from "@nessa/client"
-import { Favicon } from "@nessa-ui/react/favicon"
 import { memo, useEffect, useId, useState } from "react"
 import { useNow } from "../../../../clock"
 import { DesktopIcon } from "../../../ui/icons"
@@ -10,6 +9,7 @@ import { selectAnswer } from "../../adapters/store/selectors"
 import { answering } from "../../application/workspace-state"
 import { agentName, agentOf, type ModelRef } from "../../model/workspace-index"
 import { shownWhole, type Approval, type ApprovalDeadline } from "../../model/transcript"
+import { useClipboardWrite } from "../../../../conversation"
 import { failureCopy } from "../failure-copy"
 import { commandGist, type CommandGist } from "./approval-gist"
 import {
@@ -201,8 +201,8 @@ function DeadlineRing({ deadline }: { deadline: ApprovalDeadline }) {
 }
 
 /**
- * An agent's command: a row naming the sites it names, each by its own icon
- * where the site has one, and the programs it names; then the script itself,
+ * An agent's command: a row naming the sites it names and the programs it
+ * names; then the script itself,
  * the tool it calls and that tool's other input, and a way to copy the
  * command exactly as it came. A long script shows its first lines and says
  * how many there are until Show All; nothing else is ever folded away.
@@ -229,11 +229,9 @@ function ApprovalScript({ command, gist }: { command: string; gist: CommandGist 
             <span className="workspace-approval-fact" aria-label="Sites named">
               {hosts.map((host) => (
                 <span key={host} className="workspace-approval-site">
-                  <Favicon
-                    href={`https://${host}/`}
-                    fallback={<DesktopIcon name="site" />}
-                    className="workspace-approval-favicon"
-                  />
+                  {/* No site icon: asking the site for it would reach a host the
+                    command names before the person has allowed anything. */}
+                  <DesktopIcon name="site" />
                   <bdi>{shownName(host)}</bdi>
                 </span>
               ))}
@@ -305,20 +303,22 @@ function ApprovalScript({ command, gist }: { command: string; gist: CommandGist 
   )
 }
 
-/** Copies the command exactly as the agent sent it, and says that it did. */
+/** Copies the command exactly as the agent sent it, through the host's clipboard, and says that it did. */
 function CopyCommand({ command }: { command: string }) {
+  const write = useClipboardWrite()
   const [said, setSaid] = useState<"copied" | "refused">()
   useEffect(() => {
     if (!said) return
     const timer = setTimeout(() => setSaid(undefined), 1400)
     return () => clearTimeout(timer)
   }, [said])
+  if (!write) return null
   return (
     <button
       type="button"
       className="workspace-approval-copy"
       onClick={() =>
-        void navigator.clipboard.writeText(command).then(
+        void write(command).then(
           () => setSaid("copied"),
           () => setSaid("refused"),
         )

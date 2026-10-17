@@ -700,9 +700,9 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   _ADR 238 › Decision_ (`ui/`, `approval-request.tsx`).
   _Check:_ `responsive.mjs --only approval-card --shots <dir>`, then look at the shots.
 - [ ] **An agent's command is always shown, with what it names above it.**
-  The card's row names the sites the command names (each by the site's own
-  icon once it loads, a globe until then and where it has none) and the
-  programs it names (no row when it would only repeat the command's first
+  The card's row names the sites the command names (each by a globe: no
+  site is asked for its icon before the person answers) and the programs it
+  names, the shell's own words (`if`, `then`, `do`, `fi`) left out (no row when it would only repeat the command's first
   word); under it the script, one step per line where the card
   follows its quotes and exactly as sent where it does not, then the tool it
   calls, the tool's other input, and Copy Command. A script over six lines

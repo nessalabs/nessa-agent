@@ -128,6 +128,15 @@ it("names what the words name, and claims no more", () => {
   expect(gist.programs.map((program) => program.name)).toEqual(["rg", "sudo"])
 })
 
+it("names the programs inside the shell's own words, not the words", () => {
+  const names = (script: string) =>
+    commandGist(script).programs.map((program) => program.name)
+  expect(names('if true; then rm -rf "$dir"; fi')).toEqual(["true", "rm"])
+  expect(names("for f in a b; do cat $f; done")).toEqual(["cat"])
+  expect(names("while sleep 1; do curl -s x; done")).toEqual(["sleep", "curl"])
+  expect(names("{ ls; } && ! grep x f")).toEqual(["ls", "grep"])
+})
+
 it("counts the program a background `&` starts after a quoted or escaped `<`", () => {
   for (const script of ["echo \\<&rm -rf ~", "cat <'x'&rm -rf ~"])
     expect(commandGist(script).programs.map((program) => program.name)).toContain("rm")
