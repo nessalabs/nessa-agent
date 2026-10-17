@@ -8,5 +8,5 @@ Verdict: pass
 
 Relevant log lines:
 
-- console chromium: requestfailed: http://127.0.0.1:46491/browser/check net::ERR_ABORTED (aborted after a 204 response, #485) (harmless)
-- console chromium: requestfailed: http://127.0.0.1:46491/mcp-resources net::ERR_ABORTED (aborted after a 200 response, full body, #473) (harmless)
+- console chromium: requestfailed: http://127.0.0.1:37335/browser/check net::ERR_ABORTED (aborted after a 204 response, #485) (harmless)
+- console chromium: requestfailed: http://127.0.0.1:37335/mcp-resources net::ERR_ABORTED (aborted after a 200 response, full body, #473) (harmless)

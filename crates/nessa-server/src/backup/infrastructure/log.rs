@@ -60,17 +60,26 @@ impl DeletionLogStore for FileDeletionLog {
     async fn hold_reconciliation(&self) -> Result<Box<dyn InventoryReconciliationLease>, ()> {
         let directory = self.directory.clone();
         let file = tokio::task::spawn_blocking(move || {
-            let file = open(
+            open(
                 &directory.join("reconciliation.lock"),
                 OpenMode::OpenOrCreate,
             )
-            .map_err(|_| ())?;
-            file.lock().map_err(|_| ())?;
-            Ok::<File, ()>(file)
+            .map_err(|_| ())
         })
         .await
         .map_err(|_| ())??;
-        Ok(Box::new(FileReconciliationLease { _file: file }))
+        loop {
+            match file.try_lock() {
+                Ok(()) => return Ok(Box::new(FileReconciliationLease { _file: file })),
+                Err(std::fs::TryLockError::WouldBlock) => {
+                    // The holder's snapshot may need the blocking pool. Wait
+                    // asynchronously instead of occupying one of its workers
+                    // (`waiting_captures_leave_a_blocking_worker_for_the_holder`).
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+                Err(std::fs::TryLockError::Error(_)) => return Err(()),
+            }
+        }
     }
 
     async fn load(&self) -> Result<DeletionLog, ()> {
@@ -426,6 +435,95 @@ mod tests {
         .unwrap();
         assert!(*synced.lock().unwrap());
         assert_eq!(fs::read_to_string(&path).unwrap(), "body\n");
+    }
+
+    /// A real inventory lease remains held while its fence source needs the
+    /// blocking pool. A waiting capture must leave that worker available.
+    #[test]
+    fn waiting_captures_leave_a_blocking_worker_for_the_holder() {
+        use std::sync::Arc;
+        use std::time::Duration;
+
+        use crate::backup::application::{capture_fences, FenceSource};
+
+        struct PausedSource {
+            entered: tokio::sync::Notify,
+            resume: tokio::sync::Notify,
+        }
+
+        #[async_trait::async_trait]
+        impl FenceSource for PausedSource {
+            async fn fences(&self) -> Result<Vec<DeletionFence>, ()> {
+                self.entered.notify_one();
+                self.resume.notified().await;
+                // Metadata snapshot reads use this pool after lease acquisition.
+                tokio::task::spawn_blocking(|| {
+                    vec![DeletionFence::share_grant("c", "r", "cred", GrantRole::Read, 4).unwrap()]
+                })
+                .await
+                .map_err(|_| ())
+            }
+        }
+
+        struct CurrentGrant;
+        #[async_trait::async_trait]
+        impl FenceSource for CurrentGrant {
+            async fn fences(&self) -> Result<Vec<DeletionFence>, ()> {
+                Ok(Vec::new())
+            }
+        }
+
+        let root = tempfile::tempdir().unwrap();
+        let log = Arc::new(FileDeletionLog::open(root.path().join("inventory")).unwrap());
+        let source = Arc::new(PausedSource {
+            entered: tokio::sync::Notify::new(),
+            resume: tokio::sync::Notify::new(),
+        });
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .max_blocking_threads(1)
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let first_log = log.clone();
+            let first_source = source.clone();
+            let mut first = tokio::spawn(async move {
+                capture_fences(&[first_source.as_ref()], first_log.as_ref()).await
+            });
+            source.entered.notified().await;
+            let current = CurrentGrant;
+            let sources: [&dyn FenceSource; 1] = [&current];
+            let mut second = Box::pin(capture_fences(&sources, log.as_ref()));
+            std::future::poll_fn(|cx| {
+                assert!(std::future::Future::poll(second.as_mut(), cx).is_pending());
+                std::task::Poll::Ready(())
+            })
+            .await;
+            source.resume.notify_one();
+            let progress = tokio::time::timeout(Duration::from_secs(2), async {
+                let older = (&mut first).await.unwrap().unwrap();
+                assert_eq!(older.entries().len(), 1);
+                let newer = second.as_mut().await.unwrap();
+                assert!(newer.entries().is_empty());
+            })
+            .await;
+            // Release the holder even on regression, then join the blocking
+            // queue before asserting, so a failed test cannot hang shutdown.
+            if progress.is_err() {
+                first.abort();
+                let _ = first.await;
+            }
+            drop(second);
+            tokio::time::timeout(Duration::from_secs(10), tokio::task::spawn_blocking(|| ()))
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(
+                progress.is_ok(),
+                "lock waiters starved the holder's snapshot work"
+            );
+            assert!(log.load().await.unwrap().entries().is_empty());
+        });
     }
 
     #[test]
