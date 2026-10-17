@@ -377,7 +377,11 @@ export {
   ConversationCapability,
   ConversationToolPreset,
 } from "./generated/product.js"
-export { sharePage, toolPolicyBounds } from "./protocol/conversation-validate.js"
+export {
+  sharePage,
+  toolPolicyBounds,
+  viewEntryBounds,
+} from "./protocol/conversation-validate.js"
 export { conversationErrorCode } from "./application/conversation-error-code.js"
 export type { ConversationLease } from "./generated/product.js"
 export {
