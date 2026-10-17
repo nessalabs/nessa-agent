@@ -1,0 +1,15 @@
+
+running 6 tests
+test final_ownership_wait_attempts_acquisition_before_refusing_at_deadline ... ok
+test owner::tests::busy_claim_has_no_resource_and_can_be_retried_after_owner_exit ... ok
+
+thread 'owner::tests::failed_or_panicking_acquisition_does_not_publish_a_lease' (18625) panicked at /workspace/nessa-943-final-ownership-poll/src-tauri/src/gateway/application/../../../tests/gateway/application/host_ownership_owner.rs:114:50:
+physical claim failed
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test owner::tests::bounded_restart_wait_can_acquire_after_predecessor_releases ... ok
+test owner::tests::failed_or_panicking_acquisition_does_not_publish_a_lease ... ok
+test owner::tests::admitted_worker_retains_lease_after_foreground_owner_disappears ... ok
+test owner::tests::acquisition_is_shared_across_concurrent_host_operations ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
