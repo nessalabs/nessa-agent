@@ -31,7 +31,8 @@ use nessa_sdk::domain::agent_execution::{
     executions::{ExecutionId, ExecutionOutcome, InvocationStage, MessageKind},
     permissions::{
         PermissionEffect, PermissionReviewDeadline, PermissionScope, RefusalOutcome, ReviewDecline,
-        ReviewDeclineId, ReviewDeclineReason, ReviewDeclineStage,
+        ReviewDeclineId, ReviewDeclineReason, ReviewDeclineStage, MAX_OPEN_REVIEWS,
+        MAX_REVIEW_OPTIONS, MAX_REVIEW_OPTION_LABEL_BYTES, MAX_REVIEW_TOOL_NAME_BYTES,
     },
     questions::{AnswerShape, MAX_OPEN_QUESTIONS},
     tools::{ToolContentView, ToolKind, ToolStatus},
@@ -46,16 +47,19 @@ use uuid::Uuid;
 const MAX_MESSAGES: usize = 24;
 pub const MAX_TEXT: usize = 8192;
 const MAX_TOOLS: usize = 16;
-const MAX_PERMISSIONS: usize = 16;
 /// Most artifacts the view lists: the newest, in the order they were recorded.
 pub const MAX_VIEW_ARTIFACTS: usize = 64;
 /// Most notes the view lists: the newest, in the order they were left.
 pub const MAX_VIEW_NOTES: usize = 64;
 // Application transcript body; product catalog enrichment is serialized afterward.
 pub const MAX_VIEW_BYTES: usize = 60_000;
-/// The largest single review the view offers, encoded. One review may not take
-/// most of the view's budget from everything else.
-const MAX_REVIEW_BYTES: usize = 16_000;
+/// How much of a review's input its card carries in the view, in UTF-8 bytes.
+/// The rest is read with `conversation.permissionInput`, so no input is too
+/// large for a review to be offered.
+pub const MAX_REVIEW_PREVIEW_BYTES: usize = 1024;
+/// The schema's bound on `ConversationTool.input`, in UTF-8 bytes. An input
+/// past it is left off the tool row; its review still offers all of it.
+const MAX_TOOL_INPUT_BYTES: usize = 32_768;
 const REQUIRED_WORK_FAILURE: &str = "The turn could not complete all required work.";
 const PROVIDER_FAILURE_PREFIX: &str = "The agent provider reported an error: ";
 
@@ -1032,16 +1036,18 @@ impl Projection {
         {
             return;
         }
+        // The SDK refuses a live review past these bounds when it arrives
+        // (`MAX_REVIEW_OPTIONS` and the rest are its own), so only a saved
+        // history from elsewhere can hold one. The input has no bound here:
+        // the card carries its start, and the rest is read while it waits.
         if permission.as_str().len() > 256
             || tool_id.as_str().len() > 256
-            || options.choices().len() > 64
-            || options
-                .choices()
-                .iter()
-                .any(|option| option.id().as_str().len() > 256 || option.label().len() > 2048)
-            || input.name.len() > 256
-            || input.arguments_json.len() > 32768
-            || serde_json::from_str::<serde_json::Value>(&input.arguments_json).is_err()
+            || options.choices().len() > MAX_REVIEW_OPTIONS
+            || options.choices().iter().any(|option| {
+                option.id().as_str().len() > 256
+                    || option.label().len() > MAX_REVIEW_OPTION_LABEL_BYTES
+            })
+            || input.name.len() > MAX_REVIEW_TOOL_NAME_BYTES
         {
             self.view.interaction_view_error = Some("The complete tool input cannot be displayed safely; this review has no actionable choices in this view.".into());
             self.view.truncated = true;
@@ -1066,7 +1072,11 @@ impl Projection {
             .iter_mut()
             .find(|tool| tool.execution_id == execution && tool.tool_id == tool_id.as_str())
         {
-            tool.input = input.arguments_json.clone();
+            tool.input = if input.arguments_json.len() <= MAX_TOOL_INPUT_BYTES {
+                input.arguments_json.clone()
+            } else {
+                String::new()
+            };
         }
         let holding = self
             .holding_reviews
@@ -1081,7 +1091,9 @@ impl Projection {
                 512,
             ),
             tool_name: input.name.clone(),
-            arguments_json: input.arguments_json.clone(),
+            arguments_json: clipped(&input.arguments_json, MAX_REVIEW_PREVIEW_BYTES),
+            arguments_complete: input.arguments_json.len() <= MAX_REVIEW_PREVIEW_BYTES,
+            arguments_bytes: input.arguments_json.len() as u64,
             origin: ConversationPermissionOrigin::Harness,
             ask: ConversationPermissionAsk::Tool,
             deadline: deadline
@@ -1099,11 +1111,7 @@ impl Projection {
         };
         // How many reviews are open is counted where the view is read, over
         // the reviews offered then (`Self::read_with_mode_change`).
-        let size = serde_json::to_vec(&value).map_or(usize::MAX, |bytes| bytes.len());
-        if size > MAX_REVIEW_BYTES {
-            self.view.interaction_view_error = Some(UNSHOWN_REVIEW.into());
-            self.view.truncated = true;
-        } else if !self.view.permissions.iter().any(|known| {
+        if !self.view.permissions.iter().any(|known| {
             known.execution_id == execution && known.permission_id == value.permission_id
         }) {
             self.view.permissions.push(value);
@@ -1660,10 +1668,11 @@ impl Projection {
             .filter(|permission| offered(&view, &permission.execution_id))
             .cloned()
             .collect();
-        // Past the limit the oldest waiting reviews are shown. A later one is
-        // offered as soon as one of those is answered, on the next read.
-        if permissions.len() > MAX_PERMISSIONS {
-            permissions.truncate(MAX_PERMISSIONS);
+        // The SDK holds no more open than this (`MAX_OPEN_REVIEWS` is its
+        // own), so for a live execution this never leaves one out. A history
+        // from elsewhere past it shows the oldest, and says so.
+        if permissions.len() > MAX_OPEN_REVIEWS {
+            permissions.truncate(MAX_OPEN_REVIEWS);
             view.truncated = true;
             view.interaction_view_error = Some(UNSHOWN_REVIEW.into());
         }
@@ -1673,8 +1682,18 @@ impl Projection {
     }
 }
 
-/// What a view says of a review it holds back: too large to show whole, or
-/// past the open-review limit.
+/// `review` carrying at most the start of its input, so it takes little of a
+/// view: the whole is read with `conversation.permissionInput` while the
+/// review waits, and a surface offers no choice until it has.
+pub fn review_summary(mut review: ConversationPermission) -> ConversationPermission {
+    if review.arguments_json.len() > MAX_REVIEW_PREVIEW_BYTES {
+        review.arguments_json = clipped(&review.arguments_json, MAX_REVIEW_PREVIEW_BYTES);
+        review.arguments_complete = false;
+    }
+    review
+}
+
+/// What a view says of reviews it holds back past the open-review limit.
 const UNSHOWN_REVIEW: &str =
     "A pending tool review exceeds the display limit; no choices were silently removed.";
 
@@ -1778,6 +1797,14 @@ pub fn bound_view_within(
         } else if !view.pending.is_empty() {
             view.pending.remove(0);
             view.queue_complete = false;
+        } else if let Some(review) = view.permissions.iter_mut().find(|review| {
+            matches!(review.origin, ConversationPermissionOrigin::Harness)
+                && !review.arguments_json.is_empty()
+        }) {
+            // A review's input start yields before any review does: the
+            // whole is still read with `conversation.permissionInput`.
+            review.arguments_json.clear();
+            review.arguments_complete = false;
         } else if !view.permissions.is_empty() {
             view.permissions.pop();
             view.interaction_view_error = Some(UNSHOWN_INTERACTIONS.into());

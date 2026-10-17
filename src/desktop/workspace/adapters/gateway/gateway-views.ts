@@ -484,13 +484,15 @@ export function transcriptFrom(
     })
   const latestTurn = view.messages.at(-1)
   const history = historyExtent(view)
-  // What runs is the tool and its exact input, which the gateway offers a
-  // review only when it can show whole; why is the provider's title for it.
+  // What runs is the tool and its exact input; why is the provider's title
+  // for it. A long input is its start until it is read whole, and the card
+  // offers no answer until then (`complete`).
   const asked = view.permissions[0]
   const approval: Approval | null = asked
     ? {
         id: approvalId(asked),
         command: `${asked.toolName} ${asked.argumentsJson}`,
+        ...(asked.argumentsComplete ? {} : { partial: true as const }),
         reason: asked.title,
         origin: approvalOrigins[asked.origin.kind](asked.origin),
         options: approvalOptions(asked),

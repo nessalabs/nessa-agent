@@ -4,7 +4,8 @@
 use crate::agents::AgentId;
 use crate::conversation::domain::{ConversationApprovalMode, ConversationId};
 use crate::conversation::projection::{
-    bound_view, bound_view_within, clipped, Projection, MAX_TEXT, MAX_VIEW_BYTES,
+    bound_view, bound_view_within, clipped, Projection, MAX_REVIEW_PREVIEW_BYTES, MAX_TEXT,
+    MAX_VIEW_BYTES,
 };
 use crate::conversation::view::{
     ConversationPermissionAsk, ConversationPermissionOptionEffect, ConversationRuntime,
@@ -43,7 +44,7 @@ use nessa_sdk::domain::agent_execution::permissions::{
     PermissionId, PermissionOfferPolicy, PermissionOption, PermissionOptionId, PermissionOptions,
     PermissionReviewDeadline, PermissionScope, PermissionSessionId, PermissionToolClass,
     ReviewDecline, ReviewDeclineId, ReviewDeclineObservation, ReviewDeclineReason,
-    ReviewDeclineStage, STANDARD_DENY_REASON, STANDARD_STOP_REASON,
+    ReviewDeclineStage, MAX_OPEN_REVIEWS, STANDARD_DENY_REASON, STANDARD_STOP_REASON,
 };
 use nessa_sdk::domain::agent_execution::prompts::{PromptText, UserMessage};
 use nessa_sdk::domain::agent_execution::questions::{
@@ -1513,12 +1514,21 @@ fn a_review_reaching_beyond_its_request_is_not_offered() {
 /// `"0"`, `"1"`, ..., each for its own tool call, folded with the live
 /// authority saying which of them still wait.
 fn many_reviews(count: usize, waiting: impl Fn(usize) -> bool) -> Projection {
+    many_reviews_of(count, "{}", waiting)
+}
+
+/// [`many_reviews`], each reviewing `arguments`, all of them waiting.
+fn many_reviews_with(count: usize, arguments: &str) -> Projection {
+    many_reviews_of(count, arguments, |_| true)
+}
+
+fn many_reviews_of(count: usize, arguments: &str, waiting: impl Fn(usize) -> bool) -> Projection {
     let ExecutionUpdate::PermissionRequested {
         observation,
         input,
         options,
         ..
-    } = review("{}".into()).update().clone()
+    } = review(arguments.into()).update().clone()
     else {
         unreachable!()
     };
@@ -1593,10 +1603,61 @@ fn a_review_answered_after_a_newer_fold_is_dropped_by_an_older_read() {
     assert_ne!(view.revision, before);
 }
 
+// A review is never left out for the size of its input. The card carries the
+// input's start and its length; the whole is read while the review waits.
+#[test]
+fn a_review_of_a_large_write_is_offered_with_the_start_of_its_input() {
+    let content = "x".repeat(100_000);
+    let arguments =
+        serde_json::json!({"file_path": "/tmp/big.txt", "content": content}).to_string();
+    let snapshot = review_snapshot(vec![review(arguments.clone())]);
+    let mut projection = projection();
+    projection.replace_committed_while_holding(
+        &committed("incarnation", 1, 1, 1, Some(&snapshot)),
+        &[],
+        Some(&ExecutionId::new("execution").unwrap()),
+        &HashSet::from([("execution".to_owned(), "7".to_owned())]),
+    );
+    projection.transcript_state(ConversationTranscriptState::Complete);
+    let view = bound_view(projection.read());
+    assert_eq!(view.interaction_view_error, None);
+    assert_eq!(shown_reviews(&view), ["7"]);
+    let review = &view.permissions[0];
+    assert!(!review.arguments_complete);
+    assert_eq!(review.arguments_bytes, arguments.len() as u64);
+    assert_eq!(review.arguments_json.len(), MAX_REVIEW_PREVIEW_BYTES);
+    assert!(arguments.starts_with(&review.arguments_json));
+}
+
+// Whole reviews are the last thing a full view gives up. Before any is left
+// out, each gives up the start of its input, which is still read whole.
+#[test]
+fn a_full_view_gives_up_review_input_starts_before_any_review() {
+    let arguments = serde_json::json!({"content": "y".repeat(5_000)}).to_string();
+    let view = many_reviews_with(MAX_OPEN_REVIEWS, &arguments).read();
+    assert_eq!(view.permissions.len(), MAX_OPEN_REVIEWS);
+    let bounded = bound_view(view);
+    assert!(serde_json::to_vec(&bounded).unwrap().len() <= MAX_VIEW_BYTES);
+    assert_eq!(bounded.permissions.len(), MAX_OPEN_REVIEWS);
+    assert_eq!(bounded.interaction_view_error, None);
+    assert!(bounded
+        .permissions
+        .iter()
+        .any(|review| review.arguments_json.is_empty()));
+    for review in &bounded.permissions {
+        assert!(!review.arguments_complete);
+        assert_eq!(review.arguments_bytes, arguments.len() as u64);
+    }
+}
+
+// The SDK holds no more open than `MAX_OPEN_REVIEWS`; a saved history from
+// elsewhere past it shows the oldest, and says so.
 #[test]
 fn reviews_past_the_open_limit_wait_their_turn_and_the_view_says_so() {
-    let all = many_reviews(17, |_| true).read();
-    let expected: Vec<String> = (0..16).map(|index| index.to_string()).collect();
+    let all = many_reviews(MAX_OPEN_REVIEWS + 1, |_| true).read();
+    let expected: Vec<String> = (0..MAX_OPEN_REVIEWS)
+        .map(|index| index.to_string())
+        .collect();
     assert_eq!(shown_reviews(&all), expected);
     assert!(all.truncated);
     assert_eq!(
@@ -1604,8 +1665,10 @@ fn reviews_past_the_open_limit_wait_their_turn_and_the_view_says_so() {
         Some("A pending tool review exceeds the display limit; no choices were silently removed.")
     );
     // Once the oldest is answered, the one held back is offered.
-    let after = many_reviews(17, |index| index != 0).read();
-    let expected: Vec<String> = (1..17).map(|index| index.to_string()).collect();
+    let after = many_reviews(MAX_OPEN_REVIEWS + 1, |index| index != 0).read();
+    let expected: Vec<String> = (1..=MAX_OPEN_REVIEWS)
+        .map(|index| index.to_string())
+        .collect();
     assert_eq!(shown_reviews(&after), expected);
     assert_eq!(after.interaction_view_error, None);
     assert!(!after.truncated);
@@ -1940,11 +2003,14 @@ fn active_interactions_survive_recent_message_window_without_copying_the_message
             assert_eq!(asked.options[0].label.len(), 1024);
         }
     }
-    assert!(view.permissions.len() < 8);
-    assert!(view.interaction_view_error.is_some());
+    // Every review is still offered: a long input travels as its start, and
+    // the whole is read while the review waits.
+    assert_eq!(view.permissions.len(), 8);
     for permission in &view.permissions {
         assert_eq!(permission.options.len(), 1);
-        assert_eq!(permission.arguments_json.len(), 6002);
+        assert!(!permission.arguments_complete);
+        assert_eq!(permission.arguments_bytes, 6002);
+        assert!(permission.arguments_json.len() <= MAX_REVIEW_PREVIEW_BYTES);
     }
     let mut owner = ExecutionController::new(ExecutionSessionId::new("provider-session").unwrap());
     owner.begin_execution(active.clone()).unwrap();

@@ -84,7 +84,12 @@ export type ConversationView = {
     executionId: string
     permissionId: string
     toolName: string
+    /** The whole input when `argumentsComplete`; otherwise only its start. */
     argumentsJson: string
+    /** Whether `argumentsJson` is the whole input. No choice is offered until it is. */
+    argumentsComplete: boolean
+    /** Length of the whole input, in UTF-8 bytes. */
+    argumentsBytes: number
     toolId: string
     title: string
     options: { id: string; label: string }[]

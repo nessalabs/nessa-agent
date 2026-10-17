@@ -292,7 +292,15 @@ pub struct ConversationPermission {
     pub tool_id: String,
     pub title: String,
     pub tool_name: String,
+    /// The reviewed input when `arguments_complete`; otherwise only its
+    /// start, clipped at a character, and the whole is read with
+    /// `conversation.permissionInput` while the review waits.
     pub arguments_json: String,
+    /// Whether `arguments_json` is the whole input. A surface does not offer
+    /// a choice on a review until it holds the whole input.
+    pub arguments_complete: bool,
+    /// Length of the whole input, in UTF-8 bytes.
+    pub arguments_bytes: u64,
     pub options: Vec<ConversationPermissionOption>,
     /// Who asked for the review: the agent, or an MCP App.
     pub origin: ConversationPermissionOrigin,

@@ -625,6 +625,8 @@ pub struct ConversationPermission {
     pub origin: ConversationPermissionOrigin,
     pub ask: ConversationPermissionAsk,
     pub arguments_json: String,
+    pub arguments_complete: bool,
+    pub arguments_bytes: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deadline: Option<ConversationPermissionDeadline>,
 }
@@ -933,6 +935,22 @@ pub struct ConversationAnswerParams {
     pub execution_id: String,
     pub permission_id: String,
     pub option_id: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationPermissionInputParams {
+    pub conversation_id: String,
+    pub execution_id: String,
+    pub permission_id: String,
+    pub offset: u64,
+    pub max_bytes: u64,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationPermissionInputResult {
+    pub offset: u64,
+    pub total_bytes: u64,
+    pub data: String,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -2769,6 +2787,8 @@ pub const MAX_RECORD_RESPONSE_BYTES: usize = 131072;
 /// Published bound from the product schema.
 pub const MAX_SHARE_PAGE: usize = 8;
 /// Published bound from the product schema.
+pub const MAX_REVIEW_INPUT_RANGE_BYTES: usize = 32768;
+/// Published bound from the product schema.
 pub const MAX_MCP_CONTEXT_BYTES: usize = 8192;
 /// Published bound from the product schema.
 pub const MIN_MCP_MESSAGE_CHARACTERS: usize = 1;
@@ -2813,6 +2833,7 @@ pub mod product_method {
     pub const CONVERSATION_MESSAGE: &str = "conversation.message";
     pub const CONVERSATION_MESSAGE_STATUS: &str = "conversation.messageStatus";
     pub const CONVERSATION_ANSWER: &str = "conversation.answer";
+    pub const CONVERSATION_PERMISSION_INPUT: &str = "conversation.permissionInput";
     pub const CONVERSATION_ANSWER_QUESTION: &str = "conversation.answerQuestion";
     pub const CONVERSATION_CANCEL: &str = "conversation.cancel";
     pub const CONVERSATION_CLOSE: &str = "conversation.close";
@@ -3061,7 +3082,7 @@ pub fn wire_shape_product_session_ready(value: &Value) -> bool {
         }) && object.get("methods").is_some_and(|field| {
             let _ = field;
             field.as_array().is_some_and(|items| {
-                items.len() <= 75
+                items.len() <= 76
                     && items.iter().all(|item| {
                         let _ = item;
                         item.is_string()
@@ -3105,6 +3126,7 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "conversation.message",
     "conversation.messageStatus",
     "conversation.answer",
+    "conversation.permissionInput",
     "conversation.answerQuestion",
     "conversation.cancel",
     "conversation.close",
@@ -3217,6 +3239,7 @@ pub fn action_for_method(method: &str) -> Option<&'static str> {
         | "conversation.message"
         | "conversation.messageStatus"
         | "conversation.answer"
+        | "conversation.permissionInput"
         | "conversation.answerQuestion"
         | "conversation.cancel"
         | "conversation.close"

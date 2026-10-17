@@ -937,6 +937,8 @@ pub(crate) struct ProviderFactory {
     pub(crate) native_hooks: AtomicBool,
     /// Offer "Reject once" beside "Allow once", so a refusal can be answered.
     pub(crate) offer_deny: AtomicBool,
+    /// The input each review carries; `{}` when unset.
+    pub(crate) review_arguments: Mutex<Option<String>>,
     /// Gate after domain consumption rather than before it.
     pub(crate) consume_before_answer_gate: AtomicBool,
     /// Return the controller's actual confirmed selection for successful corpus fixtures.
@@ -1705,7 +1707,13 @@ impl ProviderSessionBackend for Backend {
                             ),
                             ToolReviewInput {
                                 name: "write_file".into(),
-                                arguments_json: "{}".into(),
+                                arguments_json: self
+                                    .factory
+                                    .review_arguments
+                                    .lock()
+                                    .unwrap()
+                                    .clone()
+                                    .unwrap_or_else(|| "{}".into()),
                             },
                             options,
                             None,

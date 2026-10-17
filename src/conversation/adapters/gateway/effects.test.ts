@@ -306,6 +306,61 @@ it("P1: tells the follower each frame, and after lagging follows on at once from
   expect(said).toHaveLength(1)
 })
 
+it("shows a 100 KB Write review's start, reads its whole input, and shows it again whole", async () => {
+  const gateway = subscribing()
+  const whole = JSON.stringify({
+    file_path: "/tmp/big.txt",
+    content: "x".repeat(100_000),
+  })
+  const start = whole.slice(0, 1024)
+  let release = () => {}
+  const loading = new Promise<void>((resolve) => (release = resolve))
+  const permissionInput = vi.fn(() => loading.then(() => whole))
+  Object.assign(gateway.client, { conversation: { permissionInput } })
+  const effects = gatewayEffects(
+    () => gateway.client,
+    unexpectedWait,
+    () => SERVER_NOW_MS,
+  )
+  const { said, follower } = told()
+  const stop = effects.follow("00000000-0000-4000-8000-000000000001", follower)
+  await settle()
+  const review = {
+    executionId: "e1",
+    permissionId: "p1",
+    toolId: "t1",
+    title: "Write big.txt",
+    options: [{ id: "a", label: "Allow", effect: "allow" as const }],
+    toolName: "Write",
+    origin: { kind: "harness" as const },
+    ask: "tool" as const,
+    argumentsJson: start,
+    argumentsComplete: false,
+    argumentsBytes: whole.length,
+  }
+  gateway.opens[0]!.handlers.view({
+    cursor: cursor("1"),
+    view: { ...gatewayView(), permissions: [review] },
+  })
+  const shown = (index: number) =>
+    (said[index] as { view: ConversationViewOf }).view.permissions[0]!
+  expect(said).toHaveLength(1)
+  expect(shown(0)).toMatchObject({ argumentsJson: start, argumentsComplete: false })
+  release()
+  await settle()
+  expect(permissionInput).toHaveBeenCalledOnce()
+  expect(said).toHaveLength(2)
+  expect(shown(1)).toMatchObject({ argumentsJson: whole, argumentsComplete: true })
+  // The next frame naming the review carries it whole without reading again.
+  gateway.opens[0]!.handlers.view({
+    cursor: cursor("2"),
+    view: { ...gatewayView(), revision: "2", permissions: [review] },
+  })
+  expect(shown(2)).toMatchObject({ argumentsJson: whole, argumentsComplete: true })
+  expect(permissionInput).toHaveBeenCalledOnce()
+  stop()
+})
+
 it("puts a review's deadline on the panel's clock as the view arrives, so skew between the machines does not move the countdown", async () => {
   for (const skewMs of [0, 60_000, -60_000]) {
     const gateway = subscribing()
@@ -334,6 +389,8 @@ it("puts a review's deadline on the panel's clock as the view arrives, so skew b
             origin: { kind: "harness" },
             ask: "tool",
             argumentsJson: "{}",
+            argumentsComplete: true,
+            argumentsBytes: 2,
             // Due 30 s after the gateway sent the view, on its clock.
             deadline: {
               waitMs: 30_000,

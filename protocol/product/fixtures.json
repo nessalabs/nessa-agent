@@ -876,5 +876,17 @@
         "outcome": "failed"
       }
     ]
+  },
+  "ConversationPermissionInputParams": {
+    "conversationId": "00000000-0000-4000-8000-000000000001",
+    "executionId": "execution",
+    "permissionId": "permission",
+    "offset": 32768,
+    "maxBytes": 32768
+  },
+  "ConversationPermissionInputResult": {
+    "offset": 32768,
+    "totalBytes": 32770,
+    "data": "e30="
   }
 }

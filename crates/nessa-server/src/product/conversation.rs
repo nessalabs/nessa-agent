@@ -10,6 +10,7 @@ use crate::conversation::application::{
     RequestedConversation, RuleCatalogError, RuleChange, RulePrincipal, SubmissionMode,
     SubmittedFile, SubmittedImage, SubmittedMessage,
 };
+use base64::Engine as _;
 use nessa_auth::application::session::{AuthenticatedSession, ReadCurrentSession};
 use nessa_auth::domain::MembershipRole;
 use nessa_protocol::conversation::projection::CommittedCursor;
@@ -25,13 +26,14 @@ use nessa_protocol::product::generated::{
     ConversationDeleteParams, ConversationListParams, ConversationListResult,
     ConversationMutationResult, ConversationObserveCursor, ConversationObserveParams,
     ConversationObserveResult, ConversationPermissionAnswerErrorDetails,
+    ConversationPermissionInputParams, ConversationPermissionInputResult,
     ConversationPermissionRulesParams, ConversationPermissionRulesResult,
     ConversationPermissionSelectionState, ConversationReadParams, ConversationReceiptParams,
     ConversationReceiptResult, ConversationRemoveParams, ConversationReorderParams,
     ConversationRevokePermissionRuleParams, ConversationRevokePermissionRuleResult,
     ConversationSendParams, ConversationSetApprovalModeParams, ConversationSetApprovalModeResult,
     ConversationStopParams, ConversationSummary, ConversationView as WireConversationView,
-    PermissionRule, PermissionRuleEffect,
+    PermissionRule, PermissionRuleEffect, MAX_REVIEW_INPUT_RANGE_BYTES,
 };
 use nessa_protocol::product::generated::{
     ConversationMessageDelivery, ConversationMessageParams, ConversationMessageReceipt,
@@ -513,6 +515,31 @@ pub(crate) async fn dispatch(
                     &ConversationMutationResult {
                         request_id: params.request_id,
                         applied: true,
+                    },
+                ))
+            }
+            "conversation.permissionInput" => {
+                let params = target_params!(ConversationPermissionInputParams);
+                let max_bytes = usize::try_from(params.max_bytes)
+                    .ok()
+                    .filter(|bytes| (1..=MAX_REVIEW_INPUT_RANGE_BYTES).contains(bytes))
+                    .ok_or(ConversationError::InvalidInput)?;
+                let (data, total_bytes) = service
+                    .permission_input(
+                        conversation_id(&params.conversation_id)?,
+                        caller(frame.id.clone()),
+                        params.execution_id,
+                        params.permission_id,
+                        params.offset,
+                        max_bytes,
+                    )
+                    .await?;
+                Ok(success(
+                    &frame.id,
+                    &ConversationPermissionInputResult {
+                        offset: params.offset,
+                        total_bytes,
+                        data: base64::engine::general_purpose::STANDARD.encode(data),
                     },
                 ))
             }

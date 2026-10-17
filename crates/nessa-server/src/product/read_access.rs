@@ -355,7 +355,7 @@ pub(super) async fn admit_list(
 }
 
 /// The action a paired party's `conversation.write` method is: a Drive
-/// command starts and steers a turn, stops it, answers or cancels its
+/// command starts and steers a turn, stops it, reads, answers or cancels its
 /// permission request, answers its question, or looks up those commands'
 /// receipts (row J11); a Comment command leaves a note or reads where the
 /// caller's own note stands (row J17); any other is `conversation.write`
@@ -369,6 +369,7 @@ fn paired_action(method: &str) -> AccessAction {
         | "conversation.steer"
         | "conversation.stop"
         | "conversation.answer"
+        | "conversation.permissionInput"
         | "conversation.answerQuestion"
         | "conversation.cancel"
         | "conversation.receipt" => AccessAction::Drive,

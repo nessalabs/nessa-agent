@@ -121,6 +121,7 @@ import {
   type SubscriptionEnd,
   type ViewFrame,
 } from "@nessa/client"
+import { reviewInputs } from "../../../../conversation"
 import { HostRefusalError } from "../../../../host/startup-refusals"
 import { isSignedOut } from "../../../../session"
 import { agentForProvider } from "../../../model/composer-options"
@@ -153,6 +154,7 @@ export interface GatewayClient {
     | "create"
     | "submit"
     | "answer"
+    | "permissionInput"
     | "answerQuestion"
     | "stop"
     | "setApprovalMode"
@@ -251,6 +253,9 @@ export interface GatewayViewObserver {
 
 /** What one conversation's latest frame left: its view, its count, and where it was read. */
 interface Read {
+  /** The view as the gateway sent it. */
+  readonly sent: ConversationView
+  /** `sent`, each review whose whole input was read carrying all of it (`reviewInputs`). */
   readonly view: ConversationView
   /** What a person could see of `view` ([`viewKey`]). */
   readonly key: string
@@ -369,6 +374,8 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
   const reads = new Map<string, Read>()
   // When each message was first seen, per session: the gateway's view has no times.
   const firstSeen = new Map<string, Map<string, number>>()
+  // The whole inputs of each conversation's waiting reviews, as read so far.
+  const inputs = new Map<string, ReturnType<typeof reviewInputs>>()
 
   // Nothing is said after `dispose`, which lets every listener go and admits no new one.
   const emit = (update: WorkspaceUpdate) => {
@@ -723,6 +730,7 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     unfollow(sessionId, new WorkspaceSourceError("unknown-session"))
     // Its last frame goes with it: listed again, nothing it said then speaks for it.
     reads.delete(sessionId)
+    inputs.delete(sessionId)
     emit({ kind: "session-removed", sessionId, revision })
   }
 
@@ -958,17 +966,34 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     cursor: ConversationViewCursor,
     receivedAtMs: number,
   ): Transcript => {
+    const sent = view
+    const whole =
+      inputs.get(sessionId) ??
+      reviewInputs((target) =>
+        client("person").then((connected) =>
+          connected.conversation.permissionInput(target),
+        ),
+      )
+    inputs.set(sessionId, whole)
+    // A review's long input arrives as its start; it is read whole, and the
+    // frame applied again with it, before the review offers any answer.
+    whole.read(sent, () => {
+      const latest = reads.get(sessionId)
+      if (!disposed && latest?.sent === sent)
+        applyRead(sessionId, sent, latest.cursor, receivedAtMs)
+    })
+    view = whole.complete(sent)
     const held = reads.get(sessionId)
     const key = viewKey(view)
     if (held && held.key === key) {
-      reads.set(sessionId, { ...held, cursor })
+      reads.set(sessionId, { ...held, sent, cursor })
       return held.transcript
     }
     const revision = (transcriptCounts.get(sessionId) ?? 0) + 1
     transcriptCounts.set(sessionId, revision)
     const transcript = transcriptFrom(view, revision, seenIn(sessionId), receivedAtMs)
-    reads.set(sessionId, { view, key, transcript, cursor })
-    tellApps(() => options.apps?.observe(view))
+    reads.set(sessionId, { sent, view, key, transcript, cursor })
+    tellApps(() => options.apps?.observe(sent))
     emit({ kind: "transcript", transcript })
     // The summary follows what the frame says: an approval waiting, the model it runs on.
     publish(sessionId)
@@ -1095,6 +1120,7 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
                 throw error
               // The client is ahead of the history the gateway holds: start over.
               reads.delete(sessionId)
+              inputs.delete(sessionId)
               if (!live() || !current()) throw new WorkspaceSourceError("unavailable")
               return subscribe(connected, undefined)
             },
@@ -1156,6 +1182,7 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
         unfollow(oldest, new WorkspaceSourceError("unavailable"))
         // Not followed, it says only what its row says (`needs-you` is a frame's).
         reads.delete(oldest)
+        inputs.delete(oldest)
         publish(oldest)
       }
     }
@@ -1235,7 +1262,8 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     within(async (live) => {
       const { permission, target } = await waitingReview(sessionId, approvalId)
       const option = permission.options.find((offered) => offered.id === optionId)
-      if (!option || option.effect !== effect)
+      // No answer before the person could see the whole of what it allows.
+      if (!permission.argumentsComplete || !option || option.effect !== effect)
         throw new WorkspaceSourceError("not-supported")
       await dispatch(live, (connected) =>
         connected.conversation.answer(target, option.id),

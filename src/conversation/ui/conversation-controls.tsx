@@ -17,7 +17,11 @@ import {
   ToolApprovalAction,
 } from "@nessa-ui/react/tool-approval"
 
-/** Render exact offered choices; permission input is never abbreviated before approval. */
+/**
+ * Render exact offered choices. A review's input is shown whole before any
+ * choice is offered: one whose input has not been read whole yet shows its
+ * start and offers nothing but dismissing it.
+ */
 export function ConversationControls({
   conversation,
   gatewayAvailable,
@@ -64,6 +68,11 @@ export function ConversationControls({
             </ToolApprovalHeading>
           </ToolApprovalHeader>
           <ToolApprovalCommand json={permission.argumentsJson} />
+          {permission.argumentsComplete ? null : (
+            // Only the start is here. No choice is offered on what has not
+            // been seen whole; the rest is being read (`review-inputs.ts`).
+            <p role="status">Loading the whole input before you can answer…</p>
+          )}
           <ToolApprovalActions>
             {permission.options.map((option) => (
               <ToolApprovalAction
@@ -71,7 +80,8 @@ export function ConversationControls({
                 disabled={
                   !gatewayAvailable ||
                   conversation.controlPending ||
-                  !remote.capabilities.permissions
+                  !remote.capabilities.permissions ||
+                  !permission.argumentsComplete
                 }
                 onClick={() => {
                   const target = targets[index]

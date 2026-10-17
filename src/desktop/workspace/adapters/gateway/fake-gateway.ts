@@ -63,6 +63,7 @@ type Method =
   | "send"
   | "answer"
   | "answerQuestion"
+  | "permissionInput"
   | "stop"
   | "withdraw"
   | "setApprovalMode"
@@ -206,6 +207,12 @@ export interface FakeGateway {
    * running after its turn stopped.
    */
   readonly active: Map<string, string>
+  /**
+   * Each waiting review's whole input, by permission id, that
+   * `permissionInput` answers with. A view carries a long one as its start
+   * (`argumentsComplete` false).
+   */
+  readonly reviewInputs: Map<string, string>
   /** Whether a list names every conversation. */
   complete: boolean
   /**
@@ -277,6 +284,7 @@ export function fakeGateway(
   const rows = new Map<string, ConversationSummary>()
   const views = new Map<string, ConversationView>()
   const active = new Map<string, string>()
+  const reviewInputs = new Map<string, string>()
   const overrides = new Map<Exclude<Method, "answer">, Behaviour[]>()
   const answerOverrides: AnswerBehaviour[] = []
   const observers = new Set<(state: ConnectionState) => void>()
@@ -453,6 +461,13 @@ export function fakeGateway(
         const behaviour = answerOverrides.shift()
         return behaviour ? behaviour(normal, args) : Promise.resolve().then(normal)
       },
+      permissionInput: (...args) =>
+        answer("permissionInput", args, () => {
+          const whole = reviewInputs.get(args[0].permissionId)
+          if (whole === undefined)
+            throw new NessaRpcError("stale_permission", "No such review is waiting")
+          return whole
+        }) as never,
       answerQuestion: (...args) => {
         calls.push({ method: "answerQuestion", args })
         const normal = (): AnswerQuestionResult => {
@@ -606,6 +621,7 @@ export function fakeGateway(
     rows,
     views,
     active,
+    reviewInputs,
     once(method: Exclude<Method, "answer">, behaviour: Behaviour) {
       overrides.set(method, [...(overrides.get(method) ?? []), behaviour])
     },

@@ -305,6 +305,8 @@ it("rejects terminal executions that remain pending or actionable", async () => 
     title: "Review",
     toolName: "shell",
     argumentsJson: "{}",
+    argumentsComplete: true,
+    argumentsBytes: 2,
     origin: { kind: "harness" },
     ask: "tool",
     options: [{ id: "deny", label: "Deny", effect: "deny" }],
@@ -417,6 +419,8 @@ it("accepts bounded full replacement views and rejects mismatched identities or 
           title: "run",
           toolName: "shell",
           argumentsJson: "{}",
+          argumentsComplete: true,
+          argumentsBytes: 2,
           origin: { kind: "harness" },
           ask: "tool",
           options: [
@@ -447,6 +451,8 @@ it("rejects duplicate identities and impossible steering order at the response b
     title: "Run",
     toolName: "shell",
     argumentsJson: "{}",
+    argumentsComplete: true,
+    argumentsBytes: 2,
     origin: { kind: "harness" },
     ask: "tool",
     options: [{ id: "allow", label: "Allow", effect: "allow" }],
@@ -590,6 +596,8 @@ it("accepts bounded omissions and the intentional pending-message overlap", asyn
         title: "Review",
         toolName: "shell",
         argumentsJson: "{}",
+        argumentsComplete: true,
+        argumentsBytes: 2,
         origin: { kind: "harness" },
         ask: "tool",
         options: [{ id: "deny", label: "Deny", effect: "deny" }],
@@ -2086,4 +2094,56 @@ it.each([
     () => "action",
   )
   await expect(api.shares(conversationId, page)).rejects.toThrow()
+})
+
+it("reads a waiting review's whole input range by range, and refuses one that does not add up", async () => {
+  // A 100 KB Write input, of two-byte characters split across ranges.
+  const whole = JSON.stringify({ file_path: "/tmp/big.txt", content: "é".repeat(50_000) })
+  const bytes = new TextEncoder().encode(whole)
+  const serve = (encoded: Uint8Array) =>
+    vi.fn(async (_method: string, params: unknown) => {
+      const { offset, maxBytes } = params as { offset: number; maxBytes: number }
+      const part = encoded.subarray(offset, offset + maxBytes)
+      return {
+        offset,
+        totalBytes: encoded.byteLength,
+        data: btoa(String.fromCharCode(...part)),
+      }
+    })
+  const request = serve(bytes)
+  const api = createConversationApi({ request }, () => "unused")
+  await expect(api.permissionInput(reviewTarget("review"))).resolves.toBe(whole)
+  const asked = request.mock.calls.map((call) => call[1] as Record<string, unknown>)
+  expect(asked.length).toBe(Math.ceil(bytes.byteLength / 32_768))
+  expect(asked[0]).toEqual({
+    conversationId,
+    executionId: "execution",
+    permissionId: "review",
+    offset: 0,
+    maxBytes: 32_768,
+  })
+  expect(asked.map((each) => each.offset)).toEqual(
+    asked.map((_, index) => index * 32_768),
+  )
+  expect(
+    request.mock.calls.every((call) => call[0] === "conversation.permissionInput"),
+  ).toBe(true)
+  // Bytes that are not UTF-8 are not an input.
+  await expect(
+    createConversationApi(
+      { request: serve(new Uint8Array([0xff])) },
+      () => "unused",
+    ).permissionInput(reviewTarget("review")),
+  ).rejects.toThrow()
+  // A read let go is not asked again.
+  const stopped = new AbortController()
+  stopped.abort()
+  const idle = serve(bytes)
+  await expect(
+    createConversationApi({ request: idle }, () => "unused").permissionInput(
+      reviewTarget("review"),
+      { signal: stopped.signal },
+    ),
+  ).rejects.toThrow()
+  expect(idle).not.toHaveBeenCalled()
 })

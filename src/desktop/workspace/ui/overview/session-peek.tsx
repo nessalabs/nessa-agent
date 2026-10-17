@@ -20,6 +20,7 @@ import { isMac } from "../../../adapters/platform"
 import { matchesChord } from "../../../model/keyboard"
 import { answering } from "../../application/workspace-state"
 import { peekOf } from "../../model/overview/peek"
+import { shownWhole } from "../../model/transcript"
 import { sessionTime } from "../../model/time-labels"
 import { agentName, agentOf, modelName, nowLine } from "../../model/workspace-index"
 import { AgentTile } from "../chrome/agent-tile"
@@ -97,7 +98,12 @@ export const SessionPeek = memo(function SessionPeek({
   const line = nowLine(summary)
   // What the agent is doing now, while it works: the story's last line, where its reply will appear.
   const running = summary.status === "running" ? (peek?.activity ?? null) : null
-  const answerable = approval !== null && !settling && !answering(answer, approval.id)
+  // Not before all of what it allows is shown (`Approval.partial`).
+  const answerable =
+    approval !== null &&
+    shownWhole(approval) &&
+    !settling &&
+    !answering(answer, approval.id)
   const refused = settling ? undefined : answer?.failure
   const agent = agentName(agentOf(summary.model))
   const reply = (

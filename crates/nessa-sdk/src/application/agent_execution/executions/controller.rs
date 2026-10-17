@@ -24,7 +24,6 @@ use crate::domain::agent_execution::{
 use std::collections::{HashMap, HashSet};
 
 const MAX_TOOLS: usize = 4096;
-const MAX_PERMISSIONS: usize = 128;
 pub(crate) const MAX_EXECUTION_PERMISSIONS: usize = 4096;
 const MAX_RETAINED_BYTES: usize = 32 * 1024 * 1024;
 
@@ -417,7 +416,7 @@ impl ExecutionController {
             .map(|bytes| HistoricalReviewCost { bytes })
     }
     pub(crate) fn validate_review_totals(count: usize, bytes: usize) -> Result<(), AgentError> {
-        if count > MAX_PERMISSIONS {
+        if count > MAX_OPEN_REVIEWS {
             return Err(AgentError::Protocol(
                 "pending permission limit exceeded".into(),
             ));

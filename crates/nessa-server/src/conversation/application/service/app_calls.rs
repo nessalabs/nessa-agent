@@ -37,7 +37,9 @@ use crate::mcp_servers::domain::{
     ResourceTicketDigest, MAX_APP_RESULT_BYTES,
 };
 use nessa_protocol::conversation::domain::ConversationId;
-use nessa_protocol::conversation::projection::{bound_view, bound_view_within, MAX_VIEW_BYTES};
+use nessa_protocol::conversation::projection::{
+    bound_view, bound_view_within, review_summary, MAX_VIEW_BYTES,
+};
 use nessa_protocol::conversation::view::{
     ConversationPermission, ConversationTranscriptState, ConversationView,
 };
@@ -1260,6 +1262,17 @@ pub(super) fn with_app_reviews(
     if reviews.is_empty() || view.transcript_state != ConversationTranscriptState::Complete {
         return view;
     }
+    // A review is never left out for the size of its input. When they do not
+    // all fit whole, each carries the start of its input, and the whole is
+    // read with `conversation.permissionInput` (`ConversationService::permission_input`).
+    let whole = reviews.iter().fold(encoded_len(&view), |total, review| {
+        total.saturating_add(serde_json::to_vec(review).map_or(usize::MAX, |bytes| bytes.len() + 1))
+    });
+    let reviews: Vec<ConversationPermission> = if whole <= MAX_VIEW_BYTES {
+        reviews
+    } else {
+        reviews.into_iter().map(review_summary).collect()
+    };
     let sizes: Vec<usize> = reviews
         .iter()
         .map(|review| serde_json::to_vec(review).map_or(usize::MAX, |bytes| bytes.len() + 1))

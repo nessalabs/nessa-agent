@@ -36,6 +36,7 @@ export { HeldFilesProvider } from "./ui/held-files"
 export { MessageImages } from "./ui/message-images"
 export { PublishedFiles } from "./ui/published-files"
 export { heldFileReader } from "./adapters/gateway/held-files"
+export { reviewInputs } from "./adapters/gateway/review-inputs"
 export { shownNote } from "./adapters/gateway/notes"
 export { monotonicWallClock } from "./adapters/browser/wall-clock"
 export {

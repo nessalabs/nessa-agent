@@ -58,6 +58,8 @@ function waiting(dueAtMs: number): Conversation {
           title: "Run tests",
           toolName: "Shell",
           argumentsJson: "{}",
+          argumentsComplete: true,
+          argumentsBytes: 2,
           options: [{ id: "cancel", label: "Cancel" }],
           deadline: {
             waitMs: 30_000,
@@ -189,4 +191,46 @@ it("captures the displayed review's conversation for both answer and dismiss", a
     expect(control).not.toHaveProperty("executionId")
     expect(control).not.toHaveProperty("permissionId")
   }
+})
+
+it("offers no answer on a review until its whole input is shown, and then offers it", async () => {
+  const base = waiting(time + 30_000)
+  const remote = base.remote
+  const [review] = remote?.permissions ?? []
+  if (!remote || !review) throw new Error("the sample asks for nothing")
+  const withInput = (
+    argumentsJson: string,
+    argumentsComplete: boolean,
+  ): Conversation => ({
+    ...base,
+    remote: {
+      ...remote,
+      permissions: [
+        { ...review, argumentsJson, argumentsComplete, argumentsBytes: 100_000 },
+      ],
+    },
+  })
+  const show = (conversation: Conversation) =>
+    act(async () => {
+      root.render(
+        <ClockProvider now={() => time}>
+          <ConversationControls conversation={conversation} gatewayAvailable />
+        </ClockProvider>,
+      )
+    })
+  const answer = () => {
+    const button = [...host.querySelectorAll("button")].find(
+      (each) => each.textContent === "Cancel",
+    )
+    if (!button) throw new Error("no answer is drawn")
+    return button
+  }
+  await show(withInput('{"content":"xxx', false))
+  expect(host.textContent).toContain("Loading the whole input before you can answer")
+  expect(answer().disabled).toBe(true)
+  await act(async () => answer().click())
+  expect(dispatch).not.toHaveBeenCalled()
+  await show(withInput(`{"content":"${"x".repeat(99_986)}"}`, true))
+  expect(host.textContent).not.toContain("Loading the whole input")
+  expect(answer().disabled).toBe(false)
 })

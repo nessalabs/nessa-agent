@@ -46,7 +46,7 @@ import {
 } from "./attachment-validate.js"
 import { approvalModeChoices } from "./agents-validate.js"
 import { boundedName } from "./mcp-app-validate.js"
-import { decimal } from "./passive-read-validate.js"
+import { canonicalBase64, decimal } from "./passive-read-validate.js"
 
 const utf8 = new TextEncoder()
 const maxTranscriptStateBytes = Math.max(
@@ -162,6 +162,37 @@ export function conversationId(
   if (identity(item, "conversationId") !== expected)
     throw new Error("Conversation response belongs to another conversation")
   return { conversationId: expected }
+}
+/**
+ * One range of a waiting review's input, held to the range asked: its
+ * offset, the input's whole length, and canonical base64 of exactly the bytes
+ * left up to `maxBytes`. `totalBytes`, when known from an earlier range or the
+ * view, must not change between ranges.
+ */
+export function permissionInputRange(
+  value: unknown,
+  offset: number,
+  maxBytes: number,
+  totalBytes?: number,
+): { totalBytes: number; bytes: Uint8Array } {
+  const item = record(value)
+  exact(item, ["offset", "totalBytes", "data"])
+  if (item.offset !== offset)
+    throw new Error("Review input response is for another range")
+  const total = item.totalBytes
+  if (
+    !Number.isSafeInteger(total) ||
+    (total as number) < 0 ||
+    (total as number) > bounds.maxReviewInputBytes ||
+    (totalBytes !== undefined && total !== totalBytes) ||
+    (offset >= (total as number) && offset !== 0)
+  )
+    throw new Error("Review input response names another length")
+  const length = Math.min(maxBytes, (total as number) - offset)
+  const bytes = canonicalBase64(item.data, maxBytes, true)
+  if (bytes.byteLength !== length)
+    throw new Error("Review input response is not the range asked for")
+  return { totalBytes: total as number, bytes }
 }
 /** Authoritative local activity; unlike a replacement view this cannot truncate the parent. */
 export function conversationPeek(
@@ -534,7 +565,7 @@ export function conversationView(value: unknown, expected: string): Conversation
     }
   }
   const permissionIds = new Set<string>()
-  for (const permission of items(item, "permissions", 64)) {
+  for (const permission of items(item, "permissions", bounds.maxOpenReviews)) {
     exact(permission, [
       "executionId",
       "permissionId",
@@ -543,6 +574,8 @@ export function conversationView(value: unknown, expected: string): Conversation
       "options",
       "toolName",
       "argumentsJson",
+      "argumentsComplete",
+      "argumentsBytes",
       "origin",
       "ask",
       "deadline",
@@ -581,12 +614,26 @@ export function conversationView(value: unknown, expected: string): Conversation
       throw new Error("Permission execution is missing its message")
     permissionIds.add(permissionKey)
     text(permission, "title", 2048)
-    const toolName = text(permission, "toolName", 256)
+    const toolName = text(permission, "toolName", bounds.maxReviewToolNameBytes)
     // The card names the app's tool; the answer approves toolName.
     if (kind === "app" && origin.tool !== toolName)
       throw new Error("An app's review names a tool other than the one it reviews")
-    JSON.parse(text(permission, "argumentsJson", 32768))
-    const options = items(permission, "options", 64)
+    // The input travels whole, or as its start with its whole length: a
+    // surface reads the rest with `permissionInput` before offering a choice.
+    // It is the agent's own text, shown as it is; it need not be JSON.
+    const argumentsJson = text(permission, "argumentsJson", bounds.maxMcpArgumentsBytes)
+    flag(permission, "argumentsComplete")
+    const argumentsBytes = permission.argumentsBytes
+    const shownBytes = utf8.encode(argumentsJson).byteLength
+    if (
+      !Number.isSafeInteger(argumentsBytes) ||
+      (argumentsBytes as number) > bounds.maxReviewInputBytes ||
+      (permission.argumentsComplete
+        ? argumentsBytes !== shownBytes
+        : (argumentsBytes as number) <= shownBytes)
+    )
+      throw new Error("Invalid conversation argumentsBytes")
+    const options = items(permission, "options", bounds.maxReviewOptions)
     if (!options.length) throw new Error("Permission response has no choices")
     const ids = new Set<string>()
     for (const option of options) {
@@ -594,7 +641,7 @@ export function conversationView(value: unknown, expected: string): Conversation
       const id = identity(option, "id")
       if (ids.has(id)) throw new Error("Permission response repeats an option")
       ids.add(id)
-      text(option, "label", 2048, false)
+      text(option, "label", bounds.maxReviewOptionLabelBytes, false)
       oneOf(text(option, "effect"), Object.values(ConversationPermissionOptionEffect))
     }
     if (permission.deadline !== undefined) deadlineOf(permission.deadline)

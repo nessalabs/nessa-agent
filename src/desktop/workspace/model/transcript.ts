@@ -306,6 +306,12 @@ export interface ApprovalDeadline {
 export interface Approval {
   readonly id: string
   readonly command: string
+  /**
+   * Present when `command` is only the start of what runs: a long input is
+   * shown so while the rest is read, and no answer is offered until it is
+   * whole (`shownWhole`).
+   */
+  readonly partial?: true
   readonly reason: string
   readonly origin: ApprovalOrigin
   /** The answers this review offers, in the order it offers them. */
@@ -322,6 +328,11 @@ export interface Approval {
 /** Whether `approval` offers `choice`. A button and an answer both ask this. */
 export function offersChoice(approval: Approval, choice: ApprovalChoice): boolean {
   return approval.options.some((option) => option.choice === choice)
+}
+
+/** Whether `approval` can be answered: all of what it allows is shown. */
+export function shownWhole(approval: Approval): boolean {
+  return approval.partial !== true
 }
 
 /**

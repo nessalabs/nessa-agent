@@ -276,6 +276,8 @@ function viewWithAppReview(argumentsJson: string) {
         title: "delete_rows",
         toolName: "delete_rows",
         argumentsJson,
+        argumentsComplete: true,
+        argumentsBytes: new TextEncoder().encode(argumentsJson).byteLength,
         origin: { kind: "app", server: "charts", tool: "delete_rows" },
         ask: "tool",
         options: [{ id: "allow", label: "Allow", effect: "allow" }],

@@ -152,6 +152,8 @@ function reviewOf(permissionId: string, tool: string): ConversationPermission {
     title: `An app asks to run ${tool} on ${server}`,
     toolName: tool,
     argumentsJson: "{}",
+    argumentsComplete: true,
+    argumentsBytes: 2,
     origin: { kind: "app", server, tool },
     ask: "tool",
     options: [
@@ -174,6 +176,8 @@ function messageReviewOf(permissionId: string, text: string): ConversationPermis
     title: `The ${asking.tool} app on ${asking.server} asks to send a message as you`,
     toolName: asking.tool,
     argumentsJson: JSON.stringify({ text }),
+    argumentsComplete: true,
+    argumentsBytes: new TextEncoder().encode(JSON.stringify({ text })).byteLength,
     origin: { kind: "app", ...asking },
     ask: "message",
     options: [

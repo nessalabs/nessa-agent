@@ -135,6 +135,8 @@ const permission = (
   origin: { kind: "harness" },
   ask: "tool",
   argumentsJson: "{}",
+  argumentsComplete: true,
+  argumentsBytes: 2,
   ...change,
 })
 
@@ -2319,6 +2321,48 @@ describe("writes", () => {
       kind: "transcript",
       transcript: expect.objectContaining({ approval: null, revision: 2 }),
     })
+  })
+
+  it("a 100 KB Write review shows its start, offers no answer, and is approved once its whole input has loaded", async () => {
+    const { gateway, source, updates, follow } = started()
+    const whole = JSON.stringify({
+      file_path: "/tmp/big.txt",
+      content: "x".repeat(100_000),
+    })
+    const start = whole.slice(0, 1024)
+    const asked = permission({
+      toolName: "Write",
+      argumentsJson: start,
+      argumentsComplete: false,
+      argumentsBytes: whole.length,
+    })
+    gateway.reviewInputs.set("p1", whole)
+    let release = () => {}
+    const loading = new Promise<void>((resolve) => (release = resolve))
+    gateway.once("permissionInput", (normal) => loading.then(normal))
+    gateway.views.set(
+      conversationA,
+      view(conversationA, { revision: "1", messages: [running()], permissions: [asked] }),
+    )
+    follow()
+    const shown = await source.transcript(conversationA)
+    expect(shown.approval).toMatchObject({ command: `Write ${start}`, partial: true })
+    // Nothing is answered before the person could see all of what it allows.
+    await expect(
+      source.approve(conversationA, approvalId(asked), "once", "person", "opt-a"),
+    ).rejects.toMatchObject({ reason: "not-supported" })
+    expect(gateway.count("answer")).toBe(0)
+    release()
+    await flush()
+    const loaded = transcriptsOf(updates, conversationA).at(-1)
+    expect(loaded?.approval?.command).toBe(`Write ${whole}`)
+    expect(loaded?.approval?.partial).toBeUndefined()
+    expect(gateway.count("permissionInput")).toBe(1)
+    await source.approve(conversationA, approvalId(asked), "once", "person", "opt-a")
+    expect(gateway.calls.find((call) => call.method === "answer")?.args).toEqual([
+      { conversationId: conversationA, executionId: "turn", permissionId: "p1" },
+      "opt-a",
+    ])
   })
 
   it("W3: approving one of two allow options answers that option", async () => {

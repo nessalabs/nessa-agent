@@ -63,6 +63,7 @@ import {
   conversationShares,
   maxPolicyRevision,
   minExpectedPolicyRevision,
+  permissionInputRange,
 } from "../protocol/conversation-validate.js"
 import { decimal } from "../protocol/passive-read-validate.js"
 import {
@@ -223,6 +224,25 @@ export type ConversationApi = {
     optionId: string,
     options?: ConversationActionOptions,
   ) => Promise<ConversationMutationResult>
+  /**
+   * Read the whole input of one waiting review.
+   *
+   * A view carries a review's whole input only when `argumentsComplete` is
+   * true; otherwise `argumentsJson` is its start. Ask for the rest here, and
+   * offer no choice on the review until this returns. Ranges of
+   * `bounds.maxReviewInputRangeBytes` are asked one after another, each held
+   * to the range asked; the assembled bytes are returned only when they are
+   * the whole length and UTF-8.
+   * @param target - A review captured from a view.
+   * @param options - `signal` abandons the read between ranges.
+   * @returns The input, exactly as the agent gave it.
+   * @throws The session's refusal, `stale_permission` once the review no
+   * longer waits; `Error` for an answer that is not the range asked for.
+   */
+  permissionInput: (
+    target: PermissionTarget,
+    options?: { signal?: AbortSignal },
+  ) => Promise<string>
   /**
    * Answer one question the agent asked, or decline it.
    *
@@ -857,6 +877,39 @@ export function createConversationApi(
         options,
         true,
       )
+    },
+    permissionInput: async (target, options = {}) => {
+      const { conversationId, executionId, permissionId } = permissionFields(target)
+      validConversationId(conversationId)
+      const maxBytes = bounds.maxReviewInputRangeBytes
+      const parts: Uint8Array[] = []
+      let offset = 0
+      let totalBytes: number | undefined
+      do {
+        options.signal?.throwIfAborted()
+        const range = permissionInputRange(
+          await session.request(ProductMethod.ConversationPermissionInput, {
+            conversationId,
+            executionId,
+            permissionId,
+            offset,
+            maxBytes,
+          }),
+          offset,
+          maxBytes,
+          totalBytes,
+        )
+        totalBytes = range.totalBytes
+        parts.push(range.bytes)
+        offset += range.bytes.byteLength
+      } while (offset < totalBytes)
+      const whole = new Uint8Array(offset)
+      let at = 0
+      for (const part of parts) {
+        whole.set(part, at)
+        at += part.byteLength
+      }
+      return new TextDecoder("utf-8", { fatal: true }).decode(whole)
     },
     cancel: (target, reason, options) => {
       const { conversationId, executionId, permissionId } = permissionFields(target)

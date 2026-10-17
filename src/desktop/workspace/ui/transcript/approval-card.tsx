@@ -7,7 +7,7 @@ import { useWorkspaceDispatch, useWorkspaceSelector } from "../../adapters/store
 import { selectAnswer } from "../../adapters/store/selectors"
 import { answering } from "../../application/workspace-state"
 import { agentName, agentOf, type ModelRef } from "../../model/workspace-index"
-import type { Approval } from "../../model/transcript"
+import { shownWhole, type Approval } from "../../model/transcript"
 import { failureCopy } from "../failure-copy"
 import {
   ApprovalActions,
@@ -67,6 +67,11 @@ export const ApprovalCard = memo(function ApprovalCard({
           <Saying said={[deadlinePendingLine(approval.deadline, now)]} />
         </p>
       ) : null}
+      {shownWhole(approval) ? null : (
+        <p className="workspace-approval-loading" role="status">
+          Loading the whole input before you can answer…
+        </p>
+      )}
       {answer?.failure ? (
         <p className="workspace-approval-failure" role="status">
           {failureCopy(answer.failure)}
@@ -74,7 +79,8 @@ export const ApprovalCard = memo(function ApprovalCard({
       ) : null}
       <ApprovalActions
         options={approval.options}
-        disabled={waiting}
+        // Not before all of what it allows is shown (`Approval.partial`).
+        disabled={waiting || !shownWhole(approval)}
         onAnswer={(option) =>
           void dispatch(
             option.choice === "deny"

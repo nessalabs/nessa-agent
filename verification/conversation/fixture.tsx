@@ -98,6 +98,8 @@ function publishedView(
               ask: "tool",
               title: "Read committed source",
               argumentsJson: '{"path":"src/main.rs"}',
+              argumentsComplete: true,
+              argumentsBytes: 22,
               options: [{ id: "allow", label: "Allow once", effect: "allow" }],
             },
           ]

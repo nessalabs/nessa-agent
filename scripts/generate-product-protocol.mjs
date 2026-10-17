@@ -492,6 +492,40 @@ const sharePage = agreeing("conversation.shares page size", [
 ])
 if (!Number.isSafeInteger(schema.$defs.ConversationSharesResult["x-maxGrants"]))
   throw new Error("ConversationSharesResult must publish x-maxGrants")
+// What one review may hold, and how many may be open, are the SDK's: it
+// refuses a live review past them when it arrives. The schema publishes the
+// same numbers, so a view never has to leave a waiting review out.
+const reviewLimits = readFileSync(
+  resolve(
+    root,
+    "crates/nessa-sdk/src/domain/agent_execution/permissions/value_objects/review_limits.rs",
+  ),
+  "utf8",
+)
+const reviewLimit = (constant) => {
+  const owned = Number(
+    reviewLimits
+      .match(new RegExp(`pub const ${constant}: usize = ([0-9_]+);`))?.[1]
+      .replaceAll("_", ""),
+  )
+  if (!Number.isSafeInteger(owned)) throw new Error(`SDK ${constant} is not readable`)
+  return owned
+}
+const permission = schema.$defs.ConversationPermission.properties
+for (const [published, constant] of [
+  [schema.$defs.ConversationView.properties.permissions.maxItems, "MAX_OPEN_REVIEWS"],
+  [permission.options.maxItems, "MAX_REVIEW_OPTIONS"],
+  [
+    schema.$defs.ConversationPermissionOption.properties.label["x-utf8MaxBytes"],
+    "MAX_REVIEW_OPTION_LABEL_BYTES",
+  ],
+  [permission.toolName["x-utf8MaxBytes"], "MAX_REVIEW_TOOL_NAME_BYTES"],
+]) {
+  if (published !== reviewLimit(constant))
+    throw new Error(
+      `The product schema's review bound drifted from the SDK's ${constant}`,
+    )
+}
 const bounds = {
   maxOrdinaryResponseBytes,
   // The same gateway limit, read where it bites a client: the gateway takes no
@@ -619,6 +653,17 @@ const bounds = {
     schema.$defs.ConversationPermission.properties.argumentsJson["x-utf8MaxBytes"],
     schema.$defs.ConversationMcpTool.properties.argumentsJson["x-utf8MaxBytes"],
   ]),
+  maxOpenReviews: schema.$defs.ConversationView.properties.permissions.maxItems,
+  maxReviewOptions: permission.options.maxItems,
+  maxReviewOptionLabelBytes:
+    schema.$defs.ConversationPermissionOption.properties.label["x-utf8MaxBytes"],
+  maxReviewToolNameBytes: permission.toolName["x-utf8MaxBytes"],
+  maxReviewInputBytes: agreeing("review input bytes", [
+    permission.argumentsBytes.maximum,
+    schema.$defs.ConversationPermissionInputResult.properties.totalBytes.maximum,
+  ]),
+  maxReviewInputRangeBytes:
+    schema.$defs.ConversationPermissionInputParams.properties.maxBytes.maximum,
   maxMcpResultBytes:
     schema.$defs.McpCallToolResult.properties.resultJson["x-utf8MaxBytes"],
   // An app's message is held to what the person's own may take.
@@ -676,6 +721,8 @@ for (const name of [
   "maxRecordPagePayloadBytes",
   "maxRecordResponseBytes",
   "maxSharePage",
+  // The most of a review's input one conversation.permissionInput answers.
+  "maxReviewInputRangeBytes",
   // Each part of an app's context past it is refused at the wire, before
   // anything is recorded; both together are the gateway's to bound.
   "maxMcpContextBytes",

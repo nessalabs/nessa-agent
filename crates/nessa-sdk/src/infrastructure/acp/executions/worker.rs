@@ -56,7 +56,8 @@ use crate::domain::agent_execution::permissions::{
     PermissionCancellationReason, PermissionCancellationReasonView, PermissionDeadlineSettlement,
     PermissionDecision, PermissionEffect, PermissionId, PermissionOfferPolicy, PermissionOptionId,
     PermissionScope, PermissionStateView, RefusalOutcome, ReviewDecline, ReviewDeclineId,
-    ReviewDeclineObservation, ReviewDeclineReason, ReviewDeclineStage,
+    ReviewDeclineObservation, ReviewDeclineReason, ReviewDeclineStage, MAX_OPEN_REVIEWS,
+    MAX_REVIEW_TOOL_NAME_BYTES,
 };
 use crate::domain::agent_execution::prompts::UserMessage;
 use crate::domain::agent_execution::questions::{
@@ -2814,7 +2815,9 @@ impl<P: AcpProfile> Worker<P> {
                 .await
                 .map_err(Into::into);
         }
-        if self.permissions.len() >= 128 || self.permissions.values().any(|id| *id == wire_id) {
+        if self.permissions.len() >= MAX_OPEN_REVIEWS
+            || self.permissions.values().any(|id| *id == wire_id)
+        {
             return Err(json_rpc::protocol("permission request limit or duplicate ID").into());
         }
         // A review this binding cannot put to a host is one tool's answer, not
@@ -2840,6 +2843,19 @@ impl<P: AcpProfile> Worker<P> {
         // the two would file a refusal under the wrong reason, and the reason
         // is most of what the record is for.
         let input = match self.profile.permission_input(&params) {
+            // A name longer than a review may carry could not be shown, so
+            // it is refused here rather than left waiting unseen.
+            Ok(input) if input.name.len() > MAX_REVIEW_TOOL_NAME_BYTES => {
+                return self
+                    .decline_review(
+                        execution,
+                        wire_id,
+                        &params,
+                        ReviewDeclineReason::UnreadableRequest,
+                        response_deadline,
+                    )
+                    .await
+            }
             Ok(input) => input,
             Err(error) => {
                 self.profile.note_declined_permission(&params);

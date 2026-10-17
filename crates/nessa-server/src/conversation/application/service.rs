@@ -3722,6 +3722,77 @@ impl ConversationService {
         })
         .await
     }
+    /// One range of a waiting review's whole input, and the input's length,
+    /// in UTF-8 bytes: at most `max_bytes` from `offset`. A view carries only
+    /// the start of a long input (`ConversationPermission::arguments_complete`),
+    /// and a person reads the rest here before they choose. Served only while
+    /// the agent's permission authority still waits on the review; afterwards
+    /// it is `StalePermission`. Opens nothing: a conversation nobody has open
+    /// has no review waiting.
+    pub async fn permission_input(
+        &self,
+        id: ConversationId,
+        caller: ConversationCaller,
+        execution: String,
+        permission: String,
+        offset: u64,
+        max_bytes: usize,
+    ) -> Result<(Vec<u8>, u64), ConversationError> {
+        let _admission = self.admit().await?;
+        let execution_id =
+            ExecutionId::new(&execution).map_err(|_| ConversationError::InvalidInput)?;
+        let permission_id =
+            PermissionId::new(&permission).map_err(|_| ConversationError::InvalidInput)?;
+        let stale = || ConversationError::from(AgentError::StalePermission);
+        let Some(live) = self.live_now(&id, &caller).await? else {
+            return Err(stale());
+        };
+        let range = |input: &[u8]| {
+            let total = input.len() as u64;
+            if offset > total || (offset == total && total != 0) {
+                return Err(ConversationError::InvalidInput);
+            }
+            let start = offset as usize;
+            let end = start.saturating_add(max_bytes).min(input.len());
+            Ok((input[start..end].to_vec(), total))
+        };
+        // An app's review first: it is the gateway's own, not the agent's.
+        if let Some(review) =
+            live.app_reviews.reviews().into_iter().find(|review| {
+                review.execution_id == execution && review.permission_id == permission
+            })
+        {
+            return range(review.arguments_json.as_bytes());
+        }
+        if !live
+            .agent
+            .pending_permission(&execution_id, &permission_id)
+            .unwrap_or(false)
+        {
+            return Err(stale());
+        }
+        let (committed, _) = self.committed_with_order(&id).await?;
+        let input = committed
+            .snapshot()
+            .and_then(|snapshot| {
+                snapshot
+                    .invocations
+                    .iter()
+                    .find(|record| record.request.execution_id == execution_id)
+            })
+            .and_then(|record| {
+                record.events.iter().find_map(|event| match event.update() {
+                    ExecutionUpdate::PermissionRequested { id, input, .. }
+                        if *id == permission_id =>
+                    {
+                        Some(input.arguments_json.as_bytes())
+                    }
+                    _ => None,
+                })
+            })
+            .ok_or_else(stale)?;
+        range(input)
+    }
     pub async fn cancel_permission(
         &self,
         id: ConversationId,

@@ -777,6 +777,10 @@ fn review_of(
         },
         tool_name: tool.to_owned(),
         arguments_json: arguments_json.to_owned(),
+        // An app's call is bounded where it arrives, so its review always
+        // carries the whole input.
+        arguments_complete: true,
+        arguments_bytes: arguments_json.len() as u64,
         options: OPTIONS
             .iter()
             .map(|&(id, label, effect)| ConversationPermissionOption {

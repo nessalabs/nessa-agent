@@ -1659,6 +1659,30 @@ async fn crowded(
     (view, review)
 }
 
+/// A conversation's view whose agent's own reviews — each with no input left
+/// to give up, as a full view carries them — leave no room for even the
+/// start of its read's open app review; and that review.
+async fn full_of_agents(fixture: &Fixture) -> (ConversationView, ConversationPermission) {
+    // Agent reviews are added until even the app review's start no longer
+    // fits beside them, while the view still shows every one of them.
+    let (mut view, review) = crowded(fixture, 0, 0).await;
+    for index in 0.. {
+        view.permissions.push(ConversationPermission {
+            permission_id: format!("agent-{index}"),
+            arguments_json: String::new(),
+            arguments_complete: false,
+            origin: ConversationPermissionOrigin::Harness,
+            ..review.clone()
+        });
+        let shown = with_app_reviews(view.clone(), vec![review.clone()]);
+        if !identities(&shown).contains(&review.permission_id) {
+            assert_eq!(identities(&bound_view(view.clone())), identities(&view));
+            break;
+        }
+    }
+    (view, review)
+}
+
 fn identities(view: &ConversationView) -> Vec<String> {
     view.permissions
         .iter()
@@ -1668,11 +1692,11 @@ fn identities(view: &ConversationView) -> Vec<String> {
 
 #[tokio::test]
 async fn an_app_review_never_pushes_the_agents_own_reviews_out_of_view() {
-    // The agent's reviews fill the view: an app's review is the one that
-    // waits unseen, and the view says so — an app's server cannot hide what
-    // the agent is asking.
+    // The agent's reviews fill the view, leaving no room even for an app
+    // review's start: the app's review is the one that waits unseen, and the
+    // view says so — an app's server cannot hide what the agent is asking.
     let fixture = Fixture::new().await;
-    let (view, review) = crowded(&fixture, 4, 13_000).await;
+    let (view, review) = full_of_agents(&fixture).await;
     let agents = identities(&view);
     let shown = with_app_reviews(view, vec![review]);
     assert!(serde_json::to_vec(&shown).unwrap().len() <= MAX_VIEW_BYTES);
@@ -1689,7 +1713,7 @@ async fn a_hidden_app_review_changes_the_revision_as_a_shown_one_does() {
     // view cannot show changes it all the same — its notice, its trimmed
     // transcript — and its end changes it back.
     let fixture = Fixture::new().await;
-    let (view, review) = crowded(&fixture, 4, 13_000).await;
+    let (view, review) = full_of_agents(&fixture).await;
     let without = with_app_reviews(view.clone(), vec![]);
     let hidden = with_app_reviews(view.clone(), vec![review.clone()]);
     assert!(!identities(&hidden).contains(&review.permission_id));
@@ -1804,7 +1828,19 @@ fn holds(view: &ConversationView, reviews: &[ConversationPermission], case: &str
 #[tokio::test]
 async fn app_reviews_never_cost_the_agents_own_however_the_view_is_filled() {
     let fixture = Fixture::new().await;
-    let (view, review) = crowded(&fixture, 4, 0).await;
+    // One held call: a second would wait behind the first.
+    let (full, review) = full_of_agents(&fixture).await;
+    let view = ConversationView {
+        permissions: (0..4)
+            .map(|index| ConversationPermission {
+                permission_id: format!("agent-{index}"),
+                arguments_json: "{\"a\":\"\"}".into(),
+                origin: ConversationPermissionOrigin::Harness,
+                ..review.clone()
+            })
+            .collect(),
+        ..full.clone()
+    };
     let app = |name: String, bytes: usize| ConversationPermission {
         permission_id: name,
         arguments_json: "z".repeat(bytes),
@@ -1819,11 +1855,13 @@ async fn app_reviews_never_cost_the_agents_own_however_the_view_is_filled() {
     // Where the final review found the agent's own given up: their reviews
     // alone fill the view to within the notice.
     let mut seen = [0; 3];
-    for bytes in 14_380..14_520 {
-        let crowded = ConversationView {
-            permissions: (0..4).map(|index| agent(index, bytes)).collect(),
-            ..view.clone()
-        };
+    // The app review's start is about a kilobyte: a longer title takes the
+    // floor past the notice's room too.
+    for bytes in (0..1_600).step_by(8) {
+        let mut crowded = full.clone();
+        if let Some(last) = crowded.permissions.last_mut() {
+            last.title = "t".repeat(bytes);
+        }
         seen[holds(
             &crowded,
             &[app("app-0".into(), 15_000)],
@@ -1921,10 +1959,48 @@ async fn every_read_of_the_same_app_reviews_has_the_same_revision() {
     assert_ne!(read().await.unwrap().revision, once.revision);
 }
 
+// A large app review that does not fit whole is still shown: as the start of
+// its input, which is read whole before it is answered.
+#[tokio::test]
+async fn an_app_review_too_large_to_fit_whole_is_shown_with_the_start_of_its_input() {
+    let fixture = Fixture::new().await;
+    let (view, review) = crowded(&fixture, 4, 11_800).await;
+    let small = |name: &str| ConversationPermission {
+        permission_id: name.into(),
+        arguments_json: "{}".into(),
+        arguments_bytes: 2,
+        ..review.clone()
+    };
+    let large = ConversationPermission {
+        permission_id: "app-large".into(),
+        ..review.clone()
+    };
+    let shown = with_app_reviews(
+        view,
+        vec![small("app-first"), large.clone(), small("app-last")],
+    );
+    let ids = identities(&shown);
+    assert!(ids.ends_with(&[
+        "app-first".to_owned(),
+        "app-large".to_owned(),
+        "app-last".to_owned()
+    ]));
+    assert_eq!(shown.interaction_view_error, None);
+    assert!(serde_json::to_vec(&shown).unwrap().len() <= MAX_VIEW_BYTES);
+    let summary = shown
+        .permissions
+        .iter()
+        .find(|review| review.permission_id == "app-large")
+        .unwrap();
+    assert!(!summary.arguments_complete);
+    assert_eq!(summary.arguments_bytes, large.arguments_json.len() as u64);
+    assert!(large.arguments_json.starts_with(&summary.arguments_json));
+}
+
 #[tokio::test]
 async fn the_oldest_app_reviews_that_fit_are_shown_and_the_rest_wait() {
     let fixture = Fixture::new().await;
-    let (view, review) = crowded(&fixture, 4, 11_800).await;
+    let (view, review) = crowded(&fixture, 4, 13_900).await;
     let small = |name: &str| ConversationPermission {
         permission_id: name.into(),
         arguments_json: "{}".into(),
@@ -1960,11 +2036,11 @@ async fn the_oldest_app_reviews_that_fit_are_shown_and_the_rest_wait() {
 
 #[tokio::test]
 async fn an_app_review_that_cannot_be_shown_gives_nothing_up_for_it() {
-    // The agent's reviews leave too little for an app's: it is not shown,
-    // and the transcript is not wiped for it — only the notice's room is
-    // taken, where there is any to take.
+    // The agent's reviews leave too little for even an app review's start:
+    // it is not shown, and the transcript is not wiped for it — only the
+    // notice's room is taken, where there is any to take.
     let fixture = Fixture::new().await;
-    let (view, review) = crowded(&fixture, 4, 11_800).await;
+    let (view, review) = full_of_agents(&fixture).await;
     let without = with_app_reviews(view.clone(), vec![]);
     let hidden = with_app_reviews(view, vec![review.clone()]);
     assert!(!identities(&hidden).contains(&review.permission_id));

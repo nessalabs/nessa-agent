@@ -27,6 +27,7 @@ import {
 } from "../../application/ports"
 import type { CommandFailure, ConversationSelection, ReadFailure } from "../../model"
 import { heldFileReader } from "./held-files"
+import { reviewInputs } from "./review-inputs"
 import { shownNote } from "./notes"
 
 /**
@@ -663,6 +664,14 @@ export function gatewayEffects(
       // so following again is never refused as a duplicate of this follow.
       let giveUp: AbortController | undefined
       let cursor: ConversationViewCursor | undefined
+      // The last frame applied, and when it arrived: shown again, whole, once
+      // a review's input it named has been read.
+      let last: { view: GatewayConversationView; receivedAtMs: number } | undefined
+      const inputs = reviewInputs((target) => api().permissionInput(target))
+      const show = () => {
+        if (stopped || !last) return
+        follower.view(conversationView(inputs.complete(last.view), last.receivedAtMs))
+      }
       const failed = (error: unknown) => {
         if (stopped) return
         // The gateway's refusal is the last thing it says in its own
@@ -690,7 +699,12 @@ export function gatewayEffects(
                 view: (frame) => {
                   if (!current()) return
                   cursor = frame.cursor
-                  follower.view(conversationView(frame.view, now()))
+                  const applied = { view: frame.view, receivedAtMs: now() }
+                  last = applied
+                  show()
+                  inputs.read(frame.view, () => {
+                    if (last === applied) show()
+                  })
                 },
                 ended: (end) => {
                   if (!current()) return

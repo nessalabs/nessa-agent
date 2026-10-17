@@ -1065,6 +1065,21 @@ describe("a transcript", () => {
     ])
   })
 
+  it("offers no answer on an approval showing only the start of what it allows", async () => {
+    const source = fakeSource()
+    const approval = conversation.approval
+    if (!approval) throw new Error("the sample asks for nothing")
+    await shown(source, { ...conversation, approval: { ...approval, partial: true } })
+    expect(host.querySelector(".workspace-approval-loading")?.textContent).toBe(
+      "Loading the whole input before you can answer…",
+    )
+    expect(buttons().every(([, disabled]) => disabled)).toBe(true)
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>(".workspace-approval [data-primary]")?.click()
+    })
+    expect(source.calls.filter((call) => call[0] === "approve")).toEqual([])
+  })
+
   it("answers the clicked option when two allow the same way", async () => {
     const source = fakeSource()
     const approval = conversation.approval

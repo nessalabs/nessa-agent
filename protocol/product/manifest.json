@@ -82,6 +82,10 @@
       "params": "ConversationAnswerParams",
       "grant": "conversation.write"
     },
+    "conversation.permissionInput": {
+      "params": "ConversationPermissionInputParams",
+      "grant": "conversation.write"
+    },
     "conversation.answerQuestion": {
       "params": "ConversationAnswerQuestionParams",
       "grant": "conversation.write"

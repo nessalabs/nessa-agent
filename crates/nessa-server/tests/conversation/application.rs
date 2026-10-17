@@ -1971,12 +1971,14 @@ async fn settled_permission_answers_wake_readers_and_expose_the_next_review() {
 
 // An answered review leaves no event in the committed history the view is
 // folded from. When the open-review limit counted that history, a turn that
-// had asked sixteen reviews hid every later one, and each hidden review waited
-// out its deadline with nobody shown it.
+// had asked as many reviews as the limit hid every later one, and each hidden
+// review waited out its deadline with nobody shown it. Now every review the
+// SDK may hold open is shown, and only those still waiting.
 #[tokio::test]
-async fn a_review_held_back_by_the_open_limit_is_offered_once_earlier_ones_are_answered() {
+async fn every_review_the_agent_may_hold_open_is_offered_and_answered_ones_leave() {
+    const LIMIT: usize = nessa_sdk::domain::agent_execution::permissions::MAX_OPEN_REVIEWS;
     let (service, provider, _, _) = fixture(ConversationLimits::default());
-    provider.request_permission.store(18, Ordering::SeqCst);
+    provider.request_permission.store(LIMIT, Ordering::SeqCst);
     provider.answer_succeeds.store(true, Ordering::SeqCst);
     let (finish, gate) = oneshot::channel();
     *provider.permission_gate.lock().unwrap() = Some(gate);
@@ -2003,13 +2005,13 @@ async fn a_review_held_back_by_the_open_limit_is_offered_once_earlier_ones_are_a
         )
         .await
         .unwrap();
-    let held_back = tokio::time::timeout(Duration::from_secs(2), async {
+    let all = tokio::time::timeout(Duration::from_secs(2), async {
         loop {
             let view = service
                 .read(id.clone(), caller("panel", "read"))
                 .await
                 .unwrap();
-            if view.permissions.len() == 16 && view.interaction_view_error.is_some() {
+            if view.permissions.len() == LIMIT {
                 break view;
             }
             tokio::task::yield_now().await;
@@ -2017,10 +2019,7 @@ async fn a_review_held_back_by_the_open_limit_is_offered_once_earlier_ones_are_a
     })
     .await
     .unwrap();
-    assert!(!held_back
-        .permissions
-        .iter()
-        .any(|review| review.permission_id == "permission-17"));
+    assert_eq!(all.interaction_view_error, None);
     for permission in ["permission", "permission-1"] {
         service
             .answer(
@@ -2034,10 +2033,10 @@ async fn a_review_held_back_by_the_open_limit_is_offered_once_earlier_ones_are_a
             .await
             .unwrap();
     }
-    // The notice above shows once seventeen reviews are saved; the
-    // eighteenth may still be on its way to storage. So the end state is
-    // waited for itself: the sixteen still waiting, the last two among them.
-    let expected: Vec<String> = (2..18).map(|index| format!("permission-{index}")).collect();
+    // The end state is waited for itself: every review still waiting.
+    let expected: Vec<String> = (2..LIMIT)
+        .map(|index| format!("permission-{index}"))
+        .collect();
     let view = tokio::time::timeout(Duration::from_secs(2), async {
         loop {
             let view = service
@@ -2056,8 +2055,109 @@ async fn a_review_held_back_by_the_open_limit_is_offered_once_earlier_ones_are_a
         }
     })
     .await
-    .expect("the reviews held back are offered once earlier ones are answered");
+    .expect("the reviews still waiting are offered");
     assert_eq!(view.interaction_view_error, None);
+    finish.send(()).unwrap();
+    service.shutdown().await.unwrap();
+}
+
+// A review is offered whatever the size of its input: the view carries the
+// start, and the whole is read range by range while the review waits, so a
+// person can see all of it before they choose.
+#[tokio::test]
+async fn a_large_write_review_is_offered_and_its_whole_input_is_read_before_it_is_answered() {
+    let (service, provider, _, _) = fixture(ConversationLimits::default());
+    let arguments =
+        serde_json::json!({"file_path": "/tmp/big.txt", "content": "é".repeat(50_000)}).to_string();
+    assert!(arguments.len() > 100_000);
+    *provider.review_arguments.lock().unwrap() = Some(arguments.clone());
+    provider.request_permission.store(1, Ordering::SeqCst);
+    provider.answer_succeeds.store(true, Ordering::SeqCst);
+    let (finish, gate) = oneshot::channel();
+    *provider.permission_gate.lock().unwrap() = Some(gate);
+    let id = id();
+    service
+        .create(
+            id.clone(),
+            caller("panel", "create"),
+            RequestedConversation::default(),
+        )
+        .await
+        .unwrap();
+    service
+        .submit(
+            id.clone(),
+            caller("panel", "send"),
+            "reviews".into(),
+            SubmittedMessage {
+                text: "write a big file".into(),
+                images: Vec::new(),
+                files: Vec::new(),
+            },
+            SubmissionMode::Queue,
+        )
+        .await
+        .unwrap();
+    let review = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let view = service
+                .read(id.clone(), caller("panel", "read"))
+                .await
+                .unwrap();
+            if let Some(review) = view.permissions.into_iter().next() {
+                break review;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(!review.arguments_complete);
+    assert_eq!(review.arguments_bytes, arguments.len() as u64);
+    assert!(arguments.starts_with(&review.arguments_json));
+    let mut whole = Vec::new();
+    while (whole.len() as u64) < review.arguments_bytes {
+        let (range, total) = service
+            .permission_input(
+                id.clone(),
+                caller("panel", "input"),
+                review.execution_id.clone(),
+                review.permission_id.clone(),
+                whole.len() as u64,
+                32_768,
+            )
+            .await
+            .unwrap();
+        assert_eq!(total, review.arguments_bytes);
+        assert!(!range.is_empty() && range.len() <= 32_768);
+        whole.extend(range);
+    }
+    assert_eq!(String::from_utf8(whole).unwrap(), arguments);
+    service
+        .answer(
+            id.clone(),
+            caller("panel", "answer"),
+            "reviews".into(),
+            review.permission_id.clone(),
+            "allow".into(),
+            PermissionCaller::Owner,
+        )
+        .await
+        .unwrap();
+    // Once answered, the input is no longer served.
+    assert!(matches!(
+        service
+            .permission_input(
+                id.clone(),
+                caller("panel", "late"),
+                review.execution_id.clone(),
+                review.permission_id.clone(),
+                0,
+                32_768,
+            )
+            .await,
+        Err(ConversationError::Agent(AgentError::StalePermission))
+    ));
     finish.send(()).unwrap();
     service.shutdown().await.unwrap();
 }

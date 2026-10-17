@@ -2729,11 +2729,12 @@ async fn a_comment_or_drive_grant_reads_on_the_socket_as_read_does() {
 
 /// The commands a Drive grant admits (row J11), in the order a test sends
 /// them.
-const DRIVE_COMMANDS: [&str; 7] = [
+const DRIVE_COMMANDS: [&str; 8] = [
     "conversation.send",
     "conversation.steer",
     "conversation.stop",
     "conversation.answer",
+    "conversation.permissionInput",
     "conversation.answerQuestion",
     "conversation.cancel",
     "conversation.receipt",
@@ -2771,6 +2772,15 @@ fn drive_params(method: &str, id: &ConversationId, execution: &str) -> Value {
         "conversation.cancel" => {
             params["permissionId"] = json!("permission");
             params["reason"] = json!("no");
+        }
+        "conversation.permissionInput" => {
+            params = json!({
+                "conversationId": id.to_string(),
+                "executionId": execution,
+                "permissionId": "permission",
+                "offset": 0,
+                "maxBytes": 1,
+            });
         }
         "conversation.answerQuestion" => params["questionId"] = json!("question"),
         // The receipt of the message `SubscriptionFixture::turn` sent.

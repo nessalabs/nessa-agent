@@ -10,6 +10,7 @@ import {
   maxPolicyRevision,
   minExpectedPolicyRevision,
   minPolicyRevision,
+  permissionInputRange,
 } from "./conversation-validate.js"
 import { bounds } from "../generated/product.js"
 
@@ -472,6 +473,8 @@ describe("conversation view agreement", () => {
             title: "Review",
             toolName: "delete_rows",
             argumentsJson: "{}",
+            argumentsComplete: true,
+            argumentsBytes: 2,
             origin,
             ask: "tool",
             options: [{ id: "allow", label: "Allow", effect: "allow" }],
@@ -517,6 +520,77 @@ describe("conversation view agreement", () => {
       expect(() => conversationView(withOrigin(origin), "conversation")).toThrow()
   })
 
+  it("reads a review whatever the size of its input: whole, or its start with the whole length", () => {
+    const withInput = (argumentsJson: string, complete: boolean, bytes: number) => {
+      const value = view()
+      Object.assign(value, {
+        permissions: [
+          {
+            executionId: "running",
+            permissionId: "permission",
+            toolId: "tool",
+            title: "Write",
+            toolName: "Write",
+            argumentsJson,
+            argumentsComplete: complete,
+            argumentsBytes: bytes,
+            origin: { kind: "harness" },
+            ask: "tool",
+            options: [{ id: "allow", label: "Allow", effect: "allow" }],
+          },
+        ],
+      })
+      return value
+    }
+    // A start is not JSON on its own, and need not be.
+    const start = '{"content":"é'
+    const shown = new TextEncoder().encode(start).byteLength
+    expect(
+      conversationView(withInput(start, false, 100_000), "conversation").permissions[0],
+    ).toMatchObject({
+      argumentsJson: start,
+      argumentsComplete: false,
+      argumentsBytes: 100_000,
+    })
+    expect(() => conversationView(withInput("{}", true, 2), "conversation")).not.toThrow()
+    for (const [input, complete, bytes] of [
+      // Whole is exactly what is shown.
+      ["{}", true, 3],
+      // A start is shorter than the whole.
+      [start, false, shown],
+      [start, false, -1],
+      [start, false, bounds.maxReviewInputBytes + 1],
+      [start, false, 1.5],
+    ] as const)
+      expect(() =>
+        conversationView(withInput(input, complete, bytes), "conversation"),
+      ).toThrow("argumentsBytes")
+  })
+
+  it("reads one range of a review's input, held to the range asked", () => {
+    const data = (text: string) => btoa(text)
+    expect(
+      permissionInputRange({ offset: 0, totalBytes: 5, data: data("hello") }, 0, 8),
+    ).toMatchObject({ totalBytes: 5, bytes: new TextEncoder().encode("hello") })
+    expect(
+      permissionInputRange({ offset: 2, totalBytes: 5, data: data("ll") }, 2, 2, 5).bytes,
+    ).toEqual(new TextEncoder().encode("ll"))
+    expect(
+      permissionInputRange({ offset: 0, totalBytes: 0, data: "" }, 0, 8).totalBytes,
+    ).toBe(0)
+    for (const [value, offset, maxBytes, totalBytes] of [
+      // Another range, a short or long one, a length that moved.
+      [{ offset: 1, totalBytes: 5, data: data("hello") }, 0, 8, undefined],
+      [{ offset: 0, totalBytes: 5, data: data("hell") }, 0, 8, undefined],
+      [{ offset: 0, totalBytes: 5, data: data("hello!") }, 0, 8, undefined],
+      [{ offset: 0, totalBytes: 6, data: data("hello") }, 0, 8, 5],
+      [{ offset: 5, totalBytes: 5, data: "" }, 5, 8, undefined],
+      [{ offset: 0, totalBytes: -1, data: "" }, 0, 8, undefined],
+      [{ offset: 0, totalBytes: 5, data: data("hello"), extra: 1 }, 0, 8, undefined],
+    ] as const)
+      expect(() => permissionInputRange(value, offset, maxBytes, totalBytes)).toThrow()
+  })
+
   it("reads a review's deadline and refuses one it cannot show", () => {
     const withDeadline = (deadline: unknown) => {
       const value = view()
@@ -529,6 +603,8 @@ describe("conversation view agreement", () => {
             title: "Review",
             toolName: "Write",
             argumentsJson: "{}",
+            argumentsComplete: true,
+            argumentsBytes: 2,
             origin: { kind: "harness" },
             ask: "tool",
             options: [{ id: "deny", label: "Deny", effect: "deny" }],
@@ -628,6 +704,8 @@ describe("conversation view agreement", () => {
             title: "Review",
             toolName,
             argumentsJson: "{}",
+            argumentsComplete: true,
+            argumentsBytes: 2,
             origin: { kind: "app", server: "charts", tool },
             ask: "tool",
             options: [{ id: "allow", label: "Allow", effect: "allow" }],
@@ -660,6 +738,8 @@ describe("conversation view agreement", () => {
             title: "The show app on charts asks to send a message as you",
             toolName: "show",
             argumentsJson: '{"text":"Plot May"}',
+            argumentsComplete: true,
+            argumentsBytes: 19,
             origin: { kind: "app", server: "charts", tool: "show" },
             ...(keep ? { ask } : {}),
             options: [{ id: "allow", label: "Allow", effect: "allow" }],
@@ -687,6 +767,8 @@ describe("conversation view agreement", () => {
             title: "Run write_file",
             toolName: "write_file",
             argumentsJson: "{}",
+            argumentsComplete: true,
+            argumentsBytes: 2,
             origin: { kind: "harness" },
             ask,
             options: [{ id: "allow", label: "Allow", effect: "allow" }],
@@ -715,6 +797,8 @@ describe("conversation view agreement", () => {
             title: "Review",
             toolName: "write_file",
             argumentsJson: "{}",
+            argumentsComplete: true,
+            argumentsBytes: 2,
             origin: { kind: "harness" },
             ask: "tool",
             options,
@@ -768,6 +852,8 @@ describe("conversation view agreement", () => {
           title: "Review",
           toolName: "write_file",
           argumentsJson: "{}",
+          argumentsComplete: true,
+          argumentsBytes: 2,
           origin: { kind: "harness" },
           ask: "tool",
           options: [{ id: "allow", label: "Allow", effect: "allow", extra: true }],

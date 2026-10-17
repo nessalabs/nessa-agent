@@ -846,6 +846,13 @@ async fn a_declined_review_refuses_the_tool_and_leaves_the_turn_running() {
             Some("Write"),
         ),
         (
+            // A choice longer than any surface may show (`MAX_REVIEW_OPTION_LABEL_BYTES`).
+            "declined-long-label",
+            ReviewDeclineReason::UnusableOptions,
+            serde_json::json!({"outcome":"selected","optionId":"deny-one"}),
+            Some("Write"),
+        ),
+        (
             // Unreadable, but the provider still offered a rejection to choose:
             // why this binding refuses does not change how plainly it can say
             // so, and a chosen "no" is plainer than a cancellation.

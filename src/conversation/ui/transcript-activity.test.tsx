@@ -89,6 +89,8 @@ function workingConversation(id: string): Conversation {
           title: "Approve shell",
           toolName: "Shell",
           argumentsJson: "{}",
+          argumentsComplete: true,
+          argumentsBytes: 2,
           options: [{ id: "allow", label: "Allow" }],
         },
       ],
@@ -809,6 +811,8 @@ it("counts a permission's deadline down by the clock composition supplies", asyn
           title: "Run tests",
           toolName: "Shell",
           argumentsJson: "{}",
+          argumentsComplete: true,
+          argumentsBytes: 2,
           options: [{ id: "cancel", label: "Cancel" }],
           deadline: {
             waitMs: 30_000,
