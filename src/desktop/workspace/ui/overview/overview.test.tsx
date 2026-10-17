@@ -576,6 +576,53 @@ describe("the agents overview", () => {
     expect(row("first")?.dataset.kind).toBe("working")
   })
 
+  it("places an answered session in its current group without reading or copying list geometry", async () => {
+    const { source, store } = await mount()
+    store.dispatch(followWorkspace())
+    await open()
+    const next = card("second")
+    const column = host.querySelector<HTMLElement>(".agents-overview-column")
+    if (!column) throw new Error("no overview list")
+    column.style.setProperty("--desktop-slow", "240ms")
+    const originalAnimate = Object.getOwnPropertyDescriptor(Element.prototype, "animate")
+    const flights = vi.fn(() => ({ finished: new Promise<void>(() => {}), cancel() {} }))
+    Object.defineProperty(Element.prototype, "animate", {
+      configurable: true,
+      value: flights,
+    })
+    const offsets = vi.spyOn(HTMLElement.prototype, "offsetTop", "get")
+    const boxes = vi.spyOn(Element.prototype, "getBoundingClientRect")
+    try {
+      await press(card("first") as HTMLElement, "Enter", { command: true })
+      expect(document.activeElement).toBe(next)
+      expect(card("first")?.dataset.phase).toBe("leaving")
+      await moveOn(source, "first", "Sign the build", "running")
+      expect(card("first")).toBeNull()
+      expect(row("first")?.dataset.kind).toBe("working")
+      expect(card("second")).toBe(next)
+      expect(document.activeElement).toBe(next)
+      expect.soft(host.querySelector("[data-departing]")).toBeNull()
+      expect.soft(offsets).not.toHaveBeenCalled()
+      expect.soft(boxes).not.toHaveBeenCalled()
+      expect.soft(flights).not.toHaveBeenCalled()
+      expect(source.calls).toContainEqual([
+        "approve",
+        "first",
+        "first-ask",
+        "once",
+        "person",
+        "once",
+      ])
+      expect(host.querySelector(".agents-overview-said")?.textContent).toBe(
+        "Allowed: Sign the build",
+      )
+    } finally {
+      if (originalAnimate)
+        Object.defineProperty(Element.prototype, "animate", originalAnimate)
+      else Reflect.deleteProperty(Element.prototype, "animate")
+    }
+  })
+
   it("answers one request per press: a held key's repeats, or a press straight after, answer nothing more", async () => {
     const { source } = await mount()
     await open()

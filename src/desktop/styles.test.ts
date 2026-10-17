@@ -35,10 +35,7 @@ it("glides without overshoot: the composer lands, and never passes its place", (
   )
 })
 
-it("moves the layout when the sidebar opens or closes, and stops only for reduced motion", () => {
-  // The sidebar's slide (`--desktop-slow`) and the panes' travel beside it
-  // (`--desktop-flight`) are seen many times a day and keep their motion, in
-  // the drawer band and under 300ms. Reduced motion is what makes them instant.
+it("lands workspace bounds immediately while preserving independent surface and arrival motion", () => {
   const token = (sheet: string, name: string) =>
     new RegExp(`${name}:\\s*(\\d+)ms`).exec(sheet)?.[1]
   const full = styles.slice(
@@ -48,10 +45,13 @@ it("moves the layout when the sidebar opens or closes, and stops only for reduce
   const reduced = /:root\[data-motion="reduced"\] \[data-surface\] \{([^}]*)\}/.exec(
     styles,
   )?.[1]
-  for (const name of ["--desktop-slow", "--desktop-flight"]) {
-    const duration = Number(token(full, name))
-    expect(duration, name).toBeGreaterThanOrEqual(200)
-    expect(duration, name).toBeLessThan(300)
+  expect(token(full, "--desktop-flight")).toBe("0")
+  expect(token(reduced ?? "", "--desktop-flight")).toBe("0")
+  const slow = Number(token(full, "--desktop-slow"))
+  expect(slow).toBeGreaterThanOrEqual(200)
+  expect(slow).toBeLessThan(300)
+  for (const name of ["--desktop-base", "--desktop-slow", "--desktop-arrival"]) {
+    expect(Number(token(full, name)), name).toBeGreaterThan(0)
     expect(token(reduced ?? "", name), name).toBe("0")
   }
 })

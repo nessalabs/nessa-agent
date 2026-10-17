@@ -387,7 +387,7 @@ const body = {
     for (const key of actions) {
       await settled(page)
       await page.evaluate(
-        ({ pane, body }) => {
+        ({ pane, body, flight }) => {
           // Each pane with the opacity of every box from its body up to it, so a
           // partial dim fails as surely as a blackout.
           const observed = [...document.querySelectorAll(pane)].map((element) => {
@@ -407,11 +407,13 @@ const body = {
             failures: [],
             before: `${chrome?.dataset.sidebar}/${document.querySelector("[data-list]")?.dataset.list}`,
             geometry: new Set(),
+            flights: 0,
           }
           const sample = () => {
             const result = window.__contentFrames
             if (!result.running) return
             result.frames++
+            if (document.querySelector(flight)) result.flights++
             const first = observed[0]?.element.getBoundingClientRect()
             if (first)
               result.geometry.add(`${first.left.toFixed(1)},${first.width.toFixed(1)}`)
@@ -453,7 +455,7 @@ const body = {
           }
           sample()
         },
-        { pane: css.pane, body: css.paneBody },
+        { pane: css.pane, body: css.paneBody, flight: css.workspaceFlight },
       )
       try {
         await page.keyboard.press(key)
@@ -469,16 +471,23 @@ const body = {
             before: result.before,
             after: `${chrome?.dataset.sidebar}/${document.querySelector("[data-list]")?.dataset.list}`,
             positions: result.geometry.size,
+            flights: result.flights,
           }
         })
-        runs.push({ key, frames: result.frames, positions: result.positions })
+        runs.push({
+          key,
+          frames: result.frames,
+          positions: result.positions,
+          flights: result.flights,
+        })
         if (result.frames < 2) failures.push(`${key}: no transition frames sampled`)
-        // The toggle took effect and the pane travelled through at least one
-        // place between where it was and where it ended.
+        // The toggle changes the bounds directly; no workspace FLIP owns an
+        // intermediate transform. Keep observing every independent CSS frame.
         if (result.before === result.after)
           failures.push(`${key}: the toggle changed nothing`)
-        else if (result.positions < 3)
-          failures.push(`${key}: the pane jumped to its new place without moving`)
+        else if (result.positions < 2)
+          failures.push(`${key}: the pane bounds changed nothing`)
+        if (result.flights > 0) failures.push(`${key}: workspace bounds started a FLIP`)
         failures.push(
           ...[...new Set(result.failures)].map((message) => `${key}: ${message}`),
         )

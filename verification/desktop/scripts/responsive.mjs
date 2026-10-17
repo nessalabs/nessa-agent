@@ -1576,18 +1576,76 @@ checks["overview-counts"] = async ({ page, engine, options }) => {
   }
 }
 
+/** The mounted conversation stays painted through its ancestors from its first frame. */
+async function peekPaintThrough(page, action) {
+  await page.evaluate((selector) => {
+    const sample = (window.__peekPaint = { frames: [], done: false })
+    const tick = () => {
+      if (sample.done) return
+      sample.frames.push(
+        [...document.querySelectorAll(selector)].map((article) => {
+          let opacity = 1
+          let painted = article.textContent.trim().length > 0
+          for (let at = article; at; at = at.parentElement) {
+            const style = getComputedStyle(at)
+            opacity *= Number(style.opacity)
+            painted &&=
+              style.display !== "none" &&
+              style.visibility === "visible" &&
+              style.contentVisibility !== "hidden"
+          }
+          return { opacity, painted }
+        }),
+      )
+      requestAnimationFrame(tick)
+    }
+    requestAnimationFrame(tick)
+  }, css.peekConversation)
+  let samples
+  try {
+    await action()
+    await frames(page, 2)
+  } finally {
+    samples = await page.evaluate(() => {
+      window.__peekPaint.done = true
+      return window.__peekPaint.frames
+    })
+  }
+  const mounted = samples.flat()
+  const first = samples.findIndex((sample) => sample.length > 0)
+  return {
+    frames: samples.length,
+    mounted: mounted.length,
+    minimumOpacity: mounted.length
+      ? Math.min(...mounted.map((sample) => sample.opacity))
+      : null,
+    held:
+      samples.length >= 2 &&
+      first >= 0 &&
+      samples
+        .slice(first)
+        .every(
+          (sample) =>
+            sample.length > 0 &&
+            sample.every((peek) => peek.opacity === 1 && peek.painted),
+        ),
+  }
+}
+
 checks["overview-story"] = async ({ page, engine, options }) => {
   // Short enough that a long turn must scroll within the peek.
   await page.setViewportSize({ width: 1440, height: 640 })
-  await page.keyboard.press(keys.overview)
-  await need(page, css.overview, "the Agents overview")
-  // The list arrives a row a frame (`data-overview-listed` once it has).
-  await need(page, css.overviewListed, "the overview's whole list")
   const item = page.locator(`[data-overview-item="${names.storySessionId}"]`)
-  if (!(await item.count()))
-    throw new CannotRun(`no overview item ${names.storySessionId}`)
-  await item.click()
-  await need(page, `${css.overviewPeek} ${css.peekStory}`, "the peek's story")
+  const openedPaint = await peekPaintThrough(page, async () => {
+    await page.keyboard.press(keys.overview)
+    await need(page, css.overview, "the Agents overview")
+    // The list arrives a row a frame (`data-overview-listed` once it has).
+    await need(page, css.overviewListed, "the overview's whole list")
+    if (!(await item.count()))
+      throw new CannotRun(`no overview item ${names.storySessionId}`)
+    await item.click()
+    await need(page, `${css.overviewPeek} ${css.peekStory}`, "the peek's story")
+  })
   await frames(page, 2)
   await settled(page)
   const read = () =>
@@ -1621,6 +1679,10 @@ checks["overview-story"] = async ({ page, engine, options }) => {
     }, css)
   const before = await read()
   const failures = []
+  if (!openedPaint.held)
+    failures.push(
+      `opened conversation darkened or disappeared: ${JSON.stringify(openedPaint)}`,
+    )
   if (!before.summary) failures.push("no line of what is going on")
   if (before.summaryLines !== 1)
     failures.push(`the line runs to ${before.summaryLines} lines`)
@@ -1666,8 +1728,14 @@ checks["overview-story"] = async ({ page, engine, options }) => {
   await need(page, css.overview, "the Agents overview")
   await frames(page, 2)
   await settled(page)
-  await item.click()
-  await need(page, `${css.inlinePeek} ${css.peekStory}`, "the story beneath its row")
+  const inlinePaint = await peekPaintThrough(page, async () => {
+    await item.click()
+    await need(page, `${css.inlinePeek} ${css.peekStory}`, "the story beneath its row")
+  })
+  if (!inlinePaint.held)
+    failures.push(
+      `inline conversation darkened or disappeared: ${JSON.stringify(inlinePaint)}`,
+    )
   await frames(page, 2)
   await settled(page)
   const story = `${css.inlinePeek} ${css.peekStory}`
@@ -1723,6 +1791,7 @@ checks["overview-story"] = async ({ page, engine, options }) => {
   await shot(options, page, `overview-story-beneath-${engine}`)
   return {
     order: kinds,
+    conversationPaint: { opened: openedPaint, inline: inlinePaint },
     summary: before.summary,
     room: before.room,
     steps: before.steps,
@@ -1744,9 +1813,16 @@ const rowSelectors = {
 const listRects = (page) =>
   page.evaluate((sel) => {
     const column = document.querySelector(sel)
-    return [...column.querySelectorAll("[data-reflow]")].map((item) => {
+    return [
+      ...column.querySelectorAll(
+        ".agents-overview-group > h2, .agents-row-item, .agents-clear, .agents-overview-resting, .agents-overview-footnote",
+      ),
+    ].map((item) => {
       const r = item.getBoundingClientRect()
-      return `${item.dataset.reflow} ${Math.round(r.top * 10) / 10} ${Math.round(r.height * 10) / 10}`
+      const key =
+        item.querySelector("[data-overview-item]")?.dataset.overviewItem ??
+        (item.id || item.className)
+      return `${key} ${Math.round(r.top * 10) / 10} ${Math.round(r.height * 10) / 10}`
     })
   }, css.overviewColumn)
 
@@ -2043,8 +2119,8 @@ checks["overview-row-answers"] = async ({ page, engine, options }) => {
 /**
  * Answers a request row by its button (`choice`: "once" or "deny") and
  * records every frame for 1.2s: the row's phase and whether it says what
- * became of it; the copy it leaves where it stood (`[data-departing]`) and
- * how visible it is; the session's row in another group and how visible it
+ * became of it; any unwanted departing copy (`[data-departing]`);
+ * the session's row in another group and how visible it
  * is; any ring drawn on the row or its copy (a box shadow, an outline, a
  * visible ::after); and where the row after it sits.
  */
@@ -2065,6 +2141,9 @@ async function answerAndWatch(page, index, choice) {
       const log = (window.__overviewLeave = [])
       window.__overviewLeaveDone = false
       const start = performance.now()
+      const initialNext = document.querySelector(
+        `[data-overview-item="${CSS.escape(nextId)}"]`,
+      )
       const ringOf = (element) => {
         if (!element) return null
         const style = getComputedStyle(element)
@@ -2098,6 +2177,12 @@ async function answerAndWatch(page, index, choice) {
           phase: request ? (request.dataset.phase ?? "asking") : null,
           says: request ? /Allowed|Denied/.test(request.textContent ?? "") : false,
           ghosts: ghosts.length,
+          nextSame: next === initialNext,
+          nextTransform: next ? getComputedStyle(next.closest(sel.item)).transform : null,
+          arrivalTransform: row
+            ? getComputedStyle(row.closest(sel.item)).transform
+            : null,
+          arrivalVisible: row ? row.checkVisibility() : null,
           ghostOpacity: ghosts[0] ? Number(getComputedStyle(ghosts[0]).opacity) : null,
           ghostFilter: ghosts[0] ? getComputedStyle(ghosts[0]).filter : null,
           arrivedIn: row
@@ -2142,6 +2227,18 @@ async function answerAndWatch(page, index, choice) {
   const rowGone = frameOf((frame, i) => i > 0 && frame.phase === null)
   return {
     id,
+    sampledFrames: log.length,
+    anyCopies: log.some((frame) => frame.ghosts > 0),
+    nextSame: log.every((frame) => frame.nextSame),
+    nextStill: log.every((frame) => frame.nextTransform === "none"),
+    immediateArrival: log.every(
+      (frame) =>
+        frame.arrivalOpacity === null ||
+        (frame.arrivalOpacity === 1 &&
+          frame.arrivalFilter === "none" &&
+          frame.arrivalTransform === "none" &&
+          frame.arrivalVisible),
+    ),
     stoodAt: Math.round(stoodAt),
     phases: [...new Set(log.map((frame) => frame.phase))],
     said: log.some((frame) => frame.says),
@@ -2177,6 +2274,13 @@ checks["overview-leave"] = async ({ page, engine, options }) => {
   await settled(page)
   const common = (what, moving, word) => {
     // No label on the row, and nothing drawn around it: no ring, no box.
+    if (moving.sampledFrames < 2) failures.push(`${what}: fewer than two sampled frames`)
+    if (moving.anyCopies) failures.push(`${what}: the row left a departing copy`)
+    if (!moving.nextSame) failures.push(`${what}: the next request changed identity`)
+    if (!moving.nextStill)
+      failures.push(`${what}: the next request travelled by transform`)
+    if (!moving.immediateArrival)
+      failures.push(`${what}: the final row was hidden or animated`)
     if (moving.said) failures.push(`${what}: the row said what became of it`)
     if (moving.rings.length)
       failures.push(`${what}: a border was drawn on the row or its copy: ${moving.rings}`)
@@ -2190,34 +2294,41 @@ checks["overview-leave"] = async ({ page, engine, options }) => {
         `${what}: the next row ends at ${moving.nextEndsAt}, the answered row stood at ${moving.stoodAt}`,
       )
   }
-  const moving = await answerAndWatch(page, 1, "once")
-  common("allowed", moving, "Allowed")
-  // It leaves and arrives in the same beat: the arrival's first visible frame
-  // is within one frame of the departure's first.
-  if (moving.laid < 0) failures.push("allowed: the row left no copy to dematerialize")
-  else if (moving.arrives < 0 || Math.abs(moving.arrives - moving.departs) > 1)
+  let moving
+  const allowedPaint = await peekPaintThrough(page, async () => {
+    moving = await answerAndWatch(page, 1, "once")
+  })
+  if (!allowedPaint.held)
     failures.push(
-      `allowed: departure began at frame ${moving.departs} (${moving.departsAt}ms), arrival at frame ${moving.arrives} (${moving.arrivesAt}ms)`,
+      `allowed: conversation darkened or disappeared: ${JSON.stringify(allowedPaint)}`,
     )
+  common("allowed", moving, "Allowed")
   if (moving.arrivedIn !== "Working")
     failures.push(`allowed: the row arrived in ${moving.arrivedIn}, not Working`)
-  if (moving.ghostGoneAfter === null || moving.ghostGoneAfter > 400)
-    failures.push(`allowed: its copy took ${moving.ghostGoneAfter}ms to go (≤ 400)`)
-  if (moving.firstArrival && moving.firstArrival.opacity >= 1)
-    failures.push(
-      `allowed: the arrival did not fade in (${JSON.stringify(moving.firstArrival)})`,
-    )
   await shot(options, page, `overview-leave-${engine}`)
 
   // Denied: it leaves the same way, wherever its session goes.
-  const denied = await answerAndWatch(page, 1, "deny")
+  let denied
+  const deniedPaint = await peekPaintThrough(page, async () => {
+    denied = await answerAndWatch(page, 1, "deny")
+  })
+  if (!deniedPaint.held)
+    failures.push(
+      `denied: conversation darkened or disappeared: ${JSON.stringify(deniedPaint)}`,
+    )
   common("denied", denied, "Denied")
-  if (denied.laid < 0) failures.push("denied: the row left no copy to dematerialize")
 
   // Less motion: no copy, no blur or scale; the row is simply where it now belongs.
   await page.emulateMedia({ reducedMotion: "reduce" })
   await frames(page, 2)
-  const still = await answerAndWatch(page, 1, "once")
+  let still
+  const reducedPaint = await peekPaintThrough(page, async () => {
+    still = await answerAndWatch(page, 1, "once")
+  })
+  if (!reducedPaint.held)
+    failures.push(
+      `less motion: conversation darkened or disappeared: ${JSON.stringify(reducedPaint)}`,
+    )
   common("less motion", still, "Allowed")
   if (still.laid >= 0) failures.push("less motion: the row left a copy dematerializing")
   if (
@@ -2227,7 +2338,19 @@ checks["overview-leave"] = async ({ page, engine, options }) => {
     failures.push(
       `less motion: the arrival animated (${JSON.stringify(still.firstArrival)})`,
     )
-  return { measured: { allowed: moving, denied, reduced: still }, failures }
+  return {
+    measured: {
+      allowed: moving,
+      denied,
+      reduced: still,
+      conversationPaint: {
+        allowed: allowedPaint,
+        denied: deniedPaint,
+        reduced: reducedPaint,
+      },
+    },
+    failures,
+  }
 }
 
 /**

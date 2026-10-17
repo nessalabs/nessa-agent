@@ -60,6 +60,7 @@ export const css = {
   cornerPane: "[data-pane-key][data-split-corner]", // the top-left pane, whose header clears the window's controls when no side column is beside it
   panesAlone: "[data-workspace][data-panes-alone]", // both side columns closed: the corner pane's header steps past the controls
   focusedPane: "[data-pane-key][data-pane-focused]",
+  workspaceFlight: "[data-split-flipping], [data-split-flying]",
   paneGrid: "[data-split-grid]", // the grid the panes are laid out in — the box the drag measures
   paneHeader: ".workspace-pane-header", // class: a pane's header, which carries the drag
   paneDragHandle: "[data-drag-pane]",
@@ -205,6 +206,7 @@ export const css = {
   overviewScroll: ".agents-overview-scroll", // class: the list's scroller, under the header
   overviewCount: ".agents-overview-counts button", // class: a header count, a toggle (aria-pressed, data-group)
   overviewGroup: ".agents-overview-group", // class: a listed group, labelled by its h2
+  peekConversation: ".agents-peek", // class: the whole conversation article, beside the list or inline
   overviewPeek: ".agents-overview-peek", // class: the peek beside the list, which scrolls
   peekSummary: ".agents-peek-summary", // class: what is going on, in the source's line
   peekCommand: ".agents-peek .workspace-approval-command", // class: the command in the peek, beside the list or under the row

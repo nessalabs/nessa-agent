@@ -269,7 +269,9 @@ against a private scripted gateway.
   that only arrange them; `ui/panes/` a session's pane, a widget's
   (`widget-pane.tsx`) and the window over them (`widget-window.tsx`), which
   share one header bar (`pane-header-frame.tsx`);
-  `ui/overview/` the Agents overview, with its rules in `model/overview/`),
+  `ui/overview/` the Agents overview, with its rules in `model/overview/`;
+  the list uses immediate final placement, while `settling.ts` holds an
+  answered request until the source catches up, following ADR 238),
   with `testing.ts` the fake source, the store, and the animation frames its
   tests share. A failed, cancelled, or unresolved turn keeps the gateway's
   status and diagnostic on the message, including an earlier authentication
@@ -392,7 +394,9 @@ against a private scripted gateway.
   source that reads its layout and carries out every change through its own
   commands, and spreads the grid's `frame` on its own pane root; the
   workspace is that host (`adapters/store/split-panes-source.ts`,
-  `ui/panes/pane-grid.tsx`). Other modules import the barrel, any of the pure
+  `ui/panes/pane-grid.tsx`); its flight duration is composed in `styles.css`.
+  `flip.test.tsx` covers the zero-duration path and interrupted-flight cleanup;
+  `drag.test.tsx` covers preview retirement on that path. Other modules import the barrel, any of the pure
   model's files (a model or use case, which may not import React, must), and
   — from a test — `split-panes/testing`; split panes import no host, only the
   four desktop shared parts the rule names (motion, reduced motion, hold

@@ -4,8 +4,9 @@
  * are cards, the one warm point is the dot beside "Needs you", and
  * everything else is a quiet grouped list. The surface arrives at once:
  * fading it in would composite the blurred ambient on every frame of the
- * fade (`styles.test.ts`). What moves inside is transform and opacity only;
- * every duration is a window token, which less motion sets to zero.
+ * fade (`styles.test.ts`). Conversation content stays opaque when a peek
+ * mounts or changes session (`responsive.mjs` overview-story/overview-leave).
+ * Non-conversation affordances retain their own motion tokens.
  */
 
 .agents-overview {
@@ -103,7 +104,6 @@ html:not(.dark) .agents-overview-surface {
 }
 
 .agents-overview-column {
-  /* Positioned: the re-flow measures every item within it (`adapters/dom/overview-reflow.ts`). */
   position: relative;
   max-width: 640px;
   margin: 0 auto;
@@ -628,14 +628,6 @@ html:not(.dark) .agents-request {
   display: none;
 }
 
-/*
- * A row's copy, left where it stood as the row is taken away
- * (`leaveInPlace`), dematerializing as the session arrives elsewhere.
- */
-.agents-overview-column > [data-departing] {
-  z-index: 1;
-}
-
 /* ——— A peek at a session ——— */
 
 .agents-peek {
@@ -643,7 +635,6 @@ html:not(.dark) .agents-request {
   max-width: 560px;
   flex-direction: column;
   gap: 24px;
-  animation: agents-peek-in var(--desktop-base) ease both;
 }
 
 /*
@@ -654,12 +645,6 @@ html:not(.dark) .agents-request {
 .agents-overview-peek > .agents-peek {
   width: 100%;
   margin-inline: auto;
-}
-
-@keyframes agents-peek-in {
-  from {
-    opacity: 0;
-  }
 }
 
 .agents-peek-head {
@@ -1061,7 +1046,6 @@ html:not(.dark) .agents-request {
 }
 
 /* Less motion, as Settings › Appearance › Motion or the system asks (`data-motion`). */
-:root[data-motion="reduced"]
-  :is(.agents-overview-surface, .agents-clear-mark, .agents-peek) {
+:root[data-motion="reduced"] :is(.agents-overview-surface, .agents-clear-mark) {
   animation: none;
 }

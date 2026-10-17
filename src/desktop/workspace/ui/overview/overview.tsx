@@ -18,7 +18,6 @@ import { flushSync } from "react-dom"
 import { reducedMotion } from "../../../adapters/motion-preference"
 import { useNow } from "../../../../clock"
 import { focusAfterPaint } from "../../adapters/dom/focus"
-import { leaveInPlace, useReflow } from "../../adapters/dom/overview-reflow"
 import { isMac } from "../../../adapters/platform"
 import { matchesChord } from "../../../model/keyboard"
 import {
@@ -196,8 +195,6 @@ export function AgentsOverview({
   )
   const [expanded, setExpanded] = useState<string | null>(null)
   const list = useRef<HTMLDivElement>(null)
-  // Only a change of what is listed, or where a peek opens, re-flows the list.
-  useReflow(list, `${order.join(",")}|${split ? "" : (expanded ?? "")}`)
 
   const section = useRef<HTMLElement>(null)
   // The list beside the peek, resized by its edge: the widths as drawn, for
@@ -426,9 +423,9 @@ export function AgentsOverview({
         // Taken: what became of it is said to a screen reader, and the row
         // waits, quiet, until the source moves its session on — "sent" can
         // come before the session's own move — so it never springs back into
-        // Needs you. Then it leaves its place as it arrives in the new one,
-        // in the same beat (`leaveInPlace`). An update that never comes lets
-        // it go after `heldAtMost`, shown as the workspace holds it.
+        // Needs you. Then it is placed in its current group immediately.
+        // An update that never comes lets it go after `heldAtMost`, shown
+        // as the workspace holds it.
         phase("leaving")
         setSaid(`${answeredLabels[choice]}: ${summary.title}`)
         // Still where it was: the session waits on the person (what lists it
@@ -442,31 +439,17 @@ export function AgentsOverview({
             (asked == null || asked.id === approval.id)
           )
         }
-        const moveOn = () => {
-          // Its copy is taken as it stands leaving — its answers put away —
-          // not as it stood a moment ago, still answering.
-          flushSync(() => phase("leaving"))
-          const column = list.current
-          const item = column
-            ?.querySelector(`[data-overview-item="${CSS.escape(summary.id)}"]`)
-            ?.closest<HTMLElement>(".agents-row-item")
-          if (column && item) leaveInPlace(column, item)
-          // Taken away in this same task, so the re-flow — the copy going,
-          // the gap closing, the session arriving — starts in the next frame.
-          flushSync(release)
-        }
-        if (!asks()) return moveOn()
-        const done = (moved: boolean) => {
+        if (!asks()) return release()
+        const done = () => {
           if (!watches.current.delete(stop)) return
           stop()
-          if (moved) moveOn()
-          else release()
+          release()
         }
         const stop = store.subscribe(() => {
-          if (!asks()) done(true)
+          if (!asks()) done()
         })
         watches.current.add(stop)
-        later(heldAtMost, () => done(false))
+        later(heldAtMost, done)
       })
     },
     [dispatch, focusItem, later, store],
@@ -985,14 +968,13 @@ function Groups({
         <EmptyState
           variant="compact"
           className="agents-overview-resting"
-          data-reflow="empty"
           title={emptyGroup[quiet]}
         />
       ) : null}
       {/* Shown only while something waits: an empty section is nothing to review. */}
       {glance.needsYou.length > 0 ? (
         <section className="agents-overview-group" aria-labelledby="agents-needs-you">
-          <h2 id="agents-needs-you" data-reflow="title:needs-you">
+          <h2 id="agents-needs-you">
             {/* The page's one warm point: what waits on the person. */}
             <StatusGlyph status="needs-you" flush decorative />
             Needs you
@@ -1011,9 +993,7 @@ function Groups({
       ) : null}
       {glance.working.length > 0 ? (
         <section className="agents-overview-group" aria-labelledby="agents-working">
-          <h2 id="agents-working" data-reflow="title:working">
-            Working
-          </h2>
+          <h2 id="agents-working">Working</h2>
           <ul role="list" className="agents-overview-list">
             {glance.working.map((sessionId) => (
               <SessionRow key={sessionId} {...row(sessionId)} kind="working" />
@@ -1023,9 +1003,7 @@ function Groups({
       ) : null}
       {glance.finished.length > 0 ? (
         <section className="agents-overview-group" aria-labelledby="agents-finished">
-          <h2 id="agents-finished" data-reflow="title:finished">
-            Finished
-          </h2>
+          <h2 id="agents-finished">Finished</h2>
           <ul role="list" className="agents-overview-list">
             {glance.finished.map((sessionId) => (
               <SessionRow key={sessionId} {...row(sessionId)} kind="finished" />
@@ -1035,9 +1013,7 @@ function Groups({
       ) : null}
       {glance.earlier.length > 0 ? (
         <section className="agents-overview-group" aria-labelledby="agents-earlier">
-          <h2 id="agents-earlier" data-reflow="title:earlier">
-            Earlier
-          </h2>
+          <h2 id="agents-earlier">Earlier</h2>
           <ul role="list" className="agents-overview-list">
             {glance.earlier.map((sessionId) => (
               <SessionRow key={sessionId} {...row(sessionId)} kind="earlier" />
@@ -1046,7 +1022,7 @@ function Groups({
         </section>
       ) : null}
       {glance.hidden > 0 ? (
-        <p className="agents-overview-footnote" data-reflow="hidden">
+        <p className="agents-overview-footnote">
           {glance.hidden} more {glance.hidden === 1 ? "session" : "sessions"} outside this
           view
           {" · "}

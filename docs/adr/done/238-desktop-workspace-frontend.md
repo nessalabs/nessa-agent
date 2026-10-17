@@ -277,7 +277,7 @@ the destination boxes after the browser's layout, so the arrival does not
 force a second layout in React's commit. The existing workspace focus owner follows the removed
 field and respects focus the person moved elsewhere. Crossing the threshold, as a pane is resized or
 split, the greeting and composer settle into their new places
-(`--desktop-slow`, opacity and transform only) under the panes' own flight;
+(`--desktop-slow`, opacity and transform only) within the final pane bounds;
 with less motion they are simply there. Only a crossing plays it: the
 stylesheet names each shape's settling in `--workspace-home-settle`, and the
 pane marks its home `data-reshaped` when that name changes under it
@@ -467,6 +467,32 @@ taking the keyboard to do it (a stop of its own, so WebKit reaches it; its
 arrows, Home and End scroll it rather than walk the list), its scrollbar
 shown and its foot fading while there is more below.
 
+### Overview list placement and answered requests
+
+The overview list uses final placement immediately for answers, group changes,
+and inline peek expansion. A mounted conversation is fully opaque from its
+first frame, including opening a peek, walking or answering into another
+session, and expanding it inline. Non-conversation affordances keep their
+own motion. List items do not travel, leave copies, or require geometry snapshots.
+`ui/overview/overview.test.tsx` checks immediate placement through the real store;
+`responsive.mjs --only overview-leave` samples the visible result.
+
+An answer keeps its session, approval and choice while the source catches up.
+The next request receives focus immediately when the keyboard was in the
+overview; focus outside it stays outside. The existing input timestamp
+and one-press guard remain the owner of repeat protection.
+
+| Held state | Event | Next and visible result |
+| --- | --- | --- |
+| answering | refused, unconfirmed, or not asked | released; the row shows the workspace's current request or failure |
+| answering | sent, session already moved | released directly into its current group; live region announces the answer |
+| answering | sent, session still waits | leaving; row held with answers put away, watching the source |
+| leaving | source moves the session on | released into its current group immediately |
+| leaving | source asks something new | released; current request shown |
+| leaving | `heldAtMost` expires | released as the workspace holds it |
+| any | overview closes | watches and timers stopped; late answer does nothing |
+| any | reduced motion | the same final placement and lifecycle; independent CSS honors its motion tokens |
+
 ### Showing one group alone
 
 The overview's state holds the group shown alone (`OverviewState.group`:
@@ -505,7 +531,7 @@ hide a request waiting on the person. One row, at least one test
 | a group | the overview closes and opens again | the same group | as it was |
 | any | a launch | every group | the filter as kept; no group |
 | Needs you not shown | an answer asked for a waiting session not chosen | unchanged | `not-asked`; it is not read for the overview |
-| Needs you | a request answered from its row | unchanged | it settles in place; held rows are listed only while the waiting are shown |
+| Needs you | a request answered from its row | unchanged | its row is held until the source moves it; held rows are listed only while the waiting are shown |
 
 **Focus follows the focused pane** (`adapters/dom/focus.ts`, one mechanism):
 whenever another pane takes focus — a split, ⌘N, ⌘W, ⌘1–4, ⇧⌘[ ⇧⌘], a pick in
@@ -817,7 +843,7 @@ check of its own.
 
 | pane-motion event | owned response |
 | --- | --- |
-| workspace shape changes | apply the final layout immediately; keep content visible and retire the owned drag preview |
+| workspace shape changes | apply the final layout immediately through the dedicated zero-duration workspace-flight token; keep content visible, skip geometry snapshots and counter-scale flights, and retire the owned drag preview |
 | nonzero flight requested by a shared-component host | snapshot old boxes; read landing boxes with content visible; cancel previous flights |
 | flight completes | release the owned flight marks; keep bodies visible |
 | shape changes during a flight | cancel old transforms and begin from the current boxes; reject late completions |
