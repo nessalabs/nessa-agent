@@ -10,42 +10,50 @@ mod state;
 
 fn main() {
     #[cfg(target_os = "macos")]
-    missing_native_url();
+    native::run();
     #[cfg(not(target_os = "macos"))]
     println!("page_load: native nil-URL qualification requires macOS (not run)");
 }
 
 #[cfg(target_os = "macos")]
-fn missing_native_url() {
+mod native {
     use objc2::MainThreadOnly;
     use objc2_app_kit::NSApplication;
     use objc2_foundation::{MainThreadMarker, NSRect};
     use objc2_web_kit::{WKWebView, WKWebViewConfiguration};
 
-    let main = MainThreadMarker::new().expect("AppKit runs on the main thread");
-    let _app = NSApplication::sharedApplication(main);
-    // The typed WebKit bindings link the framework in this standalone test;
-    // AppKit alone does not register WKWebView's Objective-C classes.
-    let view = unsafe {
-        let configuration = WKWebViewConfiguration::new(main);
-        WKWebView::initWithFrame_configuration(WKWebView::alloc(main), NSRect::ZERO, &configuration)
-    };
-    // Unlike Wry 0.55.1's accessor, this query represents nil explicitly.
-    let url = unsafe { view.URL() };
-    assert!(url.is_none(), "the regression needs a webview with no URL");
+    use super::state::Loads;
 
-    let loads = state::Loads::new();
-    let configured = "http://localhost:1498/desktop.html";
-    assert_eq!(
-        loads.unserved_page("desktop", configured).as_deref(),
-        Some(configured)
-    );
-    loads.observe(
-        "desktop",
-        "nessa-status://localhost/load-failure?page=original",
-    );
-    assert_eq!(loads.unserved_page("desktop", configured), None);
-    loads.observe("main", "http://localhost:1420/index.html");
-    assert_eq!(loads.unserved_page("main", configured), None);
-    println!("page_load: native URL=nil; configured diagnostic retained; failure-page and normal-origin fact controls passed");
+    pub fn run() {
+        let main = MainThreadMarker::new().expect("AppKit runs on the main thread");
+        let _app = NSApplication::sharedApplication(main);
+        // The typed WebKit bindings link the framework in this standalone test;
+        // AppKit alone does not register WKWebView's Objective-C classes.
+        let view = unsafe {
+            let configuration = WKWebViewConfiguration::new(main);
+            WKWebView::initWithFrame_configuration(
+                WKWebView::alloc(main),
+                NSRect::ZERO,
+                &configuration,
+            )
+        };
+        // Unlike Wry 0.55.1's accessor, this query represents nil explicitly.
+        let url = unsafe { view.URL() };
+        assert!(url.is_none(), "the regression needs a webview with no URL");
+
+        let loads = Loads::new();
+        let configured = "http://localhost:1498/desktop.html";
+        assert_eq!(
+            loads.unserved_page("desktop", configured).as_deref(),
+            Some(configured)
+        );
+        loads.observe(
+            "desktop",
+            "nessa-status://localhost/load-failure?page=original",
+        );
+        assert_eq!(loads.unserved_page("desktop", configured), None);
+        loads.observe("main", "http://localhost:1420/index.html");
+        assert_eq!(loads.unserved_page("main", configured), None);
+        println!("page_load: native URL=nil; configured diagnostic retained; failure-page and normal-origin fact controls passed");
+    }
 }
