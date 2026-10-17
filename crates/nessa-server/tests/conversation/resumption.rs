@@ -563,7 +563,10 @@ async fn a_retry_whose_agent_cannot_attach_yet_is_tried_again() {
     );
     assert_eq!(
         durable.texts()[1],
-        format!("[Your last turn on this request ended early because the agent failed, so it is sent again now. Some of it may already be done: check the current state before repeating any step, then carry on. If the work is already finished, say so and stop.]\n\nThe request was:\n\nRefactor the parser")
+        "[Your last turn on this request ended early because the agent failed, so it is \
+         sent again now. Some of it may already be done: check the current state before \
+         repeating any step, then carry on. If the work is already finished, say so and \
+         stop.]\n\nThe request was:\n\nRefactor the parser"
     );
     until(|| !durable.marks.holds(&id)).await;
     service.shutdown().await.unwrap();
