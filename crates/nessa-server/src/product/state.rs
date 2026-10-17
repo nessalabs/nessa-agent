@@ -33,7 +33,9 @@ use nessa_auth::{
 use nessa_protocol::clock::Clock as UptimeClock;
 use nessa_protocol::product::generated::{
     AgentsListResult, MAX_GLOBAL_CHANGE_WATCHES, MAX_PRINCIPAL_CHANGE_WATCHES,
+    MAX_PRINCIPAL_SUBSCRIPTIONS,
 };
+use nessa_sdk::infrastructure::session_storage::MAX_RECORD_CHANGE_WATCHES;
 use serde_json::Value;
 use std::{
     sync::Arc,
@@ -86,6 +88,7 @@ pub struct ProductRouteState {
     /// command and control admission. How many is [`OperationalLimits`].
     pub(crate) record_reads: Arc<Semaphore>,
     pub(super) change_watches: Arc<WatchOwners>,
+    pub(super) subscription_watches: Arc<WatchOwners>,
     pub(crate) record_watches: Option<Arc<dyn WatchRecords>>,
     pub(crate) catalogue_watches: Option<Arc<dyn WatchCatalogue>>,
     pub(crate) watch_namespaces: Arc<dyn WatchNamespaces>,
@@ -291,6 +294,10 @@ impl ProductRouteState {
             change_watches: Arc::new(WatchOwners::new(
                 MAX_GLOBAL_CHANGE_WATCHES,
                 MAX_PRINCIPAL_CHANGE_WATCHES,
+            )),
+            subscription_watches: Arc::new(WatchOwners::new(
+                MAX_RECORD_CHANGE_WATCHES,
+                MAX_PRINCIPAL_SUBSCRIPTIONS,
             )),
             record_watches: None,
             catalogue_watches: None,

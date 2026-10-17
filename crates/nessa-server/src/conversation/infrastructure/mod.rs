@@ -21,8 +21,11 @@
 //! before storage shutdown.
 //!
 //! `catalogue_changes` publishes coalesced payloadless notices after visible
-//! metadata transactions commit; final publisher drop closes remaining handles.
-//! Registration/head recheck belongs to its consuming authorized application.
+//! metadata transactions commit. It captures owner registrations and paired
+//! receivers whose existing scoped head reached the committed revision, then
+//! invokes callbacks after the database mutex is released. Final publisher drop
+//! closes remaining handles. Registration/head recheck belongs to its consuming
+//! authorized application.
 //!
 //! Ports and local files:
 //!

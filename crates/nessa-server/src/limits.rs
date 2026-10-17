@@ -26,8 +26,9 @@ use nessa_protocol::lease::{
 };
 use nessa_protocol::product::generated::{
     MAX_CONNECTION_CONVERSATION_SUBSCRIPTIONS, MAX_CONNECTION_LIST_SUBSCRIPTIONS,
-    MAX_PRODUCT_CLIENT_ID_CHARACTERS, MAX_PRODUCT_SURFACE_INSTANCE_CHARACTERS,
-    MAX_RECORD_RESPONSE_BYTES, MAX_SHARE_PAGE, SUBSCRIPTION_DELIVERY_TIMEOUT_MS,
+    MAX_PRINCIPAL_SUBSCRIPTIONS, MAX_PRODUCT_CLIENT_ID_CHARACTERS,
+    MAX_PRODUCT_SURFACE_INSTANCE_CHARACTERS, MAX_RECORD_RESPONSE_BYTES, MAX_SHARE_PAGE,
+    SUBSCRIPTION_DELIVERY_TIMEOUT_MS,
 };
 use nessa_protocol::protocol::MAX_PAYLOAD_BYTES;
 use nessa_sdk::application::agent_execution::sessions::{ArtifactRecord, NoteRecord, NoteText};
@@ -192,6 +193,12 @@ fn catalogue() -> &'static [Limit] {
             tier: "fixed",
             owner: "protocol/product/v1.json x-subscriptionLimits.listTargets",
             meaning: "a list subscription past this on one socket is refused",
+        },
+        Limit {
+            id: "socket.principal_subscriptions",
+            tier: "fixed",
+            owner: "protocol/product/v1.json x-subscriptionLimits.principalTargets",
+            meaning: "view, event and list subscriptions across one authenticated organization and principal share this allowance; refused admission takes no source watch, and task cancellation releases it after the sources",
         },
         Limit {
             id: "record.change_watches",
@@ -585,6 +592,10 @@ pub(crate) fn effective_json(
     put(
         "socket.list_subscriptions",
         count(MAX_CONNECTION_LIST_SUBSCRIPTIONS),
+    );
+    put(
+        "socket.principal_subscriptions",
+        count(MAX_PRINCIPAL_SUBSCRIPTIONS),
     );
     put("record.change_watches", count(MAX_RECORD_CHANGE_WATCHES));
     put(

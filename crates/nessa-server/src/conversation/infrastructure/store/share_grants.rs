@@ -1122,10 +1122,15 @@ impl LocalConversationStore {
                     "conversation share grant changed"
                 );
                 if reads_change {
-                    changes.publish(&(
-                        conversation.organization().clone(),
-                        conversation.owner().clone(),
-                    ));
+                    let publication = super::catalogue_publication(
+                        &changes,
+                        &connection,
+                        conversation.organization(),
+                        conversation.owner(),
+                        revision,
+                    );
+                    drop(connection);
+                    publication.publish();
                 }
                 Ok(ChangeAttempt::Applied(receipt))
             })

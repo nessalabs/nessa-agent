@@ -138,8 +138,8 @@ impl AdmitPassiveRead<'_> {
     }
 
     /// Whether `session`, admitted to `scope`, may watch its owner's
-    /// catalogue: a watch fires on every change to it, granted or not, so
-    /// the policy decides from whom the session signed in as
+    /// catalogue. Producer notices follow the receiver's scoped head;
+    /// the policy still decides from whom the session signed in as
     /// (`catalogue.watch`). Refused, it is `Forbidden`.
     pub fn catalogue_watch(
         &self,

@@ -223,12 +223,8 @@ impl WatchSelector {
                     .catalogue(session, receiver, *epoch, PassiveRead::CatalogueHead)
                     .await
                     .map_err(WatchRefusal::Read)?;
-                // A catalogue watch fires on every change to the owner's
-                // catalogue, granted or not; the policy decides who may
-                // follow that (`catalogue.watch`). A peer gateway polls its
-                // head instead (`docs/design/auth/peer-gateways.md`).
-                // Owner-phone sessions never reach this question: method
-                // admission above refuses the payloadless watch methods.
+                // Keep catalogue.watch policy unchanged; producer notices follow
+                // this admitted reader's existing head rather than owner activity.
                 admission
                     .catalogue_watch(session, &admitted)
                     .map_err(WatchRefusal::Read)?;
@@ -299,11 +295,13 @@ impl WatchSelector {
                 .catalogue_watches
                 .as_ref()
                 .ok_or(ChangeWatchErrorCode::TemporarilyUnavailable)?
-                .watch(&admitted.organization_id, &admitted.owner_id)
+                .watch_reader(
+                    &admitted.organization_id,
+                    &admitted.owner_id,
+                    &admitted.receiver_id,
+                )
                 .map(WatchHandle::Catalogue)
-                .map_err(|error| match error {
-                    CatalogueWatchError::Capacity => ChangeWatchErrorCode::WatchCapacity,
-                }),
+                .map_err(|CatalogueWatchError::Capacity| ChangeWatchErrorCode::WatchCapacity),
         }
     }
 }

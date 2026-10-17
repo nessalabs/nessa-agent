@@ -152,10 +152,29 @@ sequenceDiagram
     Socket-->>Device: refused, as not the owner's
 ```
 
-A device's catalogue watch is still the owner's: its notice carries no id
-and only says "read again", so it fires on any change to the owner's
-catalogue, granted or not. What the device then reads is narrowed; the notice
-tells it that something changed, never what.
+A device's catalogue watch signals only a change to that receiver's existing
+catalogue head. The store captures recipients after commit while holding its
+connection, reusing `granted_head` for at most the registered-watch limit, then
+releases the connection before invoking notification callbacks. A watch installed
+after that capture discovers the commit in its final head recheck. A cancelled
+caller does not cancel publication by the blocking worker.
+
+The Cedar bundle remains byte-for-byte unchanged: `profile_sources` feeds its raw
+source into the receiver read-policy fingerprint. Even editing its historical
+owner-wide notification comment would change that fingerprint. Producer scoping
+is described here and in `AdmitPassiveRead::catalogue_watch`; it does not change
+the bundle's existing device-only admission.
+
+| Event or ordering (#724) | Result | Regression |
+| --- | --- | --- |
+| Ungranted owner changes or another receiver's grant on an ungranted row | Head unchanged; no reader notice | `paired_catalogue_notices_follow_only_the_readers_head`; `paired_catalogue_watch_does_not_send_ungranted_owner_activity` |
+| Granted row changes; grant or last revoke | Head advances; reader notice, including the now-empty catalogue | `paired_catalogue_notices_follow_only_the_readers_head` |
+| Historical receiver replaced again | Existing journal-derived head and notice still advance; unresolved #724 disclosure | `historical_receiver_replacements_notify_exactly_when_their_head_moves` |
+| Recipient has another owner or organization | No notice | `paired_catalogue_notices_follow_only_the_readers_head` |
+| Notification callback reenters the database | Database mutex released before callback | `catalogue_publication_releases_database_before_invoking_a_waker` |
+| Caller disappears during a committed write | Blocking worker keeps commit and publication ownership | `a_cancelled_grant_change_keeps_its_permit_until_the_write_finishes` |
+| Scoped head lookup fails after commit | Durable write and owner notice succeed; affected reader stays quiet | `a_failed_scoped_head_capture_does_not_broaden_a_committed_notice` |
+| Full registry includes duplicate receivers; wait is cancelled | One head query per distinct receiver; capacity remains charged until registration drops | `full_registry_checks_each_receiver_once_and_releases_only_on_drop` |
 
 ## Revisions
 
@@ -913,15 +932,23 @@ row's tests are named by the row: the transitions in
 
 ## Known limits
 
-- **A device's catalogue watch is the owner's.** Its notices fire on every
-  catalogue change, granted or not, so a device can count its owner's activity
-  (shares to other devices included) without learning any row. Its catalogue
-  head no longer moves with them: a paired reader's head is the latest
-  revision among its granted rows and its own grant changes
-  ([peer gateways](auth/peer-gateways.md), row H9), still numbered by the
-  owner's catalogue. A device paired before that change needs one explicit
-  catalogue reset (see the peer gateways Known limits). A peer gateway,
-  another party, is refused the catalogue watch and polls that head.
+- **Catalogue revisions keep the owner's numbering.** A paired reader's head
+  and notices follow granted rows and its own grant history, but gaps between
+  visible revisions can count intervening owner changes. Eliminating those gaps
+  needs receiver-specific revision numbering and is outside #724's scoped-head
+  option. A device whose progress predates scoped heads needs one explicit
+  catalogue reset (see the peer gateways Known limits). A peer gateway remains
+  refused the catalogue watch by the existing policy and polls its scoped head.
+- **Former receivers still observe subsequent grant replacements (#724).**
+  After R1 → R2 → R3 on the same conversation/principal, R1's existing
+  journal-derived head advances at R3, and its notice follows that head. This
+  reveals later replacement timing even though R1 has no current grant. It is
+  separate from numeric revision gaps and leaves #724 partially addressed.
+  Narrowing the query alone would move previously observed heads backwards and
+  reject saved sync boundaries. Completing the fix needs a durable floor for
+  each affected receiver's old head before tracking only the immediately
+  preceding active grant. The current alpha database has no in-place migration
+  support; this change preserves saved cursor semantics and leaves that work open.
 - **Unpairing is `credential.revoke`, which leaves the binding active.** Reads
   stop because the credential no longer authenticates, but `conversation.share`
   still accepts that credential and writes a grant no one can use.

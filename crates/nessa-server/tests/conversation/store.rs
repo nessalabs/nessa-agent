@@ -9,7 +9,7 @@ use crate::conversation::{
         CatalogueWatchState, ConversationCatalogue, ConversationCreationDisposition,
         ConversationError, ConversationListing, ConversationModeApplication,
         ConversationModeRequest, ConversationModeRequestState, ConversationRepository,
-        ConversationSummaries, Reader, WatchCatalogue,
+        ConversationSummaries, Reader, ShareGrantTransition, ShareGrants, WatchCatalogue,
     },
     domain::{
         Capabilities, Conversation, ConversationDeletion, ProviderSessionErasure,
@@ -32,7 +32,10 @@ use nessa_sync::replication::{
 use std::path::{Path, PathBuf};
 use std::{
     future::Future,
-    sync::Arc,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
     task::{Context, Poll, Wake, Waker},
     time::Duration,
 };
@@ -4788,6 +4791,7 @@ async fn a_cancelled_grant_change_keeps_its_permit_until_the_write_finishes() {
         .await
         .unwrap());
     let revision = only_grant(&store, &id).await.policy_revision;
+    let mut watch = store.watch_reader(&org(), &alice(), "phone").unwrap();
     let pause = super::store::GrantWritePause::new();
     // A failed assertion still lets the blocked write finish, so the runtime
     // is not left waiting on that task.
@@ -4849,4 +4853,208 @@ async fn a_cancelled_grant_change_keeps_its_permit_until_the_write_finishes() {
             .is_empty(),
         "the detached write did not revoke the grant"
     );
+    assert_eq!(
+        catalogue_watch_ready(&mut watch),
+        CatalogueWatchState::Dirty
+    );
+}
+
+/// #724: head and notices follow the same receiver, including an empty
+/// catalogue after the last revoke. Unrelated owners and receivers stay quiet.
+#[tokio::test]
+async fn paired_catalogue_notices_follow_only_the_readers_head() {
+    let opened = opened();
+    let store = &opened.store;
+    let mut owner = store.watch(&org(), &alice()).unwrap();
+    let mut phone = store.watch_reader(&org(), &alice(), "phone").unwrap();
+    let mut tablet = store.watch_reader(&org(), &alice(), "tablet").unwrap();
+    let mut wrong_owner = store
+        .watch_reader(&org(), &PrincipalId::new("wrong-owner").unwrap(), "phone")
+        .unwrap();
+    let mut wrong_org = store
+        .watch_reader(
+            &OrganizationId::new("wrong-org").unwrap(),
+            &alice(),
+            "phone",
+        )
+        .unwrap();
+    let (first, second) = (new_id(), new_id());
+    store.create(owned(&first)).await.unwrap();
+    store.create(owned(&second)).await.unwrap();
+    assert_eq!(
+        catalogue_watch_ready(&mut owner),
+        CatalogueWatchState::Dirty
+    );
+    catalogue_watch_pending(&mut phone);
+    catalogue_watch_pending(&mut tablet);
+    assert!(grant(store, &first, "phone").await);
+    assert_eq!(
+        catalogue_watch_ready(&mut phone),
+        CatalogueWatchState::Dirty
+    );
+    let before = store
+        .head(&org(), &alice(), &device("phone"))
+        .await
+        .unwrap();
+    for n in 0..100 {
+        store
+            .record(&second, said("ungranted", n + 10))
+            .await
+            .unwrap();
+    }
+    assert!(grant(store, &second, "tablet").await);
+    assert_eq!(
+        store
+            .head(&org(), &alice(), &device("phone"))
+            .await
+            .unwrap(),
+        before
+    );
+    catalogue_watch_pending(&mut phone);
+    assert_eq!(
+        catalogue_watch_ready(&mut tablet),
+        CatalogueWatchState::Dirty
+    );
+    store.record(&first, said("granted", 200)).await.unwrap();
+    assert_eq!(
+        catalogue_watch_ready(&mut phone),
+        CatalogueWatchState::Dirty
+    );
+    assert!(revoke(store, &first, "phone").await);
+    assert_eq!(
+        catalogue_watch_ready(&mut phone),
+        CatalogueWatchState::Dirty
+    );
+    let revoked = store
+        .head(&org(), &alice(), &device("phone"))
+        .await
+        .unwrap();
+    assert!(revoked.revision > before.revision);
+    assert!(device_pass(store, device("phone"), before.revision)
+        .await
+        .is_empty());
+    store
+        .record(&first, said("after revoke", 201))
+        .await
+        .unwrap();
+    catalogue_watch_pending(&mut phone);
+    catalogue_watch_pending(&mut wrong_owner);
+    catalogue_watch_pending(&mut wrong_org);
+}
+
+/// Characterizes the remaining #724 disclosure: an old receiver's head still
+/// advances on later replacements. Preserve cursor agreement until a durable
+/// floor permits narrowing that head without regressing saved boundaries.
+#[tokio::test]
+async fn historical_receiver_replacements_notify_exactly_when_their_head_moves() {
+    let opened = opened();
+    let store = &opened.store;
+    let id = new_id();
+    store.create(owned(&id)).await.unwrap();
+    let mut first = store.watch_reader(&org(), &alice(), "first").unwrap();
+    let mut second = store.watch_reader(&org(), &alice(), "second").unwrap();
+    let mut third = store.watch_reader(&org(), &alice(), "third").unwrap();
+    for receiver in ["first", "second", "third"] {
+        let mut change = grant_change(
+            ShareGrantTransition::Grant(ShareAccess::read()),
+            &id,
+            Some(receiver),
+            &format!("credential-{receiver}"),
+            &format!("request-{receiver}"),
+        );
+        change.principal_id = Some(PrincipalId::new("one-grantee").unwrap());
+        assert!(store.change(change).await.unwrap().applied);
+        assert_eq!(
+            catalogue_watch_ready(&mut first),
+            CatalogueWatchState::Dirty
+        );
+        if receiver != "first" {
+            assert_eq!(
+                catalogue_watch_ready(&mut second),
+                CatalogueWatchState::Dirty
+            );
+        } else {
+            catalogue_watch_pending(&mut second);
+        }
+        if receiver == "third" {
+            assert_eq!(
+                catalogue_watch_ready(&mut third),
+                CatalogueWatchState::Dirty
+            );
+        } else {
+            catalogue_watch_pending(&mut third);
+        }
+    }
+    store
+        .record(&id, said("only third still holds the row", 100))
+        .await
+        .unwrap();
+    catalogue_watch_pending(&mut first);
+    catalogue_watch_pending(&mut second);
+    assert_eq!(
+        catalogue_watch_ready(&mut third),
+        CatalogueWatchState::Dirty
+    );
+}
+
+struct DatabaseUnlockedOnNotice {
+    store: Arc<LocalConversationStore>,
+    observed: AtomicBool,
+}
+impl Wake for DatabaseUnlockedOnNotice {
+    fn wake(self: Arc<Self>) {
+        self.observed
+            .store(self.store.mutation_is_unlocked(), Ordering::SeqCst);
+    }
+}
+
+#[tokio::test]
+async fn catalogue_publication_releases_database_before_invoking_a_waker() {
+    let opened = opened();
+    let store = Arc::new(opened.store);
+    let mut watch = store.watch(&org(), &alice()).unwrap();
+    let observer = Arc::new(DatabaseUnlockedOnNotice {
+        store: store.clone(),
+        observed: AtomicBool::new(false),
+    });
+    let waker = Waker::from(observer.clone());
+    let mut wait = Box::pin(watch.changed());
+    assert!(wait
+        .as_mut()
+        .poll(&mut Context::from_waker(&waker))
+        .is_pending());
+    store.create(owned(&new_id())).await.unwrap();
+    assert!(observer.observed.load(Ordering::SeqCst));
+    assert_eq!(wait.await, CatalogueWatchState::Dirty);
+}
+
+#[tokio::test]
+async fn a_failed_scoped_head_capture_does_not_broaden_a_committed_notice() {
+    let opened = opened();
+    let store = &opened.store;
+    let mut owner = store.watch(&org(), &alice()).unwrap();
+    let mut phone = store.watch_reader(&org(), &alice(), "phone").unwrap();
+    // Only this synthetic database is damaged. Owner writes still work, while
+    // a scoped head cannot query the grant journal.
+    raw(&opened.path)
+        .execute(
+            "ALTER TABLE share_grant_changes RENAME TO missing_grant_journal",
+            [],
+        )
+        .unwrap();
+    assert!(store
+        .head(&org(), &alice(), &device("phone"))
+        .await
+        .is_err());
+    let id = new_id();
+    store.create(owned(&id)).await.unwrap();
+    assert!(ConversationRepository::load(store, &id)
+        .await
+        .unwrap()
+        .is_some());
+    assert_eq!(
+        catalogue_watch_ready(&mut owner),
+        CatalogueWatchState::Dirty
+    );
+    catalogue_watch_pending(&mut phone);
 }

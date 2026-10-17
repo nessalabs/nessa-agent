@@ -22,6 +22,7 @@ use crate::conversation::application::{
     ConversationService, ReadOpening,
 };
 use crate::product::{
+    change_watch::{ProductWatchPermit, WatchPrincipal},
     conversation::{caller, read_list, read_view},
     passive_read::deadlines::{PASSIVE_READ_TIMEOUT, RECORD_SEND_TIMEOUT},
     read_access,
@@ -204,6 +205,8 @@ pub(super) struct Sources {
     environments: Option<watch::Receiver<u64>>,
     /// The native hooks choice's commands, for the agent catalog.
     hooks: Option<watch::Receiver<u64>>,
+    // Dropped after the physical sources above, including on cancellation.
+    _owner: Option<ProductWatchPermit>,
 }
 
 pub(super) enum Wake {
@@ -229,6 +232,22 @@ impl Sources {
                 .to_owned(),
             ChangeWatchError::Closed => unavailable(),
         };
+        // Agent catalog subscriptions register no record source and retain
+        // their existing per-connection duplicate bound.
+        let owner = if matches!(target, Target::Agents) {
+            None
+        } else {
+            Some(
+                state
+                    .subscription_watches
+                    .try_acquire(&WatchPrincipal::of(session))
+                    .map_err(|_| {
+                        ConversationSubscriptionErrorCode::SubscriptionCapacity
+                            .as_str()
+                            .to_owned()
+                    })?,
+            )
+        };
         Ok(match target {
             Target::Events { conversation, .. } => Self {
                 records: Some(records()?.watch(conversation).map_err(capacity)?),
@@ -236,6 +255,7 @@ impl Sources {
                 live: None,
                 environments: None,
                 hooks: None,
+                _owner: owner,
             },
             Target::View { conversation, .. } => Self {
                 records: Some(records()?.watch(conversation).map_err(capacity)?),
@@ -248,14 +268,15 @@ impl Sources {
                 ),
                 environments: None,
                 hooks: None,
+                _owner: owner,
             },
             Target::List { .. } => {
-                let owner = caller(session, String::new());
+                let caller = caller(session, String::new());
                 let catalogue = state
                     .catalogue_watches
                     .as_ref()
                     .ok_or_else(unavailable)?
-                    .watch(&owner.organization_id, &owner.principal_id)
+                    .watch(&caller.organization_id, &caller.principal_id)
                     .map_err(|CatalogueWatchError::Capacity| {
                         ConversationSubscriptionErrorCode::SubscriptionCapacity
                             .as_str()
@@ -269,6 +290,7 @@ impl Sources {
                     live: None,
                     environments: None,
                     hooks: None,
+                    _owner: owner,
                 }
             }
             // Only the paired environments and the native hooks choice
@@ -280,6 +302,7 @@ impl Sources {
                 live: None,
                 environments: state.agents_catalog_changes(),
                 hooks: state.native_hooks_changes(),
+                _owner: owner,
             },
         })
     }
@@ -971,7 +994,10 @@ pub(super) async fn run(run: Run) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::product::event_sequence::EventSequence;
+    use crate::product::{
+        change_watch::{watch_principal, WatchOwners},
+        event_sequence::EventSequence,
+    };
     use nessa_protocol::product::generated::ConversationSummary;
 
     fn row(n: usize, preview: usize) -> ConversationSummary {
@@ -1210,6 +1236,12 @@ mod tests {
         assert_eq!(retry_after(&ConversationError::Unavailable, 0), None);
     }
 
+    fn source_owner() -> ProductWatchPermit {
+        Arc::new(WatchOwners::new(1, 1))
+            .try_acquire(&watch_principal("test"))
+            .unwrap()
+    }
+
     async fn waits(sources: &mut Sources) -> bool {
         tokio::time::timeout(Duration::ZERO, sources.changed())
             .await
@@ -1242,6 +1274,7 @@ mod tests {
             live: Some(receiver),
             environments: None,
             hooks: None,
+            _owner: Some(source_owner()),
         };
         assert!(!sources.drain().await, "nothing waiting");
         live.send(1).unwrap();
@@ -1272,6 +1305,7 @@ mod tests {
             live: None,
             environments: None,
             hooks: None,
+            _owner: Some(source_owner()),
         };
         drop(changes);
         assert!(matches!(sources.changed().await, Wake::Closed));

@@ -6,7 +6,7 @@ pub use export::{
     ExportFacts, ExportFences, ExportSkip, MetadataSnapshot, NamedRecord, RevocationFact,
 };
 
-use super::catalogue_changes::CatalogueChanges;
+use super::catalogue_changes::{CatalogueChanges, CataloguePublication};
 
 use crate::conversation::application::{
     CatalogueChangeWatch, CatalogueDescriptor, CatalogueHead, CatalogueKey, CataloguePage,
@@ -39,9 +39,9 @@ use nessa_sync::replication::catalogue::{
 use nessa_sync::replication::domain::{Id, Scope, MAX_ID_BYTES};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 #[cfg(test)]
-use std::sync::{Condvar, MutexGuard, PoisonError};
+use std::sync::{Condvar, MutexGuard};
 
 /// A grant write that has entered its blocking task and will not commit
 /// until [`GrantWritePause::release`]. The permit is held across the wait.
@@ -210,20 +210,34 @@ impl LocalConversationStore {
             .unwrap_or_else(PoisonError::into_inner)
     }
 
+    #[cfg(test)]
+    pub(super) fn mutation_is_unlocked(&self) -> bool {
+        self.connection.try_lock().is_ok()
+    }
+
     fn run<T: Send + 'static>(
         &self,
         work: impl FnOnce(&mut Connection) -> Result<T, ConversationError> + Send + 'static,
     ) -> ConversationFuture<'_, T> {
+        self.run_publishing(move |connection, _| work(connection))
+    }
+
+    fn run_publishing<T: Send + 'static>(
+        &self,
+        work: impl FnOnce(&mut Connection, &mut CataloguePublication) -> Result<T, ConversationError>
+            + Send
+            + 'static,
+    ) -> ConversationFuture<'_, T> {
         let connection = self.connection.clone();
         Box::pin(async move {
             tokio::task::spawn_blocking(move || {
-                // A call that panicked left no transaction open — rusqlite
-                // rolls one back as it unwinds — so the connection is still
-                // fit for the next caller.
-                let mut connection = connection
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                work(&mut connection)
+                // A panicking transaction rolls back through rusqlite.
+                let mut connection = connection.lock().unwrap_or_else(PoisonError::into_inner);
+                let mut publication = CataloguePublication::default();
+                let result = work(&mut connection, &mut publication);
+                drop(connection);
+                publication.publish();
+                result
             })
             .await
             .map_err(|_| ConversationError::Metadata)?
@@ -313,6 +327,25 @@ fn admit_catalogue_target(
             .map_err(|_| ConversationError::Metadata)?;
     }
     Ok(())
+}
+
+fn catalogue_publication(
+    changes: &CatalogueChanges,
+    connection: &Connection,
+    organization: &OrganizationId,
+    owner: &PrincipalId,
+    revision: i64,
+) -> CataloguePublication {
+    changes.capture(
+        &(organization.clone(), owner.clone()),
+        |receiver| match granted_head(connection, organization, owner, receiver) {
+            Ok(head) => head == revision,
+            Err(error) => {
+                tracing::warn!(?error, "could not capture a reader's catalogue notice");
+                false
+            }
+        },
+    )
 }
 
 /// A paired reader's head: the latest revision among the owner's rows granted
@@ -932,7 +965,7 @@ impl ConversationRepository for LocalConversationStore {
     }
     fn create(&self, conversation: Conversation) -> ConversationFuture<'_, ConversationCreation> {
         let changes = self.changes.clone();
-        self.run(move |connection| {
+        self.run_publishing(move |connection, publication| {
             let transaction = connection
                 .transaction_with_behavior(TransactionBehavior::Immediate)
                 .map_err(failed)?;
@@ -968,10 +1001,13 @@ impl ConversationRepository for LocalConversationStore {
                 )
                 .map_err(failed)?;
             transaction.commit().map_err(failed)?;
-            changes.publish(&(
-                conversation.organization().clone(),
-                conversation.owner().clone(),
-            ));
+            *publication = catalogue_publication(
+                &changes,
+                connection,
+                conversation.organization(),
+                conversation.owner(),
+                revision,
+            );
             Ok(ConversationCreation {
                 conversation,
                 disposition: ConversationCreationDisposition::Created,
@@ -1114,7 +1150,7 @@ impl ConversationRepository for LocalConversationStore {
         let id = id.clone();
         let request_id = request_id.to_owned();
         let changes = self.changes.clone();
-        self.run(move |connection| {
+        self.run_publishing(move |connection, publication| {
             if state == ConversationModeRequestState::Pending {
                 return Err(ConversationError::InvalidInput);
             }
@@ -1149,7 +1185,7 @@ impl ConversationRepository for LocalConversationStore {
             if current.approval_mode() != request.prior {
                 return Err(ConversationError::ApprovalModeUncertain);
             }
-            if state == ConversationModeRequestState::Applied {
+            let revision = if state == ConversationModeRequestState::Applied {
                 let revision = next_revision(&transaction, &current, false)?;
                 transaction
                     .execute(
@@ -1163,7 +1199,10 @@ impl ConversationRepository for LocalConversationStore {
                         ],
                     )
                     .map_err(failed)?;
-            }
+                Some(revision)
+            } else {
+                None
+            };
             transaction
                 .execute(
                     "UPDATE mode_requests SET state = ?1
@@ -1172,8 +1211,14 @@ impl ConversationRepository for LocalConversationStore {
                 )
                 .map_err(failed)?;
             transaction.commit().map_err(failed)?;
-            if state == ConversationModeRequestState::Applied {
-                changes.publish(&(current.organization().clone(), current.owner().clone()));
+            if let Some(revision) = revision {
+                *publication = catalogue_publication(
+                    &changes,
+                    connection,
+                    current.organization(),
+                    current.owner(),
+                    revision,
+                );
             }
             Ok(ConversationModeRequest { state, ..request })
         })
@@ -1185,7 +1230,7 @@ impl ConversationRepository for LocalConversationStore {
     ) -> ConversationFuture<'_, Conversation> {
         let id = id.clone();
         let changes = self.changes.clone();
-        self.run(move |connection| {
+        self.run_publishing(move |connection, publication| {
             let transaction = connection
                 .transaction_with_behavior(TransactionBehavior::Immediate)
                 .map_err(failed)?;
@@ -1196,7 +1241,7 @@ impl ConversationRepository for LocalConversationStore {
             let deleted = conversation.deleted(deletion).map_err(contradicted)?;
             let tombstone = deleted.deletion().ok_or(ConversationError::Metadata)?;
             write_deletion(&transaction, &id, tombstone)?;
-            if first_deletion {
+            let revision = if first_deletion {
                 let revision = next_revision(&transaction, &deleted, false)?;
                 transaction
                     .execute(
@@ -1204,10 +1249,19 @@ impl ConversationRepository for LocalConversationStore {
                         params![revision, id.to_string()],
                     )
                     .map_err(failed)?;
-            }
+                Some(revision)
+            } else {
+                None
+            };
             transaction.commit().map_err(failed)?;
-            if first_deletion {
-                changes.publish(&(deleted.organization().clone(), deleted.owner().clone()));
+            if let Some(revision) = revision {
+                *publication = catalogue_publication(
+                    &changes,
+                    connection,
+                    deleted.organization(),
+                    deleted.owner(),
+                    revision,
+                );
             }
             Ok(deleted)
         })
@@ -1270,7 +1324,7 @@ impl ConversationSummaries for LocalConversationStore {
     ) -> ConversationFuture<'_, ()> {
         let id = id.clone();
         let changes = self.changes.clone();
-        self.run(move |connection| {
+        self.run_publishing(move |connection, publication| {
             let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate).map_err(failed)?;
             let conversation = read(&transaction, &id)?.ok_or(ConversationError::Metadata)?;
             if conversation.deletion().is_some() {
@@ -1300,14 +1354,14 @@ impl ConversationSummaries for LocalConversationStore {
                 params![revision, id.to_string()],
             ).map_err(failed)?;
             transaction.commit().map_err(failed)?;
-            changes.publish(&(conversation.organization().clone(), conversation.owner().clone()));
+            *publication = catalogue_publication(&changes, connection, conversation.organization(), conversation.owner(), revision);
             Ok(())
         })
     }
     fn erase(&self, id: &ConversationId) -> ConversationFuture<'_, ()> {
         let id = id.clone();
         let changes = self.changes.clone();
-        self.run(move |connection| {
+        self.run_publishing(move |connection, publication| {
             let transaction = connection
                 .transaction_with_behavior(TransactionBehavior::Immediate)
                 .map_err(failed)?;
@@ -1331,13 +1385,15 @@ impl ConversationSummaries for LocalConversationStore {
                 Some((
                     conversation.organization().clone(),
                     conversation.owner().clone(),
+                    revision,
                 ))
             } else {
                 None
             };
             transaction.commit().map_err(failed)?;
-            if let Some(owner) = changed_owner {
-                changes.publish(&owner);
+            if let Some((organization, owner, revision)) = changed_owner {
+                *publication =
+                    catalogue_publication(&changes, connection, &organization, &owner, revision);
             }
             Ok(())
         })
@@ -1788,5 +1844,14 @@ impl WatchCatalogue for LocalConversationStore {
         owner: &PrincipalId,
     ) -> Result<CatalogueChangeWatch, CatalogueWatchError> {
         self.changes.watch((organization.clone(), owner.clone()))
+    }
+    fn watch_reader(
+        &self,
+        organization: &OrganizationId,
+        owner: &PrincipalId,
+        receiver: &str,
+    ) -> Result<CatalogueChangeWatch, CatalogueWatchError> {
+        self.changes
+            .watch_for((organization.clone(), owner.clone()), Some(receiver))
     }
 }
