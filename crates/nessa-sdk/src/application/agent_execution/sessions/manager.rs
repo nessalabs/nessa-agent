@@ -41,7 +41,7 @@ use crate::domain::agent_execution::{
     sessions::SessionId,
 };
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fmt,
     future::poll_fn,
     panic::{catch_unwind, AssertUnwindSafe},
@@ -1127,6 +1127,29 @@ impl SessionManager {
         .map_err(|_| AgentError::SubmissionUnresolved)?
     }
     /// Latest locally observed submission, including evidence awaiting persistence.
+    /// Each observed invocation that `pick` keeps, read in saved order under
+    /// the evidence lock without copying the records: `pick` sees each with
+    /// its index and every identity this session has saved.
+    pub(crate) async fn pick_invocations<T>(
+        &self,
+        mut pick: impl FnMut(usize, &InvocationRecord, &HashSet<&ExecutionId>) -> Option<T>,
+    ) -> Vec<T> {
+        let evidence = self.evidence.lock().await;
+        let Some(snapshot) = evidence.observed.as_ref() else {
+            return Vec::new();
+        };
+        let saved: HashSet<&ExecutionId> = snapshot
+            .invocations
+            .iter()
+            .map(|record| &record.request.execution_id)
+            .collect();
+        snapshot
+            .invocations
+            .iter()
+            .enumerate()
+            .filter_map(|(index, record)| pick(index, record, &saved))
+            .collect()
+    }
     pub(crate) async fn submission(&self, id: &ExecutionId) -> Option<InvocationRecord> {
         self.evidence
             .lock()

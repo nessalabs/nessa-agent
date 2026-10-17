@@ -656,6 +656,93 @@ pub enum ExecutionAuditRecord {
     LateProviderResult(LateProviderResultRecord),
     /// The hooks choice a Claude or Codex process was started with.
     NativeHooksLaunch(NativeHooksLaunchRecord),
+    /// A turn a restart or the host's own shutdown cut off, continued by a
+    /// successor turn, or left ended because its chain of resumes is spent.
+    TurnResumed(TurnResumptionRecord),
+}
+
+/// What resuming did with one owed turn.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TurnResumption {
+    /// A successor turn was queued to continue it.
+    Continued {
+        /// The successor's derived identity.
+        successor: ExecutionId,
+    },
+    /// It was cut off [`Resumption::MAX_RESUMES`](crate::domain::agent_execution::executions::Resumption::MAX_RESUMES)
+    /// times running and is left ended.
+    Exhausted,
+    /// The host decided not to resume it ([`SchedulingCause::NotResumed`](crate::domain::agent_execution::executions::SchedulingCause::NotResumed)),
+    /// and it is left ended.
+    Declined,
+}
+
+/// Evidence that an owed turn was resumed: which turn, how it had stopped,
+/// whether the provider had been given it, who resumed it, and with what.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TurnResumptionRecord {
+    session_id: SessionId,
+    execution_id: ExecutionId,
+    cause: SchedulingCause,
+    dispatched: bool,
+    submitted_by: ActionContext,
+    resumed_by: ActionContext,
+    resumption: TurnResumption,
+}
+impl TurnResumptionRecord {
+    /// `cause` is the owed ending the turn stopped with: a cancellation that
+    /// leaves work owed ([`SchedulingCause::leaves_work_owed`]) or a failure
+    /// a retry can fix ([`SchedulingCause::stopped_by_failure`]); `dispatched` whether it had
+    /// reached the provider; `submitted_by` its original caller and
+    /// `resumed_by` the host's verified actor for this resume.
+    pub(crate) fn new(
+        session_id: SessionId,
+        execution_id: ExecutionId,
+        cause: SchedulingCause,
+        dispatched: bool,
+        submitted_by: ActionContext,
+        resumed_by: ActionContext,
+        resumption: TurnResumption,
+    ) -> Self {
+        Self {
+            session_id,
+            execution_id,
+            cause,
+            dispatched,
+            submitted_by,
+            resumed_by,
+            resumption,
+        }
+    }
+    /// The conversation's session.
+    pub fn session_id(&self) -> &SessionId {
+        &self.session_id
+    }
+    /// The turn that was cut off.
+    pub fn execution_id(&self) -> &ExecutionId {
+        &self.execution_id
+    }
+    /// How it had stopped: suspended by the host's shutdown, interrupted, or ended
+    /// by a failure a retry can fix.
+    pub fn cause(&self) -> SchedulingCause {
+        self.cause
+    }
+    /// Whether the provider had been given the turn before it stopped.
+    pub fn dispatched(&self) -> bool {
+        self.dispatched
+    }
+    /// Who submitted the turn.
+    pub fn submitted_by(&self) -> &ActionContext {
+        &self.submitted_by
+    }
+    /// Who resumed it.
+    pub fn resumed_by(&self) -> &ActionContext {
+        &self.resumed_by
+    }
+    /// What resuming did with it.
+    pub fn resumption(&self) -> &TurnResumption {
+        &self.resumption
+    }
 }
 
 /// Why a Claude or Codex process was started.

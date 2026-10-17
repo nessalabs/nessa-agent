@@ -884,6 +884,17 @@ fn beyond_cleanup(error: AgentError, confirmed: CloseOutcome) -> Option<AgentErr
     }
 }
 
+/// What a close does with the agent's unfinished work. [`Self::Close`] ends
+/// it, as a person's stop or a deletion does. [`Self::Suspend`] is the
+/// gateway's own stop, at shutdown or to recover an approval mode: what was
+/// queued or running is recorded as owed, and resumed when the conversation
+/// opens again (`Agent::suspend`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AgentEnd {
+    Close,
+    Suspend,
+}
+
 /// The lease a live conversation's agent runs under.
 pub(crate) struct LiveLease {
     lease: LeaseId,
@@ -1038,6 +1049,7 @@ impl LiveLease {
         cause: LeaseEndCause,
         actor: ActionContext,
         cleanup_deadline: Duration,
+        end: AgentEnd,
     ) -> Result<CloseOutcome, AgentError> {
         let manager = agent.session_manager();
         let lease = self.lease.clone();
@@ -1055,7 +1067,10 @@ impl LiveLease {
             })
             .await;
         self.fence.ending();
-        let close = agent.close(actor);
+        let close = match end {
+            AgentEnd::Close => agent.close(actor),
+            AgentEnd::Suspend => agent.suspend(actor),
+        };
         tokio::pin!(close);
         let within = tokio::select! {
             result = &mut close => Some(result),

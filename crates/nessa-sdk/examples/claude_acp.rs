@@ -153,6 +153,14 @@ impl ExecutionAudit for TracingExecutionAudit {
                         "Native configuration control"
                     );
                 }
+                ExecutionAuditRecord::TurnResumed(record) => {
+                    tracing::info!(
+                        session_id = %record.session_id().as_str(),
+                        execution_id = %record.execution_id().as_str(),
+                        resumption = ?record.resumption(),
+                        "cut-off turn resumed"
+                    );
+                }
             }
             Ok(())
         })

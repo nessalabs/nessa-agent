@@ -154,6 +154,18 @@ LiveOnly, held versus free selection lock, and attached versus stopping versus
 released owner cover all 24 combinations. Released means no live slot at read
 entry; losing a captured owner during an await is refused separately.
 
+Startup resumption is fresh admission under the same selection lock. A marked owed
+turn remains owed while either model or preset evidence is pending, including an
+opening used only to verify the prior model during recovery. The normal model
+owner reconciles the retained intent before a later resumption can dispatch.
+`startup_resumption_waits_for_pending_model_evidence` and
+`startup_resumption_runs_after_model_evidence_settles` are prepared public
+startup/normal-Open regressions. The actual before-probe admitted a successor
+and dispatched it while model intent stayed Pending, and cleared the owed mark;
+the normal-Open reconciliation counterpart passed. The common resumption owner
+now checks both pending journals under its existing admission lock before any
+successor is admitted.
+
 | Selection lock | Owner | Open | LiveOnly |
 | --- | --- | --- | --- |
 | Held | Attached | Fresh guarded pending view; no recovery or opening | Same |

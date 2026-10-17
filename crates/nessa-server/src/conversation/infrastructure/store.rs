@@ -17,7 +17,8 @@ use crate::conversation::application::{
     ConversationModeRequest, ConversationModeRequestState, ConversationModelApplication,
     ConversationModelRequest, ConversationModelRequestState, ConversationRepository,
     ConversationSummaries, ListedConversation, ListedConversations, ObservationCursor,
-    ObservedConversations, Reader, UnfinishedDeletions, WatchCatalogue,
+    ObservedConversations, Reader, UnfinishedDeletions, UnfinishedMark, UnfinishedTurns,
+    WatchCatalogue,
 };
 use crate::conversation::domain::{
     Conversation, ConversationDeletion, DeletionContradiction, ProviderSessionErasure,
@@ -1274,6 +1275,92 @@ impl ConversationRepository for LocalConversationStore {
                 }
             }
             Ok(found)
+        })
+    }
+}
+
+impl UnfinishedTurns for LocalConversationStore {
+    fn mark(&self, id: &ConversationId) -> ConversationFuture<'_, ()> {
+        let id = id.to_string();
+        self.run(move |connection| {
+            connection
+                .execute(
+                    "INSERT INTO unfinished_turns (conversation_id) VALUES (?1)
+                     ON CONFLICT (conversation_id) DO NOTHING",
+                    [id],
+                )
+                .map_err(failed)?;
+            Ok(())
+        })
+    }
+    fn clear(&self, id: &ConversationId) -> ConversationFuture<'_, ()> {
+        let id = id.to_string();
+        self.run(move |connection| {
+            connection
+                .execute(
+                    "DELETE FROM unfinished_turns WHERE conversation_id = ?1",
+                    [id],
+                )
+                .map_err(failed)?;
+            Ok(())
+        })
+    }
+    fn defer(
+        &self,
+        id: &ConversationId,
+        failures: u32,
+        retry_at_ms: u64,
+    ) -> ConversationFuture<'_, ()> {
+        let id = id.to_string();
+        self.run(move |connection| {
+            let retry_at_ms =
+                i64::try_from(retry_at_ms).map_err(|_| ConversationError::Metadata)?;
+            connection
+                .execute(
+                    "INSERT INTO unfinished_turns (conversation_id, failures, retry_at_ms)
+                     VALUES (?1, ?2, ?3)
+                     ON CONFLICT (conversation_id) DO UPDATE
+                     SET failures = excluded.failures, retry_at_ms = excluded.retry_at_ms",
+                    rusqlite::params![id, failures, retry_at_ms],
+                )
+                .map_err(failed)?;
+            Ok(())
+        })
+    }
+    fn marked(&self) -> ConversationFuture<'_, Vec<UnfinishedMark>> {
+        self.run(|connection| {
+            let mut statement = connection
+                .prepare(
+                    "SELECT conversation_id, failures, retry_at_ms FROM unfinished_turns
+                     ORDER BY conversation_id",
+                )
+                .map_err(failed)?;
+            let mut rows = statement.query([]).map_err(failed)?;
+            let mut marked = Vec::new();
+            while let Some(row) = rows.next().map_err(failed)? {
+                let name = cells(row.get::<_, String>(0))?.unwrap_or_default();
+                let failures =
+                    cells(row.get::<_, i64>(1))?.and_then(|failures| u32::try_from(failures).ok());
+                // Outer `None`: the cell could not be read as a retry time.
+                let retry_at_ms = match cells(row.get::<_, Option<i64>>(2))? {
+                    Some(None) => Some(None),
+                    Some(Some(at)) => u64::try_from(at).ok().map(Some),
+                    None => None,
+                };
+                match (ConversationId::new(&name), failures, retry_at_ms) {
+                    (Ok(conversation_id), Some(failures), Some(retry_at_ms)) => {
+                        marked.push(UnfinishedMark {
+                            conversation_id,
+                            failures,
+                            retry_at_ms,
+                        });
+                    }
+                    _ => {
+                        unreadable("unfinished_turns", &name);
+                    }
+                }
+            }
+            Ok(marked)
         })
     }
 }

@@ -19,7 +19,7 @@ pub use error::SchedulingError;
 pub use value_objects::{
     ExecutionId, ExecutionOutcome, GrantInitiator, Initiation, Initiator, InvocationCancellation,
     InvocationCancellationError, InvocationKind, InvocationStage, MessageChunk, MessageId,
-    MessageKind, QueueMutation, QueueOrderChange, QueueOrderError, QueueRemovalCause,
+    MessageKind, QueueMutation, QueueOrderChange, QueueOrderError, QueueRemovalCause, Resumption,
     SchedulingCause, SchedulingInitiator, SchedulingTransition, SchedulingTransitionError,
     SubmissionMode, ToolChecking,
 };

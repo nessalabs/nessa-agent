@@ -1297,6 +1297,10 @@ async fn conversations(
     // A note's author is checked against the same grant table the socket
     // admits it by (row J23).
     service.bind_note_authors(metadata.clone());
+    service.bind_unfinished_turns(
+        metadata.clone(),
+        crate::conversation::application::FailureBackoff::default(),
+    );
     // A Drive grant's turn runs only where its tools are checked: against
     // the grant journal's policy, by the Cedar evaluator (slice J4 of #707).
     // The same table's revision hold is that one grant. It refuses the turn
