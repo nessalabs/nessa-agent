@@ -16,6 +16,14 @@ export {
 } from "./accelerator"
 export {
   availableUpdate,
+  askReviewNoticeAccess,
+  onReviewNoticeOpened,
+  reviewNoticeAccess,
+  syncReviewNotices,
+  NOTICE_ACCESS,
+  type NoticeAccess,
+  type NoticeReview,
+  type ReviewNoticeText,
   chooseAttachmentFiles,
   onAttachmentDragging,
   onAttachmentBatch,

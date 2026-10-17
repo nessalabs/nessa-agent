@@ -3,10 +3,13 @@ import { describe, expect, it, vi } from "vitest"
 import {
   applyReviewSnapshot,
   bindConversationTitles,
+  browserNoticeAccess,
   browserReviewNotifier,
+  hostReviewNotices,
   reviewToOpen,
   waitingReviewNotices,
   waitingReviews,
+  type HostNotices,
   type ReviewNotifier,
   type WaitingReview,
 } from "./review-notices"
@@ -131,5 +134,74 @@ describe("reviewToOpen", () => {
     expect(reviewToOpen(event)).toBe("conversation")
     expect(reviewToOpen(new CustomEvent("nessa-open-review", { detail: "" }))).toBeNull()
     expect(reviewToOpen(new Event("click"))).toBeNull()
+  })
+})
+
+describe("hostReviewNotices", () => {
+  it("sends each whole set, the newest after the one in flight", async () => {
+    const sent: string[][] = []
+    const finish: (() => void)[] = []
+    const host: HostNotices = {
+      sync: (notices) => {
+        sent.push(
+          notices.map(
+            (notice) => `${notice.permissionId} ${notice.title} / ${notice.body}`,
+          ),
+        )
+        return new Promise((resolve) => finish.push(resolve))
+      },
+    }
+    bindConversationTitles(() => "Fix the build")
+    const notices = hostReviewNotices(host)
+    notices.apply([review("p1")])
+    // Two more sets while the first is in flight: only the newest follows.
+    notices.apply([review("p1"), review("p2")])
+    notices.apply([])
+    expect(sent).toEqual([["p1 Bash needs a decision / Fix the build"]])
+    finish[0]?.()
+    await vi.waitFor(() => expect(sent).toHaveLength(2))
+    expect(sent[1]).toEqual([])
+    finish[1]?.()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(sent).toHaveLength(2)
+    bindConversationTitles(() => null)
+  })
+
+  it("sends the newest set again when asked, and after a refused call", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+    const sent: number[] = []
+    let refuse = true
+    const notices = hostReviewNotices({
+      sync: (waiting) => {
+        sent.push(waiting.length)
+        return refuse ? Promise.reject(new Error("no host")) : Promise.resolve()
+      },
+    })
+    notices.apply([review("p1")])
+    await vi.waitFor(() => expect(warn).toHaveBeenCalledOnce())
+    refuse = false
+    notices.showWaiting()
+    await vi.waitFor(() => expect(sent).toEqual([1, 1]))
+    warn.mockRestore()
+  })
+})
+
+describe("browserNoticeAccess", () => {
+  it("reads and asks the browser's permission", async () => {
+    vi.stubGlobal("Notification", undefined)
+    await expect(browserNoticeAccess.read()).resolves.toBe("unsupported")
+    await expect(browserNoticeAccess.ask()).resolves.toBe("unsupported")
+    class FakeNotification {
+      static permission: NotificationPermission = "default"
+      static requestPermission(): Promise<NotificationPermission> {
+        return Promise.resolve("denied")
+      }
+    }
+    vi.stubGlobal("Notification", FakeNotification)
+    await expect(browserNoticeAccess.read()).resolves.toBe("not-asked")
+    await expect(browserNoticeAccess.ask()).resolves.toBe("denied")
+    FakeNotification.permission = "granted"
+    await expect(browserNoticeAccess.read()).resolves.toBe("allowed")
+    vi.unstubAllGlobals()
   })
 })
