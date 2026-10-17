@@ -17,9 +17,9 @@ fn main() {
 
 #[cfg(target_os = "macos")]
 fn missing_native_url() {
-    use objc2::rc::Retained;
+    use objc2::rc::{Allocated, Retained};
     use objc2::runtime::AnyObject;
-    use objc2::{class, msg_send, Allocated, MainThreadOnly};
+    use objc2::{class, msg_send, MainThreadOnly};
     use objc2_app_kit::NSApplication;
     use objc2_foundation::{MainThreadMarker, NSRect, NSURL};
 
