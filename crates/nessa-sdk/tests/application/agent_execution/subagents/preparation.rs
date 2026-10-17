@@ -1,5 +1,6 @@
 //! Empty child preparation uses ordinary ownership, without an invented task receipt.
 use super::*;
+use nessa_sdk::infrastructure::session_storage::SqliteOwnershipStore;
 
 #[tokio::test]
 async fn preparation_attaches_the_named_child_without_submitting_a_turn() {
@@ -128,7 +129,6 @@ async fn preparation_refuses_reusing_an_active_session_before_the_factory() {
 
 #[tokio::test]
 async fn preparation_readiness_round_trips_through_the_real_sqlite_owner() {
-    use nessa_sdk::infrastructure::session_storage::SqliteOwnershipStore;
     let directory = tempfile::tempdir().unwrap();
     let private = directory.path().join("ownership");
     nessa_local_storage::create_directory(&private).unwrap();
@@ -213,4 +213,215 @@ async fn restored_preparation_cannot_alias_its_parent_or_a_different_child_sessi
         assert_eq!(restored.factory.prepares(), 0);
         assert_eq!(restored.factory.submits(), 0);
     }
+}
+
+#[tokio::test]
+async fn preparation_and_spawn_have_disjoint_bindings_for_crafted_utf8_tasks() {
+    for prepare_first in [false, true] {
+        let world = World::new(4);
+        let root = world.root().await;
+        let session = SessionId::new("x").unwrap();
+        let description = "configuration";
+        let mut canonical = b"nessa.child.preparation\0".to_vec();
+        canonical.extend_from_slice(&1_u64.to_be_bytes());
+        canonical.extend_from_slice(session.as_str().as_bytes());
+        canonical.extend_from_slice(description.as_bytes());
+        let forged_task = String::from_utf8(canonical).unwrap();
+        let prepare = world.command(&root, "cross-operation", description);
+        let spawn = world.command(&root, "cross-operation", &forged_task);
+        let result = if prepare_first {
+            world
+                .coordinator
+                .prepare_child(prepare, session)
+                .await
+                .unwrap();
+            world.coordinator.spawn(spawn).await
+        } else {
+            world.coordinator.spawn(spawn).await.unwrap();
+            world.coordinator.prepare_child(prepare, session).await
+        };
+        assert!(matches!(
+            result,
+            Err(OwnershipFailure::Domain(OwnershipError::RequestConflict))
+        ));
+        assert_eq!(world.factory.prepares(), 1);
+        assert_eq!(world.factory.submits(), usize::from(!prepare_first));
+    }
+}
+
+struct ReadyAudit {
+    base: Arc<ScriptAudit>,
+    failure: Option<PortFailure>,
+    entered: Notify,
+    release: Option<Arc<Notify>>,
+}
+#[async_trait]
+impl OwnershipAudit for ReadyAudit {
+    async fn record(&self, evidence: &OwnershipEvidence) -> Result<(), PortFailure> {
+        if evidence.after == OwnershipMeaning::Ready {
+            self.entered.notify_one();
+            if let Some(release) = &self.release {
+                release.notified().await;
+            }
+            if let Some(failure) = self.failure {
+                return Err(failure);
+            }
+        }
+        self.base.record(evidence).await
+    }
+}
+struct ReadyStore {
+    base: Arc<MemoryOwnershipStore>,
+    failure: Mutex<Option<PortFailure>>,
+}
+#[async_trait]
+impl OwnershipStore for ReadyStore {
+    async fn write(&self, snapshot: &OwnershipSnapshot) -> Result<(), PortFailure> {
+        if snapshot
+            .spawns
+            .iter()
+            .any(|row| row.progress == SpawnProgress::Ready)
+        {
+            if let Some(failure) = self.failure.lock().unwrap().take() {
+                return Err(failure);
+            }
+        }
+        self.base.write(snapshot).await
+    }
+    async fn read(&self) -> Result<OwnershipSnapshot, PortFailure> {
+        self.base.read().await
+    }
+}
+
+#[tokio::test]
+async fn failed_ready_audit_or_store_keeps_cleanup_and_never_submits() {
+    for audit_fails in [false, true] {
+        for failure in [PortFailure::Rejected, PortFailure::Uncertain] {
+            let mut world = World::new(4);
+            world.coordinator = OwnershipCoordinator::new(OwnershipDependencies {
+                store: Arc::new(ReadyStore {
+                    base: world.store.clone(),
+                    failure: Mutex::new((!audit_fails).then_some(failure)),
+                }),
+                audit: Arc::new(ReadyAudit {
+                    base: world.audit.clone(),
+                    failure: audit_fails.then_some(failure),
+                    entered: Notify::new(),
+                    release: None,
+                }),
+                factory: world.factory.clone(),
+                room: Arc::new(LiveCapacity::new(4)),
+            });
+            let root = world.root().await;
+            let command = world.command(&root, "ready-failure", "configuration");
+            let session = SessionId::new("unconfirmed-preparation").unwrap();
+            let failed = world
+                .coordinator
+                .prepare_child(command.clone(), session.clone())
+                .await;
+            if audit_fails {
+                assert_eq!(failed, Err(OwnershipFailure::Audit(failure)));
+            } else {
+                assert_eq!(failed, Err(OwnershipFailure::Store(failure)));
+            }
+            let child = world.factory.last_child.lock().unwrap().clone().unwrap();
+            assert_ne!(
+                world.coordinator.lifetime_state(&child),
+                Some(LifetimeState::Open)
+            );
+            assert!(world
+                .factory
+                .last_gate
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .is_sealed());
+            assert!(world
+                .coordinator
+                .prepare_child(command, session)
+                .await
+                .is_err());
+            assert_eq!(world.factory.prepares(), 1);
+            assert_eq!(world.factory.submits(), 0);
+            world.close(&child).await.unwrap();
+            assert_eq!(
+                world.factory.children.lock().unwrap()[0]
+                    .closes
+                    .load(Ordering::SeqCst),
+                1
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn parent_close_during_ready_publication_keeps_the_child_nonrunnable() {
+    let mut world = World::new(4);
+    let release = Arc::new(Notify::new());
+    let audit = Arc::new(ReadyAudit {
+        base: world.audit.clone(),
+        failure: None,
+        entered: Notify::new(),
+        release: Some(release.clone()),
+    });
+    world.coordinator = OwnershipCoordinator::new(OwnershipDependencies {
+        store: world.store.clone(),
+        audit: audit.clone(),
+        factory: world.factory.clone(),
+        room: Arc::new(LiveCapacity::new(4)),
+    });
+    let root = world.root().await;
+    world.bind_root(&root);
+    let command = world.command(&root, "close-at-ready", "configuration");
+    let coordinator = world.coordinator.clone();
+    let preparing = tokio::spawn(async move {
+        coordinator
+            .prepare_child(command, SessionId::new("close-at-ready-child").unwrap())
+            .await
+    });
+    audit.entered.notified().await;
+    let coordinator = world.coordinator.clone();
+    let closing_root = root.clone();
+    let closing = tokio::spawn(async move {
+        coordinator
+            .end_lifetime(CloseCommand {
+                lifetime: closing_root,
+                cause: LifetimeCause::HostClose,
+                initiator: Initiator::Host(actor("close")),
+                external_attachment: false,
+                timeout: None,
+            })
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while world.coordinator.lifetime_state(&root) == Some(LifetimeState::Open) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    release.notify_one();
+    let result = preparing.await.unwrap();
+    if let Ok(receipt) = result {
+        assert!(matches!(
+            receipt.progress,
+            SpawnProgress::Draining { .. } | SpawnProgress::Ended { .. }
+        ));
+    }
+    closing.await.unwrap().unwrap();
+    let child = world.factory.last_child.lock().unwrap().clone().unwrap();
+    assert_eq!(
+        world.coordinator.lifetime_state(&child),
+        Some(LifetimeState::Closed)
+    );
+    assert!(world
+        .factory
+        .last_gate
+        .lock()
+        .unwrap()
+        .as_ref()
+        .unwrap()
+        .is_sealed());
+    assert_eq!(world.factory.submits(), 0);
 }

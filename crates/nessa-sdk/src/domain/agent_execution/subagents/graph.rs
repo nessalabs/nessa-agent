@@ -53,7 +53,7 @@ pub struct OwnershipGraph {
 pub struct SpawnAdmission {
     /// Child lifetime minted for this attempt.
     pub child_lifetime: AgentLifetimeId,
-    /// Child session minted for this attempt.
+    /// Child session reserved for this attempt.
     pub child_session: SessionId,
     /// Immutable binding, including the parent and the request id.
     pub binding: SpawnBinding,

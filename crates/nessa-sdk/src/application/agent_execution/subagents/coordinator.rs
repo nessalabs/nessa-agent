@@ -7,6 +7,7 @@
 
 use std::{
     collections::{HashMap, HashSet},
+    ops::Deref,
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Mutex, Weak,
@@ -82,7 +83,7 @@ struct ChildCommand {
     command: SpawnCommand,
     session: Option<SessionId>,
 }
-impl std::ops::Deref for ChildCommand {
+impl Deref for ChildCommand {
     type Target = SpawnCommand;
     fn deref(&self) -> &Self::Target {
         &self.command
@@ -94,6 +95,10 @@ impl ChildCommand {
             None => task_digest(&self.task),
             Some(session) => {
                 let mut digest = Sha256::new();
+                // Ordinary task preimages are UTF-8. This tag makes preparation
+                // preimages disjoint without changing stored ordinary task digests.
+                // `preparation_and_spawn_have_disjoint_bindings_for_crafted_utf8_tasks`.
+                digest.update([0xff]);
                 digest.update(b"nessa.child.preparation\0");
                 digest.update((session.as_str().len() as u64).to_be_bytes());
                 digest.update(session.as_str().as_bytes());
@@ -334,6 +339,16 @@ impl OwnershipCoordinator {
     /// receipt records acknowledged preparation, not a fabricated task receipt.
     /// Caller cancellation leaves the admitted preparation supervised. Lifetime
     /// close still drains this child. The host owns later ordinary submissions.
+    ///
+    /// ```no_run
+    /// # use nessa_sdk::application::agent_execution::subagents::{OwnershipCoordinator, OwnershipFailure, SpawnCommand};
+    /// # use nessa_sdk::domain::agent_execution::sessions::SessionId;
+    /// # async fn prepare(coordinator: OwnershipCoordinator, command: SpawnCommand, session: SessionId) -> Result<(), OwnershipFailure> {
+    /// let prepared = coordinator.prepare_child(command, session).await?;
+    /// let child_session = prepared.session; // Use ordinary Agent APIs for later work.
+    /// # Ok(())
+    /// # }
+    /// ```
     ///
     /// # Errors
     /// Returns the same admission, audit, store, capacity and preparation failures
@@ -1137,7 +1152,20 @@ impl Shared {
         if command.session.is_some() {
             self.advance(&command.request_id, SpawnProgress::Ready)
                 .await?;
-            return self.receipt(&command.request_id);
+            // Ready publication can await audit/storage while the parent closes.
+            // Reuse the graph's admission decision after that publication.
+            match self
+                .with_graph(|graph| graph.dispatch_after_prepare(&command.request_id))
+                .map_err(OwnershipFailure::Domain)?
+            {
+                Dispatch::Allowed => return self.receipt(&command.request_id),
+                Dispatch::Drain => {
+                    return Err(OwnershipFailure::Domain(OwnershipError::ParentClosing))
+                }
+                Dispatch::ChildUnavailable => {
+                    return Err(OwnershipFailure::Domain(OwnershipError::ChildUnavailable))
+                }
+            }
         }
         let submitted = effect(
             "initial_submission",
@@ -2444,6 +2472,15 @@ mod process_cleanup {
 
     #[tokio::test]
     async fn parent_close_kills_the_child_process_group() {
+        physical_child_cleanup(false).await;
+    }
+
+    #[tokio::test]
+    async fn parent_close_kills_the_prepared_child_process_group() {
+        physical_child_cleanup(true).await;
+    }
+
+    async fn physical_child_cleanup(prepare_only: bool) {
         let factory = Arc::new(ProcessFactory {
             child: Mutex::new(None),
         });
@@ -2460,20 +2497,25 @@ mod process_cleanup {
         coordinator
             .bind_resources(root.clone(), Arc::new(ReleasedRoot))
             .unwrap();
-        coordinator
-            .spawn(SpawnCommand {
-                parent: root.clone(),
-                request_id: SpawnRequestId::new("proc-req").unwrap(),
-                task: "sleep".to_owned(),
-                policy: PolicyRead::Committed(
-                    ApprovalPolicy::new("read-only", "ask", "rev-1").unwrap(),
-                ),
-                child_supports_policy: true,
-                model: None,
-                origin: SpawnOrigin::Host(HostActor::new("person", "desktop", "spawn").unwrap()),
-            })
-            .await
-            .unwrap();
+        let command = SpawnCommand {
+            parent: root.clone(),
+            request_id: SpawnRequestId::new("proc-req").unwrap(),
+            task: "sleep".to_owned(),
+            policy: PolicyRead::Committed(
+                ApprovalPolicy::new("read-only", "ask", "rev-1").unwrap(),
+            ),
+            child_supports_policy: true,
+            model: None,
+            origin: SpawnOrigin::Host(HostActor::new("person", "desktop", "spawn").unwrap()),
+        };
+        if prepare_only {
+            coordinator
+                .prepare_child(command, SessionId::new("prepared-process").unwrap())
+                .await
+                .unwrap();
+        } else {
+            coordinator.spawn(command).await.unwrap();
+        }
         let process = factory.child.lock().expect("process").clone().unwrap();
         assert_eq!(unsafe { libc::kill(process.pid, 0) }, 0);
         coordinator

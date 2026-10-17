@@ -108,7 +108,9 @@ pub struct PrepareRequest {
     pub policy: ApprovalPolicy,
     /// Optional catalog model.
     pub model: Option<ModelChoice>,
-    /// Delegated task text. The ownership record stores only its digest.
+    /// Delegated task text, or preparation-only description for
+    /// [`super::OwnershipCoordinator::prepare_child`]. The ownership record
+    /// stores only its digest. Preparation must not dispatch either form.
     pub task: String,
     /// Spawn request id.
     pub request: SpawnRequestId,

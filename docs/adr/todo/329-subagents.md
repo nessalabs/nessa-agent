@@ -135,6 +135,10 @@ gateway Stop or approval policy.
 | Parent lifetime closes after preparation | Existing lifetime drain retains child cleanup | `preparation_remains_owned_during_parent_close` |
 | Another request names an active session | Refuse before factory handoff | `preparation_refuses_reusing_an_active_session_before_the_factory` |
 | Restart after acknowledged Ready | Recover relationship/gate without dispatch | `preparation_readiness_round_trips_through_the_real_sqlite_owner` |
+| Ordinary task bytes imitate the preparation description encoding | Operation preimages remain disjoint through an invalid-UTF-8 preparation tag; preserve existing ordinary task digests | `preparation_and_spawn_have_disjoint_bindings_for_crafted_utf8_tasks` |
+| Ready audit rejects/is uncertain, or Ready write rejects/is uncertain | No initial turn; retain sealed cleanup ownership and original failure | `failed_ready_audit_or_store_keeps_cleanup_and_never_submits` |
+| Parent closes while Ready audit waits | Recheck the graph after publication; no runnable preparation returned | `parent_close_during_ready_publication_keeps_the_child_nonrunnable` |
+| Parent lifetime closes a prepared process | Existing process-group cleanup kills and reaps it | `parent_close_kills_the_prepared_child_process_group` |
 
 ### Proposed ordering and regression acceptance
 

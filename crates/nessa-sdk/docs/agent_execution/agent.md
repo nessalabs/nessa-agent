@@ -99,6 +99,16 @@ install is refused. The coordinator keeps the gate; the agent does not keep the
 coordinator. A child whose lifetime closes during preparation does not receive
 its initial task, and that refusal is not reported as the parent closing.
 
+`OwnershipCoordinator::prepare_child(command, session)` reserves and prepares an
+owned child on a fixed session without calling `InitialSubmit`. Its `Ready`
+receipt and SQLite state record acknowledged preparation, not task admission.
+The command's description/configuration fingerprint, fixed session and operation
+kind participate in retry identity. A later task uses ordinary Agent submission.
+The coordinator rechecks parent/child admission after Ready publication, retains
+cleanup on publication failure, and keeps admitted preparation supervised when
+its caller disconnects. Gateway Stop-cascade policy and settings remain outside
+this primitive; preparing a child changes no approval decision.
+
 ## Model capabilities and provider operations
 
 `agent.capabilities()` returns the immutable effective model capabilities selected
