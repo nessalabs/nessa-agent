@@ -29,7 +29,13 @@ mod server;
 fn main() -> ExitCode {
     #[cfg(target_os = "macos")]
     if let Err(error) = native::run() {
-        eprintln!("page_load_acceptance: FAIL: {error}");
+        // Publish this fixture's verdict as a check annotation, with workflow
+        // command data escaped. This contains no collected application logs.
+        let message = error
+            .replace('%', "%25")
+            .replace('\r', "%0D")
+            .replace('\n', "%0A");
+        eprintln!("::error title=Native load acceptance::{message}");
         return ExitCode::FAILURE;
     }
     #[cfg(not(target_os = "macos"))]

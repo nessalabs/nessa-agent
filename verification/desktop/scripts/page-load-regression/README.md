@@ -83,7 +83,12 @@ with the corrected fixture path and a macOS target selector. That is context
 code generation, not native Rust compilation or WKWebView execution.
 
 The existing macOS `local-auth` job lints and runs this example before the shared
-server suite. Other platforms compile its explicit unsupported-platform entry;
+server suite. During that step a standard Rust compiler
+[problem matcher](https://github.com/actions/toolkit/blob/main/docs/problem-matchers.md) publishes
+compiler message/code/source-span annotations; its registration is removed on
+step exit. The executable publishes escaped failure verdicts and the step records
+its concise successful observations as check notices. This keeps the owned check's
+outcome readable through supported annotations. Other platforms compile its explicit unsupported-platform entry;
 they do not qualify WKWebView. This is assembled diagnostic acceptance, separate
 from installed/signed-app or physical-device qualification (#562).
 

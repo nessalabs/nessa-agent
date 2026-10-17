@@ -84,7 +84,9 @@ pub fn run() -> Result<(), String> {
     thread::spawn(move || {
         thread::sleep(Duration::from_secs(20));
         if !stopped.load(Ordering::Acquire) {
-            eprintln!("page_load_acceptance: FAIL: native event loop did not settle in 20s");
+            eprintln!(
+                "::error title=Native load acceptance::native event loop did not settle in 20s"
+            );
             std::process::exit(1);
         }
     });
