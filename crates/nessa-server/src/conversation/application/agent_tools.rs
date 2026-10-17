@@ -6,6 +6,9 @@ use nessa_protocol::conversation::domain::ConversationId;
 /// tools. A cancelled response does not free this place; other sources are not
 /// bounded by it, so the gateway's total grows with its agents.
 pub const MAX_AGENT_TOOL_ADMISSIONS: usize = 8;
+/// Waiting `subscribe` reads one source runs at once: half of its
+/// connection's eight calls, so it keeps room for command and control calls.
+pub const MAX_EVENT_READERS: usize = 4;
 
 /// One gateway-verified source turn. Tool arguments cannot construct this value.
 pub struct AgentToolSource {

@@ -3,7 +3,7 @@ use crate::conversation::application::{
     error_code, event_error_code, project_events, validate_event_cursor, AgentToolRequest,
     ConversationCaller, ConversationError, ConversationEventError, ConversationService,
     EventProgress, ReportRegistration, RequestedAgent, RequestedConversation, SourcePermits,
-    SubmissionMode, SubmittedMessage, ThreadReport,
+    SubmissionMode, SubmittedMessage, ThreadReport, MAX_EVENT_READERS,
 };
 use crate::mcp_servers::application::{BuiltInFuture, BuiltInServer};
 use nessa_protocol::agents::AgentId;
@@ -39,9 +39,6 @@ pub(super) const SERVER_NAME: &str = "nessa-agents";
 const MAX_WAIT_MS: u64 = 30_000;
 const DEFAULT_LIMIT: usize = 50;
 const MAX_LIMIT: usize = 100;
-/// Waiting `subscribe` reads one source runs at once: half of its
-/// connection's eight calls, so it keeps room for command and control calls.
-pub(crate) const MAX_EVENT_READERS: usize = 4;
 const SUBSCRIPTION_SETUP_TIMEOUT: Duration = Duration::from_secs(10);
 /// The wait before retrying a read step every physical read worker refused.
 const READ_RETRY: Duration = Duration::from_millis(25);

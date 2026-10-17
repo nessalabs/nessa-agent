@@ -6,13 +6,12 @@
 //! schema publishes. `docs/limits.md` is that catalogue rendered, and the
 //! test beside this module refuses a copy that has drifted.
 use crate::attachments::application::{AttachmentLimits, HeldReads};
-use crate::composition::conversation_tools::MAX_EVENT_READERS;
-use crate::conversation::application::MAX_AGENT_TOOL_ADMISSIONS;
 use crate::conversation::application::{
     ArtifactBudget, ARTIFACT_READ_RESUMES, FETCH_BUSY_BACKOFF, FETCH_CALL_WAIT, FETCH_READS,
     MAX_ADMITTED_POLICIES, MAX_DRIVE_GRANTS_PER_CONVERSATION, MAX_SHARE_GRANTS_PER_CONVERSATION,
     PUBLISH_CALL_WAIT,
 };
+use crate::conversation::application::{MAX_AGENT_TOOL_ADMISSIONS, MAX_EVENT_READERS};
 use crate::conversation::domain::{CommandHosts, ToolRules};
 use crate::conversation::infrastructure::DISCOVERY_STEPS_PER_READ;
 use crate::mcp_servers::infrastructure::{MAX_BUILT_IN_CALLS, MAX_BUILT_IN_LINE_BYTES};
@@ -498,7 +497,7 @@ fn catalogue() -> &'static [Limit] {
         Limit {
             id: "agent_tools.waiting_reads",
             tier: "fixed",
-            owner: "MAX_EVENT_READERS in crates/nessa-server/src/composition/conversation_tools.rs",
+            owner: "MAX_EVENT_READERS in crates/nessa-server/src/conversation/application/agent_tools.rs",
             meaning: "a `subscribe` past this many running for one source conversation is refused subscription_capacity; other sources are not counted against it",
         },
         Limit {

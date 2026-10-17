@@ -150,7 +150,7 @@ mod access_policy;
 mod agent_tools;
 pub use agent_tools::{
     AgentToolAudit, AgentToolAuditRecord, AgentToolRequest, AgentToolSource,
-    MAX_AGENT_TOOL_ADMISSIONS,
+    MAX_AGENT_TOOL_ADMISSIONS, MAX_EVENT_READERS,
 };
 mod app_call_policy;
 mod artifacts;
