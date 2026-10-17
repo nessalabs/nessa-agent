@@ -22,7 +22,7 @@ import type {
   SessionSummary,
 } from "./model/workspace-index"
 import type { Transcript } from "./model/transcript"
-import { emptyTranscript } from "./model/transcript"
+import { atWork, emptyTranscript } from "./model/transcript"
 import { panesOf, type Pane, type PaneLayout } from "../split-panes/model/pane-layout"
 import { paneItemOf } from "./model/pane-item"
 
@@ -232,6 +232,46 @@ export function fakeSource(index: WorkspaceIndex = testIndex()): FakeSource {
           emit({ kind: "transcript", transcript: next })
         },
       ),
+    // Like any source: the conversation that no longer runs reaches subscribers first.
+    stop: (sessionId, initiator) =>
+      answer("stop", [sessionId, initiator], () => {
+        if (archived.has(sessionId) || !summaries.has(sessionId))
+          throw new WorkspaceSourceError("unknown-session")
+        const transcript = transcripts.get(sessionId)
+        if (!transcript || !atWork(transcript))
+          throw new WorkspaceSourceError("not-waiting")
+        const next: Transcript = {
+          ...transcript,
+          activity: null,
+          approval: null,
+          questions: [],
+          messages: transcript.messages.map((message) => {
+            if (!("working" in message) || !message.working) return message
+            const { working: _working, ...settled } = message
+            return settled
+          }),
+          revision: transcript.revision + 1,
+        }
+        transcripts.set(sessionId, next)
+        emit({ kind: "transcript", transcript: next })
+      }),
+    // Like any source: the conversation saying the new access reaches subscribers first.
+    setAccess: (sessionId, mode, initiator) =>
+      answer("setAccess", [sessionId, mode, initiator], () => {
+        if (archived.has(sessionId) || !summaries.has(sessionId))
+          throw new WorkspaceSourceError("unknown-session")
+        const transcript = transcripts.get(sessionId) ?? {
+          ...emptyTranscript(sessionId),
+          revision: 1,
+        }
+        const next: Transcript = {
+          ...transcript,
+          access: { mode, modes: ["ask", "auto", "full"] },
+          revision: transcript.revision + 1,
+        }
+        transcripts.set(sessionId, next)
+        emit({ kind: "transcript", transcript: next })
+      }),
     // Like any source: the change reaches subscribers before the call resolves.
     setPinned: (sessionId, pinned, initiator) =>
       answer("setPinned", [sessionId, pinned, initiator], () => {

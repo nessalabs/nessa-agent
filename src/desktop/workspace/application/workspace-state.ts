@@ -27,6 +27,7 @@ import { drawn, type SideColumn } from "../../model/side-column"
 import type { SessionView } from "../model/session-groups"
 import { keepShownDrafts, type Draft } from "../model/session-lifecycle"
 import { unconfirmed, type Transcript, type TurnMessage } from "../model/transcript"
+import { settledBy, type AccessChoice } from "../model/access"
 import type {
   ShareDraft,
   ShareGrant,
@@ -146,6 +147,12 @@ export interface WorkspaceState {
   readonly answers: Readonly<Record<string, Answer>>
   /** The model the person chose for a session's next message, by session. */
   readonly chosenModels: Readonly<Record<string, ModelRef>>
+  /**
+   * The access the person chose for a session, by session or new session,
+   * until the source's conversation says it (`model/access.ts`). The
+   * source's own word is the transcript's `access`.
+   */
+  readonly accessChoices: Readonly<Record<string, AccessChoice>>
   /**
    * What the person has typed in a session's composer and not sent, by
    * session or new session: the window's own, kept here so it survives a
@@ -314,6 +321,7 @@ export const initialWorkspace: WorkspaceState = {
   removed: [],
   answers: {},
   chosenModels: {},
+  accessChoices: {},
   composerText: {},
   panes: null,
   view: { channelId: "" },
@@ -491,6 +499,8 @@ export function withTranscript(
   const sent = entry(state.outbox, id) ?? []
   const waiting = unconfirmed(sent, transcript)
   const answer = entry(state.answers, id)
+  const choice = entry(state.accessChoices, id)
+  const access = settledBy(choice, transcript)
   const transcripts = keptConversations(
     { ...state.transcripts, [id]: transcript },
     shownIds(state),
@@ -513,6 +523,13 @@ export function withTranscript(
       answer && transcript.approval?.id !== answer.approvalId
         ? without(state.answers, id)
         : state.answers,
+    // A choice of access the conversation now says has settled.
+    accessChoices:
+      access === choice
+        ? state.accessChoices
+        : access
+          ? { ...state.accessChoices, [id]: access }
+          : without(state.accessChoices, id),
   }
 }
 
@@ -535,15 +552,16 @@ export function withPanes(state: WorkspaceState, panes: PaneLayout): WorkspaceSt
   if (panes === state.panes) return state
   const shown = new Set(paneIds(panes))
   const drafts = keepShownDrafts(state.drafts, shown)
-  // A new session's typing goes with it; a listed session's stays until it is let go.
-  const composerText =
+  // A new session's typing, and its access, go with it; a listed session's
+  // stay until it is let go.
+  const dropped =
     drafts === state.drafts
-      ? state.composerText
-      : Object.keys(state.drafts)
-          .filter((id) => !Object.hasOwn(drafts, id))
-          .reduce(without, state.composerText)
+      ? []
+      : Object.keys(state.drafts).filter((id) => !Object.hasOwn(drafts, id))
+  const composerText = dropped.reduce(without, state.composerText)
+  const accessChoices = dropped.reduce(without, state.accessChoices)
   // A failed read belongs to what showed it: shown again, a session is read afresh.
-  return keepShownFailures({ ...state, panes, drafts, composerText })
+  return keepShownFailures({ ...state, panes, drafts, composerText, accessChoices })
 }
 
 /** Adds `id` to a list of ids, or takes it out; the same list when nothing changes. */
@@ -598,6 +616,7 @@ export function forgetSession(state: WorkspaceState, sessionId: string): Workspa
     outbox: without(state.outbox, sessionId),
     answers: without(state.answers, sessionId),
     chosenModels: without(state.chosenModels, sessionId),
+    accessChoices: without(state.accessChoices, sessionId),
     composerText: without(state.composerText, sessionId),
     overview:
       state.overview.selected === sessionId

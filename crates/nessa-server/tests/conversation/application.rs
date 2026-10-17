@@ -1969,6 +1969,87 @@ async fn settled_permission_answers_wake_readers_and_expose_the_next_review() {
     }
 }
 
+// An answered review leaves no event in the committed history the view is
+// folded from. When the open-review limit counted that history, a turn that
+// had asked sixteen reviews hid every later one, and each hidden review waited
+// out its deadline with nobody shown it.
+#[tokio::test]
+async fn a_review_held_back_by_the_open_limit_is_offered_once_earlier_ones_are_answered() {
+    let (service, provider, _, _) = fixture(ConversationLimits::default());
+    provider.request_permission.store(18, Ordering::SeqCst);
+    provider.answer_succeeds.store(true, Ordering::SeqCst);
+    let (finish, gate) = oneshot::channel();
+    *provider.permission_gate.lock().unwrap() = Some(gate);
+    let id = id();
+    service
+        .create(
+            id.clone(),
+            caller("panel", "create"),
+            RequestedConversation::default(),
+        )
+        .await
+        .unwrap();
+    service
+        .submit(
+            id.clone(),
+            caller("panel", "send"),
+            "reviews".into(),
+            SubmittedMessage {
+                text: "change files".into(),
+                images: Vec::new(),
+                files: Vec::new(),
+            },
+            SubmissionMode::Queue,
+        )
+        .await
+        .unwrap();
+    let held_back = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let view = service
+                .read(id.clone(), caller("panel", "read"))
+                .await
+                .unwrap();
+            if view.permissions.len() == 16 && view.interaction_view_error.is_some() {
+                break view;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(!held_back
+        .permissions
+        .iter()
+        .any(|review| review.permission_id == "permission-17"));
+    for permission in ["permission", "permission-1"] {
+        service
+            .answer(
+                id.clone(),
+                caller("panel", "answer"),
+                "reviews".into(),
+                permission.into(),
+                "allow".into(),
+                PermissionCaller::Owner,
+            )
+            .await
+            .unwrap();
+    }
+    let view = service
+        .read(id.clone(), caller("panel", "after-answers"))
+        .await
+        .unwrap();
+    let shown: Vec<_> = view
+        .permissions
+        .iter()
+        .map(|review| review.permission_id.as_str())
+        .collect();
+    let expected: Vec<String> = (2..18).map(|index| format!("permission-{index}")).collect();
+    assert_eq!(shown, expected);
+    assert_eq!(view.interaction_view_error, None);
+    finish.send(()).unwrap();
+    service.shutdown().await.unwrap();
+}
+
 #[test]
 fn ownership_and_creation_context_are_domain_state() {
     let record = Conversation::new(

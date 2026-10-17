@@ -2,7 +2,7 @@ import { SelectedAgentSetup } from "../../onboarding/ui/selected-agent-setup"
 import { agentForProvider } from "../model/composer-options"
 import { useState } from "react"
 import { useGreetingPreference } from "../adapters/window-preferences"
-import { Composer } from "./composer"
+import { Composer, type ComposerAccess } from "./composer"
 import { HeaderArt } from "./header-art"
 import { greetingAt } from "../model/greeting"
 import { useNow } from "../../clock"
@@ -29,6 +29,7 @@ export function Home({
   text,
   onTextChange,
   composerClassName,
+  access,
 }: {
   /** Sends the first message; without it the composer says chat is not connected. */
   onSend?: (text: string) => void
@@ -41,6 +42,8 @@ export function Home({
   onTextChange: (text: string) => void
   /** A class for the box around the composer. */
   composerClassName?: string
+  /** The new session's access, held by the caller; without it the shield is disabled. */
+  access?: ComposerAccess
 }) {
   const [page, setPage] = useState(false)
   const [greeting] = useGreetingPreference()
@@ -71,6 +74,7 @@ export function Home({
               onModelChange={onModelChange}
               text={text}
               onTextChange={onTextChange}
+              access={access}
             />
           </div>
         </div>

@@ -2355,11 +2355,14 @@ impl ConversationService {
             .transpose()?
             .unwrap_or_default();
         let active = live.agent.active_execution_id();
-        // Storage restores a deadline unarmed. A review this process is still
-        // waiting on is that worker's promise, so the card counts down.
+        let mut projection = live.projection.lock().await;
+        // The agent's permission authority, asked once the projection is held:
+        // only the reviews it still waits on are offered, since an answer by a
+        // person or a remembered choice leaves no event in history. Storage
+        // restores a deadline unarmed; a review this process is still waiting
+        // on is that worker's promise, so the card counts down.
         // `a_saved_deadline_counts_down_while_this_process_holds_the_review`.
         let holding = reviews_this_process_holds(&live.agent, committed.snapshot());
-        let mut projection = live.projection.lock().await;
         let accepted = projection.replace_committed_while_holding(
             &committed,
             &order,
@@ -2368,6 +2371,19 @@ impl ConversationService {
         );
         if accepted {
             projection.transcript_state(committed.state().into());
+        } else {
+            // The history read here is older than the fold already held, but
+            // the authority's answer is not: a review answered since is
+            // dropped from that fold too.
+            projection.hold(|execution, permission| {
+                match (ExecutionId::new(execution), PermissionId::new(permission)) {
+                    (Ok(execution), Ok(permission)) => live
+                        .agent
+                        .pending_permission(&execution, &permission)
+                        .unwrap_or(false),
+                    _ => false,
+                }
+            });
         }
         let operation_capabilities = live.agent.operation_capabilities();
         // The last known answer stands while the agent is being restored, so the
@@ -2387,17 +2403,6 @@ impl ConversationService {
         let mut view = projection.read();
         let cursor = projection.committed_cursor();
         drop(projection);
-        view.permissions.retain(|review| {
-            let execution = ExecutionId::new(&review.execution_id);
-            let permission = PermissionId::new(&review.permission_id);
-            match (execution, permission) {
-                (Ok(execution), Ok(permission)) => live
-                    .agent
-                    .pending_permission(&execution, &permission)
-                    .unwrap_or(false),
-                _ => false,
-            }
-        });
         view.title = self.title(&id).await;
         // Bounded there, before its app reviews are added beside it.
         let view = app_calls::with_app_reviews(view, live.app_reviews.reviews());

@@ -1508,6 +1508,108 @@ fn a_review_reaching_beyond_its_request_is_not_offered() {
     assert!(view.interaction_view_error.is_some());
 }
 
+/// `count` reviews asked one after another in one running turn, with ids
+/// `"0"`, `"1"`, ..., each for its own tool call, folded with the live
+/// authority saying which of them still wait.
+fn many_reviews(count: usize, waiting: impl Fn(usize) -> bool) -> Projection {
+    let ExecutionUpdate::PermissionRequested {
+        observation,
+        input,
+        options,
+        ..
+    } = review("{}".into()).update().clone()
+    else {
+        unreachable!()
+    };
+    let events = (0..count)
+        .map(|index| {
+            event(ExecutionUpdate::PermissionRequested {
+                id: PermissionId::new(index.to_string()).unwrap(),
+                tool_id: ToolCallId::new(format!("tool-{index}")).unwrap(),
+                observation: observation.clone(),
+                input: input.clone(),
+                options: options.clone(),
+                deadline: None,
+            })
+        })
+        .collect();
+    let holding = (0..count)
+        .filter(|index| waiting(*index))
+        .map(|index| ("execution".to_owned(), index.to_string()))
+        .collect();
+    let snapshot = review_snapshot(events);
+    let mut projection = projection();
+    projection.replace_committed_while_holding(
+        &committed("incarnation", 1, 1, 1, Some(&snapshot)),
+        &[],
+        Some(&ExecutionId::new("execution").unwrap()),
+        &holding,
+    );
+    projection.transcript_state(ConversationTranscriptState::Complete);
+    projection
+}
+
+fn shown_reviews(view: &ConversationView) -> Vec<&str> {
+    view.permissions
+        .iter()
+        .map(|review| review.permission_id.as_str())
+        .collect()
+}
+
+// A person's answer, or a remembered choice, leaves no event in the history
+// the view folds. Counting the reviews that history leaves open hid every
+// new review once a long turn had asked sixteen, and each hidden one waited
+// out its deadline with nobody shown it. Keeping them would also grow the
+// projection with every review a turn ever asked.
+#[test]
+fn answered_reviews_are_not_kept_or_counted_against_the_open_limit() {
+    let projection = many_reviews(2000, |index| index == 1999);
+    assert_eq!(projection.view().permissions.len(), 1);
+    let view = projection.read();
+    assert_eq!(shown_reviews(&view), ["1999"]);
+    assert_eq!(view.interaction_view_error, None);
+    assert!(!view.truncated);
+}
+
+#[test]
+fn a_review_answered_after_a_newer_fold_is_dropped_by_an_older_read() {
+    let mut projection = many_reviews(3, |_| true);
+    // A fold is held that this read's history cannot replace, so it is refused.
+    let older = review_snapshot(vec![]);
+    let accepted = projection.replace_committed_while_holding(
+        &committed("earlier-incarnation", 1, 1, 1, Some(&older)),
+        &[],
+        Some(&ExecutionId::new("execution").unwrap()),
+        &std::collections::HashSet::new(),
+    );
+    assert!(!accepted);
+    assert_eq!(shown_reviews(&projection.read()), ["0", "1", "2"]);
+    // Review "1" was answered since; the authority's answer still applies.
+    let before = projection.read().revision;
+    projection.hold(|execution, permission| execution == "execution" && permission != "1");
+    let view = projection.read();
+    assert_eq!(shown_reviews(&view), ["0", "2"]);
+    assert_ne!(view.revision, before);
+}
+
+#[test]
+fn reviews_past_the_open_limit_wait_their_turn_and_the_view_says_so() {
+    let all = many_reviews(17, |_| true).read();
+    let expected: Vec<String> = (0..16).map(|index| index.to_string()).collect();
+    assert_eq!(shown_reviews(&all), expected);
+    assert!(all.truncated);
+    assert_eq!(
+        all.interaction_view_error.as_deref(),
+        Some("A pending tool review exceeds the display limit; no choices were silently removed.")
+    );
+    // Once the oldest is answered, the one held back is offered.
+    let after = many_reviews(17, |index| index != 0).read();
+    let expected: Vec<String> = (1..17).map(|index| index.to_string()).collect();
+    assert_eq!(shown_reviews(&after), expected);
+    assert_eq!(after.interaction_view_error, None);
+    assert!(!after.truncated);
+}
+
 #[test]
 fn a_review_says_what_each_offered_option_decides() {
     let options = PermissionOptions::new(
@@ -2935,13 +3037,24 @@ fn a_saved_deadline_counts_down_while_this_process_holds_the_review() {
     };
     let absent = show(HashSet::new());
     assert!(
-        absent.permissions[0].deadline.is_none(),
-        "a saved deadline stays off the card when this process is not holding the review"
+        absent.permissions.is_empty(),
+        "a review this process is not holding is not offered"
     );
     let other = show(HashSet::from([("execution".into(), "other".into())]));
     assert!(
-        other.permissions[0].deadline.is_none(),
-        "holding a different review does not show this deadline"
+        other.permissions.is_empty(),
+        "holding a different review does not offer this one"
+    );
+    let mut unasked = projection();
+    unasked.replace_committed(
+        &committed("incarnation", 1, 1, 1, Some(&snapshot)),
+        &[],
+        Some(&active),
+    );
+    unasked.transcript_state(ConversationTranscriptState::Complete);
+    assert!(
+        unasked.read().permissions[0].deadline.is_none(),
+        "a saved deadline stays off the card when no worker was asked about it"
     );
     let pending = show(HashSet::from([("execution".into(), "7".into())]));
     let deadline = pending.permissions[0]

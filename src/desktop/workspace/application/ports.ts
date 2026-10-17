@@ -42,6 +42,7 @@ import type {
   SharingFailure,
 } from "../model/sharing"
 import type { QuestionFlights } from "./question-flights"
+import type { AccessMode } from "../model/access"
 
 /**
  * A message sent to a session, as the source is asked to deliver it. Sent
@@ -68,7 +69,12 @@ export interface OutgoingMessage {
    * it is idempotent: a session that has begun is not begun again, and the
    * message joins it.
    */
-  readonly start?: { readonly channelId: string; readonly title: string }
+  readonly start?: {
+    readonly channelId: string
+    readonly title: string
+    /** The access chosen before it began; the source's default when absent. */
+    readonly access?: AccessMode
+  }
 }
 
 export type WorkspaceUpdate =
@@ -170,6 +176,26 @@ export interface WorkspaceSource {
     choices: readonly QuestionChoice[] | null,
     initiator: Initiator,
   ): Promise<void>
+  /**
+   * Stops the turn the session's agent is at work on (`atWork`): cancels it
+   * where it runs, and lets go whatever it waits on. Refused `not-waiting`
+   * when no turn is at work. Resolves once the source has taken it; the
+   * conversation that no longer runs reaches subscribers as an update. Like
+   * an answer, the gateway's source records nothing itself: the gateway
+   * records the stop as this window's authenticated caller.
+   */
+  stop(sessionId: string, initiator: Initiator): Promise<void>
+  /**
+   * Changes the approval preset the session's agent runs at (`access.ts`),
+   * for every review decided after it. Resolves once the source has
+   * committed it; the conversation saying so reaches subscribers as an
+   * update. A source that cannot change it now refuses: the gateway changes
+   * it only while no turn runs (`conversation.setApprovalMode`), and refuses
+   * one the session's model does not offer. Like an answer, the gateway's
+   * source records nothing itself: the gateway records the change, its
+   * refusal included, as this window's authenticated caller.
+   */
+  setAccess(sessionId: string, mode: AccessMode, initiator: Initiator): Promise<void>
   /**
    * Pins or unpins a session. Resolves once the session's changed summary has
    * reached subscribers: the window shows the pin from that update alone.

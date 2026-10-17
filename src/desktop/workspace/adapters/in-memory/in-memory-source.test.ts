@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 import type { WorkspaceUpdate } from "../../application/ports"
 import { WorkspaceSourceError } from "../../application/ports"
 import {
+  atWork,
   messageText,
   type QuestionChoice,
   type Transcript,
@@ -135,6 +136,38 @@ describe("the in-memory source", () => {
     expect(messageText(done.messages.at(-1)!)).toMatch(/^On it\./)
     const summaries = updates.filter((update) => update.kind === "session")
     expect(summaries.at(-1)).toMatchObject({ session: { status: "idle" } })
+  })
+
+  it("stops a reply where it got to, rests the session, records the stop, and refuses a second", async () => {
+    const { source, updates, advance, pending } = started()
+    await source.send({
+      initiator: "person",
+      sessionId: "new",
+      messageId: "m1",
+      text: "Sketch a calmer header",
+      model: { provider: "anthropic", modelId: "claude-opus-5" },
+      start: { channelId: "desktop-app", title: "Sketch a calmer header" },
+    })
+    advance(scriptTiming.answerMs + scriptTiming.stepMs)
+    const transcripts = () =>
+      updates.flatMap((update) =>
+        update.kind === "transcript" ? [update.transcript] : [],
+      )
+    expect(atWork(transcripts().at(-1))).toBe(true)
+    await source.stop("new", "person")
+    expect(atWork(transcripts().at(-1))).toBe(false)
+    expect(pending()).toBe(0)
+    const summaries = updates.filter((update) => update.kind === "session")
+    expect(summaries.at(-1)).toMatchObject({ session: { status: "idle" } })
+    expect(source.audit().at(-1)).toMatchObject({
+      sessionId: "new",
+      action: "stop",
+      initiator: "person",
+      outcome: "taken",
+    })
+    await expect(source.stop("new", "person")).rejects.toMatchObject({
+      reason: "not-waiting",
+    })
   })
 
   it("previews what a running session is at, step by step, without moving it in the lists", async () => {

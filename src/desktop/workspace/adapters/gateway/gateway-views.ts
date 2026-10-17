@@ -522,6 +522,13 @@ export function transcriptFrom(
       cause: view.lease.cause,
       refusal: view.lease.refusal,
     },
+    access: {
+      mode: view.approvalMode,
+      modes: view.approvalModes.map((choice) => choice.id),
+      ...(view.approvalModeChange
+        ? { changing: view.approvalModeChange.requestedMode }
+        : {}),
+    },
     authenticationRefusal: latestTurn?.authenticationRequired
       ? latestTurn.executionId
       : undefined,
@@ -530,6 +537,25 @@ export function transcriptFrom(
     latestInputId,
     ...(history ? { history } : {}),
   }
+}
+
+/**
+ * The execution Stop stops: the turn running, else the next one queued, else
+ * the one a shown review or question holds open. A queued turn is never
+ * named while one runs — stopping it would withdraw it and leave the running
+ * turn going. These are the marks `transcriptFrom` turns into `atWork`'s
+ * activity, working reply, approval and questions, so Stop is offered
+ * exactly where it has a turn to name.
+ */
+export function activeExecution(view: ConversationView): string | undefined {
+  const running = view.messages.find((turn) => turn.status === "running")
+  const queued = view.messages.find((turn) => turn.status === "queued")
+  return (
+    running?.executionId ??
+    queued?.executionId ??
+    view.permissions[0]?.executionId ??
+    questionsFrom(view)[0]?.executionId
+  )
 }
 
 /**

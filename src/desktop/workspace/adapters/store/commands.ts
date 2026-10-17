@@ -18,7 +18,12 @@ import {
   type Side,
   type Zone,
 } from "../../../split-panes/model/pane-layout"
-import { messageText, type Message, type QuestionChoice } from "../../model/transcript"
+import {
+  atWork,
+  messageText,
+  type Message,
+  type QuestionChoice,
+} from "../../model/transcript"
 import { differentFlight } from "../../application/question-flights"
 import {
   failureReason,
@@ -44,6 +49,7 @@ import {
   type WorkspaceState,
 } from "../../application/workspace-state"
 import * as panesUseCases from "../../application/usecases/panes"
+import { accessToStart } from "../../application/usecases/access"
 import type { Drop } from "../../../split-panes"
 import type { PaneRoom } from "../../../split-panes/model/pane-sizing"
 import { workspaceActions } from "./slice"
@@ -413,6 +419,12 @@ export function openChannel({
   }
 }
 
+/** The access a session begins at, when one was chosen before it began. */
+function startAccess(state: WorkspaceState, sessionId: string) {
+  const access = accessToStart(state, sessionId)
+  return access ? { access } : {}
+}
+
 /**
  * Asks the source to take a message already in the outbox. While the source
  * has not spoken of the session — it began here, at revision 0 — the message
@@ -437,7 +449,11 @@ function deliver(
         model,
         start: knownToSource(session)
           ? undefined
-          : { channelId: session.channelId, title: session.title },
+          : {
+              channelId: session.channelId,
+              title: session.title,
+              ...startAccess(getState().workspace, sessionId),
+            },
       })
       dispatch(messageDelivered({ sessionId, messageId: message.id }))
       return "sent"
@@ -703,6 +719,34 @@ export function deny({
 export type ChangeOutcome = "sent" | "refused" | "unknown" | "not-asked"
 
 /**
+ * Stops the turn a session's agent is at work on, saying who asked for the
+ * source's record. Only a session on screen whose conversation shows a turn
+ * at work is asked (`atWork`); the conversation that no longer runs arrives
+ * as the source's update, and a refusal leaves it as it was.
+ */
+export function stopTurn({
+  sessionId,
+  initiator,
+}: {
+  sessionId: string
+  initiator: Initiator
+}): WorkspaceCommand<Promise<ChangeOutcome>> {
+  return async (_dispatch, getState, { workspace }) => {
+    const state = getState().workspace
+    if (!onScreen(state, sessionId) || !atWork(entry(state.transcripts, sessionId)))
+      return "not-asked"
+    try {
+      await workspace.stop(sessionId, initiator)
+      return "sent"
+    } catch (error) {
+      const reason = failureReason(error)
+      console.warn("Could not stop a turn", sessionId, reason)
+      return outcomeOf(reason)
+    }
+  }
+}
+
+/**
  * Pins a session under its channel in the sidebar, or unpins it, saying who
  * asked for the source's record. The pin shows when the source's update says
  * so; a refusal leaves it as it was.
@@ -784,3 +828,5 @@ export {
   revokeShare,
   shareSession,
 } from "./sharing-commands"
+
+export { chooseAccess, type AccessOutcome } from "./access-commands"

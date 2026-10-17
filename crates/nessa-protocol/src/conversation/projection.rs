@@ -261,10 +261,16 @@ pub struct Projection {
     /// other unfinished record was interrupted.
     live_here: HashSet<String>,
     /// Reviews this process's worker is still waiting on, as execution id and
-    /// permission id. Storage restores a deadline unarmed. One of these is
-    /// still the promise that worker made, so its card counts down.
-    /// `a_saved_deadline_counts_down_while_this_process_holds_the_review`.
-    holding_reviews: HashSet<(String, String)>,
+    /// permission id, as the live permission authority answered when this
+    /// fold began; `None` when no authority was asked. Storage restores a
+    /// deadline unarmed. One of these is still the promise that worker made,
+    /// so its card counts down
+    /// (`a_saved_deadline_counts_down_while_this_process_holds_the_review`).
+    /// When the authority was asked, no other review is offered or kept:
+    /// a person's answer or a remembered choice leaves no event in history,
+    /// so only the authority knows it is settled
+    /// (`answered_reviews_are_not_kept_or_counted_against_the_open_limit`).
+    holding_reviews: Option<HashSet<(String, String)>>,
     /// Unfinished executions present when this projection first accepted a
     /// snapshot, except any this process has since run. A record admitted
     /// later is absent, so a read while it is saved but not active — or no
@@ -456,7 +462,7 @@ pub fn retained_view(
         HashSet::new(),
         revision,
         None,
-        &HashSet::new(),
+        None,
     );
     projection.transcript_state(status.view_state().into());
     bound_view(projection.read())
@@ -468,14 +474,7 @@ impl Projection {
         capabilities: ConversationCapabilities,
         snapshot: Option<&SessionSnapshot>,
     ) -> Self {
-        Self::from_snapshot(
-            id,
-            capabilities,
-            snapshot,
-            HashSet::new(),
-            None,
-            &HashSet::new(),
-        )
+        Self::from_snapshot(id, capabilities, snapshot, HashSet::new(), None, None)
     }
 
     fn from_snapshot(
@@ -484,7 +483,7 @@ impl Projection {
         snapshot: Option<&SessionSnapshot>,
         live_here: HashSet<String>,
         carried_unfinished: Option<HashSet<String>>,
-        holding_reviews: &HashSet<(String, String)>,
+        holding_reviews: Option<&HashSet<(String, String)>>,
     ) -> Self {
         Self::from_snapshot_with_epoch(
             id,
@@ -504,7 +503,7 @@ impl Projection {
         live_here: HashSet<String>,
         epoch: Uuid,
         carried_unfinished: Option<HashSet<String>>,
-        holding_reviews: &HashSet<(String, String)>,
+        holding_reviews: Option<&HashSet<(String, String)>>,
     ) -> Self {
         let history_accepted = carried_unfinished.is_some() || snapshot.is_some();
         let unfinished_at_fold = match carried_unfinished {
@@ -525,7 +524,7 @@ impl Projection {
             tool_parts: HashMap::new(),
             execution_hooks: HashMap::new(),
             live_here: live_here.clone(),
-            holding_reviews: holding_reviews.clone(),
+            holding_reviews: holding_reviews.cloned(),
             unfinished_at_fold,
             history_accepted,
             tool_uis: Arc::new(NoMcpToolUis),
@@ -615,21 +614,32 @@ impl Projection {
         order: &[ExecutionId],
         active: Option<&ExecutionId>,
     ) -> bool {
-        self.replace_committed_while_holding(committed, order, active, &HashSet::new())
+        self.replace(committed, order, active, None)
     }
 
     /// As [`Self::replace_committed`], and `holding` names each review this
     /// process's worker is still waiting on, as execution id and permission
-    /// id. A saved deadline is restored unarmed. One of these is still that
-    /// worker's promise, so its card counts down. A restored deadline for any
-    /// other review stays off the card.
-    /// `a_saved_deadline_counts_down_while_this_process_holds_the_review`.
+    /// id, as the live permission authority says. Only these are offered. A
+    /// saved deadline is restored unarmed. One of these is still that
+    /// worker's promise, so its card counts down.
+    /// `a_saved_deadline_counts_down_while_this_process_holds_the_review`,
+    /// `answered_reviews_are_not_kept_or_counted_against_the_open_limit`.
     pub fn replace_committed_while_holding(
         &mut self,
         committed: &CommittedSession,
         order: &[ExecutionId],
         active: Option<&ExecutionId>,
         holding: &HashSet<(String, String)>,
+    ) -> bool {
+        self.replace(committed, order, active, Some(holding))
+    }
+
+    fn replace(
+        &mut self,
+        committed: &CommittedSession,
+        order: &[ExecutionId],
+        active: Option<&ExecutionId>,
+        holding: Option<&HashSet<(String, String)>>,
     ) -> bool {
         let incarnation = committed.incarnation();
         let position = committed.position();
@@ -890,6 +900,24 @@ impl Projection {
         self.view.pending.retain(|value| value.execution_id != id);
         self.bump();
     }
+    /// Keep only the reviews `waiting` says the live permission authority
+    /// still waits on, by execution id and permission id. For a read whose
+    /// committed history was older than this fold and so not accepted: the
+    /// authority's answer is still newer than the fold's, and a review
+    /// answered since is no longer offered.
+    /// `a_review_answered_after_a_newer_fold_is_dropped_by_an_older_read`.
+    pub fn hold(&mut self, waiting: impl Fn(&str, &str) -> bool) {
+        let before = self.view.permissions.len();
+        self.view
+            .permissions
+            .retain(|review| waiting(&review.execution_id, &review.permission_id));
+        if let Some(holding) = &mut self.holding_reviews {
+            holding.retain(|(execution, permission)| waiting(execution, permission));
+        }
+        if self.view.permissions.len() != before {
+            self.bump();
+        }
+    }
     pub fn resolved_permission(&mut self, execution: &str, id: &str) {
         self.resolved_permissions
             .insert((execution.to_owned(), id.to_owned()));
@@ -994,10 +1022,13 @@ impl Projection {
             (execution.to_owned(), permission.as_str().to_owned()),
             deadline.clone(),
         );
-        if self
-            .resolved_permissions
-            .contains(&(execution.to_owned(), permission.as_str().to_owned()))
+        let key = (execution.to_owned(), permission.as_str().to_owned());
+        if self.resolved_permissions.contains(&key)
             || self.terminal_executions.contains(execution)
+            || self
+                .holding_reviews
+                .as_ref()
+                .is_some_and(|waiting| !waiting.contains(&key))
         {
             return;
         }
@@ -1039,7 +1070,8 @@ impl Projection {
         }
         let holding = self
             .holding_reviews
-            .contains(&(execution.to_owned(), permission.as_str().to_owned()));
+            .as_ref()
+            .is_some_and(|waiting| waiting.contains(&key));
         let value = ConversationPermission {
             execution_id: execution.into(),
             permission_id: permission.as_str().into(),
@@ -1065,15 +1097,11 @@ impl Projection {
                 })
                 .collect(),
         };
+        // How many reviews are open is counted where the view is read, over
+        // the reviews offered then (`Self::read_with_mode_change`).
         let size = serde_json::to_vec(&value).map_or(usize::MAX, |bytes| bytes.len());
-        let open = self
-            .view
-            .permissions
-            .iter()
-            .filter(|known| offered(&self.view, &known.execution_id))
-            .count();
-        if size > MAX_REVIEW_BYTES || open >= MAX_PERMISSIONS {
-            self.view.interaction_view_error = Some("A pending tool review exceeds the display limit; no choices were silently removed.".into());
+        if size > MAX_REVIEW_BYTES {
+            self.view.interaction_view_error = Some(UNSHOWN_REVIEW.into());
             self.view.truncated = true;
         } else if !self.view.permissions.iter().any(|known| {
             known.execution_id == execution && known.permission_id == value.permission_id
@@ -1626,17 +1654,29 @@ impl Projection {
             .filter(|question| offered(&view, &question.execution_id))
             .cloned()
             .collect();
-        let permissions = view
+        let mut permissions: Vec<_> = view
             .permissions
             .iter()
             .filter(|permission| offered(&view, &permission.execution_id))
             .cloned()
             .collect();
+        // Past the limit the oldest waiting reviews are shown. A later one is
+        // offered as soon as one of those is answered, on the next read.
+        if permissions.len() > MAX_PERMISSIONS {
+            permissions.truncate(MAX_PERMISSIONS);
+            view.truncated = true;
+            view.interaction_view_error = Some(UNSHOWN_REVIEW.into());
+        }
         view.questions = questions;
         view.permissions = permissions;
         view
     }
 }
+
+/// What a view says of a review it holds back: too large to show whole, or
+/// past the open-review limit.
+const UNSHOWN_REVIEW: &str =
+    "A pending tool review exceeds the display limit; no choices were silently removed.";
 
 /// What a view bounded to its size says of the interactions it left out.
 const UNSHOWN_INTERACTIONS: &str =

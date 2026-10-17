@@ -1,10 +1,16 @@
 import { WorkspaceSendFailure } from "../send-failure"
-import { memo, useCallback, useLayoutEffect, useRef } from "react"
+import { memo, useCallback, useLayoutEffect, useRef, useState } from "react"
 import { playArrival, type Arrival } from "../../adapters/dom/arrival"
 import { Composer } from "../../../ui/composer"
-import { chooseModel, sendMessage, setComposerText } from "../../adapters/store/commands"
+import {
+  chooseModel,
+  sendMessage,
+  setComposerText,
+  stopTurn,
+} from "../../adapters/store/commands"
 import { useWorkspaceDispatch, useWorkspaceSelector } from "../../adapters/store/hooks"
 import {
+  selectAtWork,
   selectCanChooseModel,
   selectComposerText,
   selectNextModel,
@@ -12,6 +18,7 @@ import {
 import type { ModelRef } from "../../model/workspace-index"
 import { Home } from "../../../ui/home"
 import { Transcript } from "../transcript/transcript"
+import { useComposerAccess } from "./composer-access"
 import "./conversation.css"
 
 /** The docked composer is always a card; only a home opens into a page. */
@@ -56,6 +63,24 @@ function useComposerActions(sessionId: string) {
 }
 
 /**
+ * Stop, while the session's agent is at work (`atWork`): what the docked
+ * composer's send button becomes. Held as asked until the stop settles, so
+ * one press asks once; the turn's end arrives as the source's update.
+ */
+function useStop(sessionId: string) {
+  const dispatch = useWorkspaceDispatch()
+  const working = useWorkspaceSelector((state) => selectAtWork(state, sessionId))
+  const [stopping, setStopping] = useState(false)
+  const stop = useCallback(() => {
+    setStopping(true)
+    void dispatch(stopTurn({ sessionId, initiator: "person" })).finally(() =>
+      setStopping(false),
+    )
+  }, [dispatch, sessionId])
+  return working ? { stop, stopping } : undefined
+}
+
+/**
  * A new session's home in a pane: the window's scene, greeting and composer,
  * the composer wired to this session, so the model chosen here is the one it
  * keeps and its first message starts it. `onSend` lets the pane measure the
@@ -73,11 +98,13 @@ export const PaneHome = memo(function PaneHome({
   const model = useNextModel(sessionId)
   const { changeModel } = useComposerActions(sessionId)
   const { text, onTextChange } = useComposerText(sessionId)
+  const access = useComposerAccess(sessionId)
   return (
     <Home
       model={model}
       onSend={onSend}
       onModelChange={changeModel}
+      access={access}
       text={text}
       onTextChange={onTextChange}
       // Docked as a conversation's composer is, where the pane is small (`conversation.css`).
@@ -129,6 +156,8 @@ const DockComposer = memo(function DockComposer({ sessionId }: { sessionId: stri
   const model = useNextModel(sessionId)
   const { send, changeModel } = useComposerActions(sessionId)
   const { text, onTextChange } = useComposerText(sessionId)
+  const stop = useStop(sessionId)
+  const access = useComposerAccess(sessionId)
   return (
     <>
       <WorkspaceSendFailure sessionId={sessionId} />
@@ -140,6 +169,8 @@ const DockComposer = memo(function DockComposer({ sessionId }: { sessionId: stri
         model={model}
         onModelChange={changeModel}
         onSend={send}
+        onStop={stop}
+        access={access}
         // In a conversation the field is a reply, and says so in fewer words than the home's question.
         placeholder="Reply…"
       />

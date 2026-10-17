@@ -63,6 +63,8 @@ type Method =
   | "send"
   | "answer"
   | "answerQuestion"
+  | "stop"
+  | "setApprovalMode"
   | "archive"
   | "permissionRules"
   | "revokePermissionRule"
@@ -408,7 +410,13 @@ export function fakeGateway(
         answer("create", [options], () => {
           const conversationId = options?.conversationId ?? ""
           if (!views.has(conversationId))
-            views.set(conversationId, view(conversationId, { revision: "created" }))
+            views.set(
+              conversationId,
+              view(conversationId, {
+                revision: "created",
+                ...(options?.approvalMode ? { approvalMode: options.approvalMode } : {}),
+              }),
+            )
           return { conversationId }
         }) as never,
       submit: (prepared) => {
@@ -456,6 +464,36 @@ export function fakeGateway(
         const behaviour = overrides.get("answerQuestion")?.shift()
         return (behaviour ? behaviour(normal) : Promise.resolve().then(normal)) as never
       },
+      // The turn named ends cancelled, and what it waited on goes with it.
+      stop: (...args) =>
+        answer("stop", args, () => {
+          const [target] = args
+          const current = views.get(target.conversationId)
+          if (current)
+            views.set(target.conversationId, {
+              ...current,
+              messages: current.messages.map((turn) =>
+                turn.executionId === target.executionId
+                  ? { ...turn, status: "cancelled" }
+                  : turn,
+              ),
+              permissions: current.permissions.filter(
+                (asked) => asked.executionId !== target.executionId,
+              ),
+              questions: current.questions.filter(
+                (asked) => asked.executionId !== target.executionId,
+              ),
+            })
+          return { requestId: "stop", stage: "accepted" }
+        }) as never,
+      // Committed as asked; the view says it from now on.
+      setApprovalMode: (...args) =>
+        answer("setApprovalMode", args, () => {
+          const [conversationId, mode] = args
+          const current = views.get(conversationId)
+          if (current) views.set(conversationId, { ...current, approvalMode: mode })
+          return { requestId: "set-approval-mode", mode }
+        }) as never,
       archive: (...args) =>
         answer("archive", args, () => {
           rows.delete(args[0])

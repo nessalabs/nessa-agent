@@ -94,6 +94,7 @@
  * app's calls go on that client too (`connected`).
  */
 import {
+  executionTargets,
   prepareSubmission,
   permissionTargets,
   questionTargets,
@@ -131,6 +132,7 @@ import type { WorkspaceFailureReason } from "../../model/failure"
 import type { Transcript } from "../../model/transcript"
 import type { SessionSummary, WorkspaceIndex } from "../../model/workspace-index"
 import {
+  activeExecution,
   gatewayChannel,
   gatewaySection,
   modelFor,
@@ -147,7 +149,14 @@ import { waitingReviews, type WaitingReview } from "./review-notices"
 export interface GatewayClient {
   readonly conversation: Pick<
     ConversationApi,
-    "observe" | "create" | "submit" | "answer" | "answerQuestion" | "archive"
+    | "observe"
+    | "create"
+    | "submit"
+    | "answer"
+    | "answerQuestion"
+    | "stop"
+    | "setApprovalMode"
+    | "archive"
   >
   readonly subscriptions: Pick<SubscriptionApi, "view" | "list">
   readonly connectionState: ConnectionState
@@ -1265,6 +1274,7 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
       // draft or model object while either effect is pending (PS16).
       const model = Object.freeze({ ...message.model })
       const start = message.start !== undefined
+      const access = message.start?.access
       let prepared
       try {
         prepared = prepareSubmission({
@@ -1294,6 +1304,8 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
               conversationId: prepared.conversationId,
               ...(agent ? { agent } : {}),
               model: model.modelId,
+              // The access chosen in the home; the gateway asks when told none.
+              ...(access ? { approvalMode: access } : {}),
             })
           })
         }
@@ -1363,6 +1375,33 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
             if (error instanceof TypeError) throw new WorkspaceSourceError("not-waiting")
             throw error
           }
+        })
+      }),
+    stop: (sessionId, _initiator) =>
+      within(async (live) => {
+        await transcriptOf(sessionId, "person")
+        const view = reads.get(sessionId)?.view
+        const executionId = view && activeExecution(view)
+        if (!view || executionId === undefined)
+          throw new WorkspaceSourceError("not-waiting")
+        // Captured from this view, so the stop names the turn the window shows.
+        const [target] = executionTargets({
+          conversationId: view.conversationId,
+          messages: [{ executionId }],
+          pending: [],
+        })
+        await dispatch(live, (connected) => {
+          held(sessionId)
+          return connected.conversation.stop(target)
+        })
+      }),
+    // Committed by the gateway, which refuses it while a turn runs. The
+    // conversation saying so follows as a frame, as an answer's does (D12).
+    setAccess: (sessionId, mode, _initiator) =>
+      within(async (live) => {
+        await dispatch(live, (connected) => {
+          held(sessionId)
+          return connected.conversation.setApprovalMode(sessionId, mode)
         })
       }),
     // The gateway keeps no pin.

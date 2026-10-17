@@ -59,6 +59,7 @@ const desktopRoles = [
   "needsYou",
   // Composer
   "send",
+  "stop",
   "attach",
   "folder",
   "folderAdd",

@@ -13,6 +13,7 @@ import {
   NessaConversationControlError,
   NessaConversationMutationError,
   NessaRpcError,
+  executionTargetConversation,
   questionTargetConversation,
   type ConversationPermission,
 } from "@nessa/client"
@@ -22,7 +23,7 @@ import { HostRefusalError } from "../../../../host/startup-refusals"
 import { SessionHealthError } from "../../../../session/adapters/client/dev-session"
 import { WorkspaceSourceError, type WorkspaceUpdate } from "../../application/ports"
 import { composerModels } from "../../../model/composer-options"
-import { messageText } from "../../model/transcript"
+import { atWork, messageText } from "../../model/transcript"
 import { testStore } from "../../testing"
 import { followWorkspace, loadWorkspace, sendMessage } from "../store/commands"
 import { approvalId } from "./gateway-views"
@@ -711,6 +712,63 @@ describe("conversations", () => {
       source.answerQuestion("a", "turn", "q1", null, "person"),
     ).rejects.toMatchObject({ reason: "not-waiting" })
     expect(gateway.count("answerQuestion")).toBe(1)
+  })
+
+  it("stops the running turn of a view that left a review out past its limit", async () => {
+    const { gateway, source, updates, follow } = started()
+    gateway.rows.set("a", row("a", { running: true }))
+    gateway.views.set(
+      "a",
+      view("a", {
+        messages: [running()],
+        truncated: true,
+        interactionViewError:
+          "A pending tool review exceeds the display limit; no choices were silently removed.",
+      }),
+    )
+    await source.index()
+    follow()
+    const shown = await source.transcript("a")
+    expect(shown.approval).toBeNull()
+    expect(atWork(shown)).toBe(true)
+    await source.stop("a", "person")
+    const stopCall = gateway.calls.find((call) => call.method === "stop")
+    if (!stopCall) throw new Error("expected the gateway to be asked to stop")
+    const [target] = stopCall.args as [Parameters<typeof executionTargetConversation>[0]]
+    expect(executionTargetConversation(target)).toBe("a")
+    expect(target.executionId).toBe("turn")
+    gateway.publish("a")
+    await flush()
+    expect(atWork(transcriptsOf(updates, "a").at(-1))).toBe(false)
+  })
+
+  it("stops the execution a shown review holds open when its turn is outside the view", async () => {
+    const { gateway, source } = started()
+    gateway.views.set(
+      "a",
+      view("a", {
+        messages: [],
+        permissions: [permission({ executionId: "earlier" })],
+      }),
+    )
+    expect(atWork(await source.transcript("a"))).toBe(true)
+    await source.stop("a", "agent")
+    const [target] = (gateway.calls.find((call) => call.method === "stop")?.args ??
+      []) as [{ executionId: string }]
+    expect(target.executionId).toBe("earlier")
+  })
+
+  it("refuses a stop when no turn is at work, and asks the gateway nothing", async () => {
+    const { gateway, source } = started()
+    gateway.views.set(
+      "a",
+      view("a", { messages: [{ ...running(), status: "completed" }] }),
+    )
+    expect(atWork(await source.transcript("a"))).toBe(false)
+    await expect(source.stop("a", "person")).rejects.toMatchObject({
+      reason: "not-waiting",
+    })
+    expect(gateway.count("stop")).toBe(0)
   })
 
   it("maps synchronous stale-choice validation without mapping later TypeErrors", async () => {

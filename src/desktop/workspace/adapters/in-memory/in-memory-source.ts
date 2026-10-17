@@ -14,6 +14,7 @@
  */
 import type { SessionSummary } from "../../model/workspace-index"
 import {
+  atWork,
   emptyTranscript,
   type ApprovalChoice,
   type Message,
@@ -34,6 +35,7 @@ import {
   type WorkspaceUpdate,
 } from "../../application/ports"
 import type { WorkspaceFailureReason } from "../../model/failure"
+import type { AccessMode } from "../../model/access"
 import { acceptedQuestionChoices } from "./question-answer"
 import { sampleWorkspace } from "./sample-workspace"
 import {
@@ -86,6 +88,8 @@ export interface AuditEntry {
     | "let-go"
     | "answer-question"
     | "decline-question"
+    | "stop"
+    | "set-access"
   /** The approval answered, or let go. */
   readonly approvalId?: string
   /** The question answered or declined, and the execution it belongs to. */
@@ -98,6 +102,8 @@ export interface AuditEntry {
    * ask was declined. Own words are this controlled record's only copy.
    */
   readonly choices?: readonly QuestionChoice[]
+  /** The access asked for, for a `set-access`. */
+  readonly access?: AccessMode
   /** The message that let an approval go, for a `let-go`. */
   readonly messageId?: string
   readonly initiator: Initiator
@@ -171,7 +177,13 @@ export function inMemorySource(
   const audited = (
     asked: Pick<
       AuditEntry,
-      "sessionId" | "action" | "approvalId" | "questionId" | "executionId" | "initiator"
+      | "sessionId"
+      | "action"
+      | "approvalId"
+      | "questionId"
+      | "executionId"
+      | "access"
+      | "initiator"
     >,
     work: (record: (change: Partial<AuditEntry>) => void) => number,
   ): Promise<void> => {
@@ -441,6 +453,10 @@ export function inMemorySource(
       // A new message moves the turn on: an approval still asked is let go.
       approval: null,
       activity: { label: "Thinking", since: at },
+      // A session begins at the access chosen for it; one begun keeps its own.
+      ...(!existing && message.start?.access
+        ? { access: { mode: message.start.access, modes: ["ask", "auto", "full"] } }
+        : {}),
     })
     later(session.id, scriptTiming.readingMs, () =>
       setActivity(session.id, "Reading the workspace", reply.now.reading),
@@ -621,6 +637,37 @@ export function inMemorySource(
         })
         settle(sessionId, reply.preview)
         return known(sessionId).revision
+      }),
+    // The turn ends where it got to: its script stops, what it waited on is let go.
+    stop: (sessionId, initiator) =>
+      audited({ sessionId, action: "stop", initiator }, () => {
+        known(sessionId)
+        if (!atWork(transcriptOf(sessionId)))
+          throw new WorkspaceSourceError("not-waiting")
+        stopScript(sessionId)
+        putTranscript({
+          ...transcriptOf(sessionId),
+          activity: null,
+          approval: null,
+          questions: [],
+        })
+        return putSession({
+          ...known(sessionId),
+          status: "idle",
+          now: undefined,
+          updatedAt: schedule.now(),
+        }).revision
+      }),
+    // As the gateway: changed only while no turn runs, and said by the conversation.
+    setAccess: (sessionId, mode, initiator) =>
+      audited({ sessionId, action: "set-access", access: mode, initiator }, () => {
+        known(sessionId)
+        const transcript = transcriptOf(sessionId)
+        if (atWork(transcript)) throw new WorkspaceSourceError("unavailable")
+        return putTranscript({
+          ...transcript,
+          access: { mode, modes: ["ask", "auto", "full"] },
+        }).revision
       }),
     setPinned: (sessionId, pinned, initiator) =>
       audited(

@@ -15,8 +15,10 @@ import {
   followWorkspace,
   loadWorkspace,
   newSession,
+  openSession,
   sendMessage,
 } from "../../adapters/store/commands"
+import { emptyTranscript, type Transcript } from "../../model/transcript"
 import { ClockProvider } from "../../../../clock"
 import type { ModelRef } from "../../model/workspace-index"
 import {
@@ -183,5 +185,69 @@ describe("a new session's home greets by the hour of the window's clock", () => 
       )
       expect(greeting()).toBe(said)
     }
+  })
+})
+
+describe("a pane's composer offers Stop while the agent is at work", () => {
+  const button = () => host.querySelector<HTMLButtonElement>(".desktop-send")
+  const atWork = (change: Partial<Transcript>, revision = 2): Transcript => ({
+    ...emptyTranscript("a"),
+    revision,
+    ...change,
+  })
+  async function show(source: FakeSource, transcript: Transcript) {
+    await act(async () => {
+      source.transcripts.set("a", transcript)
+      source.emit({ kind: "transcript", transcript })
+      await settle()
+    })
+  }
+
+  it("turns Send into Stop for a running turn, asks the source once, and turns back when it ends", async () => {
+    const { store, source } = await conversation()
+    await act(async () => {
+      store.dispatch(openSession({ sessionId: "a" }))
+    })
+    expect(button()?.getAttribute("aria-label")).toBe("Send")
+    await show(source, atWork({ activity: { label: "Running cargo test", since: 1 } }))
+    expect(button()?.getAttribute("aria-label")).toBe("Stop")
+    // Stop needs no draft: it is pressable with the field empty.
+    expect(button()?.disabled).toBe(false)
+    await act(async () => {
+      button()?.click()
+      await settle()
+    })
+    expect(source.calls.filter((call) => call[0] === "stop")).toEqual([
+      ["stop", "a", "person"],
+    ])
+    expect(button()?.getAttribute("aria-label")).toBe("Send")
+  })
+
+  it("offers Stop when the view left a review out and the turn still runs", async () => {
+    const { store, source } = await conversation()
+    await act(async () => {
+      store.dispatch(openSession({ sessionId: "a" }))
+    })
+    // The gateway's view past its review limit: no approval shown, its
+    // notice instead, and the turn's reply still being written.
+    await show(
+      source,
+      atWork({
+        interactionNotice:
+          "A pending tool review exceeds the display limit; no choices were silently removed.",
+        history: { omitted: true, unconfirmed: false },
+        messages: [
+          { id: "in", role: "user", at: 1, parts: [{ kind: "text", text: "Go" }] },
+          {
+            id: "out",
+            role: "agent",
+            at: 2,
+            working: true,
+            parts: [{ kind: "step", step: "run", label: "cargo test" }],
+          },
+        ],
+      }),
+    )
+    expect(button()?.getAttribute("aria-label")).toBe("Stop")
   })
 })

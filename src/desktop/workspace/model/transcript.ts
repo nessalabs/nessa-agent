@@ -1,5 +1,6 @@
 import type { ModelRef } from "./workspace-index"
 import type { FailureDiagnostic } from "./failure"
+import type { SessionAccess } from "./access"
 /**
  * A session's conversation: messages from the person and the agent, what the
  * agent is doing now, and the approval it is waiting on, if any. The agent's
@@ -393,8 +394,30 @@ export interface Transcript {
   readonly agent?: string
   /** Where its agent runs; absent until the gateway has recorded a lease. */
   readonly lease?: TranscriptLease
+  /** The approval preset its agent runs at; absent where the source did not say (`access.ts`). */
+  readonly access?: SessionAccess
   /** The source's count of changes to this conversation; see `revision.ts`. */
   readonly revision: number
+}
+
+/**
+ * Whether the conversation's agent is at work on a turn, as the source
+ * reported it: thinking or running a step (`activity`), writing a reply
+ * (`working`), or holding its turn on the person's answer (an approval or a
+ * question). This is what Stop is offered on, so it reads every one of the
+ * source's marks of a turn in progress, and nothing else: not the session
+ * list's status, not whether the view left a review out.
+ */
+export function atWork(transcript: Transcript | undefined): boolean {
+  if (!transcript) return false
+  return (
+    transcript.activity !== null ||
+    transcript.approval !== null ||
+    (transcript.questions?.length ?? 0) > 0 ||
+    transcript.messages.some(
+      (message) => "working" in message && message.working === true,
+    )
+  )
 }
 
 /** A conversation with nothing in it, before the source has said anything of it. */
