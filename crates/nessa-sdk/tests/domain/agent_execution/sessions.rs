@@ -1936,3 +1936,33 @@ fn delayed_execution_closure_cannot_cancel_a_later_execution() {
         ));
     }
 }
+
+#[test]
+fn a_pending_review_key_is_reported_only_for_its_own_pending_review() {
+    let mut session = active_session();
+    let content = ReviewContent::new(None, "write".into(), "{}".into(), None);
+    let key = content.key();
+    session
+        .request_permission(request().with_content(content))
+        .unwrap();
+    let review = PermissionId::new("review").unwrap();
+    assert_eq!(
+        session.pending_review_key(&execution("first"), &review),
+        Some(key)
+    );
+    assert_eq!(
+        session.pending_review_key(&execution("other"), &review),
+        None
+    );
+    assert_eq!(
+        session.pending_review_key(&execution("first"), &PermissionId::new("unknown").unwrap()),
+        None
+    );
+    session
+        .close(PermissionCancellationReason::session_closed())
+        .unwrap();
+    assert_eq!(
+        session.pending_review_key(&execution("first"), &review),
+        None
+    );
+}

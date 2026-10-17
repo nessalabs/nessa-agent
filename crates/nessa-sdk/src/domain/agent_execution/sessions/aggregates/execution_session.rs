@@ -514,8 +514,14 @@ impl ExecutionSession {
         if self.is_closed() || self.check_execution(execution).is_err() {
             return None;
         }
-        let active = self.active_execution.as_ref()?;
-        let pending = active.pending_permissions.lock().ok()?;
+        let active = self
+            .active_execution
+            .as_ref()
+            .expect("checked active execution");
+        let pending = active
+            .pending_permissions
+            .lock()
+            .expect("pending permissions");
         pending.get(id)?.content().map(|content| content.key())
     }
     /// Decision of a still-pending offered option, checked as
