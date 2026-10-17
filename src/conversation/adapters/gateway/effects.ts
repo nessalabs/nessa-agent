@@ -408,6 +408,8 @@ const readFailures: Record<ConversationErrorCode, ReadFailure> = {
   approval_mode_unavailable: "unavailable",
   approval_mode_not_applied: "unavailable",
   approval_mode_uncertain: "unavailable",
+  model_change_not_applied: "unavailable",
+  model_change_uncertain: "unavailable",
   approval_request_conflict: "unavailable",
   turn_running: "unavailable",
   // An MCP App's calls answer these, never a read; written out so the table

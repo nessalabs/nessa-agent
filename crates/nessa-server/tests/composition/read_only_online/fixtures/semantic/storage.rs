@@ -120,6 +120,8 @@ async fn confirmed_producer_snapshot_changes_only_after_successful_save() {
         id: id.clone(),
         provider: provider.clone(),
         provider_context: ProviderContext::Absent,
+        model_change: None,
+        current_configuration: None,
         invocations: vec![],
         queue_history: vec![],
         lease: None,
@@ -146,6 +148,8 @@ async fn confirmed_producer_snapshot_changes_only_after_successful_save() {
     let different = ProviderContext::Recorded(ExecutionSessionId::new("contradictory").unwrap());
     let invalid = SessionSnapshot {
         provider_context: requested,
+        model_change: None,
+        current_configuration: None,
         ..snapshot
     };
     assert!(matches!(

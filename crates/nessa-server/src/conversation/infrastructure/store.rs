@@ -1,5 +1,6 @@
 mod acquisition;
 mod export;
+mod model_changes;
 mod share_grants;
 
 pub use export::{
@@ -13,7 +14,8 @@ use crate::conversation::application::{
     CataloguePageRequest, CatalogueValue, CatalogueWatchError, ConversationAccessPolicyEvaluator,
     ConversationCatalogue, ConversationCreation, ConversationCreationDisposition,
     ConversationError, ConversationFuture, ConversationListing, ConversationModeApplication,
-    ConversationModeRequest, ConversationModeRequestState, ConversationRepository,
+    ConversationModeRequest, ConversationModeRequestState, ConversationModelApplication,
+    ConversationModelRequest, ConversationModelRequestState, ConversationRepository,
     ConversationSummaries, ListedConversation, ListedConversations, ObservationCursor,
     ObservedConversations, Reader, UnfinishedDeletions, UnfinishedMark, UnfinishedTurns,
     WatchCatalogue,
@@ -170,6 +172,7 @@ impl LocalConversationStore {
     /// (docs/adr/todo/202-versioned-local-datasets.md).
     pub fn open(path: &Path) -> Result<Self, OpenError> {
         let connection = nessa_local_database::open(path, &Schema::new(DEFINITION)?)?;
+        model_changes::validate_shape(&connection)?;
         Ok(Self {
             connection: Arc::new(Mutex::new(connection)),
             changes: CatalogueChanges::default(),
@@ -927,6 +930,45 @@ fn write_deletion(
 }
 
 impl ConversationRepository for LocalConversationStore {
+    fn begin_model_change(
+        &self,
+        request: ConversationModelRequest,
+    ) -> ConversationFuture<'_, ConversationModelRequest> {
+        model_changes::begin(self, request)
+    }
+    fn pending_model_change(
+        &self,
+        id: &ConversationId,
+    ) -> ConversationFuture<'_, Option<ConversationModelRequest>> {
+        let id = id.clone();
+        self.run(move |connection| model_changes::read_request(connection, &id, None))
+    }
+    fn model_change(
+        &self,
+        id: &ConversationId,
+        request_id: &str,
+    ) -> ConversationFuture<'_, Option<ConversationModelRequest>> {
+        let id = id.clone();
+        let request_id = request_id.to_owned();
+        self.run(move |connection| model_changes::read_request(connection, &id, Some(&request_id)))
+    }
+    fn observe_model_application(
+        &self,
+        id: &ConversationId,
+        request_id: &str,
+        application: ConversationModelApplication,
+    ) -> ConversationFuture<'_, ConversationModelRequest> {
+        model_changes::observe(self, id, request_id, application)
+    }
+    fn finish_model_change(
+        &self,
+        id: &ConversationId,
+        request_id: &str,
+        state: ConversationModelRequestState,
+    ) -> ConversationFuture<'_, ConversationModelRequest> {
+        model_changes::finish(self, id, request_id, state)
+    }
+
     fn load(&self, id: &ConversationId) -> ConversationFuture<'_, Option<Conversation>> {
         let id = id.clone();
         self.run(move |connection| read(connection, &id))
@@ -1005,6 +1047,10 @@ impl ConversationRepository for LocalConversationStore {
                     return Err(ConversationError::RequestConflict);
                 }
                 return Ok(existing);
+            }
+            if model_changes::read_request(&transaction, &request.conversation_id, None)?.is_some()
+            {
+                return Err(ConversationError::ModelChangeUncertain);
             }
             if read_mode_request(&transaction, &request.conversation_id, None)?.is_some() {
                 return Err(ConversationError::ApprovalModeUncertain);
@@ -1087,15 +1133,15 @@ impl ConversationRepository for LocalConversationStore {
                 return Err(ConversationError::RequestConflict);
             }
             if let Some(existing) = request.application {
-                if existing != application {
+                if existing == application {return Ok(request);}
+                if !(existing == ConversationModeApplication::Uncertain && application == ConversationModeApplication::Applied) {
                     return Err(ConversationError::RequestConflict);
                 }
-                return Ok(request);
             }
             transaction
                 .execute(
                     "UPDATE mode_requests SET application = ?1
-                 WHERE conversation_id = ?2 AND request_id = ?3 AND application IS NULL",
+                 WHERE conversation_id = ?2 AND request_id = ?3 AND (application IS NULL OR application = 'uncertain')",
                     params![mode_application(application), id.to_string(), request_id],
                 )
                 .map_err(failed)?;

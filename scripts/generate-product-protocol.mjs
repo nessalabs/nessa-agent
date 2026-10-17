@@ -301,7 +301,7 @@ for (const [name, def] of Object.entries(schema.$defs)) {
         .join("")
     ts += `export const ${name} = ${JSON.stringify(Object.fromEntries(def.enum.map((v) => [pascal(v), v])))} as const\nexport type ${name} = typeof ${name}[keyof typeof ${name}]\n`
     let enumRs = ""
-    enumRs += `#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]\n#[serde(rename_all = "snake_case")]\npub enum ${name} {${def.enum.map((v) => `${/[.-]/.test(v) ? `#[serde(rename = ${JSON.stringify(v)})] ` : ""}${pascal(v)}`).join(",")}}\n`
+    enumRs += `#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]\npub enum ${name} {${def.enum.map((value) => `#[serde(rename = ${JSON.stringify(value)})] ${pascal(value)}`).join(",")}}\n`
     // Shared payload outcomes need no separate string-code API.
     if (!sharedOutcomes.has(name) || !payloadOutcomes.has(name) || def["x-close-policy"])
       enumRs += `impl ${name} { pub fn as_str(self) -> &'static str { match self {${def.enum.map((v) => `Self::${pascal(v)} => ${JSON.stringify(v)}`).join(",")} } } }\n`

@@ -216,6 +216,8 @@ export function rejectedBeforeDispatch(code: ConversationErrorCode): boolean {
     case ConversationErrorCode.ConversationErasureIncomplete:
     case ConversationErrorCode.ApprovalModeNotApplied:
     case ConversationErrorCode.ApprovalModeUncertain:
+    case ConversationErrorCode.ModelChangeNotApplied:
+    case ConversationErrorCode.ModelChangeUncertain:
       return false
     // An MCP App's request refused before it took effect: for a call
     // (mcp.callTool, mcp.readResource), before anything reached its server;

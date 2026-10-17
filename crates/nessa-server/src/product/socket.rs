@@ -4272,6 +4272,8 @@ mod tests {
             .save_changes(
                 writer.load().await.unwrap().binding().clone(),
                 SessionSnapshot {
+                    model_change: None,
+                    current_configuration: None,
                     id: session_id.clone(),
                     provider: provider.clone(),
                     provider_context: ProviderContext::Absent,

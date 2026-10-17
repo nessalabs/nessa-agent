@@ -100,6 +100,8 @@ async fn exact_admitted_scope_reads_committed_frames_and_joins_before_shutdown()
         .save_changes(
             writer.load().await.unwrap().binding().clone(),
             SessionSnapshot {
+                model_change: None,
+                current_configuration: None,
                 id: session.clone(),
                 provider: provider.clone(),
                 provider_context: ProviderContext::Absent,
@@ -348,6 +350,8 @@ async fn small_saves(directory: &std::path::Path, session: &SessionId, saves: us
     let writer = storage.open(session.clone()).await.unwrap();
     let provider = ProviderIdentity::new("fixture", "model", "workspace").unwrap();
     let snapshot = SessionSnapshot {
+        model_change: None,
+        current_configuration: None,
         id: session.clone(),
         provider: provider.clone(),
         provider_context: ProviderContext::Absent,

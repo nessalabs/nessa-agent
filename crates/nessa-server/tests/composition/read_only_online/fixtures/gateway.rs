@@ -529,6 +529,8 @@ async fn gateway_child() {
                             id: session,
                             provider,
                             provider_context: context,
+                            model_change: None,
+                            current_configuration: None,
                             invocations: vec![],
                             queue_history: vec![],
                             lease: None,

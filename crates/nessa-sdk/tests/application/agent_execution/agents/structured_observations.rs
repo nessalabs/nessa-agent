@@ -1,6 +1,7 @@
 //! Borrowed structured-event validation must precede any compacting clone.
 use super::{actor, capabilities, request, MemoryStorage};
 use crate::application::agent_execution::support::*;
+use nessa_sdk::application::agent_execution::providers::HarnessHostIdentity;
 use nessa_sdk::domain::agent_execution::{
     sessions::ExecutionSession,
     tools::{FileLocation, FilePath, ToolContent, ToolObservation},
@@ -22,6 +23,9 @@ impl ExecutionEventStream for PayloadEvents {
     }
 }
 impl AgentProvider for PayloadProvider {
+    fn harness_host_identity(&self) -> HarnessHostIdentity<'_> {
+        HarnessHostIdentity::local()
+    }
     fn identity(&self) -> ProviderIdentity {
         ProviderIdentity::new("payload", "model", "").unwrap()
     }

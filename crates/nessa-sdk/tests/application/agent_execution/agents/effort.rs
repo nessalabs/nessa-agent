@@ -5,6 +5,8 @@
 use super::MemoryStorage;
 use crate::application::agent_execution::support::*;
 use nessa_sdk::application::agent_execution::executions::EffortChangeStage;
+use nessa_sdk::application::agent_execution::providers::HarnessHostIdentity;
+use nessa_sdk::application::agent_execution::traces::LocalTraceStore;
 use nessa_sdk::application::dto::ReasoningDto;
 use nessa_sdk::domain::model_metadata::value_objects::{EffortLevel, EffortLevels};
 use std::{
@@ -121,8 +123,24 @@ impl ExecutionEventStream for Events {
     }
 }
 
-struct Provider(Arc<Backend>);
+struct Provider(Arc<Backend>, Option<EffortLevel>);
 impl AgentProvider for Provider {
+    fn harness_host_identity(&self) -> HarnessHostIdentity<'_> {
+        HarnessHostIdentity::local()
+    }
+    fn effort_level(&self) -> Option<EffortLevel> {
+        self.1.clone()
+    }
+    fn with_model_configuration(
+        &self,
+        mode: Option<ApprovalMode>,
+        effort: Option<EffortLevel>,
+        _traces: Option<Arc<LocalTraceStore>>,
+    ) -> Result<Arc<dyn AgentProvider>, AgentError> {
+        assert_eq!(mode, self.approval_mode());
+        Ok(Arc::new(Self(self.0.clone(), effort)))
+    }
+
     fn identity(&self) -> ProviderIdentity {
         ProviderIdentity::new("effort-fixture", "fixture", "test").unwrap()
     }
@@ -155,7 +173,7 @@ async fn nothing_is_sent_until_negotiated_nor_a_level_not_offered() {
         },
     });
     let agent = attached_agent(
-        Arc::new(Provider(backend.clone())),
+        Arc::new(Provider(backend.clone(), None)),
         MemoryStorage::default().manager().await,
     )
     .await
@@ -215,7 +233,7 @@ async fn a_change_the_connection_refuses_unsent_is_recorded_as_refused() {
     });
     let stages = Arc::new(Stages::default());
     let agent = Agent::prepare(
-        Arc::new(Provider(backend.clone())),
+        Arc::new(Provider(backend.clone(), None)),
         MemoryStorage::default().manager().await,
         stages.clone(),
     )
@@ -284,7 +302,7 @@ async fn a_change_whose_caller_goes_away_still_settles_and_is_recorded() {
         gate: tokio::sync::Semaphore::new(0),
     });
     let agent = Agent::prepare(
-        Arc::new(Provider(backend.clone())),
+        Arc::new(Provider(backend.clone(), None)),
         MemoryStorage::default().manager().await,
         audit.clone(),
     )
@@ -353,7 +371,7 @@ async fn a_sink_that_panics_on_the_settlement_has_not_recorded_it() {
         },
     });
     let agent = Agent::prepare(
-        Arc::new(Provider(backend.clone())),
+        Arc::new(Provider(backend.clone(), None)),
         MemoryStorage::default().manager().await,
         Arc::new(Panicking),
     )
@@ -413,7 +431,7 @@ async fn a_sink_that_panics_delivering_the_settlement_has_not_recorded_it() {
         },
     });
     let agent = Agent::prepare(
-        Arc::new(Provider(backend.clone())),
+        Arc::new(Provider(backend.clone(), None)),
         MemoryStorage::default().manager().await,
         Arc::new(PanickingLater),
     )
@@ -506,7 +524,7 @@ async fn effort_audit_timeout_and_caller_loss_preserve_owned_failure_before_prov
             payload_drops: Arc::new(AtomicUsize::new(0)),
         });
         let agent = Agent::prepare(
-            Arc::new(Provider(backend.clone())),
+            Arc::new(Provider(backend.clone(), None)),
             MemoryStorage::default().manager().await,
             audit.clone(),
         )
@@ -566,7 +584,7 @@ fn runtime_cancellation_contains_audit_capture_cleanup_without_deferred_panic_pa
     });
     let agent = runtime.block_on(async {
         let agent = Agent::prepare(
-            Arc::new(Provider(backend.clone())),
+            Arc::new(Provider(backend.clone(), None)),
             MemoryStorage::default().manager().await,
             audit.clone(),
         )

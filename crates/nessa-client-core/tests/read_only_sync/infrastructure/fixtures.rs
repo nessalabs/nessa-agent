@@ -120,6 +120,8 @@ async fn record_fixture(root: &Path, separate_open: bool, count: usize) -> (Scop
             .save_changes(
                 lease.load().await.unwrap().binding().clone(),
                 SessionSnapshot {
+                    model_change: None,
+                    current_configuration: None,
                     id: session.clone(),
                     provider: provider.clone(),
                     provider_context: context.clone(),
@@ -149,6 +151,8 @@ async fn record_fixture(root: &Path, separate_open: bool, count: usize) -> (Scop
         .save_changes(
             lease.load().await.unwrap().binding().clone(),
             SessionSnapshot {
+                model_change: None,
+                current_configuration: None,
                 id: session.clone(),
                 provider,
                 provider_context: context,
@@ -216,6 +220,8 @@ pub(super) async fn source_records_with_artifact(root: &Path) -> (Scope, Vec<Rec
         .save_changes(
             lease.load().await.unwrap().binding().clone(),
             SessionSnapshot {
+                model_change: None,
+                current_configuration: None,
                 id: session.clone(),
                 provider,
                 provider_context: ProviderContext::Absent,

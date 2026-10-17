@@ -6,13 +6,14 @@ use super::view::{
     ConversationLeaseEnvironment, ConversationLeaseRefusal, ConversationLeaseSandbox,
     ConversationLeaseState, ConversationLeaseView, ConversationLifecycle,
     ConversationLifecyclePhase, ConversationMcpTool, ConversationMessage, ConversationMessageApp,
-    ConversationMessageStatus, ConversationNote, ConversationPart, ConversationPending,
-    ConversationPendingMode, ConversationPermission, ConversationPermissionAsk,
-    ConversationPermissionDeadline, ConversationPermissionOption,
-    ConversationPermissionOptionEffect, ConversationPermissionOrigin, ConversationQuestion,
-    ConversationQuestionEntry, ConversationReviewEntry, ConversationReviewKind,
-    ConversationRuntime, ConversationSelectionView, ConversationTool, ConversationTranscriptState,
-    ConversationUnreadable, ConversationView, NativeHooksChoice, MAX_STRUCTURED_CONTENT_BYTES,
+    ConversationMessageStatus, ConversationModelChangeEffect, ConversationModelChangeView,
+    ConversationNote, ConversationPart, ConversationPending, ConversationPendingMode,
+    ConversationPermission, ConversationPermissionAsk, ConversationPermissionDeadline,
+    ConversationPermissionOption, ConversationPermissionOptionEffect, ConversationPermissionOrigin,
+    ConversationQuestion, ConversationQuestionEntry, ConversationReviewEntry,
+    ConversationReviewKind, ConversationRuntime, ConversationSelectionView, ConversationTool,
+    ConversationTranscriptState, ConversationUnreadable, ConversationView, NativeHooksChoice,
+    MAX_STRUCTURED_CONTENT_BYTES,
 };
 use nessa_sdk::application::agent_execution::permissions::CancellationOrigin;
 use nessa_sdk::application::agent_execution::{
@@ -531,6 +532,8 @@ impl Projection {
             view: ConversationView {
                 selection: None,
                 approval_mode_change: None,
+                model_change: None,
+                model_change_effect: None,
                 conversation_id: id,
                 revision: String::new(),
                 messages: Vec::new(),
@@ -661,6 +664,8 @@ impl Projection {
         next.view.runtime = self.view.runtime.clone();
         next.view.lifecycle = self.view.lifecycle.clone();
         next.view.approval_mode_change = self.view.approval_mode_change.clone();
+        next.view.model_change = self.view.model_change.clone();
+        next.view.model_change_effect = self.view.model_change_effect;
         next.view.title = self.view.title.clone();
         next.view.unreadable = committed
             .unreadable()
@@ -804,6 +809,47 @@ impl Projection {
                 ..selection
             });
         }
+    }
+    /// Publish the durably confirmed model and associated settings together.
+    pub fn model_selection(
+        &mut self,
+        model: String,
+        approval_mode: ConversationApprovalMode,
+        effect: ConversationModelChangeEffect,
+    ) {
+        if let Some(selection) = self.view.selection.clone() {
+            let next = ConversationSelectionView {
+                model,
+                approval_mode,
+                ..selection
+            };
+            if self.view.selection.as_ref() != Some(&next)
+                || self.view.model_change_effect != Some(effect)
+            {
+                self.view.selection = Some(next);
+                self.view.model_change_effect = Some(effect);
+                self.bump();
+            }
+        }
+    }
+    /// Retain the committed selection while a correlated request is unsettled.
+    pub fn read_with_model_change(
+        &self,
+        change: Option<ConversationModelChangeView>,
+    ) -> ConversationView {
+        let mut view = self.read_with_mode_change(None);
+        if let Some(change) = change {
+            let digest = Sha256::digest(
+                format!(
+                    "{}:{}:{:?}",
+                    change.request_id, change.requested_model, change.status
+                )
+                .as_bytes(),
+            );
+            view.revision = format!("{}:model:{:x}", view.revision, digest);
+            view.model_change = Some(change);
+        }
+        view
     }
     /// Replace runtime display facts through the same revision owner.
     /// `selection_and_runtime_replacements_own_revision_without_transcript_output`.

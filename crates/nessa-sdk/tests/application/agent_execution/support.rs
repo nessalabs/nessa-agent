@@ -329,6 +329,9 @@ impl ProviderSessionBackend for InMemoryPermissionBackend {
                             ExecutionAuditRecord::EffortLevelChanged(_) => {
                                 panic!("close cannot change the effort level")
                             }
+                            ExecutionAuditRecord::ConfigurationControlled(_) => {
+                                panic!("close cannot issue a native configuration control")
+                            }
                             ExecutionAuditRecord::Attachment(_)
                             | ExecutionAuditRecord::QueueAdmitted(_)
                             | ExecutionAuditRecord::QueueSettled(_)

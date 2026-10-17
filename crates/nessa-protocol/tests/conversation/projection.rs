@@ -2,7 +2,7 @@
 //! The cases that drive `ConversationService` stay in the gateway's
 //! `tests/conversation/projection.rs`.
 use crate::agents::AgentId;
-use crate::conversation::domain::{ConversationApprovalMode, ConversationId};
+use crate::conversation::domain::{ConversationApprovalMode, ConversationId, ConversationModelId};
 use crate::conversation::projection::{
     agent_question, agent_review, bound_view, bound_view_within, clipped, question_entry,
     review_entry, Projection, MAX_LISTED_REVIEWS, MAX_QUESTION_ENTRY_BYTES,
@@ -10,6 +10,7 @@ use crate::conversation::projection::{
     MAX_TEXT, MAX_VIEW_BYTES,
 };
 use crate::conversation::view::{
+    ConversationModelChangeEffect, ConversationModelChangeStatus, ConversationModelChangeView,
     ConversationPermissionAsk, ConversationPermissionOptionEffect, ConversationReviewKind,
     ConversationRuntime, ConversationSelectionView, ConversationTranscriptState,
 };
@@ -365,6 +366,8 @@ fn deadline_cancelled_review(deadline: PermissionReviewDeadline) -> ExecutionEve
 }
 fn review_snapshot(events: Vec<ExecutionEvent>) -> SessionSnapshot {
     SessionSnapshot {
+        model_change: None,
+        current_configuration: None,
         id: SessionId::new("conversation").unwrap(),
         provider: ProviderIdentity::new("fixture", "model", "configuration").unwrap(),
         provider_context: ProviderContext::Recorded(
@@ -1965,6 +1968,29 @@ fn a_bounded_view_keeps_every_question_and_review_it_lists() {
         .collect();
     view.messages.push(message);
     view.title = Some("t".repeat(512));
+    // The current selection and pending change remain beside the full keyed
+    // lists, with the largest encoded identities their admission owners allow.
+    let model = ConversationModelId::new("\"".repeat(ConversationModelId::MAX_BYTES)).unwrap();
+    let actor = ActionContext::new(
+        "person",
+        "panel",
+        "\u{1}".repeat(ActionContext::MAX_IDENTITY_BYTES),
+    )
+    .unwrap();
+    view.selection = Some(ConversationSelectionView {
+        agent: AgentId::Claude,
+        model: model.as_str().to_owned(),
+        approval_mode: ConversationApprovalMode::Full,
+    });
+    view.model_change = Some(ConversationModelChangeView {
+        request_id: actor.request_id().to_owned(),
+        requested_model: model.as_str().to_owned(),
+        status: ConversationModelChangeStatus::RecoveryRequired,
+    });
+    view.model_change_effect = Some(ConversationModelChangeEffect::SubsequentResponses);
+    let selection = view.selection.clone();
+    let model_change = serde_json::to_value(&view.model_change).unwrap();
+    let model_effect = view.model_change_effect;
     view.permissions = (0..MAX_LISTED_REVIEWS)
         .map(|index| {
             review_entry(
@@ -1983,6 +2009,12 @@ fn a_bounded_view_keeps_every_question_and_review_it_lists() {
     assert!(serde_json::to_vec(&view).unwrap().len() <= MAX_VIEW_BYTES);
     assert_eq!(view.permissions, permissions);
     assert_eq!(view.questions, questions);
+    assert_eq!(view.selection, selection);
+    assert_eq!(
+        serde_json::to_value(&view.model_change).unwrap(),
+        model_change
+    );
+    assert_eq!(view.model_change_effect, model_effect);
     assert_eq!(view.interaction_view_error, None);
     assert!(view.truncated);
 }
@@ -3088,4 +3120,79 @@ fn publishing_mode_without_a_selection_does_not_invent_one() {
     projection.approval_mode(ConversationApprovalMode::Auto);
     assert!(projection.read().selection.is_none());
     assert_eq!(projection.read().revision, before.revision);
+}
+
+#[test]
+fn model_selection_publishes_acknowledged_settings_in_one_revision() {
+    let mut projection = projection();
+    projection.selection(ConversationSelectionView {
+        agent: AgentId::Claude,
+        model: "before".into(),
+        approval_mode: ConversationApprovalMode::Auto,
+    });
+    let before = projection.read();
+    projection.model_selection(
+        "after".into(),
+        ConversationApprovalMode::Ask,
+        ConversationModelChangeEffect::SubsequentResponses,
+    );
+    let after = projection.read();
+    assert_ne!(after.revision, before.revision);
+    let selection = after.selection.as_ref().unwrap();
+    assert_eq!(selection.agent, AgentId::Claude);
+    assert_eq!(selection.model, "after");
+    assert_eq!(selection.approval_mode, ConversationApprovalMode::Ask);
+    assert_eq!(
+        after.model_change_effect,
+        Some(ConversationModelChangeEffect::SubsequentResponses)
+    );
+    projection.model_selection(
+        "after".into(),
+        ConversationApprovalMode::Ask,
+        ConversationModelChangeEffect::SubsequentResponses,
+    );
+    assert_eq!(projection.read().revision, after.revision);
+}
+
+#[test]
+fn pending_model_request_retains_confirmed_selection_and_has_its_own_revision() {
+    let mut projection = projection();
+    projection.selection(ConversationSelectionView {
+        agent: AgentId::Codex,
+        model: "confirmed".into(),
+        approval_mode: ConversationApprovalMode::Ask,
+    });
+    let confirmed = projection.read();
+    let pending = |request: &str| {
+        projection.read_with_model_change(Some(ConversationModelChangeView {
+            request_id: request.into(),
+            requested_model: "requested".into(),
+            status: ConversationModelChangeStatus::Changing,
+        }))
+    };
+    let first = pending("first");
+    assert_eq!(first.selection, confirmed.selection);
+    assert_eq!(
+        first.model_change.as_ref().unwrap().requested_model,
+        "requested"
+    );
+    assert_ne!(first.revision, confirmed.revision);
+    assert_eq!(first.revision, pending("first").revision);
+    assert_ne!(first.revision, pending("second").revision);
+    assert_eq!(projection.read().revision, confirmed.revision);
+}
+
+#[test]
+fn publishing_model_without_a_selection_does_not_invent_one() {
+    let mut projection = projection();
+    let before = projection.read();
+    projection.model_selection(
+        "model".into(),
+        ConversationApprovalMode::Ask,
+        ConversationModelChangeEffect::NextTurn,
+    );
+    let after = projection.read();
+    assert!(after.selection.is_none());
+    assert!(after.model_change_effect.is_none());
+    assert_eq!(after.revision, before.revision);
 }

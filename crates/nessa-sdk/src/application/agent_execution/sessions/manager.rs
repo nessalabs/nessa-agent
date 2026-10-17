@@ -1,3 +1,9 @@
+use crate::application::agent_execution::providers::ModelChangeRecord;
+use crate::application::agent_execution::providers::ModelConfiguration;
+use crate::application::agent_execution::providers::SessionConfigurationKind;
+use crate::application::agent_execution::providers::SessionConfigurationRecord;
+use crate::application::agent_execution::providers::{ModelChange, ModelChangeTiming};
+
 use super::{
     app_sources,
     artifacts::ArtifactRefusal,
@@ -28,7 +34,7 @@ use crate::application::agent_execution::{
 use crate::domain::agent_execution::{
     executions::{
         ExecutionId, ExecutionOutcome, Initiation, InvocationHistory, InvocationKind,
-        InvocationObservation, QueueMutation, QueueOrderChange, SchedulingCause,
+        InvocationObservation, InvocationStage, QueueMutation, QueueOrderChange, SchedulingCause,
     },
     permissions::PermissionRequest,
     prompts::NoteContext,
@@ -418,6 +424,173 @@ impl SessionManager {
     pub(crate) async fn await_admission_writes(&self) {
         drop(self.evidence.lock().await);
     }
+    pub(crate) async fn record_configuration(
+        &self,
+        initial_before: ModelConfiguration,
+        after: ModelConfiguration,
+        actor: ActionContext,
+        kind: SessionConfigurationKind,
+    ) -> Result<(), StorageError> {
+        let mut evidence = self.evidence.lock().await;
+        let snapshot = evidence.observed.as_mut().ok_or_else(|| {
+            StorageError::Corrupt("configuration change before preparation".into())
+        })?;
+        let record = SessionConfigurationRecord::new(
+            Some(
+                snapshot
+                    .current_configuration
+                    .as_ref()
+                    .map_or(initial_before, |record| record.after().clone()),
+            ),
+            after,
+            actor,
+            kind,
+        );
+        snapshot.current_configuration = Some(record.clone());
+        evidence.push_change(SessionChange::ConfigurationChanged(record));
+        catch_storage_operation(|| Box::pin(self.save_observed(&mut evidence))).await
+    }
+
+    /// Read the latest committed attributed settings without opening a provider.
+    ///
+    /// # Errors
+    /// Returns storage validation failures or Unresolved for an unfinished save.
+    pub async fn saved_configuration(
+        &self,
+    ) -> Result<Option<SessionConfigurationRecord>, AgentError> {
+        let saved = catch_storage_operation(|| self.storage_lease.load())
+            .await
+            .map_err(AgentError::Storage)?;
+        if saved.state() == SessionLoadState::Unfinished {
+            return Err(AgentError::Storage(StorageError::Unresolved));
+        }
+        let (snapshot, _) = saved.into_checked(&self.id).map_err(AgentError::Storage)?;
+        Ok(snapshot.and_then(|snapshot| snapshot.current_configuration))
+    }
+
+    /// Read the last committed attributed model transition without opening a provider.
+    ///
+    /// # Errors
+    /// Returns storage validation failures or Unresolved for an unfinished save.
+    pub async fn saved_model_change(&self) -> Result<Option<ModelChangeRecord>, AgentError> {
+        let saved = catch_storage_operation(|| self.storage_lease.load())
+            .await
+            .map_err(AgentError::Storage)?;
+        if saved.state() == SessionLoadState::Unfinished {
+            return Err(AgentError::Storage(StorageError::Unresolved));
+        }
+        let (snapshot, _) = saved.into_checked(&self.id).map_err(AgentError::Storage)?;
+        Ok(snapshot.and_then(|snapshot| snapshot.model_change))
+    }
+
+    /// Change an unattached history's model selection before preparing its next Agent.
+    /// This is explicit selection authority, not a relaxation of normal restore identity.
+    /// The exact provider context, inputs and observations are retained unchanged.
+    ///
+    /// # Errors
+    /// Refuses a manager already prepared, unfinished writes, another prior identity,
+    /// queued or active history, and storage failures. An empty history needs no
+    /// rebinding and is left empty for the next Agent to initialize.
+    pub async fn change_model(
+        &mut self,
+        change: ModelChange,
+        actor: ActionContext,
+    ) -> Result<(), AgentError> {
+        if self.evidence.lock().await.observed.is_some() || self.attachment.needs_cleanup() {
+            return Err(AgentError::Busy);
+        }
+        let saved = catch_storage_operation(|| self.storage_lease.load())
+            .await
+            .map_err(AgentError::Storage)?;
+        if saved.state() == SessionLoadState::Unfinished {
+            return Err(AgentError::Storage(StorageError::Unresolved));
+        }
+        let (saved, generation) = saved.into_checked(&self.id).map_err(AgentError::Storage)?;
+        let Some(mut snapshot) = saved else {
+            return Ok(());
+        };
+        if &snapshot.provider != change.before() {
+            return Err(AgentError::Storage(StorageError::IdentityMismatch));
+        }
+        let pending = super::queue_validation::replay(&snapshot).map_err(AgentError::Storage)?;
+        if !pending.is_empty()
+            || snapshot.invocations.iter().any(|record| {
+                record.scheduling.last().is_some_and(|edge| {
+                    matches!(
+                        edge.stage,
+                        InvocationStage::Queued
+                            | InvocationStage::Running
+                            | InvocationStage::Injected
+                    )
+                }) || (record.scheduling.is_empty() && record.result.is_none())
+            })
+        {
+            return Err(AgentError::Busy);
+        }
+        let configuration = change.requested_configuration().clone();
+        snapshot.provider = change.after().clone();
+        let record =
+            ModelChangeRecord::new(change.clone(), actor.clone(), configuration.clone(), None);
+        snapshot.current_configuration = Some(SessionConfigurationRecord::new(
+            Some(snapshot.current_configuration.as_ref().map_or_else(
+                || record.change().prior_configuration().clone(),
+                |record| record.after().clone(),
+            )),
+            configuration,
+            actor,
+            SessionConfigurationKind::Model,
+        ));
+        snapshot.model_change = Some(record.clone());
+        let unit = SessionSaveUnit::new(vec![SessionChange::ModelChanged(record)])
+            .map_err(AgentError::Storage)?;
+        let receipt = catch_storage_operation(|| {
+            self.storage_lease
+                .save_changes(generation.clone(), snapshot, vec![unit])
+        })
+        .await
+        .map_err(AgentError::Storage)?;
+        receipt
+            .next_for(&generation, 1)
+            .map_err(AgentError::Storage)?;
+        Ok(())
+    }
+
+    /// Record one provider-acknowledged model choice while retaining this history and context.
+    pub(crate) async fn record_model_change(
+        &self,
+        change: ModelChange,
+        configuration: ModelConfiguration,
+        timing: ModelChangeTiming,
+        actor: ActionContext,
+    ) -> Result<(), StorageError> {
+        let mut evidence = self.evidence.lock().await;
+        let snapshot = evidence.observed.as_mut().ok_or_else(|| {
+            StorageError::Corrupt("model change before session preparation".into())
+        })?;
+        if &snapshot.provider != change.before() {
+            return Err(StorageError::IdentityMismatch);
+        }
+        snapshot.provider = change.after().clone();
+        let record = ModelChangeRecord::new(
+            change.clone(),
+            actor.clone(),
+            configuration.clone(),
+            Some(timing),
+        );
+        snapshot.current_configuration = Some(SessionConfigurationRecord::new(
+            Some(snapshot.current_configuration.as_ref().map_or_else(
+                || record.change().prior_configuration().clone(),
+                |record| record.after().clone(),
+            )),
+            configuration,
+            actor,
+            SessionConfigurationKind::Model,
+        ));
+        snapshot.model_change = Some(record.clone());
+        evidence.push_change(SessionChange::ModelChanged(record));
+        catch_storage_operation(|| Box::pin(self.save_observed(&mut evidence))).await
+    }
+
     pub(crate) async fn prepare(
         &mut self,
         provider: &dyn AgentProvider,
@@ -448,6 +621,8 @@ impl SessionManager {
         }
         let created = compacted.is_none();
         let mut snapshot = compacted.unwrap_or_else(|| SessionSnapshot {
+            model_change: None,
+            current_configuration: None,
             queue_history: Vec::new(),
             lease: None,
             artifacts: Vec::new(),
@@ -650,7 +825,7 @@ impl SessionManager {
                 },
             ));
         }
-        if opened.session.capabilities() != provider.capabilities() {
+        if &opened.session.capabilities() != provider.capabilities() {
             self.attachment
                 .arm(
                     self.storage_lease.clone(),

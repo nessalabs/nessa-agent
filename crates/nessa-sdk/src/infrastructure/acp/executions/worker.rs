@@ -1,3 +1,9 @@
+use crate::application::agent_execution::permissions::PermissionCaller;
+use crate::application::agent_execution::permissions::RememberError;
+use crate::application::agent_execution::providers::ModelChange;
+use crate::application::agent_execution::providers::ModelChangeEffect;
+use crate::domain::model_metadata::value_objects::EffortLevel;
+
 use super::super::{
     fields,
     permissions::{wire as permission_wire, workspace::bounded_review_class},
@@ -1573,11 +1579,14 @@ impl<P: AcpProfile> Worker<P> {
                 Command::ExecutionRequest(_, reply) => {
                     let _ = reply.send(ProviderExecutionReply::Rejected(AgentError::Closed));
                 }
-                Command::Steer(_, _, reply) => {
+                Command::Steer(_, _, _, reply) => {
                     let _ = reply.send(Err(ProviderOperationFailure::new(
                         AgentError::Closed,
                         ProviderSessionState::CleanupRequired,
                     )));
+                }
+                Command::SetModel(_, reply) => {
+                    let _ = reply.send(Err(AgentError::Closed));
                 }
                 Command::SetApprovalMode(_, reply) | Command::SetEffortLevel(_, reply) => {
                     let _ = reply.send(Err(AgentError::Closed));
@@ -1708,6 +1717,7 @@ impl<P: AcpProfile> Worker<P> {
         command: Command,
     ) -> Result<(), WorkerFailure> {
         match command {
+            Command::SetModel(target, reply) => self.set_model(execution, *target, reply).await,
             Command::SetEffortLevel(level, reply) => {
                 self.set_effort_level(execution, level, reply).await
             }
@@ -1717,8 +1727,8 @@ impl<P: AcpProfile> Worker<P> {
             Command::ExecutionRequest(prompt, reply) => {
                 self.dispatch_execution(execution, prompt, reply).await
             }
-            Command::Steer(target, prompt, reply) => {
-                self.dispatch_steering(execution, target, prompt, reply)
+            Command::Steer(target, prompt, capabilities, reply) => {
+                self.dispatch_steering(execution, target, prompt, *capabilities, reply)
                     .await
             }
             Command::CancelPermission(input, reply) => {
@@ -1794,16 +1804,61 @@ impl<P: AcpProfile> Worker<P> {
         let _ = reply.send(result);
         Ok(())
     }
+    async fn set_model(
+        &mut self,
+        execution: &mut ExecutionController,
+        target: (ModelChange, EffectiveCapabilities),
+        reply: tokio::sync::oneshot::Sender<Result<ModelChangeEffect, AgentError>>,
+    ) -> Result<(), WorkerFailure> {
+        let (change, capabilities) = target;
+        let params = match self
+            .profile
+            .change_model(execution.id().as_str(), &capabilities)
+        {
+            Ok(params) => params,
+            Err(error) => {
+                let _ = reply.send(Err(error));
+                return Ok(());
+            }
+        };
+        // Notifications can report model-induced mode/effort adjustments before
+        // the response. Admit them against the target model; the final response
+        // must establish one complete confirmed configuration.
+        self.capabilities = capabilities.clone();
+        self.configured = false;
+        let deadline = self.config.clock.now() + super::steering::RESPONSE_TIMEOUT;
+        let result = self
+            .rpc(
+                "session/set_config_option",
+                params,
+                deadline,
+                Some(execution),
+            )
+            .await
+            .and_then(|result| {
+                let (mode, effort, timing) = self.profile.confirm_model(&result, &capabilities)?;
+                let levels =
+                    thought_level::offered(&result, &capabilities, self.profile.effort_option())?;
+                self.operation_capabilities
+                    .send_modify(|published| published.effort_levels = levels);
+                self.configured = true;
+                Ok(ModelChangeEffect::new(
+                    change.after().clone(),
+                    capabilities,
+                    Some(mode),
+                    effort,
+                    timing,
+                ))
+            });
+        let _ = reply.send(result.clone());
+        result.map(|_| ()).map_err(WorkerFailure::from)
+    }
     async fn set_approval_mode(
         &mut self,
         execution: &mut ExecutionController,
         mode: ApprovalMode,
         reply: tokio::sync::oneshot::Sender<Result<(), AgentError>>,
     ) -> Result<(), WorkerFailure> {
-        if self.active.is_some() || !self.permissions.is_empty() {
-            let _ = reply.send(Err(AgentError::Busy));
-            return Ok(());
-        }
         let params = match self
             .profile
             .change_approval_mode(execution.id().as_str(), mode)
@@ -1835,7 +1890,7 @@ impl<P: AcpProfile> Worker<P> {
     async fn set_effort_level(
         &mut self,
         execution: &mut ExecutionController,
-        level: crate::domain::model_metadata::value_objects::EffortLevel,
+        level: EffortLevel,
         reply: tokio::sync::oneshot::Sender<Result<(), AgentError>>,
     ) -> Result<(), WorkerFailure> {
         if self.active.is_some() || !self.permissions.is_empty() {
@@ -1999,6 +2054,7 @@ impl<P: AcpProfile> Worker<P> {
         execution: &mut ExecutionController,
         target: ExecutionId,
         prompt: DispatchedPrompt,
+        capabilities: EffectiveCapabilities,
         reply: SteeringReply,
     ) -> Result<(), WorkerFailure> {
         let readiness = self
@@ -2018,7 +2074,7 @@ impl<P: AcpProfile> Worker<P> {
         if reply.is_closed() {
             return Ok(());
         }
-        if let Some(answer) = self.steering_without_sending(&target, &prompt.input) {
+        if let Some(answer) = self.steering_without_sending(&target, &prompt.input, &capabilities) {
             let _ = reply.send(answer);
             return Ok(());
         }
@@ -2091,6 +2147,7 @@ impl<P: AcpProfile> Worker<P> {
         &self,
         target: &ExecutionId,
         input: &ExecutionRequest,
+        capabilities: &EffectiveCapabilities,
     ) -> Option<ProviderOperationResult<SteeringOutcome>> {
         if self.close_requested.borrow().is_some() {
             return Some(Err(ProviderOperationFailure::new(
@@ -2113,7 +2170,7 @@ impl<P: AcpProfile> Worker<P> {
                 ProviderSessionState::Usable,
             )));
         }
-        match self.profile.validate_execution(input, &self.capabilities) {
+        match self.profile.validate_execution(input, capabilities) {
             Ok(()) => None,
             Err(error) => Some(Err(ProviderOperationFailure::new(
                 error,
@@ -2245,10 +2302,10 @@ impl<P: AcpProfile> Worker<P> {
                 execution_id: &answer.execution_id,
             })
             .map_err(|error| match error {
-                crate::application::agent_execution::permissions::RememberError::Refused => {
+                RememberError::Refused => {
                     AgentError::InvalidInput("only the owner can remember a permission".into())
                 }
-                crate::application::agent_execution::permissions::RememberError::Unavailable => {
+                RememberError::Unavailable => {
                     AgentError::InvalidInput("the permission rule could not be stored".into())
                 }
             })?;
@@ -2999,7 +3056,7 @@ impl<P: AcpProfile> Worker<P> {
         let ruled = if !hold && owner_turn {
             if specific { source } else { None }.and_then(|source| {
                 self.config.permission_rules.settle(
-                    crate::application::agent_execution::permissions::PermissionCaller::Owner,
+                    PermissionCaller::Owner,
                     workspace,
                     source,
                     &tool_name,
@@ -3124,9 +3181,9 @@ impl<P: AcpProfile> Worker<P> {
             .permission_rules
             .offers_remember(self.conversation_scope(), &context.execution)
         {
-            crate::application::agent_execution::permissions::PermissionCaller::Owner
+            PermissionCaller::Owner
         } else {
-            crate::application::agent_execution::permissions::PermissionCaller::Grant
+            PermissionCaller::Grant
         };
         let rule = self
             .config

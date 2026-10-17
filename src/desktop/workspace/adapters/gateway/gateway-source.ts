@@ -1845,6 +1845,8 @@ function reasonFor(
     // audit that did not answer, an outcome the gateway could not settle.
     case ConversationErrorCode.ApprovalModeNotApplied:
     case ConversationErrorCode.ApprovalModeUncertain:
+    case ConversationErrorCode.ModelChangeNotApplied:
+    case ConversationErrorCode.ModelChangeUncertain:
     case ConversationErrorCode.ApprovalRequestConflict:
     case ConversationErrorCode.TurnRunning:
     case ConversationErrorCode.ConversationCapacity:

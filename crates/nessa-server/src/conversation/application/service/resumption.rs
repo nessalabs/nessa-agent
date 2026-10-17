@@ -303,9 +303,11 @@ impl ConversationService {
         let Some(live) = waiting.upgrade() else {
             return false;
         };
-        // Its approval mode is not settled: nothing runs until it is, and
-        // the next opening resumes it.
-        if !matches!(self.inner.metadata.pending_mode_change(id).await, Ok(None)) {
+        // Its selection is not settled: nothing runs until configuration
+        // evidence is reconciled by its normal owner, then a later resume tries.
+        if !matches!(self.inner.metadata.pending_mode_change(id).await, Ok(None))
+            || !matches!(self.inner.metadata.pending_model_change(id).await, Ok(None))
+        {
             return false;
         }
         let Ok(actor) = ActionContext::new("gateway", "resume_owed", Uuid::new_v4().to_string())

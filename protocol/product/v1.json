@@ -216,7 +216,7 @@
         "methods": {
           "type": "array",
           "items": { "type": "string" },
-          "maxItems": 77,
+          "maxItems": 78,
           "description": "Registered product methods; permission is checked for every command."
         }
       },
@@ -1687,6 +1687,14 @@
         "approvalModeChange": {
           "$ref": "#/$defs/ApprovalModeChange",
           "description": "Present while a change is in progress or recovery is required."
+        },
+        "modelChange": {
+          "$ref": "#/$defs/ModelChange",
+          "description": "Pending correlated model change; the confirmed selection remains authoritative."
+        },
+        "modelChangeEffect": {
+          "$ref": "#/$defs/ModelChangeEffect",
+          "description": "Native effect boundary of the last confirmed model change."
         }
       },
       "required": [
@@ -1792,7 +1800,7 @@
           "minLength": 1,
           "maxLength": 256,
           "x-utf8MaxBytes": 256,
-          "description": "Catalog model identifier fixed at first creation; ignored on reopen."
+          "description": "Initial catalog model identifier; ignored on reopen. Use conversation.setModel to change an existing chat."
         },
         "approvalMode": {
           "$ref": "#/$defs/ApprovalMode",
@@ -4128,6 +4136,8 @@
         "approval_mode_unavailable",
         "approval_mode_not_applied",
         "approval_mode_uncertain",
+        "model_change_not_applied",
+        "model_change_uncertain",
         "approval_request_conflict",
         "turn_running",
         "conversations_not_configured",
@@ -4600,7 +4610,7 @@
     "ConversationSetApprovalModeParams": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Change a conversation approval preset while no turn runs.",
+      "description": "Change a conversation approval preset using the native harness boundary; existing reviews are not answered by this command.",
       "properties": {
         "conversationId": {
           "type": "string",
@@ -6933,6 +6943,97 @@
       },
       "required": ["subscriptionId", "cursor", "events"],
       "description": "An ordered bounded semantic event batch. An empty batch advances the checkpoint past filtered facts. Application checkpoints belong to the consumer."
+    },
+    "ConversationSetModelParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Change the model within the existing provider session, including while a turn runs. Effect timing follows the provider.",
+      "properties": {
+        "conversationId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization."
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Stable action identifier retained for retries of one logical command."
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Exact model identifier within the conversation provider."
+        }
+      },
+      "required": ["conversationId", "requestId", "model"]
+    },
+    "ConversationSetModelResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Durably confirmed model and approval preset, with native effect timing.",
+      "properties": {
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Original action identifier."
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Exact model identifier within the conversation provider."
+        },
+        "approvalMode": {
+          "$ref": "#/$defs/ApprovalMode",
+          "description": "Approval preset acknowledged with the model selection."
+        },
+        "effect": {
+          "$ref": "#/$defs/ModelChangeEffect",
+          "description": "Native boundary at which this selection takes effect."
+        }
+      },
+      "required": ["requestId", "model", "approvalMode", "effect"]
+    },
+    "ModelChangeEffect": {
+      "type": "string",
+      "enum": ["subsequentResponses", "nextTurn"],
+      "description": "The native harness boundary at which acknowledged settings affect work. This does not relabel an already running turn."
+    },
+    "ModelChange": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "A model change in progress or awaiting recovery; the last confirmed model remains separate.",
+      "properties": {
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Correlated action identifier."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["changing", "recovery_required"],
+          "description": "Turn admission state."
+        },
+        "requestedModel": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Exact model identifier within the conversation provider."
+        }
+      },
+      "required": ["requestId", "requestedModel", "status"]
     }
   }
 }

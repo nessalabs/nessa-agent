@@ -572,3 +572,6 @@ async fn a_retry_whose_agent_cannot_attach_yet_is_tried_again() {
     service.shutdown().await.unwrap();
     tokio::time::timeout(BOUND, retries).await.unwrap().unwrap();
 }
+
+#[path = "resumption/model_controls.rs"]
+mod model_controls;

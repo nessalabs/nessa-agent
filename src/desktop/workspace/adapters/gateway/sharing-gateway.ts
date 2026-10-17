@@ -98,6 +98,8 @@ const conversationFailure: Record<ConversationErrorCode, SharingFailure> = {
   [ConversationErrorCode.ApprovalModeUnavailable]: "other",
   [ConversationErrorCode.ApprovalModeNotApplied]: "other",
   [ConversationErrorCode.ApprovalModeUncertain]: "other",
+  [ConversationErrorCode.ModelChangeNotApplied]: "other",
+  [ConversationErrorCode.ModelChangeUncertain]: "other",
   [ConversationErrorCode.ApprovalRequestConflict]: "other",
   [ConversationErrorCode.TurnRunning]: "other",
   [ConversationErrorCode.UnknownMethod]: "other",

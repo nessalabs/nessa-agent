@@ -7,6 +7,9 @@ use super::{
     ProviderSessionErasers, RequestedAgent, RequestedConversation, RuntimeReadiness,
     SubmissionMode, SubmittedMessage, UnfinishedDeletions,
 };
+use crate::conversation::application::{
+    ConversationModelApplication, ConversationModelRequest, ConversationModelRequestState,
+};
 use crate::{
     conversation::domain::{Conversation, ConversationDeletion},
     conversation_test_support::{
@@ -28,6 +31,7 @@ use nessa_protocol::{
 };
 use nessa_sdk::application::agent_execution::permissions::PermissionCaller;
 use nessa_sdk::application::agent_execution::providers::ApprovalMode as ProviderApprovalMode;
+use nessa_sdk::application::agent_execution::providers::HarnessHostIdentity;
 use nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock;
 use nessa_sdk::{
     application::agent_execution::executions::{
@@ -259,7 +263,7 @@ async fn another_owner_cannot_trigger_pending_mode_recovery_by_reading() {
 }
 
 #[tokio::test]
-async fn audit_failure_after_live_application_restores_the_prior_mode() {
+async fn audit_failure_after_live_application_recovers_the_attributed_sdk_choice() {
     let (service, provider, records, _, mode_audit) = mode_fixture();
     let conversation_id = id();
     service
@@ -290,7 +294,7 @@ async fn audit_failure_after_live_application_restores_the_prior_mode() {
             .unwrap()
             .unwrap()
             .approval_mode(),
-        ConversationApprovalMode::Ask
+        ConversationApprovalMode::Auto
     );
     assert!(records
         .pending_mode_change(&conversation_id)
@@ -306,7 +310,7 @@ async fn audit_failure_after_live_application_restores_the_prior_mode() {
         .lock()
         .unwrap()
         .iter()
-        .any(|(_, phase)| { *phase == super::ConversationModeAuditPhase::RecoveryRestored }));
+        .any(|(_, phase)| { *phase == super::ConversationModeAuditPhase::RecoveryApplied }));
     service.shutdown().await.unwrap();
 }
 
@@ -380,7 +384,7 @@ async fn a_pending_recovery_view_keeps_the_committed_mode_separate_from_the_requ
     assert!(recovered.approval_mode_change.is_none());
     assert_eq!(
         recovered.selection.unwrap().approval_mode,
-        ConversationApprovalMode::Ask
+        ConversationApprovalMode::Auto
     );
     service.shutdown().await.unwrap();
 }
@@ -409,12 +413,12 @@ async fn failed_session_retirement_keeps_mode_recovery_pending_without_a_second_
             .await,
         Err(ConversationError::ApprovalModeUncertain)
     ));
-    let pending = service
-        .read(conversation_id.clone(), caller("panel", "read-pending"))
-        .await
-        .unwrap();
-    assert!(pending.approval_mode_change.is_some());
-    assert!(!pending.capabilities.queue);
+    assert!(matches!(
+        service
+            .read(conversation_id.clone(), caller("panel", "read-pending"))
+            .await,
+        Err(ConversationError::Agent(AgentError::Closed))
+    ));
     assert_eq!(provider.open_calls.load(Ordering::SeqCst), 1);
     assert!(records
         .pending_mode_change(&conversation_id)
@@ -524,7 +528,7 @@ async fn a_lost_commit_acknowledgement_uses_the_durable_terminal_result() {
 }
 
 #[tokio::test]
-async fn an_uncommitted_mode_change_recovers_the_prior_choice() {
+async fn an_uncommitted_mode_change_recovers_the_attributed_native_choice() {
     let (service, provider, records, _, _) = mode_fixture();
     let conversation_id = id();
     service
@@ -555,7 +559,7 @@ async fn an_uncommitted_mode_change_recovers_the_prior_choice() {
             .unwrap()
             .unwrap()
             .approval_mode(),
-        ConversationApprovalMode::Ask
+        ConversationApprovalMode::Auto
     );
     assert!(records
         .pending_mode_change(&conversation_id)
@@ -697,7 +701,7 @@ async fn caller_loss_does_not_cancel_a_mode_change_or_let_close_pass_its_commit(
 }
 
 #[tokio::test]
-async fn a_mode_change_after_a_turn_is_running_is_audited_and_refused() {
+async fn a_mode_change_during_an_owner_turn_is_applied_and_audited_without_retirement() {
     let (service, provider, _, _, mode_audit) = mode_fixture();
     let conversation_id = id();
     service
@@ -732,9 +736,14 @@ async fn a_mode_change_after_a_turn_is_running_is_audited_and_refused() {
                 ConversationApprovalMode::Auto,
             )
             .await,
-        Err(ConversationError::TurnRunning)
+        Ok(ConversationApprovalMode::Auto)
     ));
-    assert!(provider.mode_updates.lock().unwrap().is_empty());
+    assert_eq!(
+        provider.mode_updates.lock().unwrap().as_slice(),
+        &[ProviderApprovalMode::Auto]
+    );
+    assert_eq!(provider.close_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(provider.cancel_calls.load(Ordering::SeqCst), 0);
     assert!(mode_audit
         .records
         .lock()
@@ -742,7 +751,7 @@ async fn a_mode_change_after_a_turn_is_running_is_audited_and_refused() {
         .iter()
         .any(|(request, phase)| {
             request.request_id == "mode-auto"
-                && *phase == super::ConversationModeAuditPhase::AdmissionRefused
+                && *phase == super::ConversationModeAuditPhase::Application
         }));
     release.send(()).unwrap();
     completed(&service, &conversation_id, 1).await;
@@ -750,7 +759,7 @@ async fn a_mode_change_after_a_turn_is_running_is_audited_and_refused() {
 }
 
 #[tokio::test]
-async fn a_pending_permission_keeps_mode_changes_out_of_the_provider() {
+async fn a_pending_permission_keeps_its_identity_when_a_preset_changes() {
     let (service, provider, _, _, mode_audit) = mode_fixture();
     provider.request_permission.store(1, Ordering::SeqCst);
     let (release, gate) = oneshot::channel();
@@ -801,9 +810,23 @@ async fn a_pending_permission_keeps_mode_changes_out_of_the_provider() {
                 ConversationApprovalMode::Auto,
             )
             .await,
-        Err(ConversationError::TurnRunning)
+        Ok(ConversationApprovalMode::Auto)
     ));
-    assert!(provider.mode_updates.lock().unwrap().is_empty());
+    assert_eq!(
+        provider.mode_updates.lock().unwrap().as_slice(),
+        &[ProviderApprovalMode::Auto]
+    );
+    assert_eq!(
+        service
+            .read(conversation_id.clone(), caller("panel", "read-after-mode"))
+            .await
+            .unwrap()
+            .permissions
+            .len(),
+        1
+    );
+    assert!(provider.permission_answers.lock().unwrap().is_empty());
+    assert_eq!(provider.close_calls.load(Ordering::SeqCst), 0);
     assert!(mode_audit
         .records
         .lock()
@@ -811,7 +834,7 @@ async fn a_pending_permission_keeps_mode_changes_out_of_the_provider() {
         .iter()
         .any(|(request, phase)| {
             request.request_id == "change-during-permission"
-                && *phase == super::ConversationModeAuditPhase::AdmissionRefused
+                && *phase == super::ConversationModeAuditPhase::Application
         }));
     release.send(()).unwrap();
     completed(&service, &conversation_id, 1).await;
@@ -863,6 +886,21 @@ async fn a_cold_open_recovers_an_unfinished_intent_from_the_committed_mode() {
         )
         .await
         .unwrap();
+    let (pending, _) = service
+        .read_at(
+            conversation_id.clone(),
+            caller("panel", "cold-follow"),
+            super::ReadOpening::LiveOnly,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        pending.selection.unwrap().approval_mode,
+        ConversationApprovalMode::Ask
+    );
+    assert!(pending.approval_mode_change.is_some());
+    assert!(!pending.capabilities.queue && !pending.capabilities.permissions);
+    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 0);
     let view = service
         .read(conversation_id.clone(), caller("panel", "cold-read"))
         .await
@@ -2820,6 +2858,43 @@ struct GatedCreateRepository {
     started: Notify,
 }
 impl ConversationRepository for GatedCreateRepository {
+    fn begin_model_change(
+        &self,
+        request: ConversationModelRequest,
+    ) -> ConversationFuture<'_, ConversationModelRequest> {
+        self.inner.begin_model_change(request)
+    }
+    fn pending_model_change(
+        &self,
+        id: &ConversationId,
+    ) -> ConversationFuture<'_, Option<ConversationModelRequest>> {
+        self.inner.pending_model_change(id)
+    }
+    fn model_change(
+        &self,
+        id: &ConversationId,
+        request_id: &str,
+    ) -> ConversationFuture<'_, Option<ConversationModelRequest>> {
+        self.inner.model_change(id, request_id)
+    }
+    fn observe_model_application(
+        &self,
+        id: &ConversationId,
+        request_id: &str,
+        application: ConversationModelApplication,
+    ) -> ConversationFuture<'_, ConversationModelRequest> {
+        self.inner
+            .observe_model_application(id, request_id, application)
+    }
+    fn finish_model_change(
+        &self,
+        id: &ConversationId,
+        request_id: &str,
+        state: ConversationModelRequestState,
+    ) -> ConversationFuture<'_, ConversationModelRequest> {
+        self.inner.finish_model_change(id, request_id, state)
+    }
+
     fn load(&self, id: &ConversationId) -> ConversationFuture<'_, Option<Conversation>> {
         self.inner.load(id)
     }
@@ -2963,6 +3038,9 @@ struct FailOnceProvider {
     delegate: Provider,
 }
 impl AgentProvider for FailOnceProvider {
+    fn harness_host_identity(&self) -> HarnessHostIdentity<'_> {
+        self.delegate.harness_host_identity()
+    }
     fn identity(&self) -> ProviderIdentity {
         self.delegate.identity()
     }
@@ -3062,6 +3140,9 @@ struct UncertainOpenProvider {
     capabilities: EffectiveCapabilities,
 }
 impl AgentProvider for UncertainOpenProvider {
+    fn harness_host_identity(&self) -> HarnessHostIdentity<'_> {
+        HarnessHostIdentity::local()
+    }
     fn identity(&self) -> ProviderIdentity {
         self.identity.clone()
     }
@@ -3591,6 +3672,9 @@ struct StartupDeadlineOnceProvider {
     delegate: Provider,
 }
 impl AgentProvider for StartupDeadlineOnceProvider {
+    fn harness_host_identity(&self) -> HarnessHostIdentity<'_> {
+        self.delegate.harness_host_identity()
+    }
     fn identity(&self) -> ProviderIdentity {
         self.delegate.identity()
     }
@@ -3694,6 +3778,9 @@ struct UncertainStartupDeadlineProvider {
     capabilities: EffectiveCapabilities,
 }
 impl AgentProvider for UncertainStartupDeadlineProvider {
+    fn harness_host_identity(&self) -> HarnessHostIdentity<'_> {
+        HarnessHostIdentity::local()
+    }
     fn identity(&self) -> ProviderIdentity {
         self.identity.clone()
     }
@@ -4299,6 +4386,8 @@ async fn changed_configuration_retains_history_and_reports_exact_opening_failure
     let session_id = SessionId::new(id.to_string()).unwrap();
     let lease = storage.open(session_id.clone()).await.unwrap();
     let saved = SessionSnapshot {
+        model_change: None,
+        current_configuration: None,
         id: session_id.clone(),
         provider: ProviderIdentity::new("gateway-test", "test", "previous-config").unwrap(),
         provider_context: ProviderContext::Recorded(

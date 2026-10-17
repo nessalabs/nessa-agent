@@ -90,6 +90,8 @@ pub fn error_code(error: &ConversationError) -> ConversationErrorCode {
         }
         ConversationError::RequestConflict => ConversationErrorCode::ApprovalRequestConflict,
         ConversationError::TurnRunning => ConversationErrorCode::TurnRunning,
+        ConversationError::ModelChangeNotApplied => ConversationErrorCode::ModelChangeNotApplied,
+        ConversationError::ModelChangeUncertain => ConversationErrorCode::ModelChangeUncertain,
         ConversationError::ApprovalModeNotApplied => ConversationErrorCode::ApprovalModeNotApplied,
         ConversationError::ApprovalModeUncertain => ConversationErrorCode::ApprovalModeUncertain,
         ConversationError::Capacity => ConversationErrorCode::ConversationCapacity,

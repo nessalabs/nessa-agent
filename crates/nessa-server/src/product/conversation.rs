@@ -13,10 +13,11 @@ use crate::conversation::application::{
 use base64::Engine as _;
 use nessa_auth::application::session::{AuthenticatedSession, ReadCurrentSession};
 use nessa_auth::domain::MembershipRole;
+use nessa_protocol::conversation::domain::ConversationModelId;
 use nessa_protocol::conversation::projection::CommittedCursor;
 use nessa_protocol::conversation::view::{
-    ConversationList, ConversationObservation, ConversationObservationCursor,
-    ConversationView as ApplicationConversationView,
+    ConversationList, ConversationModelChangeEffect, ConversationObservation,
+    ConversationObservationCursor, ConversationView as ApplicationConversationView,
 };
 use nessa_protocol::product::generated::{
     ApprovalMode as WireApprovalMode, ConversationAnswerParams, ConversationAnswerQuestionParams,
@@ -33,7 +34,8 @@ use nessa_protocol::product::generated::{
     ConversationReceiptResult, ConversationRemoveParams, ConversationReorderParams,
     ConversationRevokePermissionRuleParams, ConversationRevokePermissionRuleResult,
     ConversationSendParams, ConversationSetApprovalModeParams, ConversationSetApprovalModeResult,
-    ConversationStopParams, ConversationSummary, ConversationView as WireConversationView,
+    ConversationSetModelParams, ConversationSetModelResult, ConversationStopParams,
+    ConversationSummary, ConversationView as WireConversationView, ModelChangeEffect,
     PermissionRule, PermissionRuleEffect, MAX_REVIEW_RANGE_BYTES,
 };
 use nessa_protocol::product::generated::{
@@ -168,6 +170,35 @@ pub(crate) async fn dispatch(
                 let (view, _) =
                     read_view(state, service, session, &id, &frame.id, ReadOpening::Open).await?;
                 Ok(success(&frame.id, &view))
+            }
+            "conversation.setModel" => {
+                let params = target_params!(ConversationSetModelParams);
+                let selected = service
+                    .set_model(
+                        conversation_id(&params.conversation_id)?,
+                        caller(params.request_id.clone()),
+                        ConversationModelId::new(params.model)
+                            .map_err(|_| ConversationError::InvalidInput)?,
+                    )
+                    .await?;
+                Ok(success(
+                    &frame.id,
+                    &ConversationSetModelResult {
+                        request_id: params.request_id,
+                        model: selected.model.as_str().into(),
+                        approval_mode: match selected.approval_mode {
+                            ConversationApprovalMode::Ask => WireApprovalMode::Ask,
+                            ConversationApprovalMode::Auto => WireApprovalMode::Auto,
+                            ConversationApprovalMode::Full => WireApprovalMode::Full,
+                        },
+                        effect: match selected.effect {
+                            ConversationModelChangeEffect::SubsequentResponses => {
+                                ModelChangeEffect::SubsequentResponses
+                            }
+                            ConversationModelChangeEffect::NextTurn => ModelChangeEffect::NextTurn,
+                        },
+                    },
+                ))
             }
             "conversation.setApprovalMode" => {
                 let params = target_params!(ConversationSetApprovalModeParams);
@@ -1137,6 +1168,7 @@ fn wire_view(
             .as_object_mut()
             .ok_or(ConversationError::Unavailable)?;
         runtime.insert("agent".into(), json!(selection.agent.name()));
+        runtime.insert("model".into(), json!(selection.model));
         runtime.insert("modelName".into(), json!(model.display_name));
         runtime.insert(
             "contextWindowTokens".into(),
@@ -1354,3 +1386,6 @@ mod tests;
 #[cfg(test)]
 #[path = "../../tests/conversation/wire_list.rs"]
 mod wire_list;
+#[cfg(test)]
+#[path = "../../tests/conversation/wire_model_changes.rs"]
+mod wire_model_changes;

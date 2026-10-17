@@ -1,6 +1,7 @@
 //! Fast consumption cannot turn one invocation into unbounded retained history.
 use super::{actor, capabilities, request, MemoryStorage};
 use crate::application::agent_execution::support::*;
+use nessa_sdk::application::agent_execution::providers::HarnessHostIdentity;
 use std::{future::poll_fn, task::Poll, time::Duration};
 use tokio::{
     sync::{oneshot, watch, Notify},
@@ -20,6 +21,9 @@ struct OutputState {
 struct OutputProvider(Arc<OutputState>);
 struct OutputEvents(Arc<OutputState>);
 impl AgentProvider for OutputProvider {
+    fn harness_host_identity(&self) -> HarnessHostIdentity<'_> {
+        HarnessHostIdentity::local()
+    }
     fn identity(&self) -> ProviderIdentity {
         ProviderIdentity::new("output", "model", "").unwrap()
     }

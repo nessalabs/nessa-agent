@@ -8,6 +8,7 @@ use crate::conversation::application::{
     ConversationDependencies, ConversationError, ConversationFileLinkAudit,
     ConversationFileLinkAuditRecord, ConversationFuture, ConversationLimits, ConversationListing,
     ConversationModeApplication, ConversationModeRequest, ConversationModeRequestState,
+    ConversationModelApplication, ConversationModelRequest, ConversationModelRequestState,
     ConversationRepository, ConversationService, ConversationSummaries, ListedConversation,
     ListedConversations, ObservationCursor, ObservedConversations, ProviderSessionEraser,
     ProviderSessionErasers, PublishedArtifact, ReviewNoticeAudit, ReviewNoticeAuditFailure,
@@ -28,15 +29,18 @@ use nessa_sdk::application::agent_execution::permissions::{
     ActionContext, PermissionAnswer, PermissionCancellation, PermissionCancellationRequest,
     PermissionResolution, PermissionSelectionState, QuestionAnswer,
 };
+use nessa_sdk::application::agent_execution::providers::HarnessHostIdentity;
 use nessa_sdk::application::agent_execution::providers::{
     AgentProvider, ApprovalMode, CleanupFuture, CleanupReport, CloseOutcome, ExecutionEventStream,
-    ExecutionReport, ObservationFailure, OpenedProviderSession, ProviderExecutionFuture,
-    ProviderExecutionReply, ProviderIdentity, ProviderObservationFuture, ProviderOpenError,
-    ProviderOpenFuture, ProviderOpenRequest, ProviderOperationCapabilities,
-    ProviderOperationFailure, ProviderOperationFuture, ProviderSession, ProviderSessionBackend,
-    ProviderSessionState, SessionCloseRequest, SteeringOutcome,
+    ExecutionReport, ModelChange, ModelChangeEffect, ModelChangeTiming, ObservationFailure,
+    OpenedProviderSession, ProviderExecutionFuture, ProviderExecutionReply, ProviderIdentity,
+    ProviderObservationFuture, ProviderOpenError, ProviderOpenFuture, ProviderOpenRequest,
+    ProviderOperationCapabilities, ProviderOperationFailure, ProviderOperationFuture,
+    ProviderSession, ProviderSessionBackend, ProviderSessionState, SessionCloseRequest,
+    SteeringOutcome,
 };
 use nessa_sdk::application::agent_execution::tools::ToolReviewInput;
+use nessa_sdk::application::agent_execution::traces::LocalTraceStore;
 use nessa_sdk::application::dto::{ImageInputLimitsDto, ModalitiesDto, ModelMetadataDto};
 use nessa_sdk::domain::agent_execution::executions::{ExecutionOutcome, MessageChunk};
 use nessa_sdk::domain::agent_execution::permissions::{
@@ -52,7 +56,7 @@ use nessa_sdk::domain::effective_capabilities::value_objects::{
     BindingRestrictions, EffectiveCapabilities,
 };
 use nessa_sdk::domain::model_metadata::entities::ModelMetadata;
-use nessa_sdk::domain::model_metadata::value_objects::{Modalities, ModelFeatures};
+use nessa_sdk::domain::model_metadata::value_objects::{EffortLevel, Modalities, ModelFeatures};
 use nessa_sdk::infrastructure::session_storage::InMemoryStorage;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -198,6 +202,7 @@ pub(crate) struct MemoryRepository {
     /// The same, for the read of a pending mode change: a submission held
     /// under its lock, before its resolve.
     pub(crate) pending_gate: Mutex<Option<(Arc<Notify>, Receiver<()>)>>,
+    pub(crate) model_requests: Mutex<HashMap<(ConversationId, String), ConversationModelRequest>>,
     pub(crate) mode_requests: Mutex<HashMap<(ConversationId, String), ConversationModeRequest>>,
     pub(crate) lose_mode_intent_ack: AtomicBool,
     pub(crate) lose_mode_commit_ack: AtomicBool,
@@ -259,11 +264,11 @@ impl crate::conversation::application::ConversationModeAudit for RecordingModeAu
             crate::conversation::application::ConversationModeAuditPhase::Application => {
                 self.fail_application_once.swap(false, Ordering::SeqCst)
             }
-            crate::conversation::application::ConversationModeAuditPhase::RecoveryRestored => {
+            crate::conversation::application::ConversationModeAuditPhase::RecoveryRestored
+            | crate::conversation::application::ConversationModeAuditPhase::RecoveryApplied => {
                 self.refuse_recovery.load(Ordering::SeqCst)
                     || self.fail_recovery_once.swap(false, Ordering::SeqCst)
             }
-            crate::conversation::application::ConversationModeAuditPhase::AdmissionRefused => false,
         };
         if !fail {
             self.records.lock().unwrap().push((request, phase));
@@ -278,6 +283,176 @@ impl crate::conversation::application::ConversationModeAudit for RecordingModeAu
     }
 }
 impl ConversationRepository for MemoryRepository {
+    fn begin_model_change(
+        &self,
+        request: ConversationModelRequest,
+    ) -> ConversationFuture<'_, ConversationModelRequest> {
+        let result = (|| {
+            let records = self.records.lock().unwrap();
+            let current = records
+                .get(&request.conversation_id)
+                .ok_or(ConversationError::NotFound)?;
+            if current.deletion().is_some() {
+                return Err(ConversationError::Deleted);
+            }
+            let mut requests = self.model_requests.lock().unwrap();
+            let key = (request.conversation_id.clone(), request.request_id.clone());
+            if let Some(existing) = requests.get(&key) {
+                return if existing.organization_id == request.organization_id
+                    && existing.initiator_principal_id == request.initiator_principal_id
+                    && existing.initiator_surface_id == request.initiator_surface_id
+                    && existing.requested_model == request.requested_model
+                {
+                    Ok(existing.clone())
+                } else {
+                    Err(ConversationError::RequestConflict)
+                };
+            }
+            if current.model() != &request.prior_model
+                || current.approval_mode() != request.prior_approval_mode
+                || current.organization() != &request.organization_id
+                || requests.values().any(|r| {
+                    r.conversation_id == request.conversation_id
+                        && r.state == ConversationModelRequestState::Pending
+                })
+                || self.mode_requests.lock().unwrap().values().any(|r| {
+                    r.conversation_id == request.conversation_id
+                        && r.state == ConversationModeRequestState::Pending
+                })
+            {
+                return Err(ConversationError::ModelChangeUncertain);
+            }
+            requests.insert(key, request.clone());
+            Ok(request)
+        })();
+        Box::pin(async move { result })
+    }
+    fn pending_model_change(
+        &self,
+        id: &ConversationId,
+    ) -> ConversationFuture<'_, Option<ConversationModelRequest>> {
+        let found = self
+            .model_requests
+            .lock()
+            .unwrap()
+            .values()
+            .find(|r| &r.conversation_id == id && r.state == ConversationModelRequestState::Pending)
+            .cloned();
+        Box::pin(async move { Ok(found) })
+    }
+    fn model_change(
+        &self,
+        id: &ConversationId,
+        request_id: &str,
+    ) -> ConversationFuture<'_, Option<ConversationModelRequest>> {
+        let found = self
+            .model_requests
+            .lock()
+            .unwrap()
+            .get(&(id.clone(), request_id.to_owned()))
+            .cloned();
+        Box::pin(async move { Ok(found) })
+    }
+    fn observe_model_application(
+        &self,
+        id: &ConversationId,
+        request_id: &str,
+        application: ConversationModelApplication,
+    ) -> ConversationFuture<'_, ConversationModelRequest> {
+        let result = (|| {
+            let mut requests = self.model_requests.lock().unwrap();
+            let key = (id.clone(), request_id.to_owned());
+            let request = requests.get(&key).ok_or(ConversationError::NotFound)?;
+            if request.state != ConversationModelRequestState::Pending {
+                return Err(ConversationError::RequestConflict);
+            }
+            if let Some(existing) = &request.application {
+                if existing == &application {
+                    return Ok(request.clone());
+                }
+                if !matches!(
+                    (existing, &application),
+                    (
+                        ConversationModelApplication::Uncertain,
+                        ConversationModelApplication::Applied(_)
+                            | ConversationModelApplication::Refused
+                    )
+                ) {
+                    return Err(ConversationError::RequestConflict);
+                }
+            }
+            if matches!(&application,ConversationModelApplication::Applied(s) if s.model!=request.requested_model)
+            {
+                return Err(ConversationError::RequestConflict);
+            }
+            let request = ConversationModelRequest {
+                application: Some(application),
+                ..request.clone()
+            };
+            requests.insert(key, request.clone());
+            Ok(request)
+        })();
+        Box::pin(async move { result })
+    }
+    fn finish_model_change(
+        &self,
+        id: &ConversationId,
+        request_id: &str,
+        state: ConversationModelRequestState,
+    ) -> ConversationFuture<'_, ConversationModelRequest> {
+        let result = (|| {
+            if state == ConversationModelRequestState::Pending {
+                return Err(ConversationError::InvalidInput);
+            }
+            let mut records = self.records.lock().unwrap();
+            let mut requests = self.model_requests.lock().unwrap();
+            let key = (id.clone(), request_id.to_owned());
+            let request = requests.get(&key).ok_or(ConversationError::NotFound)?;
+            if request.state != ConversationModelRequestState::Pending {
+                return if request.state == state {
+                    Ok(request.clone())
+                } else {
+                    Err(ConversationError::RequestConflict)
+                };
+            }
+            let current = records.get(id).ok_or(ConversationError::NotFound)?;
+            if current.deletion().is_some() {
+                return Err(ConversationError::Deleted);
+            }
+            if state == ConversationModelRequestState::NotApplied
+                && !matches!(
+                    request.application,
+                    Some(ConversationModelApplication::Refused)
+                )
+            {
+                return Err(ConversationError::ModelChangeUncertain);
+            }
+            if current.model() != &request.prior_model
+                || current.approval_mode() != request.prior_approval_mode
+                || request.application.is_none()
+            {
+                return Err(ConversationError::ModelChangeUncertain);
+            }
+            if state == ConversationModelRequestState::Applied {
+                let Some(ConversationModelApplication::Applied(selection)) = &request.application
+                else {
+                    return Err(ConversationError::ModelChangeUncertain);
+                };
+                let selected = current
+                    .clone()
+                    .with_model_selection(selection.model.clone(), selection.approval_mode);
+                records.insert(id.clone(), selected);
+            }
+            let request = ConversationModelRequest {
+                state,
+                ..request.clone()
+            };
+            requests.insert(key, request.clone());
+            Ok(request)
+        })();
+        Box::pin(async move { result })
+    }
+
     fn begin_mode_change(
         &self,
         request: ConversationModeRequest,
@@ -290,6 +465,12 @@ impl ConversationRepository for MemoryRepository {
                 .ok_or(ConversationError::NotFound)?;
             if current.deletion().is_some() {
                 return Err(ConversationError::Deleted);
+            }
+            if self.model_requests.lock().unwrap().values().any(|other| {
+                other.conversation_id == request.conversation_id
+                    && other.state == ConversationModelRequestState::Pending
+            }) {
+                return Err(ConversationError::ModelChangeUncertain);
             }
             let key = (request.conversation_id.clone(), request.request_id.clone());
             if let Some(existing) = requests.get(&key) {
@@ -427,9 +608,11 @@ impl ConversationRepository for MemoryRepository {
                 .get_mut(&(id.clone(), request_id.to_owned()))
                 .ok_or(ConversationError::NotFound)?;
             if request.state != ConversationModeRequestState::Pending
-                || request
-                    .application
-                    .is_some_and(|existing| existing != application)
+                || request.application.is_some_and(|existing| {
+                    existing != application
+                        && !(existing == ConversationModeApplication::Uncertain
+                            && application == ConversationModeApplication::Applied)
+                })
             {
                 return Err(ConversationError::RequestConflict);
             }
@@ -896,6 +1079,9 @@ impl nessa_auth::application::ports::Clock for TestClock {
 pub(crate) struct ProviderFactory {
     /// Deliberately misconfigure the next resolved cold profile for refusal tests.
     pub(crate) force_ask_mode: AtomicBool,
+    pub(crate) model_updates: Mutex<Vec<ProviderIdentity>>,
+    pub(crate) model_started: Notify,
+    pub(crate) model_gate: Mutex<Option<Receiver<()>>>,
     pub(crate) mode_updates: Mutex<Vec<ApprovalMode>>,
     pub(crate) mode_failure: Mutex<Option<AgentError>>,
     pub(crate) mode_started: Notify,
@@ -908,6 +1094,7 @@ pub(crate) struct ProviderFactory {
     pub(crate) opening: Notify,
     pub(crate) open_gate: Mutex<Option<Receiver<()>>>,
     pub(crate) executions: Mutex<Vec<String>>,
+    pub(crate) output_reservations: Mutex<Vec<u32>>,
     /// The next turn fails as it is prepared, before its prompt is sent.
     pub(crate) prepare_failure: Mutex<Option<AgentError>>,
     /// When set, the next turn waits as it is prepared, before its prompt is
@@ -1293,14 +1480,27 @@ impl ConversationAgentSource for ModeAgentSource {
             ConversationApprovalMode::Auto => ApprovalMode::Auto,
             ConversationApprovalMode::Full => ApprovalMode::Full,
         };
-        let found = (agent == AgentId::Claude && model == "test").then(|| {
-            let mode = if self.provider.force_ask_mode.load(Ordering::SeqCst) {
-                ApprovalMode::Ask
-            } else {
-                mode
-            };
-            self.for_mode(mode)
-        });
+        if model == "second-model" && mode != ApprovalMode::Ask {
+            return Box::pin(async { Err(ConversationError::ApprovalModeUnavailable) });
+        }
+        let found =
+            (agent == AgentId::Claude && matches!(model, "test" | "second-model")).then(|| {
+                let mode = if self.provider.force_ask_mode.load(Ordering::SeqCst) {
+                    ApprovalMode::Ask
+                } else {
+                    mode
+                };
+                let mut selected = self.for_mode(mode);
+                selected.provider = Arc::new(
+                    Provider::new(self.provider.clone())
+                        .with_mode(mode)
+                        .with_model(model),
+                );
+                if model == "second-model" {
+                    selected.reserved_output_tokens = 2048;
+                }
+                selected
+            });
         Box::pin(async move { Ok(found) })
     }
 }
@@ -1432,10 +1632,12 @@ pub(crate) fn fixture(
     .unwrap();
     (service, provider, repository, storage)
 }
+#[derive(Clone)]
 pub(crate) struct Provider {
     factory: Arc<ProviderFactory>,
     configured_capabilities: EffectiveCapabilities,
     approval_mode: ApprovalMode,
+    model: String,
 }
 impl Provider {
     pub(crate) fn new(factory: Arc<ProviderFactory>) -> Self {
@@ -1444,7 +1646,14 @@ impl Provider {
             factory,
             configured_capabilities,
             approval_mode: ApprovalMode::Ask,
+            model: "test".into(),
         }
+    }
+    pub(crate) fn with_model(mut self, model: &str) -> Self {
+        self.model = model.into();
+        self.configured_capabilities =
+            capabilities_for_model(self.factory.model_images.load(Ordering::SeqCst), model);
+        self
     }
     fn with_mode(mut self, mode: ApprovalMode) -> Self {
         self.approval_mode = mode;
@@ -1452,11 +1661,28 @@ impl Provider {
     }
 }
 impl AgentProvider for Provider {
+    fn harness_host_identity(&self) -> HarnessHostIdentity<'_> {
+        HarnessHostIdentity::local()
+    }
+    fn model_change_context(&self) -> Option<String> {
+        Some("server-test-context".into())
+    }
+    fn with_model_configuration(
+        &self,
+        mode: Option<ApprovalMode>,
+        _effort: Option<EffortLevel>,
+        _traces: Option<Arc<LocalTraceStore>>,
+    ) -> Result<Arc<dyn AgentProvider>, AgentError> {
+        let mut configured = self.clone();
+        configured.approval_mode =
+            mode.ok_or_else(|| AgentError::Configuration("missing approval preset".into()))?;
+        Ok(Arc::new(configured))
+    }
     fn approval_mode(&self) -> Option<ApprovalMode> {
         Some(self.approval_mode)
     }
     fn identity(&self) -> ProviderIdentity {
-        ProviderIdentity::new("gateway-test", "test", "test").unwrap()
+        ProviderIdentity::new("gateway-test", &self.model, "test").unwrap()
     }
     fn capabilities(&self) -> &EffectiveCapabilities {
         &self.configured_capabilities
@@ -1528,6 +1754,31 @@ struct Backend {
     sender: Mutex<Option<mpsc::UnboundedSender<ExecutionEvent>>>,
 }
 impl ProviderSessionBackend for Backend {
+    fn set_model(
+        &self,
+        change: ModelChange,
+        capabilities: EffectiveCapabilities,
+    ) -> ProviderOperationFuture<'_, ModelChangeEffect> {
+        Box::pin(async move {
+            self.factory
+                .model_updates
+                .lock()
+                .unwrap()
+                .push(change.after().clone());
+            self.factory.model_started.notify_one();
+            let gate = self.factory.model_gate.lock().unwrap().take();
+            if let Some(gate) = gate {
+                let _ = gate.await;
+            }
+            Ok(ModelChangeEffect::new(
+                change.after().clone(),
+                capabilities,
+                Some(ApprovalMode::Ask),
+                None,
+                ModelChangeTiming::NextTurn,
+            ))
+        })
+    }
     fn permission_authority(
         &self,
     ) -> Result<Option<PermissionAuthority>, PermissionAuthorityError> {
@@ -1606,6 +1857,7 @@ impl ProviderSessionBackend for Backend {
         &'a self,
         _: nessa_sdk::domain::agent_execution::executions::ExecutionId,
         _: ExecutionRequest,
+        _: &'a EffectiveCapabilities,
         started: &'a (dyn Fn() + Send + Sync),
     ) -> ProviderOperationFuture<'a, SteeringOutcome> {
         Box::pin(async move {
@@ -1626,6 +1878,11 @@ impl ProviderSessionBackend for Backend {
                 .unwrap()
                 .begin_execution(request.execution_id.clone())
                 .unwrap();
+            self.factory
+                .output_reservations
+                .lock()
+                .unwrap()
+                .push(request.reserved_output_tokens);
             self.factory
                 .executions
                 .lock()
@@ -1956,6 +2213,9 @@ impl ProviderSessionBackend for Backend {
     }
 }
 pub(crate) fn capabilities(image_input: bool) -> EffectiveCapabilities {
+    capabilities_for_model(image_input, "test")
+}
+fn capabilities_for_model(image_input: bool, model_id: &str) -> EffectiveCapabilities {
     let text = ModalitiesDto {
         text: true,
         image: false,
@@ -1963,7 +2223,7 @@ pub(crate) fn capabilities(image_input: bool) -> EffectiveCapabilities {
     };
     let model = ModelMetadata::try_from(ModelMetadataDto {
         provider: "anthropic".into(),
-        model_id: "test".into(),
+        model_id: model_id.into(),
         display_name: "Test".into(),
         input: ModalitiesDto {
             text: true,

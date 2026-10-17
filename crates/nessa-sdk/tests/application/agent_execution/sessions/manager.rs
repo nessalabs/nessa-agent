@@ -530,6 +530,8 @@ async fn manager(previous_turns: usize) -> (SessionManager, Arc<FaultLease>, Exe
         .collect();
     invocations.push(active);
     let snapshot = SessionSnapshot {
+        model_change: None,
+        current_configuration: None,
         queue_history: Vec::new(),
         lease: None,
         artifacts: Vec::new(),
@@ -1202,6 +1204,8 @@ fn a_restored_tool_call_that_changes_its_mcp_identity_is_corrupt() {
                 .map(|update| ExecutionEvent::new(id.clone(), ExecutionUpdate::Tool(update))),
         );
         SessionSnapshot {
+            model_change: None,
+            current_configuration: None,
             id: SessionId::new("session").unwrap(),
             provider: ProviderIdentity::new("provider", "model", "").unwrap(),
             provider_context: ProviderContext::Recorded(

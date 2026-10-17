@@ -43,6 +43,7 @@ use nessa_client_core::pairing::NativeEnrollmentClient;
 use nessa_protocol::lease::{Cleanup, CommandEnd};
 use nessa_protocol::pairing::wire::NativePairingStatus;
 use nessa_protocol::relay::{RelayAddress, RelayRefusal};
+use nessa_sdk::application::agent_execution::providers::HarnessHostIdentity;
 use nessa_sdk::application::agent_execution::{
     agents::AgentError,
     providers::{
@@ -1033,11 +1034,17 @@ async fn a_pending_pin_that_is_not_a_key_ends_waiting_through_a_relay() {
 /// A binding that runs its harness on whichever host it is given, and
 /// remembers that host.
 struct OnHost {
+    captured_host: Option<Arc<dyn HarnessHost>>,
     capabilities: nessa_sdk::domain::effective_capabilities::value_objects::EffectiveCapabilities,
     host: Arc<std::sync::Mutex<Option<Arc<dyn HarnessHost>>>>,
 }
 
 impl AgentProvider for OnHost {
+    fn harness_host_identity(&self) -> HarnessHostIdentity<'_> {
+        self.captured_host
+            .as_ref()
+            .map_or_else(HarnessHostIdentity::local, HarnessHostIdentity::hosted)
+    }
     fn identity(&self) -> ProviderIdentity {
         ProviderIdentity::new("fixture", "model", "context").expect("a fixed identity is valid")
     }
@@ -1050,8 +1057,9 @@ impl AgentProvider for OnHost {
         Box::pin(async { Err(ProviderOpenError::no_resources(AgentError::Closed)) })
     }
     fn on_host(&self, host: Arc<dyn HarnessHost>) -> Result<Arc<dyn AgentProvider>, AgentError> {
-        *self.host.lock().unwrap() = Some(host);
+        *self.host.lock().unwrap() = Some(host.clone());
         Ok(Arc::new(Self {
+            captured_host: Some(host),
             capabilities: self.capabilities.clone(),
             host: self.host.clone(),
         }))
@@ -1126,6 +1134,7 @@ async fn a_paired_environment_expires_a_lease_and_both_sides_record_it() {
     };
     let given = Arc::new(std::sync::Mutex::new(None));
     let binding = Arc::new(OnHost {
+        captured_host: None,
         capabilities: crate::conversation_test_support::Provider::new(Arc::new(
             crate::conversation_test_support::ProviderFactory::default(),
         ))
@@ -1261,6 +1270,7 @@ async fn k1_a_paired_environment_drains_and_both_sides_record_its_cleanup() {
     };
     let given = Arc::new(std::sync::Mutex::new(None));
     let binding = Arc::new(OnHost {
+        captured_host: None,
         capabilities: crate::conversation_test_support::Provider::new(Arc::new(
             crate::conversation_test_support::ProviderFactory::default(),
         ))
@@ -1512,6 +1522,7 @@ async fn a_paired_environment_revoked_mid_lease_ends_it_on_both_sides_and_closes
     };
     let given = Arc::new(std::sync::Mutex::new(None));
     let binding = Arc::new(OnHost {
+        captured_host: None,
         capabilities: crate::conversation_test_support::Provider::new(Arc::new(
             crate::conversation_test_support::ProviderFactory::default(),
         ))
@@ -1702,6 +1713,7 @@ async fn a_paired_environment_publishes_a_file_and_the_gateway_reads_it_back() {
     };
     let given = Arc::new(std::sync::Mutex::new(None));
     let binding = Arc::new(OnHost {
+        captured_host: None,
         capabilities: crate::conversation_test_support::Provider::new(Arc::new(
             crate::conversation_test_support::ProviderFactory::default(),
         ))
@@ -2224,6 +2236,7 @@ async fn k3_two_organizations_share_no_lease_workspace_artifact_tool_or_audit() 
         };
         let given: Given = Arc::new(std::sync::Mutex::new(None));
         let binding = Arc::new(OnHost {
+            captured_host: None,
             capabilities: crate::conversation_test_support::Provider::new(Arc::new(
                 crate::conversation_test_support::ProviderFactory::default(),
             ))

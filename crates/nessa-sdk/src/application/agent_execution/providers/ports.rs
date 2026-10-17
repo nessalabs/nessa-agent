@@ -1,14 +1,16 @@
 #![deny(missing_docs)]
 
+use crate::domain::model_metadata::value_objects::EffortLevel;
+
 use crate::domain::agent_execution::permissions::{
     PermissionAuthority, PermissionAuthorityError, PermissionId,
 };
 
 use super::{
-    CleanupFuture, HarnessHost, ProviderExecutionFuture, ProviderIdentity,
-    ProviderObservationFuture, ProviderOpenRequest, ProviderOperationCapabilities,
-    ProviderOperationFailure, ProviderOperationFuture, ProviderSession, ProviderSessionState,
-    SessionCloseRequest, SteeringOutcome,
+    ApprovalMode, CleanupFuture, HarnessHost, HarnessHostIdentity, ProviderExecutionFuture,
+    ProviderIdentity, ProviderObservationFuture, ProviderOpenRequest,
+    ProviderOperationCapabilities, ProviderOperationFailure, ProviderOperationFuture,
+    ProviderSession, ProviderSessionState, SessionCloseRequest, SteeringOutcome,
 };
 use crate::application::agent_execution::agents::AgentError;
 use crate::application::agent_execution::providers::ProviderOpenFuture;
@@ -48,6 +50,19 @@ pub trait ProviderSessionBackend: Send + Sync {
     ) -> Result<Option<PermissionAuthority>, PermissionAuthorityError> {
         Ok(None)
     }
+    /// Apply a same-provider model selection on the live native session.
+    /// A successful reply includes every native adjustment to mode and effort.
+    fn set_model(
+        &self,
+        _change: super::ModelChange,
+        _capabilities: EffectiveCapabilities,
+    ) -> ProviderOperationFuture<'_, super::ModelChangeEffect> {
+        Box::pin(async {
+            Err(ProviderOperationFailure::before_effect(
+                AgentError::Unsupported("live model change".into()),
+            ))
+        })
+    }
     /// Apply and verify one native approval preset on the current provider
     /// generation. A failed or lost response must not authorize another turn
     /// on that generation.
@@ -69,10 +84,7 @@ pub trait ProviderSessionBackend: Send + Sync {
     /// [`AgentError::Busy`] and [`AgentError::Unsupported`] with
     /// [`ProviderSessionState::Usable`] mean nothing was sent: the Agent
     /// audits them as refused. Return them for nothing else.
-    fn set_effort_level(
-        &self,
-        _level: crate::domain::model_metadata::value_objects::EffortLevel,
-    ) -> ProviderOperationFuture<'_, ()> {
+    fn set_effort_level(&self, _level: EffortLevel) -> ProviderOperationFuture<'_, ()> {
         Box::pin(async {
             Err(ProviderOperationFailure::new(
                 AgentError::Unsupported("live effort level change".into()),
@@ -94,16 +106,24 @@ pub trait ProviderSessionBackend: Send + Sync {
     ///
     /// [`ProviderSession`] calls this at every admission, after its own checks
     /// and before anything is saved, queued, or sent. It must be synchronous
-    /// and pure: no I/O, no restoration, no bytes read, and the same answer for
-    /// the same input for as long as the backend lives. Rules that depend on
-    /// the live connection belong in [`Self::operation_capabilities`] instead.
+    /// and pure: no I/O, no restoration, no bytes read. Model-dependent checks
+    /// use the operation-selected `capabilities`, which can retain an active
+    /// turn's configuration after a next-turn model acknowledgement. Do not
+    /// substitute the attachment's current selection. The same input and
+    /// supplied binding have the same answer. Rules that depend on the live
+    /// connection
+    /// belong in [`Self::operation_capabilities`] instead.
     /// The default accepts everything.
     ///
     /// # Errors
     ///
     /// The typed reason the input is refused, such as
     /// [`AgentError::MessageTooLarge`].
-    fn validate_input(&self, _input: &ExecutionRequest) -> Result<(), AgentError> {
+    fn validate_input(
+        &self,
+        _input: &ExecutionRequest,
+        _capabilities: &EffectiveCapabilities,
+    ) -> Result<(), AgentError> {
         Ok(())
     }
 
@@ -113,6 +133,10 @@ pub trait ProviderSessionBackend: Send + Sync {
     /// Deliver input only to the target execution. An ambiguous delivery failure
     /// is an error, never permission to replay the input as a fresh invocation.
     ///
+    /// `capabilities` is the same operation-selected binding used for admission.
+    /// Carry it through deferred model-dependent dispatch checks, rather than
+    /// resolving the attachment's current selection again.
+    ///
     /// Call `started` once the steer has been handed to the harness, and on
     /// every path that returns without handing it over, before this future
     /// waits for the harness's response. The host releases what it held until
@@ -121,6 +145,7 @@ pub trait ProviderSessionBackend: Send + Sync {
         &'a self,
         _target: ExecutionId,
         _input: ExecutionRequest,
+        _capabilities: &'a EffectiveCapabilities,
         started: &'a (dyn Fn() + Send + Sync),
     ) -> ProviderOperationFuture<'a, SteeringOutcome> {
         Box::pin(async move {
@@ -264,7 +289,7 @@ pub trait AgentProvider: Send + Sync {
     /// Initial reasoning effort level this factory selects in every session
     /// it opens, so admission evidence can name it. `None` — the default —
     /// means no level is sent and the agent keeps its own default.
-    fn effort_level(&self) -> Option<crate::domain::model_metadata::value_objects::EffortLevel> {
+    fn effort_level(&self) -> Option<EffortLevel> {
         None
     }
     /// Whether the next conversation this factory has not opened yet omits
@@ -272,6 +297,49 @@ pub trait AgentProvider: Send + Sync {
     /// given. Every other provider stays off.
     fn native_hooks_allowed(&self) -> bool {
         false
+    }
+    /// Live host owner retained by this factory and its configuration clones.
+    /// Local factories explicitly assert local execution; hosted factories borrow
+    /// their captured host Arc, and wrappers delegate to their wrapped factory.
+    /// Equal paths/configuration do not establish ownership. The borrowed view
+    /// grants no start authority and is not persisted as historical identity.
+    /// Omitting this assertion is a compile error, including for wrappers.
+    ///
+    /// ```compile_fail,E0046
+    /// use nessa_sdk::application::agent_execution::providers::{
+    ///     AgentProvider, ProviderIdentity, ProviderOpenFuture, ProviderOpenRequest,
+    /// };
+    /// use nessa_sdk::domain::effective_capabilities::value_objects::EffectiveCapabilities;
+    /// struct MissingHostAssertion;
+    /// impl AgentProvider for MissingHostAssertion {
+    ///     fn identity(&self) -> ProviderIdentity { unimplemented!() }
+    ///     fn capabilities(&self) -> &EffectiveCapabilities { unimplemented!() }
+    ///     fn open(&self, _: ProviderOpenRequest) -> ProviderOpenFuture<'_> { unimplemented!() }
+    /// }
+    /// ```
+    fn harness_host_identity(&self) -> HarnessHostIdentity<'_>;
+    /// Model-independent configuration compatibility for an explicit same-provider change.
+    /// Live host ownership is compared separately through `harness_host_identity`.
+    /// Returning `None` leaves live model changes unsupported. Ordinary restoration
+    /// still compares `identity` exactly, including model-dependent limits.
+    fn model_change_context(&self) -> Option<String> {
+        None
+    }
+    /// Clone this factory at the complete acknowledged native configuration.
+    /// This pure operation validates settings before live mutation and retains
+    /// the factory's existing credentials, lease authority and supplied trace port.
+    /// Model, approval and effort controls use it; the clone must report the exact
+    /// requested settings without changing identity, model capabilities or host owner.
+    ///
+    /// # Errors
+    /// Unsupported factories refuse rather than restoring with stale settings.
+    fn with_model_configuration(
+        &self,
+        _mode: Option<ApprovalMode>,
+        _effort: Option<EffortLevel>,
+        _traces: Option<Arc<LocalTraceStore>>,
+    ) -> Result<Arc<dyn AgentProvider>, AgentError> {
+        Err(AgentError::Unsupported("model change configuration".into()))
     }
     /// Exact provider/model/context configuration used to validate restoration.
     fn identity(&self) -> ProviderIdentity;

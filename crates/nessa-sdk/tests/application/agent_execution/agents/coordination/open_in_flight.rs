@@ -4,6 +4,7 @@ use super::*;
 use crate::application::agent_execution::{
     agents::scheduling::QueueAdmission, providers::ProviderCleanup,
 };
+use nessa_sdk::application::agent_execution::providers::HarnessHostIdentity;
 
 /// Opens the first attachment at once and holds every later one at a gate.
 /// With `keeps_failed`, a later open fails but keeps what it launched.
@@ -15,6 +16,9 @@ struct GatedRecoveryProvider {
     release: StateMutex<Option<oneshot::Receiver<()>>>,
 }
 impl AgentProvider for GatedRecoveryProvider {
+    fn harness_host_identity(&self) -> HarnessHostIdentity<'_> {
+        self.inner.harness_host_identity()
+    }
     fn identity(&self) -> ProviderIdentity {
         self.inner.identity()
     }

@@ -60,6 +60,8 @@ async fn save_publications(storage: &RecordStorage, id: &SessionId, count: u64) 
             opened(id).1
         } else {
             SessionSnapshot {
+                model_change: None,
+                current_configuration: None,
                 provider_context: ProviderContext::Recorded(
                     ExecutionSessionId::new(format!("context-{generation}")).unwrap(),
                 ),
@@ -344,6 +346,8 @@ async fn malformed_completion_remains_refused_after_physical_validator_advanced(
         context: ProviderContext::Absent,
     };
     let snapshot = SessionSnapshot {
+        model_change: None,
+        current_configuration: None,
         id: id.clone(),
         provider,
         provider_context: ProviderContext::Absent,
@@ -378,6 +382,8 @@ async fn malformed_completion_remains_refused_after_physical_validator_advanced(
         context: ProviderContext::Absent,
     };
     let snapshot = SessionSnapshot {
+        model_change: None,
+        current_configuration: None,
         id: foreign,
         provider,
         provider_context: ProviderContext::Absent,
@@ -465,6 +471,8 @@ async fn historical_miss_preserves_known_forward_failure_and_clean_head() {
             after: ProviderContext::Recorded(ExecutionSessionId::new("later-context").unwrap()),
         };
         let next = SessionSnapshot {
+            model_change: None,
+            current_configuration: None,
             provider_context: ProviderContext::Recorded(
                 ExecutionSessionId::new("later-context").unwrap(),
             ),

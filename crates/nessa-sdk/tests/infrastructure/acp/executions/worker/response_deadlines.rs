@@ -418,6 +418,7 @@ async fn a_steering_acknowledgement_is_armed_with_what_the_read_left() {
     let command = Command::Steer(
         ExecutionId::new("active").unwrap(),
         dispatched(request("steer"), Some(began + remaining)),
+        Box::new(worker.capabilities.clone()),
         reply,
     );
     let result = ending_at(

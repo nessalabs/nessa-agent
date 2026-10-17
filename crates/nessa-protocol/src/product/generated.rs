@@ -23,11 +23,14 @@ pub struct ProductClientMetadata {
     pub id: String,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
 pub enum ProductSurfaceKind {
+    #[serde(rename = "panel")]
     Panel,
+    #[serde(rename = "web")]
     Web,
+    #[serde(rename = "desktop")]
     Desktop,
+    #[serde(rename = "cli")]
     Cli,
 }
 impl ProductSurfaceKind {
@@ -114,11 +117,14 @@ pub struct CredentialRevokeResult {
     pub revision: u64,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
 pub enum PrincipalKind {
+    #[serde(rename = "human")]
     Human,
+    #[serde(rename = "integration")]
     Integration,
+    #[serde(rename = "agent")]
     Agent,
+    #[serde(rename = "gateway")]
     Gateway,
 }
 impl PrincipalKind {
@@ -132,9 +138,10 @@ impl PrincipalKind {
     }
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
 pub enum MembershipRole {
+    #[serde(rename = "admin")]
     Admin,
+    #[serde(rename = "member")]
     Member,
 }
 impl MembershipRole {
@@ -146,9 +153,10 @@ impl MembershipRole {
     }
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
 pub enum MembershipState {
+    #[serde(rename = "active")]
     Active,
+    #[serde(rename = "disabled")]
     Disabled,
 }
 impl MembershipState {
@@ -168,14 +176,20 @@ pub struct SessionTermination {
     pub retry_after_ms: Option<u64>,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
 pub enum ConversationMessageStatus {
+    #[serde(rename = "queued")]
     Queued,
+    #[serde(rename = "running")]
     Running,
+    #[serde(rename = "completed")]
     Completed,
+    #[serde(rename = "cancelled")]
     Cancelled,
+    #[serde(rename = "failed")]
     Failed,
+    #[serde(rename = "injected")]
     Injected,
+    #[serde(rename = "unresolved")]
     Unresolved,
 }
 impl ConversationMessageStatus {
@@ -192,9 +206,10 @@ impl ConversationMessageStatus {
     }
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
 pub enum ConversationPendingMode {
+    #[serde(rename = "queued")]
     Queued,
+    #[serde(rename = "steering")]
     Steering,
 }
 impl ConversationPendingMode {
@@ -206,10 +221,12 @@ impl ConversationPendingMode {
     }
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
 pub enum ConversationDisposition {
+    #[serde(rename = "queued")]
     Queued,
+    #[serde(rename = "injected")]
     Injected,
+    #[serde(rename = "settled")]
     Settled,
 }
 impl ConversationDisposition {
@@ -222,11 +239,14 @@ impl ConversationDisposition {
     }
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
 pub enum ConversationLifecyclePhase {
+    #[serde(rename = "absent")]
     Absent,
+    #[serde(rename = "starting")]
     Starting,
+    #[serde(rename = "attached")]
     Attached,
+    #[serde(rename = "failed")]
     Failed,
 }
 impl ConversationLifecyclePhase {
@@ -240,11 +260,14 @@ impl ConversationLifecyclePhase {
     }
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
 pub enum ConversationStartupFailureCode {
+    #[serde(rename = "audit")]
     Audit,
+    #[serde(rename = "provider")]
     Provider,
+    #[serde(rename = "storage")]
     Storage,
+    #[serde(rename = "cleanup")]
     Cleanup,
 }
 impl ConversationStartupFailureCode {
@@ -279,10 +302,12 @@ pub struct ConversationLifecycle {
     pub evidence_failure: Option<ConversationAttachmentEvidenceFailure>,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
 pub enum PermissionDenialSupport {
+    #[serde(rename = "unknown")]
     Unknown,
+    #[serde(rename = "unsupported")]
     Unsupported,
+    #[serde(rename = "supported_for_offered_permission_reviews")]
     SupportedForOfferedPermissionReviews,
 }
 impl PermissionDenialSupport {
@@ -297,10 +322,12 @@ impl PermissionDenialSupport {
     }
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
 pub enum NativeHookSuppressionSupport {
+    #[serde(rename = "unknown")]
     Unknown,
+    #[serde(rename = "unsupported")]
     Unsupported,
+    #[serde(rename = "supported_for_user_configured_hooks")]
     SupportedForUserConfiguredHooks,
 }
 impl NativeHookSuppressionSupport {
@@ -313,9 +340,10 @@ impl NativeHookSuppressionSupport {
     }
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
 pub enum NativeHooksChoice {
+    #[serde(rename = "off")]
     Off,
+    #[serde(rename = "on")]
     On,
 }
 impl NativeHooksChoice {
@@ -327,9 +355,10 @@ impl NativeHooksChoice {
     }
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
 pub enum NativeHooksAgent {
+    #[serde(rename = "claude")]
     Claude,
+    #[serde(rename = "codex")]
     Codex,
 }
 impl NativeHooksAgent {
@@ -341,9 +370,10 @@ impl NativeHooksAgent {
     }
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
 pub enum CompactionReportingSupport {
+    #[serde(rename = "unsupported_not_implemented")]
     UnsupportedNotImplemented,
+    #[serde(rename = "supported_with_invocation_correlation")]
     SupportedWithInvocationCorrelation,
 }
 impl CompactionReportingSupport {
@@ -355,9 +385,10 @@ impl CompactionReportingSupport {
     }
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
 pub enum ModelSwitchReportingSupport {
+    #[serde(rename = "unsupported_not_implemented")]
     UnsupportedNotImplemented,
+    #[serde(rename = "supported_after_validated_switch")]
     SupportedAfterValidatedSwitch,
 }
 impl ModelSwitchReportingSupport {
@@ -369,10 +400,12 @@ impl ModelSwitchReportingSupport {
     }
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
 pub enum PermissionDeferralSupport {
+    #[serde(rename = "unsupported_not_implemented")]
     UnsupportedNotImplemented,
+    #[serde(rename = "unsupported")]
     Unsupported,
+    #[serde(rename = "supported_with_nonterminal_outcome")]
     SupportedWithNonterminalOutcome,
 }
 impl PermissionDeferralSupport {
@@ -385,10 +418,12 @@ impl PermissionDeferralSupport {
     }
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
 pub enum ElicitationForwardingSupport {
+    #[serde(rename = "unknown")]
     Unknown,
+    #[serde(rename = "unsupported")]
     Unsupported,
+    #[serde(rename = "supported_with_correlated_round_trip")]
     SupportedWithCorrelatedRoundTrip,
 }
 impl ElicitationForwardingSupport {
@@ -401,10 +436,12 @@ impl ElicitationForwardingSupport {
     }
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
 pub enum PreToolPolicySupport {
+    #[serde(rename = "unknown")]
     Unknown,
+    #[serde(rename = "unsupported_not_implemented")]
     UnsupportedNotImplemented,
+    #[serde(rename = "supported_at_permission_gate")]
     SupportedAtPermissionGate,
 }
 impl PreToolPolicySupport {
@@ -417,10 +454,12 @@ impl PreToolPolicySupport {
     }
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
 pub enum PolicyEndTurnSupport {
+    #[serde(rename = "unknown")]
     Unknown,
+    #[serde(rename = "unsupported")]
     Unsupported,
+    #[serde(rename = "supported_for_current_invocation")]
     SupportedForCurrentInvocation,
 }
 impl PolicyEndTurnSupport {
@@ -433,10 +472,12 @@ impl PolicyEndTurnSupport {
     }
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
 pub enum PolicyCloseSessionSupport {
+    #[serde(rename = "unknown")]
     Unknown,
+    #[serde(rename = "unsupported")]
     Unsupported,
+    #[serde(rename = "supported_for_session")]
     SupportedForSession,
 }
 impl PolicyCloseSessionSupport {
@@ -449,10 +490,12 @@ impl PolicyCloseSessionSupport {
     }
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
 pub enum IncomingElicitationSupport {
+    #[serde(rename = "unknown")]
     Unknown,
+    #[serde(rename = "unsupported")]
     Unsupported,
+    #[serde(rename = "supported_with_correlated_round_trip")]
     SupportedWithCorrelatedRoundTrip,
 }
 impl IncomingElicitationSupport {
@@ -591,9 +634,10 @@ pub struct ConversationPermissionOption {
     pub effect: ConversationPermissionOptionEffect,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
 pub enum ConversationPermissionOptionEffect {
+    #[serde(rename = "allow")]
     Allow,
+    #[serde(rename = "deny")]
     Deny,
 }
 impl ConversationPermissionOptionEffect {
@@ -701,6 +745,10 @@ pub struct ConversationView {
     pub approval_modes: Vec<ApprovalModeChoice>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub approval_mode_change: Option<ApprovalModeChange>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_change: Option<ModelChange>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_change_effect: Option<ModelChangeEffect>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -818,11 +866,14 @@ pub struct ConversationStopParams {
     pub execution_id: String,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
 pub enum ConversationCommandOperation {
+    #[serde(rename = "create")]
     Create,
+    #[serde(rename = "submit")]
     Submit,
+    #[serde(rename = "steer")]
     Steer,
+    #[serde(rename = "stop")]
     Stop,
 }
 impl ConversationCommandOperation {
@@ -836,11 +887,14 @@ impl ConversationCommandOperation {
     }
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
 pub enum ConversationCommandStage {
+    #[serde(rename = "accepted")]
     Accepted,
+    #[serde(rename = "attempted")]
     Attempted,
+    #[serde(rename = "ready")]
     Ready,
+    #[serde(rename = "settled")]
     Settled,
 }
 impl ConversationCommandStage {
@@ -854,14 +908,20 @@ impl ConversationCommandStage {
     }
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
 pub enum ConversationCommandOutcome {
+    #[serde(rename = "dispatched")]
     Dispatched,
+    #[serde(rename = "withdrawn")]
     Withdrawn,
+    #[serde(rename = "cancelled")]
     Cancelled,
+    #[serde(rename = "already_final")]
     AlreadyFinal,
+    #[serde(rename = "no_effect")]
     NoEffect,
+    #[serde(rename = "refused_after_save")]
     RefusedAfterSave,
+    #[serde(rename = "unavailable_after_save")]
     UnavailableAfterSave,
 }
 impl ConversationCommandOutcome {
@@ -919,10 +979,12 @@ pub struct ConversationReceiptResult {
     pub outcome: Option<ConversationCommandOutcome>,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
 pub enum ConversationPermissionSelectionState {
+    #[serde(rename = "pending")]
     Pending,
+    #[serde(rename = "consumed")]
     Consumed,
+    #[serde(rename = "unknown")]
     Unknown,
 }
 impl ConversationPermissionSelectionState {
@@ -1008,10 +1070,12 @@ pub struct ConversationDeleteParams {
     pub request_id: String,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
 pub enum ConversationCapability {
+    #[serde(rename = "read")]
     Read,
+    #[serde(rename = "comment")]
     Comment,
+    #[serde(rename = "drive")]
     Drive,
 }
 impl ConversationCapability {
@@ -1024,11 +1088,14 @@ impl ConversationCapability {
     }
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
 pub enum ConversationToolPreset {
+    #[serde(rename = "read_only_tools")]
     ReadOnlyTools,
+    #[serde(rename = "no_shell")]
     NoShell,
+    #[serde(rename = "ask_everything")]
     AskEverything,
+    #[serde(rename = "all")]
     All,
 }
 impl ConversationToolPreset {
@@ -1133,11 +1200,14 @@ pub struct ConversationReorderParams {
     pub execution_ids: Vec<String>,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
 pub enum ConversationReorderOutcome {
+    #[serde(rename = "applied")]
     Applied,
+    #[serde(rename = "unchanged")]
     Unchanged,
+    #[serde(rename = "queue_changed")]
     QueueChanged,
+    #[serde(rename = "priority_conflict")]
     PriorityConflict,
 }
 impl ConversationReorderOutcome {
@@ -1201,9 +1271,10 @@ pub struct ConversationPart {
     pub message_id: Option<String>,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
 pub enum ConversationPermissionAsk {
+    #[serde(rename = "tool")]
     Tool,
+    #[serde(rename = "message")]
     Message,
 }
 impl ConversationPermissionAsk {
@@ -1215,9 +1286,10 @@ impl ConversationPermissionAsk {
     }
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
 pub enum ConversationPermissionOriginKind {
+    #[serde(rename = "harness")]
     Harness,
+    #[serde(rename = "app")]
     App,
 }
 impl ConversationPermissionOriginKind {
@@ -1341,9 +1413,10 @@ pub struct McpRemoteErrorDetails {
     pub message: String,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
 pub enum McpServerKind {
+    #[serde(rename = "stdio")]
     Stdio,
+    #[serde(rename = "remote")]
     Remote,
 }
 impl McpServerKind {
@@ -1375,15 +1448,22 @@ pub struct McpServerListEntry {
     pub authorization: Option<McpServerAuthorization>,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
 pub enum McpAuthorizationPhase {
+    #[serde(rename = "unauthenticated")]
     Unauthenticated,
+    #[serde(rename = "consent_needed")]
     ConsentNeeded,
+    #[serde(rename = "pending_consent")]
     PendingConsent,
+    #[serde(rename = "ready")]
     Ready,
+    #[serde(rename = "scope_required")]
     ScopeRequired,
+    #[serde(rename = "authorization_incomplete")]
     AuthorizationIncomplete,
+    #[serde(rename = "revoking")]
     Revoking,
+    #[serde(rename = "revocation_incomplete")]
     RevocationIncomplete,
 }
 impl McpAuthorizationPhase {
@@ -1401,10 +1481,12 @@ impl McpAuthorizationPhase {
     }
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
 pub enum McpRemoteObservation {
+    #[serde(rename = "acknowledged")]
     Acknowledged,
+    #[serde(rename = "unsupported")]
     Unsupported,
+    #[serde(rename = "unconfirmed")]
     Unconfirmed,
 }
 impl McpRemoteObservation {
@@ -1518,19 +1600,30 @@ pub struct McpServersWriteResult {
     pub live: bool,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
 pub enum McpServerProblemCode {
+    #[serde(rename = "too_many")]
     TooMany,
+    #[serde(rename = "duplicate_name")]
     DuplicateName,
+    #[serde(rename = "name")]
     Name,
+    #[serde(rename = "command")]
     Command,
+    #[serde(rename = "arguments")]
     Arguments,
+    #[serde(rename = "environment_name")]
     EnvironmentName,
+    #[serde(rename = "reserved_environment_name")]
     ReservedEnvironmentName,
+    #[serde(rename = "environment_value")]
     EnvironmentValue,
+    #[serde(rename = "environment_value_missing")]
     EnvironmentValueMissing,
+    #[serde(rename = "environment_name_repeated")]
     EnvironmentNameRepeated,
+    #[serde(rename = "url")]
     Url,
+    #[serde(rename = "duplicate_server_id")]
     DuplicateServerId,
 }
 impl McpServerProblemCode {
@@ -1588,11 +1681,14 @@ pub struct McpServersInspectParams {
     pub name: String,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
 pub enum McpServersInspectCut {
+    #[serde(rename = "tools")]
     Tools,
+    #[serde(rename = "ui")]
     Ui,
+    #[serde(rename = "bytes")]
     Bytes,
+    #[serde(rename = "stopping")]
     Stopping,
 }
 impl McpServersInspectCut {
@@ -1632,32 +1728,56 @@ pub struct McpServersInspectResult {
     pub tools: Vec<McpInspectedTool>,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
 pub enum McpServersErrorCode {
+    #[serde(rename = "mcp_servers_not_configured")]
     McpServersNotConfigured,
+    #[serde(rename = "mcp_servers_invalid")]
     McpServersInvalid,
+    #[serde(rename = "mcp_servers_reserved_name")]
     McpServersReservedName,
+    #[serde(rename = "mcp_servers_not_found")]
     McpServersNotFound,
+    #[serde(rename = "mcp_servers_revision_conflict")]
     McpServersRevisionConflict,
+    #[serde(rename = "mcp_servers_busy")]
     McpServersBusy,
+    #[serde(rename = "mcp_servers_config_invalid")]
     McpServersConfigInvalid,
+    #[serde(rename = "mcp_servers_config_too_large")]
     McpServersConfigTooLarge,
+    #[serde(rename = "mcp_servers_storage_unavailable")]
     McpServersStorageUnavailable,
+    #[serde(rename = "audit_unavailable")]
     AuditUnavailable,
+    #[serde(rename = "mcp_servers_stopping")]
     McpServersStopping,
+    #[serde(rename = "mcp_server_start_failed")]
     McpServerStartFailed,
+    #[serde(rename = "mcp_server_timed_out")]
     McpServerTimedOut,
+    #[serde(rename = "mcp_server_gone")]
     McpServerGone,
+    #[serde(rename = "mcp_server_malformed")]
     McpServerMalformed,
+    #[serde(rename = "mcp_server_remote_error")]
     McpServerRemoteError,
+    #[serde(rename = "mcp_server_unreachable")]
     McpServerUnreachable,
+    #[serde(rename = "mcp_server_unauthorized")]
     McpServerUnauthorized,
+    #[serde(rename = "mcp_server_insufficient_scope")]
     McpServerInsufficientScope,
+    #[serde(rename = "mcp_server_session_collision")]
     McpServerSessionCollision,
+    #[serde(rename = "mcp_servers_authorization_held")]
     McpServersAuthorizationHeld,
+    #[serde(rename = "mcp_servers_store_unavailable")]
     McpServersStoreUnavailable,
+    #[serde(rename = "mcp_servers_registration_unsupported")]
     McpServersRegistrationUnsupported,
+    #[serde(rename = "mcp_servers_discovery_failed")]
     McpServersDiscoveryFailed,
+    #[serde(rename = "mcp_servers_authorization_incomplete")]
     McpServersAuthorizationIncomplete,
 }
 impl McpServersErrorCode {
@@ -1740,10 +1860,12 @@ pub struct ConversationAnswerQuestionParams {
     pub choices: Option<Vec<ConversationQuestionChoice>>,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
 pub enum ApprovalMode {
+    #[serde(rename = "ask")]
     Ask,
+    #[serde(rename = "auto")]
     Auto,
+    #[serde(rename = "full")]
     Full,
 }
 impl ApprovalMode {
@@ -1861,10 +1983,12 @@ pub struct AgentInstallResult {
     pub cleanup_pending: bool,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
 pub enum InstallableAgent {
+    #[serde(rename = "claude")]
     Claude,
+    #[serde(rename = "codex")]
     Codex,
+    #[serde(rename = "opencode")]
     Opencode,
 }
 impl InstallableAgent {
@@ -2067,10 +2191,12 @@ pub struct PhoneAuthorizationStatus {
     pub activation_stopped: Option<PairingActivationStop>,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
 pub enum PairingEnrollee {
+    #[serde(rename = "device")]
     Device,
+    #[serde(rename = "gateway")]
     Gateway,
+    #[serde(rename = "environment")]
     Environment,
 }
 impl PairingEnrollee {
@@ -2100,13 +2226,18 @@ pub struct PairingApproveParams {
     pub device_key: [u8; DeviceKey::LENGTH],
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
 pub enum PairingOwnerPhase {
+    #[serde(rename = "available")]
     Available,
+    #[serde(rename = "claimed")]
     Claimed,
+    #[serde(rename = "approved")]
     Approved,
+    #[serde(rename = "staging")]
     Staging,
+    #[serde(rename = "active")]
     Active,
+    #[serde(rename = "terminal")]
     Terminal,
 }
 impl PairingOwnerPhase {
@@ -2122,12 +2253,16 @@ impl PairingOwnerPhase {
     }
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
 pub enum PairingTerminalCause {
+    #[serde(rename = "credential_revoked")]
     CredentialRevoked,
+    #[serde(rename = "denied")]
     Denied,
+    #[serde(rename = "cancelled")]
     Cancelled,
+    #[serde(rename = "expired")]
     Expired,
+    #[serde(rename = "restarted")]
     Restarted,
 }
 impl PairingTerminalCause {
@@ -2142,11 +2277,14 @@ impl PairingTerminalCause {
     }
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
 pub enum PairingInitiatorKind {
+    #[serde(rename = "local_operator")]
     LocalOperator,
+    #[serde(rename = "principal")]
     Principal,
+    #[serde(rename = "device")]
     Device,
+    #[serde(rename = "system")]
     System,
 }
 impl PairingInitiatorKind {
@@ -2202,9 +2340,10 @@ pub struct PairingOwnerStatus {
     pub cleanup_pending: bool,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
 pub enum PairingActivationStop {
+    #[serde(rename = "retryable")]
     Retryable,
+    #[serde(rename = "permanent")]
     Permanent,
 }
 impl PairingActivationStop {
@@ -2234,15 +2373,22 @@ pub struct PairingPendingResult {
     pub items: Vec<PairingOwnerStatus>,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
 pub enum PairingErrorCode {
+    #[serde(rename = "pairing_not_configured")]
     PairingNotConfigured,
+    #[serde(rename = "pairing_not_found")]
     PairingNotFound,
+    #[serde(rename = "pairing_slot_occupied")]
     PairingSlotOccupied,
+    #[serde(rename = "pairing_capacity")]
     PairingCapacity,
+    #[serde(rename = "pairing_conflict")]
     PairingConflict,
+    #[serde(rename = "pairing_ineligible")]
     PairingIneligible,
+    #[serde(rename = "pairing_busy")]
     PairingBusy,
+    #[serde(rename = "pairing_unavailable")]
     PairingUnavailable,
 }
 impl PairingErrorCode {
@@ -2280,11 +2426,14 @@ pub struct PeerRelayParams {
     pub relay: Option<String>,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
 pub enum PeerPhase {
+    #[serde(rename = "pending")]
     Pending,
+    #[serde(rename = "active")]
     Active,
+    #[serde(rename = "revoked")]
     Revoked,
+    #[serde(rename = "unreadable")]
     Unreadable,
 }
 impl PeerPhase {
@@ -2314,14 +2463,20 @@ pub struct PeerGateway {
     pub sync: Option<PeerSync>,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
 pub enum PeerSyncState {
+    #[serde(rename = "waiting")]
     Waiting,
+    #[serde(rename = "synced")]
     Synced,
+    #[serde(rename = "syncing")]
     Syncing,
+    #[serde(rename = "unreachable")]
     Unreachable,
+    #[serde(rename = "away")]
     Away,
+    #[serde(rename = "failed")]
     Failed,
+    #[serde(rename = "quota")]
     Quota,
 }
 impl PeerSyncState {
@@ -2352,18 +2507,28 @@ pub struct PeerListResult {
     pub items: Vec<PeerGateway>,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
 pub enum PeerErrorCode {
+    #[serde(rename = "peer_not_configured")]
     PeerNotConfigured,
+    #[serde(rename = "peer_not_found")]
     PeerNotFound,
+    #[serde(rename = "peer_exists")]
     PeerExists,
+    #[serde(rename = "peer_capacity")]
     PeerCapacity,
+    #[serde(rename = "peer_busy")]
     PeerBusy,
+    #[serde(rename = "peer_unreachable")]
     PeerUnreachable,
+    #[serde(rename = "peer_invitation_refused")]
     PeerInvitationRefused,
+    #[serde(rename = "peer_wrong_invitation")]
     PeerWrongInvitation,
+    #[serde(rename = "peer_own_gateway")]
     PeerOwnGateway,
+    #[serde(rename = "peer_unavailable")]
     PeerUnavailable,
+    #[serde(rename = "peer_audit_unavailable")]
     PeerAuditUnavailable,
 }
 impl PeerErrorCode {
@@ -2467,11 +2632,14 @@ pub struct ConversationListed {
     pub list: ConversationListResult,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
 pub enum ConversationSubscriptionEndReason {
+    #[serde(rename = "lagging")]
     Lagging,
+    #[serde(rename = "refused")]
     Refused,
+    #[serde(rename = "source_closed")]
     SourceClosed,
+    #[serde(rename = "too_large")]
     TooLarge,
 }
 impl ConversationSubscriptionEndReason {
@@ -2497,11 +2665,14 @@ pub struct ConversationSubscriptionEnded {
     pub last_delivered: Option<ConversationViewCursor>,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
 pub enum ConversationSubscriptionErrorCode {
+    #[serde(rename = "subscription_capacity")]
     SubscriptionCapacity,
+    #[serde(rename = "subscription_duplicate")]
     SubscriptionDuplicate,
+    #[serde(rename = "unknown_subscription")]
     UnknownSubscription,
+    #[serde(rename = "cursor_ahead")]
     CursorAhead,
 }
 impl ConversationSubscriptionErrorCode {
@@ -2515,9 +2686,10 @@ impl ConversationSubscriptionErrorCode {
     }
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
 pub enum ConversationMessageDelivery {
+    #[serde(rename = "record_only")]
     RecordOnly,
+    #[serde(rename = "next_turn")]
     NextTurn,
 }
 impl ConversationMessageDelivery {
@@ -2529,11 +2701,14 @@ impl ConversationMessageDelivery {
     }
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
 pub enum ConversationMessageState {
+    #[serde(rename = "recorded")]
     Recorded,
+    #[serde(rename = "pending")]
     Pending,
+    #[serde(rename = "assigned")]
     Assigned,
+    #[serde(rename = "retired")]
     Retired,
 }
 impl ConversationMessageState {
@@ -2547,9 +2722,10 @@ impl ConversationMessageState {
     }
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
 pub enum ConversationMessageRetiredReason {
+    #[serde(rename = "expired")]
     Expired,
+    #[serde(rename = "permission_lost")]
     PermissionLost,
 }
 impl ConversationMessageRetiredReason {
@@ -2584,9 +2760,10 @@ pub struct ConversationNote {
     pub author: ConversationNoteAuthor,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
 pub enum ConversationNoteAuthorKind {
+    #[serde(rename = "owner")]
     Owner,
+    #[serde(rename = "grant")]
     Grant,
 }
 impl ConversationNoteAuthorKind {
@@ -2646,9 +2823,10 @@ pub struct ConversationMessageStatusResult {
     pub retired_reason: Option<ConversationMessageRetiredReason>,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
 pub enum PermissionRuleEffect {
+    #[serde(rename = "allow")]
     Allow,
+    #[serde(rename = "deny")]
     Deny,
 }
 impl PermissionRuleEffect {
@@ -2706,7 +2884,6 @@ pub struct PermissionReviewWaiting {
     pub reviews: Vec<PermissionReviewNotice>,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
 pub enum ConversationEventKind {
     #[serde(rename = "turn.accepted")]
     TurnAccepted,
@@ -2765,6 +2942,43 @@ pub struct ConversationEvents {
     pub subscription_id: ConversationSubscriptionId,
     pub cursor: ConversationEventCursor,
     pub events: Vec<ConversationEvent>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationSetModelParams {
+    pub conversation_id: String,
+    pub request_id: String,
+    pub model: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationSetModelResult {
+    pub request_id: String,
+    pub model: String,
+    pub approval_mode: ApprovalMode,
+    pub effect: ModelChangeEffect,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub enum ModelChangeEffect {
+    #[serde(rename = "subsequentResponses")]
+    SubsequentResponses,
+    #[serde(rename = "nextTurn")]
+    NextTurn,
+}
+impl ModelChangeEffect {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::SubsequentResponses => "subsequentResponses",
+            Self::NextTurn => "nextTurn",
+        }
+    }
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ModelChange {
+    pub request_id: String,
+    pub status: String,
+    pub requested_model: String,
 }
 pub const MAX_CHANGE_WATCH_ID_BYTES: usize = 57;
 pub const CHANGE_WATCH_ID_PATTERN: &str =
@@ -2927,6 +3141,7 @@ pub mod product_method {
     pub const CONVERSATION_REVOKE_PERMISSION_RULE: &str = "conversation.revokePermissionRule";
     pub const CONVERSATION_SUBSCRIBE_EVENTS: &str = "conversation.subscribeEvents";
     pub const CONVERSATION_PEEK: &str = "conversation.peek";
+    pub const CONVERSATION_SET_MODEL: &str = "conversation.setModel";
 }
 pub mod product_event {
     pub const SESSION_CHALLENGE: &str = "session.challenge";
@@ -3119,7 +3334,7 @@ pub fn wire_shape_product_session_ready(value: &Value) -> bool {
         }) && object.get("methods").is_some_and(|field| {
             let _ = field;
             field.as_array().is_some_and(|items| {
-                items.len() <= 77
+                items.len() <= 78
                     && items.iter().all(|item| {
                         let _ = item;
                         item.is_string()
@@ -3221,6 +3436,7 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "conversation.revokePermissionRule",
     "conversation.subscribeEvents",
     "conversation.peek",
+    "conversation.setModel",
 ];
 /// The grant Cedar is asked for before this method is dispatched.
 ///
@@ -3300,7 +3516,8 @@ pub fn action_for_method(method: &str) -> Option<&'static str> {
         | "conversation.permissionRules"
         | "conversation.revokePermissionRule"
         | "conversation.subscribeEvents"
-        | "conversation.peek" => Some("conversation.write"),
+        | "conversation.peek"
+        | "conversation.setModel" => Some("conversation.write"),
         "conversation.recordsHead"
         | "conversation.recordsPage"
         | "artifact.read"

@@ -236,6 +236,8 @@ impl WatchFixture {
             .save_changes(
                 loaded.binding().clone(),
                 SessionSnapshot {
+                    model_change: None,
+                    current_configuration: None,
                     id,
                     provider,
                     provider_context: context,

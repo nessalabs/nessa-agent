@@ -1,5 +1,7 @@
 #![deny(missing_docs)]
 
+use crate::domain::model_metadata::value_objects::EffortLevel;
+
 use super::{
     CleanupFuture, ImageInputRefusal, OperationCapabilities, ProviderExecutionFuture,
     ProviderExecutionReply, ProviderOperationFailure, ProviderOperationFuture,
@@ -25,13 +27,13 @@ use crate::domain::{
         CapabilityError, CapabilityRequirement, EffectiveCapabilities, Modality,
     },
 };
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 /// Low-level adapter handle; SDK consumers should invoke the public Agent.
 /// Adapters construct this handle; runtime controls are crate-private so callers
 /// go through Agent storage, hooks, and scheduling.
 /// A provider context client. Clones share its execution, shutdown, and restoration lifecycle.
-/// Admission uses the same immutable capabilities selected at session creation,
+/// Admission uses the operation-selected model capability snapshot,
 /// the connected agent's negotiated answer on images when that is known, and the
 /// backend's own `validate_input`.
 /// The backend owns execution concurrency and cleanup; the host authorizes answers.
@@ -49,7 +51,7 @@ use std::sync::Arc;
 pub struct ProviderSession {
     id: ExecutionSessionId,
     backend: Arc<dyn ProviderSessionBackend>,
-    capabilities: EffectiveCapabilities,
+    capabilities: Arc<RwLock<EffectiveCapabilities>>,
 }
 impl ProviderSession {
     pub(crate) fn permission_authority(
@@ -78,12 +80,13 @@ impl ProviderSession {
     }
     pub(crate) fn set_effort_level(
         &self,
-        level: crate::domain::model_metadata::value_objects::EffortLevel,
+        level: EffortLevel,
     ) -> super::ProviderOperationFuture<'_, ()> {
         self.backend.set_effort_level(level)
     }
-    /// Wrap `backend` with its provider context `id` and immutable model admission
-    /// `capabilities`. Construction performs no I/O and opens no provider context.
+    /// Wrap `backend` with its provider context `id` and initial model admission
+    /// `capabilities`, replaced by an SDK-owned acknowledged model change.
+    /// Construction performs no I/O and opens no provider context.
     /// The provider backend retains the audit sink used for provider effects; the
     /// owning [`Agent`](crate::application::agent_execution::agents::Agent) receives
     /// the application audit sink when it is prepared.
@@ -95,7 +98,7 @@ impl ProviderSession {
         Self {
             id,
             backend,
-            capabilities,
+            capabilities: Arc::new(RwLock::new(capabilities)),
         }
     }
     pub(crate) fn prepare_invocation(&self) -> ProviderOperationFuture<'_, ()> {
@@ -105,9 +108,24 @@ impl ProviderSession {
     pub fn id(&self) -> &ExecutionSessionId {
         &self.id
     }
-    /// Model admission limits selected for this attachment.
-    pub fn capabilities(&self) -> &EffectiveCapabilities {
-        &self.capabilities
+    /// Owned snapshot of the model admission limits currently acknowledged on this attachment.
+    pub fn capabilities(&self) -> EffectiveCapabilities {
+        self.capabilities
+            .read()
+            .expect("provider model capabilities")
+            .clone()
+    }
+    pub(crate) async fn set_model(
+        &self,
+        change: super::ModelChange,
+        capabilities: EffectiveCapabilities,
+    ) -> Result<super::ModelChangeEffect, ProviderOperationFailure> {
+        let effect = self.backend.set_model(change, capabilities).await?;
+        *self
+            .capabilities
+            .write()
+            .expect("provider model capabilities") = effect.capabilities().clone();
+        Ok(effect)
     }
     /// Read the backend's current operation support without reconnecting.
     /// Unlike model capabilities, this snapshot may change after restoration.
@@ -132,8 +150,15 @@ impl ProviderSession {
     /// restored agent takes no images. A closed context keeps its last
     /// negotiation, because the same agent is what a restoration would start.
     pub(crate) fn validate(&self, input: &ExecutionRequest) -> Result<(), AgentError> {
+        self.validate_with_capabilities(&self.capabilities(), input)
+    }
+    fn validate_with_capabilities(
+        &self,
+        capabilities: &EffectiveCapabilities,
+        input: &ExecutionRequest,
+    ) -> Result<(), AgentError> {
         let images = input.user_message.images();
-        validate_configured_input(&self.capabilities, input)?;
+        validate_configured_input(capabilities, input)?;
         if !images.is_empty() {
             let agent = self.operation_capabilities();
             if agent.negotiated() && !agent.image_input() {
@@ -142,7 +167,7 @@ impl ProviderSession {
                 ));
             }
         }
-        self.backend.validate_input(input)
+        self.backend.validate_input(input, capabilities)
     }
     /// Dispatch `input` after checking actual message bytes and caller-estimated tokens.
     /// This adapter operation does not persist evidence or run Agent hooks.
@@ -160,7 +185,9 @@ impl ProviderSession {
             }
         })
     }
-    /// Steer an identified active invocation after the usual input admission checks.
+    /// Steer an identified active invocation using its selected admission binding.
+    /// The caller retains that immutable binding across admission and delivery;
+    /// the attachment's current selection may govern a later native turn.
     /// Provider acknowledgements distinguish injection from unconsumed idle input.
     /// `started` is the host's handoff, forwarded to the backend: see
     /// [`ProviderSessionBackend::steer`](super::ports::ProviderSessionBackend::steer).
@@ -168,17 +195,20 @@ impl ProviderSession {
         &'a self,
         target: ExecutionId,
         input: ExecutionRequest,
+        capabilities: &'a EffectiveCapabilities,
         started: &'a (dyn Fn() + Send + Sync),
     ) -> ProviderOperationFuture<'a, SteeringOutcome> {
         Box::pin(async move {
-            if let Err(error) = self.validate(&input) {
+            if let Err(error) = self.validate_with_capabilities(capabilities, &input) {
                 started();
                 return Err(ProviderOperationFailure::new(
                     error,
                     ProviderSessionState::Usable,
                 ));
             }
-            self.backend.steer(target, input, started).await
+            self.backend
+                .steer(target, input, capabilities, started)
+                .await
         })
     }
     /// Delegate the exact reviewed choice and actor to the backend's audit and

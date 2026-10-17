@@ -231,6 +231,8 @@ async fn seed(
     let provider = ProviderIdentity::new("claude", "claude-sonnet-5", "workspace")?;
     let context = ProviderContext::Recorded(ExecutionSessionId::new("bench-provider-session")?);
     let mut snapshot = SessionSnapshot {
+        model_change: None,
+        current_configuration: None,
         id: id.clone(),
         provider: provider.clone(),
         provider_context: context.clone(),

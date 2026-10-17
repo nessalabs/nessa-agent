@@ -5,6 +5,7 @@ use nessa_sdk::application::agent_execution::hooks::{
     HookRegistration, InvocationContext, InvocationHook, InvocationObservationWindow,
     ObservationKind, PhrasePresence, ProposedToolCall, ToolVerdict,
 };
+use nessa_sdk::application::agent_execution::providers::HarnessHostIdentity;
 use nessa_sdk::domain::agent_execution::executions::{GrantInitiator, Initiation};
 use nessa_sdk::domain::agent_execution::permissions::RefusalOutcome;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -341,6 +342,9 @@ struct ScriptedProvider {
 }
 
 impl AgentProvider for ScriptedProvider {
+    fn harness_host_identity(&self) -> HarnessHostIdentity<'_> {
+        HarnessHostIdentity::local()
+    }
     /// Ask, so a grant's checked turn may be sent here.
     fn approval_mode(
         &self,

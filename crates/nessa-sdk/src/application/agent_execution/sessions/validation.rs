@@ -164,6 +164,23 @@ pub(crate) fn validate(snapshot: &SessionSnapshot) -> Result<(), StorageError> {
 pub(super) fn continuation(
     snapshot: &SessionSnapshot,
 ) -> Result<Vec<InvocationContinuation>, StorageError> {
+    if snapshot
+        .model_change
+        .as_ref()
+        .is_some_and(|record| record.change().after() != &snapshot.provider)
+    {
+        return Err(StorageError::IdentityMismatch);
+    }
+
+    match snapshot.current_configuration.as_ref() {
+        Some(record) => record
+            .validate_relationship(snapshot.model_change.as_ref())
+            .map_err(corrupt)?,
+        None if snapshot.model_change.is_some() => {
+            return Err(corrupt("model change lacks current configuration"))
+        }
+        None => {}
+    }
     #[cfg(test)]
     VALIDATION_CALLS.with(|calls| {
         let (full, history) = calls.get();
