@@ -781,10 +781,15 @@ fn watch_pass(child: &mut WatchChild, trigger: &str, facts: u64) -> Instant {
 /// `source_preparing` before it (row W17: a slow cold read) are skipped; the
 /// pass that follows them carries `trigger: preparing`.
 fn watch_pass_report(child: &mut WatchChild, trigger: &str, facts: u64) -> (Value, Instant) {
+    eprintln!("paired-reader awaiting pass trigger={trigger} expected_facts={facts}");
     let (mut line, mut at) = watch_line(child, "pass");
+    let expected_trigger = trigger;
+    let mut preparing_attempts = 0;
     let mut trigger = trigger;
     while line["report"]["transportFailure"]["productCode"] == "source_preparing" {
         assert_eq!(line["report"]["successful"], false, "{line}");
+        preparing_attempts += 1;
+        eprintln!("paired-reader preparing trigger={expected_trigger} attempts={preparing_attempts} expected_facts={facts}");
         (line, at) = watch_line(child, "pass");
         trigger = "preparing";
     }
@@ -796,6 +801,7 @@ fn watch_pass_report(child: &mut WatchChild, trigger: &str, facts: u64) -> (Valu
         facts.to_string(),
         "{line}"
     );
+    eprintln!("paired-reader pass trigger={expected_trigger} preparing_attempts={preparing_attempts} facts={facts}");
     (line["report"].clone(), at)
 }
 fn watch_hint(child: &mut WatchChild, watch: &Value, during_pass: bool) {

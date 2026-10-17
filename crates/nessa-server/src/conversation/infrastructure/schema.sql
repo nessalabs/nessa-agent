@@ -1,5 +1,5 @@
 -- Conversation metadata. The one definition, version included (the last
--- line), which the server includes (`store.rs`).
+-- part in store/catalogue_heads.sql), which the server includes (`store.rs`).
 -- See docs/adr/done/196-conversation-metadata-database.md.
 --
 -- Columns hold stored text and numbers, and a flag is 0 or 1, the file's
@@ -155,5 +155,3 @@ CREATE UNIQUE INDEX share_grant_changes_request
 -- through (`granted_head` in store.rs).
 CREATE INDEX share_grant_changes_by_receiver
     ON share_grant_changes (receiver_id, revision);
-
-PRAGMA user_version = 6;

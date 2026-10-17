@@ -14,6 +14,16 @@ of that selection and owns all doctests. Linux/macOS use `all`. Unit and real
 process tests assert the partition union and intersection; workflow-contract
 tests hold the build arguments, platform coverage, guards and aggregate needs.
 
+`paired-reader-load.mjs` reuses that exact package selection and existing server
+library discovery for #746's macOS-only check. Ten independent two-device fixture
+runs share four CPU workers; failures and zero matched tests stay red even if
+later runs pass. A per-run log and partial JSON ledger are retained under
+`target/paired-reader-macos-load`, with requested PR head, tested checkout and
+binary digest. The macOS matrix uploads them on success or failure. Historical
+Linux median 9.1 s/run suggests 1–3 warm minutes; the workflow caps the step at
+ten minutes without changing product timeouts. Worker cleanup and the failure
+ledger are covered by `paired-reader-load.test.mjs` in the existing gateway job.
+
 | Result | Next action |
 | --- | --- |
 | Build fails or emits no executable | Fail before running tests |

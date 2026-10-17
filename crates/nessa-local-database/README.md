@@ -11,8 +11,10 @@ and [ADR 202](../../docs/adr/todo/202-versioned-local-datasets.md).
   it by name, so a process running as this same user could swap the name in
   between; that is not guarded against, since such a process can read the file
   anyway. What this keeps out is every other user.
-- A file at another version is refused before anything persistent in it
-  changes, its journal mode included.
+- A file at an unsupported version is refused before anything persistent in it
+  changes, its journal mode included. A context can explicitly register one
+  preserving predecessor transformation with `Schema::upgrading_from`; no other
+  context or predecessor gains upgrade support.
 - Every connection enforces foreign keys, keeps a rollback journal synced in
   full, and overwrites deleted rows (`secure_delete`). It uses a rollback journal
   rather than a write-ahead log so that erased data leaves no readable page
@@ -26,11 +28,18 @@ and [ADR 202](../../docs/adr/todo/202-versioned-local-datasets.md).
   every page once, at open. Both describe the file,
   not the moment, so a caller can refuse them for good
   ([ADR 202](../../docs/adr/todo/202-versioned-local-datasets.md)). There are no
-  in-place migrations during alpha.
+  automatic in-place migrations during alpha. The explicitly authorized #724
+  conversation metadata upgrade is an opt-in exception: the context owns its
+  transformation; this opener owns the immediate write transaction, integrity
+  check, version recheck, atomic commit and rollback. Errors and a wrong resulting
+  version leave the old version and logical rows intact. Reopening the target
+  version does not rerun the transformation. Supported files may have their
+  journal mode normalized before that transaction, as ordinary opens do.
 
 ## Module map
 
 | Path | Responsibility |
 | --- | --- |
 | `src/lib.rs` | `Schema`, `OpenError`, and `open`: private file creation, connection pragmas, and the version check. Re-exports `rusqlite` so every context uses the one version. |
+| `tests/upgrade.rs` | Explicit predecessor conversion, rollback/retry, target-version validation, version refusal and competing openers. |
 | `tests/open.rs` | Schema application and reopening, version refusal, the stated-version rule, pragmas and erasure, and private-file and private-directory refusal. |

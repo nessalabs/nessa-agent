@@ -1,6 +1,8 @@
 //! Ownership, tombstones and summaries in one database: create-once
 //! ownership, tombstones and summaries that cannot stand without their record,
 //! rows refused rather than repaired, and a list that reads only its owner's.
+#[path = "store/metadata_upgrade.rs"]
+mod metadata_upgrade;
 use super::store::{list_query, LocalConversationStore, UNFINISHED};
 use crate::conversation::infrastructure::MAX_CATALOGUE_CHANGE_WATCHES;
 use crate::conversation::{
@@ -233,7 +235,7 @@ fn an_alpha_v1_database_is_refused_without_migrating_its_rows() {
         LocalConversationStore::open(&path),
         Err(nessa_local_database::OpenError::Version {
             found: 1,
-            expected: 6
+            expected: 7
         })
     ));
     let old_row: String = raw(&path)
@@ -260,7 +262,7 @@ fn an_alpha_v2_database_is_refused_without_erasing_ownership() {
         LocalConversationStore::open(&path),
         Err(nessa_local_database::OpenError::Version {
             found: 2,
-            expected: 6
+            expected: 7
         })
     ));
     let retained: String = raw(&path)
@@ -2860,7 +2862,7 @@ async fn a_revoke_takes_the_row_out_of_the_devices_catalogue() {
 }
 
 /// A version 4 file, whose grants hold no capability set but read and no
-/// policy, is refused rather than read into the version 6 shape, and keeps
+/// policy, is refused rather than read into the version 7 shape, and keeps
 /// its rows (docs/adr/todo/202-versioned-local-datasets.md).
 #[test]
 fn a_version_4_database_is_refused_without_erasing_its_grants() {
@@ -2884,7 +2886,7 @@ fn a_version_4_database_is_refused_without_erasing_its_grants() {
         LocalConversationStore::open(&path),
         Err(nessa_local_database::OpenError::Version {
             found: 4,
-            expected: 6
+            expected: 7
         })
     ));
     let kept: String = raw(&path)
@@ -2893,8 +2895,8 @@ fn a_version_4_database_is_refused_without_erasing_its_grants() {
     assert_eq!(kept, "phone");
 }
 
-/// The previous metadata version, whose grants name a role, is refused and
-/// left untouched. This build reads version 6 only.
+/// Version 5, whose grants name a role, is refused and left untouched. Only
+/// version 6 has the explicit preserving upgrade to this build's version 7.
 #[test]
 fn a_version_5_database_is_refused_without_erasing_its_grants() {
     let directory = tempfile::tempdir().unwrap();
@@ -2921,7 +2923,7 @@ fn a_version_5_database_is_refused_without_erasing_its_grants() {
         LocalConversationStore::open(&path),
         Err(nessa_local_database::OpenError::Version {
             found: 5,
-            expected: 6
+            expected: 7
         })
     ));
     let kept: String = raw(&path)
@@ -4942,11 +4944,9 @@ async fn paired_catalogue_notices_follow_only_the_readers_head() {
     catalogue_watch_pending(&mut wrong_org);
 }
 
-/// Characterizes the remaining #724 disclosure: an old receiver's head still
-/// advances on later replacements. Preserve cursor agreement until a durable
-/// floor permits narrowing that head without regressing saved boundaries.
+/// A receiver observes its own removal, then stays quiet on later replacements.
 #[tokio::test]
-async fn historical_receiver_replacements_notify_exactly_when_their_head_moves() {
+async fn historical_receiver_replacements_stop_at_their_own_removal() {
     let opened = opened();
     let store = &opened.store;
     let id = new_id();
@@ -4964,10 +4964,14 @@ async fn historical_receiver_replacements_notify_exactly_when_their_head_moves()
         );
         change.principal_id = Some(PrincipalId::new("one-grantee").unwrap());
         assert!(store.change(change).await.unwrap().applied);
-        assert_eq!(
-            catalogue_watch_ready(&mut first),
-            CatalogueWatchState::Dirty
-        );
+        if receiver != "third" {
+            assert_eq!(
+                catalogue_watch_ready(&mut first),
+                CatalogueWatchState::Dirty
+            );
+        } else {
+            catalogue_watch_pending(&mut first);
+        }
         if receiver != "first" {
             assert_eq!(
                 catalogue_watch_ready(&mut second),

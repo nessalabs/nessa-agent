@@ -630,8 +630,10 @@ later binding checks all use directory handles without following links.
 nothing else: a private directory and file through `nessa-local-storage`,
 foreign keys, a rollback journal synced in full, `secure_delete`, and the
 context's schema at the one version its definition states, refusing any other.
-It has no tables of its own and no migrations; each context owns its schema, and
-a schema change ships its own move. See the
+It has no tables or transformations of its own. A context may explicitly opt in
+one preserving predecessor conversion; the opener owns its transaction and
+version checks. The authorized #724 metadata conversion is such an exception;
+other versions remain refused. See the
 [local-database crate](../crates/nessa-local-database/README.md) and
 [ADR 196](adr/done/196-conversation-metadata-database.md).
 
@@ -983,7 +985,10 @@ raise the list bound, and it does not open a provider. `LocalConversationStore`
 (`infrastructure/store.rs`) answers it, and is the repository and the
 `ConversationSummaries` store too: ownership records, tombstones and summaries are
 tables of one private SQLite file, `conversations/metadata.sqlite3`, defined
-once in `infrastructure/schema.sql` and opened by `crates/nessa-local-database`
+in `infrastructure/schema.sql` and `infrastructure/store/catalogue_heads.sql`,
+opened by `crates/nessa-local-database`. `store/catalogue_heads.rs` owns the scoped
+head and its explicit version-6 to version-7 preserving conversion (frozen legacy
+heads keep saved cursor boundaries without following future unrelated retargets)
 ([ADR 196](adr/done/196-conversation-metadata-database.md)).
 The receiver journal is a different file, `receiver-access/receiver-access.sqlite3`
 under the namespace: retirement treats `conversations/` as conversation data,

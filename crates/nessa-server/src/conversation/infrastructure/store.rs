@@ -1,4 +1,5 @@
 mod acquisition;
+mod catalogue_heads;
 mod export;
 mod share_grants;
 
@@ -97,7 +98,10 @@ impl GrantWritePause {
 }
 
 /// The tables and their version, defined once.
-const DEFINITION: &str = include_str!("schema.sql");
+const DEFINITION: &str = concat!(
+    include_str!("schema.sql"),
+    include_str!("store/catalogue_heads.sql")
+);
 
 /// One owner's conversations that a list shows, newest summary first, at most
 /// `?4` of them. The index on `(organization, owner)` finds the owner's rows,
@@ -168,7 +172,9 @@ impl LocalConversationStore {
     /// it whether starting again could help
     /// (docs/adr/todo/202-versioned-local-datasets.md).
     pub fn open(path: &Path) -> Result<Self, OpenError> {
-        let connection = nessa_local_database::open(path, &Schema::new(DEFINITION)?)?;
+        let schema =
+            Schema::new(DEFINITION)?.upgrading_from(6, catalogue_heads::preserve_legacy_heads);
+        let connection = nessa_local_database::open(path, &schema)?;
         Ok(Self {
             connection: Arc::new(Mutex::new(connection)),
             changes: CatalogueChanges::default(),
@@ -348,52 +354,14 @@ fn catalogue_publication(
     )
 }
 
-/// A paired reader's head: the latest revision among the owner's rows granted
-/// to `receiver`, among `receiver`'s grants and revokes, and among later
-/// journal rows that replaced this receiver or its credential. A change of
-/// capabilities or constraints, with the same receiver and credential, is
-/// none of those: it leaves what the receiver reads as it was, and takes no
-/// revision of its own (`docs/design/read-grants.md`, row J4). A revoke, and
-/// a switch of the grant onto another receiver, stamps a new revision, so
-/// the head moves forward and never back: the journal only grows and
-/// conversation rows are never removed. Zero when the receiver was never
-/// granted anything.
+/// The scoped projection and its preserving upgrade share one SQL owner.
 fn granted_head(
     connection: &Connection,
     organization: &OrganizationId,
     owner: &PrincipalId,
     receiver: &str,
 ) -> Result<i64, ConversationError> {
-    connection
-        .query_row(
-            &format!(
-                "SELECT MAX(
-                     COALESCE((SELECT MAX(c.change_revision) FROM conversations AS c
-                               WHERE c.organization = ?1 AND c.owner = ?2 AND {}), 0),
-                     COALESCE((SELECT MAX(j.revision) FROM share_grant_changes AS j
-                               JOIN conversations AS c ON c.id = j.resource_id
-                               WHERE c.organization = ?1 AND c.owner = ?2
-                                 AND j.resource_kind = '{kind}'
-                                 AND j.receiver_id = ?3
-                                 AND (j.before = 'none') <> (j.after = 'none')), 0),
-                     COALESCE((SELECT MAX(later.revision) FROM share_grant_changes AS later
-                               JOIN share_grant_changes AS j
-                                 ON j.resource_kind = later.resource_kind
-                                AND j.resource_id = later.resource_id
-                                AND j.principal_id = later.principal_id
-                                AND j.sequence < later.sequence
-                                AND j.receiver_id = ?3
-                                AND (later.receiver_id IS NOT j.receiver_id
-                                     OR later.credential_id <> j.credential_id)
-                               JOIN conversations AS c ON c.id = later.resource_id
-                               WHERE c.organization = ?1 AND c.owner = ?2
-                                 AND later.resource_kind = '{kind}'), 0))",
-                share_grants::granted("c.id", "?3"),
-                kind = share_grants::CONVERSATION,
-            ),
-            params![organization.as_str(), owner.as_str(), receiver],
-            |row| row.get(0),
-        )
+    catalogue_heads::head(connection, organization.as_str(), owner.as_str(), receiver)
         .map_err(failed)
 }
 

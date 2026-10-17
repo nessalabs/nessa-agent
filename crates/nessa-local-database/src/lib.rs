@@ -38,9 +38,10 @@
 //! `quick_check` finds damaged is [`OpenError::Damaged`]. Those are what
 //! the file holds, so opening again cannot change them, and a caller can tell
 //! them from a failure that can clear (docs/adr/todo/202-versioned-local-datasets.md).
-//! There are no in-place migrations: during alpha a schema change bumps the
-//! version and nothing moves the old file, because a reader for an older shape
-//! is what "One current contract" forbids.
+//! Other versions are refused by default. A context may explicitly register one
+//! preserving predecessor upgrade with [`Schema::upgrading_from`]. The opener
+//! validates and transforms that file under one write transaction; a failure
+//! rolls back its version and logical data (`a_failed_upgrade_rolls_back_and_can_retry`).
 use rusqlite::{Connection, OpenFlags, TransactionBehavior};
 use std::{fmt, io, path::Path};
 
@@ -51,6 +52,13 @@ pub use rusqlite;
 pub struct Schema {
     version: u32,
     definition: &'static str,
+    upgrade: Option<Upgrade>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct Upgrade {
+    from_version: u32,
+    apply: fn(&rusqlite::Transaction<'_>) -> rusqlite::Result<()>,
 }
 impl Schema {
     /// `definition` holds the statements that create every table and index,
@@ -73,6 +81,7 @@ impl Schema {
             (Some(Ok(version)), None) if version > 0 => Ok(Self {
                 version,
                 definition,
+                upgrade: None,
             }),
             _ => Err(OpenError::UnversionedSchema),
         }
@@ -80,6 +89,25 @@ impl Schema {
     /// The version the definition states.
     pub fn version(&self) -> u32 {
         self.version
+    }
+
+    /// Explicitly accept one positive predecessor below this schema's version.
+    ///
+    /// `apply` owns the context's transformation, including setting the target
+    /// `user_version`. It runs after integrity and version checks under the
+    /// opener's immediate write transaction, and must not commit that transaction.
+    /// An error or wrong resulting version rolls its writes back. A current file
+    /// never invokes it; other versions retain ordinary version refusal.
+    pub fn upgrading_from(
+        mut self,
+        from_version: u32,
+        apply: fn(&rusqlite::Transaction<'_>) -> rusqlite::Result<()>,
+    ) -> Self {
+        self.upgrade = Some(Upgrade {
+            from_version,
+            apply,
+        });
+        self
     }
 }
 
@@ -145,6 +173,8 @@ enum Accepted {
     Current,
     /// No version and no tables: the schema is still to be given.
     Empty,
+    /// The one explicitly supported predecessor, to transform under a write lock.
+    Upgrade,
 }
 
 /// Whether the file is one this schema opens, or refused as another version.
@@ -154,6 +184,13 @@ fn accepted(connection: &Connection, schema: &Schema) -> Result<Accepted, OpenEr
     let found: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
     if found == i64::from(schema.version) {
         return Ok(Accepted::Current);
+    }
+    if schema.upgrade.is_some_and(|upgrade| {
+        upgrade.from_version > 0
+            && upgrade.from_version < schema.version
+            && found == i64::from(upgrade.from_version)
+    }) {
+        return Ok(Accepted::Upgrade);
     }
     let tables: u32 =
         connection.query_row("SELECT count(*) FROM sqlite_schema", [], |row| row.get(0))?;
@@ -215,7 +252,8 @@ fn open_mode(
     // Asked again, and when empty given its schema, under one write lock, so
     // two openers of an empty file cannot both set about creating it.
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    if accepted(&transaction, schema)? == Accepted::Current {
+    let accepted = accepted(&transaction, schema)?;
+    if accepted != Accepted::Empty {
         // A header can be whole over a damaged page that nothing above
         // reads. Every page is read once here, so such a file is refused at
         // open rather than on the first question that reaches it.
@@ -224,12 +262,23 @@ fn open_mode(
         if problem != "ok" {
             return Err(OpenError::Damaged(problem));
         }
-        drop(transaction);
-        return Ok(connection);
+        if accepted == Accepted::Current {
+            drop(transaction);
+            return Ok(connection);
+        }
     }
     // The definition sets its own version, inside the same transaction, and
     // what it set is what it said it would.
-    transaction.execute_batch(schema.definition)?;
+    match accepted {
+        Accepted::Empty => transaction.execute_batch(schema.definition)?,
+        Accepted::Upgrade => {
+            (schema
+                .upgrade
+                .expect("only an opted-in predecessor is accepted")
+                .apply)(&transaction)?;
+        }
+        Accepted::Current => unreachable!("a current schema returned its connection"),
+    }
     let applied: i64 = transaction.pragma_query_value(None, "user_version", |row| row.get(0))?;
     if applied != i64::from(schema.version) {
         return Err(OpenError::Version {

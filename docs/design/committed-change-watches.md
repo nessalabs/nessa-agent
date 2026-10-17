@@ -230,6 +230,23 @@ Placement: the loop is `read_only_sync/application/watch.rs` over two ports (`Wa
 
 `online::online_two_devices_follow_live_hints_and_converge` is the client acceptance (rows L8–L10 above); `online::online_two_devices_catch_up_after_restart_and_revocation_purges_only_the_victim` is row L11. `online::online_replay_then_live_hints_converge_with_a_fresh_replay` stays as the wire acceptance with the probe client. The fixture gateway's `live` mode pairs a second device, and its `hold` and `release` actions make the L9 race deterministic: `hold` arms a `HeadHold` gate (`tests/composition/read_only_online/fixtures/gateway.rs`) that parks the second head read from then on (a `watch`'s discovery reads the first, its recheck pass the second); the test commits while that read is parked, then `release` lets it answer, so the recheck pass reads a head that already holds the commit. No timing is involved.
 
+### Loaded macOS acceptance (#746)
+
+The existing `local-auth` macOS job reuses its compiled server library to run
+`online_two_devices_follow_live_hints_and_converge` ten times with four CPU-load
+workers. The historical Linux median was 9.1 seconds (maximum 15.5), suggesting
+roughly 1–3 minutes of added warm runtime; macOS may take longer. A ten-minute CI
+step bounds the check without increasing any product timeout. Linux results and
+one ordinary macOS pass do not establish this acceptance.
+
+| Ordering / outcome | Required result | Verification |
+| --- | --- | --- |
+| Combined package build completed | Resolve the server library by existing Cargo package/target discovery; reuse the same package selection and artifact | existing discovery/partition tests; hosted load summary |
+| Ten loaded repetitions | Preserve each run's raw log and partial JSON ledger, including preparation diagnostics from the synthetic fixture | paired-reader load runner tests |
+| Any run fails, crashes or matches zero tests | Retain its failure, continue the bounded remaining repetitions, and fail overall; a later success cannot erase it | paired-reader load runner tests |
+| A runner or ledger operation throws | Release all CPU workers before reporting failure | paired-reader load runner tests |
+| Check finishes or fails | Upload the retained logs and summary from the macOS job | workflow contract test |
+
 ### Still separate from this contract
 
 - A long-lived client: the example's `watch` is a bounded run with no reconnect loop, stop signal or continuous status presentation. Catch-up after a lost connection is the next command's recheck from the durable checkpoint (rows S2, L4, L11). A phone client owns a continuous lifecycle.

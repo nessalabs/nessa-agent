@@ -42,6 +42,13 @@ on-disk shape changes ("One current contract"). A store that has no marker
 today is version 1 as written today. The change that first alters its shape
 adds the marker. Nothing is added now, and nothing is deleted by hand.
 
+The later, explicitly authorized #724 exception converts conversation metadata
+version 6 to 7 transactionally, preserving its grants, grant journal, attribution,
+incarnation and saved catalogue boundaries. It does not migrate audit sinks or
+other contexts. The [read-grant upgrade table](../../design/read-grants.md#cursor-preserving-metadata-upgrade-724)
+owns that conversion's ordering and failure contract; unknown predecessors remain
+version refusals.
+
 **2. Three scopes, decided by what the data is.**
 
 | Scope | Stores | What it cannot read |
