@@ -1090,3 +1090,85 @@ async fn an_opening_owner_prevents_historical_cleanup_from_closing_its_lifetime(
     storage.shutdown().await.unwrap();
     drop((storage, metadata));
 }
+
+#[tokio::test]
+async fn stopping_owed_parent_work_cascades_only_after_command_attempt_is_durable() {
+    use nessa_sdk::application::agent_execution::providers::{
+        ExecutionReport, ProviderExecutionReply, ProviderSessionState,
+    };
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("data");
+    let provider = Arc::new(ProviderFactory::default());
+    provider.turn_cancel.store(true, Ordering::SeqCst);
+    let (service, storage, metadata) = fixture(&root, provider.clone());
+    bind(&service, &storage, &root, true).await;
+    let parent = id();
+    opened(&service, &provider, &parent).await;
+    let p = hold_turn(&service, &provider, &parent, "parent").await;
+    let child_id = child(&service, &parent, "parent", "child").await;
+    let c = hold_turn(&service, &provider, &child_id, "child").await;
+    *provider.execution_reply.lock().unwrap() =
+        Some(ProviderExecutionReply::Finished(ExecutionReport::new(
+            Some(Err(AgentError::Transport("pipe".into()))),
+            None,
+            ProviderSessionState::Usable,
+        )));
+    drop(p);
+    let live = service
+        .resolve(&parent, &caller("inspect-owed"))
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !live
+            .agent
+            .owed_turns()
+            .await
+            .iter()
+            .any(|turn| turn.execution_id().as_str() == "parent")
+        {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let faulty: Arc<dyn commands::CreationStorage> = Arc::new(FaultyCommands {
+        storage: storage.clone(),
+        target: parent.clone(),
+        commit: false,
+        stage: MutationStage::Attempted,
+        once: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+    });
+    assert!(service
+        .stop_command(
+            faulty.clone(),
+            parent.clone(),
+            caller("stop-owed"),
+            "parent".into()
+        )
+        .await
+        .is_err());
+    assert!(
+        live.agent
+            .owed_turns()
+            .await
+            .iter()
+            .any(|turn| turn.execution_id().as_str() == "parent"),
+        "failed Attempted persistence cannot perform the root decline"
+    );
+    assert!(
+        provider
+            .cancel_turns
+            .lock()
+            .unwrap()
+            .contains(&"child".to_owned()),
+        "a failed root attempt does not skip its admitted child"
+    );
+    let receipt = service
+        .stop_command(faulty, parent, caller("stop-owed"), "parent".into())
+        .await
+        .unwrap();
+    assert_eq!(receipt.outcome(), Some(MutationOutcome::Withdrawn));
+    assert!(live.agent.owed_turns().await.is_empty());
+    drop((c, live));
+    retire(service, storage, metadata).await;
+}

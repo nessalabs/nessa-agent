@@ -330,11 +330,11 @@ impl ConversationService {
                 .captured_stop_actor(id, turn.execution_id().as_str(), &stop_caller)
                 .await
             {
-                Ok(Some(stopper)) => {
-                    if let Err(error) = live.agent.decline_turn(&turn, stopper).await {
-                        tracing::warn!(conversation_id = %id, %error, "captured Stop decline failed");
-                        unsettled = true;
-                    }
+                Ok(Some(_)) => {
+                    // The admitted exact Stop owns its decline and receipt.
+                    // Resumption waits rather than creating a successor or
+                    // performing an effect outside the mutation owner.
+                    unsettled = true;
                     continue;
                 }
                 Ok(None) => {}

@@ -218,9 +218,9 @@ impl ConversationService {
         })
     }
 
-    /// Stop the named turn. A queued turn is withdrawn. The active turn is
-    /// cancelled without closing the attachment. A finished turn records
-    /// `AlreadyFinal` and sends nothing.
+    /// Stop the named turn: withdraw queued work or decline its owed
+    /// continuation, or cancel its active execution without closing the
+    /// attachment. A final turn with no owed continuation records `AlreadyFinal`.
     pub async fn stop_command(
         &self,
         storage: Arc<dyn CreationStorage>,
@@ -427,6 +427,15 @@ impl MutationTarget for StopTarget {
             let live = service.resolve(&id, &caller).await?;
             if live
                 .agent
+                .owed_turns()
+                .await
+                .iter()
+                .any(|owed| owed.execution_id() == &turn)
+            {
+                return Ok(MutationPlan::Effect);
+            }
+            if live
+                .agent
                 .queued_ids()
                 .await
                 .iter()
@@ -465,6 +474,22 @@ impl MutationTarget for StopTarget {
             let actor = caller
                 .actor()
                 .map_err(CreationInitializationFailure::Target)?;
+            if let Some(owed) = live
+                .agent
+                .owed_turns()
+                .await
+                .into_iter()
+                .find(|owed| owed.execution_id() == &turn)
+            {
+                live.agent
+                    .decline_turn(&owed, actor)
+                    .await
+                    .map_err(|error| {
+                        CreationInitializationFailure::Target(ConversationError::Agent(error))
+                    })?;
+                service.wake_thread_reports(&id);
+                return Ok(MutationOutcome::Withdrawn);
+            }
             if live
                 .agent
                 .queued_ids()

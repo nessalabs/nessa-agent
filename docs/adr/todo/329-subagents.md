@@ -74,6 +74,11 @@ remain independent attempts after admission. An unknown-target durable partial
 selection would require a further command-owner representation and is outside
 this draft's completion claim.
 
+Owed-work decline is an ordinary StopTarget effect, after the existing mutation
+owner has durably recorded Accepted and Attempted. Selection reads it as work;
+its exact root actor is retained. Automatic resumption waits for the admitted command owner instead of declining
+work itself or admitting a successor.
+
 Cold cleanup observes the existing environment/lease owner's exact confirmation.
 It does not claim to end or rewrite that owner's lower lease history. `NotHeld`
 remains unknown for physical release, because an earlier process may outlive an

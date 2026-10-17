@@ -498,10 +498,6 @@ impl ConversationService {
     }
 }
 
-fn selection_actor(caller: &ConversationCaller) -> Result<ActionContext, Failure> {
-    caller.actor().map_err(MutationFailure::Target)
-}
-
 impl ConversationService {
     async fn execute_selected_stop(
         &self,
@@ -525,19 +521,12 @@ impl ConversationService {
             {
                 break;
             }
-            let mut declined = false;
-            for owed in live.agent.owed_turns().await {
-                if owed.execution_id() == binding.turn_id() {
-                    live.agent
-                        .decline_turn(&owed, selection_actor(caller)?)
-                        .await
-                        .map_err(|error| {
-                            MutationFailure::Target(ConversationError::Agent(error))
-                        })?;
-                    declined = true;
-                }
-            }
-            if declined
+            if live
+                .agent
+                .owed_turns()
+                .await
+                .iter()
+                .any(|owed| owed.execution_id() == binding.turn_id())
                 || !live
                     .agent
                     .unsettled_execution_ids()
@@ -554,7 +543,7 @@ impl ConversationService {
         let target = Arc::new(StopTarget {
             service: self.clone(),
             id,
-            caller: target_caller,
+            caller: caller.clone(),
             execution_id: binding.turn_id().as_str().into(),
         });
         MutationCoordinator::new(storage)
