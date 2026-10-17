@@ -213,14 +213,29 @@ impl ConversationService {
         {
             return;
         }
-        // Released before the retry is due, so the retry never meets the
-        // closing agent.
-        if let Some(live) = blocked.and_then(|live| live.upgrade()) {
-            if stuck(&live) {
-                self.release_for_reopen(id, live).await;
+        let mut failed = true;
+        if let Some(waiting) = blocked {
+            // Under the submission lock, as `after_settle` releases, so a
+            // person's message that closes the same agent is ordered with it.
+            let _submissions = self.inner.mode_changes.lock(id).await;
+            if let Some(live) = waiting.upgrade() {
+                if stuck(&live) {
+                    // Released before the retry is due, so the retry never
+                    // meets the closing agent.
+                    if live.agent.is_idle().await {
+                        self.release_for_reopen(id, live).await;
+                    }
+                } else {
+                    // Still connecting is not a failure: it waits as long
+                    // again, and does not count toward `attempts`.
+                    failed = !matches!(
+                        live.agent.attachment_status().phase(),
+                        AttachmentPhase::Waiting | AttachmentPhase::Starting
+                    );
+                }
             }
         }
-        self.schedule_retry(id).await;
+        self.schedule_retry(id, failed).await;
     }
 
     async fn resume_conversation(
@@ -464,7 +479,7 @@ impl ConversationService {
         if stuck(&live) {
             self.release_for_reopen(id, live).await;
         }
-        self.schedule_retry(id).await;
+        self.schedule_retry(id, true).await;
     }
 
     /// Close `live`, an agent that cannot take its retry, and let its slot go
@@ -486,11 +501,12 @@ impl ConversationService {
     }
 
     /// Record that `id`'s next failure retry is due after its backoff, and
-    /// wake the retry loop. A retry already waiting is kept as it is, so a
+    /// wake the retry loop; `failed` counts it as one more failure in a row.
+    /// A retry already waiting is kept as it is, so a
     /// later settle neither puts it off nor counts as another failure. Nothing
     /// is done when `id` is not marked. A deferral that cannot be saved still
     /// runs in this process; after a restart the mark alone resumes it.
-    async fn schedule_retry(&self, id: &ConversationId) {
+    async fn schedule_retry(&self, id: &ConversationId, failed: bool) {
         let (Some(marks), Some(backoff)) = (
             self.inner.unfinished_turns.get(),
             self.inner.failure_backoff.get(),
@@ -499,9 +515,9 @@ impl ConversationService {
         };
         let failures = match self.unfinished_marked().get(id) {
             None | Some(Retry { at_ms: Some(_), .. }) => return,
-            Some(retry) => retry.failures.saturating_add(1),
+            Some(retry) => retry.failures.saturating_add(u32::from(failed)),
         };
-        let delay = u64::try_from(backoff.delay(failures).as_millis()).unwrap_or(u64::MAX);
+        let delay = u64::try_from(backoff.delay(failures.max(1)).as_millis()).unwrap_or(u64::MAX);
         let at_ms = self.inner.clock.unix_milliseconds().saturating_add(delay);
         if let Err(error) = marks.defer(id, failures, at_ms).await {
             tracing::warn!(conversation_id = %id, %error, "a failed turn's retry could not be saved; it still runs, and a restart resumes it");

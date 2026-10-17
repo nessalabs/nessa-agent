@@ -75,13 +75,10 @@ async fn successor_receipt(
                 evidence,
             )))
         };
-        if let Some(SubmissionReceipt::Queued { result, evidence }) = receipts.get(&next) {
-            return Some(queued(result.clone(), evidence.clone()));
-        }
         let record = manager.submission(&next).await?;
         let last = record.scheduling.last()?;
         // Followed only while a later successor is saved: the newest one
-        // answers, however it ended.
+        // answers, however it ended, and an older link's receipt does not.
         if continued(last) {
             if let Some(after) = Resumption::of(&next).successor() {
                 if receipts.contains_key(&after) || manager.submission(&after).await.is_some() {
@@ -89,6 +86,9 @@ async fn successor_receipt(
                     continue;
                 }
             }
+        }
+        if let Some(SubmissionReceipt::Queued { result, evidence }) = receipts.get(&next) {
+            return Some(queued(result.clone(), evidence.clone()));
         }
         let result = match last.stage {
             InvocationStage::Cancelled => record.result.unwrap_or(Err(AgentError::Closed)),
