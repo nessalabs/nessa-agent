@@ -5,6 +5,8 @@ use std::io::Write;
 
 use serde::Serialize;
 
+use super::backup_output::print;
+
 use crate::backup::application::{
     verify_bundle, VerificationFailure, VerificationLimits, VerificationReport,
 };
@@ -46,17 +48,5 @@ pub fn run_backup_verifier(arguments: &[OsString], output: &mut dyn Write) -> u8
     match result {
         Ok(report) => print(output, &VerificationOutput::Verified { report }, 0),
         Err(reason) => print(output, &VerificationOutput::Failed { reason }, 1),
-    }
-}
-
-fn print(output: &mut dyn Write, result: &VerificationOutput, exit: u8) -> u8 {
-    let Ok(mut bytes) = serde_json::to_vec(result) else {
-        return 1;
-    };
-    bytes.push(b'\n');
-    if output.write_all(&bytes).is_ok() {
-        exit
-    } else {
-        1
     }
 }
