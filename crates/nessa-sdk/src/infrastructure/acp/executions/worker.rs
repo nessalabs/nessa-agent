@@ -4401,11 +4401,13 @@ impl AskedQuestions {
     fn key_of(&self, id: &QuestionId) -> Option<String> {
         self.listings.get(id)?.key_of(id)
     }
-    #[cfg(test)]
+    // Only the unix-only worker tests read these.
+    #[cfg(all(test, unix))]
     fn len(&self) -> usize {
         self.open.len()
     }
-    #[cfg(test)]
+    // Only the unix-only worker tests read these.
+    #[cfg(all(test, unix))]
     fn is_empty(&self) -> bool {
         self.open.is_empty()
     }
