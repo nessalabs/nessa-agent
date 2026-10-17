@@ -40,10 +40,15 @@ it("offers measured downloads, coalesces clicks, and refreshes after confirmed i
   })
   expect(source.install).toHaveBeenCalledTimes(1)
   expect(container.textContent).toContain("installation will continue")
+  expect(container.textContent).toContain("Archive size · 87 MB")
+  expect(
+    requiredElement(container, '[role="progressbar"]').hasAttribute("aria-valuenow"),
+  ).toBe(false)
   source.offers.mockResolvedValue([
     { agent: "claude", archiveBytes: 86_966_377, installed: true },
   ])
   await React.act(async () => resolve({ status: "installed", cleanupPending: false }))
+  expect(container.querySelector('[role="progressbar"]')).toBeNull()
   expect(container.textContent).toContain("Installed")
   expect(onChanged).toHaveBeenCalledTimes(1)
   await React.act(async () => root.unmount())
@@ -93,6 +98,7 @@ it.each(["download", "refused", "verification", "busy", "not-confirmed"] as cons
     await React.act(async () => root.render(<AgentDownloads source={source} />))
     await React.act(async () => requiredElement(container, "button").click())
     const status = requiredElement(container, '[role="status"]').textContent
+    expect(container.querySelector('[role="progressbar"]')).toBeNull()
     expect(status).not.toContain("Installed.")
     expect(status?.length).toBeGreaterThan(10)
     if (reason === "refused") {

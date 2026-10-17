@@ -1280,68 +1280,8 @@ fn a_concurrent_hold_of_the_same_bytes_keeps_one_draft() {
     assert_eq!(rows[0].intent().text(), "hello");
 }
 
-#[test]
-fn a_lost_departure_does_not_send_again() {
-    let dir = directory();
-    let path = path_in(&dir);
-    {
-        let mut outbox = opened(&path, Scripted::new(Vec::new(), Vec::new()));
-        person_hold(&mut outbox, text_intent("command-1", "hello"));
-    }
-    let sends = Arc::new(AtomicUsize::new(0));
-    let entered = Arc::new((Mutex::new(false), Condvar::new()));
-    let release = Arc::new((Mutex::new(false), Condvar::new()));
-    let (done_tx, done_rx) = mpsc::channel();
-    let spawn = |path: PathBuf| {
-        let sends = Arc::clone(&sends);
-        let entered = Arc::clone(&entered);
-        let release = Arc::clone(&release);
-        let done_tx = done_tx.clone();
-        thread::spawn(move || {
-            let mut outbox = open(
-                &path,
-                PausingSend {
-                    sends,
-                    entered,
-                    release,
-                },
-                SeqIds::default(),
-                clock(),
-            )
-            .unwrap();
-            let outcome = outbox.send(&command("command-1")).unwrap().outcome();
-            done_tx.send(outcome).unwrap();
-        })
-    };
-    let first = spawn(path.clone());
-    let second = spawn(path.clone());
-    {
-        let (lock, cv) = &*entered;
-        let mut flag = lock.lock().unwrap();
-        while !*flag {
-            flag = cv.wait(flag).unwrap();
-        }
-    }
-    assert!(done_rx.recv_timeout(Duration::from_millis(400)).is_err());
-    {
-        let (lock, cv) = &*release;
-        let mut flag = lock.lock().unwrap();
-        *flag = true;
-        cv.notify_all();
-    }
-    let left = done_rx.recv_timeout(Duration::from_secs(5)).unwrap();
-    let right = done_rx.recv_timeout(Duration::from_secs(5)).unwrap();
-    first.join().unwrap();
-    second.join().unwrap();
-    assert_eq!(sends.load(Ordering::SeqCst), 1);
-    assert_eq!(left, PhoneOutcome::Accepted);
-    assert_eq!(right, PhoneOutcome::Accepted);
-    let mut check = opened(&path, Scripted::new(Vec::new(), Vec::new()));
-    let rows = check.list().unwrap();
-    assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].intent().command().as_str(), "command-1");
-    assert_eq!(rows[0].outcome(), PhoneOutcome::Accepted);
-}
+#[path = "departure.rs"]
+mod departure;
 
 #[test]
 fn the_departure_winner_reloads_before_it_sends() {
@@ -1352,12 +1292,7 @@ fn the_departure_winner_reloads_before_it_sends() {
         person_hold(&mut outbox, text_intent("command-1", "hello"));
     }
     let gate = Arc::new((
-        Mutex::new(DepartureGate {
-            drafts: HashSet::new(),
-            winner: None,
-            loser_done: false,
-            leases: 0,
-        }),
+        Mutex::new(DepartureGate::new(DepartureOrder::LoserCommitted, 2, false)),
         Condvar::new(),
     ));
     let sends = Arc::new(AtomicUsize::new(0));
@@ -1377,8 +1312,7 @@ fn the_departure_winner_reloads_before_it_sends() {
     let right = spawn(path.clone(), gate.clone(), sends.clone());
     assert_eq!(left.join().unwrap(), PhoneOutcome::Accepted);
     assert_eq!(right.join().unwrap(), PhoneOutcome::Accepted);
-    // A second queued receipt is not stronger, so the row and its audit can
-    // stay at one Accepted event while `conversation.send` ran twice.
+    // The departure winner reloads the direct receipt rather than sending again.
     assert_eq!(sends.load(Ordering::SeqCst), 1);
     assert_eq!(gate.0.lock().expect("gate").leases, 2);
     let mut check = opened(&path, Scripted::new(Vec::new(), Vec::new()));
@@ -1402,13 +1336,43 @@ fn the_departure_winner_reloads_before_it_sends() {
     );
 }
 
-/// Both callers load the draft, then the departure winner waits outside the
-/// file lease until the compare-and-swap loser has stored its answer.
+/// Select which draft contender takes the physical lease first.
+#[derive(Clone, Copy, Debug)]
+enum DepartureOrder {
+    LoserCommitted,
+    WinnerFirst,
+    LoserFirst,
+}
+
+/// Records actual departure/lease results; gates only the fixture's ordering.
+#[derive(Debug)]
 struct DepartureGate {
     drafts: HashSet<ThreadId>,
     winner: Option<ThreadId>,
     loser_done: bool,
     leases: usize,
+    order: DepartureOrder,
+    readers: usize,
+    fail_waiter: bool,
+    departures: Vec<(ThreadId, Result<(), StoreError>)>,
+    attempts: HashSet<ThreadId>,
+    results: Vec<(ThreadId, Result<(), StoreError>)>,
+}
+impl DepartureGate {
+    fn new(order: DepartureOrder, readers: usize, fail_waiter: bool) -> Self {
+        Self {
+            drafts: HashSet::new(),
+            winner: None,
+            loser_done: false,
+            leases: 0,
+            order,
+            readers,
+            fail_waiter,
+            departures: Vec::new(),
+            attempts: HashSet::new(),
+            results: Vec::new(),
+        }
+    }
 }
 
 struct YieldingLease {
@@ -1445,7 +1409,7 @@ impl IntentStore for YieldingLease {
             let mut gate = lock.lock().expect("gate");
             gate.drafts.insert(thread::current().id());
             cv.notify_all();
-            let _gate = wait_for(cv, gate, |gate| gate.drafts.len() >= 2);
+            let _gate = wait_for(cv, gate, |gate| gate.drafts.len() >= gate.readers);
         }
         Ok(loaded)
     }
@@ -1458,16 +1422,23 @@ impl IntentStore for YieldingLease {
         next: &PhoneRecord,
         event: IntentEvent,
     ) -> Result<(), StoreError> {
-        let won = !previous.departed() && next.departed();
-        self.inner.replace(previous, next, event)?;
-        if won {
+        let departure = !previous.departed() && next.departed();
+        let result = self.inner.replace(previous, next, event);
+        if departure {
             let (lock, cv) = &*self.gate;
             let mut gate = lock.lock().expect("gate");
-            gate.winner = Some(thread::current().id());
+            if result.is_ok() {
+                gate.winner = Some(thread::current().id());
+            }
+            gate.departures.push((thread::current().id(), result));
             cv.notify_all();
+            // Finish both CAS attempts before either can hold the writer lock.
+            // Otherwise the loser can be blocked in replace rather than lease.
+            let _gate = wait_for(cv, gate, |gate| gate.departures.len() >= gate.readers);
         }
-        Ok(())
+        result
     }
+
     fn replace_and_insert(
         &mut self,
         previous: &PhoneRecord,
@@ -1491,24 +1462,40 @@ impl IntentStore for YieldingLease {
         let gate = lock.lock().expect("gate");
         let gate = wait_for(cv, gate, |gate| gate.winner.is_some());
         let won = gate.winner == Some(me);
-        let gate = if won {
-            wait_for(cv, gate, |gate| gate.loser_done)
-        } else {
-            gate
+        let first = match gate.order {
+            DepartureOrder::LoserCommitted | DepartureOrder::LoserFirst => !won,
+            DepartureOrder::WinnerFirst => won,
         };
+        let mut gate = if first {
+            gate
+        } else {
+            wait_for(cv, gate, |gate| match gate.order {
+                DepartureOrder::LoserCommitted => gate.loser_done,
+                DepartureOrder::WinnerFirst | DepartureOrder::LoserFirst => gate.leases > 0,
+            })
+        };
+        let fail = !first && gate.fail_waiter;
+        gate.attempts.insert(me);
+        cv.notify_all();
         drop(gate);
-        match self.inner.begin_exclusive() {
-            Ok(()) => {
-                self.gate.0.lock().expect("gate").leases += 1;
-                Ok(())
-            }
-            Err(error) => {
-                if !won {
-                    self.finish_loser();
-                }
-                Err(error)
-            }
+        // This is a substituted store failure, separate from the real SQLite
+        // busy-timeout boundary test. No production timing is changed.
+        let result = if fail {
+            Err(StoreError::Unavailable)
+        } else {
+            self.inner.begin_exclusive()
+        };
+        let mut gate = lock.lock().expect("gate");
+        gate.results.push((me, result));
+        if result.is_ok() {
+            gate.leases += 1;
         }
+        cv.notify_all();
+        drop(gate);
+        if result.is_err() && !won {
+            self.finish_loser();
+        }
+        result
     }
     fn end_exclusive(&mut self) -> Result<(), StoreError> {
         let result = self.inner.end_exclusive();
@@ -1531,14 +1518,14 @@ fn wait_for<'a>(
         let remaining = deadline.saturating_duration_since(Instant::now());
         assert!(
             !remaining.is_zero(),
-            "the departure winner was not handed the committed row"
+            "departure fixture did not reach its expected phase: {gate:?}"
         );
         let (next, status) = cv.wait_timeout(gate, remaining).expect("gate");
         gate = next;
         if status.timed_out() {
             assert!(
                 ready(&gate),
-                "the departure winner was not handed the committed row"
+                "departure fixture did not reach its expected phase: {gate:?}"
             );
         }
     }
@@ -1698,10 +1685,10 @@ impl PhoneGateway for PausingSend {
             cv.notify_all();
         }
         let (lock, cv) = &*self.release;
-        let mut flag = lock.lock().unwrap();
-        while !*flag {
-            flag = cv.wait(flag).unwrap();
-        }
+        let (flag, _) = cv
+            .wait_timeout_while(lock.lock().unwrap(), Duration::from_secs(5), |flag| !*flag)
+            .unwrap();
+        assert!(*flag, "paused gateway send was not released");
         SendAnswer::Receipt(Delivery::Queued)
     }
     fn lookup(&mut self, _: &PhoneIntent) -> LookupAnswer {
