@@ -120,6 +120,8 @@ a draft implementation is not evidence that those gates passed.
 | A queued report's Stop fails before its effect or confirmation | Same-parent report withdrawal is a root cancellation prerequisite. Leave the root Accepted for retry on failure; continue independent descendant attempts | `failed_queued_report_withdrawal_keeps_root_active_and_retries_before_root_stop` |
 | Captured descendant queued work dispatches during active cancellation | Withdraw a still-queued identity or cancel that same identity after dispatch; preserve Open lifetimes and later explicit work. The override preserves descendant active and queued inputs | `parent_stop_cancels_owned_active_and_queued_turns_and_keeps_threads_reusable` |
 | Child preparation names an existing ordinary conversation, including one created concurrently | The existing creation owner refuses adoption before reopening or binding cleanup. Exact saved Ready retries remain valid; Attempted is not re-executed. Parent Stop/deletion cannot affect the unrelated target | `owned_preparation_cannot_adopt_an_existing_unowned_conversation` and creation-owner collision regression |
+| Restart reads an original Attempted child creation | Keep that lifetime unconfirmed without binding cleanup or replaying initialization; continue starting the gateway and unrelated work | `startup_retains_attempted_child_creation_without_binding_or_replaying_it` |
+| Child creation audit fails after metadata but before a slot is acquired | Transfer no cleanup owner; definite absence releases the reservation and capacity. Slot acquisition follows audit/admission checks | `child_creation_audit_failure_cannot_strand_unacquired_cleanup` |
 
 
 

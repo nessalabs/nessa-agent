@@ -245,8 +245,17 @@ impl ConversationService {
         for row in &snapshot.lifetimes {
             let id = ConversationId::new(row.session_id.as_str())
                 .map_err(|_| ConversationError::InvalidInput)?;
-            if !self.confirm_child_creation(&id, &row.lifetime_id).await? {
-                continue;
+            match self.confirm_child_creation(&id, &row.lifetime_id).await {
+                Ok(true) => {}
+                Ok(false) => continue,
+                Err(ConversationError::Unavailable) => {
+                    // Attempted does not prove acquisition. Keep the original
+                    // lifetime unsettled without binding an inferred owner or
+                    // preventing unrelated conversations from starting.
+                    tracing::warn!(conversation_id = %id, "restored child creation remains unconfirmed; cleanup owner was not rebound");
+                    continue;
+                }
+                Err(error) => return Err(error),
             }
             let _ = ownership.coordinator.bind_resources(
                 row.lifetime_id.clone(),
@@ -434,9 +443,11 @@ impl ConversationService {
             .ok_or(ConversationError::Unavailable)
     }
 
-    /// Called only by the ordinary creation owner after acknowledged Created,
-    /// under its creation lock. The factory retains this actual acquisition
-    /// through the existing PrepareFailure/PreparedChild resource transfer.
+    /// Called only by the strict new-target creation owner after acknowledged
+    /// Created, audit and capacity checks, while inserting its vacant live slot.
+    /// Reads only the existing graph and pending transfer, without repository
+    /// or audit I/O. The factory retains the actual acquisition through its
+    /// existing PrepareFailure/PreparedChild resource transfer.
     pub(super) async fn claim_owned_preparation(
         &self,
         id: &ConversationId,
@@ -456,7 +467,6 @@ impl ConversationService {
             .ok_or(ConversationError::Unavailable)?;
         if binding.request_id
             != creation_request(actor.principal_id(), actor.surface_id(), actor.request_id())
-            || self.child_creation_caller(id, &binding).await?.is_none()
         {
             return Err(ConversationError::Unavailable);
         }

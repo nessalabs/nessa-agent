@@ -1458,11 +1458,6 @@ impl ConversationService {
         {
             return Err(ConversationError::Metadata);
         }
-        let owned_preparation = if new_only {
-            service.claim_owned_preparation(&id, &actor).await?
-        } else {
-            None
-        };
         service.reconcile_creation_audit(record).await?;
         if outcome.disposition == super::ConversationCreationDisposition::Existing
             && caller.action_id != record.creation_action()
@@ -1495,6 +1490,11 @@ impl ConversationService {
                 return Err(ConversationError::Capacity);
             }
             match owners.entry(id.clone()) {
+                std::collections::hash_map::Entry::Occupied(_) if new_only => {
+                    return Err(ConversationError::ChildCreationRefused(Box::new(
+                        ConversationError::RequestConflict,
+                    )));
+                }
                 std::collections::hash_map::Entry::Occupied(entry) => entry.get().clone(),
                 std::collections::hash_map::Entry::Vacant(entry) => {
                     let slot = Arc::new(Slot {
@@ -1503,6 +1503,14 @@ impl ConversationService {
                         started: AtomicBool::new(false),
                         stopping: AtomicBool::new(false),
                     });
+                    // Audit and admission checks already passed. From this
+                    // transfer through publication/start there is no fallible
+                    // I/O and no unowned slot can supply this preparation.
+                    let owned_preparation = if new_only {
+                        service.claim_owned_preparation(&id, &actor).await?
+                    } else {
+                        None
+                    };
                     entry.insert(slot.clone());
                     service.start_slot(id.clone(), slot.clone(), actor.clone(), owned_preparation);
                     slot

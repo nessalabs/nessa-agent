@@ -16,6 +16,16 @@ pub(super) async fn bind(
     root: &Path,
     cascade: bool,
 ) -> OwnershipCoordinator {
+    bind_with_capacity(service, storage, root, cascade, 32).await
+}
+
+async fn bind_with_capacity(
+    service: &ConversationService,
+    storage: &Arc<RecordStorage>,
+    root: &Path,
+    cascade: bool,
+    capacity: usize,
+) -> OwnershipCoordinator {
     service.bind_commands(storage.clone());
     let coordinator = OwnershipCoordinator::new(OwnershipDependencies {
         store: Arc::new(SqliteOwnershipStore::open(&root.join("ownership.sqlite3")).unwrap()),
@@ -26,7 +36,7 @@ pub(super) async fn bind(
             .unwrap(),
         ),
         factory: service.owned_thread_factory(),
-        room: Arc::new(LiveCapacity::new(32)),
+        room: Arc::new(LiveCapacity::new(capacity)),
     });
     coordinator.resume().await.unwrap();
     service
@@ -63,6 +73,77 @@ async fn child(
         .await
         .unwrap();
     child
+}
+
+struct RejectChildCreationAudit;
+impl crate::conversation::application::ConversationCreationAudit for RejectChildCreationAudit {
+    fn record(
+        &self,
+        record: crate::conversation::application::ConversationCreationAuditRecord,
+    ) -> crate::conversation::application::ConversationFuture<'_, ()> {
+        Box::pin(async move {
+            if record.correlation_id == "audit-failed-child" {
+                Err(ConversationError::Audit)
+            } else {
+                Ok(())
+            }
+        })
+    }
+}
+
+#[tokio::test]
+async fn child_creation_audit_failure_cannot_strand_unacquired_cleanup() {
+    use nessa_sdk::application::agent_execution::subagents::OwnershipStore;
+    use nessa_sdk::domain::agent_execution::subagents::LifetimeState;
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("data");
+    let provider = Arc::new(ProviderFactory::default());
+    let (mut service, storage, metadata) = fixture(&root, provider.clone());
+    Arc::get_mut(&mut service.inner)
+        .expect("fixture is not shared yet")
+        .creation_audit = Arc::new(RejectChildCreationAudit);
+    let coordinator = bind_with_capacity(&service, &storage, &root, true, 1).await;
+    let parent = id();
+    opened(&service, &provider, &parent).await;
+    let p = hold_turn(&service, &provider, &parent, "parent").await;
+    let rejected = id();
+    assert!(service
+        .create_owned_thread(
+            source(&parent, "parent", "audit-failed-child"),
+            rejected.clone(),
+            RequestedConversation::default()
+        )
+        .await
+        .is_err());
+    assert!(metadata.load(&rejected).await.unwrap().is_some());
+    let snapshot = SqliteOwnershipStore::open(&root.join("ownership.sqlite3"))
+        .unwrap()
+        .read()
+        .await
+        .unwrap();
+    let failed = snapshot
+        .spawns
+        .iter()
+        .find(|row| row.child_session == conversation_session(&rejected))
+        .unwrap();
+    assert_eq!(
+        coordinator.lifetime_state(&failed.child_lifetime),
+        Some(LifetimeState::Closed)
+    );
+    assert_eq!(
+        provider.open_calls.load(Ordering::SeqCst),
+        1,
+        "the rejected audit acquired no child provider"
+    );
+    assert_eq!(provider.close_calls.load(Ordering::SeqCst), 0);
+    child(&service, &parent, "parent", "after-audit-failure").await;
+    assert_eq!(
+        provider.open_calls.load(Ordering::SeqCst),
+        2,
+        "the single child slot is available after definite absence"
+    );
+    drop(p);
+    retire(service, storage, metadata).await;
 }
 
 #[tokio::test]
@@ -2093,6 +2174,221 @@ async fn failed_child_preparation_cannot_claim_a_foreign_live_slot_during_storag
                 .phase()
                 == AttachmentPhase::Attached
         );
+        retire(service, storage, metadata).await;
+    }
+}
+
+struct RejectChildReadyCommands {
+    storage: Arc<RecordStorage>,
+    child: ConversationId,
+}
+struct RejectChildReadyLease {
+    inner: Arc<dyn commands::CreationStorageLease>,
+    child: ConversationId,
+}
+impl commands::CreationStorage for RejectChildReadyCommands {
+    fn open_creation(
+        &self,
+        principal: String,
+        create: bool,
+    ) -> commands::CreationFuture<'_, Option<Arc<dyn commands::CreationStorageLease>>> {
+        Box::pin(async move {
+            Ok(self
+                .storage
+                .open_creation(principal, create)
+                .await?
+                .map(|inner| {
+                    Arc::new(RejectChildReadyLease {
+                        inner,
+                        child: self.child.clone(),
+                    }) as Arc<dyn commands::CreationStorageLease>
+                }))
+        })
+    }
+}
+impl commands::CreationStorageLease for RejectChildReadyLease {
+    fn load(
+        &self,
+        request: &str,
+    ) -> commands::CreationFuture<'_, Option<commands::CreationReceipt>> {
+        self.inner.load(request)
+    }
+    fn save(&self, receipt: commands::CreationReceipt) -> commands::CreationFuture<'_, ()> {
+        Box::pin(async move {
+            if receipt.binding().target() == &conversation_session(&self.child)
+                && receipt.stage() == commands::CreationStage::Ready
+            {
+                return Err(commands::CreationStorageError::Storage(
+                    nessa_sdk::application::agent_execution::sessions::StorageError::Io(
+                        "injected rejection before child Ready append".into(),
+                    ),
+                ));
+            }
+            self.inner.save(receipt).await
+        })
+    }
+    fn load_mutation(
+        &self,
+        request: &str,
+    ) -> commands::CreationFuture<'_, Option<MutationReceipt>> {
+        self.inner.load_mutation(request)
+    }
+    fn save_mutation(&self, receipt: MutationReceipt) -> commands::CreationFuture<'_, ()> {
+        self.inner.save_mutation(receipt)
+    }
+    fn mutations(&self) -> commands::CreationFuture<'_, Vec<MutationReceipt>> {
+        self.inner.mutations()
+    }
+}
+
+struct CaptureReservedOwnership {
+    inner: Arc<SqliteOwnershipStore>,
+    reserved:
+        std::sync::Mutex<Option<nessa_sdk::domain::agent_execution::subagents::OwnershipSnapshot>>,
+}
+#[async_trait::async_trait]
+impl nessa_sdk::application::agent_execution::subagents::OwnershipStore
+    for CaptureReservedOwnership
+{
+    async fn read(
+        &self,
+    ) -> Result<
+        nessa_sdk::domain::agent_execution::subagents::OwnershipSnapshot,
+        nessa_sdk::application::agent_execution::subagents::PortFailure,
+    > {
+        nessa_sdk::application::agent_execution::subagents::OwnershipStore::read(
+            self.inner.as_ref(),
+        )
+        .await
+    }
+    async fn write(
+        &self,
+        snapshot: &nessa_sdk::domain::agent_execution::subagents::OwnershipSnapshot,
+    ) -> Result<(), nessa_sdk::application::agent_execution::subagents::PortFailure> {
+        if snapshot.spawns.iter().any(|row| {
+            row.progress == nessa_sdk::domain::agent_execution::subagents::SpawnProgress::Reserved
+        }) {
+            self.reserved
+                .lock()
+                .unwrap()
+                .get_or_insert_with(|| snapshot.clone());
+        }
+        nessa_sdk::application::agent_execution::subagents::OwnershipStore::write(
+            self.inner.as_ref(),
+            snapshot,
+        )
+        .await
+    }
+}
+
+#[tokio::test]
+async fn startup_retains_attempted_child_creation_without_binding_or_replaying_it() {
+    use nessa_sdk::application::agent_execution::subagents::OwnershipStore;
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("data");
+    let provider = Arc::new(ProviderFactory::default());
+    let (service, storage, metadata) = fixture(&root, provider.clone());
+    let child = id();
+    service.bind_commands(Arc::new(RejectChildReadyCommands {
+        storage: storage.clone(),
+        child: child.clone(),
+    }));
+    let owned = Arc::new(SqliteOwnershipStore::open(&root.join("ownership.sqlite3")).unwrap());
+    let captured = Arc::new(CaptureReservedOwnership {
+        inner: owned.clone(),
+        reserved: std::sync::Mutex::new(None),
+    });
+    let coordinator = OwnershipCoordinator::new(OwnershipDependencies {
+        store: captured.clone(),
+        audit: Arc::new(
+            crate::conversation::infrastructure::DurableOwnershipAudit::new(
+                root.join("ownership-audit"),
+            )
+            .unwrap(),
+        ),
+        factory: service.owned_thread_factory(),
+        room: Arc::new(LiveCapacity::new(32)),
+    });
+    coordinator.resume().await.unwrap();
+    service
+        .bind_owned_threads(coordinator.clone(), true)
+        .unwrap();
+    let parent = id();
+    opened(&service, &provider, &parent).await;
+    let parent_release = hold_turn(&service, &provider, &parent, "parent").await;
+    assert!(service
+        .create_owned_thread(
+            source(&parent, "parent", "attempted-child"),
+            child.clone(),
+            RequestedConversation::default()
+        )
+        .await
+        .is_err());
+    assert!(metadata.load(&child).await.unwrap().is_some());
+    let lease = storage
+        .open_creation("person".into(), false)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(lease
+        .load("attempted-child")
+        .await
+        .unwrap()
+        .is_some_and(|receipt| receipt.stage() == commands::CreationStage::Attempted));
+    drop(lease);
+    let crash_image = captured
+        .reserved
+        .lock()
+        .unwrap()
+        .clone()
+        .expect("actual acknowledged SDK Reserved prefix");
+    let child_lifetime = crash_image.spawns[0].child_lifetime.clone();
+    drop(parent_release);
+    retire(service, storage, metadata).await;
+    drop(coordinator);
+    drop(captured);
+    // Reconstruct a crash while the factory had acquired its real target, but
+    // before SDK preparation publication. Both retained facts came from their
+    // production owners; no lifetime, actor or physical release is fabricated.
+    owned.write(&crash_image).await.unwrap();
+    drop(owned);
+
+    for restart in 0..2 {
+        let provider = Arc::new(ProviderFactory::default());
+        let (service, storage, metadata) = fixture(&root, provider.clone());
+        let coordinator = bind(&service, &storage, &root, true).await;
+        assert!(
+            !coordinator.has_bound_resources(&child_lifetime),
+            "Attempted does not authorize recovery to invent a cleanup owner"
+        );
+        assert!(service
+            .resolve(&child, &caller("inspect-unconfirmed"))
+            .await
+            .is_err());
+        assert_eq!(
+            provider.open_calls.load(Ordering::SeqCst),
+            0,
+            "unconfirmed child recovery does not open a provider attachment"
+        );
+        assert!(
+            provider.executions.lock().unwrap().is_empty(),
+            "recovery does not replay the child's uncertain initialization"
+        );
+        let unrelated = id();
+        opened(&service, &provider, &unrelated).await;
+        finish_turn(
+            &service,
+            &provider,
+            &unrelated,
+            &format!("unrelated-{restart}"),
+        )
+        .await;
+        assert!(provider
+            .executions
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|id| id == &format!("unrelated-{restart}")));
         retire(service, storage, metadata).await;
     }
 }
