@@ -215,6 +215,8 @@ export const css = {
   transcriptStep: ".workspace-steps li", // class: one step the agent took, in a message
   transcriptWorkToggle: ".workspace-work button[aria-expanded]", // completed tool work opens its steps in place
   overviewColumn: ".agents-overview-column", // class: the list the arrow keys walk
+  overviewGeometryItems:
+    ".agents-overview-group > h2, .agents-row-item, .agents-clear, .agents-overview-resting, .agents-overview-footnote", // classes: list headings, rows and notices whose placement is observed
   overviewResting: ".agents-overview-resting", // class: a group shown alone that lists nothing ("Nothing needs you"), the kit's EmptyState
   overviewFootnote: ".agents-overview-footnote", // class: how many sessions the view leaves out, and Show All
   inlinePeek: ".agents-inline-peek", // class: the peek opened beneath its row

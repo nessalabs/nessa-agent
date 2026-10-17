@@ -1811,20 +1811,23 @@ const rowSelectors = {
 
 /** Every item of the list as laid out: its key, top and height, rounded to a tenth. */
 const listRects = (page) =>
-  page.evaluate((sel) => {
-    const column = document.querySelector(sel)
-    return [
-      ...column.querySelectorAll(
-        ".agents-overview-group > h2, .agents-row-item, .agents-clear, .agents-overview-resting, .agents-overview-footnote",
-      ),
-    ].map((item) => {
-      const r = item.getBoundingClientRect()
-      const key =
-        item.querySelector("[data-overview-item]")?.dataset.overviewItem ??
-        (item.id || item.className)
-      return `${key} ${Math.round(r.top * 10) / 10} ${Math.round(r.height * 10) / 10}`
-    })
-  }, css.overviewColumn)
+  page.evaluate(
+    (sel) => {
+      const column = document.querySelector(sel.column)
+      return [...column.querySelectorAll(sel.items)].map((item) => {
+        const r = item.getBoundingClientRect()
+        const key =
+          item.querySelector(sel.item)?.dataset.overviewItem ??
+          (item.id || item.className)
+        return `${key} ${Math.round(r.top * 10) / 10} ${Math.round(r.height * 10) / 10}`
+      })
+    },
+    {
+      column: css.overviewColumn,
+      items: css.overviewGeometryItems,
+      item: css.overviewItem,
+    },
+  )
 
 /**
  * A request row as drawn: its box, the right edges of its why and command
