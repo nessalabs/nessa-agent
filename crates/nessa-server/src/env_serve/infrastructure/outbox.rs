@@ -9,7 +9,8 @@
 //!
 //! stage(path) ──▶ outbox.lock exclusive ──▶ absolute? ──▶ every link followed
 //!   ──▶ inside the workspace?
-//!   ──▶ open without following a last link ──▶ a regular file, the one checked?
+//!   ──▶ open each name relative to a pinned directory, without following links
+//!   ──▶ descriptor metadata says regular file?
 //!   ──▶ copy to <lease>/<artifact>, hashed and counted as it is copied
 //!   ──▶ StagedArtifact { name, media type, size, digest, path }
 //!   ──▶ outbox.lock released
@@ -26,6 +27,29 @@
 //! runs as this user, already can. Its address is short whatever the data
 //! directory is called, since a Unix socket's path has a small bound
 //! (104 bytes on macOS).
+//!
+//! # Source identity and ordering (#767)
+//!
+//! The workspace descriptor is captured once at startup, which assumes a
+//! trusted workspace selection. Canonicalization keeps existing in-workspace
+//! aliases usable; it supplies names, not authority to open an absolute path.
+//! On Unix, openat + O_DIRECTORY + O_NOFOLLOW pin each directory identity and
+//! O_NOFOLLOW refuses a final link. O_NONBLOCK prevents a substituted FIFO from
+//! parking the source open; descriptor metadata then refuses non-regular files.
+//!
+//! | Ordering | Result | Regression |
+//! | --- | --- | --- |
+//! | Stable file, or stable alias to a file inside workspace | Stage descriptor bytes under requested name | a_file_in_the_workspace_is_staged_as_copied_and_hashed; a_file_published_through_a_link_keeps_the_name_it_was_asked_by |
+//! | Ancestor becomes a link after canonicalization, before traversal | Unreadable; no staged file | a_directory_swapped_after_resolution_is_refused_without_staging |
+//! | Final name becomes a link after canonicalization | Unreadable; no staged file | a_final_link_substituted_after_resolution_is_refused |
+//! | Workspace path replaced after startup capture | Original pinned workspace remains the source | the_workspace_handle_survives_path_replacement |
+//! | Source becomes a FIFO before open | Nonblocking open; non-regular refusal | a_fifo_substituted_after_resolution_is_refused |
+//!
+//! A held directory remains the same object if renamed; this is an identity
+//! guarantee, not a check of current pathname ancestry after every rename.
+//! Mounts, hard links, changes to bytes during copy, and hostile workspace
+//! capture at startup are outside this boundary. This is not a filesystem
+//! sandbox. This module is Unix-only; it provides no Windows artifact guarantee.
 use crate::env_serve::application::{
     ArtifactOutbox, PublishAnswer, PublishCall, PublishPoint, PublishRequest,
 };
@@ -37,10 +61,17 @@ use nessa_sdk::domain::common::value_objects::MediaType;
 use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
+    ffi::CString,
     fs::{self, File, OpenOptions},
     io::{self, Read, Write},
-    os::unix::fs::{DirBuilderExt, FileExt, MetadataExt, OpenOptionsExt},
-    path::{Path, PathBuf},
+    os::{
+        fd::{AsRawFd, FromRawFd},
+        unix::{
+            ffi::OsStrExt,
+            fs::{DirBuilderExt, FileExt, OpenOptionsExt},
+        },
+    },
+    path::{Component, Path, PathBuf},
     sync::{Arc, Mutex, PoisonError},
     time::Duration,
 };
@@ -65,6 +96,7 @@ pub(crate) struct FileOutbox {
     root: PathBuf,
     sockets: PathBuf,
     workspace: PathBuf,
+    workspace_directory: File,
     points: Mutex<HashMap<String, JoinHandle<()>>>,
 }
 
@@ -79,6 +111,10 @@ impl FileOutbox {
     /// not be made ready.
     pub(crate) fn open(root: PathBuf, sockets: PathBuf, workspace: &Path) -> io::Result<Self> {
         let workspace = fs::canonicalize(workspace)?;
+        let workspace_directory = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+            .open(&workspace)?;
         if let Some(parent) = root
             .parent()
             .filter(|parent| !parent.as_os_str().is_empty())
@@ -92,6 +128,7 @@ impl FileOutbox {
             root,
             sockets,
             workspace,
+            workspace_directory,
             points: Mutex::new(HashMap::new()),
         };
         // The sweep is the same exclusive section as a stage: an export pin
@@ -153,6 +190,19 @@ impl FileOutbox {
             return Err(PublishRefusal::OutsideWorkspace);
         }
         let resolved = fs::canonicalize(requested).map_err(|_| PublishRefusal::Unreadable)?;
+        self.copy_resolved(lease, artifact, request, &resolved)
+    }
+
+    /// Continue under the caller's outbox lock after path resolution. Opening
+    /// re-establishes containment through directory handles, not a pathname stat.
+    fn copy_resolved(
+        &self,
+        lease: &str,
+        artifact: u32,
+        request: &PublishRequest,
+        resolved: &Path,
+    ) -> Result<StagedArtifact, PublishRefusal> {
+        let requested = Path::new(&request.path);
         if !resolved.starts_with(&self.workspace) {
             return Err(PublishRefusal::OutsideWorkspace);
         }
@@ -169,19 +219,9 @@ impl FileOutbox {
             Some(_) => return Err(PublishRefusal::Invalid),
             None => media_type_of(&name).into(),
         };
-        let checked = fs::metadata(&resolved).map_err(|_| PublishRefusal::Unreadable)?;
-        if !checked.is_file() {
-            return Err(PublishRefusal::OutsideWorkspace);
-        }
-        // The last component is not followed, and what opened is the file
-        // that was checked: a link swapped in between is refused.
-        let mut source = OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_NOFOLLOW)
-            .open(&resolved)
-            .map_err(|_| PublishRefusal::Unreadable)?;
+        let mut source = self.open_source(resolved)?;
         let opened = source.metadata().map_err(|_| PublishRefusal::Unreadable)?;
-        if !opened.is_file() || opened.dev() != checked.dev() || opened.ino() != checked.ino() {
+        if !opened.is_file() {
             return Err(PublishRefusal::OutsideWorkspace);
         }
         if opened.len() == 0 || opened.len() > MAX_ARTIFACT_BYTES {
@@ -222,6 +262,41 @@ impl FileOutbox {
             digest,
             path,
         })
+    }
+
+    /// Canonical paths contain names only below the pinned workspace. Each
+    /// openat refuses links; a renamed ancestor cannot redirect a held handle.
+    fn open_source(&self, resolved: &Path) -> Result<File, PublishRefusal> {
+        let relative = resolved
+            .strip_prefix(&self.workspace)
+            .map_err(|_| PublishRefusal::OutsideWorkspace)?;
+        let mut parts = relative.components().peekable();
+        let mut directory = self
+            .workspace_directory
+            .try_clone()
+            .map_err(|_| PublishRefusal::Unreadable)?;
+        while let Some(part) = parts.next() {
+            let Component::Normal(name) = part else {
+                return Err(PublishRefusal::OutsideWorkspace);
+            };
+            let name = CString::new(name.as_bytes()).map_err(|_| PublishRefusal::Invalid)?;
+            let flags = libc::O_RDONLY
+                | libc::O_NOFOLLOW
+                | libc::O_CLOEXEC
+                | if parts.peek().is_some() {
+                    libc::O_DIRECTORY
+                } else {
+                    libc::O_NONBLOCK
+                };
+            // SAFETY: directory is live and name is NUL terminated for the call.
+            let descriptor = unsafe { libc::openat(directory.as_raw_fd(), name.as_ptr(), flags) };
+            if descriptor < 0 {
+                return Err(PublishRefusal::Unreadable);
+            }
+            // SAFETY: openat returned a new descriptor owned only by this File.
+            directory = unsafe { File::from_raw_fd(descriptor) };
+        }
+        Ok(directory)
     }
 }
 
