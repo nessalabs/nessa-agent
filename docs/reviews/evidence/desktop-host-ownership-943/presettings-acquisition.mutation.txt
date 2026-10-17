@@ -6,4 +6,3 @@
         .map_err(ClaudeConfigurationChangeError::Gateway)?;
 
 BECOMES
-

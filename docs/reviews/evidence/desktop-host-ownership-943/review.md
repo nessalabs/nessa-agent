@@ -21,5 +21,19 @@ matched all eight source hashes and passed focused16/full156 headless tests.
   The Mac-only adapter test covers same label/different data roots and distinct
   stage/instance claims; actual hosted Mac execution remains required.
 
-R2 will review the complete corrected source; R1 is not relabeled clean. Native
-compilation/package CI, browser E2E and installed-Mac acceptance remain separate.
+## R2: source review clean; evidence whitespace corrected
+
+Fresh independent FULL review at `6dae6f6be1579ead639fcd47ec8d1da0b3f43a87`
+found no blocker, major or lifecycle source defect. It independently passed
+157 tests and matched all eight source hashes, inspecting H1–H14, pre-journal
+and settings boundaries, failed/cancelled callers, deferred staging, stop-worker
+retention, lock identity, process release and existing retirement/audit agreement.
+
+Its sole minor finding was two mutation-description files ending with blank
+lines. The initial working-tree-only whitespace command had not inspected new
+untracked evidence. Those two descriptions are trimmed and the complete
+`git diff --check <base>` now passes. This follow-up changes evidence only;
+production/test source and its qualification hashes are unchanged.
+
+R1 is not relabeled clean. Full native/platform compilation, Mac-only adapter
+test, browser E2E and installed-Mac acceptance remain separate gates.
