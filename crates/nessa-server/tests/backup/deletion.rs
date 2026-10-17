@@ -455,6 +455,101 @@ async fn a_stale_log_is_reconciled_again() {
     assert!(keys.contains(&ours.key()));
 }
 
+#[tokio::test]
+async fn a_failed_reconciliation_lease_does_not_read_sources_or_the_log() {
+    let current = ObservedEmpty(AtomicBool::new(false));
+    assert_eq!(
+        capture_fences(&[&current], &RefusedReconciliation).await,
+        Err(InventoryFailure::NotStored)
+    );
+    assert!(!current.0.load(Ordering::SeqCst));
+}
+
+struct RefusedReconciliation;
+
+#[async_trait]
+impl DeletionLogStore for RefusedReconciliation {
+    async fn hold_reconciliation(
+        &self,
+    ) -> Result<Box<dyn crate::backup::application::InventoryReconciliationLease>, ()> {
+        Err(())
+    }
+
+    async fn load(&self) -> Result<DeletionLog, ()> {
+        panic!("a failed reconciliation lease must stop before loading")
+    }
+
+    async fn store(&self, _base: &DeletionLog, _next: &DeletionLog) -> Result<(), LogStoreError> {
+        panic!("a failed reconciliation lease must stop before storing")
+    }
+}
+
+/// The first read captured a revoke before a re-grant. Without a lease,
+/// the re-grant's empty-to-empty capture returns, then the older read can
+/// store an obsolete revoke against that unchanged empty base.
+#[tokio::test]
+async fn a_noop_regrant_capture_waits_for_an_older_revoke_read() {
+    let revoke = DeletionFence::share_grant("c", "r", "cred", GrantRole::Read, 4).unwrap();
+    let older = PausedRevoke {
+        revoke,
+        entered: AtomicBool::new(false),
+        release: tokio::sync::Notify::new(),
+    };
+    let current = ObservedEmpty(AtomicBool::new(false));
+    let log = MemLog::default();
+    let older_sources: [&dyn FenceSource; 1] = [&older];
+    let current_sources: [&dyn FenceSource; 1] = [&current];
+    let mut first = std::pin::pin!(capture_fences(&older_sources, &log));
+    std::future::poll_fn(|cx| {
+        assert!(std::future::Future::poll(first.as_mut(), cx).is_pending());
+        std::task::Poll::Ready(())
+    })
+    .await;
+    assert!(older.entered.load(Ordering::SeqCst));
+
+    let mut second = std::pin::pin!(capture_fences(&current_sources, &log));
+    std::future::poll_fn(|cx| {
+        assert!(
+            std::future::Future::poll(second.as_mut(), cx).is_pending(),
+            "the newer no-op capture returned while an older source read was pending"
+        );
+        std::task::Poll::Ready(())
+    })
+    .await;
+    assert!(!current.0.load(Ordering::SeqCst));
+    older.release.notify_one();
+    assert_eq!(first.await.unwrap().entries().len(), 1);
+    assert!(second.await.unwrap().entries().is_empty());
+    assert!(current.0.load(Ordering::SeqCst));
+    assert!(log.load().await.unwrap().entries().is_empty());
+}
+
+struct PausedRevoke {
+    revoke: DeletionFence,
+    entered: AtomicBool,
+    release: tokio::sync::Notify,
+}
+
+#[async_trait]
+impl FenceSource for PausedRevoke {
+    async fn fences(&self) -> Result<Vec<DeletionFence>, ()> {
+        let snapshot = self.revoke.clone();
+        self.entered.store(true, Ordering::SeqCst);
+        self.release.notified().await;
+        Ok(vec![snapshot])
+    }
+}
+
+struct ObservedEmpty(AtomicBool);
+
+#[async_trait]
+impl FenceSource for ObservedEmpty {
+    async fn fences(&self) -> Result<Vec<DeletionFence>, ()> {
+        self.0.store(true, Ordering::SeqCst);
+        Ok(vec![])
+    }
+}
+
 /// Another capture stores a share-grant revoke as this writer loads. The
 /// fence source is empty until that store is visible. Reading fences before
 /// the load would drop the revoke; reading them after the load keeps it.
@@ -502,6 +597,12 @@ impl FenceSource for RevokeLandsOnLoad {
 
 #[async_trait]
 impl DeletionLogStore for RevokeLandsOnLoad {
+    async fn hold_reconciliation(
+        &self,
+    ) -> Result<Box<dyn crate::backup::application::InventoryReconciliationLease>, ()> {
+        Ok(Box::new(UncontendedReconciliation))
+    }
+
     async fn load(&self) -> Result<DeletionLog, ()> {
         let mut guard = self.log.lock().unwrap();
         if guard.entries().is_empty() {
@@ -540,6 +641,12 @@ impl StaleOnce {
 
 #[async_trait]
 impl DeletionLogStore for StaleOnce {
+    async fn hold_reconciliation(
+        &self,
+    ) -> Result<Box<dyn crate::backup::application::InventoryReconciliationLease>, ()> {
+        Ok(Box::new(UncontendedReconciliation))
+    }
+
     async fn load(&self) -> Result<DeletionLog, ()> {
         Ok(self.log.lock().unwrap().clone())
     }
@@ -604,12 +711,21 @@ impl FenceSource for OneFence {
 
 #[derive(Default)]
 struct MemLog {
+    reconciliation: std::sync::Arc<tokio::sync::Mutex<()>>,
     log: Mutex<DeletionLog>,
     fail: AtomicBool,
 }
 
 #[async_trait]
 impl DeletionLogStore for MemLog {
+    async fn hold_reconciliation(
+        &self,
+    ) -> Result<Box<dyn crate::backup::application::InventoryReconciliationLease>, ()> {
+        Ok(Box::new(HeldReconciliation {
+            _guard: self.reconciliation.clone().lock_owned().await,
+        }))
+    }
+
     async fn load(&self) -> Result<DeletionLog, ()> {
         Ok(self.log.lock().unwrap().clone())
     }
@@ -722,3 +838,14 @@ impl CanonicalProbe for crate::backup::domain::FenceKind {
         format!("{self:?}")
     }
 }
+
+// These adapters are used by single-capture tests only.
+struct UncontendedReconciliation;
+
+impl crate::backup::application::InventoryReconciliationLease for UncontendedReconciliation {}
+
+struct HeldReconciliation {
+    _guard: tokio::sync::OwnedMutexGuard<()>,
+}
+
+impl crate::backup::application::InventoryReconciliationLease for HeldReconciliation {}

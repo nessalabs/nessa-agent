@@ -10,7 +10,9 @@ use nessa_local_storage::{create_directory, open, sync_directory, OpenMode, Priv
 
 use async_trait::async_trait;
 
-use crate::backup::application::{Authenticator, DeletionLogStore, LogStoreError, MacKey};
+use crate::backup::application::{
+    Authenticator, DeletionLogStore, InventoryReconciliationLease, LogStoreError, MacKey,
+};
 use crate::backup::domain::{
     CredentialKind, DeletionEntry, DeletionFence, DeletionLog, Fingerprint, GrantRole,
 };
@@ -55,6 +57,31 @@ impl FileDeletionLog {
 
 #[async_trait]
 impl DeletionLogStore for FileDeletionLog {
+    async fn hold_reconciliation(&self) -> Result<Box<dyn InventoryReconciliationLease>, ()> {
+        let directory = self.directory.clone();
+        let file = tokio::task::spawn_blocking(move || {
+            open(
+                &directory.join("reconciliation.lock"),
+                OpenMode::OpenOrCreate,
+            )
+            .map_err(|_| ())
+        })
+        .await
+        .map_err(|_| ())??;
+        loop {
+            match file.try_lock() {
+                Ok(()) => return Ok(Box::new(FileReconciliationLease { _file: file })),
+                Err(std::fs::TryLockError::WouldBlock) => {
+                    // The holder's snapshot may need the blocking pool. Wait
+                    // asynchronously instead of occupying one of its workers
+                    // (`waiting_captures_leave_a_blocking_worker_for_the_holder`).
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+                Err(std::fs::TryLockError::Error(_)) => return Err(()),
+            }
+        }
+    }
+
     async fn load(&self) -> Result<DeletionLog, ()> {
         let path = self.path();
         let key = self.key;
@@ -83,9 +110,17 @@ impl DeletionLogStore for FileDeletionLog {
     }
 }
 
-/// One writer at a time for this directory, including another `FileDeletionLog`
-/// opened on the same path. The lock lasts until the file is dropped.
-fn exclusive(directory: &Path) -> std::io::Result<File> {
+/// Own the process-safe reconciliation lock across fence reads and publication.
+struct FileReconciliationLease {
+    _file: File,
+}
+
+impl InventoryReconciliationLease for FileReconciliationLease {}
+
+/// Serialize inventory and decision publication in this directory, including
+/// temporary cleanup and rollback. The lock lasts until the file is dropped
+/// (`a_decision_write_waits_for_inventory_rollback`).
+pub(super) fn exclusive(directory: &Path) -> std::io::Result<File> {
     let file = open(
         &directory.join("deletion-inventory.lock"),
         OpenMode::OpenOrCreate,
@@ -301,6 +336,73 @@ mod tests {
         (root, directory, path)
     }
 
+    /// The decision publisher must not sweep the inventory's live rollback
+    /// copy. The directory-sync seam pauses exactly after replacement.
+    #[test]
+    fn a_decision_write_waits_for_inventory_rollback() {
+        use std::sync::{mpsc, Arc};
+        use std::time::Duration;
+
+        use nessa_auth::application::ports::Clock;
+
+        use crate::backup::application::{
+            InventoryAction, InventoryCause, InventoryDecision, InventoryDecisionAudit,
+            InventoryFacts,
+        };
+        use crate::backup::infrastructure::decision_audit::FileInventoryDecisions;
+
+        struct FixedClock;
+        impl Clock for FixedClock {
+            fn unix_milliseconds(&self) -> u64 {
+                1
+            }
+        }
+
+        let (_root, directory, path) = inventory();
+        persist_with(&directory, &path, "previous\n", &sync_directory).unwrap();
+        let decisions = FileInventoryDecisions::open(&directory, Arc::new(FixedClock)).unwrap();
+        let held = exclusive(&directory).unwrap();
+        let (started, ready) = mpsc::channel();
+        let (finished, result) = mpsc::channel();
+        let writer = Mutex::new(Some((decisions, started, finished)));
+        let error = persist_with(&directory, &path, "replacement\n", &|_| {
+            let (decisions, started, finished) = writer.lock().unwrap().take().unwrap();
+            std::thread::spawn(move || {
+                started.send(()).unwrap();
+                let stored = decisions.record(
+                    &InventoryFacts {
+                        kind: "gateway",
+                        cause: InventoryCause::CommittedFence,
+                        action: InventoryAction::Record,
+                    },
+                    &InventoryDecision::Allow {
+                        policies: vec!["inventory.record.gateway".to_owned()],
+                    },
+                );
+                finished.send(stored).unwrap();
+            });
+            ready.recv_timeout(Duration::from_secs(10)).unwrap();
+            assert!(
+                matches!(
+                    result.recv_timeout(Duration::from_secs(1)),
+                    Err(mpsc::RecvTimeoutError::Timeout)
+                ),
+                "the audit must wait while the inventory rollback copy is live"
+            );
+            Err(std::io::Error::other("directory sync failed"))
+        });
+        assert!(error.is_err());
+        assert_eq!(fs::read_to_string(&path).unwrap(), "previous\n");
+        drop(held);
+        result
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap()
+            .unwrap();
+        let audit = fs::read_to_string(directory.join("inventory-decisions.jsonl")).unwrap();
+        assert!(audit.contains("inventory-decision-1"));
+        assert_eq!(fs::read_to_string(&path).unwrap(), "previous\n");
+    }
+
     #[test]
     fn a_directory_sync_failure_restores_the_previous_log() {
         let (_root, directory, path) = inventory();
@@ -333,6 +435,160 @@ mod tests {
         .unwrap();
         assert!(*synced.lock().unwrap());
         assert_eq!(fs::read_to_string(&path).unwrap(), "body\n");
+    }
+
+    /// A real inventory lease remains held while its fence source needs the
+    /// blocking pool. A waiting capture must leave that worker available.
+    #[test]
+    fn waiting_captures_leave_a_blocking_worker_for_the_holder() {
+        use std::sync::Arc;
+        use std::time::Duration;
+
+        use crate::backup::application::{capture_fences, FenceSource};
+
+        struct PausedSource {
+            entered: tokio::sync::Notify,
+            resume: tokio::sync::Notify,
+        }
+
+        #[async_trait::async_trait]
+        impl FenceSource for PausedSource {
+            async fn fences(&self) -> Result<Vec<DeletionFence>, ()> {
+                self.entered.notify_one();
+                self.resume.notified().await;
+                // Metadata snapshot reads use this pool after lease acquisition.
+                tokio::task::spawn_blocking(|| {
+                    vec![DeletionFence::share_grant("c", "r", "cred", GrantRole::Read, 4).unwrap()]
+                })
+                .await
+                .map_err(|_| ())
+            }
+        }
+
+        struct CurrentGrant;
+        #[async_trait::async_trait]
+        impl FenceSource for CurrentGrant {
+            async fn fences(&self) -> Result<Vec<DeletionFence>, ()> {
+                Ok(Vec::new())
+            }
+        }
+
+        let root = tempfile::tempdir().unwrap();
+        let log = Arc::new(FileDeletionLog::open(root.path().join("inventory")).unwrap());
+        let source = Arc::new(PausedSource {
+            entered: tokio::sync::Notify::new(),
+            resume: tokio::sync::Notify::new(),
+        });
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .max_blocking_threads(1)
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let first_log = log.clone();
+            let first_source = source.clone();
+            let mut first = tokio::spawn(async move {
+                capture_fences(&[first_source.as_ref()], first_log.as_ref()).await
+            });
+            source.entered.notified().await;
+            let current = CurrentGrant;
+            let sources: [&dyn FenceSource; 1] = [&current];
+            let mut second = Box::pin(capture_fences(&sources, log.as_ref()));
+            std::future::poll_fn(|cx| {
+                assert!(std::future::Future::poll(second.as_mut(), cx).is_pending());
+                std::task::Poll::Ready(())
+            })
+            .await;
+            source.resume.notify_one();
+            let progress = tokio::time::timeout(Duration::from_secs(2), async {
+                let older = (&mut first).await.unwrap().unwrap();
+                assert_eq!(older.entries().len(), 1);
+                let newer = second.as_mut().await.unwrap();
+                assert!(newer.entries().is_empty());
+            })
+            .await;
+            // Release the holder even on regression, then join the blocking
+            // queue before asserting, so a failed test cannot hang shutdown.
+            if progress.is_err() {
+                first.abort();
+                let _ = first.await;
+            }
+            drop(second);
+            tokio::time::timeout(Duration::from_secs(10), tokio::task::spawn_blocking(|| ()))
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(
+                progress.is_ok(),
+                "lock waiters starved the holder's snapshot work"
+            );
+            assert!(log.load().await.unwrap().entries().is_empty());
+        });
+    }
+
+    #[test]
+    fn a_cancelled_reconciliation_waiter_releases_its_eventual_lock() {
+        use std::time::Duration;
+
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("inventory");
+        let log = FileDeletionLog::open(&directory).unwrap();
+        let held = open(
+            &directory.join("reconciliation.lock"),
+            OpenMode::OpenOrCreate,
+        )
+        .unwrap();
+        held.lock().unwrap();
+        // The sentinel cannot finish before the cancelled blocking acquisition:
+        // one blocking thread runs their FIFO work queue.
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .max_blocking_threads(1)
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let mut waiting = Box::pin(log.hold_reconciliation());
+            std::future::poll_fn(|cx| {
+                assert!(std::future::Future::poll(waiting.as_mut(), cx).is_pending());
+                std::task::Poll::Ready(())
+            })
+            .await;
+            drop(waiting);
+            let completed = tokio::task::spawn_blocking(|| ());
+            drop(held);
+            tokio::time::timeout(Duration::from_secs(10), completed)
+                .await
+                .unwrap()
+                .unwrap();
+            let next = tokio::time::timeout(Duration::from_secs(10), log.hold_reconciliation())
+                .await
+                .unwrap()
+                .unwrap();
+            drop(next);
+        });
+    }
+
+    #[tokio::test]
+    async fn separately_opened_inventories_share_the_reconciliation_lease() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("inventory");
+        let first = FileDeletionLog::open(&directory).unwrap();
+        let second = FileDeletionLog::open(&directory).unwrap();
+        let contender = open(
+            &directory.join("reconciliation.lock"),
+            OpenMode::OpenOrCreate,
+        )
+        .unwrap();
+        for inventory in [&first, &second] {
+            let lease = inventory.hold_reconciliation().await.unwrap();
+            assert!(matches!(
+                contender.try_lock(),
+                Err(std::fs::TryLockError::WouldBlock)
+            ));
+            drop(lease);
+            contender.try_lock().unwrap();
+            contender.unlock().unwrap();
+        }
     }
 
     #[tokio::test]

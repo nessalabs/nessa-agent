@@ -48,6 +48,14 @@ takes admission's write guard and never takes a grant gate. It does not
 call into a command, and a command does not call into the cut while it
 holds a grant gate.
 
+Inventory captures take `backup/reconciliation.lock` across the log load,
+current fence reads and the final no-op or replacement. Export acquires this
+lease after admission. The short `backup/deletion-inventory.lock` protects
+publication of both the inventory and its decision audit, including temporary
+cleanup and rollback. The audit releases that lock before reconciliation starts;
+load and store acquire it inside the reconciliation lease. Neither inventory
+adapter calls back into conversation admission.
+
 Device pairing does not take conversation admission. It holds
 `receiver-access/publication.lock` from the receiver write through the
 credential publish. During the pin, after admission, the cut holds that
@@ -196,3 +204,43 @@ sequences 1, 2, 3, … and are still matched by key.
 | Capture during export | During the brief hold, after the append | The manifest's deletion-inventory watermark is the log after that append. `the_cut_includes_the_deletion_inventory` |
 | Command, then inventory | After a deletion, unshare, credential revocation, or pairing cancellation commits | The gateway asks Cedar, stores that decision, then reconciles. It does not take admission and does not publish a bundle. A refusal or a failed append leaves the fence and the previous log. The command's result is unchanged. A capture failure after `pairing.cancel` leaves the cancellation. A worker enrollment names an `environment.serve` credential as `worker`; a device or peer id in that file stays what the registry said. A damaged enrollment commits nothing from that read. `a_failed_inventory_capture_leaves_the_deletion`, `a_revoked_worker_credential_is_inventoried`, `a_damaged_worker_enrollment_does_not_commit_fences`, `an_unshare_reconciles_the_revoked_grant`, `pairing_cancel_records_the_inventory_and_a_failure_still_cancels` |
 | Who may record | Before the log is read | Cedar permits the gateway to record a committed fence, and a person or the gateway's own surface to capture when they ask. A device, peer, environment peer, or worker is refused. The allow or the deny is stored first. A failed decision store does not read the log, and a refusal does not create it. `the_gateway_may_record_a_committed_fence`, `a_device_peer_environment_or_worker_may_not_capture`, `a_denied_capture_does_not_write`, `the_inventory_decision_is_stored_before_the_log`, `a_failed_decision_audit_does_not_write` |
+
+## Integrity follow-up (#901)
+
+The existing export, deletion fences, and Cedar decisions remain the owners of
+these facts. The follow-up orders their existing adapters; it does not implement
+restore, upload, authority transfer, or deferred-session recovery (#854).
+
+| Order | Required behavior | Regression evidence |
+| --- | --- | --- |
+| A capture holds reconciliation while its snapshot needs the blocking pool; another capture waits for the same lease | File opening uses short blocking work. Contention uses nonblocking OS lock attempts and asynchronous retry, leaving pool workers available to the holder. Cancellation drops the open file or acquired lease. | `waiting_captures_leave_a_blocking_worker_for_the_holder`, `a_cancelled_reconciliation_waiter_releases_its_eventual_lock` |
+| Old capture reads a revoke from an empty inventory; a newer re-grant capture would leave that inventory unchanged | Hold one reconciliation lease over load, source reads, no-op and replacement. The newer capture waits for the old one and then removes the obsolete revoke; a no-op cannot bypass a pending older replacement. The adapter provides a separate process-safe lock; the short publication lock remains inside it. | `a_noop_regrant_capture_waits_for_an_older_revoke_read`, `a_failed_reconciliation_lease_does_not_read_sources_or_the_log`, `separately_opened_inventories_share_the_reconciliation_lease`, `a_cancelled_reconciliation_waiter_releases_its_eventual_lock` |
+| Offline owner or surface rotation commits while the gateway is stopped; next startup | Reconcile committed fences after opening the inventory and before publishing product listeners. A failed capture refuses startup; repeated startup retains the same fences. | `startup_records_offline_credential_rotations_once`, `startup_refuses_an_unreadable_committed_fence_source` |
+| A re-grant commits, its inventory capture fails, then an equivalent grant is retried with a new request identity | Retry inventory reconciliation even if the grant receipt says it did not apply another change. The current grant removes the old revoke; denied grants still do not capture. | `a_retried_share_reconciles_after_a_failed_capture` |
+| Inventory replacement is staged or its rollback copy is live; decision audit starts | Both publishers take the same directory lock before stale temporary cleanup, replacement, and rollback. The audit waits until inventory rollback finishes. | `a_decision_write_waits_for_inventory_rollback` |
+| Outbox or receiver-access parent is initially absent; its first writer starts | Establish the writer's lock before observing the stores. Parent absence cannot authorize reading a later-created tree without the lock. Missing stores remain represented as absent. | `absent_parent_outbox_cut_excludes_first_writer`, `absent_receiver_parent_cut_excludes_first_publisher`; file/symlink refusal tests beside them |
+
+The synchronous capture await on committed delete, unshare, revoke, and pairing
+cancel remains intentional for this scope: commands attempt local inventory
+reconciliation before replying; they do not await an upload. Failure preserves
+the committed operation and is logged. Moving this work into a durable retrying
+reconciler needs queue ownership and shutdown semantics and is separate work.
+Decision-log growth and rewrite cost remain a known performance limitation.
+
+
+### Recovery acceptance still outstanding
+
+#270 remains open for replacement identity, independently verified manifest and
+deletion inventory, quarantine, old-source/remote-lease fencing, explicit
+reconciliation and a synthetic restore drill that proves historical commands do
+not execute. This integrity follow-up does not supply that restore path.
+
+#854 remains separate: the cut records deferred conversation identities, byte
+sizes and exact source-state digests for oversized sessions; it does not retain
+or fetch the recorded version. Recovery needs a source that can serve that
+immutable version, a bounded import into the restore path, progress on open, and
+an explicit unavailable/changed-source error that leaves other conversations
+usable. Acceptance must exercise successful recovery of a synthetic session
+over 64 MiB, source disappearance/change, identity mismatch, interrupted fetch
+and retry, while preserving quarantine and command non-execution. The existing
+deferred-entry/digest tests prove export metadata only.

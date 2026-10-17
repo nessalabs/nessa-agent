@@ -10,14 +10,18 @@
 
 use std::collections::HashSet;
 use std::fs::{self, File};
-use std::io::Read;
+use std::io::{ErrorKind, Read};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use nessa_local_storage::{open, OpenMode};
+use nessa_local_storage::{create_directory, open, OpenMode};
 
 use async_trait::async_trait;
 use serde_json::Value;
+
+#[cfg(test)]
+#[path = "../../../tests/backup/publication_lock.rs"]
+mod publication_lock_tests;
 
 use super::credentials::{read_credentials, CredentialRead, CredentialReadError};
 use super::jsonl::jsonl_cut;
@@ -523,8 +527,8 @@ impl CredentialCache {
     }
 
     /// Read the registry and open the receiver snapshot while
-    /// `publication.lock` is held, when that directory exists. A later call
-    /// returns the same pair.
+    /// `publication.lock` is held. Its parent is created if absent so the
+    /// first pairing writer uses the same lock. A later call returns the same pair.
     fn load(&self) -> CredState {
         if let Some(cached) = self.slot.lock().ok().and_then(|slot| slot.clone()) {
             return cached;
@@ -553,8 +557,8 @@ fn snapshot_paired(
     credentials: &Path,
     receivers: &Path,
 ) -> (CredState, ReceiverState) {
-    // `None` means the receiver directory is absent, so no pairing writer can
-    // sit between the two stores. A lock error makes both stores unreadable.
+    // Establish the lock before either store is inspected, including first use.
+    // A lock error makes both stores unreadable.
     let lock = match publication_lock(lock_path) {
         Ok(file) => file,
         Err(()) => return (CredState::Unreadable, ReceiverState::Failed),
@@ -565,16 +569,20 @@ fn snapshot_paired(
     (credentials, receivers)
 }
 
-fn publication_lock(path: &Path) -> Result<Option<File>, ()> {
+fn publication_lock(path: &Path) -> Result<File, ()> {
     let Some(parent) = path.parent() else {
         return Err(());
     };
-    if !parent.is_dir() {
-        return Ok(None);
+    match fs::symlink_metadata(parent) {
+        Ok(meta) if meta.is_dir() => {}
+        Err(error) if error.kind() == ErrorKind::NotFound => {
+            create_directory(parent).map_err(|_| ())?;
+        }
+        _ => return Err(()),
     }
     let file = open(path, OpenMode::OpenOrCreate).map_err(|_| ())?;
     file.lock().map_err(|_| ())?;
-    Ok(Some(file))
+    Ok(file)
 }
 
 fn read_credential_state(path: &Path) -> CredState {

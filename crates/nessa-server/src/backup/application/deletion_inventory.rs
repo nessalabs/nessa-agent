@@ -70,7 +70,12 @@ pub async fn capture_inventory(
 
 /// Read `fences` and append any that are not already in the log.
 ///
-/// Each attempt loads the log and then reads every source. A source that
+/// Captures hold the store's reconciliation lease through the source reads
+/// and the final no-op or replacement, so an older read cannot land after
+/// a later capture has returned
+/// (`a_noop_regrant_capture_waits_for_an_older_revoke_read`).
+/// Each attempt loads the log and then reads
+/// every source. A source that
 /// fails leaves the stored log untouched. The fences from that read are the
 /// share-grant revocations current after the load: a grant fence already in
 /// the loaded log is removed when this read does not name it, which is a
@@ -87,6 +92,10 @@ pub async fn capture_fences(
     fences: &[&dyn FenceSource],
     store: &dyn DeletionLogStore,
 ) -> Result<DeletionLog, InventoryFailure> {
+    let _lease = store
+        .hold_reconciliation()
+        .await
+        .map_err(|()| InventoryFailure::NotStored)?;
     for _ in 0..REPLACE_ATTEMPTS {
         let loaded = store
             .load()
