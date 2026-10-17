@@ -23,7 +23,7 @@ use crate::host_refusal;
 
 mod state;
 use state::FAILURE_PATH;
-pub use state::{is_load_failure_page, Loads, HTTP_HOST, SCHEME};
+pub use state::{is_load_failure_page, Loads, SCHEME};
 
 pub fn load_failure_url(page: &str) -> Url {
     let mut url = Url::parse(&format!("{SCHEME}://localhost{FAILURE_PATH}"))

@@ -59,7 +59,7 @@ try {
     .join("\n")
   write(
     "Cargo.toml",
-    `[package]\nname = "page-load-synthetic-regression"\nversion = "0.0.0"\nedition = "2021"\n[lib]\npath = "src-tauri/src/main.rs"\n[workspace]\n[dependencies]\n${dependencies}\n[lints.rust]\nunexpected_cfgs = { level = "allow", check-cfg = ['cfg(dev)'] }\n`,
+    `[package]\nname = "page-load-synthetic-regression"\nversion = "0.0.0"\nedition = "2021"\n[lib]\npath = "src-tauri/src/main.rs"\n[workspace]\n[dependencies]\n${dependencies}\n[lints.rust]\nunused_imports = "deny"\nunexpected_cfgs = { level = "allow", check-cfg = ['cfg(dev)'] }\n`,
   )
   const result = spawnSync(
     "cargo",

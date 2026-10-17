@@ -29,7 +29,10 @@ that module's private scope. `host.rs` substitutes the Tauri boundary: its URL
 accessor panics on `None`, like the reported Wry behavior; navigation is recorded
 or explicitly refused. The source implementation is not rewritten. Dependency
 versions are seeded from the source revision's lockfile. The temporary crate is
-removed afterwards. This tests the real `explain` orchestration and callback
+removed afterwards. The temporary crate denies unused imports; its fixture marks
+the load-failure predicate consumed by the real links adapter as used. This
+catches an unused re-export that the first fixture version suppressed.
+This tests the real `explain` orchestration and callback
 state with a synthetic native boundary, not WebKit or Tauri's real adapter.
 
 The retained production unit tests run in the existing desktop CI suite. The

@@ -1,4 +1,4 @@
-#![allow(dead_code, unused_imports)]
+#![allow(dead_code)]
 extern crate self as tauri;
 pub use http;
 use std::sync::{Arc, Mutex};
@@ -87,3 +87,7 @@ mod host_refusal {
     }
 }
 mod page_load;
+
+// The real links adapter consumes this public function; this fixture compiles
+// only page_load, so keep that contract used without substituting its policy.
+const _: fn(&Url, bool) -> bool = page_load::is_load_failure_page;
