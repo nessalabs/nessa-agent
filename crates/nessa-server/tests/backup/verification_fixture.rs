@@ -18,7 +18,8 @@ use super::server::backup::infrastructure::DirectoryPublisher;
 pub const BODY: &[u8] = b"synthetic saved conversation bytes\n";
 
 pub struct Fixture {
-    pub parent: TempDir,
+    // Owns cleanup even when a platform only reads the published paths.
+    pub _parent: TempDir,
     pub bundle: PathBuf,
     pub key_file: PathBuf,
     pub key: MacKey,
@@ -88,7 +89,7 @@ impl Fixture {
             .await
             .unwrap();
         Self {
-            parent,
+            _parent: parent,
             bundle,
             key_file,
             key,

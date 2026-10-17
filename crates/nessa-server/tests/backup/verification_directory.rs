@@ -172,12 +172,12 @@ mod unix {
             let manifest = fs::read(self.fixture.bundle.join("manifest.txt")).unwrap();
             fs::rename(
                 &self.fixture.bundle,
-                self.fixture.parent.path().join("detached-root"),
+                self.fixture._parent.path().join("detached-root"),
             )
             .unwrap();
             match self.change {
                 RootChange::Symlink => {
-                    let replacement = self.fixture.parent.path().join("replacement-root");
+                    let replacement = self.fixture._parent.path().join("replacement-root");
                     create_directory(&replacement).unwrap();
                     private_file(&replacement.join("manifest.txt"), &manifest);
                     symlink(&replacement, &self.fixture.bundle).unwrap();
@@ -225,7 +225,7 @@ mod unix {
             let original = if matches!(change, RootChange::UnsafeMode) {
                 fixture.bundle.clone()
             } else {
-                fixture.parent.path().join("detached-root")
+                fixture._parent.path().join("detached-root")
             };
             assert_eq!(fs::read(original.join("manifest.txt")).unwrap(), manifest);
             if matches!(change, RootChange::Missing) {
@@ -316,7 +316,7 @@ mod unix {
                     replaced = true;
                     fs::rename(
                         &self.fixture.bundle,
-                        self.fixture.parent.path().join("detached-root"),
+                        self.fixture._parent.path().join("detached-root"),
                     )
                     .unwrap();
                     create_directory(&self.fixture.store()).unwrap();
@@ -344,7 +344,7 @@ mod unix {
             ),
             "root replacement during enumeration returned {result:?}"
         );
-        let detached = fixture.parent.path().join("detached-root");
+        let detached = fixture._parent.path().join("detached-root");
         assert_eq!(fs::read(detached.join("manifest.txt")).unwrap(), manifest);
         assert_eq!(
             fs::read(detached.join("records/conversation-metadata/public-row")).unwrap(),
@@ -371,7 +371,7 @@ mod unix {
             let path = self.fixture.bundle.join("manifest.txt");
             let bytes = fs::read(&path).unwrap();
             assert_eq!(first[0], bytes[0]);
-            fs::rename(&path, self.fixture.parent.path().join("detached-manifest")).unwrap();
+            fs::rename(&path, self.fixture._parent.path().join("detached-manifest")).unwrap();
             private_file(&path, &bytes);
             Ok(Box::new(Cursor::new(first).chain(reader)))
         }
@@ -409,7 +409,7 @@ mod unix {
             manifest
         );
         assert_eq!(
-            fs::read(fixture.parent.path().join("detached-manifest")).unwrap(),
+            fs::read(fixture._parent.path().join("detached-manifest")).unwrap(),
             manifest
         );
         assert_eq!(fs::read(fixture.body()).unwrap(), BODY);
@@ -443,7 +443,7 @@ mod unix {
             reader.read_exact(&mut first).unwrap();
             assert_eq!(first[0], BODY[0]);
 
-            let original = self.fixture.parent.path().join("detached-original");
+            let original = self.fixture._parent.path().join("detached-original");
             match self.replacement {
                 Replacement::Body => {
                     fs::rename(self.fixture.body(), original).unwrap();
@@ -480,7 +480,7 @@ mod unix {
             VerificationFailure::Unreadable
         );
         assert_eq!(fs::read(fixture.body()).unwrap(), BODY);
-        let original = fixture.parent.path().join("detached-original");
+        let original = fixture._parent.path().join("detached-original");
         let original_body = match replacement {
             Replacement::Body => original,
             Replacement::Store => original.join("public-row"),
@@ -515,7 +515,7 @@ mod unix {
             } else {
                 fixture.bundle.join(relative)
             };
-            let detached = fixture.parent.path().join("detached-original");
+            let detached = fixture._parent.path().join("detached-original");
             fs::rename(&path, &detached).unwrap();
             symlink(&detached, &path).unwrap();
             assert!(
@@ -534,7 +534,7 @@ mod unix {
             let fixture = Fixture::published().await;
             fs::hard_link(
                 fixture.bundle.join(relative),
-                fixture.parent.path().join("alias"),
+                fixture._parent.path().join("alias"),
             )
             .unwrap();
             assert_eq!(
@@ -543,7 +543,7 @@ mod unix {
             );
         }
         let fixture = Fixture::published().await;
-        fs::hard_link(&fixture.key_file, fixture.parent.path().join("key-alias")).unwrap();
+        fs::hard_link(&fixture.key_file, fixture._parent.path().join("key-alias")).unwrap();
         assert_eq!(
             read_verification_key(&fixture.key_file),
             Err(VerificationFailure::UnsafeObject)
@@ -553,7 +553,7 @@ mod unix {
     #[tokio::test]
     async fn a_symlink_key_is_refused_without_modifying_its_target() {
         let fixture = Fixture::published().await;
-        let link = fixture.parent.path().join("key-link");
+        let link = fixture._parent.path().join("key-link");
         symlink(&fixture.key_file, &link).unwrap();
         assert!(matches!(
             read_verification_key(&link),

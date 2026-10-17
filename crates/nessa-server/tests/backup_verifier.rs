@@ -68,7 +68,7 @@ fn json(output: &Output, exit: i32) -> Value {
 #[tokio::test]
 async fn a_published_cut_verifies_without_profile_effects() {
     let fixture = Fixture::published().await;
-    let canary = fixture.parent.path().join("synthetic-profile");
+    let canary = fixture._parent.path().join("synthetic-profile");
     for directory in [
         "synthetic/auth",
         "synthetic/logs",
@@ -109,15 +109,15 @@ async fn a_published_cut_verifies_without_profile_effects() {
 #[tokio::test]
 async fn an_empty_published_cut_verifies_without_profile_effects() {
     let fixture = Fixture::empty().await;
-    let before = tree(fixture.parent.path());
-    let report = json(&run(&arguments(&fixture), fixture.parent.path()), 0);
+    let before = tree(fixture._parent.path());
+    let report = json(&run(&arguments(&fixture), fixture._parent.path()), 0);
     assert_eq!(report["status"], "verified");
     assert_eq!(report["report"]["public_records_verified"], 0);
     assert_eq!(report["report"]["body_bytes_verified"], 0);
     assert_eq!(report["report"]["omissions"], serde_json::json!([]));
     assert_eq!(report["report"]["restore_readiness"], "not_assessed");
     assert_eq!(report["report"]["inventory_freshness"], "not_assessed");
-    assert_eq!(tree(fixture.parent.path()), before);
+    assert_eq!(tree(fixture._parent.path()), before);
     assert!(!fixture.bundle.join("records").exists());
 }
 
@@ -144,15 +144,15 @@ fn tree(path: &Path) -> Vec<(OsString, Vec<u8>)> {
 async fn command_reports_authentication_body_and_missing_bundle_failures() {
     let fixture = Fixture::published().await;
     fs::write(&fixture.key_file, [38; 32]).unwrap();
-    let report = json(&run(&arguments(&fixture), fixture.parent.path()), 1);
+    let report = json(&run(&arguments(&fixture), fixture._parent.path()), 1);
     assert_eq!(report["status"], "failed");
     assert_eq!(report["reason"], "authentication");
     fs::write(&fixture.key_file, fixture.key.0).unwrap();
     fs::write(fixture.body(), b"TAMPERED-SYNTHETIC").unwrap();
-    let report = json(&run(&arguments(&fixture), fixture.parent.path()), 1);
+    let report = json(&run(&arguments(&fixture), fixture._parent.path()), 1);
     assert_eq!(report["reason"], "body_fingerprint");
     fs::remove_dir_all(&fixture.bundle).unwrap();
-    let report = json(&run(&arguments(&fixture), fixture.parent.path()), 1);
+    let report = json(&run(&arguments(&fixture), fixture._parent.path()), 1);
     assert_eq!(report["reason"], "unreadable");
     assert!(!fixture.bundle.exists());
 }
@@ -163,12 +163,12 @@ async fn command_never_creates_or_repairs_invalid_key_files() {
     for size in [0, 31, 33, 8192] {
         let bytes = vec![53; size];
         fs::write(&fixture.key_file, &bytes).unwrap();
-        let report = json(&run(&arguments(&fixture), fixture.parent.path()), 1);
+        let report = json(&run(&arguments(&fixture), fixture._parent.path()), 1);
         assert_eq!(report["reason"], "invalid_key");
         assert_eq!(fs::read(&fixture.key_file).unwrap(), bytes);
     }
     fs::remove_file(&fixture.key_file).unwrap();
-    let report = json(&run(&arguments(&fixture), fixture.parent.path()), 1);
+    let report = json(&run(&arguments(&fixture), fixture._parent.path()), 1);
     assert_eq!(report["reason"], "unreadable");
     assert!(!fixture.key_file.exists());
 }
@@ -196,7 +196,7 @@ async fn command_requires_explicit_absolute_inputs_and_refuses_duplicate_unknown
     cases.push(extra);
     for args in cases {
         assert_eq!(
-            json(&run(&args, fixture.parent.path()), 2)["status"],
+            json(&run(&args, fixture._parent.path()), 2)["status"],
             "usage"
         );
     }
@@ -207,10 +207,10 @@ async fn command_requires_explicit_absolute_inputs_and_refuses_duplicate_unknown
         base[1].clone(),
     ];
     assert_eq!(
-        json(&run(&reverse, fixture.parent.path()), 0)["status"],
+        json(&run(&reverse, fixture._parent.path()), 0)["status"],
         "verified"
     );
-    let help = run(&["--help".into()], fixture.parent.path());
+    let help = run(&["--help".into()], fixture._parent.path());
     assert!(help.status.success());
     assert!(help.stderr.is_empty());
     assert!(String::from_utf8(help.stdout)
@@ -246,7 +246,7 @@ mod unix {
             };
             fs::remove_file(&path).unwrap();
             fifo(&path);
-            let result = json(&run(&arguments(&fixture), fixture.parent.path()), 1);
+            let result = json(&run(&arguments(&fixture), fixture._parent.path()), 1);
             assert_eq!(result["status"], "failed");
             assert_eq!(result["reason"], "unsafe_object");
             assert!(fs::symlink_metadata(&path).unwrap().file_type().is_fifo());
@@ -255,12 +255,26 @@ mod unix {
 
     #[tokio::test]
     async fn socket_body_is_refused_without_connecting_or_replacing_it() {
-        let fixture = Fixture::published().await;
-        fs::remove_file(fixture.body()).unwrap();
-        let listener = UnixListener::bind(fixture.body()).unwrap();
-        listener.set_nonblocking(true).unwrap();
-        let result = json(&run(&arguments(&fixture), fixture.parent.path()), 1);
-        assert_eq!(result["reason"], "unsafe_object");
-        assert_eq!(listener.accept().unwrap_err().kind(), ErrorKind::WouldBlock);
+        for long_path in [false, true] {
+            let mut fixture = Fixture::published().await;
+            if long_path {
+                let bundle = fixture._parent.path().join("bundle-".repeat(24));
+                fs::rename(&fixture.bundle, &bundle).unwrap();
+                fixture.bundle = bundle;
+            }
+            fs::remove_file(fixture.body()).unwrap();
+            // Socket addresses have a shorter limit than filesystem paths.
+            let socket = fixture._parent.path().join("socket");
+            let listener = UnixListener::bind(&socket).unwrap();
+            fs::rename(socket, fixture.body()).unwrap();
+            listener.set_nonblocking(true).unwrap();
+            let result = json(&run(&arguments(&fixture), fixture._parent.path()), 1);
+            assert_eq!(result["reason"], "unsafe_object");
+            assert_eq!(listener.accept().unwrap_err().kind(), ErrorKind::WouldBlock);
+            assert!(fs::symlink_metadata(fixture.body())
+                .unwrap()
+                .file_type()
+                .is_socket());
+        }
     }
 }
