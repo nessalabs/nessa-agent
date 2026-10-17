@@ -84,8 +84,9 @@ impl ProviderSession {
     ) -> super::ProviderOperationFuture<'_, ()> {
         self.backend.set_effort_level(level)
     }
-    /// Wrap `backend` with its provider context `id` and immutable model admission
-    /// `capabilities`. Construction performs no I/O and opens no provider context.
+    /// Wrap `backend` with its provider context `id` and initial model admission
+    /// `capabilities`, replaced by an SDK-owned acknowledged model change.
+    /// Construction performs no I/O and opens no provider context.
     /// The provider backend retains the audit sink used for provider effects; the
     /// owning [`Agent`](crate::application::agent_execution::agents::Agent) receives
     /// the application audit sink when it is prepared.

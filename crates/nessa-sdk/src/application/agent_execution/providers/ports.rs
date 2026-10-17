@@ -107,8 +107,10 @@ pub trait ProviderSessionBackend: Send + Sync {
     /// [`ProviderSession`] calls this at every admission, after its own checks
     /// and before anything is saved, queued, or sent. It must be synchronous
     /// and pure: no I/O, no restoration, no bytes read, and the same answer for
-    /// the same input for as long as the backend lives. Rules that depend on
-    /// the live connection belong in [`Self::operation_capabilities`] instead.
+    /// the same input under an unchanged acknowledged model configuration.
+    /// An SDK-owned acknowledged model change may replace that configuration
+    /// and its validation limits. Rules that depend on the live connection
+    /// belong in [`Self::operation_capabilities`] instead.
     /// The default accepts everything.
     ///
     /// # Errors
