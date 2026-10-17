@@ -185,15 +185,25 @@ async fn a_command_past_its_timeout_is_stopped_and_its_output_kept() {
     assert!(matches!(ran.cleanup, Cleanup::Confirmed { .. }));
 }
 
+// Readiness is a complete published descendant PID, not an empty redirect.
+// Hold the writer after prefix creation so premature publication is observable;
+// the stop, physical cleanup, parsed PID and descendant-exit checks remain required.
 #[tokio::test]
 async fn a_stop_ends_a_running_command_and_its_descendants() {
     let workspace = tempfile::tempdir().unwrap();
     let (stop, stopped) = not_stopped();
     let marker = workspace.path().join("child.pid");
-    let script = format!("sleep 30 & echo $! > {}; wait", marker.to_str().unwrap());
+    let writing = workspace.path().join("writing");
+    let release = workspace.path().join("release");
+    let script = "sleep 30 & child=$!; : > child.pid.tmp; : > writing; while [ ! -f release ]; do sleep 0.01; done; printf '%s\\n' \"$child\" > child.pid.tmp; mv child.pid.tmp child.pid; wait";
     let running =
-        runner(workspace.path()).run(command(&["sh", "-c", &script], None, 60_000), stopped);
+        runner(workspace.path()).run(command(&["sh", "-c", script], None, 60_000), stopped);
     let task = tokio::spawn(running);
+    while !writing.exists() {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let unpublished = !marker.exists();
+    std::fs::write(release, b"").unwrap();
     while !marker.exists() {
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
@@ -204,6 +214,10 @@ async fn a_stop_ends_a_running_command_and_its_descendants() {
         .unwrap();
     assert_eq!(ran.end, CommandEnd::Stopped);
     assert!(matches!(ran.cleanup, Cleanup::Confirmed { .. }));
+    assert!(
+        unpublished,
+        "the incomplete PID marker was publicly visible"
+    );
     let child: i32 = std::fs::read_to_string(&marker)
         .unwrap()
         .trim()
