@@ -34,7 +34,7 @@ use nessa_sdk::application::agent_execution::providers::{
     ProviderExecutionReply, ProviderIdentity, ProviderObservationFuture, ProviderOpenError,
     ProviderOpenFuture, ProviderOpenRequest, ProviderOperationCapabilities,
     ProviderOperationFailure, ProviderOperationFuture, ProviderSession, ProviderSessionBackend,
-    ProviderSessionState, SessionCloseRequest,
+    ProviderSessionState, SessionCloseRequest, SteeringOutcome,
 };
 use nessa_sdk::application::agent_execution::tools::ToolReviewInput;
 use nessa_sdk::application::dto::{ImageInputLimitsDto, ModalitiesDto, ModelMetadataDto};
@@ -964,6 +964,9 @@ pub(crate) struct ProviderFactory {
     pub(crate) image_input: AtomicBool,
     /// Whether the attached agent can inject a steer into the active turn.
     pub(crate) native_steering: AtomicBool,
+    /// Whether a steer is taken into the running turn; otherwise steering
+    /// is refused as unsupported.
+    pub(crate) inject_steers: AtomicBool,
     /// Set while the agent's answer is not known, as during a restoration.
     pub(crate) answer_unknown: AtomicBool,
     /// Whether the selected model is offered images: it records image limits
@@ -1590,6 +1593,23 @@ impl ProviderSessionBackend for Backend {
                 )),
                 None => Ok(()),
             }
+        })
+    }
+    fn steer<'a>(
+        &'a self,
+        _: nessa_sdk::domain::agent_execution::executions::ExecutionId,
+        _: ExecutionRequest,
+        started: &'a (dyn Fn() + Send + Sync),
+    ) -> ProviderOperationFuture<'a, SteeringOutcome> {
+        Box::pin(async move {
+            started();
+            if self.factory.inject_steers.load(Ordering::SeqCst) {
+                return Ok(SteeringOutcome::Injected);
+            }
+            Err(ProviderOperationFailure::new(
+                AgentError::Unsupported("provider does not support steering".into()),
+                ProviderSessionState::Usable,
+            ))
         })
     }
     fn execute(&self, request: ExecutionRequest) -> ProviderExecutionFuture<'_> {

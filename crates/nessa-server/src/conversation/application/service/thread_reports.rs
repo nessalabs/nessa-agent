@@ -1,11 +1,14 @@
 //! Report a thread's finished turn back to the conversation whose agent sent it.
 //!
 //! `send_message` from an agent turn registers a report before it submits. The
-//! child's agent runs [`ThreadReportHook`] after every invocation; it only asks
-//! the service to look. The look reads the child's saved invocations: a watched
-//! execution that settled, was cancelled, or was injected into a turn that has
-//! since ended is finished, and its report is queued into the parent as an
-//! owner turn under the caller the parent's own send was admitted with. The
+//! child's agent runs [`ThreadReportHook`] after every invocation, once its
+//! result is saved; it only asks the service to look. The look reads the
+//! child's saved invocations: a watched execution that settled, was cancelled,
+//! or was injected into a turn (its scheduling `target`) that has since
+//! settled is finished, and its report is queued into the parent as an owner
+//! turn under the caller the parent's own send was admitted with. Each look
+//! checks every waiting caller may still view the thread; one refused, or a
+//! thread gone, drops that caller's watches. The
 //! report's execution identity is fixed at registration, so a second look or a
 //! retried send answers from the same receipt instead of queueing again.
 //!
@@ -17,9 +20,13 @@
 //! ```
 //!
 //! Registrations are process-local and bounded by [`MAX_THREAD_REPORTS`]; a
-//! full registry answers `false` and the send goes on without a report. A
+//! full registry refuses and the send goes on without a report. A
 //! gateway restart forgets them: the parent can still `subscribe`.
-use super::{ConversationCaller, ConversationService, Inner, SubmissionMode, SubmittedMessage};
+use super::{
+    ConversationCaller, ConversationError, ConversationService, Inner, SubmissionMode,
+    SubmittedMessage,
+};
+use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_sdk::application::agent_execution::commands::{CreationStorageError, MutationFailure};
 use nessa_sdk::application::agent_execution::{
@@ -46,11 +53,6 @@ pub const MAX_REPORT_REPLY_BYTES: usize = 8 * 1024;
 /// A report whose turn has not finished in this long is let go, so a thread
 /// deleted or never run cannot hold a place for good.
 const REPORT_LIFETIME: Duration = Duration::from_secs(24 * 60 * 60);
-/// A hook can run before the settlement it follows is saved: look again this
-/// many times, this far apart, before leaving the report for the next look.
-const SETTLEMENT_LOOKS: usize = 20;
-const SETTLEMENT_LOOK_DELAY: Duration = Duration::from_millis(100);
-
 /// A report meeting another command of the same person tries again this many
 /// times, this far apart.
 const DELIVERY_BUSY_TRIES: usize = 50;
@@ -71,6 +73,16 @@ struct Watch {
     execution: String,
     report: ThreadReport,
     since: Instant,
+}
+impl Watch {
+    fn expired(&self) -> bool {
+        self.since.elapsed() >= REPORT_LIFETIME
+    }
+}
+
+/// Who a caller is to access: the rest of a caller is attribution.
+fn person(caller: &ConversationCaller) -> (&OrganizationId, &PrincipalId) {
+    (&caller.organization_id, &caller.principal_id)
 }
 
 /// What registering a report did.
@@ -99,6 +111,14 @@ pub(crate) struct ThreadReports {
 
 /// Counts one report being queued until dropped.
 struct Delivering(Arc<AtomicUsize>);
+
+/// A report taken off its watch, counted as being queued from the moment it
+/// left the registry.
+struct Taken {
+    report: ThreadReport,
+    text: String,
+    _delivering: Delivering,
+}
 impl Drop for Delivering {
     fn drop(&mut self) {
         self.0.fetch_sub(1, Ordering::SeqCst);
@@ -108,11 +128,6 @@ impl Drop for Delivering {
 impl ThreadReports {
     fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<ConversationId, Vec<Watch>>> {
         self.watches.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-
-    fn delivering(&self) -> Delivering {
-        self.delivering.fetch_add(1, Ordering::SeqCst);
-        Delivering(self.delivering.clone())
     }
 
     fn watched(&self, child: &ConversationId) -> bool {
@@ -134,7 +149,7 @@ impl ThreadReports {
             return ReportRegistration::AlreadyWaiting;
         }
         watches.retain(|_, list| {
-            list.retain(|watch| watch.since.elapsed() < REPORT_LIFETIME);
+            list.retain(|watch| !watch.expired());
             !list.is_empty()
         });
         if watches.values().map(Vec::len).sum::<usize>() >= MAX_THREAD_REPORTS {
@@ -158,29 +173,66 @@ impl ThreadReports {
         }
     }
 
-    /// Remove and return every watch `finished` decides, with its report text.
+    /// One caller for each person with a report waiting on `child`.
+    fn callers(&self, child: &ConversationId) -> Vec<ConversationCaller> {
+        let watches = self.lock();
+        let mut callers: Vec<ConversationCaller> = Vec::new();
+        for watch in watches.get(child).into_iter().flatten() {
+            let caller = &watch.report.caller;
+            if !callers.iter().any(|seen| person(seen) == person(caller)) {
+                callers.push(caller.clone());
+            }
+        }
+        callers
+    }
+
+    /// Let go of every report on `child` waiting for `caller`'s person.
+    fn drop_person(&self, child: &ConversationId, caller: &ConversationCaller) {
+        let mut watches = self.lock();
+        if let Some(list) = watches.get_mut(child) {
+            list.retain(|watch| person(&watch.report.caller) != person(caller));
+            if list.is_empty() {
+                watches.remove(child);
+            }
+        }
+    }
+
+    /// Remove and return every watch of an `admitted` person that `finished`
+    /// decides, with its report text; let expired ones go.
     fn take(
         &self,
         child: &ConversationId,
+        admitted: &[ConversationCaller],
         finished: impl Fn(&str) -> Option<String>,
-    ) -> (Vec<(ThreadReport, String)>, usize) {
+    ) -> Vec<Taken> {
         let mut watches = self.lock();
         let Some(list) = watches.get_mut(child) else {
-            return (Vec::new(), 0);
+            return Vec::new();
         };
         let mut taken = Vec::new();
-        list.retain(|watch| match finished(&watch.execution) {
-            Some(text) => {
-                taken.push((watch.report.clone(), text));
-                false
+        list.retain(|watch| {
+            if watch.expired() {
+                return false;
             }
-            None => true,
+            let caller = &watch.report.caller;
+            if !admitted.iter().any(|seen| person(seen) == person(caller)) {
+                return true;
+            }
+            let Some(text) = finished(&watch.execution) else {
+                return true;
+            };
+            self.delivering.fetch_add(1, Ordering::SeqCst);
+            taken.push(Taken {
+                report: watch.report.clone(),
+                text,
+                _delivering: Delivering(self.delivering.clone()),
+            });
+            false
         });
-        let left = list.len();
-        if left == 0 {
+        if list.is_empty() {
             watches.remove(child);
         }
-        (taken, left)
+        taken
     }
 
     /// Reports registered or being queued.
@@ -217,7 +269,7 @@ impl InvocationHook for ThreadReportHook {
         if let Ok(runtime) = tokio::runtime::Handle::try_current() {
             let service = ConversationService { inner };
             let child = self.child.clone();
-            runtime.spawn(async move { service.look_for_reports(child, true).await });
+            runtime.spawn(async move { service.look_for_reports(child).await });
         }
         Ok(())
     }
@@ -243,50 +295,50 @@ impl ConversationService {
         self.inner.thread_reports.forget(child, report);
     }
 
-    /// Queue every report on `child` whose turn has finished. `settling` is a
-    /// look after an invocation ended, whose own settlement may not be saved
-    /// yet: it looks again while a watch on that invocation still waits.
-    pub async fn look_for_reports(&self, child: ConversationId, settling: bool) {
-        let looks = if settling { SETTLEMENT_LOOKS } else { 1 };
-        for look in 0..looks {
-            if look > 0 {
-                tokio::time::sleep(SETTLEMENT_LOOK_DELAY).await;
-            }
-            let Some(snapshot) = self.report_snapshot(&child).await else {
-                return;
-            };
-            let (taken, left) = self
-                .inner
-                .thread_reports
-                .take(&child, |execution| finished(&child, &snapshot, execution));
-            for (report, text) in taken {
-                self.deliver_report(report, text).await;
-            }
-            if left == 0 {
-                return;
+    /// Queue every report on `child` whose turn has finished, for each
+    /// person who may still view it.
+    pub async fn look_for_reports(&self, child: ConversationId) {
+        let mut snapshot = None;
+        let mut admitted = Vec::new();
+        for caller in self.inner.thread_reports.callers(&child) {
+            match self.live_now(&child, &caller).await {
+                Ok(Some(live)) => {
+                    if snapshot.is_none() {
+                        snapshot = live.agent.session_manager().snapshot().await;
+                    }
+                    admitted.push(caller);
+                }
+                // Refused, or gone for good: this person is told nothing.
+                Err(ConversationError::NotFound | ConversationError::Deleted) => {
+                    self.inner.thread_reports.drop_person(&child, &caller);
+                }
+                // Not open, or not readable now: a later look, or the
+                // report's lifetime, settles it.
+                Ok(None) | Err(_) => {}
             }
         }
-    }
-
-    /// The child's saved invocations, read through any waiting report's
-    /// caller: a person who may no longer view the thread is told nothing.
-    async fn report_snapshot(&self, child: &ConversationId) -> Option<SessionSnapshot> {
-        let caller = {
-            let watches = self.inner.thread_reports.lock();
-            watches.get(child)?.first()?.report.caller.clone()
+        let Some(snapshot) = snapshot else {
+            return;
         };
-        let live = self.live_now(child, &caller).await.ok()??;
-        live.agent.session_manager().snapshot().await
+        let taken = self
+            .inner
+            .thread_reports
+            .take(&child, &admitted, |execution| {
+                finished(&child, &snapshot, execution)
+            });
+        for taken in taken {
+            self.deliver_report(taken).await;
+        }
     }
 
     /// Queue one report into its parent. Commands of one person are taken
     /// one at a time with no queue (`CreationStorage`), so a report that meets
     /// the person's own command tries again for a bounded while.
-    async fn deliver_report(&self, report: ThreadReport, text: String) {
+    async fn deliver_report(&self, taken: Taken) {
+        let Taken { report, text, .. } = &taken;
         let Some(storage) = self.commands() else {
             return;
         };
-        let _delivering = self.inner.thread_reports.delivering();
         let mut tries = 0;
         loop {
             let answer = self
@@ -322,47 +374,30 @@ impl ConversationService {
     }
 }
 
-/// Whether a turn is running, or work waits, in the snapshot: a later look
-/// will follow when it ends.
-fn running_or_waiting(snapshot: &SessionSnapshot) -> bool {
-    snapshot.invocations.iter().any(|record| {
-        record.result.is_none()
-            && record.scheduling.last().is_some_and(|event| {
-                matches!(
-                    event.stage,
-                    InvocationStage::Running | InvocationStage::Queued
-                )
-            })
-    })
-}
-
 /// The report text for `execution` if its turn has finished.
 fn finished(child: &ConversationId, snapshot: &SessionSnapshot, execution: &str) -> Option<String> {
-    let index = snapshot
-        .invocations
-        .iter()
-        .position(|record| record.request.execution_id.as_str() == execution)?;
-    let record = &snapshot.invocations[index];
-    let stage = record.scheduling.last().map(|event| event.stage);
+    let record = invocation(snapshot, execution)?;
+    let last = record.scheduling.last();
+    let stage = last.map(|event| event.stage);
     let (outcome, reply) = match (&record.result, stage) {
         (Some(result), _) => (outcome(result), reply(record)),
         (None, Some(InvocationStage::Cancelled)) => ("cancelled", None),
-        // Steering delivered into a turn that has since ended: that turn's
-        // outcome and reply are this message's.
-        (None, Some(InvocationStage::Injected)) if !running_or_waiting(snapshot) => {
-            // The host was running when this was injected: admitted earlier.
-            let host = snapshot.invocations[..index]
-                .iter()
-                .rev()
-                .find(|record| record.result.is_some())?;
-            (
-                outcome(host.result.as_ref().expect("found settled")),
-                reply(host),
-            )
+        // Steering delivered into a turn that has since settled: that
+        // turn's outcome and reply are this message's.
+        (None, Some(InvocationStage::Injected)) => {
+            let host = invocation(snapshot, last?.target.as_ref()?.as_str())?;
+            (outcome(host.result.as_ref()?), reply(host))
         }
         _ => return None,
     };
     Some(report_text(child, execution, outcome, reply))
+}
+
+fn invocation<'s>(snapshot: &'s SessionSnapshot, execution: &str) -> Option<&'s InvocationRecord> {
+    snapshot
+        .invocations
+        .iter()
+        .find(|record| record.request.execution_id.as_str() == execution)
 }
 
 fn outcome(result: &Result<ExecutionOutcome, impl std::fmt::Debug>) -> &'static str {

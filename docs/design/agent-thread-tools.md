@@ -45,23 +45,28 @@ whatever the sender is doing, so a sender that ended its turn is woken, and one
 still running reads it next. A passive note starts no turn and reports nothing.
 
 `service/thread_reports.rs` owns this. The send registers its report before it
-submits, so a turn that ends at once is not missed, and looks once after the
-submit, so a retry of a turn that already ended still reports. Every opened
-agent carries `ThreadReportHook`; after each invocation it asks the service to
-look at that thread when a report waits on it. The look reads the thread's saved
-invocations through the report's caller (a person who can no longer view the
-thread is told nothing): a watched execution is finished when it settled, was
-cancelled, or was injected into a turn that has since ended, in which case that
-turn's outcome and reply are its own. The hook can run before its settlement is
-saved, so a look after an invocation tries again for up to two seconds. The
-report's execution identity derives from the send's source, request and purpose,
-so a second look or a retried send answers from the first receipt. One person's
+submits, so a turn that ends at once is not missed, and again after a submit
+that succeeded, so a concurrent retry that failed cannot let it go. It then
+looks once, so a retry of a turn that already ended still reports. A refused
+send lets the report go only when nothing was saved: a request conflict, or the
+thread refusing it before save. Every opened agent carries `ThreadReportHook`;
+after each invocation, once its result is saved, it asks the service to look at
+that thread when a report waits on it. Each look checks that every person with
+a report waiting may still view the thread: a refusal, or a thread gone, lets
+that person's reports go and tells them nothing. It reads the thread's saved
+invocations: a watched execution is finished when it settled, was cancelled, or
+was injected into the turn its scheduling names as `target` and that turn has
+settled, in which case that turn's outcome and reply are its own. The report's
+execution identity derives from the send's source, request and purpose, so a
+second look or a retried send answers from the first receipt. One person's
 commands are taken one at a time without a queue, so a report that meets the
 person's own command retries while the store answers busy, for up to five seconds.
 
 Registrations are process-local: at most 256 wait at once, and one waits at
 most a day. A full registry answers `reportsBack: false`; a restart forgets
 them, and the sender can still `subscribe`. A thread cannot report to itself.
+Two agents that keep messaging each other keep reporting to each other: that is
+their own conversation, and the person stops it as they would any turn.
 
 For example, call `send_message({threadId, message: "Review the change"})`, then
 `subscribe({threadId, replay: true})`. Continue with the returned `cursor` as

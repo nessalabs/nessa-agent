@@ -417,20 +417,18 @@ async fn run(
                 }
             };
             let storage = service.commands().ok_or("command_unavailable")?;
+            let answer = ThreadReport {
+                parent: source.conversation().clone(),
+                caller: ConversationCaller {
+                    action_id: report_action,
+                    ..source.caller()
+                },
+                execution: report.clone(),
+            };
             // Registered before the submit, so a turn that ends at once is
             // not missed; the look after it catches one that already had.
-            let registration = service.report_thread_turn(
-                target.clone(),
-                execution.clone(),
-                ThreadReport {
-                    parent: source.conversation().clone(),
-                    caller: ConversationCaller {
-                        action_id: report_action,
-                        ..source.caller()
-                    },
-                    execution: report.clone(),
-                },
-            );
+            let registration =
+                service.report_thread_turn(target.clone(), execution.clone(), answer.clone());
             let submitted = match service
                 .submit_command(
                     storage,
@@ -449,14 +447,29 @@ async fn run(
             {
                 Ok(submitted) => submitted,
                 Err(error) => {
-                    if registration == ReportRegistration::Registered {
+                    // Only a send that saved nothing lets its report go; one
+                    // that may have run keeps it until it settles or expires.
+                    let admitted_nothing = matches!(
+                        &error,
+                        MutationFailure::Conflict | MutationFailure::Target(_)
+                    ) && !matches!(
+                        &error,
+                        MutationFailure::Target(
+                            ConversationError::RevokedAfterSave
+                                | ConversationError::UnavailableAfterSave
+                        )
+                    );
+                    if registration == ReportRegistration::Registered && admitted_nothing {
                         service.forget_thread_report(&target, &report);
                     }
                     return Err(mutation(error));
                 }
             };
-            if registration.reports() {
-                service.look_for_reports(target.clone(), false).await;
+            // A concurrent retry under this request may have failed and let
+            // the report go after this one registered: hold it again.
+            let held = service.report_thread_turn(target.clone(), execution.clone(), answer);
+            if held.reports() {
+                service.look_for_reports(target.clone()).await;
             }
             Ok(
                 json!({"threadId":target.to_string(),"requestId":request,"mode":args.mode.name(),"executionId":execution,"command":receipt(&submitted.progress),"reportsBack":registration.reports()}),

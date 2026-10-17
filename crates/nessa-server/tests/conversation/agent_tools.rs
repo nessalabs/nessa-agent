@@ -1050,8 +1050,13 @@ async fn a_thread_turn_reports_its_outcome_and_reply_back_to_the_sender() {
     assert_eq!(conflict["structuredContent"]["error"], "request_conflict");
     assert_eq!(service.inner.thread_reports.waiting(), 0);
 
-    // Steering into a running turn reports once that turn has ended.
+    // A steer taken into a running turn reports that turn's outcome and
+    // reply once it settles, though a queued turn admitted in between is
+    // still waiting.
+    provider.native_steering.store(true, Ordering::SeqCst);
+    provider.inject_steers.store(true, Ordering::SeqCst);
     let release_worker = hold_turn(&service, &provider, &worker_id, "worker-active").await;
+    send(&service, &worker_id, "worker-queued", "after").await;
     let steered = client
         .call(
             "send_message",
@@ -1065,10 +1070,55 @@ async fn a_thread_turn_reports_its_outcome_and_reply_back_to_the_sender() {
         .unwrap()
         .to_owned();
     assert_eq!(service.inner.thread_reports.waiting(), 1);
+    provider
+        .execution_updates
+        .lock()
+        .unwrap()
+        .push(ExecutionUpdate::Message(MessageChunk::text("Host answer.")));
     drop(release_worker);
     let reports = reports_in(&service, &source, 2).await;
     assert_eq!(reports.len(), 2, "{reports:?}");
     assert!(reports[1].contains(&steer), "{}", reports[1]);
+    assert!(reports[1].contains(": completed."), "{}", reports[1]);
+    assert!(
+        reports[1].contains("Its reply:\nHost answer."),
+        "the host turn's reply is the steer's: {}",
+        reports[1]
+    );
+    let worker_turns = service
+        .resolve(&worker_id, &caller("reports"))
+        .await
+        .unwrap()
+        .agent
+        .session_manager()
+        .snapshot()
+        .await
+        .unwrap();
+    let steer_record = worker_turns
+        .invocations
+        .iter()
+        .find(|record| record.request.execution_id.as_str() == steer)
+        .unwrap();
+    assert_eq!(
+        steer_record.scheduling.last().map(|event| event.stage),
+        Some(InvocationStage::Injected),
+        "the steer was taken into the running turn"
+    );
+    // The queued turn after it runs and adds no second report.
+    tokio::time::timeout(TURN_HOLD_HANG, async {
+        while !provider
+            .executions
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|execution| execution == "worker-queued")
+        {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the queued turn ran");
+    assert_eq!(reports_in(&service, &source, 2).await.len(), 2);
 
     // A thread cannot report to itself.
     assert_eq!(
