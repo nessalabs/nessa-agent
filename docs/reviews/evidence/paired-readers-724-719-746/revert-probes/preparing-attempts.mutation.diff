@@ -1,0 +1,11 @@
+--- crates/nessa-client-core/src/read_only_sync/application/watch.rs
++++ crates/nessa-client-core/src/read_only_sync/application/watch.rs
+@@ -50,7 +50,7 @@
+ // Thirty-two attempts permit up to 4096 retained steps without widening any read's
+ // source work, request deadline, or physical ownership. The prolonged-preparing
+ // tests cover progress after the former four-attempt cutoff and final refusal.
+-pub(crate) const PREPARING_ATTEMPTS: usize = 32;
++pub(crate) const PREPARING_ATTEMPTS: usize = 4;
+ 
+ /// The gateway's answer that the source is not ready yet: its progress is
+ /// retained, and the same read may be asked again.

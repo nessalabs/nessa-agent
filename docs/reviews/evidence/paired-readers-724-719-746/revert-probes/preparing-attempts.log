@@ -1,0 +1,38 @@
+running 3 tests
+test read_only_sync::application::watch::tests::lost_output_stops_prolonged_preparing_without_waiting_or_reregistering ... FAILED
+test read_only_sync::application::watch::tests::prolonged_preparing_discovery_keeps_progress_until_registration ... FAILED
+test read_only_sync::application::watch::tests::prolonged_preparing_preserves_the_live_watch_and_pass_budget ... FAILED
+
+failures:
+
+---- read_only_sync::application::watch::tests::lost_output_stops_prolonged_preparing_without_waiting_or_reregistering stdout ----
+
+thread 'read_only_sync::application::watch::tests::lost_output_stops_prolonged_preparing_without_waiting_or_reregistering' (86363) panicked at crates/nessa-client-core/src/read_only_sync/application/../../../tests/read_only_sync/application/watch.rs:579:5:
+assertion `left == right` failed
+  left: Ok(End { reason: Unavailable, cause: Some(Record(SourcePreparing)) })
+ right: Err(OutputLost)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- read_only_sync::application::watch::tests::prolonged_preparing_discovery_keeps_progress_until_registration stdout ----
+
+thread 'read_only_sync::application::watch::tests::prolonged_preparing_discovery_keeps_progress_until_registration' (86364) panicked at crates/nessa-client-core/src/read_only_sync/application/../../../tests/read_only_sync/application/watch.rs:566:5:
+assertion `left == right` failed
+  left: (Some(Record(SourcePreparing)), 4)
+ right: (None, 9)
+
+---- read_only_sync::application::watch::tests::prolonged_preparing_preserves_the_live_watch_and_pass_budget stdout ----
+
+thread 'read_only_sync::application::watch::tests::prolonged_preparing_preserves_the_live_watch_and_pass_budget' (86365) panicked at crates/nessa-client-core/src/read_only_sync/application/../../../tests/read_only_sync/application/watch.rs:535:5:
+assertion `left == right` failed
+  left: End { reason: Unavailable, cause: Some(Record(SourcePreparing)) }
+ right: End { reason: PassesExhausted, cause: None }
+
+
+failures:
+    read_only_sync::application::watch::tests::lost_output_stops_prolonged_preparing_without_waiting_or_reregistering
+    read_only_sync::application::watch::tests::prolonged_preparing_discovery_keeps_progress_until_registration
+    read_only_sync::application::watch::tests::prolonged_preparing_preserves_the_live_watch_and_pass_budget
+
+test result: FAILED. 0 passed; 3 failed; 0 ignored; 0 measured; 415 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p nessa-client-core --lib`

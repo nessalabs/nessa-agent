@@ -1,0 +1,23 @@
+test conversation::infrastructure::catalogue_changes::tests::full_registry_checks_each_receiver_once_and_releases_only_on_drop ... ok
+test conversation::infrastructure::store_tests::a_cancelled_grant_change_keeps_its_permit_until_the_write_finishes ... ok
+test conversation::infrastructure::store_tests::a_failed_scoped_head_capture_does_not_broaden_a_committed_notice ... ok
+test conversation::infrastructure::store_tests::catalogue_publication_releases_database_before_invoking_a_waker ... ok
+test conversation::infrastructure::store_tests::historical_receiver_replacements_notify_exactly_when_their_head_moves ... ok
+test conversation::infrastructure::store_tests::paired_catalogue_notices_follow_only_the_readers_head ... ok
+test product::socket::tests::subscriptions::principal_subscription_allowance_is_shared_bounded_and_released ... ok
+test product::socket::tests::watches::paired_catalogue_watch_does_not_send_ungranted_owner_activity ... ok
+test conversation::application::service::app_calls::tests::app_reviews_never_cost_the_agents_own_however_the_view_is_filled ... ok
+
+failures:
+
+---- agents::infrastructure::codex::tests::status_cleanup_removes_descendants_after_root_exit_and_after_timeout stdout ----
+
+thread 'agents::infrastructure::codex::tests::status_cleanup_removes_descendants_after_root_exit_and_after_timeout' (97091) panicked at crates/nessa-server/src/agents/infrastructure/../../../tests/agents/codex.rs:95:79:
+called `Result::unwrap()` on an `Err` value: CleanupUnconfirmed
+
+
+failures:
+    agents::infrastructure::codex::tests::status_cleanup_removes_descendants_after_root_exit_and_after_timeout
+
+test result: FAILED. 3168 passed; 1 failed; 10 ignored; 0 measured; 0 filtered out; finished in 166.56s
+

@@ -1,0 +1,17 @@
+--- crates/nessa-server/src/product/subscription/target.rs
++++ crates/nessa-server/src/product/subscription/target.rs
+@@ -207,6 +207,14 @@
+     hooks: Option<watch::Receiver<u64>>,
+     // Dropped after the physical sources above, including on cancellation.
+     _owner: Option<ProductWatchPermit>,
++}
++
++impl Drop for Sources {
++    fn drop(&mut self) {
++        if let Some(owner) = self._owner.take() {
++            std::mem::forget(owner);
++        }
++    }
+ }
+ 
+ pub(super) enum Wake {

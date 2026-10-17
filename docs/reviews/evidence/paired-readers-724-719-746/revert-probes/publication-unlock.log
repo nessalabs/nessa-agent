@@ -1,0 +1,18 @@
+running 1 test
+test conversation::infrastructure::store_tests::catalogue_publication_releases_database_before_invoking_a_waker ... FAILED
+
+failures:
+
+---- conversation::infrastructure::store_tests::catalogue_publication_releases_database_before_invoking_a_waker stdout ----
+
+thread 'conversation::infrastructure::store_tests::catalogue_publication_releases_database_before_invoking_a_waker' (84558) panicked at crates/nessa-server/src/conversation/infrastructure/../../../tests/conversation/store.rs:5027:5:
+assertion failed: observer.observed.load(Ordering::SeqCst)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    conversation::infrastructure::store_tests::catalogue_publication_releases_database_before_invoking_a_waker
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3178 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p nessa-server --lib`

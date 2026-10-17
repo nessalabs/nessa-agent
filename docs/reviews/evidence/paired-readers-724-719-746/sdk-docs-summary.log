@@ -1,0 +1,4 @@
+    Checking nessa-local-database v0.1.0 (/workspace/paired-readers/crates/nessa-local-database)
+ Documenting nessa-sdk v0.1.0 (/workspace/paired-readers/crates/nessa-sdk)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 15.55s
+   Generated /workspace/paired-readers/target/doc/nessa_sdk/index.html

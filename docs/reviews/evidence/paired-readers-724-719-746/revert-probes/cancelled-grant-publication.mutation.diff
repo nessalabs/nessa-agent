@@ -1,0 +1,11 @@
+--- crates/nessa-server/src/conversation/infrastructure/store/share_grants.rs
++++ crates/nessa-server/src/conversation/infrastructure/store/share_grants.rs
+@@ -1130,7 +1130,7 @@
+                         revision,
+                     );
+                     drop(connection);
+-                    publication.publish();
++                    drop(publication);
+                 }
+                 Ok(ChangeAttempt::Applied(receipt))
+             })

@@ -1,0 +1,20 @@
+running 1 test
+test product::socket::tests::subscriptions::principal_subscription_allowance_is_shared_bounded_and_released ... FAILED
+
+failures:
+
+---- product::socket::tests::subscriptions::principal_subscription_allowance_is_shared_bounded_and_released stdout ----
+
+thread 'product::socket::tests::subscriptions::principal_subscription_allowance_is_shared_bounded_and_released' (83909) panicked at crates/nessa-server/src/product/../../tests/product/socket/subscriptions.rs:5364:5:
+assertion `left == right` failed
+  left: Null
+ right: "subscription_capacity"
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    product::socket::tests::subscriptions::principal_subscription_allowance_is_shared_bounded_and_released
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3178 filtered out; finished in 0.49s
+
+error: test failed, to rerun pass `-p nessa-server --lib`

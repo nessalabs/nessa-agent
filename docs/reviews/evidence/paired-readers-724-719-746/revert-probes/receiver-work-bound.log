@@ -1,0 +1,20 @@
+running 1 test
+test conversation::infrastructure::catalogue_changes::tests::full_registry_checks_each_receiver_once_and_releases_only_on_drop ... FAILED
+
+failures:
+
+---- conversation::infrastructure::catalogue_changes::tests::full_registry_checks_each_receiver_once_and_releases_only_on_drop stdout ----
+
+thread 'conversation::infrastructure::catalogue_changes::tests::full_registry_checks_each_receiver_once_and_releases_only_on_drop' (84892) panicked at crates/nessa-server/src/conversation/infrastructure/catalogue_changes.rs:311:9:
+assertion `left == right` failed
+  left: 64
+ right: 2
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    conversation::infrastructure::catalogue_changes::tests::full_registry_checks_each_receiver_once_and_releases_only_on_drop
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3178 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p nessa-server --lib`

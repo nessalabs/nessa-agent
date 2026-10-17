@@ -1,0 +1,107 @@
+[
+  {
+    "check": "tests",
+    "command": [
+      "node",
+      "scripts/cargo-test-parallel.mjs",
+      "--concurrency",
+      "2",
+      "--partition",
+      "all",
+      "--",
+      "-p",
+      "nessa-local-storage",
+      "-p",
+      "nessa-auth",
+      "-p",
+      "nessa-server",
+      "-p",
+      "nessa-protocol",
+      "-p",
+      "nessa-client-core",
+      "-p",
+      "nessa-device-client",
+      "-p",
+      "nessa-sdk"
+    ],
+    "exit_code": 1
+  },
+  {
+    "check": "clippy",
+    "command": [
+      "cargo",
+      "clippy",
+      "-p",
+      "nessa-local-storage",
+      "-p",
+      "nessa-auth",
+      "-p",
+      "nessa-server",
+      "-p",
+      "nessa-protocol",
+      "-p",
+      "nessa-client-core",
+      "-p",
+      "nessa-device-client",
+      "-p",
+      "nessa-sdk",
+      "--all-targets",
+      "--",
+      "-D",
+      "warnings"
+    ],
+    "exit_code": 0
+  },
+  {
+    "check": "format",
+    "command": [
+      "cargo",
+      "fmt",
+      "--all",
+      "--check"
+    ],
+    "exit_code": 0
+  },
+  {
+    "check": "sdk_docs",
+    "command": [
+      "node",
+      "scripts/check-sdk-docs.mjs"
+    ],
+    "exit_code": 0
+  },
+  {
+    "check": "restored_format_after_release_probe",
+    "command": [
+      "cargo",
+      "fmt",
+      "--all",
+      "--check"
+    ],
+    "exit_code": 0
+  },
+  {
+    "check": "restored_quota_after_release_probe",
+    "command": [
+      "cargo",
+      "test",
+      "-p",
+      "nessa-local-storage",
+      "-p",
+      "nessa-auth",
+      "-p",
+      "nessa-server",
+      "-p",
+      "nessa-protocol",
+      "-p",
+      "nessa-client-core",
+      "-p",
+      "nessa-device-client",
+      "-p",
+      "nessa-sdk",
+      "--lib",
+      "principal_subscription_allowance_is_shared_bounded_and_released"
+    ],
+    "exit_code": 0
+  }
+]

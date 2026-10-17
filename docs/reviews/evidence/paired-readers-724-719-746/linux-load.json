@@ -1,0 +1,106 @@
+{
+  "binary_sha256": "071d88781a03b7d89dc746f4f03ceae8b21180b6537820fe64f73467a532c5b9",
+  "workers": 4,
+  "repetitions": [
+    {
+      "run": 1,
+      "exit_code": 0,
+      "seconds": 8.0
+    },
+    {
+      "run": 2,
+      "exit_code": 0,
+      "seconds": 7.46
+    },
+    {
+      "run": 3,
+      "exit_code": 0,
+      "seconds": 8.16
+    },
+    {
+      "run": 4,
+      "exit_code": 0,
+      "seconds": 7.86
+    },
+    {
+      "run": 5,
+      "exit_code": 0,
+      "seconds": 9.11
+    },
+    {
+      "run": 6,
+      "exit_code": 0,
+      "seconds": 8.32
+    },
+    {
+      "run": 7,
+      "exit_code": 0,
+      "seconds": 8.39
+    },
+    {
+      "run": 8,
+      "exit_code": 0,
+      "seconds": 7.86
+    },
+    {
+      "run": 9,
+      "exit_code": 0,
+      "seconds": 8.63
+    },
+    {
+      "run": 10,
+      "exit_code": 0,
+      "seconds": 8.2
+    },
+    {
+      "run": 11,
+      "exit_code": 0,
+      "seconds": 9.27
+    },
+    {
+      "run": 12,
+      "exit_code": 0,
+      "seconds": 9.73
+    },
+    {
+      "run": 13,
+      "exit_code": 0,
+      "seconds": 10.87
+    },
+    {
+      "run": 14,
+      "exit_code": 0,
+      "seconds": 9.62
+    },
+    {
+      "run": 15,
+      "exit_code": 0,
+      "seconds": 9.01
+    },
+    {
+      "run": 16,
+      "exit_code": 0,
+      "seconds": 9.57
+    },
+    {
+      "run": 17,
+      "exit_code": 0,
+      "seconds": 14.64
+    },
+    {
+      "run": 18,
+      "exit_code": 0,
+      "seconds": 15.47
+    },
+    {
+      "run": 19,
+      "exit_code": 0,
+      "seconds": 12.81
+    },
+    {
+      "run": 20,
+      "exit_code": 0,
+      "seconds": 12.96
+    }
+  ]
+}
