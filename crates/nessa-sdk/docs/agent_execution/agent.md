@@ -647,3 +647,20 @@ combined evidence. Confirmed release cannot be undone by a competing uncertain
 result, and independent confirmation cannot erase failed audit delivery. Close
 callers use the final combined report. A real cleanup retry on resources still
 owned can acknowledge an earlier failed attempt.
+
+## Exact execution observation for host orchestration
+
+`Agent::unsettled_execution_ids()` reads admitted queued/running identities under
+one scheduler lock, including a dequeued invocation awaiting provider dispatch.
+It is observation, not a cancellation capability: hosts still authorize and use
+the ordinary exact execution Stop controls. Completed work may disappear before
+the host acts. The conformance regression
+`unsettled_selection_includes_dequeued_work_before_active_provider_dispatch`
+holds the actual before-invocation boundary to verify that handoff.
+
+`turn_continuation(history, original)` returns `Final`, `Pending`, or the exact
+saved `Successor` according to the same SDK owed-turn rules used for resumption.
+A host report owner can wait for legitimate suspended work without following an
+unrelated later turn. Explicit Stop stays final. The conformance regression
+`continuation_read_waits_for_the_exact_original_successor_and_keeps_person_stop_final`
+covers those distinctions. These reads choose no host cascade or delivery policy.

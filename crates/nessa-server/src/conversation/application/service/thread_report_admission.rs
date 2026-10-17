@@ -1,0 +1,202 @@
+//! Person admission releases a Stop's report fence. Automated work cannot.
+use super::super::{SubmittedFile, SubmittedImage, SubmittedMessage};
+use super::{
+    conversation_session, ConversationCaller, ConversationError, ConversationId,
+    ConversationService, SubmissionMode,
+};
+use nessa_sdk::application::agent_execution::{
+    commands::{MutationOperation, MutationOutcome},
+    sessions::InvocationRecord,
+};
+use nessa_sdk::domain::agent_execution::{
+    executions::{Resumption, SubmissionMode as InvocationSubmission},
+    prompts::MessageSender,
+};
+use sha2::{Digest, Sha256};
+use std::collections::HashSet;
+
+/// A new delivery after withdrawal belongs to the next explicit person turn.
+/// The withdrawn turn stays final. The existing waiting report row owns the
+/// obligation; the parent transcript owns each exact delivery identity.
+fn delivery_id(original: &str, person: &str) -> String {
+    let bytes = serde_json::to_vec(&(original, person)).expect("strings serialize");
+    format!("thread-report-{:x}", Sha256::digest(bytes))
+}
+pub(super) fn report_execution_ids(
+    original: &str,
+    history: &[InvocationRecord],
+) -> HashSet<String> {
+    std::iter::once(original.to_owned())
+        .chain(
+            history
+                .iter()
+                .map(|record| delivery_id(original, record.request.execution_id.as_str())),
+        )
+        .collect()
+}
+/// Both durable source binding and saved submission identify a report. A
+/// caller-chosen execution ID alone cannot confer ownership over queued work.
+pub(super) fn is_report_record(
+    pending: &super::thread_reports::PendingReport,
+    record: &InvocationRecord,
+) -> bool {
+    let header = format!(
+        "[Thread report] Thread {} finished the turn you sent it (execution {}): ",
+        pending.child, pending.execution
+    );
+    pending
+        .report
+        .caller
+        .actor()
+        .is_ok_and(|actor| actor == record.actor)
+        && record.request.user_message.sender() == &MessageSender::Person
+        && record.request.user_message.text_str().starts_with(&header)
+        && record.request.user_message.images().is_empty()
+        && record.request.user_message.files().is_empty()
+}
+
+impl ConversationService {
+    async fn person_turns(
+        &self,
+        id: &ConversationId,
+        caller: &ConversationCaller,
+        history: &[InvocationRecord],
+    ) -> Result<Vec<(usize, String)>, ConversationError> {
+        let Some(storage) = self.commands() else {
+            return Ok(Vec::new());
+        };
+        let Some(lease) = storage
+            .open_creation(caller.principal_id.as_str().into(), false)
+            .await
+            .map_err(|_| ConversationError::Unavailable)?
+        else {
+            return Ok(Vec::new());
+        };
+        let receipts = lease
+            .mutations()
+            .await
+            .map_err(|_| ConversationError::Unavailable)?;
+        let mut people = Vec::new();
+        for record in history {
+            if record.request.user_message.sender() != &MessageSender::Person
+                || Resumption::of(&record.request.execution_id).attempt() != 0
+            {
+                continue;
+            }
+            let message = SubmittedMessage {
+                text: record.request.user_message.text_str().into(),
+                images: record
+                    .request
+                    .user_message
+                    .images()
+                    .iter()
+                    .map(|image| SubmittedImage {
+                        digest: image.digest().to_string(),
+                        media_type: image.media_type().as_str().into(),
+                        size: image.size(),
+                    })
+                    .collect(),
+                files: record
+                    .request
+                    .user_message
+                    .files()
+                    .iter()
+                    .map(|file| SubmittedFile {
+                        path: file.path().into(),
+                    })
+                    .collect(),
+            };
+            let mut sender = caller.clone();
+            sender.surface_id = record.actor.surface_id().into();
+            sender.action_id = record.actor.request_id().into();
+            let mode = if record.submission == InvocationSubmission::Queued {
+                SubmissionMode::Queue
+            } else {
+                SubmissionMode::Steer
+            };
+            let expected = super::mutation::submit_binding(
+                id,
+                &sender,
+                record.request.execution_id.as_str(),
+                &message,
+                mode,
+            )?;
+            if let Some(index) = receipts.iter().position(|receipt| {
+                receipt.binding().operation() == MutationOperation::Submit
+                    && receipt.binding() == &expected
+                    && receipt.outcome() == Some(MutationOutcome::Dispatched)
+            }) {
+                people.push((index, record.request.execution_id.as_str().to_owned()));
+            }
+        }
+        people.sort();
+        Ok(people)
+    }
+    pub(super) async fn reports_paused(
+        &self,
+        id: &ConversationId,
+        caller: &ConversationCaller,
+        history: &[InvocationRecord],
+    ) -> Result<bool, ConversationError> {
+        if self.inner.ownership.get().is_none() {
+            return Ok(false);
+        }
+        let roots: HashSet<_> = self
+            .captured_stops(caller)
+            .await?
+            .into_iter()
+            .filter_map(|(root, target)| {
+                (target.target() == &conversation_session(id))
+                    .then(|| root.actor().request_id().to_owned())
+            })
+            .collect();
+        if roots.is_empty() {
+            return Ok(false);
+        }
+        let Some(storage) = self.commands() else {
+            return Ok(true);
+        };
+        let Some(lease) = storage
+            .open_creation(caller.principal_id.as_str().into(), false)
+            .await
+            .map_err(|_| ConversationError::Unavailable)?
+        else {
+            return Ok(true);
+        };
+        let receipts = lease
+            .mutations()
+            .await
+            .map_err(|_| ConversationError::Unavailable)?;
+        let stopped_at = receipts
+            .iter()
+            .enumerate()
+            .filter_map(|(index, receipt)| {
+                roots
+                    .contains(receipt.binding().actor().request_id())
+                    .then_some(index)
+            })
+            .max();
+        drop(lease);
+        let Some(stopped_at) = stopped_at else {
+            return Ok(true);
+        };
+        Ok(!self
+            .person_turns(id, caller, history)
+            .await?
+            .iter()
+            .any(|(index, _)| *index > stopped_at))
+    }
+    pub(super) async fn next_report_delivery(
+        &self,
+        id: &ConversationId,
+        caller: &ConversationCaller,
+        original: &str,
+        history: &[InvocationRecord],
+    ) -> Result<Option<String>, ConversationError> {
+        Ok(self
+            .person_turns(id, caller, history)
+            .await?
+            .last()
+            .map(|(_, person)| delivery_id(original, person)))
+    }
+}

@@ -403,7 +403,7 @@ async fn agent_tools_relay_create_send_replay_and_refuse_a_foreign_target() {
     let provider = Arc::new(ProviderFactory::default());
     provider.turn_cancel.store(true, Ordering::SeqCst);
     let (service, storage, metadata) = fixture(&root, provider.clone());
-    service.bind_commands(storage.clone());
+    super::parent_stop::bind(&service, &storage, &root, true).await;
     let audit = Arc::new(Audit::default());
     service.bind_agent_tool_audit(audit.clone());
     let source = id();
@@ -969,7 +969,7 @@ async fn a_thread_turn_reports_its_outcome_and_reply_back_to_the_sender() {
     let provider = Arc::new(ProviderFactory::default());
     provider.turn_cancel.store(true, Ordering::SeqCst);
     let (service, storage, metadata) = fixture(&root, provider.clone());
-    service.bind_commands(storage.clone());
+    super::parent_stop::bind(&service, &storage, &root, true).await;
     service.bind_agent_tool_audit(Arc::new(Audit::default()));
     let source = id();
     opened(&service, &provider, &source).await;

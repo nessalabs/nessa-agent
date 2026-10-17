@@ -104,6 +104,79 @@ pub enum Resumed {
     NotOwed,
 }
 
+/// Whether saved work is final, awaits host continuation, or has an exact
+/// acknowledged successor. This is a history read, not permission to resume.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TurnContinuation {
+    /// No continuation carries this work.
+    Final,
+    /// Work is owed and no matching successor has been saved yet.
+    Pending,
+    /// This exact successor carries the original work.
+    Successor(ExecutionId),
+}
+
+/// Read continuation using the same owed-work rules as [`Agent::owed_turns`].
+/// Successors must match the derived identity, original caller/initiation and
+/// canonical continuation request. An unrelated record is never followed.
+/// Running records are treated as cut off for this historical read; a live host
+/// may keep waiting for them instead. No execution is submitted or changed.
+pub fn turn_continuation(
+    history: &[InvocationRecord],
+    execution: &ExecutionId,
+) -> TurnContinuation {
+    let Some((index, record)) = history
+        .iter()
+        .enumerate()
+        .find(|(_, record)| &record.request.execution_id == execution)
+    else {
+        return TurnContinuation::Final;
+    };
+    let Some(next) = Resumption::of(execution).successor() else {
+        return TurnContinuation::Final;
+    };
+    let saved: HashSet<_> = history
+        .iter()
+        .map(|record| &record.request.execution_id)
+        .filter(|id| **id != next)
+        .collect();
+    let newest_final = history
+        .iter()
+        .enumerate()
+        .filter_map(|(index, record)| ended_for_good(record, &saved, |_| false).then_some(index))
+        .next_back();
+    // Later person work suppresses a new retry, but cannot erase an already
+    // admitted successor. Validate that successor's canonical request below.
+    let admitted = history
+        .iter()
+        .any(|record| record.request.execution_id == next);
+    let Some(stop) = owed(
+        record,
+        &saved,
+        !admitted && newest_final > Some(index),
+        |_| false,
+    ) else {
+        return TurnContinuation::Final;
+    };
+    let cause = match stop {
+        Stop::Recorded(edge) | Stop::CutOff { edge } => edge.cause,
+    };
+    match history
+        .iter()
+        .find(|record| record.request.execution_id == next)
+    {
+        Some(successor)
+            if successor.actor == record.actor
+                && successor.initiation == record.initiation
+                && successor_request(record, cause, next.clone())
+                    .is_ok_and(|expected| expected == successor.request) =>
+        {
+            TurnContinuation::Successor(next)
+        }
+        _ => TurnContinuation::Pending,
+    }
+}
+
 /// How an owed turn stands in saved history.
 enum Stop {
     /// Its last edge is this owed cancellation, or this failure.

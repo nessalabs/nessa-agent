@@ -10,9 +10,10 @@
 //! saved, is finished, and its report is queued into the parent as an owner
 //! turn under the caller the parent's own send was admitted with. Each look
 //! checks every waiting caller may still view the thread; one refused, or a
-//! thread gone, drops that caller's reports. A report leaves the store once
-//! its parent has it, so a restart part way through delivers it again, and
-//! its fixed execution identity answers that from the first receipt.
+//! thread gone, drops that caller's reports. With ownership composed, a report
+//! stays durable through its parent turn's settlement. Stop can therefore
+//! withdraw an already queued report and retain it until later person input.
+//! Delivery identities and the existing transcript reconcile lost acknowledgements.
 //!
 //! ```text
 //! send_message ─▶ save + register(child, execution, parent) ─▶ submit to child
@@ -22,9 +23,9 @@
 //! look(child) ─▶ child's history ─▶ finished watches ─▶ submit to parent ─▶ settle
 //! ```
 //!
-//! After a restart no turn left unfinished by the earlier run is run again,
-//! so a report saved by that run whose turn has not finished says it was
-//! interrupted: [`restored_unfinished`] owns that one decision.
+//! Suspended work follows the SDK's exact original-to-successor continuation.
+//! It stays pending until that successor settles. An unfinished restored turn
+//! without a continuation uses [`restored_unfinished`]. Explicit Stop remains final.
 use super::{
     ConversationCaller, ConversationError, ConversationService, Inner, SubmissionMode,
     SubmittedMessage, Writer,
@@ -33,12 +34,13 @@ use crate::conversation::application::ConversationFuture;
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_sdk::application::agent_execution::{
+    agents::{turn_continuation, TurnContinuation},
     executions::ExecutionUpdate,
     hooks::{HookError, InvocationContext, InvocationHook},
     sessions::InvocationRecord,
 };
 use nessa_sdk::domain::agent_execution::executions::{
-    ExecutionOutcome, Initiation, InvocationStage, MessageKind,
+    ExecutionOutcome, InvocationStage, MessageKind,
 };
 use std::{
     collections::{HashMap, HashSet},
@@ -145,7 +147,7 @@ pub(crate) struct ThreadReports {
     /// Held while a report registers, so a second registration of the same
     /// report sees the first one's watch, never its half-made state.
     registering: tokio::sync::Mutex<()>,
-    store: OnceLock<Arc<dyn ThreadReportStore>>,
+    pub(super) store: OnceLock<Arc<dyn ThreadReportStore>>,
 }
 
 /// What a look found of one watched turn.
@@ -171,7 +173,7 @@ struct Taken {
     child: ConversationId,
     report: ThreadReport,
     text: String,
-    _delivering: Delivering,
+    _delivering: Option<Delivering>,
 }
 
 impl ThreadReports {
@@ -312,7 +314,7 @@ impl ThreadReports {
                 child: child.clone(),
                 report: watch.report.clone(),
                 text,
-                _delivering: Delivering(self.delivering.clone()),
+                _delivering: Some(Delivering(self.delivering.clone())),
             });
             false
         });
@@ -703,42 +705,106 @@ impl ConversationService {
     /// its configuration or placement, is not tried again in it: the report
     /// stays saved for the next start. One the parent refuses for good is let
     /// go.
-    async fn deliver_report(&self, taken: Taken) {
-        let Taken { report, text, .. } = &taken;
+    async fn deliver_report(&self, mut taken: Taken) {
+        let report = taken.report.clone();
+        let text = taken.text.clone();
+        let retain_for_stop =
+            self.inner.ownership.get().is_some() && self.inner.thread_reports.store.get().is_some();
         let mut delay = DELIVERY_RETRY_FIRST;
         loop {
             if self.inner.retirement.get().is_some() {
                 return;
             }
-            let delivered = self
-                .report_history(&report.parent, &report.caller)
-                .await
-                .map(|history| invocation(&history, &report.execution).is_some());
-            if delivered == Some(true) {
+            let admission = Arc::new(self.inner.thread_admission.clone().lock_owned().await);
+            let history = self.report_history(&report.parent, &report.caller).await;
+            let mut delivered = false;
+            let mut waiting = false;
+            let mut previously_cancelled = false;
+            if let Some(history) = &history {
+                let ids = super::thread_report_admission::report_execution_ids(
+                    &report.execution,
+                    history,
+                );
+                for record in history
+                    .iter()
+                    .filter(|record| ids.contains(record.request.execution_id.as_str()))
+                {
+                    let matches = report
+                        .caller
+                        .actor()
+                        .is_ok_and(|actor| actor == record.actor)
+                        && record.request.user_message.text_str() == text
+                        && record.request.user_message.images().is_empty()
+                        && record.request.user_message.files().is_empty();
+                    if !matches {
+                        previously_cancelled = true;
+                        continue;
+                    }
+                    taken._delivering.take();
+                    if !retain_for_stop {
+                        delivered = true;
+                    }
+                    match in_record(history, record, false) {
+                        Found::Finished("cancelled", _) => previously_cancelled = true,
+                        Found::Finished(_, _) => delivered = true,
+                        _ => waiting = true,
+                    }
+                }
+            }
+            if delivered || (waiting && self.inner.thread_reports.store.get().is_none()) {
                 break;
             }
-            if delivered == Some(false) {
+            let paused = match &history {
+                Some(history) => self
+                    .reports_paused(&report.parent, &report.caller, history)
+                    .await
+                    .unwrap_or(true),
+                None => true,
+            };
+            let execution = if previously_cancelled {
+                match &history {
+                    Some(history) => self
+                        .next_report_delivery(
+                            &report.parent,
+                            &report.caller,
+                            &report.execution,
+                            history,
+                        )
+                        .await
+                        .ok()
+                        .flatten(),
+                    None => None,
+                }
+            } else {
+                Some(report.execution.clone())
+            };
+            if let Some(execution) = execution.filter(|_| history.is_some() && !waiting && !paused)
+            {
                 let answer = self
                     .submit_as(
                         report.parent.clone(),
                         report.caller.clone(),
-                        report.execution.clone(),
+                        execution,
                         SubmittedMessage {
                             text: text.clone(),
                             ..Default::default()
                         },
                         SubmissionMode::Queue,
-                        Writer::Person(Initiation::owner(), false),
+                        Writer::ThreadReport {
+                            _admission: admission.clone(),
+                        },
                     )
                     .await;
                 match answer.map_err(super::SubmitFailure::into_error) {
-                    Ok(_) => break,
+                    Ok(_) if !retain_for_stop => break,
+                    Ok(_) => {
+                        taken._delivering.take();
+                    }
                     Err(_) if self.inner.retirement.get().is_some() => return,
                     Err(
                         error @ (ConversationError::NotFound
                         | ConversationError::Deleted
                         | ConversationError::InvalidInput
-                        | ConversationError::RequestConflict
                         | ConversationError::AgentUnsupported),
                     ) => {
                         let parent = &report.parent;
@@ -764,6 +830,7 @@ impl ConversationService {
                     }
                 }
             }
+            drop(admission);
             tokio::time::sleep(delay).await;
             delay = (delay * 2).min(DELIVERY_RETRY_MOST);
         }
@@ -799,14 +866,13 @@ fn watched(
             restored_unfinished(child, execution, saved, limit)
         }
         Found::Settling(_) => Watched::Settling,
-        Found::Waiting(_) => Watched::Waiting,
+        Found::Waiting(_) | Found::Continuing => Watched::Waiting,
     }
 }
 
-/// A report an earlier run saved, whose turn that run left unfinished. No
-/// turn is run again after a restart, so one that saved no result is reported
-/// interrupted. One that saved its result, but not its settlement, did end:
-/// it is reported with that result and reply.
+/// A restored unfinished report with no SDK continuation. A saved result is
+/// retained; absence of a result is reported as interrupted. Owed/resumed turns
+/// are filtered before this decision and remain pending for their exact successor.
 fn restored_unfinished(
     child: &ConversationId,
     execution: &str,
@@ -821,6 +887,7 @@ fn restored_unfinished(
 type Ended = (&'static str, Option<String>);
 
 enum Found {
+    Continuing,
     Finished(&'static str, Option<String>),
     /// Settling, with the result already saved, if one is.
     Settling(Option<Ended>),
@@ -828,6 +895,15 @@ enum Found {
 }
 
 fn in_record(history: &[InvocationRecord], record: &InvocationRecord, failure: bool) -> Found {
+    match turn_continuation(history, &record.request.execution_id) {
+        TurnContinuation::Pending => return Found::Continuing,
+        TurnContinuation::Successor(next) => {
+            return invocation(history, next.as_str())
+                .map(|next| in_record(history, next, failure))
+                .unwrap_or(Found::Continuing)
+        }
+        TurnContinuation::Final => {}
+    }
     let last = record.scheduling.last();
     if settled(record) {
         return match &record.result {

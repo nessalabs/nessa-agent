@@ -43,12 +43,32 @@ enum Held {
     Creation(CreationReceipt),
     Mutation(MutationReceipt),
 }
+/// Cache of one validated control stream, preserving first admission order.
+#[derive(Default)]
+struct Receipts {
+    held: HashMap<String, Held>,
+    order: Vec<String>,
+}
+impl Receipts {
+    fn get(&self, request: &str) -> Option<&Held> {
+        self.held.get(request)
+    }
+    fn len(&self) -> usize {
+        self.held.len()
+    }
+    fn insert(&mut self, request: String, receipt: Held) {
+        if !self.held.contains_key(&request) {
+            self.order.push(request.clone());
+        }
+        self.held.insert(request, receipt);
+    }
+}
 struct ControlInner {
     _reservation: Reservation,
     runtime: RecordRuntime,
     stream: StreamKey,
     principal: String,
-    receipts: Mutex<HashMap<String, Held>>,
+    receipts: Mutex<Receipts>,
     writable: bool,
 }
 impl CreationStorage for RecordStorage {
@@ -152,6 +172,20 @@ impl CreationStorageLease for Control {
             }
         })
     }
+    fn mutations(&self) -> CreationFuture<'_, Vec<MutationReceipt>> {
+        let inner = self.inner.clone();
+        Box::pin(async move {
+            let receipts = inner.receipts.lock().await;
+            Ok(receipts
+                .order
+                .iter()
+                .filter_map(|request| match receipts.get(request) {
+                    Some(Held::Mutation(receipt)) => Some(receipt.clone()),
+                    _ => None,
+                })
+                .collect())
+        })
+    }
     fn save_mutation(&self, receipt: MutationReceipt) -> CreationFuture<'_, ()> {
         let inner = self.inner.clone();
         Box::pin(async move {
@@ -183,10 +217,7 @@ impl CreationStorageLease for Control {
         })
     }
 }
-fn check_creation(
-    receipts: &HashMap<String, Held>,
-    next: &CreationReceipt,
-) -> Result<(), CreationStorageError> {
+fn check_creation(receipts: &Receipts, next: &CreationReceipt) -> Result<(), CreationStorageError> {
     match receipts.get(next.binding().actor().request_id()) {
         Some(Held::Mutation(_)) => Err(CreationStorageError::ForeignRequest),
         Some(Held::Creation(previous)) if previous == next => Ok(()),
@@ -204,10 +235,7 @@ fn check_creation(
         None => Ok(()),
     }
 }
-fn check_mutation(
-    receipts: &HashMap<String, Held>,
-    next: &MutationReceipt,
-) -> Result<(), CreationStorageError> {
+fn check_mutation(receipts: &Receipts, next: &MutationReceipt) -> Result<(), CreationStorageError> {
     match receipts.get(next.binding().actor().request_id()) {
         Some(Held::Creation(_)) => Err(CreationStorageError::ForeignRequest),
         Some(Held::Mutation(previous)) if previous == next => Ok(()),
@@ -236,14 +264,14 @@ async fn replay(
     runtime: &RecordRuntime,
     stream: &StreamKey,
     principal: &str,
-) -> Result<HashMap<String, Held>, StorageError> {
+) -> Result<Receipts, StorageError> {
     let bounds = runtime.bounds(stream).await.map_err(store_error)?;
     if bounds.floor.offset != 0 || bounds.tail.offset > (MAX_RECEIPTS * 3) as u64 {
         return Err(corrupt(
             "creation control history exceeds bounds or lost its prefix",
         ));
     }
-    let mut receipts = HashMap::new();
+    let mut receipts = Receipts::default();
     let mut cursor = Cursor::new(stream.clone(), 0);
     while cursor.offset < bounds.tail.offset {
         let page = runtime

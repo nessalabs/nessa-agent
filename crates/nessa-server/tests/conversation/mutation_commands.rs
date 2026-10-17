@@ -1477,3 +1477,6 @@ async fn active_execution_ignores_truncated_display_and_opens_no_provider() {
     let _ = release.send(());
     service.shutdown().await.unwrap();
 }
+
+#[path = "parent_stop.rs"]
+mod parent_stop;

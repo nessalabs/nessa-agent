@@ -1,6 +1,9 @@
 mod agent_tools;
 mod creation;
 mod mutation;
+mod owned_threads;
+mod parent_stop;
+mod thread_report_admission;
 mod thread_reports;
 use super::metadata_target::{load_conversation, validate_target};
 use super::session_key::conversation_session;
@@ -60,8 +63,8 @@ use nessa_protocol::product_contract::generated::MAX_MCP_MESSAGE_BYTES;
 use nessa_sdk::application::agent_execution::{
     agents::{
         AdmissionEvidence, AdmissionEvidenceFailure, Agent, AgentError, AttachmentFailure,
-        AttachmentFailureCode, AttachmentPhase, AttachmentRequest, QueueAdmission, QueueRemoval,
-        QueueReorder, SteeringDelivery, SteeringEvidence,
+        AttachmentFailureCode, AttachmentPhase, AttachmentRequest, OwnedLifetime, QueueAdmission,
+        QueueRemoval, QueueReorder, SteeringDelivery, SteeringEvidence,
     },
     commands::{CreationStorage, CreationTaskFault},
     executions::{
@@ -92,7 +95,7 @@ use nessa_sdk::domain::agent_execution::{
     },
     prompts::{ImageReference, LinkedFile, McpAppSource, MessageSender, PromptText, UserMessage},
     questions::{QuestionChoice, QuestionId},
-    sessions::ExecutionSessionId,
+    sessions::{ExecutionSessionId, SessionId},
 };
 use nessa_sdk::domain::common::value_objects::{ImageMediaType, Sha256Digest};
 use std::{
@@ -553,6 +556,10 @@ pub(super) enum Writer {
     /// the share grant that admitted it. The flag is whether this membership
     /// may use a remember choice. A grant turn is not offered one.
     Person(Initiation, bool),
+    /// Retain report admission through its supervised queue write.
+    ThreadReport {
+        _admission: Arc<OwnedMutexGuard<()>>,
+    },
     App {
         sender: McpAppSource,
         apps: Arc<AppReviews>,
@@ -571,7 +578,7 @@ impl Writer {
     fn initiation(&self) -> Initiation {
         match self {
             Self::Person(initiation, _) => initiation.clone(),
-            Self::App { .. } => Initiation::owner(),
+            Self::App { .. } | Self::ThreadReport { .. } => Initiation::owner(),
         }
     }
     /// Whether this message may be offered a remember choice. An app writes
@@ -581,11 +588,12 @@ impl Writer {
         match self {
             Self::Person(_, offered) => *offered,
             Self::App { .. } => true,
+            Self::ThreadReport { .. } => false,
         }
     }
     fn sender(&self) -> MessageSender {
         match self {
-            Self::Person(_, _) => MessageSender::Person,
+            Self::Person(_, _) | Self::ThreadReport { .. } => MessageSender::Person,
             Self::App { sender, .. } => MessageSender::App(sender.clone()),
         }
     }
@@ -606,7 +614,7 @@ impl Writer {
     /// admitted in ended or its mount was released. Never the person's.
     fn opening_ended(&self) -> bool {
         match self {
-            Self::Person(_, _) => false,
+            Self::Person(_, _) | Self::ThreadReport { .. } => false,
             Self::App {
                 apps, epoch, mount, ..
             } => apps.admit(*epoch, mount).is_err(),
@@ -738,6 +746,10 @@ struct Inner {
     agent_tool_admissions: Arc<Semaphore>,
     /// Agent sends waiting to report their thread's finished turn.
     thread_reports: thread_reports::ThreadReports,
+    ownership: OnceLock<owned_threads::Ownership>,
+    thread_admission: Arc<Mutex<()>>,
+    ownership_preparations: Mutex<HashMap<SessionId, Arc<dyn OwnedLifetime>>>,
+
     /// Decides every command's admission to a conversation.
     access_policy: Arc<dyn ConversationAccessPolicyEvaluator>,
     limits: ConversationLimits,
@@ -1218,6 +1230,9 @@ impl ConversationService {
                 agent_tool_audit: OnceLock::new(),
                 agent_tool_admissions: Arc::new(Semaphore::new(super::MAX_AGENT_TOOL_ADMISSIONS)),
                 thread_reports: Default::default(),
+                ownership: OnceLock::new(),
+                thread_admission: Arc::new(Mutex::new(())),
+                ownership_preparations: Mutex::new(HashMap::new()),
                 access_policy,
                 limits,
                 conversations: Mutex::new(HashMap::new()),
@@ -1710,6 +1725,9 @@ impl ConversationService {
                                     holds: error.needs_cleanup(),
                                 }
                             })?;
+                            if let Some(gate) = service.ownership_gate(&id, &actor).await.map_err(|cause| OpeningFailure { cause, holds: true })? {
+                                agent.install_owned_lifetime(gate).map_err(|error| OpeningFailure { cause: ConversationError::Agent(error), holds: true })?;
+                            }
                             // Before anything can run: every call a Drive
                             // grant's turn asks about is checked against its
                             // policy. An agent that does not ask about every

@@ -1,119 +1,84 @@
 # 329. Subagents use ordinary Agents with parent ownership
 
-## Parent turn Stop: confirmed decision and integration proposal — 17 October 2026
+## Parent turn Stop implementation — 17 October 2026
 
-**Confirmed:** stopping a parent stops its children recursively by default, with
-an explicit user settings override. This is ordinary turn cancellation. It does
-not permanently close ownership, delete conversations, suspend work for later,
-or change permission decisions. The historical approval-inheritance and
-configuration proposals below are not authorization to change current approvals.
-Current issue [#329](https://github.com/nessalabs/nessa-agent/issues/329), tracking
-[#325](https://github.com/nessalabs/nessa-agent/issues/325), and the extension seam
-[#337](https://github.com/nessalabs/nessa-agent/issues/337) record this distinction.
+The confirmed contract is recursive child Stop by default, with an explicit user
+settings override. Stop targets exact executions; it does not end an ownership
+lifetime, inherit approvals, delete conversations or turn cancellation into owed
+work. Issue [#329](https://github.com/nessalabs/nessa-agent/issues/329), tracking
+[#325](https://github.com/nessalabs/nessa-agent/issues/325), and extension seam
+[#337](https://github.com/nessalabs/nessa-agent/issues/337) own those decisions.
 
-**Implementation status:** this section specifies a proposed integration; it does
-not claim a running gateway cascade. At inspected main
-`e650b901b30b64745cd43920b5b87e82d5442981`, SDK `OwnershipCoordinator`, SQLite
-ownership storage, `OwnedLifetime` and supervised lifetime cleanup exist. Gateway
-thread creation still calls ordinary `create_command` without composing that
-coordinator. Reports are durable messaging registrations, not ownership edges.
-The earlier blanket statements that ownership is unimplemented refer to the old
-planning stage; they do not describe those SDK modules today.
+The gateway now composes the existing SDK ownership coordinator and SQLite graph.
+`create_thread` prepares an ordinary empty child through that coordinator without
+a placeholder model turn. Report watches and sends do not create ownership edges.
+Ordinary creation keeps Ask approval and the existing Cedar checks still decide
+source and each target access.
 
-### Settings owner and proposed minimal schema
+### Settings
 
-Use the existing namespace-scoped `config.json`, beside `auth/`, read by
-`composition/runtime_config.rs`. Propose one optional block:
+The existing namespace `config.json` accepts one optional strict block:
 
 ```json
 { "subagents": { "stopChildrenOnParentStop": false } }
 ```
 
-Omitting the block or field means `true`. An explicit `false` stops only the
-named parent execution. `null`, non-booleans and unknown keys fail startup under
-the existing strict configuration contract. This is a startup setting for that
-stage/instance, not a per-tool argument or a new permission. Do not introduce
-YAML, per-session persistence, dynamic reload or a UI settings control for this
-slice. Capture the resolved setting in the admitted stop intent so restart or
-retry cannot reinterpret an existing operation after a configuration edit.
-Composition injects the typed setting into conversation orchestration; SDK
-`Agent` retains ordinary execution-specific controls. Do not accept a setting
-that silently has no effect before the gateway cascade is wired.
+Omitted block/field means true. False stops the exact parent only. Null, wrong
+types and unknown keys are refused at startup. This uses the existing settings
+owner; there is no YAML parser, dynamic reload or permission override.
 
-### Authorities, target capture and admission order
+### Admission, persistence and cancellation
 
-The existing ownership graph owns durable parent/child relationships. Creation
-must go through its acknowledged binding and shared admission scope; neither a
-report watch, an arbitrary `send_message`, an extension display id nor a caller
-supplied parent field confers ownership. Compose the existing coordinator and
-ordinary conversation creation/submission receipts. A new empty `create_thread`
-has no initial task, while `OwnershipCoordinator::spawn` requires one: resolve
-that seam explicitly rather than inventing a placeholder model turn or recording
-an unowned conversation as a child after the fact. The factory must retain
-ordinary Ask approval behavior; this decision does not select inherited policy.
+Gateway `owned_threads.rs` and `parent_stop.rs` serialize owned creation, agent
+send, report submission and Stop selection at one application admission boundary.
+The SDK graph remains the only ownership authority. Stop traverses descendants,
+including idle intermediates, and captures each unsettled execution identity.
+The SDK's atomic `unsettled_execution_ids` read includes dispatch handoff work.
+No lifetime seal or new scheduler is involved. Later explicit person input can
+run on the same open lifetime.
 
-The gateway owns cascade selection and supervision. It must capture the original
-caller, command request, exact parent execution and ownership lifetime before
-any target effect. Existing Cedar checks still decide source and each target
-access. A child relationship supplies selection, not new authority. Check the
-parent's exact execution before admitting a cascade: a stale/final request may
-read its prior receipt but must not cancel a successor or newly running children.
+Existing mutation receipts persist each exact child Stop before the root complete
+selection marker. The marker fingerprints that immutable selection. Retry and
+startup recovery use those original targets even after settings change; an
+incomplete publication refuses recapture. Each target is checked independently,
+remaining targets are attempted after failures, and aggregate lookup does not
+claim completion while a child receipt remains unresolved. Supervised admission
+survives caller disconnect. A lost acknowledgement remains uncertain until the
+original receipt/history confirms the effect. Physical release and audit facts
+remain separate.
 
-Under the coordinator's existing admission scope, order the stop fence against
-child reservations and capture descendants, including grandchildren through idle
-children. Capture each affected active and queued execution by its own identity;
-stop captured queued work before it can dispatch. Work already admitted by an
-in-flight owned spawn belongs to reconciliation even if its factory returns
-later. Refuse further spawn effects originating from the stopped executions.
-Release synchronous locks before storage, audit, provider work or other awaits.
-Do not hold a gateway lock while waiting for a child tool to return to the parent.
+### Reports and suspension
 
-The current lifetime seal is permanent. Do not call `end_owned_lifetime`, flip
-`OwnedLifetime::seal`, reopen that seal, or use `suspend` to implement this fence.
-An execution-scoped fence must be enforced at the same reservation/dispatch
-boundary as the authoritative graph, without adding another graph, provider
-scheduler or independent lifetime coordinator. Its minimal primitive and durable
-representation remain an implementation seam to settle before runtime changes.
-An explicit later user turn remains admissible on the same open lifetime.
+After merged #982 released the report paths, report delivery was integrated with
+the same admission boundary. The existing durable waiting row remains through
+parent settlement. Stop first withdraws already queued report work belonging to
+that report, without cancelling unrelated user submissions, then cancels parent
+and descendants. Child cancellation cannot immediately enqueue a parent model
+turn. A later person Submit admitted after the Stop marker releases delivery;
+agent messages and earlier queued person submissions do not. Transcript identity
+and the existing waiting row reconcile delivery/restart; there is no new ledger.
 
-Use ordinary exact-target stop commands and their idempotent receipts for each
-captured execution. Persist the immutable selection and unresolved obligations
-before effects through the existing durable command/ownership authorities; a
-new independent retry/dedupe ledger is not the proposed solution. Current mutation
-receipts identify one target, so they alone do not yet prove a persisted cascade
-selection. Retain the original actor and root cause in target audit evidence.
-Supervision continues across caller disconnect; lost acknowledgement means
-uncertain until the existing receipt/history confirms what happened. Preserve
-physical release and audit outcomes separately. A failed target does not prevent
-attempts on the remaining admitted targets or justify reporting full success.
+SDK continuation reads follow the exact saved original-to-successor relationship
+for legitimate suspended work. A person's Stop stays final and is declined rather
+than resumed if recovered as owed work. The coordinator's existing lifetime
+cleanup still owns physical process teardown; ordinary Stop does not permanently
+close those resources.
 
-### Reports and suspension boundary: coordinated handoff required
+Lock order is application admission, then the per-conversation mode lock.
+Automatic resume holds that same order through successor admission, so an owed
+turn cannot gain a successor between Stop capture and its exact cancellation.
 
-Merged #974 resumes owed work. A person's Stop and cascaded child cancellation
-must stay final cancellation, not become Suspended/owed work or gain successors.
-Reports for other legitimately resumed executions follow original-to-successor
-identity through the report owner; do not retarget a cancellation to whichever
-turn is currently active.
+An unreadable descendant history refuses selection before any effect; it is not
+a claimed partial success. Known targets whose access or provider effect fails
+remain independent attempts after admission. An unknown-target durable partial
+selection would require a further command-owner representation and is outside
+this draft's completion claim.
 
-Before a stopped child can settle, the stop admission must fence report delivery
-that would enqueue a model turn into that stopped parent. Proposed behavior:
-retain the terminal report durably in the existing report owner, expose it
-without waking the parent, and allow consumption when the person explicitly
-starts later work. Do not drop the report, invent a second delivery ledger or
-claim passive delivery before its persistence/admission contract exists. The
-report-fix owner and cascade owner must settle the exact delivery boundary and
-lost-ack/restart orderings together. This includes reports already admitted as
-separate queued parent executions before Stop, and deliveries awaiting parent
-submission admission when Stop wins. Fencing only future delivery is insufficient:
-the report owner must identify and withdraw or suppress that report work without
-cancelling unrelated queued user turns. This boundary remains unresolved.
-
-Reserved integration paths until the parent coordinates task
-`01a147eb-6534-75a7-b4f8-3bfd87e5902c`'s handoff:
-`composition/conversation_tools.rs`, conversation service `mutation.rs`,
-`thread_reports.rs`, `resumption.rs`, shared report fixtures and their Stop/resume
-callers. Independent settings parsing, this contract and ownership inspection do
-not release that reservation.
+The runtime draft has focused tests for default/override, descendants, stale ids,
+caller loss, spawn fencing, queued reports, unrelated work, authorization,
+partial target failures, lost acknowledgements and restart with changed settings.
+Browser acceptance, exact-head review and current-main CI remain release gates;
+a draft implementation is not evidence that those gates passed.
 
 ### Empty-child preparation integration seam
 
@@ -140,9 +105,9 @@ gateway Stop or approval policy.
 | Parent closes while Ready audit waits | Recheck the graph after publication; no runnable preparation returned | `parent_close_during_ready_publication_keeps_the_child_nonrunnable` |
 | Parent lifetime closes a prepared process | Existing process-group cleanup kills and reaps it | `parent_close_kills_the_prepared_child_process_group` |
 
-### Proposed ordering and regression acceptance
+### Ordering and regression acceptance
 
-Each row needs an actual public-primitives regression before runtime acceptance;
+Each row requires actual public-primitives evidence before runtime acceptance;
 portable provider fixtures and document checks cannot establish these guarantees.
 
 | Case | Required decision/effect | Owning regression boundary |

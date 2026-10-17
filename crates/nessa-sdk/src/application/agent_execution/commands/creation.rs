@@ -180,6 +180,19 @@ pub trait CreationStorageLease: Send + Sync {
             )))
         })
     }
+    /// Read the latest retained submit/stop receipts for this principal.
+    /// Ordered by each request's first durable admission, unchanged by later
+    /// progress writes. The lease's existing retention bound applies;
+    /// this does not admit effects or change progress. Hosts may reconstruct
+    /// an acknowledged orchestration selection from these immutable bindings.
+    /// Creation-only leases refuse this read, as they refuse mutation writes.
+    fn mutations(&self) -> CreationFuture<'_, Vec<super::mutation::MutationReceipt>> {
+        Box::pin(async {
+            Err(CreationStorageError::Storage(StorageError::Corrupt(
+                "mutation is not on this lease".into(),
+            )))
+        })
+    }
     /// Append one legal submit or stop transition, or acknowledge an exact retained event.
     /// Leases that only store creation refuse the append.
     fn save_mutation(&self, _receipt: super::mutation::MutationReceipt) -> CreationFuture<'_, ()> {
