@@ -78,6 +78,13 @@ it.each([
   ["quotes nested in an expansion", 'x=; echo "${x:-"; rm -rf ~; "}"'],
   ["a test", "[[ ab =~ a|b ]] && echo yes"],
   ["an old arithmetic", "echo $[1|2]"],
+  ["an operator that starts its line", "echo a\n&& echo b"],
+  ["a `;` that starts its line", "echo a\n; echo b"],
+  ["a pipe that starts its line", "echo a\n| cat"],
+  ["an empty step", "echo a;\t;echo b"],
+  ["a `;&` outside a case", "echo a ;&echo b"],
+  ["three bars", "echo a ||| echo b"],
+  ["a `;;` outside a case", "a ;; b"],
 ])("shows the script exactly as sent where it has %s", (_, script) => {
   const gist = commandGist(script)
   expect(gist.lined).toBe(false)
@@ -93,7 +100,7 @@ it.each([
   "make 2>&1 |& tee log & wait",
   "touch a\\ ; ls",
   "printf 'a;b|c' \"d && e\" ; true",
-  "a ;; b",
+  "a |\n\n cat",
   "echo a\\ ",
   "echo 'x'\u00a0",
   "a;\nb",

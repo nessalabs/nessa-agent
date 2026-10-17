@@ -171,8 +171,13 @@ export function read(script: string): Reading {
     afterRedirect = char === "<" || char === ">"
     if (";&|\n()".includes(char) && !redirect) {
       end()
+      // An operator with no command before it, or `;;` outside a `case`, is a
+      // shell's syntax error: it runs only what came before, and the lines
+      // would join what it never runs.
+      if (char !== "\n" && starts) lined = false
       starts = true
       const pair = char + (next ?? "")
+      if (pair === ";;") lined = false
       if (pair === "&&" || pair === "||" || pair === "|&" || pair === ";;") {
         if (pair !== ";;") breaks.push({ start: index, end: index + 2, operator: pair })
         index++
@@ -242,10 +247,9 @@ export function scriptLines(script: string): string {
       operator === "|" || operator === "|&"
         ? `${step} ${operator}\n  `
         : `${step}${operator === ";" ? "" : " "}${operator}\n`
-    // The spaces after an operator are not read; a newline after one is a line already.
+    // The spaces and newlines after an operator are not read; each step starts its own line.
     from = end
-    while (/[ \t]/.test(script[from] ?? "")) from++
-    if (operator !== "|" && operator !== "|&" && script[from] === "\n") from++
+    while (/[ \t\n]/.test(script[from] ?? "")) from++
   }
   out += trimEnd(script.slice(from))
   // Only unescaped ASCII spaces at the ends: any other is part of a word.

@@ -1125,11 +1125,14 @@ describe("a transcript", () => {
       value: { writeText },
       configurable: true,
     })
-    await act(async () =>
-      host.querySelector<HTMLButtonElement>(".workspace-approval-copy")?.click(),
-    )
-    expect(writeText).toHaveBeenCalledWith(steps.join("; "))
-    Reflect.deleteProperty(navigator, "clipboard")
+    try {
+      await act(async () =>
+        host.querySelector<HTMLButtonElement>(".workspace-approval-copy")?.click(),
+      )
+      expect(writeText).toHaveBeenCalledWith(steps.join("; "))
+    } finally {
+      Reflect.deleteProperty(navigator, "clipboard")
+    }
     await act(async () => unfold?.click())
     expect(unfold?.getAttribute("aria-expanded")).toBe("true")
     expect(command()).toBe(`$ ${steps.join(";\n")}`)
