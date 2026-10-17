@@ -1,0 +1,3 @@
+        let _ = receipt.publish_journal(Err(error.clone()));
+BECOMES
+        // deliberate omission: no journal refusal publication

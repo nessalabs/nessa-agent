@@ -1,0 +1,10 @@
+{
+  "tauri_crate": "2.11.5",
+  "crate_url": "https://static.crates.io/crates/tauri/tauri-2.11.5.crate",
+  "crate_sha256": "667b20e2726d572dea2de7370da16e188eb06008faf9a92fab7cdc46791190b5",
+  "async_runtime_source_sha256": "ccee9dc653f37366a4060d64c6b447ccb98c08300316298be3afc7a98b1301af",
+  "headless_modules": "Production gateway application and domain modules plus native Unix ownership module, included by path. Tauri async_runtime.rs from exact pinned crate; small crate-level JoinError/Result shell. No Tauri GUI/macOS adapter compiled in local headless selection.",
+  "full_tests_passed": 157,
+  "focused_new_tests_passed": 17,
+  "mutation_runtime_failures": 9
+}

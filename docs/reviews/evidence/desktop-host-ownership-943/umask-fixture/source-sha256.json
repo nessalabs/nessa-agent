@@ -1,0 +1,10 @@
+{
+  "src-tauri/src/gateway/application/host_ownership.rs": "fef56a72f77e688633f36be1ff0fda9ca07596936ab2fb0746e19441dedeec4f",
+  "src-tauri/src/gateway/application/ports.rs": "792219ee06286e785f9f07d32876f5f715142bec9a67cd04b5a607283e000162",
+  "src-tauri/src/gateway/application/service.rs": "e62c033f8ea3509c64218405ab92ba68980c6f81efec1d27f684169792ebf421",
+  "src-tauri/src/gateway/infrastructure/host_ownership.rs": "2ba9ee8757788c75f69d35ae4d4ddf9c071176ddf262af89321b6a3a6f137dca",
+  "src-tauri/src/gateway/infrastructure/macos.rs": "799d9a7a47d4eac94fdb22d4e9b39ba49b5b4adbf0a53da7b94992a7ac99b02e",
+  "src-tauri/tests/gateway/application/host_ownership.rs": "da98d50143531140d8cf4391aaeb2e1df85af4f2665e5d524b9d668054da20ee",
+  "src-tauri/tests/gateway/application/host_ownership_owner.rs": "fd77c3808de4cbaf4f8f7cc4b57a93086d437364cd2f7257a50f5d6fe3c86e60",
+  "src-tauri/tests/gateway/infrastructure/host_ownership.rs": "cf578fec50ce2796f914deb44feb01b20592b908f96c8bd21c59e8c03d60356c"
+}

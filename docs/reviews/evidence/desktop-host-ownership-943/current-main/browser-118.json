@@ -1,0 +1,5 @@
+{
+  "annotation_level": "notice",
+  "message": "repository: nessalabs/nessa-agent\nworkflowCommit: 118cc4b48736900d3fd2c1aece554ae48b23adc3\nsource: 118cc4b48736900d3fd2c1aece554ae48b23adc3\nbase: none\ntree: b63b0913442b6489db25c4e4321b9b974e494da6\nstate: ready\nVerdict: pass\n\n| Check | Chromium | WebKit |\n| --- | --- | --- |\n| mcp-apps-gateway | pass | pass |\n| gateway-window | pass | pass |\n| scripted-scenarios | pass | pass |\n\nRelevant log lines:\n\n- console chromium: requestfailed: <redacted URL> net::ERR_ABORTED (aborted after a 204 response, #485) (harmless)\n- console chromium: requestfailed: <redacted URL> net::ERR_ABORTED (aborted after a 200 response, full body, #473) (harmless)",
+  "title": "Fresh canonical browser result (#943)"
+}

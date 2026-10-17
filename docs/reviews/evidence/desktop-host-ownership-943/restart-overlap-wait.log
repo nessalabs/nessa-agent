@@ -1,0 +1,41 @@
+
+running 1 test
+test gateway::application::host_ownership::tests::bounded_restart_wait_can_acquire_after_predecessor_releases ... FAILED
+
+failures:
+
+---- gateway::application::host_ownership::tests::bounded_restart_wait_can_acquire_after_predecessor_releases stdout ----
+
+thread 'gateway::application::host_ownership::tests::bounded_restart_wait_can_acquire_after_predecessor_releases' (12386) panicked at /workspace/nessa-943-desktop-owner/src-tauri/src/gateway/application/../../../tests/gateway/application/host_ownership_owner.rs:102:5:
+assertion failed: matches!(result, DesktopHostClaim::Acquired(_))
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    gateway::application::host_ownership::tests::bounded_restart_wait_can_acquire_after_predecessor_releases
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 156 filtered out; finished in 0.00s
+
+   Compiling nessa-desktop-host-ownership-proof v0.0.0 (/tmp/nessa-943-headless)
+warning: variable does not need to be mutable
+  --> /workspace/nessa-943-desktop-owner/src-tauri/src/gateway/application/host_ownership.rs:52:9
+   |
+52 |         mut wait: impl FnMut() -> bool,
+   |         ----^^^^
+   |         |
+   |         help: remove this `mut`
+   |
+   = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `wait`
+  --> /workspace/nessa-943-desktop-owner/src-tauri/src/gateway/application/host_ownership.rs:52:9
+   |
+52 |         mut wait: impl FnMut() -> bool,
+   |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_wait`
+   |
+   = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: `nessa-desktop-host-ownership-proof` (lib test) generated 2 warnings (run `cargo fix --lib -p nessa-desktop-host-ownership-proof --tests` to apply 2 suggestions)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.66s
+     Running unittests src/lib.rs (/tmp/nessa-943-headless/target/debug/deps/nessa_desktop_host_ownership_proof-65b5a97976207635)
+error: test failed, to rerun pass `--lib`
