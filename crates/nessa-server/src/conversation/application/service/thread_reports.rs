@@ -94,8 +94,8 @@ pub trait ThreadReportStore: Send + Sync {
     /// Answers whether this save wrote it.
     fn save(&self, report: &PendingReport) -> ConversationFuture<'_, bool>;
     /// Let go of one report belonging to `child`; an absent row is no error.
-    /// Answers whether this removed its saved row.
-    fn settle(&self, child: &ConversationId, report: &str) -> ConversationFuture<'_, bool>;
+    /// Another child's binding returns `RequestConflict` and is retained.
+    fn settle(&self, child: &ConversationId, report: &str) -> ConversationFuture<'_, ()>;
     /// Let go of every report waiting on, or going to, a deleted conversation.
     fn forget_conversation(&self, id: &ConversationId) -> ConversationFuture<'_, ()>;
     /// Every saved report.
@@ -492,13 +492,9 @@ impl ConversationService {
 
     async fn settle_saved(&self, child: &ConversationId, report: &str) {
         if let Some(store) = self.inner.thread_reports.store() {
-            match store.settle(child, report).await {
-                Ok(true) => {}
-                Ok(false) => return,
-                Err(error) => {
-                    tracing::warn!(report, %error, "a settled thread report stays saved; the next start settles it");
-                    return;
-                }
+            if let Err(error) = store.settle(child, report).await {
+                tracing::warn!(report, %error, "a settled thread report stays saved; the next start settles it");
+                return;
             }
         }
         self.inner.thread_reports.fresh().remove(report);
@@ -774,6 +770,10 @@ impl ConversationService {
         self.settle_saved(&taken.child, &report.execution).await;
     }
 }
+
+#[cfg(test)]
+#[path = "../../../../tests/conversation/thread_report_registry.rs"]
+mod tests;
 
 /// What `history` says of the watched `execution`: finished once its
 /// settlement is saved, with the report text. After a `failure`, a turn still

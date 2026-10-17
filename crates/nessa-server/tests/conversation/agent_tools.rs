@@ -1363,7 +1363,7 @@ impl crate::conversation::application::ThreadReportStore for HeldSave {
         &self,
         child: &ConversationId,
         report: &str,
-    ) -> crate::conversation::application::ConversationFuture<'_, bool> {
+    ) -> crate::conversation::application::ConversationFuture<'_, ()> {
         self.store.settle(child, report)
     }
     fn forget_conversation(

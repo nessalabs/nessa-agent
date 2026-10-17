@@ -104,7 +104,7 @@ impl ThreadReportStore for LocalThreadReports {
         })
     }
 
-    fn settle(&self, child: &ConversationId, report: &str) -> ConversationFuture<'_, bool> {
+    fn settle(&self, child: &ConversationId, report: &str) -> ConversationFuture<'_, ()> {
         let child = child.to_string();
         let report = report.to_owned();
         self.run(move |connection| {
@@ -114,7 +114,19 @@ impl ThreadReportStore for LocalThreadReports {
                     params![child, report],
                 )
                 .map_err(failed)?;
-            Ok(removed == 1)
+            if removed == 0 {
+                let exists: bool = connection
+                    .query_row(
+                        "SELECT EXISTS(SELECT 1 FROM waiting_reports WHERE report = ?1)",
+                        [report],
+                        |row| row.get(0),
+                    )
+                    .map_err(failed)?;
+                if exists {
+                    return Err(ConversationError::RequestConflict);
+                }
+            }
+            Ok(())
         })
     }
 
@@ -303,13 +315,15 @@ mod tests {
         assert_eq!(pending[0].report.caller.action_id, "a-action");
         assert_eq!(pending[0].report.parent.to_string(), parent);
         let child_id = ConversationId::new(child).unwrap();
-        assert!(!store
-            .settle(&ConversationId::new(other).unwrap(), "a")
-            .await
-            .unwrap());
+        assert!(matches!(
+            store
+                .settle(&ConversationId::new(other).unwrap(), "a")
+                .await,
+            Err(ConversationError::RequestConflict)
+        ));
         assert_eq!(store.pending().await.unwrap().len(), 3);
-        assert!(store.settle(&child_id, "a").await.unwrap());
-        assert!(!store.settle(&child_id, "missing").await.unwrap());
+        store.settle(&child_id, "a").await.unwrap();
+        store.settle(&child_id, "missing").await.unwrap();
         let left: Vec<_> = store
             .pending()
             .await
