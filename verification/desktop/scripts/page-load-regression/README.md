@@ -42,7 +42,8 @@ main-thread native regression also runs there on macOS:
 cargo test -p nessa-app --no-default-features --test page_load
 ```
 
-That regression creates a real empty WKWebView, asserts its native `URL` is nil,
+That regression explicitly links WebKit through its typed `objc2-web-kit`
+bindings, creates a real empty WKWebView, asserts its native `URL` is nil,
 and checks the diagnostic state decision plus failure-page and normal-origin
 fact controls. It does not drive the complete Tauri application, wait for the
 four-second deadline, or load the normal origin from a real server. Those native

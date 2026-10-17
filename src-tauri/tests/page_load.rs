@@ -17,21 +17,21 @@ fn main() {
 
 #[cfg(target_os = "macos")]
 fn missing_native_url() {
-    use objc2::rc::{Allocated, Retained};
-    use objc2::runtime::AnyObject;
-    use objc2::{class, msg_send, MainThreadOnly};
+    use objc2::MainThreadOnly;
     use objc2_app_kit::NSApplication;
-    use objc2_foundation::{MainThreadMarker, NSRect, NSURL};
+    use objc2_foundation::{MainThreadMarker, NSRect};
+    use objc2_web_kit::{WKWebView, WKWebViewConfiguration};
 
     let main = MainThreadMarker::new().expect("AppKit runs on the main thread");
     let _app = NSApplication::sharedApplication(main);
-    let view: Retained<AnyObject> = unsafe {
-        let configuration: Retained<AnyObject> = msg_send![class!(WKWebViewConfiguration), new];
-        let allocated: Allocated<AnyObject> = msg_send![class!(WKWebView), alloc];
-        msg_send![allocated, initWithFrame: NSRect::ZERO, configuration: &*configuration]
+    // The typed WebKit bindings link the framework in this standalone test;
+    // AppKit alone does not register WKWebView's Objective-C classes.
+    let view = unsafe {
+        let configuration = WKWebViewConfiguration::new(main);
+        WKWebView::initWithFrame_configuration(WKWebView::alloc(main), NSRect::ZERO, &configuration)
     };
     // Unlike Wry 0.55.1's accessor, this query represents nil explicitly.
-    let url: Option<Retained<NSURL>> = unsafe { msg_send![&*view, URL] };
+    let url = unsafe { view.URL() };
     assert!(url.is_none(), "the regression needs a webview with no URL");
 
     let loads = state::Loads::new();
