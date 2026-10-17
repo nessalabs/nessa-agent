@@ -288,6 +288,8 @@ async fn an_unchanged_preset_preserves_a_retained_refusal() {
 
 #[tokio::test]
 async fn an_unchanged_preset_preserves_a_retained_uncertainty() {
-    recover_unchanged_preset_with_retained_application(Some(ConversationModeApplication::Uncertain))
-        .await;
+    recover_unchanged_preset_with_retained_application(Some(
+        ConversationModeApplication::Uncertain,
+    ))
+    .await;
 }
