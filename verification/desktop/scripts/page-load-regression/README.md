@@ -72,6 +72,10 @@ all three native URLs and the configured URL in the temporary host log. It count
 normal and existing-failure starts to catch unwanted replacement. Only external
 browser launching is replaced with a recorded production policy decision. The
 shipped composition supplies its existing window labels to the same watcher.
+The plugin explicitly selects Wry so Tauri's otherwise unconstrained configuration
+generic receives its unit default. An independent minimized Rust reproduction
+failed with E0282 before that selection and compiled afterward; actual macOS
+compilation remains a separate gate.
 No gateway, credential, settings, tray or user data startup is invoked. The
 fixture's custom identifier, nonpersistent WK stores and temporary log directory
 isolate its data. A port collision fails instead of selecting a broader origin.

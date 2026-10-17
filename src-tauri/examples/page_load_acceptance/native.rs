@@ -29,7 +29,7 @@ pub fn run() -> Result<(), String> {
     let observed = loads.clone();
     let app = AppBuilder::<Wry>::default()
         .plugin(
-            PluginBuilder::new("load-fixture-navigation")
+            PluginBuilder::<Wry>::new("load-fixture-navigation")
                 .on_navigation(move |webview, url| {
                     let decision = navigation::decide(url, navigation::serving());
                     if decision == Navigation::HandToBrowser {
