@@ -606,6 +606,7 @@ impl ConversationService {
                     failures.history = Some(ConversationError::Storage(error));
                 }
             }
+            self.forget_thread_reports_of(&id).await;
             let _writes = self.inner.summary_writes.lock(&id).await;
             if let Err(error) = self.inner.summaries.erase(&id).await {
                 failures.summary = Some(error);

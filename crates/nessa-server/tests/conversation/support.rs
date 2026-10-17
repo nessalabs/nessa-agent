@@ -34,7 +34,7 @@ use nessa_sdk::application::agent_execution::providers::{
     ProviderExecutionReply, ProviderIdentity, ProviderObservationFuture, ProviderOpenError,
     ProviderOpenFuture, ProviderOpenRequest, ProviderOperationCapabilities,
     ProviderOperationFailure, ProviderOperationFuture, ProviderSession, ProviderSessionBackend,
-    ProviderSessionState, SessionCloseRequest,
+    ProviderSessionState, SessionCloseRequest, SteeringOutcome,
 };
 use nessa_sdk::application::agent_execution::tools::ToolReviewInput;
 use nessa_sdk::application::dto::{ImageInputLimitsDto, ModalitiesDto, ModelMetadataDto};
@@ -182,6 +182,8 @@ pub(crate) enum ModeReadbackFault {
     Record(ModeRecordChange),
 }
 
+type CountedMetadataLoadGate = (ConversationId, usize, oneshot::Sender<()>, Receiver<()>);
+
 #[derive(Default)]
 pub(crate) struct MemoryRepository {
     pub(crate) records: Mutex<HashMap<ConversationId, Conversation>>,
@@ -209,6 +211,10 @@ pub(crate) struct MemoryRepository {
     pub(crate) metadata_load_failure: Mutex<Option<ConversationError>>,
     /// Pauses a metadata reply after reading it, before its caller's policy admission.
     pub(crate) metadata_load_gate: Mutex<Option<(oneshot::Sender<()>, Receiver<()>)>>,
+    /// Actual metadata reads by target, for delivery retry ordering assertions.
+    pub(crate) metadata_load_counts: Mutex<HashMap<ConversationId, usize>>,
+    /// Hold a selected target read once its observed read count reaches the threshold.
+    pub(crate) metadata_counted_load_gate: Mutex<Option<CountedMetadataLoadGate>>,
     /// Override one create acknowledgement after its proposed target is stored.
     pub(crate) creation_reply: Mutex<Option<ConversationCreation>>,
     /// A concurrent creator establishes this row after the initial load, before create.
@@ -529,6 +535,23 @@ impl ConversationRepository for MemoryRepository {
         })
     }
     fn load(&self, id: &ConversationId) -> ConversationFuture<'_, Option<Conversation>> {
+        let count = {
+            let mut counts = self.metadata_load_counts.lock().unwrap();
+            let count = counts.entry(id.clone()).or_default();
+            *count += 1;
+            *count
+        };
+        let counted_gate = {
+            let mut gate = self.metadata_counted_load_gate.lock().unwrap();
+            if gate
+                .as_ref()
+                .is_some_and(|(target, threshold, _, _)| target == id && count >= *threshold)
+            {
+                gate.take()
+            } else {
+                None
+            }
+        };
         let value = self.records.lock().unwrap().get(id).cloned();
         let value = self.mode_loaded_reply.lock().unwrap().take().or(value);
         let value = match self.metadata_load_failure.lock().unwrap().take() {
@@ -537,6 +560,10 @@ impl ConversationRepository for MemoryRepository {
         };
         let gate = self.metadata_load_gate.lock().unwrap().take();
         Box::pin(async move {
+            if let Some((_, _, entered, release)) = counted_gate {
+                let _ = entered.send(());
+                let _ = release.await;
+            }
             if let Some((entered, release)) = gate {
                 let _ = entered.send(());
                 let _ = release.await;
@@ -964,6 +991,9 @@ pub(crate) struct ProviderFactory {
     pub(crate) image_input: AtomicBool,
     /// Whether the attached agent can inject a steer into the active turn.
     pub(crate) native_steering: AtomicBool,
+    /// Whether a steer is taken into the running turn; otherwise steering
+    /// is refused as unsupported.
+    pub(crate) inject_steers: AtomicBool,
     /// Set while the agent's answer is not known, as during a restoration.
     pub(crate) answer_unknown: AtomicBool,
     /// Whether the selected model is offered images: it records image limits
@@ -1590,6 +1620,23 @@ impl ProviderSessionBackend for Backend {
                 )),
                 None => Ok(()),
             }
+        })
+    }
+    fn steer<'a>(
+        &'a self,
+        _: nessa_sdk::domain::agent_execution::executions::ExecutionId,
+        _: ExecutionRequest,
+        started: &'a (dyn Fn() + Send + Sync),
+    ) -> ProviderOperationFuture<'a, SteeringOutcome> {
+        Box::pin(async move {
+            started();
+            if self.factory.inject_steers.load(Ordering::SeqCst) {
+                return Ok(SteeringOutcome::Injected);
+            }
+            Err(ProviderOperationFailure::new(
+                AgentError::Unsupported("provider does not support steering".into()),
+                ProviderSessionState::Usable,
+            ))
         })
     }
     fn execute(&self, request: ExecutionRequest) -> ProviderExecutionFuture<'_> {

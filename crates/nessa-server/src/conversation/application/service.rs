@@ -3,6 +3,7 @@ mod creation;
 mod deletion;
 pub use deletion::DeletionsLeft;
 mod mutation;
+mod thread_reports;
 use super::metadata_target::{load_conversation, validate_target};
 use super::session_key::conversation_session;
 use super::{
@@ -96,6 +97,9 @@ use std::{
     },
     time::Duration,
 };
+#[cfg(test)]
+pub(crate) use thread_reports::report_text_for_test;
+pub use thread_reports::{PendingReport, ReportRegistration, ThreadReport, ThreadReportStore};
 
 use tokio::{
     sync::{
@@ -714,6 +718,8 @@ struct Inner {
     agent_tool_audit: OnceLock<Arc<dyn AgentToolAudit>>,
     /// Physical source admission owners retain their slot after response loss.
     agent_tool_admissions: Arc<Semaphore>,
+    /// Agent sends waiting to report their thread's finished turn.
+    thread_reports: thread_reports::ThreadReports,
     /// Decides every command's admission to a conversation.
     access_policy: Arc<dyn ConversationAccessPolicyEvaluator>,
     limits: ConversationLimits,
@@ -1104,6 +1110,7 @@ impl ConversationService {
                 clock,
                 agent_tool_audit: OnceLock::new(),
                 agent_tool_admissions: Arc::new(Semaphore::new(super::MAX_AGENT_TOOL_ADMISSIONS)),
+                thread_reports: Default::default(),
                 access_policy,
                 limits,
                 conversations: Mutex::new(HashMap::new()),
@@ -1618,6 +1625,14 @@ impl ConversationService {
                                     source,
                                 }));
                             }
+                            // Every agent: whether a send to this thread
+                            // waits on a report is decided as each turn ends.
+                            agent.add_invocation_hook(Arc::new(
+                                thread_reports::ThreadReportHook {
+                                    service: Arc::downgrade(&service.inner),
+                                    child: id.clone(),
+                                },
+                            ));
                             let issued = issue(
                                 agent.session_manager(),
                                 environment.as_ref(),
@@ -3647,6 +3662,9 @@ impl ConversationService {
                 ExecutionId::new(&execution).map_err(|_| ConversationError::InvalidInput)?;
             let live = service.resolve(&id, &caller).await?;
             let result = live.agent.remove_queued(execution.clone(), actor).await?;
+            if result == QueueRemoval::Removed {
+                service.wake_thread_reports(&id);
+            }
             Ok(result == QueueRemoval::Removed)
         })
         .await
@@ -3808,121 +3826,130 @@ impl ConversationService {
     ) -> Result<(), ConversationError> {
         let service = self.clone();
         supervised(async move {
-            let _admission = service.admit().await?;
-            let _mode = service.inner.mode_changes.lock(&id).await;
-            let actor = caller.actor()?;
-            // Whose conversation this is comes from the ownership record, before
-            // anything else. Letting go of files must not depend on being able
-            // to start a provider, so it cannot depend on `resolve` for this.
-            let record = load_conversation(service.inner.metadata.as_ref(), &id)
-                .await?
-                .ok_or(ConversationError::NotFound)?;
-            service.access().admit(&record, &caller)?;
-            let pending_mode = service.inner.metadata.pending_mode_change(&id).await?;
-            // Its apps' end drops what they still hold, each drop reported
-            // to the drop recorder there and then: the close answers its own
-            // result, not their records (row C15b).
-            let (closed, released) = if pending_mode.is_some() {
-                let slot = service.inner.conversations.lock().await.get(&id).cloned();
-                match slot {
-                    Some(slot) => match service
-                        .finish_pending_close(&id, slot, &actor, &initiator_of(&actor), &caller)
-                        .await
-                    {
-                        // Uploads were let go before the slot, inside the close.
-                        PendingClose::Closed { uploads } => (Ok(()), uploads),
-                        // The carry-on lets the uploads go, then the slot. This
-                        // answer does not mean they stay held.
-                        PendingClose::Stopped(StopFailure::OverBudget) => {
-                            (Err(ConversationError::ApprovalModeUncertain), Ok(()))
-                        }
-                        // The agent was let go, and only the record of it was
-                        // not saved: the carry-on lets the uploads go, then
-                        // the slot, and the close answers the failure.
-                        PendingClose::Stopped(StopFailure::Failed(error))
-                            if confirmed_despite(&error).is_some() =>
+            let closing = id.clone();
+            let closed = async {
+                let _admission = service.admit().await?;
+                let _mode = service.inner.mode_changes.lock(&id).await;
+                let actor = caller.actor()?;
+                // Whose conversation this is comes from the ownership record, before
+                // anything else. Letting go of files must not depend on being able
+                // to start a provider, so it cannot depend on `resolve` for this.
+                let record = load_conversation(service.inner.metadata.as_ref(), &id)
+                    .await?
+                    .ok_or(ConversationError::NotFound)?;
+                service.access().admit(&record, &caller)?;
+                let pending_mode = service.inner.metadata.pending_mode_change(&id).await?;
+                // Its apps' end drops what they still hold, each drop reported
+                // to the drop recorder there and then: the close answers its own
+                // result, not their records (row C15b).
+                let (closed, released) = if pending_mode.is_some() {
+                    let slot = service.inner.conversations.lock().await.get(&id).cloned();
+                    match slot {
+                        Some(slot) => match service
+                            .finish_pending_close(&id, slot, &actor, &initiator_of(&actor), &caller)
+                            .await
                         {
-                            (Err(ConversationError::Agent(error)), Ok(()))
-                        }
-                        PendingClose::Stopped(_) => {
-                            if service.inner.attachments.is_some() {
-                                tracing::warn!(
-                                    conversation_id = %id,
-                                    "a conversation that did not close keeps its uploads"
-                                );
+                            // Uploads were let go before the slot, inside the close.
+                            PendingClose::Closed { uploads } => (Ok(()), uploads),
+                            // The carry-on lets the uploads go, then the slot. This
+                            // answer does not mean they stay held.
+                            PendingClose::Stopped(StopFailure::OverBudget) => {
+                                (Err(ConversationError::ApprovalModeUncertain), Ok(()))
                             }
-                            (Err(ConversationError::ApprovalModeUncertain), Ok(()))
-                        }
-                    },
-                    None => (Ok(()), service.release_closed_uploads(&id, &caller).await),
-                }
-            } else {
-                let (closed, may_release) = match service.resolve_opening(&id, &caller, true).await
-                {
-                    Ok((slot, live)) => {
-                        let result = service
-                            .stopping(
-                                &id,
-                                slot,
-                                None,
-                                StopBy {
-                                    actor: &actor,
-                                    ended_by: &initiator_of(&actor),
-                                    cause: LeaseEndCause::Closed,
-                                },
-                                ConfirmedClose::ReleaseSlot,
-                            )
-                            .await;
-                        // Let go once its cleanup is confirmed, even when the
-                        // record of that was not saved: the close answers that
-                        // failure, and the next opening accounts for the lease
-                        // (`l7_a_close_whose_cleanup_record_cannot_be_saved_says_so_and_the_next_opening_accounts_for_it`).
-                        let closed = match &result {
-                            Ok(_) => true,
-                            Err(error) => confirmed_despite(error).is_some(),
-                        };
-                        let snapshot = live.agent.session_manager().snapshot_handle().await;
-                        // A closed agent runs nothing more, so nothing can still
-                        // need the files. An agent that did not close keeps its
-                        // saved invocations, and one of those may be a turn that
-                        // names images and has not settled.
-                        let may_release = closed || !awaits_images(snapshot.as_deref());
-                        (
-                            result.map(|_| ()).map_err(ConversationError::Agent),
-                            may_release,
-                        )
+                            // The agent was let go, and only the record of it was
+                            // not saved: the carry-on lets the uploads go, then
+                            // the slot, and the close answers the failure.
+                            PendingClose::Stopped(StopFailure::Failed(error))
+                                if confirmed_despite(&error).is_some() =>
+                            {
+                                (Err(ConversationError::Agent(error)), Ok(()))
+                            }
+                            PendingClose::Stopped(_) => {
+                                if service.inner.attachments.is_some() {
+                                    tracing::warn!(
+                                        conversation_id = %id,
+                                        "a conversation that did not close keeps its uploads"
+                                    );
+                                }
+                                (Err(ConversationError::ApprovalModeUncertain), Ok(()))
+                            }
+                        },
+                        None => (Ok(()), service.release_closed_uploads(&id, &caller).await),
                     }
-                    // No room for another live conversation, a provider that will
-                    // not start, storage that will not open: the agent was not
-                    // closed, and that is reported. Nothing was read about what it
-                    // has queued either, so its files stay where they are and the
-                    // next close, which can open it, lets them go.
-                    Err(error) => (Err(error.into()), false),
-                };
-                let released = if may_release {
-                    service.release_closed_uploads(&id, &caller).await
-                } else if service.inner.attachments.is_some() {
-                    tracing::warn!(
-                        conversation_id = %id,
-                        "a conversation that did not close keeps its uploads"
-                    );
-                    Ok(())
                 } else {
-                    Ok(())
+                    let (closed, may_release) =
+                        match service.resolve_opening(&id, &caller, true).await {
+                            Ok((slot, live)) => {
+                                let result = service
+                                    .stopping(
+                                        &id,
+                                        slot,
+                                        None,
+                                        StopBy {
+                                            actor: &actor,
+                                            ended_by: &initiator_of(&actor),
+                                            cause: LeaseEndCause::Closed,
+                                        },
+                                        ConfirmedClose::ReleaseSlot,
+                                    )
+                                    .await;
+                                // Let go once its cleanup is confirmed, even when the
+                                // record of that was not saved: the close answers that
+                                // failure, and the next opening accounts for the lease
+                                // (`l7_a_close_whose_cleanup_record_cannot_be_saved_says_so_and_the_next_opening_accounts_for_it`).
+                                let closed = match &result {
+                                    Ok(_) => true,
+                                    Err(error) => confirmed_despite(error).is_some(),
+                                };
+                                let snapshot = live.agent.session_manager().snapshot_handle().await;
+                                // A closed agent runs nothing more, so nothing can still
+                                // need the files. An agent that did not close keeps its
+                                // saved invocations, and one of those may be a turn that
+                                // names images and has not settled.
+                                let may_release = closed || !awaits_images(snapshot.as_deref());
+                                (
+                                    result.map(|_| ()).map_err(ConversationError::Agent),
+                                    may_release,
+                                )
+                            }
+                            // No room for another live conversation, a provider that will
+                            // not start, storage that will not open: the agent was not
+                            // closed, and that is reported. Nothing was read about what it
+                            // has queued either, so its files stay where they are and the
+                            // next close, which can open it, lets them go.
+                            Err(error) => (Err(error.into()), false),
+                        };
+                    let released = if may_release {
+                        service.release_closed_uploads(&id, &caller).await
+                    } else if service.inner.attachments.is_some() {
+                        tracing::warn!(
+                            conversation_id = %id,
+                            "a conversation that did not close keeps its uploads"
+                        );
+                        Ok(())
+                    } else {
+                        Ok(())
+                    };
+                    (closed, released)
                 };
-                (closed, released)
-            };
-            match (closed, released) {
-                (Ok(()), Ok(())) => Ok(()),
-                (Ok(()), Err(release)) => {
-                    Err(ConversationError::AttachmentRelease(Box::new(release)))
+                match (closed, released) {
+                    (Ok(()), Ok(())) => Ok(()),
+                    (Ok(()), Err(release)) => {
+                        Err(ConversationError::AttachmentRelease(Box::new(release)))
+                    }
+                    (Err(agent), Ok(())) => Err(agent),
+                    (Err(agent), Err(release)) => Err(ConversationError::CloseIncomplete {
+                        agent: Box::new(agent),
+                        release: Box::new(release),
+                    }),
                 }
-                (Err(agent), Ok(())) => Err(agent),
-                (Err(agent), Err(release)) => Err(ConversationError::CloseIncomplete {
-                    agent: Box::new(agent),
-                    release: Box::new(release),
-                }),
             }
+            .await;
+            // A queued turn cancelled by close has no invocation hook. Keep
+            // its report wake with the supervised close even if its caller
+            // goes away; a close that changed nothing finds nothing new.
+            service.wake_thread_reports(&closing);
+            closed
         })
         .await
     }

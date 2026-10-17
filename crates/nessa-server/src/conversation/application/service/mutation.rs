@@ -408,7 +408,10 @@ impl MutationTarget for StopTarget {
                     .map_err(|error| {
                         CreationInitializationFailure::Target(ConversationError::Agent(error))
                     })? {
-                    QueueRemoval::Removed => return Ok(MutationOutcome::Withdrawn),
+                    QueueRemoval::Removed => {
+                        service.wake_thread_reports(&id);
+                        return Ok(MutationOutcome::Withdrawn);
+                    }
                     QueueRemoval::NotPending => {}
                 }
             }
