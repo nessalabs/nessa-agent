@@ -124,6 +124,9 @@ fn answers(audit: &AnswerAudit) -> Vec<PermissionAnswerRecord> {
             ExecutionAuditRecord::LateProviderResult(record) => {
                 panic!("a review is not a late provider result: {record:?}")
             }
+            ExecutionAuditRecord::ConfigurationControlled(record) => {
+                panic!("a review is not a native configuration control: {record:?}")
+            }
             ExecutionAuditRecord::NativeHooksLaunch(record) => {
                 panic!("a review is not a hooks launch: {record:?}")
             }

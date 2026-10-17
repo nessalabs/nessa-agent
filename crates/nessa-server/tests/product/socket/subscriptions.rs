@@ -4,16 +4,17 @@
 
 use super::*;
 use crate::conversation::application::{
-    AccessAction, AccessAsk, AccessDecision, AccessDenial, ConversationAccessPolicyEvaluator, ConversationDependencies, ConversationLimits, ConversationModeRequest,
-    ConversationModeRequestState, ConversationRepository, ConversationService, SubmissionMode,
-    SubmittedMessage,
+    AccessAction, AccessAsk, AccessDecision, AccessDenial, ConversationAccessPolicyEvaluator,
+    ConversationDependencies, ConversationFuture, ConversationLimits, ConversationModeAudit,
+    ConversationModeAuditPhase, ConversationModeRequest, ConversationModeRequestState,
+    ConversationRepository, ConversationService, SubmissionMode, SubmittedMessage,
 };
 use crate::conversation::infrastructure::NessaRecordWatches;
 use crate::product::conversation::caller;
 use conversation_support::{
     claude_erasers, mode_agents, AcceptingCreationAudit, AcceptingDeletionAudit,
-    AcceptingModeAudit, ObservedPolicy, ProviderFactory, RecordingFileLinkAudit, RecordingModeExecutionAudit,
-    TestClock, DELETION_BUDGETS,
+    AcceptingModeAudit, ObservedPolicy, ProviderFactory, RecordingFileLinkAudit,
+    RecordingModeExecutionAudit, TestClock, DELETION_BUDGETS,
 };
 use nessa_protocol::product::generated::{
     AgentsListResult, AgentsListed, MAX_CONNECTION_CONVERSATION_SUBSCRIPTIONS, MAX_SHARE_PAGE,
@@ -23,7 +24,7 @@ use nessa_sdk::application::agent_execution::sessions::ChangeWatchError;
 use nessa_sdk::domain::agent_execution::sessions::ExecutionSessionId;
 use std::task::Waker;
 use tempfile::TempDir;
-use tokio::sync::Notify;
+use tokio::sync::{oneshot, Notify};
 use tokio::task::JoinHandle;
 
 /// How long a test waits for a frame it expects.
@@ -292,7 +293,13 @@ fn conversation_service(
     metadata: &Arc<LocalConversationStore>,
     provider: &Arc<ProviderFactory>,
 ) -> Arc<ConversationService> {
-    conversation_service_with_repository(storage, metadata, provider, metadata.clone())
+    conversation_service_with_repository(
+        storage,
+        metadata,
+        provider,
+        metadata.clone(),
+        Arc::new(AcceptingModeAudit),
+    )
 }
 
 fn conversation_service_with_repository(
@@ -300,6 +307,7 @@ fn conversation_service_with_repository(
     metadata: &Arc<LocalConversationStore>,
     provider: &Arc<ProviderFactory>,
     repository: Arc<dyn ConversationRepository>,
+    mode_audit: Arc<dyn ConversationModeAudit>,
 ) -> Arc<ConversationService> {
     let service = ConversationService::new(
         ConversationDependencies {
@@ -311,7 +319,7 @@ fn conversation_service_with_repository(
             ),
             storage: storage.clone(),
             metadata: repository,
-            mode_audit: Arc::new(AcceptingModeAudit),
+            mode_audit,
             creation_audit: Arc::new(AcceptingCreationAudit),
             file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
@@ -602,6 +610,8 @@ impl SubscriptionFixture {
                         id: session.clone(),
                         provider: provider.clone(),
                         provider_context: context.clone(),
+                        model_change: None,
+                        current_configuration: None,
                         invocations: Vec::new(),
                         queue_history: Vec::new(),
                         lease: None,
@@ -672,6 +682,8 @@ impl SubscriptionFixture {
                     id,
                     provider,
                     provider_context: context,
+                    model_change: None,
+                    current_configuration: None,
                     invocations: Vec::new(),
                     queue_history: Vec::new(),
                     lease: None,
@@ -1413,9 +1425,46 @@ async fn a_duplicate_subscription_is_refused() {
     client.close().await;
 }
 
-/// Row S20: an approval-mode change is a live fact of the view, not a record.
+/// Row S20: an unsettled request changes the overlay without a native commit.
 #[tokio::test]
 async fn an_overlay_change_without_a_commit_is_delivered() {
+    let fixture = SubscriptionFixture::new().await;
+    let mut client = fixture.connect();
+    let id = client.subscribe("subscribe", &fixture.id).await;
+    let first = client.next().await;
+    let (release, gate) = oneshot::channel();
+    *fixture.provider.mode_gate.lock().unwrap() = Some(gate);
+    let service = fixture.service.clone();
+    let conversation_id = fixture.id.clone();
+    let actor = caller(&fixture.session, "pending-mode".into());
+    let changing = tokio::spawn(async move {
+        service
+            .set_approval_mode(conversation_id, actor, ConversationApprovalMode::Auto)
+            .await
+    });
+    tokio::time::timeout(EXPECTED, fixture.provider.mode_started.notified())
+        .await
+        .unwrap();
+    let frames = client
+        .until(&id, |frame| {
+            view(frame)["approvalModeChange"]["requestId"] == "pending-mode"
+        })
+        .await;
+    let pending = frames.last().unwrap();
+    assert_eq!(view(pending)["approvalMode"], "ask");
+    assert_eq!(pending["payload"]["cursor"], first["payload"]["cursor"]);
+    release.send(()).unwrap();
+    assert_eq!(
+        changing.await.unwrap().unwrap(),
+        ConversationApprovalMode::Auto
+    );
+
+    client.close().await;
+}
+
+/// Row S20: acknowledging a preset now records its durable configuration fact.
+#[tokio::test]
+async fn a_confirmed_mode_change_is_delivered_with_its_committed_cursor() {
     let fixture = SubscriptionFixture::new().await;
     let mut client = fixture.connect();
     let id = client.subscribe("subscribe", &fixture.id).await;
@@ -1431,10 +1480,13 @@ async fn an_overlay_change_without_a_commit_is_delivered() {
     let frames = client
         .until(&id, |frame| view(frame)["approvalMode"] == "auto")
         .await;
-    assert_eq!(
-        frames.last().unwrap()["payload"]["cursor"],
-        first["payload"]["cursor"],
-        "no record was written"
+    let cursor = &frames.last().unwrap()["payload"]["cursor"];
+    let prior = &first["payload"]["cursor"];
+    assert_eq!(cursor["incarnation"], prior["incarnation"]);
+    assert!(
+        cursor["position"].as_str().unwrap().parse::<u64>().unwrap()
+            > prior["position"].as_str().unwrap().parse::<u64>().unwrap(),
+        "the confirmed configuration must publish its committed progress"
     );
     client.close().await;
 }
@@ -1997,21 +2049,22 @@ impl SubscriptionFixture {
 
     async fn grant_to(&self, transition: crate::conversation::application::ShareGrantTransition) {
         use crate::conversation::application::{ShareGrantChange, ShareGrants};
-        assert!(self
-            .metadata
-            .change(ShareGrantChange {
-                transition,
-                conversation_id: self.id.clone(),
-                principal_id: Some(PrincipalId::new("grantee-receiver").unwrap()),
-                receiver_id: Some("receiver".into()),
-                credential_id: CredentialId::new("credential").unwrap(),
-                expected_policy_revision: None,
-                initiator: caller(&self.session, uuid::Uuid::new_v4().to_string()),
-                at_ms: 1,
-            })
-            .await
-            .unwrap()
-            .applied);
+        assert!(
+            self.metadata
+                .change(ShareGrantChange {
+                    transition,
+                    conversation_id: self.id.clone(),
+                    principal_id: Some(PrincipalId::new("grantee-receiver").unwrap()),
+                    receiver_id: Some("receiver".into()),
+                    credential_id: CredentialId::new("credential").unwrap(),
+                    expected_policy_revision: None,
+                    initiator: caller(&self.session, uuid::Uuid::new_v4().to_string()),
+                    at_ms: 1,
+                })
+                .await
+                .unwrap()
+                .applied
+        );
     }
 
     async fn listed(&self) -> Vec<Value> {
@@ -2462,7 +2515,10 @@ async fn share_refuses_what_the_owner_cannot_grant() {
         )
         .await;
     assert_eq!(shares["payload"]["items"][0]["credentialId"], "phone");
-    assert_eq!(shares["payload"]["items"][0]["capabilities"], json!(["read"]));
+    assert_eq!(
+        shares["payload"]["items"][0]["capabilities"],
+        json!(["read"])
+    );
     let deleted = fixture
         .call(
             "conversation.delete",
@@ -2495,10 +2551,12 @@ async fn share_refuses_what_the_owner_cannot_grant() {
 async fn a_gateway_is_refused_comment_and_drive_and_the_grant_is_unchanged() {
     use crate::conversation::application::ShareGrants;
     use nessa_auth::domain::PrincipalId;
-    let fixture = SubscriptionFixture::new().await.with_devices(Devices::new(&[
-        ("peer", "peer", "principal", true),
-        ("person", "person", "principal", true),
-    ]));
+    let fixture = SubscriptionFixture::new()
+        .await
+        .with_devices(Devices::new(&[
+            ("peer", "peer", "principal", true),
+            ("person", "person", "principal", true),
+        ]));
     *fixture.authority.snapshot.lock().unwrap() =
         snapshot(MembershipRole::Admin, MembershipStatus::Active);
     grants(
@@ -2513,10 +2571,7 @@ async fn a_gateway_is_refused_comment_and_drive_and_the_grant_is_unchanged() {
     {
         let mut targets = fixture.authority.target_principal.lock().unwrap();
         targets.insert("peer".into(), PrincipalId::new("gateway:peer").unwrap());
-        targets.insert(
-            "person".into(),
-            PrincipalId::new("other-person").unwrap(),
-        );
+        targets.insert("person".into(), PrincipalId::new("other-person").unwrap());
     }
     let id = fixture.id.to_string();
     for credential in ["peer", "person"] {
@@ -2529,12 +2584,12 @@ async fn a_gateway_is_refused_comment_and_drive_and_the_grant_is_unchanged() {
             })
         };
         let granted = fixture
-            .call(
-                "conversation.share",
-                share("share-read", json!(["read"])),
-            )
+            .call("conversation.share", share("share-read", json!(["read"])))
             .await;
-        assert_eq!(granted["payload"]["applied"], true, "{credential}: {granted}");
+        assert_eq!(
+            granted["payload"]["applied"], true,
+            "{credential}: {granted}"
+        );
         let before = fixture.metadata.grants(&fixture.id).await.unwrap();
         let journal = journal_rows(&fixture);
         for (request, capabilities) in [
@@ -2568,7 +2623,9 @@ async fn a_gateway_is_refused_comment_and_drive_and_the_grant_is_unchanged() {
         .await;
     let items = listed["payload"]["items"].as_array().unwrap();
     assert!(
-        items.iter().all(|item| item["capabilities"] == json!(["read"])),
+        items
+            .iter()
+            .all(|item| item["capabilities"] == json!(["read"])),
         "{listed}"
     );
 }
@@ -2583,7 +2640,9 @@ fn journal_rows(fixture: &SubscriptionFixture) -> i64 {
         nessa_local_database::rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
     )
     .unwrap()
-    .query_row("SELECT COUNT(*) FROM share_grant_changes", [], |row| row.get(0))
+    .query_row("SELECT COUNT(*) FROM share_grant_changes", [], |row| {
+        row.get(0)
+    })
     .unwrap()
 }
 
@@ -2652,7 +2711,10 @@ async fn share_answers_its_revision_and_refuses_a_stale_expected_one() {
     let before = listed().await;
     assert_eq!(before[0]["policyRevision"], moved);
     let stale = fixture
-        .call("conversation.share", share("share-3", "read", Some(revision)))
+        .call(
+            "conversation.share",
+            share("share-3", "read", Some(revision)),
+        )
         .await;
     assert_eq!(stale["error"]["code"], "share_grant_changed", "{stale}");
     let stale = fixture
@@ -2745,8 +2807,12 @@ const COMMENT_COMMANDS: [&str; 2] = ["conversation.message", "conversation.messa
 /// A Drive grant with the widest policy: every tool, asked as the
 /// conversation's approval mode asks.
 fn drive_access() -> crate::conversation::domain::ShareAccess {
-    use crate::conversation::domain::{ShareAccess, Capabilities, ToolPolicy, ToolPreset};
-    ShareAccess::new(Capabilities::drive(), Some(ToolPolicy::preset(ToolPreset::All))).unwrap()
+    use crate::conversation::domain::{Capabilities, ShareAccess, ToolPolicy, ToolPreset};
+    ShareAccess::new(
+        Capabilities::drive(),
+        Some(ToolPolicy::preset(ToolPreset::All)),
+    )
+    .unwrap()
 }
 
 /// Params any Drive command's handler reads, naming conversation `id`: each
@@ -2894,14 +2960,16 @@ async fn a_paired_session_writes_only_what_a_drive_grant_admits() {
     let missing = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
     for method in others {
         for id in [&fixture.id, &ungranted, &missing] {
-            let answer = fixture.call(method, drive_params(method, id, "other")).await;
+            let answer = fixture
+                .call(method, drive_params(method, id, "other"))
+                .await;
             assert_eq!(
                 answer["error"]["code"], "forbidden",
                 "{method} {id}: {answer}"
             );
         }
     }
-    use crate::conversation::domain::{ShareAccess, Capabilities};
+    use crate::conversation::domain::{Capabilities, ShareAccess};
     for role in [Capabilities::read(), Capabilities::comment()] {
         let access = ShareAccess::new(role, None).unwrap();
         fixture
@@ -3084,14 +3152,9 @@ async fn a_paired_device_shares_nothing_whatever_id_it_names() {
 /// The checked-in policy, except that it cannot decide `action`.
 struct UndecidedOn(AccessAction);
 impl ConversationAccessPolicyEvaluator for UndecidedOn {
-    fn evaluate(
-        &self,
-        ask: &AccessAsk<'_>,
-    ) -> AccessDecision {
+    fn evaluate(&self, ask: &AccessAsk<'_>) -> AccessDecision {
         if ask.action == self.0 {
-            return AccessDecision::Deny(
-                AccessDenial::Unavailable,
-            );
+            return AccessDecision::Deny(AccessDenial::Unavailable);
         }
         crate::conversation_test_support::access_policy_ref().evaluate(ask)
     }
@@ -3103,9 +3166,7 @@ impl ConversationAccessPolicyEvaluator for UndecidedOn {
 async fn a_share_the_policy_cannot_decide_is_unavailable() {
     let fixture = SubscriptionFixture::new().await.with_devices_asking(
         Devices::new(&[("phone", "phone", "principal", true)]),
-        Arc::new(UndecidedOn(
-            AccessAction::Share,
-        )),
+        Arc::new(UndecidedOn(AccessAction::Share)),
     );
     *fixture.authority.snapshot.lock().unwrap() =
         snapshot(MembershipRole::Admin, MembershipStatus::Active);
@@ -3145,7 +3206,7 @@ async fn a_share_the_policy_cannot_decide_is_unavailable() {
 #[tokio::test]
 async fn a_drive_grant_lowered_revoked_or_unpaired_drives_no_more() {
     use crate::conversation::application::ShareGrantTransition;
-    use crate::conversation::domain::{ShareAccess, Capabilities};
+    use crate::conversation::domain::{Capabilities, ShareAccess};
     let fixture = SubscriptionFixture::new().await;
     fixture.turn("first").await;
     let fixture = fixture.with_devices(this_device(true));
@@ -3287,7 +3348,7 @@ async fn a_driver_sends_text_and_names_nothing_of_the_owners() {
 #[tokio::test]
 async fn a_turn_is_saved_with_who_started_it() {
     use crate::conversation::application::{ShareGrantTransition, ShareGrants};
-    use crate::conversation::domain::{ShareAccess, Capabilities, ToolPolicy, ToolPreset};
+    use crate::conversation::domain::{Capabilities, ShareAccess, ToolPolicy, ToolPreset};
     use nessa_sdk::domain::agent_execution::executions::{
         GrantInitiator, Initiation, ToolChecking,
     };
@@ -3330,9 +3391,8 @@ async fn a_turn_is_saved_with_who_started_it() {
         &["conversation.write", "conversation.read", "server.read"],
     );
     fixture.owner_turn("owner").await;
-    let driver = |revision| {
-        Initiation::checked_grant(GrantInitiator::new("receiver", revision).unwrap())
-    };
+    let driver =
+        |revision| Initiation::checked_grant(GrantInitiator::new("receiver", revision).unwrap());
     for (execution, expected, tools) in [
         ("first", Initiation::owner(), ToolChecking::NotChecked),
         ("driven", driver(granted), ToolChecking::Checked),
@@ -3464,10 +3524,15 @@ async fn the_owner_leaves_a_note_saved_with_who_left_it_and_no_turn() {
     assert_eq!(fixture.turns().await, turns);
     let view = fixture.settled_read(1).await;
     assert!(
-        !view["messages"].to_string().contains("the parser review is ready"),
+        !view["messages"]
+            .to_string()
+            .contains("the parser review is ready"),
         "a note is not a turn: {view}"
     );
-    assert_eq!(view["notes"][0]["text"], "the parser review is ready", "{view}");
+    assert_eq!(
+        view["notes"][0]["text"], "the parser review is ready",
+        "{view}"
+    );
 }
 
 /// Row J17: a device holding pairing's `conversation.read` and a Comment
@@ -3479,7 +3544,7 @@ async fn the_owner_leaves_a_note_saved_with_who_left_it_and_no_turn() {
 #[tokio::test]
 async fn a_comment_or_drive_grant_leaves_notes_on_the_conversation_it_names() {
     use crate::conversation::application::{ShareGrantTransition, ShareGrants};
-    use crate::conversation::domain::{ShareAccess, Capabilities};
+    use crate::conversation::domain::{Capabilities, ShareAccess};
     use nessa_sdk::domain::agent_execution::executions::{GrantInitiator, Initiator};
     let fixture = SubscriptionFixture::new().await;
     fixture.turn("first").await;
@@ -3611,7 +3676,7 @@ async fn a_comment_or_drive_grant_leaves_notes_on_the_conversation_it_names() {
 #[tokio::test]
 async fn a_retried_note_answers_its_first_receipt_and_another_conflicts() {
     use crate::conversation::application::{ShareGrantTransition, ShareGrants};
-    use crate::conversation::domain::{ShareAccess, Capabilities};
+    use crate::conversation::domain::{Capabilities, ShareAccess};
     let fixture = SubscriptionFixture::new().await;
     fixture.turn("first").await;
     let first = fixture
@@ -3697,7 +3762,7 @@ async fn a_retried_note_answers_its_first_receipt_and_another_conflicts() {
 #[tokio::test]
 async fn an_author_past_its_note_rate_is_refused_and_another_is_not() {
     use crate::conversation::application::ShareGrantTransition;
-    use crate::conversation::domain::{ShareAccess, Capabilities};
+    use crate::conversation::domain::{Capabilities, ShareAccess};
     use nessa_sdk::application::agent_execution::sessions::NoteRecord;
     let fixture = SubscriptionFixture::new().await;
     fixture.turn("first").await;
@@ -4081,10 +4146,7 @@ async fn a_drive_grants_command_hosts_round_trip_and_their_bounds_are_refused() 
         )
         .await;
     assert_eq!(answer["payload"]["applied"], true, "{answer}");
-    assert_eq!(
-        policy_of("phone").await["commandHosts"][0],
-        longest_host
-    );
+    assert_eq!(policy_of("phone").await["commandHosts"][0], longest_host);
 }
 
 /// `conversation.shares` returns one page and resumes after the cursor it
@@ -4245,6 +4307,34 @@ async fn shares_reports_each_grants_role_policy_and_policy_revision() {
     );
 }
 
+// Application audit is called after the SDK acknowledgement and observed
+// application are retained, before terminal metadata is written.
+#[derive(Default)]
+struct HeldModeAudit {
+    entered: Notify,
+    release: Mutex<Option<oneshot::Receiver<()>>>,
+}
+impl ConversationModeAudit for HeldModeAudit {
+    fn record(
+        &self,
+        _request: ConversationModeRequest,
+        phase: ConversationModeAuditPhase,
+    ) -> ConversationFuture<'_, ()> {
+        let gate = if phase == ConversationModeAuditPhase::Application {
+            self.release.lock().unwrap().take()
+        } else {
+            None
+        };
+        Box::pin(async move {
+            if let Some(gate) = gate {
+                self.entered.notify_one();
+                gate.await.map_err(|_| ConversationError::Audit)?;
+            }
+            Ok(())
+        })
+    }
+}
+
 /// A retained retirement owner refuses both the wire read and its live follow.
 #[tokio::test]
 async fn retained_stopping_publication_refuses_wire_and_subscription_until_cleanup() {
@@ -4264,11 +4354,13 @@ async fn retained_stopping_publication_refuses_wire_and_subscription_until_clean
             .create(fixture.metadata.load(&fixture.id).await.unwrap().unwrap())
             .await
             .unwrap();
+        let application_audit = Arc::new(HeldModeAudit::default());
         fixture.service = conversation_service_with_repository(
             &fixture.storage,
             &fixture.metadata,
             &fixture.provider,
             repository.clone(),
+            application_audit.clone(),
         );
         fixture.state = fixture.state.with_conversations(fixture.service.clone());
         fixture
@@ -4281,34 +4373,53 @@ async fn retained_stopping_publication_refuses_wire_and_subscription_until_clean
             .unwrap();
         let opens = fixture.provider.open_calls.load(Ordering::SeqCst);
         let mut client = fixture.connect();
-        let subscription = client.subscribe("before-retirement", &fixture.id).await;
-        let initial = client.next().await;
-        assert_eq!(view(&initial)["approvalMode"], "ask");
         *fixture.provider.close_failure.lock().unwrap() = Some(AgentError::CleanupUncertain);
-        if terminal_mode {
+        let subscription = if terminal_mode {
             repository
                 .lose_mode_commit_ack
                 .store(true, Ordering::SeqCst);
             *repository.mode_readback_fault.lock().unwrap() = Some(ModeReadbackFault::Refuse);
-            assert!(fixture
-                .service
-                .set_approval_mode(
-                    fixture.id.clone(),
-                    caller(&fixture.session, "uncertain-mode".into()),
-                    ConversationApprovalMode::Auto
-                )
+            let (release, gate) = oneshot::channel();
+            *application_audit.release.lock().unwrap() = Some(gate);
+            let service = fixture.service.clone();
+            let conversation_id = fixture.id.clone();
+            let actor = caller(&fixture.session, "uncertain-mode".into());
+            let changing = tokio::spawn(async move {
+                service
+                    .set_approval_mode(conversation_id, actor, ConversationApprovalMode::Auto)
+                    .await
+            });
+            tokio::time::timeout(EXPECTED, application_audit.entered.notified())
                 .await
-                .is_err());
+                .unwrap();
+            // Subscribe after the ACK is retained, before retirement can
+            // start. No pre-ACK progress remains queued on this subscription.
+            let subscription = client.subscribe("before-retirement", &fixture.id).await;
+            let pending = client.next().await;
+            assert_eq!(view(&pending)["lease"]["state"], "live");
+            assert_eq!(view(&pending)["approvalMode"], "ask");
+            assert_eq!(
+                view(&pending)["approvalModeChange"]["status"],
+                "recovery_required"
+            );
+            assert!(!view(&pending)["capabilities"]["queue"].as_bool().unwrap());
+            release.send(()).unwrap();
+            assert!(changing.await.unwrap().is_err());
+            subscription
         } else {
+            let subscription = client.subscribe("before-retirement", &fixture.id).await;
+            let initial = client.next().await;
+            assert_eq!(view(&initial)["approvalMode"], "ask");
             assert!(fixture
                 .service
                 .close(
                     fixture.id.clone(),
-                    caller(&fixture.session, "uncertain-close".into())
+                    caller(&fixture.session, "uncertain-close".into()),
                 )
                 .await
                 .is_err());
-        }
+            subscription
+        };
         for method in ["conversation.read"] {
             let response = fixture
                 .call(method, json!({"conversationId":fixture.id.to_string()}))
@@ -4816,7 +4927,10 @@ async fn the_next_turn_takes_a_pending_note_and_it_stays_assigned_to_that_turn()
     fixture.turn("second").await;
     fixture.settled_read(2).await;
     let status = fixture
-        .call("conversation.messageStatus", status_params(&fixture.id, "note"))
+        .call(
+            "conversation.messageStatus",
+            status_params(&fixture.id, "note"),
+        )
         .await;
     assert_eq!(status["payload"]["deliveryState"], "assigned", "{status}");
     assert_eq!(status["payload"]["executionId"], "second", "{status}");
@@ -4834,7 +4948,12 @@ async fn the_next_turn_takes_a_pending_note_and_it_stays_assigned_to_that_turn()
         &[NoteContext::new(NoteAuthor::Owner, "credential", "use the May figures").unwrap()]
     );
     let session = crate::conversation::application::conversation_session(&fixture.id);
-    let committed = fixture.storage.read_committed(session).await.unwrap().unwrap();
+    let committed = fixture
+        .storage
+        .read_committed(session)
+        .await
+        .unwrap()
+        .unwrap();
     assert!(committed
         .snapshot()
         .unwrap()
@@ -4859,9 +4978,15 @@ async fn the_next_turn_takes_a_pending_note_and_it_stays_assigned_to_that_turn()
     assert!(fixture.notes_taken_by("third").await.is_empty());
     // A record_only note is never taken.
     let recorded = fixture
-        .call("conversation.message", note_params(&fixture.id, "kept", "fyi"))
+        .call(
+            "conversation.message",
+            note_params(&fixture.id, "kept", "fyi"),
+        )
         .await;
-    assert_eq!(recorded["payload"]["deliveryState"], "recorded", "{recorded}");
+    assert_eq!(
+        recorded["payload"]["deliveryState"], "recorded",
+        "{recorded}"
+    );
     fixture.turn("fourth").await;
     fixture.settled_read(4).await;
     assert!(fixture.notes_taken_by("fourth").await.is_empty());
@@ -4874,7 +4999,7 @@ async fn the_next_turn_takes_a_pending_note_and_it_stays_assigned_to_that_turn()
 #[tokio::test]
 async fn a_grants_note_is_taken_while_it_holds_comment_and_retired_once_it_does_not() {
     use crate::conversation::application::ShareGrantTransition;
-    use crate::conversation::domain::{ShareAccess, Capabilities};
+    use crate::conversation::domain::{Capabilities, ShareAccess};
     let fixture = SubscriptionFixture::new().await;
     fixture.turn("first").await;
     fixture.settled_read(1).await;
@@ -4888,7 +5013,10 @@ async fn a_grants_note_is_taken_while_it_holds_comment_and_retired_once_it_does_
         let fixture = &fixture;
         async move {
             let answer = fixture
-                .call("conversation.message", next_turn_params(&fixture.id, request, request))
+                .call(
+                    "conversation.message",
+                    next_turn_params(&fixture.id, request, request),
+                )
                 .await;
             assert_eq!(answer["ok"], true, "{request}: {answer}");
             answer["payload"]["messageId"].as_str().unwrap().to_owned()
@@ -4898,7 +5026,10 @@ async fn a_grants_note_is_taken_while_it_holds_comment_and_retired_once_it_does_
         let fixture = &fixture;
         async move {
             fixture
-                .call("conversation.messageStatus", status_params(&fixture.id, request))
+                .call(
+                    "conversation.messageStatus",
+                    status_params(&fixture.id, request),
+                )
                 .await["payload"]
                 .clone()
         }
@@ -4938,7 +5069,10 @@ async fn a_grants_note_is_taken_while_it_holds_comment_and_retired_once_it_does_
     owner_turn("third", 3).await;
     assert!(fixture.notes_taken_by("third").await.is_empty());
     let saved = fixture.notes().await;
-    let lowered_note = saved.iter().find(|note| note.id.as_str() == lowered).unwrap();
+    let lowered_note = saved
+        .iter()
+        .find(|note| note.id.as_str() == lowered)
+        .unwrap();
     assert!(matches!(
         fixture.note_state(lowered_note).await,
         nessa_sdk::application::agent_execution::sessions::NoteState::Retired(retirement)
@@ -4952,13 +5086,19 @@ async fn a_grants_note_is_taken_while_it_holds_comment_and_retired_once_it_does_
         .await;
     let revoked = leave("revoked").await;
     let revoked_status = status("revoked").await;
-    assert_eq!(revoked_status["deliveryState"], "pending", "{revoked_status}");
+    assert_eq!(
+        revoked_status["deliveryState"], "pending",
+        "{revoked_status}"
+    );
     fixture.grant_to(ShareGrantTransition::Revoke).await;
     owner_turn("fourth", 4).await;
     let taken = fixture.notes_taken_by("fourth").await;
     assert!(!taken.contains(&revoked), "{taken:?}");
     let saved = fixture.notes().await;
-    let revoked_note = saved.iter().find(|note| note.id.as_str() == revoked).unwrap();
+    let revoked_note = saved
+        .iter()
+        .find(|note| note.id.as_str() == revoked)
+        .unwrap();
     assert!(matches!(
         fixture.note_state(revoked_note).await,
         nessa_sdk::application::agent_execution::sessions::NoteState::Retired(_)
@@ -4984,7 +5124,10 @@ async fn a_steer_takes_no_note() {
     fixture.turn("first").await;
     fixture.settled_read(1).await;
     let answer = fixture
-        .call("conversation.message", next_turn_params(&fixture.id, "note", "x"))
+        .call(
+            "conversation.message",
+            next_turn_params(&fixture.id, "note", "x"),
+        )
         .await;
     assert_eq!(answer["ok"], true, "{answer}");
     let steered = fixture
@@ -5004,7 +5147,10 @@ async fn a_steer_takes_no_note() {
     fixture.settled_read(2).await;
     assert!(fixture.notes_taken_by("steered").await.is_empty());
     let status = fixture
-        .call("conversation.messageStatus", status_params(&fixture.id, "note"))
+        .call(
+            "conversation.messageStatus",
+            status_params(&fixture.id, "note"),
+        )
         .await;
     assert_eq!(status["payload"]["deliveryState"], "pending", "{status}");
 }
@@ -5013,7 +5159,7 @@ async fn a_steer_takes_no_note() {
 fn drive_preset(
     preset: crate::conversation::domain::ToolPreset,
 ) -> crate::conversation::domain::ShareAccess {
-    use crate::conversation::domain::{ShareAccess, Capabilities, ToolPolicy};
+    use crate::conversation::domain::{Capabilities, ShareAccess, ToolPolicy};
     ShareAccess::new(Capabilities::drive(), Some(ToolPolicy::preset(preset))).unwrap()
 }
 
@@ -5050,8 +5196,7 @@ async fn a_drive_turn_is_refused_where_its_tools_cannot_be_checked() {
                         "requestId": format!("mode-{label}-{attempt}"),
                         "mode": mode,
                     });
-                    let changed =
-                        owner_call(fixture, "conversation.setApprovalMode", params).await;
+                    let changed = owner_call(fixture, "conversation.setApprovalMode", params).await;
                     if changed["error"]["code"] != "turn_running" {
                         assert_eq!(changed["ok"], true, "{changed}");
                         return;
@@ -5067,7 +5212,10 @@ async fn a_drive_turn_is_refused_where_its_tools_cannot_be_checked() {
     let turns = fixture.turns().await;
     for method in ["conversation.send", "conversation.steer"] {
         let answer = fixture
-            .call(method, drive_params(method, &fixture.id, &format!("{method}-auto")))
+            .call(
+                method,
+                drive_params(method, &fixture.id, &format!("{method}-auto")),
+            )
             .await;
         assert_eq!(
             answer["error"]["code"], "drive_policy_unenforceable",
@@ -5106,7 +5254,10 @@ async fn a_drive_turn_is_refused_where_its_tools_cannot_be_checked() {
             drive_params("conversation.send", &fixture.id, "hooked"),
         )
         .await;
-    assert_eq!(answer["error"]["code"], "drive_policy_unenforceable", "{answer}");
+    assert_eq!(
+        answer["error"]["code"], "drive_policy_unenforceable",
+        "{answer}"
+    );
     assert_eq!(fixture.turns().await, turns);
     fixture.owner_turn("owner-hooked").await;
 }
@@ -5260,7 +5411,12 @@ async fn a_queued_drive_turn_is_not_sent_where_its_tools_can_no_longer_be_checke
     let session = crate::conversation::application::conversation_session(&fixture.id);
     let result = timeout(EXPECTED, async {
         loop {
-            let committed = fixture.storage.read_committed(session.clone()).await.unwrap().unwrap();
+            let committed = fixture
+                .storage
+                .read_committed(session.clone())
+                .await
+                .unwrap()
+                .unwrap();
             let settled = committed
                 .snapshot()
                 .unwrap()

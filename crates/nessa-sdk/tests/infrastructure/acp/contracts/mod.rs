@@ -14,6 +14,7 @@
 //!           -> images (advertised prompt capability, byte source, content blocks)
 //!           -> deletion (a connection of its own: initialize, session/delete)
 //!           -> effort (a selected level sent and read back; offered levels narrowed)
+//!           -> model_switch (active native turn retained; configuration and traces agree)
 //!           -> stand_ins (every profile's MCP entries carry the open's grant)
 //! ```
 //! Arrows show which test layer exercises each feature.
@@ -47,3 +48,5 @@ mod support;
 mod tools;
 
 mod agents;
+
+mod model_switch;

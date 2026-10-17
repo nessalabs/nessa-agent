@@ -188,12 +188,22 @@ pub enum ProviderSessionState {
     CleanupReported(CleanupReport),
 }
 
+/// Whether the SDK owner proved an operation stopped before any provider effect.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProviderOperationStage {
+    /// Local validation refused before invoking a provider control.
+    BeforeEffect,
+    /// No owner-issued proof of absence; diagnostics or Usable do not prove it.
+    EffectUncertain,
+}
+
 /// Failed provider operation with explicit provider session status; errors are diagnostic.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProviderOperationFailure {
     error: AgentError,
     session_state: Box<ProviderSessionState>,
     permission_selection: Option<PermissionSelectionState>,
+    stage: ProviderOperationStage,
 }
 impl ProviderOperationFailure {
     /// Record `error` and the adapter-observed provider session status without inference.
@@ -202,6 +212,7 @@ impl ProviderOperationFailure {
             error: error.bounded(),
             session_state: Box::new(session_state),
             permission_selection: None,
+            stage: ProviderOperationStage::EffectUncertain,
         }
     }
     /// Record a permission-answer failure and the independently observed domain
@@ -215,7 +226,17 @@ impl ProviderOperationFailure {
             error: error.bounded(),
             session_state: Box::new(session_state),
             permission_selection: Some(selection),
+            stage: ProviderOperationStage::EffectUncertain,
         }
+    }
+    pub(crate) fn before_effect(error: AgentError) -> Self {
+        let mut failure = Self::new(error, ProviderSessionState::Usable);
+        failure.stage = ProviderOperationStage::BeforeEffect;
+        failure
+    }
+    /// Owner-issued effect evidence, independent of error text and session usability.
+    pub fn stage(&self) -> ProviderOperationStage {
+        self.stage
     }
     /// Diagnostic cause, never a source of resource ownership decisions.
     pub fn error(&self) -> &AgentError {

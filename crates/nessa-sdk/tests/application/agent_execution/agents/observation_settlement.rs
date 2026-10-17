@@ -1,6 +1,7 @@
 //! Invalid observations must not erase settlement released by provider cleanup.
 use super::{actor, capabilities, request, MemoryStorage};
 use crate::application::agent_execution::support::*;
+use nessa_sdk::application::agent_execution::providers::HarnessHostIdentity;
 use std::{sync::atomic::AtomicBool, time::Duration};
 use tokio::sync::{mpsc, watch};
 
@@ -29,6 +30,9 @@ impl ExecutionEventStream for SettlementEvents {
     }
 }
 impl AgentProvider for SettlementProvider {
+    fn harness_host_identity(&self) -> HarnessHostIdentity<'_> {
+        HarnessHostIdentity::local()
+    }
     fn identity(&self) -> ProviderIdentity {
         ProviderIdentity::new("observation-settlement", "fixture", "test").unwrap()
     }
@@ -328,6 +332,9 @@ impl ExecutionEventStream for PolicyStopEvents {
     }
 }
 impl AgentProvider for PolicyStopProvider {
+    fn harness_host_identity(&self) -> HarnessHostIdentity<'_> {
+        HarnessHostIdentity::local()
+    }
     fn identity(&self) -> ProviderIdentity {
         ProviderIdentity::new("policy-stop", "fixture", "test").unwrap()
     }

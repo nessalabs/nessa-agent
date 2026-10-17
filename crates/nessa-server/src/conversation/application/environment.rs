@@ -40,6 +40,7 @@
 use futures_util::FutureExt;
 use nessa_auth::application::ports::Clock;
 use nessa_protocol::lease::{CollectionRefusal, FetchRefusal, PublishRefusal};
+use nessa_sdk::application::agent_execution::providers::HarnessHostIdentity;
 use nessa_sdk::application::agent_execution::{
     agents::{Agent, AgentError},
     permissions::ActionContext,
@@ -147,6 +148,13 @@ pub(crate) struct EnvironmentLease {
 /// An environment's side of one Live lease. Dropping the last handle without
 /// [`Self::end`] asks the environment to end it, unanswered.
 pub(crate) trait LeaseHold: Send + Sync {
+    /// Adapt a replacement model factory to this already granted execution
+    /// place. This creates no new connection, grant, or native session.
+    fn model_provider(
+        &self,
+        binding: Arc<dyn AgentProvider>,
+    ) -> Result<Arc<dyn AgentProvider>, AgentError>;
+
     /// Resolves once the environment can no longer run anything for the
     /// lease, with why: [`LeaseEndCause::Lost`] for its connection lost (row
     /// L10), [`LeaseEndCause::Expired`] for the environment ending it past
@@ -507,6 +515,16 @@ impl LeaseFence {
             })),
         })
     }
+    /// Reconfigure a factory under this same lease authority. State and event
+    /// retirement remain owned by the original fence, not a second lease.
+    fn with_inner(&self, inner: Arc<dyn AgentProvider>) -> Arc<Self> {
+        Arc::new(Self {
+            lease: self.lease.clone(),
+            inner,
+            state: self.state.clone(),
+            not_live: self.not_live.clone(),
+        })
+    }
     fn state(&self) -> std::sync::MutexGuard<'_, FenceState> {
         self.state
             .lock()
@@ -562,6 +580,25 @@ impl LeaseFence {
     }
 }
 impl AgentProvider for LeaseFence {
+    fn harness_host_identity(&self) -> HarnessHostIdentity<'_> {
+        self.inner.harness_host_identity()
+    }
+    fn native_hooks_allowed(&self) -> bool {
+        self.inner.native_hooks_allowed()
+    }
+    fn model_change_context(&self) -> Option<String> {
+        self.inner
+            .model_change_context()
+            .map(|context| format!("lease:{}:{context}", self.lease.as_str()))
+    }
+    fn with_model_configuration(
+        &self,
+        mode: Option<ApprovalMode>,
+        effort: Option<EffortLevel>,
+        traces: Option<Arc<LocalTraceStore>>,
+    ) -> Result<Arc<dyn AgentProvider>, AgentError> {
+        Ok(self.with_inner(self.inner.with_model_configuration(mode, effort, traces)?))
+    }
     fn approval_mode(&self) -> Option<ApprovalMode> {
         self.inner.approval_mode()
     }
@@ -860,6 +897,22 @@ impl LiveLease {
             fence: opening.fence.clone(),
             hold: opening.hold.clone(),
         }
+    }
+
+    /// A target factory fenced by this exact lease. The SDK still compares
+    /// provider-issued context proofs, so an environment-bound context cannot
+    /// be replaced with an unrelated raw local factory.
+    pub(crate) fn model_provider(
+        &self,
+        provider: Arc<dyn AgentProvider>,
+    ) -> Result<Arc<dyn AgentProvider>, AgentError> {
+        if !self.is_live() {
+            return Err(AgentError::Closed);
+        }
+        let hold = self.hold.as_ref().ok_or_else(|| {
+            AgentError::Configuration("model target has no established environment lease".into())
+        })?;
+        Ok(self.fence.with_inner(hold.model_provider(provider)?))
     }
 
     /// Resolves once the environment can no longer run anything for this

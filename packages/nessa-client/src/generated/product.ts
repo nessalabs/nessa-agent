@@ -681,6 +681,10 @@ export interface ConversationView {
   approvalModes: ApprovalModeChoice[]
   /** Present while a change is in progress or recovery is required. */
   approvalModeChange?: ApprovalModeChange
+  /** Pending correlated model change; the confirmed selection remains authoritative. */
+  modelChange?: ModelChange
+  /** Native effect boundary of the last confirmed model change. */
+  modelChangeEffect?: ModelChangeEffect
 }
 /** One file its agent published under a lease: read from the environment, verified by its digest, held, and then recorded with the lease as its cause. The record outlives the hold. The bytes are never in the view. */
 export interface ConversationArtifact {
@@ -705,7 +709,7 @@ export interface ConversationCreateParams {
   requestId: string
   /** Coding agent this conversation runs on for its whole life. Omitted takes the gateway's configured default. Ignored when the conversation already exists, which is reopened on the agent it was created with. */
   agent?: string
-  /** Catalog model identifier fixed at first creation; ignored on reopen. */
+  /** Initial catalog model identifier; ignored on reopen. Use conversation.setModel to change an existing chat. */
   model?: string
   /** Initial preset, default ask; ignored on reopen. */
   approvalMode?: ApprovalMode
@@ -1609,6 +1613,8 @@ export const ConversationErrorCode = {
   ApprovalModeUnavailable: "approval_mode_unavailable",
   ApprovalModeNotApplied: "approval_mode_not_applied",
   ApprovalModeUncertain: "approval_mode_uncertain",
+  ModelChangeNotApplied: "model_change_not_applied",
+  ModelChangeUncertain: "model_change_uncertain",
   ApprovalRequestConflict: "approval_request_conflict",
   TurnRunning: "turn_running",
   ConversationsNotConfigured: "conversations_not_configured",
@@ -1798,7 +1804,7 @@ export interface AgentsListed {
   /** The same catalog agents.list returns, read again now. */
   catalog: AgentsListResult
 }
-/** Change a conversation approval preset while no turn runs. */
+/** Change a conversation approval preset using the native harness boundary; existing reviews are not answered by this command. */
 export interface ConversationSetApprovalModeParams {
   /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
   conversationId: string
@@ -2739,6 +2745,41 @@ export interface ConversationEvents {
   /** Committed semantic events in source order; empty advances filtered progress. */
   events: ConversationEvent[]
 }
+/** Change the model within the existing provider session, including while a turn runs. Effect timing follows the provider. */
+export interface ConversationSetModelParams {
+  /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
+  conversationId: string
+  /** Stable action identifier retained for retries of one logical command. */
+  requestId: string
+  /** Exact model identifier within the conversation provider. */
+  model: string
+}
+/** Durably confirmed model and approval preset, with native effect timing. */
+export interface ConversationSetModelResult {
+  /** Original action identifier. */
+  requestId: string
+  /** Exact model identifier within the conversation provider. */
+  model: string
+  /** Approval preset acknowledged with the model selection. */
+  approvalMode: ApprovalMode
+  /** Native boundary at which this selection takes effect. */
+  effect: ModelChangeEffect
+}
+/** The native harness boundary at which acknowledged settings affect work. This does not relabel an already running turn. */
+export const ModelChangeEffect = {
+  SubsequentResponses: "subsequentResponses",
+  NextTurn: "nextTurn",
+} as const
+export type ModelChangeEffect = (typeof ModelChangeEffect)[keyof typeof ModelChangeEffect]
+/** A model change in progress or awaiting recovery; the last confirmed model remains separate. */
+export interface ModelChange {
+  /** Correlated action identifier. */
+  requestId: string
+  /** Turn admission state. */
+  status: "changing" | "recovery_required"
+  /** Exact model identifier within the conversation provider. */
+  requestedModel: string
+}
 export const maxChangeWatchIdBytes = 57 as const
 export const changeWatchIdPattern =
   "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-[1-9][0-9]{0,19}$" as const
@@ -2799,7 +2840,7 @@ export const mcpServerRules = {
 export const bounds = {
   maxOrdinaryResponseBytes: 65536,
   maxRequestFrameBytes: 65536,
-  maxReadyMethods: 75,
+  maxReadyMethods: 76,
   maxAuthCredentialCharacters: 16384,
   maxProductClientIdCharacters: 256,
   maxProductSurfaceInstanceCharacters: 256,
@@ -3080,6 +3121,7 @@ export const ProductMethod = {
   ConversationRevokePermissionRule: "conversation.revokePermissionRule",
   ConversationSubscribeEvents: "conversation.subscribeEvents",
   ConversationPeek: "conversation.peek",
+  ConversationSetModel: "conversation.setModel",
 } as const
 export const ProductEvent = {
   SessionChallenge: "session.challenge",
@@ -3170,6 +3212,7 @@ export const productReadyMethods = [
   "conversation.revokePermissionRule",
   "conversation.subscribeEvents",
   "conversation.peek",
+  "conversation.setModel",
 ] as const
 /** The grant each product method asks Cedar for, generated from protocol/product/manifest.json. null means another owner admits the method: the handshake, auth.session, or a watch. Writing to a conversation — an answer, an upload, an app's calls — asks for conversation.write; reading its records or catalogue asks for conversation.read; running a configured server, or enrolling a device, asks for credential.manage. */
 export const productMethodGrants = {
@@ -3249,6 +3292,7 @@ export const productMethodGrants = {
   "conversation.revokePermissionRule": "conversation.write",
   "conversation.subscribeEvents": "conversation.write",
   "conversation.peek": "conversation.write",
+  "conversation.setModel": "conversation.write",
 } as const
 export const catalogueWireSchemas = {
   RecordScope: {

@@ -608,6 +608,8 @@ mod tests {
             .save_changes(
                 lease.load().await.unwrap().binding().clone(),
                 SessionSnapshot {
+                    model_change: None,
+                    current_configuration: None,
                     id: session.clone(),
                     provider: provider.clone(),
                     provider_context: ProviderContext::Absent,
@@ -639,6 +641,8 @@ mod tests {
             .save_changes(
                 lease.load().await.unwrap().binding().clone(),
                 SessionSnapshot {
+                    model_change: None,
+                    current_configuration: None,
                     id: session.clone(),
                     provider,
                     provider_context: next.clone(),

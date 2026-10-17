@@ -50,6 +50,8 @@ async fn restored_checkpoint_accepts_real_same_generation_extension() {
         after: ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap()),
     };
     let second_snapshot = SessionSnapshot {
+        model_change: None,
+        current_configuration: None,
         provider_context: ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap()),
         ..initial.clone()
     };
@@ -94,6 +96,8 @@ async fn restored_checkpoint_accepts_real_same_generation_extension() {
         after: ProviderContext::Recorded(ExecutionSessionId::new("later").unwrap()),
     };
     let final_snapshot = SessionSnapshot {
+        model_change: None,
+        current_configuration: None,
         provider_context: ProviderContext::Recorded(ExecutionSessionId::new("later").unwrap()),
         ..initial.clone()
     };

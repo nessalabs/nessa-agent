@@ -19,6 +19,7 @@ mod terminal_settlement;
 mod undispatched_cancellation;
 
 use super::*;
+use nessa_sdk::application::agent_execution::providers::HarnessHostIdentity;
 use nessa_sdk::application::agent_execution::providers::ProviderOpenFuture;
 use nessa_sdk::domain::agent_execution::executions::{InvocationStage, SchedulingCause};
 use nessa_sdk::domain::agent_execution::ExecutionError;
@@ -66,6 +67,9 @@ struct ProbeFactory {
     receiver: Mutex<Option<mpsc::UnboundedReceiver<ExecutionEvent>>>,
 }
 impl AgentProvider for ProbeFactory {
+    fn harness_host_identity(&self) -> HarnessHostIdentity<'_> {
+        HarnessHostIdentity::local()
+    }
     fn identity(&self) -> ProviderIdentity {
         ProviderIdentity::new("review", "test", "test").unwrap()
     }
@@ -625,6 +629,8 @@ async fn restored_scheduling_from_a_custom_store_is_validated_before_provider_op
     ];
     assert!(history.iter().all(|event| event.transition().is_ok()));
     storage.0.lock().unwrap().snapshot = Some(SessionSnapshot {
+        model_change: None,
+        current_configuration: None,
         queue_history: Vec::new(),
         id: SessionId::new("conversation").unwrap(),
         provider: provider.identity(),

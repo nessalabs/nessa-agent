@@ -1,5 +1,6 @@
 //! Deterministic stream and subscriber failure probes using local test adapters.
 use super::*;
+use nessa_sdk::application::agent_execution::providers::HarnessHostIdentity;
 use nessa_sdk::application::agent_execution::providers::ProviderOpenFuture;
 
 struct ExhaustedProvider {
@@ -28,6 +29,9 @@ impl ExecutionEventStream for ExhaustedEvents {
     }
 }
 impl AgentProvider for ExhaustedProvider {
+    fn harness_host_identity(&self) -> HarnessHostIdentity<'_> {
+        HarnessHostIdentity::local()
+    }
     fn identity(&self) -> ProviderIdentity {
         ProviderIdentity::new("exhaustion-probe", "fixture", "test").unwrap()
     }
@@ -251,6 +255,9 @@ impl ProviderSessionBackend for CloseDependentBackend {
     }
 }
 impl AgentProvider for StreamFailureProvider {
+    fn harness_host_identity(&self) -> HarnessHostIdentity<'_> {
+        HarnessHostIdentity::local()
+    }
     fn identity(&self) -> ProviderIdentity {
         ExhaustedProvider { failure: true }.identity()
     }

@@ -48,6 +48,8 @@ async fn worker_projection_after_reload(
     );
     let session_id = SessionId::new("worker-projection").unwrap();
     let snapshot = SessionSnapshot {
+        model_change: None,
+        current_configuration: None,
         queue_history: Vec::new(),
         id: session_id.clone(),
         provider: ProviderIdentity::new("fixture", "model", "workspace").unwrap(),

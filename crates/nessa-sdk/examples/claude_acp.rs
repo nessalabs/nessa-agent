@@ -140,6 +140,19 @@ impl ExecutionAudit for TracingExecutionAudit {
                         "harness process started with this hooks choice"
                     );
                 }
+                ExecutionAuditRecord::ConfigurationControlled(record) => {
+                    tracing::info!(
+                        session = record.session_id().as_str(),
+                        generation = record.attachment_generation(),
+                        actor = ?record.actor(),
+                        before = ?record.before(),
+                        before_configuration = ?record.before_configuration(),
+                        requested = ?record.request(),
+                        acknowledged = ?record.acknowledged(),
+                        stage = ?record.stage(),
+                        "Native configuration control"
+                    );
+                }
             }
             Ok(())
         })

@@ -1,5 +1,6 @@
 //! A rejected invocation must not drain a continuously ready invalid stream.
 use super::*;
+use nessa_sdk::application::agent_execution::providers::HarnessHostIdentity;
 
 struct ReadyProvider {
     backend: Arc<ReadyBackend>,
@@ -29,6 +30,9 @@ impl ExecutionEventStream for ReadyEvents {
     }
 }
 impl AgentProvider for ReadyProvider {
+    fn harness_host_identity(&self) -> HarnessHostIdentity<'_> {
+        HarnessHostIdentity::local()
+    }
     fn identity(&self) -> ProviderIdentity {
         ProviderIdentity::new("ready", "test", "test").unwrap()
     }

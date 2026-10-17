@@ -1,6 +1,7 @@
 mod opening;
 
 use super::support::*;
+use nessa_sdk::application::agent_execution::providers::HarnessHostIdentity;
 use nessa_sdk::application::agent_execution::providers::{ProviderOpenFuture, ProviderOpenRequest};
 use nessa_sdk::application::agent_execution::sessions::{SessionChange, SessionSaveUnit};
 use nessa_sdk::{
@@ -127,6 +128,9 @@ impl ExecutionEventStream for EmptyEvents {
     }
 }
 impl AgentProvider for TestProvider {
+    fn harness_host_identity(&self) -> HarnessHostIdentity<'_> {
+        HarnessHostIdentity::local()
+    }
     fn identity(&self) -> ProviderIdentity {
         ProviderIdentity::new("test", "test", "test").unwrap()
     }
@@ -171,6 +175,8 @@ pub(super) async fn provider_agent_with_review(
     let id = SessionId::new("retained-review").unwrap();
     let lease = storage.open(id.clone()).await.unwrap();
     let snapshot = SessionSnapshot {
+        model_change: None,
+        current_configuration: None,
         queue_history: Vec::new(),
         id: id.clone(),
         provider: provider.identity(),

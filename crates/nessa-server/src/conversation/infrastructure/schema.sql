@@ -56,6 +56,34 @@ CREATE TABLE mode_requests (
 ) STRICT;
 CREATE UNIQUE INDEX one_pending_mode_request ON mode_requests (conversation_id) WHERE state = 'pending';
 
+-- One native model decision, including the approval choice the harness confirmed.
+CREATE TABLE model_requests (
+    conversation_id TEXT NOT NULL REFERENCES conversations (id),
+    request_id TEXT NOT NULL,
+    initiator TEXT NOT NULL,
+    surface TEXT NOT NULL,
+    prior_provider TEXT NOT NULL,
+    prior_context TEXT NOT NULL,
+    requested_provider TEXT NOT NULL,
+    requested_context TEXT NOT NULL,
+    prior_model TEXT NOT NULL,
+    prior_mode TEXT NOT NULL CHECK (prior_mode IN ('ask','auto','full')),
+    requested_model TEXT NOT NULL,
+    state TEXT NOT NULL CHECK (state IN ('pending','applied','not_applied')),
+    application TEXT CHECK (application IN ('applied','refused','uncertain')),
+    applied_mode TEXT CHECK (applied_mode IN ('ask','auto','full')),
+    effect TEXT CHECK (effect IN ('subsequent_responses','next_turn')),
+    requested_at_ms INTEGER NOT NULL,
+    PRIMARY KEY (conversation_id,request_id),
+    CHECK ((application = 'applied' AND applied_mode IS NOT NULL AND effect IS NOT NULL)
+        OR (application IS NULL AND applied_mode IS NULL AND effect IS NULL)
+        OR (application IN ('refused','uncertain') AND applied_mode IS NULL AND effect IS NULL)),
+    CHECK (state <> 'applied' OR application = 'applied'),
+    CHECK (state <> 'not_applied' OR application = 'refused'),
+    CHECK (state = 'pending' OR application IS NOT NULL)
+) STRICT;
+CREATE UNIQUE INDEX one_pending_model_request ON model_requests(conversation_id) WHERE state='pending';
+
 -- A deleted conversation's tombstone. Written at the fence and carried
 -- further until `erased`; never removed.
 CREATE TABLE deletions (

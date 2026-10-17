@@ -26,6 +26,7 @@ use crate::application::{
     },
     dto::{ModalitiesDto, ModelMetadataDto},
 };
+use nessa_sdk::application::agent_execution::providers::HarnessHostIdentity;
 
 struct AcceptingAudit;
 impl ExecutionAudit for AcceptingAudit {
@@ -181,6 +182,9 @@ struct Backend {
 }
 struct Events(Arc<Backend>);
 impl AgentProvider for Provider {
+    fn harness_host_identity(&self) -> HarnessHostIdentity<'_> {
+        HarnessHostIdentity::local()
+    }
     fn identity(&self) -> ProviderIdentity {
         ProviderIdentity::new("control-handoff", "fixture", "fixture").unwrap()
     }
@@ -233,6 +237,9 @@ impl AgentProvider for Provider {
     }
 }
 impl AgentProvider for RecoveryOpenFailureProvider {
+    fn harness_host_identity(&self) -> HarnessHostIdentity<'_> {
+        self.inner.harness_host_identity()
+    }
     fn identity(&self) -> ProviderIdentity {
         self.inner.identity()
     }

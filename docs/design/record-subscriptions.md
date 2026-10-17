@@ -260,7 +260,7 @@ guarantee (#935).
 | S17 | Past the per-connection limit | Refused `subscription_capacity` | `subscriptions_past_the_published_limit_are_refused` |
 | S18 | A second subscription to the same target on one connection | Refused `subscription_duplicate` | `a_duplicate_subscription_is_refused` |
 | S19 | The record source closes | Ended `source_closed` | `a_closed_source_ends_the_subscription` (unit, `product/subscription/target.rs`) |
-| S20 | A live overlay change with no commit (the approval mode changed) | One new frame; the cursor does not move | `an_overlay_change_without_a_commit_is_delivered` |
+| S20 | A pending approval request changes the overlay; later native acknowledgement commits the configuration | Pending frame retains the committed preset and cursor. Confirmed configuration publishes the new preset and advances committed progress | `an_overlay_change_without_a_commit_is_delivered`, `a_confirmed_mode_change_is_delivered_with_its_committed_cursor` |
 | S21 | The socket closes | Every task ends and every registration is dropped | `closing_the_socket_drops_every_subscription` |
 | S22 | A frame larger than the frame bound | Ended `too_large` | `an_oversized_view_ends_the_subscription_as_too_large` (unit, `product/subscription/target.rs`) |
 | S23 | A read refused for want of a storage read slot | Tried again with a doubling wait, then refused | `a_read_without_a_storage_slot_is_tried_again_then_refused` (unit, `product/subscription/target.rs`) |
@@ -389,6 +389,15 @@ The rows of #248 and #419 that do not depend on a timer read keep their ids
 (round counts, read pacing, foreground polling of #532) went with the poller.
 `W6` gained a case: a list frame that arrives while an archive is on its way
 may have been read before it, and does not list the archived session again.
+
+A changed preset intent notifies live followers after its exact durable admission and
+before calling the native harness. While that call is held, followers retain
+the committed preset and cursor and show the pending request. The native
+acknowledgement then records its SDK configuration fact and advances the cursor.
+S20 exercises these separately through a held public preset call and a completed
+call; raw metadata writes do not impersonate the service notification owner.
+An unchanged preset keeps the same owner, committed cursor and capabilities
+without a transient pending overlay or a native setting call.
 
 ## Committed event subscriptions
 

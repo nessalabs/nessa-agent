@@ -2,13 +2,15 @@
 use nessa_sdk::application::agent_execution::{
     executions::{
         AdmissionAuditCause, AdmissionAuditStage, AttachmentAuditCause, AttachmentAuditStage,
-        EffortChangeStage, ExecutionAuditRecord, NativeHooksLaunchCause, QueueOrderCause,
-        SteeringAuditCause, SteeringAuditStage,
+        ConfigurationControlRequest, ConfigurationControlStage, EffortChangeStage,
+        ExecutionAuditRecord, NativeHooksLaunchCause, QueueOrderCause, SteeringAuditCause,
+        SteeringAuditStage,
     },
     permissions::{
         ActionContext, ApprovalAttribution, ApprovalBasis, CancellationOrigin,
         PermissionAnswerDelivery, QuestionRefusalRecord, ReviewDeclineRecord,
     },
+    providers::{ModelConfiguration, ProviderIdentity},
 };
 use nessa_sdk::domain::agent_execution::{
     executions::{
@@ -29,6 +31,31 @@ use serde_json::{json, Value};
 
 pub(super) fn record_value(record: &ExecutionAuditRecord) -> Value {
     match record {
+        ExecutionAuditRecord::ConfigurationControlled(record) => {
+            json!({
+                "kind":"configuration_control",
+                "sessionId":record.session_id().as_str(),
+                "attachmentGeneration":record.attachment_generation(),
+                "before":{
+                    "provider":provider_identity(record.before()),
+                    "configuration":configuration(record.before_configuration()),
+                },
+                "request":match record.request() {
+                    ConfigurationControlRequest::Model(identity)=>json!({"kind":"model","provider":provider_identity(identity)}),
+                    ConfigurationControlRequest::ApprovalMode(mode)=>json!({"kind":"approval_mode","approvalMode":mode.as_str()}),
+                },
+                "stage":match record.stage() {
+                    ConfigurationControlStage::Requested=>"requested",
+                    ConfigurationControlStage::Acknowledged=>"acknowledged",
+                    ConfigurationControlStage::Applied=>"applied",
+                    ConfigurationControlStage::Refused=>"refused",
+                    ConfigurationControlStage::Failed=>"failed",
+                },
+                "acknowledged":record.acknowledged().map(|(identity,settings)|json!({"provider":provider_identity(identity),"configuration":configuration(settings)})),
+                "cause":"caller_requested",
+                "actor":actor(record.actor()),
+            })
+        }
         ExecutionAuditRecord::Attachment(record) => {
             json!({
                 "kind":"attachment_transition",
@@ -227,6 +254,13 @@ pub(super) fn record_value(record: &ExecutionAuditRecord) -> Value {
         }
     }
 }
+fn provider_identity(identity: &ProviderIdentity) -> Value {
+    json!({"name":identity.name(),"modelId":identity.model_id(),"context":identity.context()})
+}
+fn configuration(configuration: &ModelConfiguration) -> Value {
+    json!({"approvalMode":configuration.approval_mode().map(|mode|mode.as_str()),"effortLevel":configuration.effort_level().map(|effort|effort.as_str())})
+}
+
 fn attachment_stage(stage: AttachmentAuditStage) -> &'static str {
     match stage {
         AttachmentAuditStage::Absent => "absent",

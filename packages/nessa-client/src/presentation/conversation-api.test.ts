@@ -78,7 +78,7 @@ function reviewTarget(permissionId = "permission") {
   })[0]!
 }
 
-it("passes a fixed model and initial mode only on creation", async () => {
+it("passes the initial model and mode only on creation", async () => {
   const request = vi.fn().mockResolvedValue({ conversationId })
   const api = createConversationApi({ request }, () => "generated")
   await api.create({
@@ -2086,4 +2086,34 @@ it.each([
     () => "action",
   )
   await expect(api.shares(conversationId, page)).rejects.toThrow()
+})
+
+it("correlates a model switch and validates its whole acknowledged selection", async () => {
+  const selected = {
+    requestId: "switch-1",
+    model: "claude-haiku-4-5-20251001",
+    approvalMode: "ask",
+    effect: "subsequentResponses",
+  }
+  const request = vi.fn().mockResolvedValue(selected)
+  const api = createConversationApi({ request }, () => "generated")
+  await expect(
+    api.setModel(conversationId, selected.model, { requestId: selected.requestId }),
+  ).resolves.toEqual(selected)
+  expect(request).toHaveBeenCalledExactlyOnceWith("conversation.setModel", {
+    conversationId,
+    requestId: selected.requestId,
+    model: selected.model,
+  })
+  for (const bad of [
+    { ...selected, requestId: "another-action" },
+    { ...selected, model: "another-model" },
+    { ...selected, approvalMode: "invented" },
+    { ...selected, effect: "immediate" },
+  ]) {
+    request.mockResolvedValue(bad)
+    await expect(
+      api.setModel(conversationId, selected.model, { requestId: selected.requestId }),
+    ).rejects.toBeInstanceOf(NessaConversationControlError)
+  }
 })

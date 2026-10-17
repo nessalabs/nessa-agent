@@ -216,7 +216,7 @@
         "methods": {
           "type": "array",
           "items": { "type": "string" },
-          "maxItems": 75,
+          "maxItems": 76,
           "description": "Registered product methods; permission is checked for every command."
         }
       },
@@ -1631,6 +1631,14 @@
         "approvalModeChange": {
           "$ref": "#/$defs/ApprovalModeChange",
           "description": "Present while a change is in progress or recovery is required."
+        },
+        "modelChange": {
+          "$ref": "#/$defs/ModelChange",
+          "description": "Pending correlated model change; the confirmed selection remains authoritative."
+        },
+        "modelChangeEffect": {
+          "$ref": "#/$defs/ModelChangeEffect",
+          "description": "Native effect boundary of the last confirmed model change."
         }
       },
       "required": [
@@ -1736,7 +1744,7 @@
           "minLength": 1,
           "maxLength": 256,
           "x-utf8MaxBytes": 256,
-          "description": "Catalog model identifier fixed at first creation; ignored on reopen."
+          "description": "Initial catalog model identifier; ignored on reopen. Use conversation.setModel to change an existing chat."
         },
         "approvalMode": {
           "$ref": "#/$defs/ApprovalMode",
@@ -1779,19 +1787,9 @@
           "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
           "description": "Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization."
         },
-        "executionId": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "minLength": 1,
-          "maxLength": 256
-        }
+        "executionId": { "type": ["string", "null"], "minLength": 1, "maxLength": 256 }
       },
-      "required": [
-        "conversationId",
-        "executionId"
-      ]
+      "required": ["conversationId", "executionId"]
     },
     "ConversationReadParams": {
       "type": "object",
@@ -3942,6 +3940,8 @@
         "approval_mode_unavailable",
         "approval_mode_not_applied",
         "approval_mode_uncertain",
+        "model_change_not_applied",
+        "model_change_uncertain",
         "approval_request_conflict",
         "turn_running",
         "conversations_not_configured",
@@ -4400,7 +4400,7 @@
     "ConversationSetApprovalModeParams": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Change a conversation approval preset while no turn runs.",
+      "description": "Change a conversation approval preset using the native harness boundary; existing reviews are not answered by this command.",
       "properties": {
         "conversationId": {
           "type": "string",
@@ -6036,7 +6036,10 @@
           "maxLength": 64,
           "description": "For refused: the conversation error code, or unauthorized or forbidden when access was refused."
         },
-        "lastEventCursor": { "$ref": "#/$defs/ConversationEventCursor", "description": "Last semantic event cursor written, or the supplied after cursor if no batch was written. A written cursor records socket delivery, not application processing. Resume from your application's own last-applied batch cursor." },
+        "lastEventCursor": {
+          "$ref": "#/$defs/ConversationEventCursor",
+          "description": "Last semantic event cursor written, or the supplied after cursor if no batch was written. A written cursor records socket delivery, not application processing. Resume from your application's own last-applied batch cursor."
+        },
         "lastDelivered": {
           "$ref": "#/$defs/ConversationViewCursor",
           "description": "Where a view subscription resumes from: the cursor of the last view frame written or, when none was, the after it was opened with. Absent for a list, and for a view subscription opened without after that wrote no frame."
@@ -6575,235 +6578,78 @@
           ]
         }
       },
-      "required": [
-        "id",
-        "cursor",
-        "kind"
-      ],
+      "required": ["id", "cursor", "kind"],
       "description": "Metadata projected from one complete committed semantic fact. No prompt, thinking, tool arguments or results are included.",
       "allOf": [
         {
-          "if": {
-            "properties": {
-              "kind": {
-                "const": "turn.accepted"
-              }
-            }
-          },
+          "if": { "properties": { "kind": { "const": "turn.accepted" } } },
           "then": {
-            "required": [
-              "executionId",
-              "status"
-            ],
-            "properties": {
-              "status": {
-                "const": "accepted"
-              }
-            },
+            "required": ["executionId", "status"],
+            "properties": { "status": { "const": "accepted" } },
             "not": {
               "anyOf": [
-                {
-                  "required": [
-                    "toolId"
-                  ]
-                },
-                {
-                  "required": [
-                    "name"
-                  ]
-                },
-                {
-                  "required": [
-                    "outcome"
-                  ]
-                }
+                { "required": ["toolId"] },
+                { "required": ["name"] },
+                { "required": ["outcome"] }
               ]
             }
           }
         },
         {
-          "if": {
-            "properties": {
-              "kind": {
-                "const": "turn.started"
-              }
-            }
-          },
+          "if": { "properties": { "kind": { "const": "turn.started" } } },
           "then": {
-            "required": [
-              "executionId",
-              "status"
-            ],
-            "properties": {
-              "status": {
-                "const": "running"
-              }
-            },
+            "required": ["executionId", "status"],
+            "properties": { "status": { "const": "running" } },
             "not": {
               "anyOf": [
-                {
-                  "required": [
-                    "toolId"
-                  ]
-                },
-                {
-                  "required": [
-                    "name"
-                  ]
-                },
-                {
-                  "required": [
-                    "outcome"
-                  ]
-                }
+                { "required": ["toolId"] },
+                { "required": ["name"] },
+                { "required": ["outcome"] }
               ]
             }
           }
         },
         {
-          "if": {
-            "properties": {
-              "kind": {
-                "const": "turn.ended"
-              }
-            }
-          },
+          "if": { "properties": { "kind": { "const": "turn.ended" } } },
           "then": {
-            "required": [
-              "executionId",
-              "status",
-              "outcome"
-            ],
-            "properties": {
-              "status": {
-                "const": "settled"
-              }
-            },
-            "not": {
-              "anyOf": [
-                {
-                  "required": [
-                    "toolId"
-                  ]
-                },
-                {
-                  "required": [
-                    "name"
-                  ]
-                }
-              ]
-            }
+            "required": ["executionId", "status", "outcome"],
+            "properties": { "status": { "const": "settled" } },
+            "not": { "anyOf": [{ "required": ["toolId"] }, { "required": ["name"] }] }
           }
         },
         {
-          "if": {
-            "properties": {
-              "kind": {
-                "const": "tool.updated"
-              }
-            }
-          },
+          "if": { "properties": { "kind": { "const": "tool.updated" } } },
           "then": {
-            "required": [
-              "executionId",
-              "toolId"
-            ],
+            "required": ["executionId", "toolId"],
             "properties": {
-              "status": {
-                "enum": [
-                  "pending",
-                  "running",
-                  "completed",
-                  "failed"
-                ]
-              }
+              "status": { "enum": ["pending", "running", "completed", "failed"] }
             },
-            "not": {
-              "anyOf": [
-                {
-                  "required": [
-                    "outcome"
-                  ]
-                }
-              ]
-            }
+            "not": { "anyOf": [{ "required": ["outcome"] }] }
           }
         },
         {
-          "if": {
-            "properties": {
-              "kind": {
-                "const": "state.changed"
-              }
-            }
-          },
+          "if": { "properties": { "kind": { "const": "state.changed" } } },
           "then": {
             "oneOf": [
               {
-                "required": [
-                  "status"
-                ],
-                "properties": {
-                  "status": {
-                    "const": "opened"
-                  }
-                },
+                "required": ["status"],
+                "properties": { "status": { "const": "opened" } },
                 "not": {
                   "anyOf": [
-                    {
-                      "required": [
-                        "executionId"
-                      ]
-                    },
-                    {
-                      "required": [
-                        "toolId"
-                      ]
-                    },
-                    {
-                      "required": [
-                        "name"
-                      ]
-                    },
-                    {
-                      "required": [
-                        "outcome"
-                      ]
-                    }
+                    { "required": ["executionId"] },
+                    { "required": ["toolId"] },
+                    { "required": ["name"] },
+                    { "required": ["outcome"] }
                   ]
                 }
               },
               {
-                "required": [
-                  "executionId",
-                  "status",
-                  "outcome"
-                ],
-                "properties": {
-                  "status": {
-                    "const": "settlement_updated"
-                  }
-                },
-                "not": {
-                  "anyOf": [
-                    {
-                      "required": [
-                        "toolId"
-                      ]
-                    },
-                    {
-                      "required": [
-                        "name"
-                      ]
-                    }
-                  ]
-                }
+                "required": ["executionId", "status", "outcome"],
+                "properties": { "status": { "const": "settlement_updated" } },
+                "not": { "anyOf": [{ "required": ["toolId"] }, { "required": ["name"] }] }
               },
               {
-                "required": [
-                  "executionId",
-                  "status"
-                ],
+                "required": ["executionId", "status"],
                 "properties": {
                   "status": {
                     "enum": [
@@ -6823,21 +6669,9 @@
                 },
                 "not": {
                   "anyOf": [
-                    {
-                      "required": [
-                        "toolId"
-                      ]
-                    },
-                    {
-                      "required": [
-                        "name"
-                      ]
-                    },
-                    {
-                      "required": [
-                        "outcome"
-                      ]
-                    }
+                    { "required": ["toolId"] },
+                    { "required": ["name"] },
+                    { "required": ["outcome"] }
                   ]
                 }
               }
@@ -6867,18 +6701,14 @@
         },
         "kinds": {
           "type": "array",
-          "items": {
-            "$ref": "#/$defs/ConversationEventKind"
-          },
+          "items": { "$ref": "#/$defs/ConversationEventKind" },
           "minItems": 1,
           "maxItems": 5,
           "uniqueItems": true,
           "description": "Event kinds to deliver; omitted delivers all supported kinds. Filtered batches still advance their cursor."
         }
       },
-      "required": [
-        "conversationId"
-      ],
+      "required": ["conversationId"],
       "not": { "required": ["after", "replay"] },
       "description": "Follow committed semantic events without opening an Agent. Replay uses complete saved facts and explicit gap refusals; default is future events. Stop with conversation.unsubscribe."
     },
@@ -6896,19 +6726,104 @@
         },
         "events": {
           "type": "array",
-          "items": {
-            "$ref": "#/$defs/ConversationEvent"
-          },
+          "items": { "$ref": "#/$defs/ConversationEvent" },
           "maxItems": 64,
           "description": "Committed semantic events in source order; empty advances filtered progress."
         }
       },
-      "required": [
-        "subscriptionId",
-        "cursor",
-        "events"
-      ],
+      "required": ["subscriptionId", "cursor", "events"],
       "description": "An ordered bounded semantic event batch. An empty batch advances the checkpoint past filtered facts. Application checkpoints belong to the consumer."
+    },
+    "ConversationSetModelParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Change the model within the existing provider session, including while a turn runs. Effect timing follows the provider.",
+      "properties": {
+        "conversationId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization."
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Stable action identifier retained for retries of one logical command."
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Exact model identifier within the conversation provider."
+        }
+      },
+      "required": ["conversationId", "requestId", "model"]
+    },
+    "ConversationSetModelResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Durably confirmed model and approval preset, with native effect timing.",
+      "properties": {
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Original action identifier."
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Exact model identifier within the conversation provider."
+        },
+        "approvalMode": {
+          "$ref": "#/$defs/ApprovalMode",
+          "description": "Approval preset acknowledged with the model selection."
+        },
+        "effect": {
+          "$ref": "#/$defs/ModelChangeEffect",
+          "description": "Native boundary at which this selection takes effect."
+        }
+      },
+      "required": ["requestId", "model", "approvalMode", "effect"]
+    },
+    "ModelChangeEffect": {
+      "type": "string",
+      "enum": ["subsequentResponses", "nextTurn"],
+      "description": "The native harness boundary at which acknowledged settings affect work. This does not relabel an already running turn."
+    },
+    "ModelChange": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "A model change in progress or awaiting recovery; the last confirmed model remains separate.",
+      "properties": {
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Correlated action identifier."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["changing", "recovery_required"],
+          "description": "Turn admission state."
+        },
+        "requestedModel": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Exact model identifier within the conversation provider."
+        }
+      },
+      "required": ["requestId", "requestedModel", "status"]
     }
   }
 }

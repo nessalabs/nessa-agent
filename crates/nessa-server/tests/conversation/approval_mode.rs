@@ -5,8 +5,6 @@ use crate::conversation_test_support::{
     ModeReadbackFault, ModeRecordChange, ModeTerminalFault, ProviderFactory,
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
-use std::future::{poll_fn, Future};
-use std::task::Poll;
 use std::time::Duration;
 use tokio::sync::oneshot;
 
@@ -154,14 +152,21 @@ async fn rejected_and_unconfirmed_mode_changes_do_not_publish_requested_selectio
         }
         let after = service.read(id.clone(), caller()).await.unwrap();
         let follow_view = current(&service, id, caller()).await.unwrap();
+        let expected = if fail == "commit" {
+            // Native success is durably attributed in the SDK even if the
+            // metadata acknowledgement is lost; an Open read joins that fact.
+            ConversationApprovalMode::Auto
+        } else {
+            ConversationApprovalMode::Ask
+        };
         assert_eq!(
             after.selection.as_ref().unwrap().approval_mode,
-            ConversationApprovalMode::Ask,
+            expected,
             "{fail}"
         );
         assert_eq!(
             follow_view.selection.as_ref().unwrap().approval_mode,
-            ConversationApprovalMode::Ask,
+            expected,
             "{fail}"
         );
         assert!(after.messages.is_empty());
@@ -198,17 +203,33 @@ async fn admitted_mode_change_outlives_caller_and_revises_only_after_acknowledge
             .await
     });
     provider.mode_started.notified().await;
-    let reading = current(&service, id.clone(), caller());
-    tokio::pin!(reading);
-    assert!(poll_fn(|cx| Poll::Ready(reading.as_mut().poll(cx)))
-        .await
-        .is_pending());
+    let pending = tokio::time::timeout(
+        Duration::from_secs(3),
+        current(&service, id.clone(), caller()),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        pending.selection.unwrap().approval_mode,
+        ConversationApprovalMode::Ask
+    );
+    assert!(pending.approval_mode_change.is_some());
+    assert!(!pending.capabilities.queue && !pending.capabilities.steer);
     change.abort();
     release.send(()).unwrap();
-    let after = tokio::time::timeout(Duration::from_secs(3), reading)
-        .await
-        .unwrap()
-        .unwrap();
+    tokio::time::timeout(
+        Duration::from_secs(3),
+        service.set_approval_mode(
+            id.clone(),
+            retry_actor.clone(),
+            ConversationApprovalMode::Auto,
+        ),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let after = current(&service, id.clone(), caller()).await.unwrap();
     assert_eq!(
         after.selection.as_ref().unwrap().approval_mode,
         ConversationApprovalMode::Auto
@@ -299,7 +320,7 @@ async fn terminal_committed_invocation_and_poll_panics_reconcile_before_publicat
     }
 }
 #[tokio::test]
-async fn terminal_uncommitted_panics_recover_prior_and_allow_a_later_mode() {
+async fn terminal_uncommitted_panics_recover_the_sdk_ack_and_allow_a_later_mode() {
     for fault in [
         ModeTerminalFault::InvokeBefore,
         ModeTerminalFault::PollBefore,
@@ -314,20 +335,21 @@ async fn terminal_uncommitted_panics_recover_prior_and_allow_a_later_mode() {
             Err(ConversationError::ApprovalModeUncertain)
         ));
         let recovered =
-            terminal_publication(&service, &repository, &id, ConversationApprovalMode::Ask).await;
+            terminal_publication(&service, &repository, &id, ConversationApprovalMode::Auto).await;
         assert!(recovered.approval_mode_change.is_none());
-        assert!(matches!(
+        assert_eq!(
             service
-                .set_approval_mode(id.clone(), actor, ConversationApprovalMode::Auto)
-                .await,
-            Err(ConversationError::ApprovalModeNotApplied)
-        ));
+                .set_approval_mode(id.clone(), actor, ConversationApprovalMode::Auto,)
+                .await
+                .unwrap(),
+            ConversationApprovalMode::Auto
+        );
         service
-            .set_approval_mode(id.clone(), caller(), ConversationApprovalMode::Auto)
+            .set_approval_mode(id.clone(), caller(), ConversationApprovalMode::Ask)
             .await
             .unwrap();
         let after =
-            terminal_publication(&service, &repository, &id, ConversationApprovalMode::Auto).await;
+            terminal_publication(&service, &repository, &id, ConversationApprovalMode::Ask).await;
         assert_ne!(after.revision, recovered.revision);
         assert_eq!(provider.mode_updates.lock().unwrap().len(), mutations + 2);
         service.shutdown().await.unwrap();
@@ -366,26 +388,17 @@ async fn terminal_unreadable_readback_retires_the_held_owner_before_recovery() {
                 ),
                 "{fault:?} committed={committed}"
             );
-            let expected = if committed {
-                ConversationApprovalMode::Auto
-            } else {
-                ConversationApprovalMode::Ask
-            };
-            let after = terminal_publication(&service, &repository, &id, expected).await;
-            if committed {
-                assert_ne!(after.revision, before.revision);
-                assert!(service
-                    .set_approval_mode(id.clone(), actor, ConversationApprovalMode::Auto)
+            let after =
+                terminal_publication(&service, &repository, &id, ConversationApprovalMode::Auto)
+                    .await;
+            assert_ne!(after.revision, before.revision);
+            assert_eq!(
+                service
+                    .set_approval_mode(id.clone(), actor, ConversationApprovalMode::Auto,)
                     .await
-                    .is_ok());
-            } else {
-                assert!(matches!(
-                    service
-                        .set_approval_mode(id.clone(), actor, ConversationApprovalMode::Auto)
-                        .await,
-                    Err(ConversationError::ApprovalModeNotApplied)
-                ));
-            }
+                    .unwrap(),
+                ConversationApprovalMode::Auto
+            );
             assert_eq!(provider.mode_updates.lock().unwrap().len(), mutations + 1);
             service.shutdown().await.unwrap();
         }
@@ -928,7 +941,15 @@ async fn terminal_pending_query_is_correlated_before_cleanup_and_publication() {
                     "{field:?}"
                 );
             } else {
-                assert!(reading.unwrap().approval_mode_change.is_some());
+                // Recovery refused the malformed reply without effects. Its
+                // fallback reads and validates a fresh pending record.
+                let pending = reading.unwrap();
+                assert!(pending.approval_mode_change.is_some());
+                assert_eq!(
+                    pending.selection.unwrap().approval_mode,
+                    ConversationApprovalMode::Ask
+                );
+                assert!(!pending.capabilities.queue && !pending.capabilities.steer);
             }
             assert_eq!(provider.open_calls.load(Ordering::SeqCst), opens);
             assert_eq!(provider.close_calls.load(Ordering::SeqCst), closes);
@@ -1035,7 +1056,11 @@ async fn terminal_loaded_conversation_must_be_the_pending_query_target() {
     );
     let blocked = service.read(id.clone(), caller()).await.unwrap();
     assert!(blocked.approval_mode_change.is_some());
-    assert!(!blocked.capabilities.queue);
+    assert_eq!(
+        blocked.selection.unwrap().approval_mode,
+        ConversationApprovalMode::Ask
+    );
+    assert!(!blocked.capabilities.queue && !blocked.capabilities.steer);
     assert_eq!(provider.open_calls.load(Ordering::SeqCst), opens);
     assert_eq!(provider.close_calls.load(Ordering::SeqCst), closes);
     terminal_publication(&service, &repository, &id, ConversationApprovalMode::Ask).await;
@@ -1109,14 +1134,64 @@ async fn retained_stopping_publication_refuses_current_reads_until_confirmed_cle
             *provider.close_failure.lock().unwrap() = None;
             service.close(id.clone(), caller()).await.unwrap();
             assert!(live_changes.has_changed().unwrap());
-            let expected = if committed {
-                ConversationApprovalMode::Auto
-            } else {
-                ConversationApprovalMode::Ask
-            };
-            terminal_publication(&service, &repository, &id, expected).await;
+            terminal_publication(&service, &repository, &id, ConversationApprovalMode::Auto).await;
             service.shutdown().await.unwrap();
         }
+    }
+}
+
+#[tokio::test]
+async fn a_pending_mode_view_rechecks_its_owner_after_the_title_wait() {
+    for confirmed in [false, true] {
+        let summaries = Arc::new(MemorySummaries::default());
+        let (service, provider, repository, _, _) = mode_fixture_with_summaries(summaries.clone());
+        let id = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
+        service
+            .create(id.clone(), caller(), RequestedConversation::default())
+            .await
+            .unwrap();
+        service.read(id.clone(), caller()).await.unwrap();
+        repository
+            .begin_mode_change(ConversationModeRequest {
+                conversation_id: id.clone(),
+                organization_id: OrganizationId::new("org").unwrap(),
+                request_id: "pending-mode".into(),
+                initiator_principal_id: PrincipalId::new("person").unwrap(),
+                initiator_surface_id: "desktop".into(),
+                prior: ConversationApprovalMode::Ask,
+                requested: ConversationApprovalMode::Auto,
+                state: ConversationModeRequestState::Pending,
+                application: None,
+                requested_at_ms: 1_700_000_000_124,
+            })
+            .await
+            .unwrap();
+        let (entered, waiting) = oneshot::channel();
+        let (release, gate) = oneshot::channel();
+        *summaries.load_gate.lock().unwrap() = Some((entered, gate));
+        let reader = service.clone();
+        let reading_id = id.clone();
+        let reading = tokio::spawn(async move { current(&reader, reading_id, caller()).await });
+        tokio::time::timeout(Duration::from_secs(5), waiting)
+            .await
+            .unwrap()
+            .unwrap();
+        if !confirmed {
+            *provider.close_failure.lock().unwrap() = Some(AgentError::CleanupUncertain);
+        }
+        let close = service.close(id.clone(), caller()).await;
+        assert_eq!(close.is_ok(), confirmed);
+        release.send(()).unwrap();
+        assert!(matches!(
+            tokio::time::timeout(Duration::from_secs(5), reading)
+                .await
+                .unwrap()
+                .unwrap(),
+            Err(ConversationError::Agent(AgentError::Closed))
+        ));
+        *provider.close_failure.lock().unwrap() = None;
+        service.close(id.clone(), caller()).await.unwrap();
+        service.shutdown().await.unwrap();
     }
 }
 
@@ -1369,3 +1444,7 @@ async fn terminal_panic_payload_ownership_preserves_settlement() {
         "terminal panic escaped owned settlement: {violations:?}"
     );
 }
+
+#[cfg(test)]
+#[path = "approval_mode/unchanged.rs"]
+mod unchanged;

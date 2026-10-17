@@ -26,6 +26,10 @@
 //! retains bounded provider prose separately from the numeric provider code;
 //! neither diagnostic text nor its presence grants lifecycle authority.
 //! Provider and storage adapters remain injected.
+//! `models` owns acknowledged live model binding changes. The scheduler excludes
+//! new admission while a control is verified and persisted; the active native
+//! turn and stable trace port retain their identities. Model-change factories
+//! normalize all acknowledged settings for restoration under the same fence.
 //! The lifecycle coordinator alone opens/closes admission. Supervised submission
 //! owners retain work permits through evidence and receipt settlement. Their original
 //! queue permit and invocation slot retire before receipt publication. Waiting
@@ -61,3 +65,5 @@ pub use scheduling::{
     AdmissionEvidence, AdmissionEvidenceFailure, QueueAdmission, QueueRemoval, QueueReorder,
     SteeringDelivery, SteeringEvidence,
 };
+
+mod models;

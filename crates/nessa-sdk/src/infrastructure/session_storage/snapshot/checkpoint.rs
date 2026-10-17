@@ -41,6 +41,10 @@ struct SnapshotCodec<I, Q> {
     id: String,
     provider: Provider,
     context: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    model_change: Option<super::semantic::SavedModelChange>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    current_configuration: Option<super::semantic::SavedConfigurationChange>,
     invocations: I,
     queue_history: Q,
     /// Absent before any lease was recorded, so a checkpoint without one is
@@ -69,6 +73,8 @@ impl Serialize for SnapshotRef<'_> {
         let value = self.0;
         SnapshotCodec {
             id: value.id.as_str().to_owned(),
+            model_change: value.model_change.as_ref().map(Into::into),
+            current_configuration: value.current_configuration.as_ref().map(Into::into),
             provider: Provider {
                 name: value.provider.name().into(),
                 model_id: value.provider.model_id().into(),
@@ -159,6 +165,14 @@ impl Snapshot {
             invocations.push(record);
         }
         let snapshot = SessionSnapshot {
+            model_change: value
+                .model_change
+                .map(super::semantic::SavedModelChange::decode)
+                .transpose()?,
+            current_configuration: value
+                .current_configuration
+                .map(super::semantic::SavedConfigurationChange::decode)
+                .transpose()?,
             id: SessionId::new(value.id).map_err(corrupt)?,
             provider: value.provider.decode()?,
             provider_context: context.map_or(ProviderContext::Absent, ProviderContext::Recorded),
@@ -213,6 +227,8 @@ pub(crate) fn history_fixture(count: usize) -> SessionSnapshot {
         })
         .collect();
     SessionSnapshot {
+        model_change: None,
+        current_configuration: None,
         id: SessionId::new("conversation").unwrap(),
         provider: ProviderIdentity::new("provider", "model", "workspace").unwrap(),
         provider_context: ProviderContext::Absent,

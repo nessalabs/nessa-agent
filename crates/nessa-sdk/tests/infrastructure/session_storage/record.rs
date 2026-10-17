@@ -194,6 +194,8 @@ async fn load_binds_fresh_reopened_and_reset_writers_to_actual_stream_progress()
         after: ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap()),
     };
     let restored = SessionSnapshot {
+        model_change: None,
+        current_configuration: None,
         provider_context: ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap()),
         ..initial.clone()
     };
@@ -484,6 +486,8 @@ async fn late_invalid_unit_never_appends_valid_prefix() {
         after: ProviderContext::Recorded(ExecutionSessionId::new("valid-prefix-context").unwrap()),
     };
     let candidate = SessionSnapshot {
+        model_change: None,
+        current_configuration: None,
         provider_context: ProviderContext::Recorded(
             ExecutionSessionId::new("valid-prefix-context").unwrap(),
         ),

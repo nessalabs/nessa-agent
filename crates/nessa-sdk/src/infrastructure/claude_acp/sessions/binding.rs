@@ -1,11 +1,13 @@
 #![deny(missing_docs)]
 
+use crate::application::agent_execution::providers::ApprovalModeChoice;
+
 use super::profile::ClaudeProfile;
 use crate::application::agent_execution::agents::AgentError;
 use crate::application::agent_execution::executions::ExecutionAudit;
 use crate::application::agent_execution::providers::{
-    AgentProvider, ApprovalMode, HarnessHost, HarnessLaunch, NativeHooksSwitch, ProviderIdentity,
-    ProviderOpenFuture, ProviderOpenRequest,
+    AgentProvider, ApprovalMode, HarnessHost, HarnessHostIdentity, HarnessLaunch,
+    NativeHooksSwitch, ProviderIdentity, ProviderOpenFuture, ProviderOpenRequest,
 };
 use crate::application::agent_execution::traces::LocalTraceStore;
 use crate::domain::agent_execution::permissions::PermissionScope;
@@ -63,9 +65,7 @@ impl ClaudeAcpProvider {
     pub const SANDBOX_PROFILES: crate::domain::agent_execution::leases::SandboxProfiles =
         crate::domain::agent_execution::leases::SandboxProfiles::HARNESS_DEFAULT;
     /// Presets this binding has verified for an exact catalog model ID.
-    pub fn approval_modes(
-        model_id: &str,
-    ) -> &'static [crate::application::agent_execution::providers::ApprovalModeChoice] {
+    pub fn approval_modes(model_id: &str) -> &'static [ApprovalModeChoice] {
         super::profile::approval_modes(model_id)
     }
     /// Configure a Claude ACP execution factory without starting a process.
@@ -252,6 +252,38 @@ impl AgentProvider for ClaudeAcpProvider {
     }
     fn effort_level(&self) -> Option<EffortLevel> {
         self.effort_level.clone()
+    }
+    fn harness_host_identity(&self) -> HarnessHostIdentity<'_> {
+        self.host
+            .as_ref()
+            .map_or_else(HarnessHostIdentity::local, HarnessHostIdentity::hosted)
+    }
+    fn model_change_context(&self) -> Option<String> {
+        // Claude pins its output ceiling in the process environment. A live
+        // model control changes no launch setting, so only the input/model
+        // limits may differ while this native context remains attached.
+        Some(format!(
+            "{}:output={}",
+            identity::model_change_context(&self.config, self.system_prompt.as_ref(),),
+            self.capabilities.limits().max_output()
+        ))
+    }
+    fn with_model_configuration(
+        &self,
+        mode: Option<ApprovalMode>,
+        effort: Option<EffortLevel>,
+        traces: Option<Arc<LocalTraceStore>>,
+    ) -> Result<Arc<dyn AgentProvider>, AgentError> {
+        let approval_mode = mode.ok_or_else(|| {
+            AgentError::Configuration("model change omitted approval mode".into())
+        })?;
+        let mut normalized = self.clone().with_approval_mode(approval_mode)?;
+        normalized.effort_level = None;
+        if let Some(level) = effort {
+            normalized = normalized.with_effort_level(level)?;
+        }
+        normalized.traces = traces.unwrap_or_else(|| self.traces.clone());
+        Ok(Arc::new(normalized))
     }
     fn identity(&self) -> ProviderIdentity {
         ProviderIdentity::new(

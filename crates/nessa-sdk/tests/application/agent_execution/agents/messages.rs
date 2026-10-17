@@ -1,6 +1,7 @@
 //! Actual message bytes are validated independently of caller token estimates,
 //! and a message's images are refused by type before anything is accepted.
 use super::*;
+use nessa_sdk::application::agent_execution::providers::HarnessHostIdentity;
 use nessa_sdk::application::dto::ImageInputLimitsDto;
 use nessa_sdk::domain::common::value_objects::{ImageMediaType, Sha256Digest};
 use nessa_sdk::domain::model_metadata::value_objects::OfferedEffortLevels;
@@ -248,6 +249,9 @@ fn image_capabilities_ref(takes_text: bool) -> &'static EffectiveCapabilities {
     capabilities.get_or_init(|| image_capabilities(takes_text))
 }
 impl AgentProvider for ImageProvider {
+    fn harness_host_identity(&self) -> HarnessHostIdentity<'_> {
+        HarnessHostIdentity::local()
+    }
     fn identity(&self) -> ProviderIdentity {
         ProviderIdentity::new("anthropic", "fixture", "workspace").unwrap()
     }

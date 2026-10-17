@@ -124,6 +124,8 @@ async fn gateway_child() {
     if !root.join("seeded").exists() {
         let provider = ProviderIdentity::new("fixture", "model", "workspace").unwrap();
         let snapshot = SessionSnapshot {
+            model_change: None,
+            current_configuration: None,
             id: session.clone(),
             provider: provider.clone(),
             provider_context: ProviderContext::Absent,

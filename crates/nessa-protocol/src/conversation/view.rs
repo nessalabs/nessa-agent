@@ -21,7 +21,7 @@ use nessa_sdk::{
 };
 use serde::Serialize;
 
-/// Internal fixed selection used to enrich the product view from the same
+/// Current confirmed selection used to enrich the product view from the same
 /// catalog that powers agents.list. Equality lets Projection own replacements.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ConversationSelectionView {
@@ -38,6 +38,10 @@ pub struct ConversationView {
     pub selection: Option<ConversationSelectionView>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub approval_mode_change: Option<ConversationApprovalModeChangeView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_change: Option<ConversationModelChangeView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_change_effect: Option<ConversationModelChangeEffect>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub runtime: Option<ConversationRuntime>,
     pub conversation_id: String,
@@ -134,6 +138,29 @@ pub struct ConversationApprovalModeChangeView {
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ConversationApprovalModeChangeStatus {
+    Changing,
+    RecoveryRequired,
+}
+/// An acknowledged model change follows the native harness boundary.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ConversationModelChangeEffect {
+    /// Claude uses the selection for subsequent responses.
+    SubsequentResponses,
+    /// Codex snapshots the selection when the next native turn starts.
+    NextTurn,
+}
+/// The pending request is separate from the last durably confirmed selection.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationModelChangeView {
+    pub request_id: String,
+    pub requested_model: String,
+    pub status: ConversationModelChangeStatus,
+}
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationModelChangeStatus {
     Changing,
     RecoveryRequired,
 }

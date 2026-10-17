@@ -2,6 +2,7 @@
 //! Default cleanup releases owned execution; explicit fault reports vary resource
 //! status independently of diagnostic text. Native input keeps its target's outcome.
 use super::*;
+use nessa_sdk::application::agent_execution::providers::HarnessHostIdentity;
 use std::{
     future::{poll_fn, Future},
     sync::{
@@ -101,6 +102,9 @@ struct WorkflowBackend {
     shutdowns: Mutex<Vec<SessionCloseRequest>>,
 }
 impl AgentProvider for WorkflowProvider {
+    fn harness_host_identity(&self) -> HarnessHostIdentity<'_> {
+        HarnessHostIdentity::local()
+    }
     fn identity(&self) -> ProviderIdentity {
         ProviderIdentity::new("workflow-conformance", "fixture", "local").unwrap()
     }

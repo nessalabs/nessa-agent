@@ -305,6 +305,10 @@
     "conversation.peek": {
       "params": "ConversationReadParams",
       "grant": "conversation.write"
+    },
+    "conversation.setModel": {
+      "params": "ConversationSetModelParams",
+      "grant": "conversation.write"
     }
   },
   "events": {

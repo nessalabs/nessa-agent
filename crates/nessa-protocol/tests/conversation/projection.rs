@@ -7,6 +7,7 @@ use crate::conversation::projection::{
     bound_view, bound_view_within, clipped, Projection, MAX_TEXT, MAX_VIEW_BYTES,
 };
 use crate::conversation::view::{
+    ConversationModelChangeEffect, ConversationModelChangeStatus, ConversationModelChangeView,
     ConversationPermissionAsk, ConversationPermissionOptionEffect, ConversationRuntime,
     ConversationSelectionView, ConversationTranscriptState,
 };
@@ -361,6 +362,8 @@ fn deadline_cancelled_review(deadline: PermissionReviewDeadline) -> ExecutionEve
 }
 fn review_snapshot(events: Vec<ExecutionEvent>) -> SessionSnapshot {
     SessionSnapshot {
+        model_change: None,
+        current_configuration: None,
         id: SessionId::new("conversation").unwrap(),
         provider: ProviderIdentity::new("fixture", "model", "configuration").unwrap(),
         provider_context: ProviderContext::Recorded(
@@ -3216,4 +3219,79 @@ fn publishing_mode_without_a_selection_does_not_invent_one() {
     projection.approval_mode(ConversationApprovalMode::Auto);
     assert!(projection.read().selection.is_none());
     assert_eq!(projection.read().revision, before.revision);
+}
+
+#[test]
+fn model_selection_publishes_acknowledged_settings_in_one_revision() {
+    let mut projection = projection();
+    projection.selection(ConversationSelectionView {
+        agent: AgentId::Claude,
+        model: "before".into(),
+        approval_mode: ConversationApprovalMode::Auto,
+    });
+    let before = projection.read();
+    projection.model_selection(
+        "after".into(),
+        ConversationApprovalMode::Ask,
+        ConversationModelChangeEffect::SubsequentResponses,
+    );
+    let after = projection.read();
+    assert_ne!(after.revision, before.revision);
+    let selection = after.selection.as_ref().unwrap();
+    assert_eq!(selection.agent, AgentId::Claude);
+    assert_eq!(selection.model, "after");
+    assert_eq!(selection.approval_mode, ConversationApprovalMode::Ask);
+    assert_eq!(
+        after.model_change_effect,
+        Some(ConversationModelChangeEffect::SubsequentResponses)
+    );
+    projection.model_selection(
+        "after".into(),
+        ConversationApprovalMode::Ask,
+        ConversationModelChangeEffect::SubsequentResponses,
+    );
+    assert_eq!(projection.read().revision, after.revision);
+}
+
+#[test]
+fn pending_model_request_retains_confirmed_selection_and_has_its_own_revision() {
+    let mut projection = projection();
+    projection.selection(ConversationSelectionView {
+        agent: AgentId::Codex,
+        model: "confirmed".into(),
+        approval_mode: ConversationApprovalMode::Ask,
+    });
+    let confirmed = projection.read();
+    let pending = |request: &str| {
+        projection.read_with_model_change(Some(ConversationModelChangeView {
+            request_id: request.into(),
+            requested_model: "requested".into(),
+            status: ConversationModelChangeStatus::Changing,
+        }))
+    };
+    let first = pending("first");
+    assert_eq!(first.selection, confirmed.selection);
+    assert_eq!(
+        first.model_change.as_ref().unwrap().requested_model,
+        "requested"
+    );
+    assert_ne!(first.revision, confirmed.revision);
+    assert_eq!(first.revision, pending("first").revision);
+    assert_ne!(first.revision, pending("second").revision);
+    assert_eq!(projection.read().revision, confirmed.revision);
+}
+
+#[test]
+fn publishing_model_without_a_selection_does_not_invent_one() {
+    let mut projection = projection();
+    let before = projection.read();
+    projection.model_selection(
+        "model".into(),
+        ConversationApprovalMode::Ask,
+        ConversationModelChangeEffect::NextTurn,
+    );
+    let after = projection.read();
+    assert!(after.selection.is_none());
+    assert!(after.model_change_effect.is_none());
+    assert_eq!(after.revision, before.revision);
 }

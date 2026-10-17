@@ -5,6 +5,8 @@
 //!                           |-> ProviderSession -> ProviderSessionBackend
 //!                           |-> ExecutionEventStream
 //! active ExecutionId -> steer -> Injected / PromptRequired
+//! ModelChange::between -> validated factory target -> ModelChangeEffect
+//!                         -> durable ModelChangeRecord / current configuration
 //! SessionCloseRequest -> backend close -> CleanupReport (resources + audit)
 //! failed open -> ProviderOpenError -> ProviderCleanup (when resources remain)
 //! executable snapshot -> per-generation use guard -> release after confirmed cleanup
@@ -20,7 +22,7 @@
 //! Diagnostic errors never determine admission or resource ownership.
 //! ProviderOperationCapabilities flows from the live backend into ProviderSession,
 //! which resolves the private effective OperationCapabilities read by Agent;
-//! immutable model capabilities remain a separate admission contract.
+//! model capabilities are owned snapshots of the acknowledged current configuration.
 //! ApprovalModeChoice is binding-owned catalog data. A live preset change goes
 //! through ProviderSessionBackend and is acknowledged only after that binding
 //! verifies the effective provider configuration; an uncertain generation is
@@ -40,6 +42,8 @@
 //! HarnessHost is where a binding starts its harness when that is another
 //! machine: the binding stays here and speaks its agent protocol over the
 //! harness's standard streams, which the host carries (`AgentProvider::on_host`).
+//! HarnessHostIdentity borrows that captured owner for live factory comparisons;
+//! saved configuration fingerprints do not contain this process-local authority.
 
 mod approval;
 mod close;
@@ -69,7 +73,8 @@ pub(crate) use finalized_execution::{
     FinalizedExecutionProjection, FinalizedExecutionSource, FinalizedFailureComponent,
 };
 pub use harness_host::{
-    HarnessCleanupFuture, HarnessControl, HarnessHost, HarnessLaunch, HarnessProcess,
+    HarnessCleanupFuture, HarnessControl, HarnessHost, HarnessHostIdentity, HarnessLaunch,
+    HarnessProcess,
 };
 pub use identity::ProviderIdentity;
 pub use images::{ImageInputRefusal, UserImageError, UserImageFuture, UserImageSource};
@@ -95,9 +100,15 @@ pub use reports::{
     CleanupFuture, CleanupReport, ExecutionReport, ExecutionReportSource, ObservationFailure,
     ObservationFailureCause, ProviderExecutionFuture, ProviderExecutionReply,
     ProviderObservationFuture, ProviderOperationFailure, ProviderOperationFuture,
-    ProviderOperationResult, ProviderSessionState, ResourceCleanup,
+    ProviderOperationResult, ProviderOperationStage, ProviderSessionState, ResourceCleanup,
 };
 pub(crate) use session::validate_configured_input;
 pub use session::ProviderSession;
 
 pub use steering::SteeringOutcome;
+
+mod model_change;
+pub use model_change::{
+    ModelChange, ModelChangeEffect, ModelChangeRecord, ModelChangeTiming, ModelConfiguration,
+    SessionConfigurationKind, SessionConfigurationRecord,
+};

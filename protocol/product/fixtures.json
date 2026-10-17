@@ -876,5 +876,22 @@
         "outcome": "failed"
       }
     ]
+  },
+  "ConversationSetModelParams": {
+    "conversationId": "00000000-0000-4000-8000-000000000001",
+    "requestId": "mode-1",
+    "model": "claude-haiku-4-5-20251001"
+  },
+  "ConversationSetModelResult": {
+    "requestId": "mode-1",
+    "model": "claude-haiku-4-5-20251001",
+    "approvalMode": "ask",
+    "effect": "subsequentResponses"
+  },
+  "ModelChangeEffect": "nextTurn",
+  "ModelChange": {
+    "requestId": "mode-1",
+    "requestedModel": "claude-haiku-4-5-20251001",
+    "status": "changing"
   }
 }

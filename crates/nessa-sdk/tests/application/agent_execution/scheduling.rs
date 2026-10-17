@@ -1,5 +1,6 @@
 //! Deterministic invocation admission, dispatch, steering, and cleanup interleavings.
 //! Retry tests share these gated providers through the retries module.
+use nessa_sdk::application::agent_execution::providers::HarnessHostIdentity;
 use nessa_sdk::application::agent_execution::providers::{ProviderOpenFuture, ProviderOpenRequest};
 mod retries;
 use super::{agents::MemoryStorage, support::*};
@@ -49,6 +50,9 @@ impl ExecutionEventStream for Events {
 }
 struct GatedFactory(Arc<GatedProvider>);
 impl AgentProvider for GatedFactory {
+    fn harness_host_identity(&self) -> HarnessHostIdentity<'_> {
+        HarnessHostIdentity::local()
+    }
     /// Ask, so a grant's checked turn may be sent here.
     fn approval_mode(
         &self,

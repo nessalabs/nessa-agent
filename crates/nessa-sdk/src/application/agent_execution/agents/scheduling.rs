@@ -843,8 +843,8 @@ impl Agent {
         kind: InvocationKind,
         candidates: NoteCandidates,
     ) -> Result<QueueAdmission, AgentError> {
-        validate_configured_input(self.capabilities(), &input)?;
         let mut scheduler = self.inner.scheduler.lock().await;
+        validate_configured_input(&self.capabilities(), &input)?;
         let mode = match kind {
             InvocationKind::Queued => SubmissionMode::Queued,
             InvocationKind::Steering => SubmissionMode::BoundarySteering,
@@ -864,10 +864,8 @@ impl Agent {
             };
         }
         let work = self.inner.lifecycle.accept_waiting_work()?;
-        // Captured with the permit. Close detaches the attachment before it
-        // takes this scheduler lock, so a later read would name the binding
-        // preset for a generation that was admitted under the live one.
-        let approval_mode = self.approval_mode_at(work.live_generation());
+        // Settings are captured before the admission save while controls share this lock.
+        let approval_mode = self.approval_mode();
         scheduler
             .queue
             .validate_enqueue(&input.execution_id)
@@ -920,7 +918,8 @@ impl Agent {
                 audit_actor.clone(),
             )
             .with_approval_context(approval_mode, admission_generation)
-            .with_effort_level(effort_level),
+            .with_effort_level(effort_level)
+            .with_model(self.provider_identity()),
         );
         let audit = self
             .record_scheduling_audit(audit_record, "queue_admission")
@@ -1508,8 +1507,8 @@ impl Agent {
         // The same check `invoke` and `accept_work` run before a save. A
         // message the selected model cannot take is refused here, with
         // nothing written and nothing handed to the provider.
-        validate_configured_input(self.capabilities(), &input)?;
         let mut scheduler = self.inner.scheduler.lock().await;
+        validate_configured_input(&self.capabilities(), &input)?;
         if let Some(recovered) = submissions::recover(
             &self.inner.manager,
             &scheduler.receipts,
@@ -1523,12 +1522,7 @@ impl Agent {
         }
         let close_notice = self.inner.lifecycle.close_notice();
         *work_owner = Some(self.inner.lifecycle.accept_waiting_work()?);
-        let approval_mode = self.approval_mode_at(
-            work_owner
-                .as_ref()
-                .expect("admitted steering owner")
-                .live_generation(),
-        );
+        let approval_mode = self.approval_mode();
         scheduler
             .queue
             .validate_enqueue(&input.execution_id)
@@ -1714,7 +1708,8 @@ impl Agent {
                         audit_actor.clone(),
                     )
                     .with_approval_context(approval_mode, admission_generation)
-                    .with_effort_level(effort_level),
+                    .with_effort_level(effort_level)
+                    .with_model(self.provider_identity()),
                 );
                 let audit = self
                     .record_scheduling_audit(audit_record, "steering_queue_admission")

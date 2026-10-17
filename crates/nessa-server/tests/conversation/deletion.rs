@@ -2,6 +2,9 @@
 //! agent is stopped before anything is erased, the deletion is recorded before
 //! its history goes, and a repeat finishes whatever did not.
 use super::*;
+use crate::conversation::application::{
+    ConversationModelApplication, ConversationModelRequest, ConversationModelRequestState,
+};
 use crate::conversation::{
     application::{
         AttachmentReleaseCause, ConversationAccessPolicyEvaluator, ConversationCreation,
@@ -722,6 +725,43 @@ async fn an_eraser_answering_capacity_is_a_failure_not_a_slot_wait() {
 /// A repository whose tombstone writes all fail.
 struct Unfenceable(Arc<MemoryRepository>);
 impl ConversationRepository for Unfenceable {
+    fn begin_model_change(
+        &self,
+        request: ConversationModelRequest,
+    ) -> ConversationFuture<'_, ConversationModelRequest> {
+        self.0.begin_model_change(request)
+    }
+    fn pending_model_change(
+        &self,
+        id: &ConversationId,
+    ) -> ConversationFuture<'_, Option<ConversationModelRequest>> {
+        self.0.pending_model_change(id)
+    }
+    fn model_change(
+        &self,
+        id: &ConversationId,
+        request_id: &str,
+    ) -> ConversationFuture<'_, Option<ConversationModelRequest>> {
+        self.0.model_change(id, request_id)
+    }
+    fn observe_model_application(
+        &self,
+        id: &ConversationId,
+        request_id: &str,
+        application: ConversationModelApplication,
+    ) -> ConversationFuture<'_, ConversationModelRequest> {
+        self.0
+            .observe_model_application(id, request_id, application)
+    }
+    fn finish_model_change(
+        &self,
+        id: &ConversationId,
+        request_id: &str,
+        state: ConversationModelRequestState,
+    ) -> ConversationFuture<'_, ConversationModelRequest> {
+        self.0.finish_model_change(id, request_id, state)
+    }
+
     fn load(&self, id: &ConversationId) -> ConversationFuture<'_, Option<Conversation>> {
         self.0.load(id)
     }
@@ -870,6 +910,43 @@ impl Faulty {
     }
 }
 impl ConversationRepository for Faulty {
+    fn begin_model_change(
+        &self,
+        request: ConversationModelRequest,
+    ) -> ConversationFuture<'_, ConversationModelRequest> {
+        self.repository.begin_model_change(request)
+    }
+    fn pending_model_change(
+        &self,
+        id: &ConversationId,
+    ) -> ConversationFuture<'_, Option<ConversationModelRequest>> {
+        self.repository.pending_model_change(id)
+    }
+    fn model_change(
+        &self,
+        id: &ConversationId,
+        request_id: &str,
+    ) -> ConversationFuture<'_, Option<ConversationModelRequest>> {
+        self.repository.model_change(id, request_id)
+    }
+    fn observe_model_application(
+        &self,
+        id: &ConversationId,
+        request_id: &str,
+        application: ConversationModelApplication,
+    ) -> ConversationFuture<'_, ConversationModelRequest> {
+        self.repository
+            .observe_model_application(id, request_id, application)
+    }
+    fn finish_model_change(
+        &self,
+        id: &ConversationId,
+        request_id: &str,
+        state: ConversationModelRequestState,
+    ) -> ConversationFuture<'_, ConversationModelRequest> {
+        self.repository.finish_model_change(id, request_id, state)
+    }
+
     fn load(&self, id: &ConversationId) -> ConversationFuture<'_, Option<Conversation>> {
         match self.loads.lock().unwrap().pop_front().flatten() {
             Some(fault) => Self::answer(fault),
@@ -1969,6 +2046,43 @@ struct PausingRepository {
     pause: StdMutex<Option<LoadPause>>,
 }
 impl ConversationRepository for PausingRepository {
+    fn begin_model_change(
+        &self,
+        request: ConversationModelRequest,
+    ) -> ConversationFuture<'_, ConversationModelRequest> {
+        self.inner.begin_model_change(request)
+    }
+    fn pending_model_change(
+        &self,
+        id: &ConversationId,
+    ) -> ConversationFuture<'_, Option<ConversationModelRequest>> {
+        self.inner.pending_model_change(id)
+    }
+    fn model_change(
+        &self,
+        id: &ConversationId,
+        request_id: &str,
+    ) -> ConversationFuture<'_, Option<ConversationModelRequest>> {
+        self.inner.model_change(id, request_id)
+    }
+    fn observe_model_application(
+        &self,
+        id: &ConversationId,
+        request_id: &str,
+        application: ConversationModelApplication,
+    ) -> ConversationFuture<'_, ConversationModelRequest> {
+        self.inner
+            .observe_model_application(id, request_id, application)
+    }
+    fn finish_model_change(
+        &self,
+        id: &ConversationId,
+        request_id: &str,
+        state: ConversationModelRequestState,
+    ) -> ConversationFuture<'_, ConversationModelRequest> {
+        self.inner.finish_model_change(id, request_id, state)
+    }
+
     fn load(&self, id: &ConversationId) -> ConversationFuture<'_, Option<Conversation>> {
         let call = self.loads.fetch_add(1, Ordering::SeqCst);
         let pause = {

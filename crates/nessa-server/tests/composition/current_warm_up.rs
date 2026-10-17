@@ -12,6 +12,7 @@ use crate::{
     conversation::application::ConversationAgent,
     conversation_test_support::{AcceptingAudit, Provider, ProviderFactory, TestClock},
 };
+use nessa_sdk::application::agent_execution::providers::HarnessHostIdentity;
 use nessa_sdk::{
     application::agent_execution::providers::{
         AgentProvider, CleanupFuture, CleanupReport, ProviderCleanup, ProviderIdentity,
@@ -76,6 +77,9 @@ struct IdentifiedProvider {
 }
 
 impl AgentProvider for IdentifiedProvider {
+    fn harness_host_identity(&self) -> HarnessHostIdentity<'_> {
+        HarnessHostIdentity::local()
+    }
     fn identity(&self) -> ProviderIdentity {
         ProviderIdentity::new("opencode", self.model, self.model).unwrap()
     }
@@ -110,6 +114,9 @@ impl ProviderCleanup for RetainedCleanup {
 }
 
 impl AgentProvider for RetainedOpenProvider {
+    fn harness_host_identity(&self) -> HarnessHostIdentity<'_> {
+        self.inner.harness_host_identity()
+    }
     fn identity(&self) -> ProviderIdentity {
         self.inner.identity()
     }

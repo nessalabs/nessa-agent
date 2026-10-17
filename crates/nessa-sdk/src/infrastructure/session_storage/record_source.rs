@@ -1260,6 +1260,8 @@ mod tests {
         let lease = storage.open(session.clone()).await.unwrap();
         let provider = ProviderIdentity::new("provider", "model", "workspace").unwrap();
         let mut snapshot = SessionSnapshot {
+            model_change: None,
+            current_configuration: None,
             id: session.clone(),
             provider: provider.clone(),
             provider_context: ProviderContext::Absent,
@@ -3440,6 +3442,8 @@ mod tests {
             context: ProviderContext::Absent,
         };
         let snapshot = SessionSnapshot {
+            model_change: None,
+            current_configuration: None,
             id: session.clone(),
             provider,
             provider_context: ProviderContext::Absent,

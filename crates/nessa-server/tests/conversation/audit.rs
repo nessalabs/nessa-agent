@@ -38,6 +38,7 @@ use nessa_sdk::domain::agent_execution::{
     ExecutionError,
 };
 use nessa_sdk::infrastructure::session_storage::{InMemoryStorage, RuntimeMessageCommitClock};
+use serde_json::Value;
 use std::fs;
 struct TestClock;
 impl Clock for TestClock {
@@ -1318,3 +1319,126 @@ fn audit_maps_why_a_hooks_launch_happened() {
 
 #[path = "audit/physical.rs"]
 mod physical;
+
+#[tokio::test]
+async fn native_configuration_audit_keeps_requested_and_acknowledged_settings_separate() {
+    use nessa_sdk::application::agent_execution::providers::ApprovalMode;
+    let factory = Arc::new(ProviderFactory::default());
+    let audit = Arc::new(RecordingModeExecutionAudit::default());
+    let manager = SessionManager::open(
+        Some(SessionId::new("configuration-session").unwrap()),
+        Arc::new(InMemoryStorage::new()),
+        Arc::new(RuntimeMessageCommitClock::new()),
+    )
+    .await
+    .unwrap();
+    let agent = Agent::prepare(
+        Arc::new(Provider::new(factory.clone())),
+        manager,
+        audit.clone(),
+    )
+    .await
+    .unwrap();
+    let attachment = agent
+        .authorize_attachment(AttachmentRequest::CallerRequested(actor()))
+        .unwrap();
+    agent
+        .start_attachment(attachment)
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
+    agent
+        .set_approval_mode(
+            ApprovalMode::Auto,
+            ActionContext::new("person", "window", "approval-choice").unwrap(),
+        )
+        .await
+        .unwrap();
+    let target = Arc::new(Provider::new(factory.clone()).with_model("second-model"));
+    agent
+        .set_model(
+            target.clone(),
+            ActionContext::new("person", "window", "model-choice").unwrap(),
+        )
+        .await
+        .unwrap();
+    assert!(agent
+        .set_model(
+            target,
+            ActionContext::new("person", "window", "unchanged-model").unwrap()
+        )
+        .await
+        .is_err());
+    *factory.mode_failure.lock().unwrap() =
+        Some(AgentError::Transport("controlled preset failure".into()));
+    assert!(agent
+        .set_approval_mode(
+            ApprovalMode::Full,
+            ActionContext::new("person", "window", "failed-preset").unwrap()
+        )
+        .await
+        .is_err());
+    let values = audit
+        .records
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|record| matches!(record, ExecutionAuditRecord::ConfigurationControlled(_)))
+        .map(record_value)
+        .collect::<Vec<_>>();
+    let model = values
+        .iter()
+        .filter(|value| value["actor"]["requestId"] == "model-choice")
+        .collect::<Vec<_>>();
+    assert_eq!(model.len(), 3);
+    for record in &model {
+        assert_eq!(record["kind"], "configuration_control");
+        assert_eq!(record["sessionId"], "configuration-session");
+        assert!(!record["attachmentGeneration"].as_str().unwrap().is_empty());
+        assert_eq!(record["before"]["provider"]["name"], "gateway-test");
+        assert_eq!(record["before"]["provider"]["modelId"], "test");
+        assert_eq!(record["before"]["provider"]["context"], "test");
+        assert_eq!(record["before"]["configuration"]["approvalMode"], "auto");
+        assert_eq!(record["request"]["kind"], "model");
+        assert_eq!(record["request"]["provider"]["modelId"], "second-model");
+        assert_eq!(record["actor"]["principalId"], "person");
+        assert_eq!(record["actor"]["surfaceId"], "window");
+        assert_eq!(record["cause"], "caller_requested");
+    }
+    assert_eq!(model[0]["stage"], "requested");
+    assert_eq!(model[0]["acknowledged"], Value::Null);
+    for record in &model[1..] {
+        assert_eq!(
+            record["acknowledged"]["provider"]["modelId"],
+            "second-model"
+        );
+        assert_eq!(
+            record["acknowledged"]["configuration"]["approvalMode"],
+            "ask"
+        );
+    }
+    assert_eq!(model[1]["stage"], "acknowledged");
+    assert_eq!(model[2]["stage"], "applied");
+    for (request, stage) in [("unchanged-model", "refused"), ("failed-preset", "failed")] {
+        let record = values
+            .iter()
+            .find(|value| value["actor"]["requestId"] == request && value["stage"] == stage)
+            .unwrap();
+        assert_eq!(record["acknowledged"], Value::Null);
+        assert_eq!(record["before"]["provider"]["modelId"], "second-model");
+    }
+    let approval = values
+        .iter()
+        .find(|value| {
+            value["actor"]["requestId"] == "approval-choice" && value["stage"] == "applied"
+        })
+        .unwrap();
+    assert_eq!(approval["request"]["kind"], "approval_mode");
+    assert_eq!(approval["request"]["approvalMode"], "auto");
+    assert_eq!(
+        approval["acknowledged"]["configuration"]["approvalMode"],
+        "auto"
+    );
+    agent.close(actor()).await.unwrap();
+}

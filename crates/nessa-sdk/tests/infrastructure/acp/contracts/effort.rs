@@ -304,7 +304,7 @@ fn a_binding_selects_only_a_catalogue_level() {
 }
 
 #[tokio::test]
-async fn a_live_level_is_kept_by_a_restored_connection_and_reset_by_a_new_attachment() {
+async fn a_live_level_is_kept_by_a_restored_connection_and_later_attachment() {
     let _slot = process_test_slot().await;
     let (root, binding) = claude("echo", CLAUDE_LEVELS);
     let binding = binding.with_effort_level(level("low")).unwrap();
@@ -313,18 +313,18 @@ async fn a_live_level_is_kept_by_a_restored_connection_and_reset_by_a_new_attach
         .set_effort_level(level("max"), close_action())
         .await
         .unwrap();
-    // Closed and attached again: a new context, opened at the binding's level.
+    // Reattachment retains the durably confirmed factory setting.
     agent.close(close_action()).await.unwrap();
     attach_agent(&agent, AttachmentRequest::CallerRequested(close_action()))
         .await
         .unwrap();
-    assert_eq!(agent.effort_level(), Some(level("low")));
+    assert_eq!(agent.effort_level(), Some(level("max")));
     let sent: Vec<_> = lines(&root, "effort-steps")
         .into_iter()
         .filter(|step| step[0] == "effort")
         .map(|step| step[1].as_str().unwrap().to_owned())
         .collect();
-    assert_eq!(sent, ["low", "max", "low"]);
+    assert_eq!(sent, ["low", "max", "max"]);
     assert_eq!(
         agent
             .invoke(prompt("hello"), Submitter::owner(close_action()))
@@ -479,7 +479,7 @@ async fn a_failed_change_keeps_the_previous_level_on_record() {
 }
 
 #[tokio::test]
-async fn detached_the_level_is_the_bindings_and_work_admitted_then_says_so() {
+async fn detached_work_keeps_the_durably_confirmed_effort() {
     let _slot = process_test_slot().await;
     let audit = Arc::new(AdmissionAudit::default());
     let (_root, binding) = claude("echo", CLAUDE_LEVELS);
@@ -491,8 +491,8 @@ async fn detached_the_level_is_the_bindings_and_work_admitted_then_says_so() {
         .unwrap();
     assert_eq!(agent.effort_level(), Some(level("max")));
     agent.close(close_action()).await.unwrap();
-    // No attachment: the next one opens at the binding's level, and says so now.
-    assert_eq!(agent.effort_level(), Some(level("low")));
+    // No attachment: the confirmed setting owns the next opening and admission.
+    assert_eq!(agent.effort_level(), Some(level("max")));
     // A change needs an attachment, whatever the level: not a refusal of the level.
     let failure = agent
         .set_effort_level(level("high"), close_action())
@@ -508,12 +508,12 @@ async fn detached_the_level_is_the_bindings_and_work_admitted_then_says_so() {
         .enqueue(prompt("later"), Submitter::owner(close_action()))
         .await
         .unwrap();
-    assert_eq!(*audit.0.lock().unwrap(), [Some("low".to_owned())]);
+    assert_eq!(*audit.0.lock().unwrap(), [Some("max".to_owned())]);
     attach_agent(&agent, AttachmentRequest::CallerRequested(close_action()))
         .await
         .unwrap();
     assert_eq!(receipt.wait().await, Ok(ExecutionOutcome::Completed));
-    assert_eq!(agent.effort_level(), Some(level("low")));
+    assert_eq!(agent.effort_level(), Some(level("max")));
     agent.close(close_action()).await.unwrap();
 }
 

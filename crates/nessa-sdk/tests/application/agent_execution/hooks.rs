@@ -6,6 +6,7 @@ use nessa_sdk::application::agent_execution::hooks::{
     AfterInvocation, AfterInvocationEvent, BeforeInvocation, HookError, HookFailure,
     InvocationContext, InvocationHook,
 };
+use nessa_sdk::application::agent_execution::providers::HarnessHostIdentity;
 use nessa_sdk::application::agent_execution::providers::{ProviderOpenFuture, ProviderOpenRequest};
 use nessa_sdk::application::agent_execution::{agents::Agent, providers::ProviderIdentity};
 use std::{future::poll_fn, task::Poll, time::Duration};
@@ -91,6 +92,9 @@ impl ExecutionEventStream for EmptyEvents {
     }
 }
 impl AgentProvider for HookProvider {
+    fn harness_host_identity(&self) -> HarnessHostIdentity<'_> {
+        HarnessHostIdentity::local()
+    }
     fn identity(&self) -> ProviderIdentity {
         ProviderIdentity::new("hook-fixture", "fixture", "test").unwrap()
     }
@@ -575,6 +579,9 @@ impl ExecutionEventStream for FailedEvents {
     }
 }
 impl AgentProvider for ObservationFailureProvider {
+    fn harness_host_identity(&self) -> HarnessHostIdentity<'_> {
+        HarnessHostIdentity::local()
+    }
     fn identity(&self) -> ProviderIdentity {
         ProviderIdentity::new("observation-fixture", "test", "test").unwrap()
     }

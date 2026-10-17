@@ -1,3 +1,8 @@
+use crate::application::agent_execution::providers::ApprovalMode;
+use crate::application::agent_execution::providers::ModelChange;
+use crate::application::agent_execution::providers::ModelChangeEffect;
+use crate::domain::model_metadata::value_objects::EffortLevel;
+
 use super::super::{
     executions::{
         event_queue::{EventQueueBudget, EventReceiver},
@@ -101,7 +106,7 @@ pub(crate) async fn open<P: AcpProfile + Clone + Sync>(
         permission_authority: PermissionAuthoritySource::default(),
         process,
         config,
-        capabilities: capabilities.clone(),
+        capabilities: ControlMutex::new(capabilities.clone()),
         profile: ControlMutex::new(profile),
         audit,
         session_key,
@@ -183,7 +188,7 @@ struct WorkerFactory<P> {
     permission_authority: PermissionAuthoritySource,
     process: ProcessFactory,
     config: AcpConfig,
-    capabilities: EffectiveCapabilities,
+    capabilities: ControlMutex<EffectiveCapabilities>,
     profile: ControlMutex<P>,
     audit: Arc<dyn ExecutionAudit>,
     /// The conversation this factory was opened for, when the request named one.
@@ -303,7 +308,10 @@ impl<P: AcpProfile + Clone> WorkerFactory<P> {
                 scope,
                 launched_profile,
                 self.config.clone(),
-                self.capabilities.clone(),
+                self.capabilities
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .clone(),
                 receiver,
                 close_receiver,
                 finished,
@@ -783,10 +791,60 @@ impl<P: AcpProfile + Clone + Sync> ProviderSessionBackend for AcpSession<P> {
         })
     }
 
-    fn set_approval_mode(
+    fn set_model(
         &self,
-        mode: crate::application::agent_execution::providers::ApprovalMode,
-    ) -> ProviderOperationFuture<'_, ()> {
+        change: ModelChange,
+        capabilities: EffectiveCapabilities,
+    ) -> ProviderOperationFuture<'_, ModelChangeEffect> {
+        Box::pin(async move {
+            let (sender, receiver) = oneshot::channel();
+            let commands = self
+                .live_generation()
+                .await
+                .map_err(|error| {
+                    ProviderOperationFailure::new(
+                        error.cause,
+                        ProviderSessionState::CleanupRequired,
+                    )
+                })?
+                .commands
+                .clone();
+            enqueue(
+                &commands,
+                Command::SetModel(Box::new((change, capabilities.clone())), sender),
+            )
+            .map_err(|error| {
+                ProviderOperationFailure::new(error, ProviderSessionState::CleanupRequired)
+            })?;
+            let effect = receiver
+                .await
+                .unwrap_or(Err(AgentError::Closed))
+                .map_err(|error| {
+                    ProviderOperationFailure::new(error, ProviderSessionState::CleanupRequired)
+                })?;
+            let mode = effect.approval_mode().ok_or_else(|| {
+                ProviderOperationFailure::new(
+                    AgentError::Protocol("model reply omitted mode".into()),
+                    ProviderSessionState::CleanupRequired,
+                )
+            })?;
+            self.factory
+                .profile
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .retain_model_configuration(&capabilities, mode, effect.effort_level().cloned())
+                .map_err(|error| {
+                    ProviderOperationFailure::new(error, ProviderSessionState::CleanupRequired)
+                })?;
+            *self
+                .factory
+                .capabilities
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = capabilities;
+            Ok(effect)
+        })
+    }
+    fn set_approval_mode(&self, mode: ApprovalMode) -> ProviderOperationFuture<'_, ()> {
         Box::pin(async move {
             let (sender, receiver) = oneshot::channel();
             let commands = {
@@ -820,10 +878,7 @@ impl<P: AcpProfile + Clone + Sync> ProviderSessionBackend for AcpSession<P> {
             outcome
         })
     }
-    fn set_effort_level(
-        &self,
-        level: crate::domain::model_metadata::value_objects::EffortLevel,
-    ) -> ProviderOperationFuture<'_, ()> {
+    fn set_effort_level(&self, level: EffortLevel) -> ProviderOperationFuture<'_, ()> {
         Box::pin(async move {
             let (sender, receiver) = oneshot::channel();
             let commands = {
@@ -905,7 +960,14 @@ impl<P: AcpProfile + Clone + Sync> ProviderSessionBackend for AcpSession<P> {
             .profile
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .validate_execution(input, &self.factory.capabilities)?;
+            .validate_execution(
+                input,
+                &self
+                    .factory
+                    .capabilities
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+            )?;
         fits_one_frame(&input.user_message, self.factory.config.max_frame_bytes)
     }
     fn prepare_invocation(&self) -> ProviderOperationFuture<'_, ()> {
@@ -1292,15 +1354,13 @@ pub(crate) struct DispatchedPrompt {
 }
 
 pub(crate) enum Command {
-    SetApprovalMode(
-        crate::application::agent_execution::providers::ApprovalMode,
-        oneshot::Sender<Result<(), AgentError>>,
+    SetModel(
+        Box<(ModelChange, EffectiveCapabilities)>,
+        oneshot::Sender<Result<ModelChangeEffect, AgentError>>,
     ),
+    SetApprovalMode(ApprovalMode, oneshot::Sender<Result<(), AgentError>>),
     /// A reasoning effort level the application has already checked is offered.
-    SetEffortLevel(
-        crate::domain::model_metadata::value_objects::EffortLevel,
-        oneshot::Sender<Result<(), AgentError>>,
-    ),
+    SetEffortLevel(EffortLevel, oneshot::Sender<Result<(), AgentError>>),
     /// Native steering for the identified execution.
     Steer(
         ExecutionId,
