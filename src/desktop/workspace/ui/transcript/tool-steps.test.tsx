@@ -4,6 +4,7 @@ import { act } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { afterEach, beforeEach, expect, it } from "vitest"
 import type { StepPart } from "../../model/transcript"
+import { SiteIconProvider, type SiteIcon } from "./site-icon"
 import { ToolSteps } from "./tool-steps"
 
 let root: Root
@@ -60,4 +61,34 @@ it("folds a settled run into one line that opens to its steps in place and close
   await act(async () => line?.click())
   expect(labels()).toEqual([])
   expect(line?.hasAttribute("aria-controls")).toBe(false)
+})
+
+const fetched: StepPart[] = [
+  { kind: "step", step: "search", label: "Fetch", detail: "https://example.com/page" },
+  { kind: "step", step: "read", label: "Read", detail: "transcript.tsx" },
+]
+
+it("asks the composed site icon for a step on a web page, with the kind's icon as its fallback", async () => {
+  const asked: string[] = []
+  const siteIcon: SiteIcon = ({ href, fallback }) => {
+    asked.push(href)
+    return <span data-site-icon={href}>{fallback}</span>
+  }
+  await act(async () =>
+    root.render(
+      <SiteIconProvider render={siteIcon}>
+        <ToolSteps steps={fetched} />
+      </SiteIconProvider>,
+    ),
+  )
+  expect(asked).toEqual(["https://example.com/page"])
+  const site = host.querySelector("[data-site-icon]")
+  expect(site?.getAttribute("data-site-icon")).toBe("https://example.com/page")
+  expect(site?.querySelector("svg")).not.toBeNull()
+})
+
+it("draws only the kind's icon, and fetches nothing, when no site icon is composed", async () => {
+  await act(async () => root.render(<ToolSteps steps={fetched} />))
+  expect(host.querySelectorAll(".workspace-steps li > svg")).toHaveLength(2)
+  expect(host.querySelector("img")).toBeNull()
 })

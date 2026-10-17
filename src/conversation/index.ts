@@ -114,4 +114,4 @@ export {
   type AttachmentResourceUsage,
 } from "./application/queries/attachment-resources"
 
-export { ClipboardProvider, SendFailure } from "./ui/send-failure"
+export { ClipboardProvider, SendFailure, useClipboardWrite } from "./ui/send-failure"

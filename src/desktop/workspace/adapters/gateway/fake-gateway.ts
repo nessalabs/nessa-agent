@@ -16,6 +16,7 @@ import {
   NessaRpcError,
   createSubscriptionGate,
   subscriptionLimits,
+  viewEntryBounds,
   type ConnectionState,
   type ConversationApi,
   type ConversationListResult,
@@ -198,7 +199,7 @@ export function questionEntry(
 ): ConversationQuestionEntry {
   return {
     question: question.question ?? questionKey(question),
-    message: question.message.slice(0, 48),
+    message: clipped(question.message, viewEntryBounds.messageBytes),
   }
 }
 
@@ -214,8 +215,26 @@ export function reviewEntry(
   return {
     review: reviewKey(permission),
     origin: permission.origin.kind,
-    toolName: permission.toolName,
+    toolName: clipped(permission.toolName, viewEntryBounds.toolNameBytes),
   }
+}
+
+/**
+ * The start of `text` whose JSON encoding fits `max` UTF-8 bytes, cut between
+ * characters: what the gateway lists in an entry (`projection.rs`,
+ * `clipped_encoded`).
+ */
+function clipped(text: string, max: number): string {
+  const encoder = new TextEncoder()
+  let end = 0
+  let bytes = 0
+  for (const character of text) {
+    // The quotes JSON wraps one character in are not the text's.
+    bytes += encoder.encode(JSON.stringify(character)).byteLength - 2
+    if (bytes > max) break
+    end += character.length
+  }
+  return text.slice(0, end)
 }
 
 // Every review a fake view was built with, by its key: what any fake

@@ -20,6 +20,7 @@ import { transcriptFrom } from "../../adapters/gateway/gateway-views"
 import { GATEWAY_NOW_MS, view } from "../../adapters/gateway/fake-gateway"
 import { workspaceActions } from "../../adapters/store/slice"
 import { ClockProvider } from "../../../../clock"
+import { ClipboardProvider } from "../../../../conversation"
 import {
   emptyTranscript,
   type Transcript as TranscriptValue,
@@ -99,6 +100,9 @@ const conversation: TranscriptValue = {
   ],
 }
 
+/** The host's clipboard, as every test's window supplies it. */
+const clipboardWrite = vi.fn((_text: string) => Promise.resolve())
+
 async function shown(
   source = fakeSource(),
   shownConversation = conversation,
@@ -114,12 +118,14 @@ async function shown(
       <StrictMode>
         <Provider store={store}>
           <ClockProvider now={() => 1000}>
-            <Transcript
-              sessionId="b"
-              scrollRef={createRef()}
-              onHeadingVisible={onHeadingVisible}
-            />
-            <WorkspaceSendFailure sessionId="b" />
+            <ClipboardProvider write={clipboardWrite}>
+              <Transcript
+                sessionId="b"
+                scrollRef={createRef()}
+                onHeadingVisible={onHeadingVisible}
+              />
+              <WorkspaceSendFailure sessionId="b" />
+            </ClipboardProvider>
           </ClockProvider>
         </Provider>
       </StrictMode>,
@@ -129,7 +135,7 @@ async function shown(
 }
 
 const buttons = () =>
-  [...host.querySelectorAll<HTMLButtonElement>(".workspace-approval button")].map(
+  [...host.querySelectorAll<HTMLButtonElement>(".workspace-approval-actions button")].map(
     (button) => [
       button.getAttribute("aria-label") ?? button.textContent,
       button.disabled,
@@ -1043,12 +1049,138 @@ describe("a transcript", () => {
     })
     const deadline = host.querySelector<HTMLElement>("[data-deadline]")
     expect(deadline?.dataset.deadline).toBe("deny")
-    expect(deadline?.textContent).toBe(
+    // Quiet until its last seconds: the seconds left, the sentence its name.
+    expect(deadline?.textContent).toBe("30s")
+    expect(deadline?.getAttribute("aria-label")).toBe(
       "If nobody answers within 30 seconds, this is denied automatically.",
     )
     expect(host.querySelector(".workspace-approval-reason")?.textContent).toBe(
       "Runs the tests.",
     )
+  })
+
+  it("names what an agent's command reaches and runs, above the command itself", async () => {
+    const approval = conversation.approvals[0]
+    if (!approval) throw new Error("the sample asks for nothing")
+    const script =
+      'curl -s "https://tad2026.eventive.org/api" | head -c 1000; curl -I https://tad2026.eventive.org/'
+    await shown(fakeSource(), {
+      ...conversation,
+      approvals: [
+        {
+          ...approval,
+          command: `mcp__nessa__shell ${JSON.stringify({ command: script })}`,
+          reason: "mcp__nessa__shell",
+          deadline: {
+            waitMs: 30_000,
+            dueAtMs: 7_000,
+            effect: "deny",
+            reason: "No human answered in time.",
+            stopsTurn: false,
+          },
+        },
+      ],
+    })
+    const card = host.querySelector<HTMLElement>(".workspace-approval")
+    // A title that only names the tool is not repeated as a reason.
+    expect(card?.querySelector(".workspace-approval-reason")).toBeNull()
+    expect(card?.querySelector('[aria-label="Sites named"]')?.textContent).toBe(
+      "tad2026.eventive.org",
+    )
+    expect(card?.querySelector('[aria-label="Programs named"]')?.textContent).toBe(
+      "curl×2head",
+    )
+    // The last seconds say what will happen.
+    const deadline = card?.querySelector<HTMLElement>("[data-deadline]")
+    expect(deadline?.textContent).toBe("Denies in 6s")
+    expect(deadline?.hasAttribute("data-ending")).toBe(true)
+    // The command is always shown, a step per line, with the tool it calls.
+    expect(card?.querySelector(".workspace-approval-command")?.textContent).toBe(
+      '$ curl -s "https://tad2026.eventive.org/api" |\n  head -c 1000;\ncurl -I https://tad2026.eventive.org/',
+    )
+    expect(card?.querySelector(".workspace-approval-meta dd")?.textContent).toBe(
+      "mcp__nessa__shell",
+    )
+    // Short enough to show whole: nothing to unfold.
+    expect(card?.querySelector(".workspace-approval-disclose")).toBeNull()
+  })
+
+  it("shows a script it cannot follow exactly as sent", async () => {
+    const approval = conversation.approvals[0]
+    if (!approval) throw new Error("the sample asks for nothing")
+    await shown(fakeSource(), {
+      ...conversation,
+      approvals: [{ ...approval, command: 'echo "$(echo "a; b")"' }],
+    })
+    expect(host.querySelector(".workspace-approval-command")?.textContent).toBe(
+      '$ echo "$(echo "a; b")"',
+    )
+  })
+
+  it("folds a long script to its first lines, and says how many there are", async () => {
+    const approval = conversation.approvals[0]
+    if (!approval) throw new Error("the sample asks for nothing")
+    const steps = Array.from({ length: 8 }, (_, step) => `echo ${step}`)
+    await shown(fakeSource(), {
+      ...conversation,
+      approvals: [{ ...approval, command: steps.join("; ") }],
+    })
+    const command = () => host.querySelector(".workspace-approval-command")?.textContent
+    const unfold = host.querySelector<HTMLButtonElement>(".workspace-approval-disclose")
+    expect(unfold?.textContent).toBe("Show All 8 Lines")
+    expect(unfold?.getAttribute("aria-expanded")).toBe("false")
+    expect(command()).toBe("$ echo 0;\necho 1;\necho 2;\necho 3;")
+    // It unfolds the block it names.
+    const block = document.getElementById(unfold?.getAttribute("aria-controls") ?? "")
+    expect(block?.contains(host.querySelector(".workspace-approval-command"))).toBe(true)
+    // Folded or not, Copy Command copies the command as the agent sent it,
+    // through the host's clipboard.
+    clipboardWrite.mockClear()
+    await act(async () =>
+      host.querySelector<HTMLButtonElement>(".workspace-approval-copy")?.click(),
+    )
+    expect(clipboardWrite).toHaveBeenCalledWith(steps.join("; "))
+    await act(async () => unfold?.click())
+    expect(unfold?.getAttribute("aria-expanded")).toBe("true")
+    expect(command()).toBe(`$ ${steps.join(";\n")}`)
+  })
+
+  it("folds a script it cannot follow by its own lines, as sent", async () => {
+    const approval = conversation.approvals[0]
+    if (!approval) throw new Error("the sample asks for nothing")
+    const lines = Array.from({ length: 6 }, (_, line) => `echo $(date) ${line}`)
+    await shown(fakeSource(), {
+      ...conversation,
+      approvals: [{ ...approval, command: `${lines.join("\n")}\n` }],
+    })
+    // Six lines and the newline that ends them: short enough to show whole.
+    expect(host.querySelector(".workspace-approval-disclose")).toBeNull()
+    expect(host.querySelector(".workspace-approval-command")?.textContent).toBe(
+      `$ ${lines.join("\n")}\n`,
+    )
+    // Its words are not read as programs.
+    expect(host.querySelector('[aria-label="Programs named"]')).toBeNull()
+  })
+
+  it("starts the next approval folded, whatever the last one showed", async () => {
+    const approval = conversation.approvals[0]
+    if (!approval) throw new Error("the sample asks for nothing")
+    const long = Array.from({ length: 8 }, (_, step) => `echo ${step}`).join("; ")
+    const source = fakeSource()
+    await shown(source, {
+      ...conversation,
+      approvals: [{ ...approval, command: long }],
+    })
+    await act(async () =>
+      host.querySelector<HTMLButtonElement>(".workspace-approval-disclose")?.click(),
+    )
+    await shown(source, {
+      ...conversation,
+      approvals: [{ ...approval, id: `${approval.id}-next`, command: `${long}; echo 8` }],
+    })
+    expect(
+      host.querySelector(".workspace-approval-disclose")?.getAttribute("aria-expanded"),
+    ).toBe("false")
   })
 
   it("answers an approval once, resting its buttons while the answer is on its way", async () => {
@@ -1082,6 +1214,8 @@ describe("a transcript", () => {
     expect(host.querySelector(".workspace-approval-loading")?.textContent).toBe(
       "Loading this review before you can answer…",
     )
+    // Its command is only the tool's name until it is read: not shown as the command.
+    expect(host.querySelector(".workspace-approval-command")).toBeNull()
     expect(buttons().every(([, disabled]) => disabled)).toBe(true)
     await act(async () => {
       host.querySelector<HTMLButtonElement>(".workspace-approval [data-primary]")?.click()
@@ -1288,7 +1422,7 @@ describe("a transcript", () => {
     source.refuse("deny", "not-waiting")
     await shown(source)
     await act(async () => {
-      host.querySelector<HTMLButtonElement>(".workspace-approval button")?.click()
+      host.querySelector<HTMLButtonElement>(".workspace-approval-actions button")?.click()
     })
     await act(async () => settle())
     expect(host.querySelector(".workspace-approval-failure")?.textContent).toBe(
