@@ -1,18 +1,25 @@
 # Workspace visibility — #914
 
-Captured and qualified on source `817ccbb46f1793eca608dfa95dadd663583d4187`, actual main base `b949034ec2d33eab425b513b2ba59b8aa9d15634`. These are fresh production screenshots from Chromium and Playwright WebKit, not installed AppKit/WKWebView. Pane, full-chat widget and answered peek captures follow two animation frames; screenshot transport can advance time. Existing samplers separately assert first-mounted cumulative ancestor opacity, header/body paint and unit transforms. Local-control shots show keyboard focus on one row while the pointer hovers another.
+Runtime-qualified source `8354279471796013198a28286f099b9b4bcc329b`, actual main `4cdbb0b87a0341253c6c577f8b9a2338e0fffce7`, private Nessa UI pin `0794a41bb1482aa7e677fd2b7012874bcc3e29b2`. These are fresh production Chromium and Playwright WebKit captures. Pane, full-chat widget and answered-peek captures follow two animation frames; screenshot transport can advance time. Separate browser samplers own first-mounted cumulative opacity, header/body paint and unit-transform assertions. Local-control shots show keyboard focus on one request while the pointer hovers another.
 
 ## Current qualification
 
-- Full frontend: 359 Vitest files / 4770 tests, plus the complete chained frontend checks, exit 0.
-- Actual-main own-gateway canonical wrapper: all three programs (`mcp-apps-gateway`, `gateway-window`, `scripted-scenarios`) passed Chromium and WebKit.
-- Affected production programs: smoke 33/33; overview responsive 13/13; mounted content 13/13; widgets 13/13; focus 85/85; safe area 91/91; stationary drag 17/17. Total 265/265. Ordinary functional runs had disclosed isolated SDK test contention; no performance claim uses that interval.
-- Full production headed Chromium budget: `perf-budget: 35/35 held`, 33 interaction rows, five runs each, both layouts, unchanged 4× throttle, windows and unrounded 50 ms decision. Calibration 22→64 ms (ratio 2.93); known 120 ms frame measured 120.700 ms and was LoAF-attributed. All interaction samples have zero over-budget frames.
-- All 4785 source hashes and 878 production artifact hashes unchanged after the run. Sorted-map SHA256: source `ebc4ff8cc6b0484e1fb867253ee9c060ab559e844c9647bfcd328e4589e9185d`; artifact `c4ea62f9428acfefdcdc03108f273036ba20c22ec9b9ea467b746637b19bf6ec`. Own preview processes retired and port 51747 closed.
+- Full frontend: 364 Vitest files / 4883 tests plus all chained checks, exit 0.
+- Own current-main gateway: all three canonical programs (`mcp-apps-gateway`, `gateway-window`, `scripted-scenarios`) passed Chromium and WebKit (16/14/9).
+- Affected production programs: smoke 33/33; overview responsive 13/13; mounted visibility 13/13; widgets 13/13; focus 85/85; safe area 91/91; stationary drag 17/17. Total 265/265 held result rows.
+- Incoming main-card coverage: responsive approval-card 5/5 (including Show All before measuring), command order 9/9, deadline 3/3 on an owned dev fixture. Total 17/17. No unrelated full matrix was repeated.
+- Full production headed budget: `perf-budget: 35/35 held`, 33 interaction rows × five fresh-page runs, both layouts, unchanged 4× CPU setting, action windows and unrounded 50 ms decision. Calibration 22→64 ms (ratio 2.88); known 120 ms frame measured 120.400 ms and was LoAF-attributed. All rows have zero frames over 50 ms; maximum anywhere 44.800 ms. Send-home maxima/medians: columns 44.800/35.900 ms, sidebar 39.800/36.900 ms. Overview answer: columns 40.900/39.900 ms, sidebar 38.600/37.100 ms.
+- All 4813 tracked-file hashes and 878 production artifact hashes remained unchanged through qualification. Sorted-map SHA256: source `880526841db83eabf4b0276dafcd1413b7f726dfb764d934f20c2bedcb577e3a`; artifact `b682f18ea60d7ffab88b901aca1a053c6bde39d7e289f9c07daf878e280e134e`. No other owned runtime during measurement; own preview/dev servers, runners and sleep-prevention processes retired and ports closed afterward. The result formatter warning did not affect exit 0.
 
-Actual local-rule regression before: all four engine/layout cases rejected the new shown-row/time-opacity property; fixed 9/9. Independently restoring the actions ancestor guard rejected only shown-row identity; restoring the time guard rejected only time opacity. Exact restoration and fresh build passed 9/9. These premerge checks apply to byte-identical feature source/artifacts; the full current run above is a separate assembled-source execution.
+## Regression and omission evidence
 
-Historical failed calibrations, overview matrices, headless drag samples and rejected focus/scoping experiments remain in the retained investigation packet. They are not relabelled current passes or explained solely by this later result. The original requested-80-ms rapid-answer observation was unmeasured; the replacement queued-event property explicitly uses synthetic DOM inputs, while native repeat coverage remains. Raw current budget samples retain trusted input timestamps and rAF gaps. No bounds, window or guard relaxation.
+Before this first-send correction, the current-main matrix held 34/35: one native send-home sample reached 50.2 ms. Exact mapped diagnostic stacks identified native focus loss during React's removal of the focused home after preceding DOM mutations. The existing focus owner now retires only that home's focus before those mutations, synchronously restoring only an unchanged not-asked home when focus authority remains; the existing post-paint controller owns the next composer. No focus deferral, extra frame owner, timer, cache or state was added.
+
+A fresh old-owner build rejected the new native ordering property in all eight engine/layout/motion cases. Fixed public tests held 44/44 and the full focus program 85/85. Omitting only `held.blur()` rejected all eight cases again; exact fresh restoration held 9/9 (including console), each native focusout preceding pane mutations while the original home/field remained connected. Restored 878 artifact files were byte-identical to the fixed full-focus artifact. The final budget records the retirement inside the measured native Enter action in all ten send-home samples; no work moved before the window.
+
+Earlier local-row before/fixed checks and independent action/time guard omissions prove the deliberate row-local affordance rule. Whole-view fade/entry and overview-placement-owner before/fixed/omission records remain preserved at their original source-qualified checkpoints. Historical failed calibrations, 33/35 and 34/35 matrices, headless drag samples and rejected focus/scoping experiments are retained in the investigation packet; none is relabelled a current pass or treated as a waived gate. The original requested-80-ms observation was unmeasured. The replacement queued-input property explicitly uses synthetic DOM events; genuine native-repeat coverage remains.
+
+No installed AppKit/native WKWebView, live provider or user-data operation is claimed. The subsequent evidence-only commit changes these eight pictures and this README; runtime/checker source and measured artifact bytes remain exact.
 
 ## Fresh screenshots
 
@@ -36,36 +43,36 @@ Historical failed calibrations, overview matrices, headless drag samples and rej
 
 | Layout | Action | Maximum ms | Median ms | Frames >50 ms |
 | --- | --- | ---: | ---: | ---: |
-| columns | split-right | 27.900 | 25.900 | 0 |
-| columns | split-down | 29.000 | 25.800 | 0 |
-| columns | move | 22.400 | 19.800 | 0 |
-| columns | close | 38.300 | 32.700 | 0 |
-| columns | sidebar | 28.500 | 22.100 | 0 |
-| columns | session-list | 24.600 | 19.900 | 0 |
-| columns | send-home | 40.600 | 37.100 | 0 |
-| columns | typing | 24.300 | 21.100 | 0 |
-| columns | stream-1-of-4 | 28.400 | 27.200 | 0 |
-| columns | drag-drop | 38.900 | 28.900 | 0 |
-| columns | drag-cancel | 28.800 | 27.200 | 0 |
-| columns | thinking-walk | 22.800 | 19.600 | 0 |
-| columns | thinking-drag | 19.300 | 19.100 | 0 |
-| columns | overview-open | 30.000 | 27.000 | 0 |
-| columns | overview-select | 26.600 | 25.500 | 0 |
-| columns | overview-answer | 41.400 | 41.000 | 0 |
-| columns | overview-leave | 23.400 | 19.500 | 0 |
-| sidebar | split-right | 29.200 | 28.100 | 0 |
-| sidebar | split-down | 26.700 | 26.500 | 0 |
-| sidebar | move | 20.100 | 19.200 | 0 |
-| sidebar | close | 35.600 | 30.200 | 0 |
-| sidebar | sidebar | 29.200 | 27.000 | 0 |
-| sidebar | send-home | 45.500 | 35.900 | 0 |
-| sidebar | typing | 25.300 | 21.600 | 0 |
-| sidebar | stream-1-of-4 | 30.600 | 28.000 | 0 |
-| sidebar | drag-drop | 29.700 | 27.100 | 0 |
-| sidebar | drag-cancel | 28.700 | 27.300 | 0 |
-| sidebar | thinking-walk | 21.100 | 19.500 | 0 |
-| sidebar | thinking-drag | 19.400 | 19.100 | 0 |
-| sidebar | overview-open | 29.700 | 26.700 | 0 |
-| sidebar | overview-select | 27.400 | 24.700 | 0 |
-| sidebar | overview-answer | 42.600 | 39.300 | 0 |
-| sidebar | overview-leave | 24.600 | 21.000 | 0 |
+| columns | split-right | 28.300 | 26.500 | 0 |
+| columns | split-down | 30.700 | 26.900 | 0 |
+| columns | move | 25.800 | 21.200 | 0 |
+| columns | close | 37.400 | 25.400 | 0 |
+| columns | sidebar | 23.300 | 20.700 | 0 |
+| columns | session-list | 22.600 | 19.100 | 0 |
+| columns | send-home | 44.800 | 35.900 | 0 |
+| columns | typing | 22.500 | 20.700 | 0 |
+| columns | stream-1-of-4 | 26.200 | 24.400 | 0 |
+| columns | drag-drop | 39.200 | 27.000 | 0 |
+| columns | drag-cancel | 26.700 | 25.400 | 0 |
+| columns | thinking-walk | 22.600 | 21.800 | 0 |
+| columns | thinking-drag | 20.500 | 19.400 | 0 |
+| columns | overview-open | 32.600 | 25.600 | 0 |
+| columns | overview-select | 29.600 | 25.800 | 0 |
+| columns | overview-answer | 40.900 | 39.900 | 0 |
+| columns | overview-leave | 24.300 | 20.700 | 0 |
+| sidebar | split-right | 27.500 | 27.400 | 0 |
+| sidebar | split-down | 30.100 | 29.200 | 0 |
+| sidebar | move | 22.700 | 21.800 | 0 |
+| sidebar | close | 36.900 | 28.000 | 0 |
+| sidebar | sidebar | 29.400 | 27.600 | 0 |
+| sidebar | send-home | 39.800 | 36.900 | 0 |
+| sidebar | typing | 22.700 | 21.400 | 0 |
+| sidebar | stream-1-of-4 | 28.900 | 26.800 | 0 |
+| sidebar | drag-drop | 27.800 | 26.600 | 0 |
+| sidebar | drag-cancel | 27.400 | 26.900 | 0 |
+| sidebar | thinking-walk | 21.900 | 20.300 | 0 |
+| sidebar | thinking-drag | 18.700 | 18.100 | 0 |
+| sidebar | overview-open | 30.900 | 24.900 | 0 |
+| sidebar | overview-select | 29.400 | 24.800 | 0 |
+| sidebar | overview-answer | 38.600 | 37.100 | 0 |
+| sidebar | overview-leave | 20.200 | 19.200 | 0 |
