@@ -429,7 +429,11 @@ async function scenarioTurn({ sessionId, prompt: blocks }) {
           })
           send({ id, method: "session/request_permission", params })
         }),
-      callTool: (args) => server.request("tools/call", args),
+      callTool: (args, name = SERVER) => {
+        const selected = session.servers.get(name)
+        if (!selected) throw new Error(`the session has no ${name} server`)
+        return selected.request("tools/call", args)
+      },
       messageId: () => `msg-${randomUUID()}`,
       toolId: () =>
         agent === "claude" ? `toolu_scripted_${randomUUID()}` : `exec-${randomUUID()}`,

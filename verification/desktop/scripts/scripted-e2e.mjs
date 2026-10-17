@@ -89,6 +89,7 @@ const checks = [
   },
   { name: "gateway-window", args: ["--scripted"] },
   { name: "scripted-scenarios", args: [] },
+  { name: "parent-stop", args: [] },
 ]
 
 let values

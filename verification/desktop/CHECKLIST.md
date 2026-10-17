@@ -1882,3 +1882,14 @@ rejected acknowledgement. SDK ACP tests cover remembered allow and deny, exact
 logical attribution and the mapped provider wire option. Service tests keep a
 second review pending and require live publication after success or consumption
 with a typed failure.
+
+- [ ] **Stopping a parent cancels owned child and grandchild turns by default** (#329).
+  `parent-stop.mjs` creates them through the actual source-bound `nessa-agents`
+  tools and clicks the window composer's ordinary Stop button. Chromium and
+  WebKit assert one cancelled parent turn, cancelled descendants, an unrelated
+  turn still running, and no new parent turn during a 1500 ms report-delivery
+  observation, then a later person command releases the retained child report.
+  A second isolated gateway sets
+  `subagents.stopChildrenOnParentStop:false` and asserts the descendants remain
+  running. This runs in `pnpm test:e2e:scripted`; the Rust Stop/report tests own
+  controlled races and restart coverage.
