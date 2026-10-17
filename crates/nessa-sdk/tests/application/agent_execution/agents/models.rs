@@ -1,4 +1,5 @@
 //! Public same-provider control preserves an active execution and exact saved context.
+mod admission;
 use nessa_sdk::application::agent_execution::traces::LocalTraceStore;
 use nessa_sdk::application::dto::ImageInputLimitsDto;
 use nessa_sdk::domain::common::value_objects::{ImageMediaType, Sha256Digest};
@@ -18,6 +19,7 @@ struct Backend {
     image_input: bool,
     hold: Mutex<Option<oneshot::Receiver<()>>>,
     started: Notify,
+    preparation_gate: Mutex<Option<(oneshot::Sender<()>, oneshot::Receiver<()>)>>,
     closes: AtomicUsize,
     fail_model: Mutex<Option<AgentError>>,
     fail_approval: Mutex<Option<AgentError>>,
@@ -95,7 +97,14 @@ impl ProviderSessionBackend for Backend {
         })
     }
     fn prepare_invocation(&self) -> ProviderOperationFuture<'_, ()> {
-        self.inner.prepare_invocation()
+        Box::pin(async move {
+            let gate = self.preparation_gate.lock().unwrap().take();
+            if let Some((entered, release)) = gate {
+                entered.send(()).unwrap();
+                release.await.unwrap();
+            }
+            self.inner.prepare_invocation().await
+        })
     }
     fn execute(&self, input: ExecutionRequest) -> ProviderExecutionFuture<'_> {
         Box::pin(async move {
@@ -260,6 +269,14 @@ fn capabilities_with_images(
     maximum: u32,
     image_input: Option<ImageInputLimitsDto>,
 ) -> EffectiveCapabilities {
+    capabilities_with_limits(id, maximum, 100, image_input)
+}
+fn capabilities_with_limits(
+    id: &str,
+    maximum: u32,
+    maximum_output: u32,
+    image_input: Option<ImageInputLimitsDto>,
+) -> EffectiveCapabilities {
     let images = image_input.is_some();
     let text = ModalitiesDto {
         text: true,
@@ -282,7 +299,7 @@ fn capabilities_with_images(
         }),
         fast_mode: false,
         max_context_window_tokens: maximum,
-        max_output_tokens: 100,
+        max_output_tokens: maximum_output,
         knowledge_cutoff: "2026-01".into(),
         documentation_url: "https://example.com".into(),
     })
@@ -355,6 +372,7 @@ async fn prepared_with_capabilities(
         image_input: capabilities.features().input().image(),
         hold: Mutex::new(hold),
         started: Notify::new(),
+        preparation_gate: Mutex::new(None),
         closes: AtomicUsize::new(0),
         fail_model: Mutex::new(None),
         fail_approval: Mutex::new(None),

@@ -254,13 +254,6 @@ impl Scheduler {
     fn has_no_work(&self) -> bool {
         self.queue.is_empty() && self.pending.is_empty()
     }
-    pub(super) fn require_no_pending_work(&self) -> Result<(), AgentError> {
-        if self.has_no_work() {
-            Ok(())
-        } else {
-            Err(AgentError::Busy)
-        }
-    }
     pub(super) fn is_idle(&self) -> bool {
         !self.running && self.queue.is_empty()
     }
@@ -851,7 +844,6 @@ impl Agent {
         candidates: NoteCandidates,
     ) -> Result<QueueAdmission, AgentError> {
         let mut scheduler = self.inner.scheduler.lock().await;
-        validate_configured_input(&self.capabilities(), &input)?;
         let mode = match kind {
             InvocationKind::Queued => SubmissionMode::Queued,
             InvocationKind::Steering => SubmissionMode::BoundarySteering,
@@ -870,6 +862,7 @@ impl Agent {
                 SteeringDelivery::Injected { .. } => Err(AgentError::SubmissionConflict),
             };
         }
+        validate_configured_input(&self.capabilities(), &input)?;
         let work = self.inner.lifecycle.accept_waiting_work()?;
         // Settings are captured before the admission save while controls share this lock.
         let approval_mode = self.approval_mode();
@@ -1511,11 +1504,9 @@ impl Agent {
         submitter: Submitter,
         work_owner: &mut Option<WorkPermit>,
     ) -> Result<SteeringDelivery, AgentError> {
-        // The same check `invoke` and `accept_work` run before a save. A
-        // message the selected model cannot take is refused here, with
-        // nothing written and nothing handed to the provider.
+        // Resolve saved submission identity before validating genuinely new
+        // input against the current model. A retry only retrieves its receipt.
         let mut scheduler = self.inner.scheduler.lock().await;
-        validate_configured_input(&self.capabilities(), &input)?;
         if let Some(recovered) = submissions::recover(
             &self.inner.manager,
             &scheduler.receipts,
@@ -1527,6 +1518,7 @@ impl Agent {
         {
             return recovered;
         }
+        validate_configured_input(&self.capabilities(), &input)?;
         let close_notice = self.inner.lifecycle.close_notice();
         *work_owner = Some(self.inner.lifecycle.accept_waiting_work()?);
         let approval_mode = self.approval_mode();

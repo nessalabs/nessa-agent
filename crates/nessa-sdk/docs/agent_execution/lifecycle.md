@@ -424,10 +424,19 @@ changing that ceiling requires another launch and is refused before a live model
 request. Changing its model with the same ceiling is supported.
 
 The scheduler serializes model/settings controls with admission. Live model and
-changing approval-preset controls preserve the configuration of queued or retained pending input: while the
-existing scheduler owns that work, either control returns Busy before
-native effect. It does not reinterpret waiting input against a new selection.
-An active turn alone still permits supported native model control and keeps its
+changing approval-preset controls preserve the configuration of unstarted admitted
+input, including queued, selected and preparing work. The common audited control wrapper asks its existing
+work permit whether another owner remains Waiting or selected/preparing Active,
+and returns Busy before native effect. It does not reinterpret waiting input against a new selection.
+The control permit excludes its own identity. Existing lifecycle retirement
+requires retired non-waiting owners to drain before reopening; waiting owners
+survive automatic recovery and remain blockers until execution or retirement.
+Failed-attachment settlement retains the scheduler lock until its Settling owners
+retire, and failed-provider readiness refuses control admission. Public controls
+therefore do not independently reach the guard with a Settling owner; the
+exhaustive match conservatively retains that phase without a separate public
+omission-coverage claim.
+An Executing turn alone still permits supported native model control and keeps its
 original execution and trace identity; later admission records the current
 configured model. The trace store belongs to the Agent
 lifetime, so replacing a model factory cannot orphan a span started earlier.
@@ -487,10 +496,14 @@ snapshot validation both ask that owner.
 
 | State and event/order | Settlement and retained evidence | Regression |
 | --- | --- | --- |
+| Saved completed A submission, then B narrows context/output/image support, then exact Queue/Boundary/Steer retry | Saved request identity and receipt resolve before fresh CURRENT-configuration validation; no extra dispatch, save or admission audit. All nine before-probes rejected the exact receipt against B | `models::admission::saved_*_retry_after_*` (nine cases) |
+| Same-ID changed request after B, or fresh invalid request under B | Saved identity mismatch remains SubmissionConflict; genuinely new input still uses current configured validation. Before-probes incorrectly validated conflicts against B while fresh-invalid refusals remained correct | same nine public retry cases; `scheduling_retry_rejects_changed_content_attribution_or_delivery_mode` includes a changed image under the same identity |
+| Sole queued checked input selected and blocked in attached provider preparation; queue empty and active identity absent; changing model/preset requested | The common audited wrapper asks its own WorkPermit before polling a changing control: Waiting and selected/preparing Active other owners return Busy BeforeEffect; Executing owners remain allowed. Both before-probes applied the control and lost the checked turn | `selected_model_retains_admission_authority`; `selected_preset_retains_admission_authority` |
+| Same selected preparation ordering with unchanged Ask preset | The wrapper uses captured before_configuration to exempt an unchanged preset; native control and checked input complete. Public before-positive passed | `selected_unchanged_preset_remains_supported` |
 | Active A plus ordinary/boundary/PromptRequired input admitted under A; target B has smaller limits | Busy BeforeEffect, Requested/Refused audit, zero native model calls and no Applied/model fact; all admitted inputs complete under A | `queued_limits_keep_the_admitted_configuration_authority` |
 | Same ordering, target B removes the admitted image modality | Same refusal and preserved receipts; no dispatch-time reinterpretation | `queued_images_keep_the_admitted_configuration_authority` |
 | Same ordering, checked-grant input needs Ask and B would relax it | Same refusal and preserved checked grant; no queued tool-policy invalidation | `queued_checked_grants_keep_the_admitted_configuration_authority` |
-| Owner A active plus queued checked-grant Ask input; direct preset would relax Ask | Shared scheduler prerequisite returns Busy BeforeEffect for a changing preset and preserves all receipts. Before correction, Full succeeded and queued checked input failed Unsupported; active-only control remains allowed | `queued_preset_keeps_the_admitted_configuration_authority` |
+| Owner A active plus queued checked-grant Ask input; direct preset would relax Ask | Shared work-permit prerequisite returns Busy BeforeEffect for a changing preset and preserves all receipts. Before correction, Full succeeded and queued checked input failed Unsupported; active-only control remains allowed | `queued_preset_keeps_the_admitted_configuration_authority` |
 | Queued checked-grant Ask input and an unchanged Ask preset request | Existing same-value native control and audit behavior remains allowed; the pending-work prerequisite exempts an unchanged preset. Public before-probe passed | `queued_unchanged_preset_keeps_the_admitted_configuration_authority` |
 | Only a native-executing active input, no queued or retained pending owner | Supported native model control remains allowed; original active/review identities persist | `a_live_model_change_keeps_the_active_turn_and_context_and_changes_later_admission`; active checked-turn tests |
 | Native model ACK, then configured factory panics | Work-permit unwind fences admission; no Applied or committed model is published; explicit close owns physical cleanup | `post_ack_factory_panic_fences_admission_without_committing_model` |

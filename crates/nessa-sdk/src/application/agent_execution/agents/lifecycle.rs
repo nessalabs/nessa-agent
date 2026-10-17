@@ -285,6 +285,21 @@ impl WorkPermit {
     pub(super) fn defer(&self) -> Result<(), AgentError> {
         self.owner.defer_active(self)
     }
+    pub(super) fn require_no_unstarted_work(&self) -> Result<(), AgentError> {
+        let state = self.owner.state.lock().expect("session lifecycle");
+        let unstarted = state.work.iter().any(|(id, work)| {
+            *id != self.id
+                && match work.phase {
+                    WorkPhase::Waiting | WorkPhase::Active | WorkPhase::Settling => true,
+                    WorkPhase::Executing => false,
+                }
+        });
+        if unstarted {
+            Err(AgentError::Busy)
+        } else {
+            Ok(())
+        }
+    }
     pub(super) fn mark_execution_started(&self) {
         let mut state = self.owner.state.lock().expect("session lifecycle");
         state
