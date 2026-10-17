@@ -1185,6 +1185,25 @@ async fn a_thread_turn_reports_its_outcome_and_reply_back_to_the_sender() {
     assert!(reports[3].contains(": cancelled."), "{}", reports[3]);
     drop(release_ahead);
 
+    // The same request id sent to another thread is refused before anything
+    // is sent or waits, so two threads never share one report.
+    let other = client
+        .call("create_thread", json!({"requestId":"report-create-other"}))
+        .await;
+    assert_eq!(other["isError"], false, "{other}");
+    let other = other["structuredContent"]["threadId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let elsewhere = client
+        .call(
+            "send_message",
+            json!({"threadId":other,"message":"work","requestId":"report-send"}),
+        )
+        .await;
+    assert_eq!(elsewhere["structuredContent"]["error"], "request_conflict");
+    assert_eq!(reports_in(&service, &source, 4).await.len(), 4);
+
     // A thread cannot report to itself.
     assert_eq!(
         service
