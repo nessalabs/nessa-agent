@@ -989,12 +989,13 @@ html:not(.dark) .agents-request {
   border-radius: 50%;
   background: radial-gradient(
     circle at 50% 30%,
-    color-mix(in oklab, var(--desktop-light-edge) 26%, transparent),
-    color-mix(in oklab, var(--desktop-light-edge) 7%, transparent) 72%
+    color-mix(in oklab, var(--desktop-light-edge) 16%, transparent),
+    color-mix(in oklab, var(--desktop-light-edge) 5%, transparent) 72%
   );
+  /* Lit, not glowing: the halo stays within a few pixels of the rim. */
   box-shadow:
-    inset 0 0 0 1px color-mix(in oklab, var(--desktop-light-edge) 28%, transparent),
-    0 0 28px -6px color-mix(in oklab, var(--desktop-light-edge) 45%, transparent);
+    inset 0 0 0 1px color-mix(in oklab, var(--desktop-light-edge) 22%, transparent),
+    0 0 12px -6px color-mix(in oklab, var(--desktop-light-edge) 20%, transparent);
   color: var(--desktop-run);
   animation: agents-clear-in var(--desktop-slow) var(--desktop-settle) both;
 }

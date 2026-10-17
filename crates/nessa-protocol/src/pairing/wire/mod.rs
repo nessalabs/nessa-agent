@@ -8,8 +8,8 @@ use super::status::DevicePairingStatus;
 use dto::{WireConsent, WirePublic, WireReply, WireRequest, WireStatus};
 use nessa_auth::domain::{
     pairing::{
-        AttemptId, AttemptOutcome, DisclosedConsent, PairingError, PairingPhase, PairingRecord,
-        PublicIntent, TerminalCause,
+        AttemptId, AttemptOutcome, DisclosedConsent, OwnerPhoneRequestId, PairingError,
+        PairingPhase, PairingRecord, PublicIntent, TerminalCause,
     },
     CredentialId, ResourceId,
 };
@@ -64,6 +64,14 @@ pub enum NativePairingRequest {
     },
     /// Exact earlier attempt; fresh actual TLS possession is required by the owner.
     Status(PublicIntent),
+    /// Read the exact earlier owner-phone original. The server must separately
+    /// verify actual TLS key possession and the stored UUID/digest linkage.
+    RecoverOwnerPhone {
+        /// Original allocated request, not an invitation or credential.
+        request_id: OwnerPhoneRequestId,
+        /// Digest of the locally saved signed original.
+        digest: [u8; 32],
+    },
     /// Select the protected product session on this connection. Only a first
     /// envelope selects it; it carries no credential and grants nothing.
     OpenProduct,
@@ -164,6 +172,16 @@ pub enum NativePairingReply {
     },
     /// Decoded enrollment status; authenticity remains with its channel consumer.
     Status(NativePairingStatus),
+    /// Compact historical status for the exact signed original; successful
+    /// decoding alone cannot authorize local issuance or product access.
+    OwnerPhoneRecovery {
+        /// Exact original request correlation.
+        request_id: OwnerPhoneRequestId,
+        /// Exact original signed-request digest.
+        digest: [u8; 32],
+        /// Existing complete canonical consent and enrollment projection.
+        status: NativePairingStatus,
+    },
     /// Redacted refusal; it does not authorize a pin/cache change.
     Refused,
     /// The environment phase was admitted: lease frames follow, the serving
@@ -185,6 +203,13 @@ pub fn decode_request(bytes: &[u8]) -> Result<NativePairingRequest, NativeWireEr
             message: message.into_owned(),
         }),
         WireRequest::Status { public } => Ok(NativePairingRequest::Status(public.into_domain()?)),
+        WireRequest::RecoverOwnerPhone { request_id, digest } => {
+            Ok(NativePairingRequest::RecoverOwnerPhone {
+                request_id: OwnerPhoneRequestId::new(request_id)
+                    .map_err(NativeWireError::Correlation)?,
+                digest,
+            })
+        }
         WireRequest::OpenProduct {} => Ok(NativePairingRequest::OpenProduct),
         WireRequest::OpenEnvironment {} => Ok(NativePairingRequest::OpenEnvironment),
     }
@@ -206,6 +231,12 @@ pub fn encode_request(request: &NativePairingRequest) -> Result<Vec<u8>, NativeW
         NativePairingRequest::Status(public) => WireRequest::Status {
             public: WirePublic::from_domain(*public),
         },
+        NativePairingRequest::RecoverOwnerPhone { request_id, digest } => {
+            WireRequest::RecoverOwnerPhone {
+                request_id: *request_id.bytes(),
+                digest: *digest,
+            }
+        }
         NativePairingRequest::OpenProduct => WireRequest::OpenProduct {},
         NativePairingRequest::OpenEnvironment => WireRequest::OpenEnvironment {},
     };
@@ -230,6 +261,34 @@ pub fn encode_status(
     public: PublicIntent,
     status: &DevicePairingStatus,
 ) -> Result<Vec<u8>, NativeWireError> {
+    with_status(public, status, |status| {
+        encode(&WireReply::Status { status })
+    })
+}
+/// Encode one complete compact recovery envelope using the same canonical
+/// status projection and unchanged native byte bound as legacy enrollment.
+/// The route owns fresh key/original/current-receiver evidence, not this codec.
+pub fn encode_owner_phone_recovery(
+    request_id: OwnerPhoneRequestId,
+    digest: [u8; 32],
+    public: PublicIntent,
+    status: &DevicePairingStatus,
+) -> Result<Vec<u8>, NativeWireError> {
+    with_status(public, status, |status| {
+        encode(&WireReply::OwnerPhoneRecovery {
+            request_id: *request_id.bytes(),
+            digest,
+            status,
+        })
+    })
+}
+// WireConsent borrows a local canonical DisclosedConsent. Encoding inside this
+// scope preserves that owner without allocating a second consent representation.
+fn with_status(
+    public: PublicIntent,
+    status: &DevicePairingStatus,
+    envelope: impl for<'a> FnOnce(WireStatus<'a>) -> Result<Vec<u8>, NativeWireError>,
+) -> Result<Vec<u8>, NativeWireError> {
     let value = match status {
         DevicePairingStatus::Pending => WireStatus::Pending {
             public: WirePublic::from_domain(public),
@@ -240,7 +299,7 @@ pub fn encode_status(
         DevicePairingStatus::Claimed(record) => {
             let consent = DisclosedConsent::from_intent(public, record.intent())
                 .map_err(NativeWireError::Correlation)?;
-            return encode_claimed(public, record, &consent, None);
+            return with_claimed(public, record, &consent, None, envelope);
         }
         DevicePairingStatus::Active {
             record,
@@ -248,10 +307,10 @@ pub fn encode_status(
         } => {
             let consent = DisclosedConsent::from_intent(public, record.intent())
                 .map_err(NativeWireError::Correlation)?;
-            return encode_claimed(public, record, &consent, Some(*access_epoch));
+            return with_claimed(public, record, &consent, Some(*access_epoch), envelope);
         }
     };
-    encode(&WireReply::Status { status: value })
+    envelope(value)
 }
 /// Redacted refusal contains no diagnostic, private selector or password-dependent detail.
 pub fn encode_refused() -> Result<Vec<u8>, NativeWireError> {
@@ -272,17 +331,28 @@ pub fn decode_reply(bytes: &[u8]) -> Result<NativePairingReply, NativeWireError>
             response: response.into_owned(),
         }),
         WireReply::Status { status } => Ok(NativePairingReply::Status(status.into_domain()?)),
+        WireReply::OwnerPhoneRecovery {
+            request_id,
+            digest,
+            status,
+        } => Ok(NativePairingReply::OwnerPhoneRecovery {
+            request_id: OwnerPhoneRequestId::new(request_id)
+                .map_err(NativeWireError::Correlation)?,
+            digest,
+            status: status.into_domain()?,
+        }),
         WireReply::Refused {} => Ok(NativePairingReply::Refused),
         WireReply::Serving {} => Ok(NativePairingReply::Serving),
     }
 }
 /// `access_epoch` is the current epoch an Active status carries, and only an
 /// Active status: the record's phase and its presence must agree.
-fn encode_claimed(
+fn with_claimed(
     public: PublicIntent,
     record: &PairingRecord,
     consent: &DisclosedConsent,
     access_epoch: Option<u64>,
+    envelope: impl for<'a> FnOnce(WireStatus<'a>) -> Result<Vec<u8>, NativeWireError>,
 ) -> Result<Vec<u8>, NativeWireError> {
     if PublicIntent::from_record(record, public.attempt()).map_err(NativeWireError::Correlation)?
         != public
@@ -326,7 +396,7 @@ fn encode_claimed(
             cause: record.terminal().ok_or(NativeWireError::Invalid)?.0.into(),
         },
     };
-    encode(&WireReply::Status { status })
+    envelope(status)
 }
 fn decode<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, NativeWireError> {
     if bytes.len() > MAX_ENROLLMENT_ENVELOPE_BYTES {

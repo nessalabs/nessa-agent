@@ -136,7 +136,8 @@ pub(crate) struct WireClient {
     held: VecDeque<Frame>,
 }
 /// One frame as it arrived: its decoded text with the exact encoded length, or
-/// the end of the connection. A native close carries no reason.
+/// the end of the connection. A named native close arrives first as
+/// `session.terminated`; the read after that event is the end.
 pub(crate) enum Frame {
     Text { value: Value, bytes: usize },
     Closed,

@@ -17,6 +17,10 @@
 export {
   NessaClient,
   createSubscriptionGate,
+  createConversationReadTools,
+  type ConversationReadToolDescriptor,
+  type ConversationReadTools,
+  type ConversationReadToolsOptions,
   type SubscriptionGate,
   type AuthApi,
   type CredentialApi,
@@ -35,6 +39,7 @@ export {
   type SubscriptionEnd,
   type ViewFrame,
   type ViewSubscriptionHandlers,
+  type EventSubscriptionHandlers,
 } from "./presentation/index.js"
 export type {
   NessaClientConnectOptions,
@@ -397,3 +402,22 @@ export {
   executionTargetConversation,
   type ExecutionTarget,
 } from "./application/execution-target.js"
+export type {
+  SendMessageOptions,
+  ThreadMessageMode,
+  ThreadMessageReceipt,
+  StopThreadOptions,
+  StopThreadResult,
+} from "./presentation/thread-api.js"
+export {
+  NessaThreadSubscriptionError,
+  type ThreadEventBatch,
+  type ThreadSubscribeOptions,
+  type ThreadSubscription,
+} from "./presentation/thread-subscription.js"
+export type {
+  ConversationEvent,
+  ConversationEventKind,
+  ConversationEvents,
+  ConversationMessageReceipt,
+} from "./generated/product.js"

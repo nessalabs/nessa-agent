@@ -1,4 +1,5 @@
 import type {
+  ConversationPeekResult,
   ConversationListResult,
   ConversationMessageReceipt,
   ConversationMessageStatusResult,
@@ -162,6 +163,21 @@ export function conversationId(
     throw new Error("Conversation response belongs to another conversation")
   return { conversationId: expected }
 }
+/** Authoritative local activity; unlike a replacement view this cannot truncate the parent. */
+export function conversationPeek(
+  value: unknown,
+  expected: string,
+): ConversationPeekResult {
+  const item = record(value)
+  exact(item, ["conversationId", "executionId"])
+  if (identity(item, "conversationId") !== expected)
+    throw new Error("Conversation response belongs to another conversation")
+  const executionId = item.executionId === null ? null : text(item, "executionId", 256)
+  if (executionId !== null && !executionId.trim())
+    throw new Error("Invalid active execution ID")
+  return { conversationId: expected, executionId }
+}
+
 export function conversationReceipt(
   value: unknown,
   executionId: string,

@@ -24,7 +24,7 @@ use nessa_protocol::pairing::{
 };
 use nessa_protocol::product::catalogue_read::wire_descriptor;
 use nessa_protocol::product::generated::{
-    product_event, product_method, ProductSessionReady, SessionChallenge,
+    product_event, product_method, ProductSessionReady, SessionChallenge, SessionTermination,
     MAX_AUTH_CREDENTIAL_CHARACTERS, MAX_PRODUCT_CLIENT_ID_CHARACTERS, MAX_RECORD_RESPONSE_BYTES,
     PRODUCT_VERSION,
 };
@@ -653,6 +653,74 @@ fn bounded_event_and_frame_refusals_preserve_actual_typed_cause() {
     }
 }
 
+/// A retained refresh or follow reads `session.terminated` as the close.
+/// The following EOF is not a second, untyped close. A payload
+/// `accepted_termination` refuses is a protocol failure and is not queued.
+#[test]
+fn terminated_session_is_the_close_reason_and_a_malformed_one_is_protocol() {
+    let (revoked, revoked_peer) = peer(|socket| {
+        let _ = request(socket);
+        send(
+            socket,
+            OutgoingMessage::Event(
+                EventFrame::push(
+                    product_event::SESSION_TERMINATED,
+                    &SessionTermination {
+                        code: SessionCloseReason::CredentialRevoked,
+                        retryable: false,
+                        retry_after_ms: None,
+                    },
+                    0,
+                    0,
+                )
+                .unwrap(),
+            ),
+        );
+    });
+    let mut session = connect(&revoked);
+    session.begin().unwrap();
+    assert_eq!(
+        session.rpc(
+            product_method::CONVERSATION_RECORDS_HEAD,
+            &json!({}),
+            RpcKind::Record
+        ),
+        Err(GatewayError::Closed(Some(
+            SessionCloseReason::CredentialRevoked
+        )))
+    );
+    drop(session);
+    revoked_peer.join().unwrap();
+
+    let (malformed, malformed_peer) = peer(|socket| {
+        let _ = request(socket);
+        send(
+            socket,
+            OutgoingMessage::Event(
+                EventFrame::push(
+                    product_event::SESSION_TERMINATED,
+                    &json!({"code": "credential_revoked", "retryable": true}),
+                    0,
+                    0,
+                )
+                .unwrap(),
+            ),
+        );
+    });
+    let mut session = connect(&malformed);
+    session.begin().unwrap();
+    assert_eq!(
+        session.rpc(
+            product_method::CONVERSATION_RECORDS_HEAD,
+            &json!({}),
+            RpcKind::Record
+        ),
+        Err(GatewayError::Protocol)
+    );
+    drop(session);
+    malformed_peer.join().unwrap();
+}
+
 /// Row PR9 (client): a frame cut short by the gateway's close is an untyped
 /// close of this attempt, not a response.
 #[test]
@@ -842,6 +910,11 @@ fn authentication_temporary_permanent_and_unknown_refusals_consume_the_shared_cl
             "temporarily_unavailable",
             SessionCloseReason::TemporaryUnavailable,
         ),
+        ("handshake_timeout", SessionCloseReason::HandshakeTimeout),
+        (
+            "protocol_incompatible",
+            SessionCloseReason::ProtocolIncompatible,
+        ),
         ("unauthorized", SessionCloseReason::AuthenticationFailed),
         ("unknown", SessionCloseReason::AuthenticationFailed),
     ] {
@@ -858,6 +931,87 @@ fn authentication_temporary_permanent_and_unknown_refusals_consume_the_shared_cl
             matches!(Session::connect(endpoint.address,endpoint.evidence("credential"),"example",&LocalConnector,Arc::new(Time(Instant::now())),Arc::new(Never),policy()),Err(GatewayError::Authentication(reason)) if reason==expected)
         );
         peer.join().unwrap();
+    }
+}
+
+/// Authentication replies reach both public retained entry paths with the
+/// same failure/status policy, after the real pinned native TLS handshake.
+#[test]
+fn retained_refresh_and_follow_preserve_authentication_outcomes() {
+    for (code, expected, status) in [
+        ("temporarily_unavailable", ReadFailure::Unreachable, false),
+        ("handshake_timeout", ReadFailure::Unreachable, false),
+        ("protocol_incompatible", ReadFailure::Protocol, false),
+        ("unauthorized", ReadFailure::Refused, true),
+        ("unknown", ReadFailure::Refused, true),
+    ] {
+        for follow in [false, true] {
+            // Prepare private state before starting a peer that waits on I/O.
+            let root = tempfile::tempdir().unwrap();
+            let private = root.path().join("cache");
+            nessa_local_storage::create_directory(&private).unwrap();
+            let mut cache = RetainedCache::open(
+                &private.join("cache.sqlite3"),
+                Arc::new(Wall),
+                Arc::new(Time(Instant::now())),
+            )
+            .unwrap();
+            let (endpoint, peer) = native_peer(move |socket| {
+                challenge(socket);
+                let auth = request(socket);
+                assert_eq!(auth.method, product_method::SESSION_AUTHENTICATE);
+                send(
+                    socket,
+                    OutgoingMessage::Response(ResponseFrame::failure(&auth.id, code, "sanitized")),
+                );
+                assert!(
+                    socket.ended(),
+                    "authentication failure closes before any read"
+                );
+            });
+            let access = ReaderAccess {
+                role: ReaderRole::DeviceOwner,
+                address: endpoint.address,
+                relay: None,
+                identity: &endpoint.device,
+                pin: endpoint.pin,
+                credential: "credential",
+                receiver: "receiver",
+                access_epoch: 3,
+                client_id: "example",
+            };
+            if follow {
+                let conversation =
+                    ConversationId::new("00000000-0000-4000-8000-000000000001").unwrap();
+                let error = cache
+                    .subscribe(
+                        access,
+                        &conversation,
+                        None,
+                        &ReadStop::new(),
+                        Duration::from_secs(2),
+                    )
+                    .err()
+                    .expect("authentication refused before subscription");
+                assert_eq!(error.failure(), expected, "follow {code}");
+                assert_eq!(error.asks_status(), status, "follow {code}");
+            } else {
+                assert_eq!(
+                    cache.read(
+                        access,
+                        &ReadStop::new(),
+                        Duration::from_secs(2),
+                        8,
+                        &mut Vec::new()
+                    ),
+                    Err(expected),
+                    "refresh {code}"
+                );
+            }
+            assert!(cache.conversation_ids("receiver").unwrap().is_empty());
+            drop(cache);
+            peer.join().unwrap();
+        }
     }
 }
 
@@ -1407,3 +1561,62 @@ mod held_files;
 mod subscribe;
 #[path = "session/watch.rs"]
 mod watch;
+
+#[test]
+fn canonical_tls_observer_keeps_original_socket_failure_for_retained_caller() {
+    struct FailedSocket(ErrorKind);
+    impl Read for FailedSocket {
+        fn read(&mut self, _: &mut [u8]) -> IoResult<usize> {
+            Err(self.0.into())
+        }
+    }
+    impl Write for FailedSocket {
+        fn write(&mut self, bytes: &[u8]) -> IoResult<usize> {
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> IoResult<()> {
+            Ok(())
+        }
+    }
+    impl GatewayStream for FailedSocket {
+        fn read_timeout(&self, _: Duration) -> IoResult<()> {
+            Ok(())
+        }
+        fn write_timeout(&self, _: Duration) -> IoResult<()> {
+            Ok(())
+        }
+        fn shutdown(&self) -> IoResult<()> {
+            Ok(())
+        }
+    }
+    struct Connector(ErrorKind);
+    impl GatewayConnector for Connector {
+        fn connect(&self, _: SocketAddr, _: Duration) -> IoResult<Box<dyn GatewayStream>> {
+            Ok(Box::new(FailedSocket(self.0)))
+        }
+    }
+    let identity = NativeIdentity::generate(&mut OsEntropy).unwrap();
+    for (error, cause) in [
+        (ErrorKind::TimedOut, GatewayError::TimedOut),
+        (ErrorKind::ConnectionReset, GatewayError::Closed(None)),
+        (ErrorKind::PermissionDenied, GatewayError::Transport),
+    ] {
+        let opened = Session::connect(
+            "127.0.0.1:1".parse().unwrap(),
+            DeviceEvidence {
+                identity: &identity,
+                pin: identity.public_spki(),
+                credential: "credential",
+            },
+            "example",
+            &Connector(error),
+            Arc::new(Time(Instant::now())),
+            Arc::new(Never),
+            policy(),
+        );
+        assert!(
+            matches!(opened,Err(failure) if failure==cause),
+            "canonical observer must not consume {cause:?}"
+        );
+    }
+}

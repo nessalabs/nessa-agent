@@ -37,7 +37,7 @@ import {
 import { main } from "./lib/run.mjs"
 import { writeView } from "./lib/scripted-evidence.mjs"
 import { css, offeredLabel } from "./lib/selectors.mjs"
-import { unofferedAnswers } from "./lib/workspace.mjs"
+import { revealTranscriptWork, unofferedAnswers } from "./lib/workspace.mjs"
 
 const steps = ["permission", "allow", "fail", "cancel"]
 
@@ -252,6 +252,7 @@ const checks = {
     const shown = text ?? (await pageText(page))
     if (!shown.includes(stack.script.allowed))
       failures.push(`the window does not show ${JSON.stringify(stack.script.allowed)}`)
+    await revealTranscriptWork(page)
     const labels = await page.locator(css.transcriptStep).allTextContents()
     if (!labels.some((label) => fold(label).includes(stack.script.title)))
       failures.push(`no step titled ${JSON.stringify(stack.script.title)}`)

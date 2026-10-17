@@ -183,12 +183,15 @@ impl PairingStore for LocalCredentialStore {
         clock: &'a dyn Clock,
     ) -> PortFuture<'a, PairingRecord, PairingStoreError> {
         Box::pin(async move {
+            if !record.intent().class().uses_pake() {
+                return Err(PairingStoreError::Domain(PairingError::Ineligible));
+            }
             let mut slot = self
                 .registry()
                 .map_err(|_| PairingStoreError::Unavailable)?;
             let current = slot.as_ref().ok_or(PairingStoreError::Unavailable)?;
             let now = clock.unix_milliseconds();
-            validate_pairing_admission(current, admission, now)?;
+            validate_pairing_admission(current, admission, now, true)?;
             if record.intent() != admission.intent()
                 || record.created_at_ms() > now
                 || now >= record.expires_at_ms()
@@ -429,17 +432,20 @@ impl PairingStore for LocalCredentialStore {
                     issued_at: transition.ordering_time_ms() / 1000,
                     expires_at: None,
                     revoked_at: None,
-                    grants: vec![CredentialGrantDto {
-                        action: intent.grant().action().as_str().to_owned(),
-                        resource: ResourceDto {
-                            organization_id: intent
-                                .resource()
-                                .organization_id()
-                                .as_str()
-                                .to_owned(),
-                            id: intent.resource().id().as_str().to_owned(),
-                        },
-                    }],
+                    grants: intent
+                        .grants()
+                        .map(|grant| CredentialGrantDto {
+                            action: grant.action().as_str().to_owned(),
+                            resource: ResourceDto {
+                                organization_id: grant
+                                    .resource()
+                                    .organization_id()
+                                    .as_str()
+                                    .to_owned(),
+                                id: grant.resource().id().as_str().to_owned(),
+                            },
+                        })
+                        .collect(),
                 };
                 let credential =
                     domain_credential(&metadata).map_err(|_| PairingStoreError::Unavailable)?;
@@ -511,7 +517,12 @@ impl PairingStore for LocalCredentialStore {
                 .map_err(|_| PairingStoreError::Unavailable)?;
             let current = slot.as_ref().ok_or(PairingStoreError::Unavailable)?;
             let now = clock.unix_milliseconds();
-            validate_pairing_admission(current, admission, now)?;
+            validate_pairing_admission(
+                current,
+                admission,
+                now,
+                !matches!(decision, OwnerDecision::Cancel | OwnerDecision::Deny),
+            )?;
             let index = current
                 .pairings
                 .iter()
@@ -628,7 +639,7 @@ impl LocalCredentialStore {
             .map_err(|_| PairingStoreError::Unavailable)?;
         let current = slot.as_ref().ok_or(PairingStoreError::Unavailable)?;
         let now = clock.unix_milliseconds();
-        validate_pairing_admission(current, admission, now)?;
+        validate_pairing_admission(current, admission, now, true)?;
         let index = current
             .pairings
             .iter()
@@ -746,10 +757,11 @@ fn enroll_peer_principal(
     }
 }
 
-fn validate_pairing_admission(
+pub(super) fn validate_pairing_admission(
     registry: &Registry,
     admission: &PairingAdmission,
     now_ms: u64,
+    require_original_issuer: bool,
 ) -> Result<(), PairingStoreError> {
     if registry.revision != admission.revision() {
         return Err(PairingStoreError::StaleRevision);
@@ -761,6 +773,26 @@ fn validate_pairing_admission(
         return Err(PairingStoreError::Domain(PairingError::Expired));
     }
     let intent = admission.intent();
+    // Owner-phone authorization, reads, staging, and publication keep the
+    // original bootstrap issuer. Cancel and deny do not: a later credential of
+    // the same principal may end the enrollment.
+    if require_original_issuer && !intent.class().uses_pake() {
+        for stored in &registry.pairings {
+            let Some(request) = stored
+                .owner_phone_request()
+                .map_err(PairingStoreError::Domain)?
+            else {
+                continue;
+            };
+            let record = stored
+                .restore(&registry.transitions)
+                .map_err(PairingStoreError::Domain)?;
+            if record.intent() == intent && request.source().credential() != admission.credential()
+            {
+                return Err(PairingStoreError::Domain(PairingError::Conflict));
+            }
+        }
+    }
     let issuer = registry
         .credentials
         .iter()

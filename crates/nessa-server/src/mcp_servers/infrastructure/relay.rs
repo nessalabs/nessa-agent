@@ -184,8 +184,8 @@ pub struct Relay {
     grants: ConversationGrants,
     /// This process's key for each configuration's digest.
     key: ConfigurationKey,
-    /// The server the gateway serves itself, when it serves one.
-    built_in: Option<Arc<dyn BuiltInServer>>,
+    /// The servers the gateway serves itself, each admitted by its own digest.
+    built_in: Vec<Arc<dyn BuiltInServer>>,
 }
 impl Relay {
     pub fn new(servers: McpServers, grants: ConversationGrants, key: ConfigurationKey) -> Self {
@@ -193,14 +193,14 @@ impl Relay {
             servers,
             grants,
             key,
-            built_in: None,
+            built_in: Vec::new(),
         }
     }
 
     /// This relay, serving `server` itself under its name, in place of any
     /// configured server of the same name.
     pub fn with_built_in(mut self, server: Arc<dyn BuiltInServer>) -> Self {
-        self.built_in = Some(server);
+        self.built_in.push(server);
         self
     }
 
@@ -281,8 +281,8 @@ impl Relay {
         };
         if let Some(server) = self
             .built_in
-            .as_ref()
-            .filter(|server| server.name() == hello.server)
+            .iter()
+            .find(|server| server.name() == hello.server)
         {
             let digests = BTreeMap::from([(
                 server.name().to_owned(),

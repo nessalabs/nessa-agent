@@ -11,6 +11,8 @@
 //! `ConversationCatalogue` reads the same metadata for a linked receiver in
 //! finite creation-key pages. It owns no second copy of metadata or progress.
 //! A bounded replacement projection reads independently committed SDK records;
+//! EventProgress correlates semantic reader replies with their start/prior
+//! checkpoint before consumers project events or retain cursor evidence.
 //! broadcast observations only prompt refresh and may supply local activity.
 //! The projection, the `ConversationView` it folds into, its `McpToolUis` port
 //! and the read scope checks are `nessa_protocol::conversation`, so a device's
@@ -147,6 +149,11 @@ pub use catalogue_watch::{
     CatalogueChangeWatch, CatalogueWatchError, CatalogueWatchState, WatchCatalogue,
 };
 mod access_policy;
+mod agent_tools;
+pub use agent_tools::{
+    AgentToolAudit, AgentToolAuditRecord, AgentToolRequest, AgentToolSource,
+    MAX_AGENT_TOOL_ADMISSIONS,
+};
 mod app_call_policy;
 mod artifacts;
 mod catalogue_read;
@@ -161,9 +168,12 @@ mod live_changes;
 mod locks;
 mod mcp_apps;
 mod metadata_target;
+pub(crate) use metadata_target::load_conversation;
+mod owner_phone_policy;
 pub(crate) use metadata_target::ConversationMetadataReader;
 mod passive_read;
 mod permission_rules;
+pub use passive_read::AdmittedCatalogueRead;
 mod placement;
 mod ports;
 mod provider_sessions;
@@ -194,6 +204,10 @@ pub use catalogue::{
 pub use catalogue_read::{
     CatalogueReadError, CatalogueReadFuture, CatalogueReadOperation, CatalogueReadResponse,
     CatalogueReadSource, CatalogueReadValue, ReadCatalogue,
+};
+pub use owner_phone_policy::{
+    AdmitOwnerPhoneReader, OwnerPhoneDecision, OwnerPhoneOperation, OwnerPhonePolicyEvaluator,
+    OwnerPhonePolicyFacts, OwnerPhoneReader, OwnerPhoneReceiverAuthority,
 };
 // The port itself, which placement and the service use on every host.
 pub(crate) use command_environment::CommandEnvironment;
@@ -271,6 +285,10 @@ pub use provider_sessions::{
 pub use record_read::{
     ReadRecords, RecordHead, RecordReadError, RecordReadFuture, RecordReadLease,
     RecordReadOperation, RecordReadResponse, RecordReadSource, RecordReadValue,
+};
+pub use service::{
+    event_error_code, project_events, validate_event_cursor, ConversationEventError, EventProgress,
+    ThreadEvent,
 };
 pub use service::{CommandAnswer, CommandCall, CommandCallError, EnvironmentListing, HERE};
 pub use service::{

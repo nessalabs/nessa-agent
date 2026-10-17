@@ -84,6 +84,7 @@ import { css, names, offeredLabel, selectorFor } from "./lib/selectors.mjs"
 import {
   paneCount,
   paneCountIs,
+  revealTranscriptWork,
   settled,
   unofferedAnswers,
   until,
@@ -727,6 +728,7 @@ const checks = {
     // transcript, every inline frame is its mount, and only one may be, or a
     // later step's review may be another's.
     await settled(page)
+    await revealTranscriptWork(page)
     const cards = await page.locator(css.transcriptStep, { hasText: APP_TOOL }).count()
     const frames = (await page.$$(selectorFor.appFrameIn("inline"))).length
     const drawnOnce = [oneCard(cards), oneMount(frames)].filter(Boolean)

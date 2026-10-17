@@ -1009,7 +1009,7 @@ The current enrollment implementation only closes its semaphore and waits for ph
 
 The native live adapter consumes the existing generic product `run_authenticated` Stream/Sink boundary and its writer/admission/reaping implementation. It does not implement a second dispatch or deadline loop. The adapter owns one TLS stream with nonblocking physical readiness, one bounded in-progress prefix/body and one bounded output offset/flush state. It must attempt buffered TLS progress before waiting for physical readiness; a blocking read holding shared TLS ownership cannot gate ready delivery. The original native physical closure owns this adapter until the existing loop and all actual retained work drain. Directional ceilings are checked before input allocation/output. The auth pairing pure contract publishes MAX_ENROLLMENT_MESSAGE_BYTES once. Raw OPAQUE message length and the encoded enrollment whole-envelope length each consume this value at their actual owner; fitting raw bytes does not waive JSON/base64 envelope overhead.
 
-The native mapping consumes manifest-published `session.terminated` with the existing generated SessionTermination shape: write that ordinary event under the directional output deadline, then physically close even if delivery fails. Browser CloseFrame presentation remains current. The same native client reader validates this event and records typed Closed(reason); real EOF without a valid termination retains honest disconnected/unknown meaning. Authentication failure uses the enrollment/auth-pending ceiling and cannot construct ready. Termination does not authorize deleting cached data or infer current scope revocation. Duplicate/malformed termination, every valid reason, delivery failure before actual close and plain EOF require distinct fixtures. WebSocket bytes are never written to this profile.
+The native mapping consumes manifest-published `session.terminated` with the existing generated SessionTermination shape: write that ordinary event under the directional output deadline, then physically close even if delivery fails. Browser CloseFrame presentation remains current. The same native client reader validates this event and records typed Closed(reason); real EOF without a valid termination retains honest disconnected/unknown meaning. Which of those outcomes the client retries, stops as a revoked authorization, or keeps is the lifecycle table in ADR 811, not a second reading of this paragraph. Authentication failure uses the enrollment/auth-pending ceiling and cannot construct ready. Termination does not authorize deleting cached data or infer current scope revocation. Duplicate/malformed termination, every valid reason, delivery failure before actual close and plain EOF require distinct fixtures. WebSocket bytes are never written to this profile.
 
 The calling-side application port lives in `crates/nessa-client-core/src/read_only_sync/application/gateway.rs`; product continues owning wire/routing and selectively publishes the same generated DTOs/codec. The port owns the one current GatewayError/Cancellation/attempt outcome meanings; no native duplicate error or renewed per-RPC operation budget. Generated DTOs remain untrusted wire values. Public request/response wrappers validate through current codec/scope owners and retain private fields with immutable access; exposing a generated public-field DTO alone is not this application contract.
 
@@ -2085,10 +2085,10 @@ an incoming announced length above `MAX_PAYLOAD_BYTES` (65536) before reading
 or allocating the body; the client refuses one above
 `MAX_RECORD_RESPONSE_BYTES` (131072). Both bounds are the existing published
 constants. The same frame reader (`frames.rs`) frames enrollment
-envelopes at 4096. There is no WebSocket close frame: the gateway closes the
-TLS connection after its last attempted write, and the client reports an
-untyped close (`Closed(None)`). A close carries no authority meaning; only the
-pinned enrollment status does.
+envelopes at 4096. There is no WebSocket close frame: the gateway writes `session.terminated`
+when it has a reason, then closes the TLS connection. The client records that
+reason, or `Closed(None)` when the stream ends with no valid termination.
+What the client does next is the lifecycle table in ADR 811.
 
 ### Ordering table
 

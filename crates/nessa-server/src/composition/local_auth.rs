@@ -9,6 +9,8 @@ use super::warm_up::{CurrentOpenCodeWarmUp, PreparedRuntime};
 #[cfg(unix)]
 use crate::conversation::infrastructure::NessaRecordWatches;
 #[cfg(unix)]
+use crate::mcp_servers::application::BuiltInServer;
+#[cfg(unix)]
 use crate::{
     agent_warm_up::{
         application::{AgentWarmUp, WarmUpSessionPorts},
@@ -23,7 +25,7 @@ use crate::{
             Environments, McpAppPorts,
         },
         infrastructure::{
-            CedarToolPolicyEvaluator, DurableConversationCreationAudit,
+            CedarToolPolicyEvaluator, DurableAgentToolAudit, DurableConversationCreationAudit,
             DurableConversationDeletionAudit, DurableConversationFileLinkAudit,
             DurableConversationModeAudit, DurableDriveToolAudit, DurableMcpAppAudit,
             LocalConversationStore,
@@ -193,6 +195,10 @@ pub(super) async fn product_state(
         )?;
     }
     let policy = Arc::new(CedarPolicyEvaluator::new().map_err(setup_error)?);
+    let owner_phone_policy = Arc::new(
+        crate::conversation::infrastructure::CedarOwnerPhonePolicyEvaluator::new()
+            .map_err(setup_error)?,
+    );
     let store = Arc::new(super::credential_registry::open(
         directory,
         settings.registry,
@@ -227,7 +233,10 @@ pub(super) async fn product_state(
         Some(receiver_access(
             namespace,
             &store,
-            &CedarPolicyEvaluator::profile_digest(),
+            &crate::conversation::infrastructure::CedarOwnerPhonePolicyEvaluator::receiver_profile_digest(
+                &CedarPolicyEvaluator::profile_digest(),
+                &CedarConversationAccessPolicy::profile_sources(),
+            ),
         )?)
     } else {
         None
@@ -283,7 +292,7 @@ pub(super) async fn product_state(
     let access_policy: Arc<dyn ConversationAccessPolicyEvaluator> =
         Arc::new(CedarConversationAccessPolicy::new().map_err(RunError::Agent)?);
     let (conversations, agent_probe, warm_ups, mcp, environment_peers) =
-        match (&settings.agents, receivers) {
+        match (&settings.agents, receivers.clone()) {
             (Some(agents), Some(receivers)) => {
                 let mut built = conversations(
                     agents,
@@ -350,6 +359,12 @@ pub(super) async fn product_state(
         audience,
         ProductDependencies {
             verifier: store.clone(),
+            owner_phone_purpose: store.clone(),
+            owner_phone_policy,
+            owner_phone_receivers: receivers.as_ref().map(|authority| {
+                authority.clone()
+                    as Arc<dyn crate::conversation::application::OwnerPhoneReceiverAuthority>
+            }),
             access: store,
             clock: Arc::new(SystemClock),
             policy,
@@ -909,6 +924,11 @@ async fn conversations(
     let environment_tools = command_policy
         .as_ref()
         .map(super::environment_tools::EnvironmentTools::new);
+    let conversation_tools = super::conversation_tools::ConversationTools::new();
+    let mut built_in: Vec<Arc<dyn BuiltInServer>> = vec![conversation_tools.clone()];
+    if let Some(tools) = &environment_tools {
+        built_in.push(tools.clone());
+    }
     let mut mcp = match std::env::current_exe() {
         Ok(gateway) => {
             super::mcp_servers::compose(
@@ -919,9 +939,7 @@ async fn conversations(
                 &gateway,
                 super::mcp_servers::server_environment(|key| std::env::var_os(key)),
                 packaged_agents,
-                environment_tools
-                    .clone()
-                    .map(|tools| tools as Arc<dyn crate::mcp_servers::application::BuiltInServer>),
+                built_in,
             )
             .await?
         }
@@ -1251,6 +1269,11 @@ async fn conversations(
     };
     let service = service.map_err(|error| RunError::Agent(error.to_string()))?;
     service.bind_commands(storage.clone());
+    service.bind_agent_tool_audit(Arc::new(
+        DurableAgentToolAudit::new(root.join("audit").join("agent-tools"), clock.clone())
+            .map_err(|error| RunError::Agent(error.to_string()))?,
+    ));
+    conversation_tools.attach(service.clone());
     // A note's author is checked against the same grant table the socket
     // admits it by (row J23).
     service.bind_note_authors(metadata.clone());

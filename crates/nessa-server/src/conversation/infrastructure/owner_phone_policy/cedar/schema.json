@@ -1,0 +1,202 @@
+{
+  "NessaPhone": {
+    "entityTypes": {
+      "Phone": {
+        "shape": {
+          "type": "Record",
+          "attributes": {
+            "owner": {
+              "type": "String",
+              "required": true
+            },
+            "organization": {
+              "type": "String",
+              "required": true
+            },
+            "membership": {
+              "type": "String",
+              "required": true
+            },
+            "audience": {
+              "type": "String",
+              "required": true
+            },
+            "credential": {
+              "type": "String",
+              "required": true
+            },
+            "purposeOwner": {
+              "type": "String",
+              "required": true
+            },
+            "purposeOrganization": {
+              "type": "String",
+              "required": true
+            },
+            "purposeMembership": {
+              "type": "String",
+              "required": true
+            },
+            "purposeAudience": {
+              "type": "String",
+              "required": true
+            },
+            "purposeCredential": {
+              "type": "String",
+              "required": true
+            },
+            "purposeReceiver": {
+              "type": "String",
+              "required": true
+            },
+            "pairedEpoch": {
+              "type": "String",
+              "required": true
+            },
+            "receiverId": {
+              "type": "String",
+              "required": true
+            },
+            "receiverOwner": {
+              "type": "String",
+              "required": true
+            },
+            "receiverOrganization": {
+              "type": "String",
+              "required": true
+            },
+            "receiverCredential": {
+              "type": "String",
+              "required": true
+            },
+            "receiverEpoch": {
+              "type": "String",
+              "required": true
+            },
+            "receiverActive": {
+              "type": "Boolean",
+              "required": true
+            }
+          },
+          "additionalAttributes": false
+        }
+      },
+      "Scope": {
+        "shape": {
+          "type": "Record",
+          "attributes": {
+            "gatewayId": {
+              "type": "String",
+              "required": true
+            },
+            "organization": {
+              "type": "String",
+              "required": true
+            }
+          },
+          "additionalAttributes": false
+        }
+      }
+    },
+    "actions": {
+      "product.request": {
+        "appliesTo": {
+          "principalTypes": [
+            "Phone"
+          ],
+          "resourceTypes": [
+            "Scope"
+          ],
+          "context": {
+            "type": "Record",
+            "attributes": {
+              "method": {
+                "type": "String",
+                "required": false
+              },
+              "publishedAction": {
+                "type": "String",
+                "required": false
+              }
+            },
+            "additionalAttributes": false
+          }
+        }
+      },
+      "conversation.create": {
+        "appliesTo": {
+          "principalTypes": [
+            "Phone"
+          ],
+          "resourceTypes": [
+            "Scope"
+          ],
+          "context": {
+            "type": "Record",
+            "attributes": {
+              "requestedMode": {
+                "type": "String",
+                "required": false
+              },
+              "defaultMode": {
+                "type": "String",
+                "required": true
+              }
+            },
+            "additionalAttributes": false
+          }
+        }
+      },
+      "conversation.input": {
+        "appliesTo": {
+          "principalTypes": [
+            "Phone"
+          ],
+          "resourceTypes": [
+            "Scope"
+          ],
+          "context": {
+            "type": "Record",
+            "attributes": {
+              "linkedFiles": {
+                "type": "Long",
+                "required": true
+              }
+            },
+            "additionalAttributes": false
+          }
+        }
+      },
+      "conversation.remember": {
+        "appliesTo": {
+          "principalTypes": [
+            "Phone"
+          ],
+          "resourceTypes": [
+            "Scope"
+          ],
+          "context": {
+            "type": "Record",
+            "attributes": {},
+            "additionalAttributes": false
+          }
+        }
+      },
+      "phone.context": {
+        "appliesTo": {
+          "principalTypes": [
+            "Phone"
+          ],
+          "resourceTypes": [
+            "Scope"
+          ],
+          "context": {
+            "type": "Record",
+            "attributes": {},
+            "additionalAttributes": false
+          }
+        }
+      }
+    }
+  }
+}

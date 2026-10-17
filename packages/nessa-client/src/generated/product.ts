@@ -717,6 +717,12 @@ export interface ConversationCreateResult {
   /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
   conversationId: string
 }
+/** Capture the locally active execution without opening a provider. Null means no active execution; bounded transcript views are not used to select it. */
+export interface ConversationPeekResult {
+  /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
+  conversationId: string
+  executionId: string | null
+}
 /** Read the current bounded projection. */
 export interface ConversationReadParams {
   /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
@@ -2054,6 +2060,93 @@ export const CatalogueReadErrorCode = {
 } as const
 export type CatalogueReadErrorCode =
   (typeof CatalogueReadErrorCode)[keyof typeof CatalogueReadErrorCode]
+/** Discover the native phone endpoint and canonical consent under the current authenticated bootstrap session. */
+export interface PhoneEndpointParams {}
+/** Exact original authenticated bootstrap linkage. These public identifiers describe correlation; the server reconstructs current authority independently. */
+export interface PhoneOwnerSource {
+  /** Original conversation owner. */
+  ownerId: string
+  /** Original organization. */
+  organizationId: string
+  /** Original membership. */
+  membershipId: string
+  /** Original gateway audience. */
+  audience: string
+  /** Original public bootstrap credential identifier; not a token. */
+  credentialId: string
+  /** Composition-resolved original gateway resource. */
+  resourceId: string
+}
+/** Complete ordered consent published by Auth. The envelope admits bounded grants; Auth owns the exact class, actions, order and resource correspondence. */
+export interface PhoneConsent {
+  /** Canonical access class returned by discovery. */
+  class: string
+  /** Complete canonical ordered action/resource set. No singular grant alias. */
+  grants: ProductGrant[]
+}
+/** Authenticated discovery facts for signing one original phone authorization. No endpoint is inferred from a product address. */
+export interface PhoneDiscovery {
+  /** Original bootstrap identity and gateway resource. */
+  source: PhoneOwnerSource
+  /** Explicit usable numeric SocketAddr destination, as composed by the gateway. Auth validates the numeric address; the wire envelope bounds its text. */
+  nativeEndpoint: string
+  /** Exact gateway TLS SPKI bytes; Auth validates its key grammar. */
+  gatewayKey: number[]
+  /** Canonical complete consent returned by Auth. */
+  consent: PhoneConsent
+}
+/** One immutable signed original. Auth validates nonzero request identity, endpoint, pin and canonical consent before effects. */
+export interface PhoneOriginal {
+  /** Original allocated nonzero request UUID bytes, retained through lost replies. */
+  requestId: number[]
+  /** Exact discovery included in the signed original. */
+  discovery: PhoneDiscovery
+  /** Exact permanent device public key. No private key is published. */
+  deviceKey: number[]
+}
+/** Authorize this exact signed original under fresh bootstrap management and complete consent admission. Exact replay rejoins the same original. */
+export interface PhoneAuthorizeParams {
+  /** Original to verify and persist before activation. */
+  original: PhoneOriginal
+  /** Ed25519 signature of the Auth-owned original transcript. */
+  signature: number[]
+}
+/** Find or rejoin only this exact original in the current bootstrap namespace. Digest mismatch or another source cannot disclose or activate it. */
+export interface PhoneStatusParams {
+  /** Original request UUID bytes. */
+  requestId: number[]
+  /** SHA-256 digest computed by the cryptographic owner from the original transcript. */
+  originalDigest: number[]
+}
+/** Complete historical status of one original phone authorization. Auth constructs phase, receiver, credential and cleanup together; historical activation is not current read/write authority. */
+export interface PhoneAuthorizationStatus {
+  /** Exact stored signed original, including complete consent. */
+  original: PhoneOriginal
+  /** Auth-computed digest of this original transcript. */
+  originalDigest: number[]
+  /** Original invitation identity. */
+  invitationId: number[]
+  /** Original immutable consent identity. */
+  consentId: number[]
+  /** Original consent generation. */
+  generation: number
+  /** Original creation time, Unix milliseconds. */
+  createdAtMs: number
+  /** Original exclusive expiry, Unix milliseconds. */
+  expiresAtMs: number
+  /** Auth-owned current enrollment phase. */
+  phase: PairingOwnerPhase
+  /** Public issued or reserved device credential identifier, once known. */
+  credentialId?: string
+  /** Original receiver and access epoch, once known. */
+  receiver?: PairingReceiver
+  /** First terminal cause and initiator, once ended. */
+  terminal?: PairingTerminal
+  /** Whether original physical cleanup remains owed. */
+  cleanupPending: boolean
+  /** Typed activation interruption, when present. */
+  activationStopped?: PairingActivationStop
+}
 /** Who an invitation enrolls. device: one of the owner's own devices; its credential acts as the owner. gateway: a peer gateway that reads; its credential names a principal of kind gateway, identified by the key it pinned at pairing, and holds only the conversation.read grant. environment: a peer gateway or worker that serves as an environment for this gateway's leases; its credential names the same gateway principal for the same key and holds only the environment.serve grant, so it reads nothing. All use the same enrollment and listener; the choice is bound into the enrollment and cannot be changed by the enrolling side. */
 export const PairingEnrollee = {
   Device: "device",
@@ -2407,6 +2500,8 @@ export interface ConversationSubscriptionEnded {
   reason: ConversationSubscriptionEndReason
   /** For refused: the conversation error code, or unauthorized or forbidden when access was refused. */
   code?: string
+  /** Last semantic event cursor written, or the supplied after cursor if no batch was written. A written cursor records socket delivery, not application processing. Resume from your application's own last-applied batch cursor. */
+  lastEventCursor?: ConversationEventCursor
   /** Where a view subscription resumes from: the cursor of the last view frame written or, when none was, the after it was opened with. Absent for a list, and for a view subscription opened without after that wrote no frame. */
   lastDelivered?: ConversationViewCursor
 }
@@ -2592,6 +2687,58 @@ export interface PermissionReviewWaiting {
   /** Waiting reviews, oldest first, at most 128. */
   reviews: PermissionReviewNotice[]
 }
+/** Committed semantic facts. A scheduling start is distinct from queued input; tool state is provider observation, not proof of physical effects; turn end is local settlement. */
+export const ConversationEventKind = {
+  TurnAccepted: "turn.accepted",
+  TurnStarted: "turn.started",
+  TurnEnded: "turn.ended",
+  ToolUpdated: "tool.updated",
+  StateChanged: "state.changed",
+} as const
+export type ConversationEventKind =
+  (typeof ConversationEventKind)[keyof typeof ConversationEventKind]
+/** Opaque SDK cursor bound to one conversation and stream incarnation. Save only after applying the batch. Reuse unchanged to resume; socket sequence numbers are not cursors. */
+export type ConversationEventCursor = string
+/** Metadata projected from one complete committed semantic fact. No prompt, thinking, tool arguments or results are included. */
+export interface ConversationEvent {
+  /** Stable semantic event identity, identical on replay. */
+  id: ConversationEventCursor
+  /** Opaque checkpoint after applying this event or batch. */
+  cursor: ConversationEventCursor
+  /** The semantic event kind. */
+  kind: ConversationEventKind
+  /** Execution this fact belongs to, when any. */
+  executionId?: string
+  /** Provider tool identity within its execution, when any. */
+  toolId?: string
+  /** Tool name when observed, bounded metadata only. */
+  name?: string
+  /** Observed lifecycle or tool status. */
+  status?: string
+  /** Local settlement outcome; this is not a provider acknowledgement. */
+  outcome?:
+    "completed" | "output_limit" | "request_limit" | "refused" | "cancelled" | "failed"
+}
+/** Follow committed semantic events without opening an Agent. Replay uses complete saved facts and explicit gap refusals; default is future events. Stop with conversation.unsubscribe. */
+export interface ConversationSubscribeEventsParams {
+  /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
+  conversationId: string
+  /** Resume strictly after the last applied semantic cursor. */
+  after?: ConversationEventCursor
+  /** Start at the beginning when true. Omitted starts at the captured committed head. Mutually exclusive with after. */
+  replay?: boolean
+  /** Event kinds to deliver; omitted delivers all supported kinds. Filtered batches still advance their cursor. */
+  kinds?: ConversationEventKind[]
+}
+/** An ordered bounded semantic event batch. An empty batch advances the checkpoint past filtered facts. Application checkpoints belong to the consumer. */
+export interface ConversationEvents {
+  /** The connection-local subscription this batch belongs to. */
+  subscriptionId: ConversationSubscriptionId
+  /** Opaque checkpoint after applying this event or batch. */
+  cursor: ConversationEventCursor
+  /** Committed semantic events in source order; empty advances filtered progress. */
+  events: ConversationEvent[]
+}
 export const maxChangeWatchIdBytes = 57 as const
 export const changeWatchIdPattern =
   "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-[1-9][0-9]{0,19}$" as const
@@ -2652,7 +2799,7 @@ export const mcpServerRules = {
 export const bounds = {
   maxOrdinaryResponseBytes: 65536,
   maxRequestFrameBytes: 65536,
-  maxReadyMethods: 70,
+  maxReadyMethods: 75,
   maxAuthCredentialCharacters: 16384,
   maxProductClientIdCharacters: 256,
   maxProductSurfaceInstanceCharacters: 256,
@@ -2717,6 +2864,145 @@ export const bounds = {
   maxMcpDomainBytes: 512,
   maxMcpRemoteMessageCharacters: 512,
 } as const
+export const eventSubscriptionBounds = {
+  maxCursorCharacters: 4096,
+  maxBatchEvents: 64,
+  minKinds: 1,
+  maxKinds: 5,
+  uniqueKinds: true,
+  maxExecutionIdCharacters: 256,
+  maxToolIdCharacters: 256,
+  maxNameCharacters: 1024,
+  maxStatusCharacters: 256,
+  maxOutcomeCharacters: 256,
+} as const
+/** Kind/metadata relationships derived from ConversationEvent's JSON Schema conditionals. */
+export const conversationEventMetadataRules = [
+  {
+    kind: "turn.accepted",
+    required: ["executionId", "status"],
+    forbidden: ["toolId", "name", "outcome"],
+    values: {
+      status: ["accepted"],
+      outcome: [
+        "completed",
+        "output_limit",
+        "request_limit",
+        "refused",
+        "cancelled",
+        "failed",
+      ],
+    },
+  },
+  {
+    kind: "turn.started",
+    required: ["executionId", "status"],
+    forbidden: ["toolId", "name", "outcome"],
+    values: {
+      status: ["running"],
+      outcome: [
+        "completed",
+        "output_limit",
+        "request_limit",
+        "refused",
+        "cancelled",
+        "failed",
+      ],
+    },
+  },
+  {
+    kind: "turn.ended",
+    required: ["executionId", "status", "outcome"],
+    forbidden: ["toolId", "name"],
+    values: {
+      status: ["settled"],
+      outcome: [
+        "completed",
+        "output_limit",
+        "request_limit",
+        "refused",
+        "cancelled",
+        "failed",
+      ],
+    },
+  },
+  {
+    kind: "tool.updated",
+    required: ["executionId", "toolId"],
+    forbidden: ["outcome"],
+    values: {
+      status: ["pending", "running", "completed", "failed"],
+      outcome: [
+        "completed",
+        "output_limit",
+        "request_limit",
+        "refused",
+        "cancelled",
+        "failed",
+      ],
+    },
+  },
+  {
+    kind: "state.changed",
+    required: ["status"],
+    forbidden: ["executionId", "toolId", "name", "outcome"],
+    values: {
+      status: ["opened"],
+      outcome: [
+        "completed",
+        "output_limit",
+        "request_limit",
+        "refused",
+        "cancelled",
+        "failed",
+      ],
+    },
+  },
+  {
+    kind: "state.changed",
+    required: ["executionId", "status", "outcome"],
+    forbidden: ["toolId", "name"],
+    values: {
+      status: ["settlement_updated"],
+      outcome: [
+        "completed",
+        "output_limit",
+        "request_limit",
+        "refused",
+        "cancelled",
+        "failed",
+      ],
+    },
+  },
+  {
+    kind: "state.changed",
+    required: ["executionId", "status"],
+    forbidden: ["toolId", "name", "outcome"],
+    values: {
+      status: [
+        "queued",
+        "injected",
+        "settled",
+        "cancelled",
+        "waiting_permission",
+        "permission_cancelled",
+        "permission_declined",
+        "permission_deadline_answered",
+        "waiting_question",
+        "question_closed",
+        "stop_requested",
+      ],
+      outcome: [
+        "completed",
+        "output_limit",
+        "request_limit",
+        "refused",
+        "cancelled",
+        "failed",
+      ],
+    },
+  },
+] as const
 export const ProductMethod = {
   SessionAuthenticate: "session.authenticate",
   AuthSession: "auth.session",
@@ -2768,6 +3054,9 @@ export const ProductMethod = {
   McpServersInspect: "mcpServers.inspect",
   McpServersAuthorize: "mcpServers.authorize",
   McpServersRevoke: "mcpServers.revoke",
+  PhoneEndpoint: "phone.endpoint",
+  PhoneAuthorize: "phone.authorize",
+  PhoneStatus: "phone.status",
   PairingCreate: "pairing.create",
   PairingPending: "pairing.pending",
   PairingStatus: "pairing.status",
@@ -2789,9 +3078,12 @@ export const ProductMethod = {
   ConversationShares: "conversation.shares",
   ConversationPermissionRules: "conversation.permissionRules",
   ConversationRevokePermissionRule: "conversation.revokePermissionRule",
+  ConversationSubscribeEvents: "conversation.subscribeEvents",
+  ConversationPeek: "conversation.peek",
 } as const
 export const ProductEvent = {
   SessionChallenge: "session.challenge",
+  SessionTerminated: "session.terminated",
   ConversationChanged: "conversation.changed",
   ConversationWatchEnded: "conversation.watchEnded",
   ConversationView: "conversation.view",
@@ -2799,6 +3091,7 @@ export const ProductEvent = {
   AgentsListed: "agents.listed",
   ConversationSubscriptionEnded: "conversation.subscriptionEnded",
   PermissionReviewWaiting: "permission.reviewWaiting",
+  ConversationEvents: "conversation.events",
 } as const
 export const ProductHandshakeMethod = "session.authenticate" as const
 export const productReadyMethods = [
@@ -2851,6 +3144,9 @@ export const productReadyMethods = [
   "mcpServers.inspect",
   "mcpServers.authorize",
   "mcpServers.revoke",
+  "phone.endpoint",
+  "phone.authorize",
+  "phone.status",
   "pairing.create",
   "pairing.pending",
   "pairing.status",
@@ -2872,6 +3168,8 @@ export const productReadyMethods = [
   "conversation.shares",
   "conversation.permissionRules",
   "conversation.revokePermissionRule",
+  "conversation.subscribeEvents",
+  "conversation.peek",
 ] as const
 /** The grant each product method asks Cedar for, generated from protocol/product/manifest.json. null means another owner admits the method: the handshake, auth.session, or a watch. Writing to a conversation — an answer, an upload, an app's calls — asks for conversation.write; reading its records or catalogue asks for conversation.read; running a configured server, or enrolling a device, asks for credential.manage. */
 export const productMethodGrants = {
@@ -2925,6 +3223,9 @@ export const productMethodGrants = {
   "mcpServers.inspect": "credential.manage",
   "mcpServers.authorize": "credential.manage",
   "mcpServers.revoke": "credential.manage",
+  "phone.endpoint": "server.read",
+  "phone.authorize": "credential.manage",
+  "phone.status": "credential.manage",
   "pairing.create": "credential.manage",
   "pairing.pending": "credential.manage",
   "pairing.status": "credential.manage",
@@ -2946,6 +3247,8 @@ export const productMethodGrants = {
   "conversation.shares": "credential.manage",
   "conversation.permissionRules": "conversation.write",
   "conversation.revokePermissionRule": "conversation.write",
+  "conversation.subscribeEvents": "conversation.write",
+  "conversation.peek": "conversation.write",
 } as const
 export const catalogueWireSchemas = {
   RecordScope: {

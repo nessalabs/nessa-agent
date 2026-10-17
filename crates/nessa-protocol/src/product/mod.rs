@@ -5,6 +5,7 @@
 //!                 ├─▶ passive_read ─▶ generated
 //! record_read ────┘
 //! handshake ─────────────────────────▶ generated
+//! owner_phone ───────────────────────▶ generated + Auth immutable originals
 //! ```
 //! Arrows are imports.
 //!
@@ -19,5 +20,6 @@
 pub mod catalogue_read;
 pub mod generated;
 pub mod handshake;
+pub mod owner_phone;
 pub mod passive_read;
 pub mod record_read;

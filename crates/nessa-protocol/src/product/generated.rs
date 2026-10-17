@@ -720,6 +720,13 @@ pub struct ConversationCreateResult {
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationPeekResult {
+    pub conversation_id: String,
+    #[serde(deserialize_with = "Option::deserialize")]
+    pub execution_id: Option<String>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConversationReadParams {
     pub conversation_id: String,
 }
@@ -1944,6 +1951,73 @@ pub struct ConversationCatalogueResolveResult {
     pub entry: CatalogueDescriptor,
     pub payload: String,
 }
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PhoneEndpointParams {}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PhoneOwnerSource {
+    pub owner_id: String,
+    pub organization_id: String,
+    pub membership_id: String,
+    pub audience: String,
+    pub credential_id: String,
+    pub resource_id: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PhoneConsent {
+    pub class: String,
+    pub grants: Vec<CredentialGrantDto>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PhoneDiscovery {
+    pub source: PhoneOwnerSource,
+    pub native_endpoint: String,
+    pub gateway_key: Vec<u64>,
+    pub consent: PhoneConsent,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PhoneOriginal {
+    pub request_id: Vec<u64>,
+    pub discovery: PhoneDiscovery,
+    pub device_key: [u8; DeviceKey::LENGTH],
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PhoneAuthorizeParams {
+    pub original: PhoneOriginal,
+    pub signature: Vec<u64>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PhoneStatusParams {
+    pub request_id: Vec<u64>,
+    pub original_digest: Vec<u64>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PhoneAuthorizationStatus {
+    pub original: PhoneOriginal,
+    pub original_digest: Vec<u64>,
+    pub invitation_id: [u8; InvitationId::LENGTH],
+    pub consent_id: [u8; ConsentIntentId::LENGTH],
+    pub generation: u64,
+    pub created_at_ms: u64,
+    pub expires_at_ms: u64,
+    pub phase: PairingOwnerPhase,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receiver: Option<PairingReceiver>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal: Option<PairingTerminal>,
+    pub cleanup_pending: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activation_stopped: Option<PairingActivationStop>,
+}
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PairingEnrollee {
@@ -2370,6 +2444,8 @@ pub struct ConversationSubscriptionEnded {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub code: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_event_cursor: Option<ConversationEventCursor>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_delivered: Option<ConversationViewCursor>,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
@@ -2581,6 +2657,67 @@ pub struct PermissionReviewNotice {
 pub struct PermissionReviewWaiting {
     pub reviews: Vec<PermissionReviewNotice>,
 }
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationEventKind {
+    #[serde(rename = "turn.accepted")]
+    TurnAccepted,
+    #[serde(rename = "turn.started")]
+    TurnStarted,
+    #[serde(rename = "turn.ended")]
+    TurnEnded,
+    #[serde(rename = "tool.updated")]
+    ToolUpdated,
+    #[serde(rename = "state.changed")]
+    StateChanged,
+}
+impl ConversationEventKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::TurnAccepted => "turn.accepted",
+            Self::TurnStarted => "turn.started",
+            Self::TurnEnded => "turn.ended",
+            Self::ToolUpdated => "tool.updated",
+            Self::StateChanged => "state.changed",
+        }
+    }
+}
+pub type ConversationEventCursor = String;
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationEvent {
+    pub id: ConversationEventCursor,
+    pub cursor: ConversationEventCursor,
+    pub kind: ConversationEventKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<String>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationSubscribeEventsParams {
+    pub conversation_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after: Option<ConversationEventCursor>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replay: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kinds: Option<Vec<ConversationEventKind>>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationEvents {
+    pub subscription_id: ConversationSubscriptionId,
+    pub cursor: ConversationEventCursor,
+    pub events: Vec<ConversationEvent>,
+}
 pub const MAX_CHANGE_WATCH_ID_BYTES: usize = 57;
 pub const CHANGE_WATCH_ID_PATTERN: &str =
     "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-[1-9][0-9]{0,19}$";
@@ -2649,6 +2786,12 @@ pub const PASSIVE_DELIVERY_TIMEOUT_MS: u64 = 30000;
 pub const PASSIVE_CLIENT_ALLOWANCE_MS: u64 = 5000;
 /// Published passive read timing from the product schema, in milliseconds.
 pub const PASSIVE_MIN_REQUEST_TIMEOUT_MS: u64 = 45000;
+/// Event filter bounds published by the product schema.
+pub const MIN_EVENT_SUBSCRIPTION_KINDS: usize = 1;
+pub const MAX_EVENT_SUBSCRIPTION_KINDS: usize = 5;
+pub const UNIQUE_EVENT_SUBSCRIPTION_KINDS: bool = true;
+/// Optional event subscription fields whose published schema forbids explicit null.
+pub const NON_NULL_EVENT_SUBSCRIPTION_OPTIONS: &[&str] = &["after", "replay", "kinds"];
 pub mod product_method {
     pub const SESSION_AUTHENTICATE: &str = "session.authenticate";
     pub const AUTH_SESSION: &str = "auth.session";
@@ -2700,6 +2843,9 @@ pub mod product_method {
     pub const MCP_SERVERS_INSPECT: &str = "mcpServers.inspect";
     pub const MCP_SERVERS_AUTHORIZE: &str = "mcpServers.authorize";
     pub const MCP_SERVERS_REVOKE: &str = "mcpServers.revoke";
+    pub const PHONE_ENDPOINT: &str = "phone.endpoint";
+    pub const PHONE_AUTHORIZE: &str = "phone.authorize";
+    pub const PHONE_STATUS: &str = "phone.status";
     pub const PAIRING_CREATE: &str = "pairing.create";
     pub const PAIRING_PENDING: &str = "pairing.pending";
     pub const PAIRING_STATUS: &str = "pairing.status";
@@ -2721,9 +2867,12 @@ pub mod product_method {
     pub const CONVERSATION_SHARES: &str = "conversation.shares";
     pub const CONVERSATION_PERMISSION_RULES: &str = "conversation.permissionRules";
     pub const CONVERSATION_REVOKE_PERMISSION_RULE: &str = "conversation.revokePermissionRule";
+    pub const CONVERSATION_SUBSCRIBE_EVENTS: &str = "conversation.subscribeEvents";
+    pub const CONVERSATION_PEEK: &str = "conversation.peek";
 }
 pub mod product_event {
     pub const SESSION_CHALLENGE: &str = "session.challenge";
+    pub const SESSION_TERMINATED: &str = "session.terminated";
     pub const CONVERSATION_CHANGED: &str = "conversation.changed";
     pub const CONVERSATION_WATCH_ENDED: &str = "conversation.watchEnded";
     pub const CONVERSATION_VIEW: &str = "conversation.view";
@@ -2731,6 +2880,7 @@ pub mod product_event {
     pub const AGENTS_LISTED: &str = "agents.listed";
     pub const CONVERSATION_SUBSCRIPTION_ENDED: &str = "conversation.subscriptionEnded";
     pub const PERMISSION_REVIEW_WAITING: &str = "permission.reviewWaiting";
+    pub const CONVERSATION_EVENTS: &str = "conversation.events";
 }
 pub fn wire_shape_session_challenge(value: &Value) -> bool {
     value.as_object().is_some_and(|object| {
@@ -2911,7 +3061,7 @@ pub fn wire_shape_product_session_ready(value: &Value) -> bool {
         }) && object.get("methods").is_some_and(|field| {
             let _ = field;
             field.as_array().is_some_and(|items| {
-                items.len() <= 70
+                items.len() <= 75
                     && items.iter().all(|item| {
                         let _ = item;
                         item.is_string()
@@ -2985,6 +3135,9 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "mcpServers.inspect",
     "mcpServers.authorize",
     "mcpServers.revoke",
+    "phone.endpoint",
+    "phone.authorize",
+    "phone.status",
     "pairing.create",
     "pairing.pending",
     "pairing.status",
@@ -3006,6 +3159,8 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "conversation.shares",
     "conversation.permissionRules",
     "conversation.revokePermissionRule",
+    "conversation.subscribeEvents",
+    "conversation.peek",
 ];
 /// The grant Cedar is asked for before this method is dispatched.
 ///
@@ -3023,7 +3178,8 @@ pub fn action_for_method(method: &str) -> Option<&'static str> {
         | "agents.list"
         | "agents.subscribe"
         | "agents.unsubscribe"
-        | "agents.installOptions" => Some("server.read"),
+        | "agents.installOptions"
+        | "phone.endpoint" => Some("server.read"),
         "credential.issue"
         | "credential.list"
         | "credential.revoke"
@@ -3034,6 +3190,8 @@ pub fn action_for_method(method: &str) -> Option<&'static str> {
         | "mcpServers.inspect"
         | "mcpServers.authorize"
         | "mcpServers.revoke"
+        | "phone.authorize"
+        | "phone.status"
         | "pairing.create"
         | "pairing.pending"
         | "pairing.status"
@@ -3078,7 +3236,9 @@ pub fn action_for_method(method: &str) -> Option<&'static str> {
         | "conversation.subscribeList"
         | "conversation.unsubscribe"
         | "conversation.permissionRules"
-        | "conversation.revokePermissionRule" => Some("conversation.write"),
+        | "conversation.revokePermissionRule"
+        | "conversation.subscribeEvents"
+        | "conversation.peek" => Some("conversation.write"),
         "conversation.recordsHead"
         | "conversation.recordsPage"
         | "artifact.read"

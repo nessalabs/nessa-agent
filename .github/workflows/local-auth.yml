@@ -157,6 +157,7 @@ jobs:
           node-version: 24
       - name: Check portable Rust dependency graphs
         run: node scripts/check-runtime-dependencies.mjs --verify-fixture
+      - run: node --test scripts/cargo-test-parallel/e2e.test.mjs
       - run: cargo fmt --all -- --check
       # This pure shared domain is small enough to report denied warnings
       # before its tests without paying a second workspace compile.
@@ -205,6 +206,9 @@ jobs:
           product.mkdir(parents=True)
           shutil.copy2('crates/nessa-protocol/src/product/generated.rs', product / 'generated.rs')
           shutil.copy2('vitest.config.ts', root / 'vitest.config.ts')
+          # The config's setup file: every run loads it, this harness's included.
+          (root / 'src/test').mkdir(parents=True)
+          shutil.copy2('src/test/match-media.ts', root / 'src/test/match-media.ts')
           shutil.copy2('prettier.config.js', root / 'prettier.config.js')
           shutil.copy2('.prettierignore', root / '.prettierignore')
           package = json.loads(pathlib.Path('package.json').read_text())
@@ -298,6 +302,35 @@ jobs:
       # before the aggregate runs.
       - uses: taiki-e/install-action@just
       - run: pnpm frontend:check
+  # The long Windows server libtest starts immediately on its own runner.
+  # Both jobs compile the complete package group to preserve Cargo feature
+  # unification. Only execution is partitioned; remaining owns all doctests.
+  windows-server-tests:
+    name: Windows server library tests
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy,rustfmt
+      - uses: Swatinem/rust-cache@v2
+        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.rust-cache != 'cold' }}
+        with:
+          # Restore the existing Windows matrix cache. It remains the sole
+          # writer, including on main, so two jobs never race the same key.
+          shared-key: local-auth
+          save-if: false
+          cache-on-failure: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - shell: bash
+        run: node scripts/cargo-test-parallel.mjs --concurrency 2 --partition server-lib -- -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk
+        timeout-minutes: 45
+
   local-auth:
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
@@ -305,6 +338,13 @@ jobs:
       fail-fast: false
       matrix:
         os: [windows-latest, ubuntu-latest, macos-latest]
+        include:
+          - os: windows-latest
+            partition: remaining
+          - os: ubuntu-latest
+            partition: all
+          - os: macos-latest
+            partition: all
     runs-on: ${{ matrix.os }}
     # The apt step can run 65 minutes and the Rust tests can run to their own
     # 45 (#366). On the 21 green Ubuntu legs of 2026-10-07, every other step
@@ -358,11 +398,13 @@ jobs:
       # The package list is still one cargo invocation (`--no-run`), so feature
       # unification does not change. scripts/cargo-test-parallel.mjs then runs
       # the built test binaries two at a time and runs doctests with the same
-      # packages. It does not raise libtest's thread count: the ACP
+      # packages. Windows uses remaining; windows-server-tests owns its library
+      # executable. Linux/macOS use all. It does not raise libtest's thread count:
+      # the ACP
       # process-contract semaphore is process-local, and a process-per-test
       # runner would make that semaphore admit every contract test at once.
       - shell: bash
-        run: node scripts/cargo-test-parallel.mjs --concurrency 2 -- -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk
+        run: node scripts/cargo-test-parallel.mjs --concurrency 2 --partition ${{ matrix.partition }} -- -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk
         timeout-minutes: 45
       - run: cargo clippy -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk --all-targets -- -D warnings
       - run: node scripts/check-sdk-docs.mjs
@@ -549,6 +591,7 @@ jobs:
       - desktop-release-profile
       - frontend
       - local-auth
+      - windows-server-tests
       - sdk-domain-coverage
     if: ${{ always() && !cancelled() }}
     runs-on: ubuntu-latest

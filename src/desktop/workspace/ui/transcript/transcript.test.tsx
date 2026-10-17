@@ -258,6 +258,11 @@ describe("a transcript", () => {
     })
     expect(host.querySelector(".workspace-heading h2")?.textContent).toBe("Session b")
     expect(host.querySelector(".workspace-bubble code")?.textContent).toBe("cargo")
+    // The turn has ended, so its steps are one line until opened.
+    const work = host.querySelector<HTMLButtonElement>(".workspace-work button")
+    expect(work?.textContent).toBe("Ran 2 tools · 1 read, 1 edited")
+    expect(host.querySelector(".workspace-steps")).toBeNull()
+    await act(async () => work?.click())
     expect(
       [...host.querySelectorAll(".workspace-steps li")].map((step) => step.textContent),
     ).toEqual(["ReadCargo.toml", "Editedlib.rs+3−1"])
@@ -1636,6 +1641,101 @@ it("pins after observed layout, respects scrolling away, and rejects late delive
   } finally {
     if (!removed) await act(async () => root.unmount())
     geometry.mockRestore()
+    Object.assign(globalThis, { ResizeObserver: previous })
+  }
+})
+
+it("offers the way back to the latest only half a screen from the end, and returns there within the motion budget", async () => {
+  let notify: ResizeObserverCallback | null = null
+  class LayoutObserver {
+    constructor(callback: ResizeObserverCallback) {
+      notify = callback
+    }
+    observe() {}
+    disconnect() {}
+  }
+  const previous = globalThis.ResizeObserver
+  Object.assign(globalThis, { ResizeObserver: LayoutObserver })
+  const geometry = vi
+    .spyOn(HTMLElement.prototype, "scrollHeight", "get")
+    .mockImplementation(function (this: HTMLElement) {
+      return this.classList.contains("workspace-transcript") ? 1000 : 0
+    })
+  // Frames the test turns by hand, so nothing is left running after it.
+  const frames = new Map<number, FrameRequestCallback>()
+  let nextFrame = 0
+  const request = vi
+    .spyOn(window, "requestAnimationFrame")
+    .mockImplementation((callback) => {
+      frames.set(++nextFrame, callback)
+      return nextFrame
+    })
+  const cancelFrame = vi
+    .spyOn(window, "cancelAnimationFrame")
+    .mockImplementation((id) => void frames.delete(id))
+  const clock = vi.spyOn(performance, "now").mockReturnValue(0)
+  const turn = async (at: number) => {
+    const due = [...frames.values()]
+    frames.clear()
+    await act(async () => due.forEach((callback) => callback(at)))
+  }
+  try {
+    await shown()
+    const scroller = host.querySelector<HTMLElement>(".workspace-transcript")
+    const jump = host.querySelector<HTMLButtonElement>(".workspace-jump")
+    if (!scroller || !jump) throw new Error("no transcript")
+    Object.defineProperty(scroller, "clientHeight", { configurable: true, value: 200 })
+    await act(async () =>
+      (notify as ResizeObserverCallback | null)?.([], {} as ResizeObserver),
+    )
+    expect(scroller.scrollTop).toBe(1000)
+    expect(jump.hasAttribute("data-hidden")).toBe(true)
+    expect(jump.tabIndex).toBe(-1)
+
+    // A nudge up is not away.
+    scroller.scrollTop = 750
+    await act(async () => scroller.dispatchEvent(new Event("scroll")))
+    expect(jump.hasAttribute("data-hidden")).toBe(true)
+
+    scroller.scrollTop = 200
+    await act(async () => scroller.dispatchEvent(new Event("scroll")))
+    expect(jump.hasAttribute("data-hidden")).toBe(false)
+    expect(jump.getAttribute("aria-label")).toBe("Jump to Latest")
+
+    // The stylesheet's duration (`--desktop-slow`), which reduced motion makes 0.
+    scroller.style.setProperty("--desktop-slow", "240ms")
+    await act(async () => jump.click())
+    await turn(120)
+    expect(scroller.scrollTop).toBeGreaterThan(200)
+    expect(scroller.scrollTop).toBeLessThan(800)
+    await turn(240)
+    expect(scroller.scrollTop).toBe(800)
+    expect(frames.size).toBe(0)
+    await act(async () => scroller.dispatchEvent(new Event("scroll")))
+    expect(jump.hasAttribute("data-hidden")).toBe(true)
+
+    // The reader taking the scroll back mid-return keeps where they are.
+    scroller.scrollTop = 100
+    await act(async () => scroller.dispatchEvent(new Event("scroll")))
+    await act(async () => jump.click())
+    await turn(60)
+    const reached = scroller.scrollTop
+    scroller.dispatchEvent(new Event("wheel"))
+    expect(frames.size).toBe(0)
+    expect(scroller.scrollTop).toBe(reached)
+
+    // Reduced motion: straight there, no frames.
+    scroller.style.setProperty("--desktop-slow", "0ms")
+    await act(async () => jump.click())
+    expect(scroller.scrollTop).toBe(1000)
+    expect(frames.size).toBe(0)
+  } finally {
+    await act(async () => root.unmount())
+    root = createRoot(host)
+    geometry.mockRestore()
+    request.mockRestore()
+    cancelFrame.mockRestore()
+    clock.mockRestore()
     Object.assign(globalThis, { ResizeObserver: previous })
   }
 })

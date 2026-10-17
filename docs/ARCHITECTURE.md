@@ -871,6 +871,12 @@ boundaries and mandatory audit records independently. Unfinished streaming text
 can be lost on crash. Reads are bounded current views, not a durable cursor stream.
 The shared record database is opened before the gateway listens.
 
+Committed semantic event consumers share the conversation application's
+`EventProgress` validator: SDK page construction validates one page, and the
+application correlates each reply with its requested start and prior checkpoint
+before projection or checkpoint retention. Socket subscriptions and agent tools
+use that same continuity owner.
+
 Authorized physical history uses `conversation.recordsHead` and
 `conversation.recordsPage` on that same authenticated `/session` socket. Each
 request passes current credential, receiver-binding and conversation-owner
@@ -982,7 +988,12 @@ contract contains no routing or IO and is separate from generic protocol frames.
 
 **Device client core** (`crates/nessa-client-core`) — reusable Rust library and
 standalone retained-sync example. Owns device enrollment, private profile/cache,
-finite retained reads and bounded watch composition. The gateway's real paired
+finite retained reads, bounded watch composition, and an independent protected
+product child. The child reuses the canonical pinned OpenProduct handshake and
+shared incremental channel, with one bounded request/event pump, original native
+IDs and cancellation-independent physical drain. Actual Ready methods gate
+request admission; neither metadata nor the child grants credential authority.
+The gateway's real paired
 process tests consume its public entry point through a dev-dependency. Shared
 schemas, framing and conversation projection remain in `nessa-protocol`; the
 client graph cannot reach the gateway runtime. See the
@@ -1033,6 +1044,16 @@ source. Composition loads namespace `config.json` and injects registry limits
 and session deadlines. Use the
 [local SDK/CLI guide](guides/local-auth.md) for gateway access and the
 [adversarial review](reviews/local-auth-gateway.md) for validation and limits.
+
+## Agent thread tools
+
+The gateway's `nessa-agents` built-in offers source-bound `create_thread`,
+`send_message`, `subscribe` and `stop_thread` tools through the existing MCP
+relay. Conversation application admission derives the actor from the live source
+turn, Cedar decides owner delegation, and target commands retain their existing
+durable receipts and permission handling. Observation polls an independent
+committed reader and never opens an Agent. The ownership and ordering table is
+[agent thread tools](design/agent-thread-tools.md).
 
 ## Nessa-owned tools over MCP
 

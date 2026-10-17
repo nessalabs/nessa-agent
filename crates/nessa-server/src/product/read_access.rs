@@ -11,7 +11,7 @@
 //! role and policy between the wire and the domain. `conversation.read`,
 //! `artifact.read` and every view subscription batch
 //! (`subscription::authorize_batch`) ask [`admit_conversation`]; a paired
-//! device is admitted to that batch on [`admit_paired_follow`];
+//! device is admitted to that batch on [`admit_paired_read`];
 //! `conversation.list`, `conversation.observe` and every list batch ask
 //! [`admit_list`]. A gateway that pairs no device has no receiver binding, so
 //! every session is the owner's and reads exactly as before (row G11).
@@ -24,13 +24,13 @@
 //! ```
 use super::{
     conversation::{caller, conversation_id},
-    socket::{admit_action, admit_grant, failure, failure_with_details, success},
+    socket::{admit_grant, failure, failure_with_details, success},
     state::ProductRouteState,
 };
 use crate::conversation::application::{
     binding_of, error_code, paired_facts, AccessAction, AuditedReviewSelection,
     ConversationAccessPolicyEvaluator, ConversationError, PairedAccess, PairedParty, PairedRefusal,
-    ReceiverBinding, RequestShape, ReviewNoticeAuditCause, ReviewNoticeAuditFailure,
+    Reader, ReceiverBinding, RequestShape, ReviewNoticeAuditCause, ReviewNoticeAuditFailure,
     SelectReviewNotice, ShareConversation, ShareGrant, MAX_POLICY_REVISION,
 };
 use crate::conversation::domain::{CommandHosts, ToolChoice, ToolPolicy, ToolPreset, ToolRules};
@@ -64,6 +64,21 @@ async fn paired_binding(
     binding_of(receivers.as_ref(), session.context())
         .await
         .map_err(refusal_code)
+}
+
+pub(super) async fn reader(
+    state: &ProductRouteState,
+    session: &AuthenticatedSession,
+) -> Result<Reader, &'static str> {
+    if let Some(phone) = super::owner_phone::current(state, session).await? {
+        return Ok(Reader::OwnerPhone(Box::new(phone)));
+    }
+    Ok(match paired_binding(state, session).await? {
+        Some(binding) => Reader::PairedDevice {
+            receiver_id: binding.receiver_id,
+        },
+        None => Reader::Owner,
+    })
 }
 
 /// The access policy a paired party is asked of. It is bound with the
@@ -161,24 +176,26 @@ async fn unpaired_may_see_review(
     })
 }
 
-/// Whether a paired `session` may open or stop one view subscription on
-/// `method`.
+/// Admit a paired credential's peek or subscription read through pairing's grant.
 ///
-/// Returns whether this call admitted it. A session that is not paired, and
-/// a method other than `conversation.subscribe` or `conversation.unsubscribe`,
-/// returns false so the caller asks the method's own grant. A paired session
-/// is admitted on the grant pairing mints (`conversation.read`). One that
-/// holds `conversation.write` instead is admitted on that grant, as a paired
-/// session holding the owner's write grant already was. The conversation it
-/// may follow is [`admit_conversation`], asked by the subscription task.
-/// `conversation.subscribeList` is not here: a device stays refused it until
-/// the catalogue is grant-scoped.
-pub(super) async fn admit_paired_follow(
+/// Returns false for unpaired sessions or other methods so their caller asks
+/// the manifest grant. Paired credentials ask `conversation.read`, with the
+/// existing `conversation.write` fallback. This admits no target: peek and
+/// subscription tasks still ask [`admit_conversation`]. Unsubscribe retires only
+/// a subscription admitted earlier. Lists remain outside this exception until
+/// their catalogue is grant-scoped.
+pub(super) async fn admit_paired_read(
     state: &ProductRouteState,
     session: &AuthenticatedSession,
     method: &str,
 ) -> Result<bool, &'static str> {
-    if method != "conversation.subscribe" && method != "conversation.unsubscribe" {
+    if !matches!(
+        method,
+        "conversation.peek"
+            | "conversation.subscribe"
+            | "conversation.subscribeEvents"
+            | "conversation.unsubscribe"
+    ) {
         return Ok(false);
     }
     if paired_binding(state, session).await?.is_none() {
@@ -201,6 +218,20 @@ pub(super) async fn admit_conversation(
     session: &AuthenticatedSession,
     id: &ConversationId,
 ) -> Result<(), &'static str> {
+    let reader = reader(state, session).await?;
+    if let Reader::OwnerPhone(phone) = &reader {
+        let Some((_, conversations, _)) = state.passive_read.as_ref() else {
+            return Err("temporarily_unavailable");
+        };
+        let target =
+            crate::conversation::application::load_conversation(conversations.as_ref(), id)
+                .await
+                .map_err(|_| "temporarily_unavailable")?
+                .ok_or("conversation_not_found")?;
+        return phone
+            .admit_conversation(&target, AccessAction::Read)
+            .map_err(refusal_code);
+    }
     let Some(binding) = paired_binding(state, session).await? else {
         return Ok(());
     };
@@ -226,15 +257,95 @@ pub(super) async fn admit_conversation(
         .map_err(paired_code)
 }
 
-/// Whether `session` may ask for the owner's list (`conversation.list` on
-/// the catalogue its binding reads). A paired device lists through its
-/// catalogue, which the store narrows to its grants; the socket's lists are
-/// the owner's own, so the policy refuses them to a device (row G12) rather
-/// than it being handed a list filtered after it was read.
+/// The handler supplies an ID only after canonical typed decoding. Existing
+/// metadata is independently scoped by Cedar before effects; absence remains
+/// the command owner's fact (missing target, missing receipt, or a new creation),
+/// never fabricated target metadata or a Rust permission verdict.
+///
+/// A live conversation asks `conversation.act`. A tombstone asks
+/// `when_deleted`. Delete passes `conversation.erase`, so the owner of a
+/// committed tombstone can take the idempotent receipt and resume erasure.
+/// Every other command passes `Act`, which the ownership policy refuses once
+/// the conversation is deleted.
+pub(super) async fn admit_command_target(
+    state: &ProductRouteState,
+    session: &AuthenticatedSession,
+    id: &ConversationId,
+    when_deleted: AccessAction,
+) -> Result<(), &'static str> {
+    let Reader::OwnerPhone(phone) = reader(state, session).await? else {
+        return Ok(());
+    };
+    let Some((_, repository, _)) = state.passive_read.as_ref() else {
+        return Err("temporarily_unavailable");
+    };
+    if let Some(target) =
+        crate::conversation::application::load_conversation(repository.as_ref(), id)
+            .await
+            .map_err(|_| "temporarily_unavailable")?
+    {
+        let action = if target.deletion().is_some() {
+            when_deleted
+        } else {
+            AccessAction::Act
+        };
+        phone
+            .admit_conversation(&target, action)
+            .map_err(refusal_code)?;
+    }
+    Ok(())
+}
+
+/// A list/index is buffered as one response. Every actual returned candidate
+/// asks target policy; a failure refuses the whole batch without a cursor or
+/// partial metadata disclosure. Ordinary/legacy readers keep their admission.
+pub(super) async fn admit_index_rows(
+    state: &ProductRouteState,
+    session: &AuthenticatedSession,
+    rows: &[nessa_protocol::product::generated::ConversationSummary],
+) -> Result<(), ConversationError> {
+    let Some(phone) = super::owner_phone::current(state, session)
+        .await
+        .map_err(|_| ConversationError::Metadata)?
+    else {
+        return Ok(());
+    };
+    let Some((_, repository, _)) = state.passive_read.as_ref() else {
+        return Err(ConversationError::Metadata);
+    };
+    for row in rows {
+        let id = conversation_id(&row.conversation_id)?;
+        let target = crate::conversation::application::load_conversation(repository.as_ref(), &id)
+            .await?
+            .ok_or(ConversationError::Metadata)?;
+        phone
+            .admit_entry(
+                target.owner(),
+                target.organization(),
+                target.deletion().is_some(),
+            )
+            .map_err(|_| ConversationError::Metadata)?;
+    }
+    Ok(())
+}
+
+/// Whether `session` may ask for the owner's list. A paired device lists
+/// through its catalogue, which the store narrows to its grants; the socket's
+/// lists are the owner's own, so a device is refused them (row G12) rather
+/// than handed a list filtered after it was read.
 pub(super) async fn admit_list(
     state: &ProductRouteState,
     session: &AuthenticatedSession,
 ) -> Result<(), &'static str> {
+    if let Some(phone) = super::owner_phone::current(state, session).await? {
+        return phone
+            .admit_catalogue(
+                &phone.receiver().owner_id,
+                &phone.receiver().organization_id,
+                AccessAction::List,
+            )
+            .map_err(refusal_code);
+    }
     let Some(binding) = paired_binding(state, session).await? else {
         return Ok(());
     };
@@ -270,18 +381,22 @@ fn paired_action(method: &str) -> AccessAction {
 /// reaches only to be admitted again by its grants: the read and the view
 /// subscription ask [`admit_conversation`], the lists ask [`admit_list`],
 /// and an unsubscribe ends only what was admitted. Rows G12 and G13.
-const ADMITTED_BY_ITS_OWN_CHECK: [&str; 6] = [
+const ADMITTED_BY_ITS_OWN_CHECK: [&str; 8] = [
     "conversation.read",
     "conversation.list",
     "conversation.observe",
     "conversation.subscribe",
+    "conversation.subscribeEvents",
+    "conversation.peek",
     "conversation.subscribeList",
     "conversation.unsubscribe",
 ];
 
 /// The one admission of a socket request, after its session was found
 /// current. The owner's surfaces, and every method outside Cedar's
-/// `conversation.write`, are admitted by the method's grant as before.
+/// `conversation.write`, are admitted by the method's grant as before. Paired
+/// peek asks [`admit_paired_read`] before the manifest fallback, then its handler
+/// still asks current target read admission.
 ///
 /// A paired session holding `conversation.write` would otherwise act as its
 /// owner, so for it every `conversation.write` method that its grants do
@@ -312,9 +427,25 @@ pub(super) async fn admit_request(
 ) -> Result<Initiation, &'static str> {
     let method = frame.method.as_str();
     let as_owner = || async {
-        admit_action(state, session, method).await?;
+        let action = action_for_method(method).ok_or("unknown_method")?;
+        admit_grant(state, session, action).await?;
         Ok(Initiation::owner())
     };
+    // Canonical first-party purpose is distinct from a share-grant driver.
+    // Cedar admits its published method; decoded target/input admission still
+    // precedes each handler effect. The initiation retains existing owner tool
+    // approval behavior rather than a Drive grant's unchecked tool execution.
+    if super::owner_phone::admit_method(state, session, method)
+        .await?
+        .is_some()
+    {
+        return as_owner().await;
+    }
+    // Peek is an ordinary request, unlike subscription task admission. Ask the
+    // same paired-read owner here before the manifest's owner-surface fallback.
+    if method == "conversation.peek" && admit_paired_read(state, session, method).await? {
+        return Ok(Initiation::owner());
+    }
     let writes = action_for_method(method) == Some("conversation.write");
     if !writes || ADMITTED_BY_ITS_OWN_CHECK.contains(&method) {
         return as_owner().await;

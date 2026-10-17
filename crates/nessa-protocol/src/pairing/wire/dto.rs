@@ -51,6 +51,8 @@ pub(super) struct WireConsent<'a> {
     organization: Cow<'a, str>,
     resource: Cow<'a, str>,
     action: Cow<'a, str>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    additional_actions: Vec<Cow<'a, str>>,
 }
 impl WireConsent<'_> {
     pub(super) fn from_domain(consent: &DisclosedConsent) -> WireConsent<'_> {
@@ -60,6 +62,11 @@ impl WireConsent<'_> {
             organization: consent.grant().resource().organization_id().as_str().into(),
             resource: consent.grant().resource().id().as_str().into(),
             action: consent.grant().action().as_str().into(),
+            additional_actions: consent
+                .additional_grants()
+                .iter()
+                .map(|grant| grant.action().as_str().into())
+                .collect(),
         }
     }
     fn into_domain(self) -> Result<Box<DisclosedConsent>, NativeWireError> {
@@ -75,7 +82,14 @@ impl WireConsent<'_> {
             Action::new(self.action.into_owned()).map_err(|_| NativeWireError::Invalid)?,
             resource,
         );
-        DisclosedConsent::new(public, audience, grant)
+        let mut grants = vec![grant];
+        for action in self.additional_actions {
+            grants.push(Grant::new(
+                Action::new(action.into_owned()).map_err(|_| NativeWireError::Invalid)?,
+                grants[0].resource().clone(),
+            ));
+        }
+        DisclosedConsent::with_grants(public, audience, grants)
             .map(Box::new)
             .map_err(NativeWireError::Correlation)
     }
@@ -97,6 +111,11 @@ pub(super) enum WireRequest<'a> {
     Status {
         public: WirePublic<'a>,
     },
+    RecoverOwnerPhone {
+        #[serde(rename = "requestId")]
+        request_id: [u8; 16],
+        digest: [u8; 32],
+    },
     OpenProduct {},
     OpenEnvironment {},
 }
@@ -111,6 +130,12 @@ pub(super) enum WireReply<'a> {
         response: Cow<'a, [u8]>,
     },
     Status {
+        status: WireStatus<'a>,
+    },
+    OwnerPhoneRecovery {
+        #[serde(rename = "requestId")]
+        request_id: [u8; 16],
+        digest: [u8; 32],
         status: WireStatus<'a>,
     },
     Refused {},

@@ -9,6 +9,7 @@
 
 mod caller_wakes;
 mod discovery;
+mod events;
 mod fixtures;
 mod memory;
 mod ownership_settlement;

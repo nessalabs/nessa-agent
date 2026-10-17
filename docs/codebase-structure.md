@@ -688,6 +688,29 @@ numbers are the caller's: the gateway takes them from the selected model's
 
 ## Gateway conversation ownership
 
+First-party phone authorization is [ADR811](adr/todo/811-owner-phone-authorization.md).
+`nessa-server/src/product/phone_endpoint.rs` publishes actual authenticated native
+discovery. `composition/native_pairing.rs` publishes a wildcard listener as
+`native.advertisedAddress` on the bound port. `product/phone.rs` maps the signed
+setup/status DTOs, and `product/owner_phone.rs` supplies current purpose/method/input
+admission.
+`device_pairing/application/owner_phone.rs` and its infrastructure adapter use
+Auth's original-request ledger and the existing activation/expiry/cleanup owners.
+`device_pairing/application/read_status.rs` projects exact signed TLS recovery
+through the same current original holding owner as read-only pairing.
+
+`conversation/application/owner_phone_policy.rs` retains current signed purpose,
+receiver holding and linkage before the shared conversation-access policy may
+see a first-party Person. Its Cedar adapter under
+`conversation/infrastructure/owner_phone_policy/cedar/` owns only purpose linkage,
+method and input restrictions; `access_policy/cedar/` remains the single actual
+conversation target and catalogue entry policy owner. The source's admitted
+reader and caller travel together through bounded catalogue workers. The receiver
+profile hash consumes each enforcing bundle's owning sources, so an actual
+policy change fences saved read epochs. Server fixtures split mounted discovery,
+signed replay/refusal, actual TLS recovery, held late Pair cleanup, native method
+effect accounting, catalogue and policy-profile proofs under
+`tests/composition/owner_phone*.rs` and `tests/conversation/owner_phone*.rs`.
 Review notices receive an application-owned `ConversationMetadataReader` from
 product-route composition. Its private repository delegates to the checked
 metadata loader, so returned identity is correlated before ownership policy
@@ -917,6 +940,8 @@ Named record-read owners: `conversation/application/record_read/read.rs` owns pa
 `product/change_watch/` owns live change hints on the product socket: `registration.rs` the watch identity and the one current-admission call (through `AdmitPassiveRead`), `connection.rs` a connection's two target positions and their authority tasks, `delivery.rs` the pending/in-flight notice positions the single writer in `socket.rs` takes from, and `owner.rs` the gateway-wide watch permits and first task fault. Producers are injected through `conversation/application/change_watch.rs` (`WatchRecords`, `WatchNamespaces`) with adapters in `conversation/infrastructure/change_watch.rs`; a watch never reads a head or takes a passive-read permit. The client side is `packages/nessa-client/src/presentation/change-watch-api.ts` and `protocol/change-watch-validate.ts`, through the existing dispatcher. The state and order table is in [committed change watches](design/committed-change-watches.md#298b-authorized-live-hints-over-the-product-socket); socket tests are `tests/product/socket/watches.rs`.
 `product/subscription/` owns replay-to-live view and list subscriptions on the product socket ([record subscriptions](design/record-subscriptions.md)): `connection.rs` a connection's subscriptions and their limits, `target.rs` one task per subscription — wake sources registered before each read, every batch admitted in `authorize_batch`, read through the same fold as `conversation.read` and `conversation.list`, `lagging` when a frame is not taken in time — and `delivery.rs` the frames the single writer in `socket.rs` takes, one in flight per subscription. `conversation/application/live_changes.rs` wakes a reader on live facts that are not records. The client side is `packages/nessa-client/src/presentation/subscription-api.ts` and `protocol/subscription-validate.ts`; socket tests are `tests/product/socket/subscriptions.rs`. The desktop workspace's gateway source (`src/desktop/workspace/adapters/gateway/gateway-source.ts`) follows these subscriptions and polls nothing.
 
+`product/subscription/events.rs` follows committed semantic events through the same connection and delivery owners. `conversation/application/service/event_read.rs` owns target admission, shared `EventProgress` correlation of reader outputs with their start/prior checkpoint, and the metadata-only projection from the SDK reader; it never opens an Agent. Event consumers share that continuity validator before publishing data or retaining checkpoints. Event subscriptions retain a replay cursor rather than replacing a conversation view. Their socket regressions are `tests/product/socket/subscriptions/events.rs`, with delivery deadline tests in `tests/product/subscription_event_delivery.rs`; shared continuity and projection regressions are `tests/conversation/event_read.rs`.
+
 Share grants ([share grants](design/read-grants.md)): `conversation/domain/value_objects/share_access.rs` is what a grant lets its holder do — a role (Read, Comment, Drive) and, for Drive, a tool policy checked for shape and size; `conversation/application/share_grants.rs` owns whether a reader may read a conversation — a session with a receiver binding is a paired device and reads only what it was granted, whatever the role — and the owner's share commands; `conversation/infrastructure/store/share_grants.rs` keeps the grant table and its journal in the metadata database and states the one SQL predicate the catalogue pages with; `product/read_access.rs` asks it for `conversation.read` and every view subscription batch, refuses the owner's lists to a paired device, and serves `conversation.share`, `.unshare` and `.shares`, mapping a role and policy between the wire and the domain. A Drive turn proceeds only while `hold_revision` still finds that grant at the admitted revision. The permit is that `(conversation, receiver)` pair and is removed when the last one drops. A native steer drops the first permit after the save, compares the revision again, and keeps the second until the provider operation starts, releasing it before the response wait.
 The live slot owns a prepared SDK `Agent` before provider attachment. It captures
 caller-attributed attachment authority, returns create/read/queue commands without
@@ -1033,6 +1058,15 @@ unconfirmed cleanup retains its owner and fences another automatic launch. The
 conversation's freshly resolved provider always supplies the authoritative
 request result. Tests live under `crates/nessa-server/tests/agent_warm_up/` and
 the composition seam under `crates/nessa-server/tests/composition/`.
+
+## CI test execution
+
+[`scripts/cargo-test-parallel.mjs`](../scripts/cargo-test-parallel.mjs) owns the
+combined Cargo test build and bounded binary execution. The Windows server
+library runs in a parallel job; its complement owns doctests. Linux/macOS keep
+the complete selection. The [execution map and failure table](../scripts/cargo-test-parallel/README.md)
+link unit, real-process and workflow-contract coverage; `scripts/ci-result.mjs`
+owns the required-check decision.
 
 ## Cloud development preparation
 
@@ -2039,6 +2073,34 @@ method identity or prove gateway dispatch. [ADR 921](adr/todo/921-close-product-
 proposes that identity while keeping routing, response lanes, execution capacity and paired-admission
 shape in the gateway.
 
+The pure `crates/nessa-protocol/src/product/owner_phone.rs` mapper is shared by
+server phone routes and native preparation. It consumes Auth's immutable source,
+context/request constructors and complete consent publication.
+`nessa-auth`'s `application/pairing/owner_phone_private.rs` and
+`adapters/pairing/private_state/owner_phone.rs` reserve and restore original keys
+under the existing private directory/operation/publisher owner. The core
+`pairing/owner_phone.rs` consumes these ports without network, preserving the
+original signed proof and refusing missing/incomplete restoration. Matching
+fixtures live in Auth `tests/adapters/private_state/owner_phone.rs`, core
+`tests/pairing/owner_phone.rs` and protocol `tests/product/owner_phone.rs`.
+Auth's `application/pairing/owner_phone_adoption.rs` publishes the explicit local
+adoption port and independent acknowledgement/failure receipts.
+`adapters/pairing/private_state/owner_phone/adoption.rs` validates the actual
+original, binds its immutable public lineage, then publishes its pending/issued
+record. One shared public-field codec and joint relationship checker govern cold
+selection; cold getters acknowledge the named original, while adoption validates
+all offered selectors before its first acknowledgement. Generic enrollment writers
+remain excluded from original scopes. Actual storage regressions live in
+`tests/adapters/private_state/owner_phone_adoption.rs`. These Auth owners implement
+local historical adoption. Core `pairing/owner_recovery.rs` consumes the same
+combined private owner for actual pinned compact recovery, complete original/echo/
+disclosure correspondence, explicit settlement and actual saved-record correlation.
+`retained/owner.rs` structurally separates failed recovery from completed remote
+facts and later independent settlement/purge failures; `retained/device.rs` runs
+both inside the existing physical worker/permit. Current reader/product selection
+uses the same freshly reloaded, correlated issued record. Generated Apple bindings
+and app Send remain consuming integration work.
+
 ### Shared product contract values
 
 `crates/nessa-protocol/src/product_contract/generated.rs` publishes the pure typed
@@ -2069,6 +2131,16 @@ example's command line and the retained-sync composition behind it; gateway
 tests enable it as a dev-dependency (ADR 483, amended). The portable package
 gate refuses any client dependency path to `nessa-server`, including renamed
 and transitive edges. Both ends depend on `nessa-protocol` for shared rules.
+
+The public `product` library owns an independent bounded protected pump over the
+same canonical pinned TLS/OpenProduct handshake. `src/protected.rs` and its
+deadline stream own shared incremental framing; `src/product/ports.rs` supplies
+injected socket, independent interrupt and versioned wake ports. The original
+request/ticket and settlement handles in `src/product/session.rs` retain capacity
+through physical completion and final observer release; `src/product/worker.rs`
+is the sole serialized writer/reader. Matching real TLS evidence is under
+`tests/product/`. Actual Ready methods gate admission; this transport grants no
+new credential purpose and changes no method payload schemas or cached authority.
 
 The public `retained` library selects owner-device or granted-peer catalogue reads
 through the existing source authorizer. `retained/subscribe.rs` is the live
@@ -2156,7 +2228,8 @@ The socket admits `conversation.create`, `conversation.send`, `conversation.stee
 Tests mirror those owners under `nessa-sdk/tests/infrastructure/session_storage/creation.rs`,
 `nessa-server/tests/conversation/creation_commands.rs` and
 `nessa-server/tests/conversation/mutation_commands.rs`. The state table is in
-[command creation](design/command-creation.md).
+[command creation](design/command-creation.md). The phone send both sides share
+is [phone send](design/phone-send-contract.md).
 
 Watch shutdown is part of normal host cleanup in `composition/root.rs`: after native
 pairing is signalled to stop, it closes
@@ -2252,6 +2325,35 @@ injected; `src/native_session.rs` and `src/failures.rs` own immutable foreign
 representations. Public intent fields delegate to Auth's immutable historical
 correlation, and saved cursor restoration delegates Id validation to sync;
 neither creates authority. Admission/failure/correlation tests live in `tests/session`.
+`src/native_product.rs` owns immutable actual product Ready/ticket/completion/event
+views, delegating wire bounds, request IDs, pump lifecycle and permit accounting to
+core. `src/session.rs` registers the original product child before start and joins
+it before private-state disposal, including teardown-only poisoned-lock recovery.
+The pure `SessionProduct` holder keeps the injected native clock independently of
+the parent; the foreign relative wait captures one absolute deadline for core.
+`src/native_owner_phone.rs` maps bounded unique discovery through the canonical
+protocol owner and exposes immutable original preparation proof. Initial/restore
+calls share the same combined private store and delegate durable key/signature
+production to core; no network enrollment, issued credential or Ready is invented.
+`tests/session/owner_original.rs` holds actual FS publication/admission/close with
+injected entropy/socket counters; `tests/session/owner_proof.rs` crosses actual cold
+private state and the public foreign proof/error/close-observation boundary.
+`SessionCloseObservation` derives release under the existing driver lock after
+actual join/destruction, independently of retained Product/Damaged errors; an
+unknown poisoned empty slot stays unconfirmed. No new mutable cleanup flag exists.
+`src/serialization.rs` owns the shared capped saved/product JSON-copy writer;
+`tests/product/serialization.rs` covers exact limits and canonical growth without
+changing captured native facts.
+`tests/product/parent.rs` and `tests/product/fixtures.rs` exercise actual pinned TLS,
+private-scope retention and escaped foreign facts/permits. These additions do not
+compose Swift product waiting. `src/native_owner_recovery.rs` exposes immutable
+pinned recovery and independent exact local adoption failures, without a seed,
+bearer or parent lease. `SessionStatus` distinguishes current ReadOnly and original
+OwnerPhone outcomes; missing original state cannot fall through to ReadOnly.
+`tests/session/owner_recovery.rs` crosses actual private FS, pinned compact TLS,
+contradictory valid saved records, held publication/close, reader refusal recheck,
+terminal purge/removal and actual product Ready. Authorization/app Send and the
+changed generated Apple ABI remain separate integration gates.
 The admitted `local_enrollment` publication transfers an owned private-record seed to
 the Auth native identity adapter and returns only public key/pin/intent and optional
 issued selectors. `tests/session/local_enrollment.rs` covers records, failures,
@@ -2269,7 +2371,26 @@ admission reserved before enqueue, a per-call stop latch and a cancellation-inde
 close task. Per-operation capture overloads translate bounded immutable snapshots
 inside that same admission, including serialization/decoding. Verification holds
 actual private scope locks through physical calls and captures until drain.
+Its original prepare/restore/recovery calls use that same parent admission;
+close capture preserves native-confirmed physical release independently of a
+historical failure. `swift/NativeProductWorker.swift` dispatches the actual product
+child with separately admitted Ready, event and submission lanes. Native tickets
+settle on an independent wait lane; their captures retain native count/byte
+permits, original UInt64 identity and typed settlement. Synchronous close wakes
+native I/O before physical drain joins those captures. Neither wrapper allocates
+transport IDs, implements request deadlines or copies private device keys.
 `scripts/build-native-device.sh` generates a local Apple Swift package/XCFramework
 from a frozen checkout; generated declarations remain build output, not hand-edited
 source. Nessa iOS embeds a reviewed dynamic package; its production native
 profile/enrollment and retained history repository remain unfinished.
+
+## Agent thread tools
+
+`nessa-server/src/composition/conversation_tools.rs` adapts four MCP tools to the
+conversation application. `conversation/application/service/agent_tools.rs`
+resolves the source actor and calls the existing Cedar access evaluator before
+using ordinary target command/read paths. `application/agent_tools.rs` owns
+admission evidence and its audit port; `infrastructure/agent_tool_audit.rs`
+persists it. The built-in collection in relay composition keeps these tools
+independent of optional environment commands. See the [ordering and ownership
+contract](design/agent-thread-tools.md).

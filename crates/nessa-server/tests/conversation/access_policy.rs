@@ -187,6 +187,11 @@ fn the_checked_in_bundle_validates_and_names_every_action() {
             _ => on(&live),
         };
         let subject = match action {
+            AccessAction::AgentTools => AccessSubject::AgentTurn {
+                organization: &org,
+                principal: &owner,
+                owner_initiated: true,
+            },
             AccessAction::ReviewNotice => AccessSubject::ReviewRecipient {
                 organization: &org,
                 principal: &owner,
@@ -269,6 +274,34 @@ fn owner_act_admits_the_owner_until_the_conversation_is_deleted() {
         "org",
         "owner"
     )));
+}
+
+#[test]
+fn owner_erase_admits_only_the_owner_of_a_tombstone() {
+    let policy = policy();
+    let deleted = conversation("org", "owner", true);
+    let live = conversation("org", "owner", false);
+    assert_eq!(
+        allowed_by(&person(
+            &policy,
+            AccessAction::Erase,
+            &deleted,
+            "org",
+            "owner"
+        )),
+        Some(&["owner.erase".to_owned()][..])
+    );
+    assert!(!allowed(&person(
+        &policy,
+        AccessAction::Erase,
+        &live,
+        "org",
+        "owner"
+    )));
+    assert_eq!(
+        person(&policy, AccessAction::Erase, &deleted, "org", "other"),
+        AccessDecision::Deny(AccessDenial::NotPermitted)
+    );
 }
 
 #[test]
@@ -1307,6 +1340,44 @@ fn review_notices_use_current_membership_and_live_organization_ownership() {
                     assert_eq!(allowed(&decision), same_organization && !deleted &&
                         (owns || membership == MembershipRole::Admin),
                         "{membership:?}, same org={same_organization}, owns={owns}, deleted={deleted}");
+                }
+            }
+        }
+    }
+}
+
+/// Agent delegation is its own Cedar question; a grant origin cannot inherit
+/// the metadata owner's cross-thread authority, even on a matching account.
+#[test]
+fn agent_tools_require_an_owner_origin_and_matching_live_source_owner() {
+    let policy = policy();
+    let org = organization("org");
+    let owner = principal("owner");
+    for owner_initiated in [false, true] {
+        for same_owner in [false, true] {
+            for same_org in [false, true] {
+                for deleted in [false, true] {
+                    let source = conversation(
+                        if same_org { "org" } else { "other" },
+                        if same_owner { "owner" } else { "other" },
+                        deleted,
+                    );
+                    let decision = policy.evaluate(&AccessAsk {
+                        subject: AccessSubject::AgentTurn {
+                            organization: &org,
+                            principal: &owner,
+                            owner_initiated,
+                        },
+                        action: AccessAction::AgentTools,
+                        resource: AccessResource::of(&source),
+                        held: None,
+                        request: RequestShape::default(),
+                        target: None,
+                    });
+                    assert_eq!(
+                        allowed(&decision),
+                        owner_initiated && same_owner && same_org && !deleted
+                    );
                 }
             }
         }

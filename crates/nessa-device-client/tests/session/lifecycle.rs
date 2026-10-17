@@ -72,6 +72,7 @@ fn compose(root: &Path, connector: Arc<dyn EnrollmentConnector>) -> NativeSessio
         wall: Arc::new(Wall),
         clock: Arc::new(Monotonic::new()),
         runtime: Builder::new_current_thread().enable_all().build().unwrap(),
+        product: ProductDependencies::default(),
     })
     .unwrap()
 }
@@ -151,7 +152,7 @@ fn unreachable_status_retains_outer_failure_and_does_not_read() {
     let refresh = session.refresh(ReadStop::new()).unwrap();
     assert!(matches!(
         refresh.initial(),
-        Err(NativeClientError::Io(ErrorKind::ConnectionRefused))
+        SessionStatus::ReadOnly(Err(NativeClientError::Io(ErrorKind::ConnectionRefused)))
     ));
     assert!(refresh.read().is_none());
     assert!(refresh.recheck().is_none());
@@ -219,7 +220,7 @@ fn concurrent_calls_refuse_and_close_waits_for_physical_connector_before_reuse()
     let refresh = operation.join().unwrap().unwrap();
     assert!(matches!(
         refresh.initial(),
-        Err(NativeClientError::Io(ErrorKind::ConnectionRefused))
+        SessionStatus::ReadOnly(Err(NativeClientError::Io(ErrorKind::ConnectionRefused)))
     ));
     closer.join().unwrap();
     assert_eq!(closed.load(Ordering::SeqCst), 1);

@@ -29,21 +29,42 @@ impl ProductClient {
         assert_eq!(ready["ok"], true, "{ready}");
         client
     }
-    /// Send one request and return its response frame.
+    /// Send one request and require its response frame.
     pub fn call(&mut self, method: &str, params: Value) -> Value {
+        self.call_response_or_close(method, params)
+            .expect("request answered before terminal close")
+    }
+    /// Send one request and retain a typed terminal close instead of discarding it.
+    pub fn call_response_or_close(
+        &mut self,
+        method: &str,
+        params: Value,
+    ) -> Result<Value, tungstenite::protocol::CloseFrame> {
         self.next += 1;
         let id = self.next.to_string();
         self.socket
             .send(Message::Text(
-                json!({"type": "req", "id": id, "method": method, "params": params})
-                    .to_string()
-                    .into(),
+                json!({"type":"req", "id":id,
+            "method":method, "params":params})
+                .to_string()
+                .into(),
             ))
             .unwrap();
         loop {
-            let frame = read(&mut self.socket);
-            if frame["type"] == "res" && frame["id"] == id {
-                return frame;
+            match self
+                .socket
+                .read()
+                .expect("request yields response or typed close")
+            {
+                Message::Close(Some(frame)) => return Err(frame),
+                Message::Text(text) => {
+                    let frame: Value = serde_json::from_str(&text).unwrap();
+                    if frame["type"] == "res" && frame["id"] == id {
+                        return Ok(frame);
+                    }
+                }
+                Message::Ping(_) | Message::Pong(_) => {}
+                other => panic!("unexpected request frame {other:?}"),
             }
         }
     }

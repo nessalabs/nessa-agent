@@ -1,3 +1,4 @@
+mod agent_tools;
 mod creation;
 mod mutation;
 use super::metadata_target::{load_conversation, validate_target};
@@ -12,17 +13,17 @@ use super::{
     placement::Environments,
     provider_sessions::{ProviderSessionErasers, ProviderSessionHandler},
     retries::{Claim, DeletionRetries, Waiting},
-    ArtifactBudget, ArtifactCollector, ArtifactOffer, AttachmentRelease, AttachmentReleaseCause,
-    ConversationAccessPolicyEvaluator, ConversationAttachments, ConversationCreationAudit,
-    ConversationDeletionAudit, ConversationDeletionAuditRecord, ConversationDeletionCause,
-    ConversationError, ConversationFileLinkAudit, ConversationFileLinkAuditRecord,
-    ConversationFileLinkCause, ConversationFileLinkState, ConversationListing,
-    ConversationModeApplication, ConversationModeAudit, ConversationModeAuditPhase,
-    ConversationModeRequest, ConversationModeRequestState, ConversationOwnershipState,
-    ConversationRepository, ConversationSummaries, DeletionFailures, FenceCapture, FetchRequests,
-    ListedConversation, ObservationCursor, ObservedConversations, OwnerAccess, PublishRequests,
-    RevisionHold, RuntimeReadiness, ShareGrants, StopFailure, SubmittedMessage,
-    UnfinishedDeletions,
+    AgentToolAudit, ArtifactBudget, ArtifactCollector, ArtifactOffer, AttachmentRelease,
+    AttachmentReleaseCause, ConversationAccessPolicyEvaluator, ConversationAttachments,
+    ConversationCreationAudit, ConversationDeletionAudit, ConversationDeletionAuditRecord,
+    ConversationDeletionCause, ConversationError, ConversationFileLinkAudit,
+    ConversationFileLinkAuditRecord, ConversationFileLinkCause, ConversationFileLinkState,
+    ConversationListing, ConversationModeApplication, ConversationModeAudit,
+    ConversationModeAuditPhase, ConversationModeRequest, ConversationModeRequestState,
+    ConversationOwnershipState, ConversationRepository, ConversationSummaries, DeletionFailures,
+    FenceCapture, FetchRequests, ListedConversation, ObservationCursor, ObservedConversations,
+    OwnerAccess, PublishRequests, RevisionHold, RuntimeReadiness, ShareGrants, StopFailure,
+    SubmittedMessage, UnfinishedDeletions,
 };
 use crate::conversation::domain::{
     Conversation, ConversationDeletion, ProviderSessionErasure, ProviderSessionLink, ToolSource,
@@ -720,6 +721,10 @@ struct Inner {
     /// Where agents run; every opening is leased from it.
     environment: Environments,
     clock: Arc<dyn Clock>,
+    /// Acknowledges a source turn's delegation decision before target work.
+    agent_tool_audit: OnceLock<Arc<dyn AgentToolAudit>>,
+    /// Physical source admission owners retain their slot after response loss.
+    agent_tool_admissions: Arc<Semaphore>,
     /// Decides every command's admission to a conversation.
     access_policy: Arc<dyn ConversationAccessPolicyEvaluator>,
     limits: ConversationLimits,
@@ -1016,6 +1021,11 @@ pub(crate) enum ExportHoldFailure {
 }
 
 impl ConversationService {
+    /// Canonical approval selection when creation supplies no override.
+    pub fn default_creation_approval_mode() -> ConversationApprovalMode {
+        ConversationApprovalMode::Ask
+    }
+
     /// Own every configured agent, and the one a caller gets by default. No
     /// MCP call shows a UI: see [`Self::with_tool_uis`].
     pub fn new(
@@ -1102,6 +1112,8 @@ impl ConversationService {
                 deletion_budgets,
                 environment,
                 clock,
+                agent_tool_audit: OnceLock::new(),
+                agent_tool_admissions: Arc::new(Semaphore::new(super::MAX_AGENT_TOOL_ADMISSIONS)),
                 access_policy,
                 limits,
                 conversations: Mutex::new(HashMap::new()),
@@ -1231,7 +1243,7 @@ impl ConversationService {
         let agent = service.inner.agents.select(agent_request)?;
         let approval_mode = requested
             .approval_mode
-            .unwrap_or(ConversationApprovalMode::Ask);
+            .unwrap_or_else(Self::default_creation_approval_mode);
         let configured = match requested.model.as_deref() {
             Some(model) => {
                 service
@@ -2268,6 +2280,22 @@ impl ConversationService {
             .map(|(view, _)| view)
     }
 
+    /// Capture the current locally owned execution after target admission.
+    /// Opens no provider and does not infer activity from a bounded display view.
+    pub async fn active_execution(
+        &self,
+        id: ConversationId,
+        caller: ConversationCaller,
+    ) -> Result<Option<String>, ConversationError> {
+        let _admission = self.admit().await?;
+        let live = self.live_now(&id, &caller).await?;
+        // Waiting for an already opening slot must not retain old target authority.
+        self.check_view_access(&id, &caller).await?;
+        Ok(live
+            .and_then(|live| live.agent.active_execution_id())
+            .map(|execution| execution.as_str().to_owned()))
+    }
+
     /// Follow `id`'s live facts: subscribe before [`Self::read_at`], and a
     /// change during or after that read is not missed.
     pub fn live_changes(&self, id: &ConversationId) -> tokio::sync::watch::Receiver<u64> {
@@ -2820,9 +2848,25 @@ impl ConversationService {
             // An app's message is for a live opening, and opens none: one
             // ended by the desktop stopping the agent is refused below, not
             // opened again for it.
-            let (owner, live) = service
+            let (mut owner, mut live) = service
                 .resolve_opening(&id, &caller, !writer.is_app())
                 .await?;
+            // An agent that stopped itself and waits for its owner's close
+            // takes nothing more (`Agent::awaits_close`): the conversation is
+            // stopped, not gone, so a person's message closes it and opens
+            // the conversation again, as a desktop stop would have. An app's
+            // message opens nothing, and is refused below as before.
+            if !writer.is_app()
+                && live.agent.awaits_close()
+                && !owner.stopping.load(Ordering::SeqCst)
+            {
+                // The ended agent holds its history's lease until the last
+                // handle goes, so this one goes before the conversation
+                // opens again.
+                drop(live);
+                service.reopen_ended(&id, owner).await;
+                (owner, live) = service.resolve_opening(&id, &caller, true).await?;
+            }
             // A submission the agent already has is the agent's to answer: the
             // same message recovers its original delivery and any other is a
             // conflict, whatever this conversation holds today. Its images were
@@ -5298,6 +5342,33 @@ impl ConversationService {
             .unwrap_or(Err(AgentError::CleanupUncertain))
     }
 
+    /// Close the agent `slot` holds, which stopped itself and waits for that
+    /// close, and let the slot go so the next resolve opens the conversation
+    /// again. A close that cannot be confirmed keeps the slot, stopping, and
+    /// the message that asked is refused as closed.
+    async fn reopen_ended(&self, id: &ConversationId, slot: Arc<Slot>) {
+        let Ok(actor) = ActionContext::new(
+            "gateway",
+            "agent_ended",
+            format!("ended-{}", Uuid::new_v4()),
+        ) else {
+            return;
+        };
+        tracing::warn!(conversation_id = %id, "the agent stopped itself; closing it to open the conversation again");
+        if let Err(stop) = self
+            .stop_and_release(
+                id,
+                slot,
+                &actor,
+                &McpAppInitiator::System,
+                LeaseEndCause::Stopped,
+            )
+            .await
+        {
+            tracing::warn!(conversation_id = %id, ?stop, "an ended agent's close did not confirm cleanup");
+        }
+    }
+
     async fn release_slot(&self, id: &ConversationId, slot: &Arc<Slot>) {
         let released = {
             let mut owners = self.inner.conversations.lock().await;
@@ -5895,9 +5966,14 @@ pub use artifact_fetch::{
 mod artifact_publish;
 pub use artifact_publish::{PublishAnswer, PublishCall, PublishCallRefusal};
 mod environment_tools;
+mod event_read;
 mod notes;
 pub use environment_tools::{
     CommandAnswer, CommandCall, CommandCallError, EnvironmentListing, HERE,
+};
+pub use event_read::{
+    event_error_code, project_events, validate_event_cursor, ConversationEventError, EventProgress,
+    ThreadEvent,
 };
 
 mod app_calls;

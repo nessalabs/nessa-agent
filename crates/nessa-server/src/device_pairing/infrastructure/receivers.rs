@@ -11,7 +11,7 @@ use crate::conversation::{
     infrastructure::{LocalReceiverAuthority, ReceiverChangeError},
 };
 use crate::device_pairing::application::{
-    PairingReceivers, PublicationGuard, ReceiverError, ReceiverRequest,
+    PairingReceivers, PublicationGuard, ReceiverDispatch, ReceiverError, ReceiverRequest,
 };
 use nessa_auth::{application::pairing::ReceiverOutcome, domain::ResourceId};
 use std::sync::Arc;
@@ -80,7 +80,8 @@ impl PairingReceivers for ConversationReceivers {
             .map_err(|_| ReceiverError::Unavailable)
     }
 
-    fn pair(&self, request: &ReceiverRequest) -> Result<ReceiverOutcome, ReceiverError> {
+    fn pair(&self, dispatch: &ReceiverDispatch<'_>) -> Result<ReceiverOutcome, ReceiverError> {
+        let request = dispatch.pair_request()?;
         let binding = self
             .0
             .pair_now(
@@ -116,10 +117,11 @@ impl PairingReceivers for ConversationReceivers {
 
     fn fence(
         &self,
-        request: &ReceiverRequest,
+        dispatch: &ReceiverDispatch<'_>,
         receiver: &ResourceId,
         paired_epoch: u64,
     ) -> Result<ReceiverOutcome, ReceiverError> {
+        let request = dispatch.fence_request(receiver, paired_epoch)?;
         let binding = self
             .0
             .fence(

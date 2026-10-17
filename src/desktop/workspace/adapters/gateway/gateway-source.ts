@@ -1269,8 +1269,13 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
       try {
         prepared = prepareSubmission({
           conversationId: message.sessionId,
+          // The message's id is its turn's: a message the gateway already
+          // took is answered from that turn, never taken twice.
           executionId: message.messageId,
-          requestId: message.messageId,
+          // Each send is a command of its own. A command the gateway refused
+          // keeps that answer, and one whose answer was lost reads as
+          // unresolved for good, so sending again under it could never send.
+          requestId: crypto.randomUUID(),
           text: message.text,
           mode: "queued",
         })
