@@ -32,6 +32,12 @@ pub(super) async fn bind(
     service
         .bind_owned_threads(coordinator.clone(), cascade)
         .unwrap();
+    let restored = SqliteOwnershipStore::open(&root.join("ownership.sqlite3")).unwrap();
+    let snapshot =
+        nessa_sdk::application::agent_execution::subagents::OwnershipStore::read(&restored)
+            .await
+            .unwrap();
+    service.recover_deleted_ownership(&snapshot).await.unwrap();
     coordinator
 }
 fn source(parent: &ConversationId, execution: &str, request: &str) -> AgentToolSource {
@@ -57,6 +63,107 @@ async fn child(
         .await
         .unwrap();
     child
+}
+
+#[tokio::test]
+async fn owned_preparation_cannot_adopt_an_existing_unowned_conversation() {
+    for ordinary_ready in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("data");
+        let provider = Arc::new(ProviderFactory::default());
+        provider.turn_cancel.store(true, Ordering::SeqCst);
+        let (service, storage, metadata) = fixture_with_sessions(
+            &root,
+            provider.clone(),
+            crate::conversation::infrastructure::in_process_environment().into(),
+            crate::conversation_test_support::access_policy(),
+            crate::conversation_test_support::claude_erasers(),
+        );
+        // Ordinary metadata and a live slot can predate ownership composition.
+        let unrelated = id();
+        if ordinary_ready {
+            service
+                .create_command(
+                    storage.clone(),
+                    unrelated.clone(),
+                    caller("colliding-child"),
+                    RequestedConversation::default(),
+                )
+                .await
+                .unwrap();
+        } else {
+            opened(&service, &provider, &unrelated).await;
+        }
+        let original = metadata.load(&unrelated).await.unwrap().unwrap();
+        let u = hold_turn(&service, &provider, &unrelated, "unrelated").await;
+        let coordinator = bind(&service, &storage, &root, true).await;
+        let parent = id();
+        opened(&service, &provider, &parent).await;
+        let p = hold_turn(&service, &provider, &parent, "parent").await;
+        assert!(service
+            .create_owned_thread(
+                source(&parent, "parent", "colliding-child"),
+                unrelated.clone(),
+                RequestedConversation::default(),
+            )
+            .await
+            .is_err());
+        assert!(
+            coordinator
+                .active_lifetime_for_session(&conversation_session(&unrelated))
+                .is_none(),
+            "a rejected preparation cannot adopt the unrelated target"
+        );
+        service
+            .stop_command(
+                storage.clone(),
+                parent.clone(),
+                caller("stop-parent"),
+                "parent".into(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(provider.cancel_turns.lock().unwrap().as_slice(), ["parent"]);
+        drop(p);
+        let closes = provider.close_calls.load(Ordering::SeqCst);
+        assert!(service
+            .delete(parent, caller("delete-parent"))
+            .await
+            .unwrap());
+        assert_eq!(provider.close_calls.load(Ordering::SeqCst), closes + 1);
+        assert_eq!(metadata.load(&unrelated).await.unwrap().unwrap(), original);
+        assert_eq!(
+            service
+                .resolve(&unrelated, &caller("inspect-unrelated"))
+                .await
+                .unwrap()
+                .agent
+                .active_execution_id()
+                .unwrap()
+                .as_str(),
+            "unrelated"
+        );
+        drop(u);
+        service
+            .close(unrelated.clone(), caller("close-unrelated"))
+            .await
+            .unwrap();
+        service
+            .create(
+                unrelated.clone(),
+                caller("reopen-unrelated"),
+                RequestedConversation::default(),
+            )
+            .await
+            .unwrap();
+        assert!(
+            coordinator
+                .active_lifetime_for_session(&conversation_session(&unrelated))
+                .is_some(),
+            "a proven absent reservation cannot poison the unrelated conversation's later opening"
+        );
+        retire(service, storage, metadata).await;
+    }
 }
 
 #[tokio::test]
@@ -1808,4 +1915,184 @@ async fn failed_queued_report_withdrawal_keeps_root_active_and_retries_before_ro
     );
     drop((held_parent, held_independent, live));
     retire(service, storage, metadata).await;
+}
+
+struct HoldPreparationAdmission {
+    durable: crate::conversation::infrastructure::DurableOwnershipAudit,
+    entered: tokio::sync::Notify,
+    release: tokio::sync::Notify,
+}
+#[async_trait::async_trait]
+impl nessa_sdk::application::agent_execution::subagents::OwnershipAudit
+    for HoldPreparationAdmission
+{
+    async fn record(
+        &self,
+        evidence: &nessa_sdk::domain::agent_execution::subagents::OwnershipEvidence,
+    ) -> Result<(), nessa_sdk::application::agent_execution::subagents::PortFailure> {
+        use nessa_sdk::application::agent_execution::subagents::OwnershipAudit;
+        if evidence.after
+            == nessa_sdk::domain::agent_execution::subagents::OwnershipMeaning::Reserved
+        {
+            self.entered.notify_one();
+            self.release.notified().await;
+        }
+        OwnershipAudit::record(&self.durable, evidence).await
+    }
+}
+
+#[tokio::test]
+async fn failed_child_preparation_cannot_claim_a_foreign_live_slot_during_storage_contention() {
+    for busy in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("data");
+        let provider = Arc::new(ProviderFactory::default());
+        provider.turn_cancel.store(true, Ordering::SeqCst);
+        let (service, storage, metadata) = fixture_with_sessions(
+            &root,
+            provider.clone(),
+            crate::conversation::infrastructure::in_process_environment().into(),
+            crate::conversation_test_support::access_policy(),
+            crate::conversation_test_support::claude_erasers(),
+        );
+        service.bind_commands(storage.clone());
+        let unrelated = id();
+        let mut foreign = caller("foreign-create");
+        foreign.principal_id = PrincipalId::new("foreign").unwrap();
+        service
+            .create(
+                unrelated.clone(),
+                foreign.clone(),
+                RequestedConversation::default(),
+            )
+            .await
+            .unwrap();
+        let original = metadata.load(&unrelated).await.unwrap().unwrap();
+        let (unrelated_release, gate) = oneshot::channel();
+        *provider.execution_gate.lock().unwrap() = Some(gate);
+        let started = provider.execution_started.notified();
+        service
+            .submit(
+                unrelated.clone(),
+                foreign.clone(),
+                "foreign-active".into(),
+                message("foreign work"),
+                SubmissionMode::Queue,
+            )
+            .await
+            .unwrap();
+        tokio::time::timeout(TURN_HOLD_HANG, started).await.unwrap();
+
+        let audit = Arc::new(HoldPreparationAdmission {
+            durable: crate::conversation::infrastructure::DurableOwnershipAudit::new(
+                root.join("ownership-audit"),
+            )
+            .unwrap(),
+            entered: tokio::sync::Notify::new(),
+            release: tokio::sync::Notify::new(),
+        });
+        let coordinator = OwnershipCoordinator::new(OwnershipDependencies {
+            store: Arc::new(SqliteOwnershipStore::open(&root.join("ownership.sqlite3")).unwrap()),
+            audit: audit.clone(),
+            factory: service.owned_thread_factory(),
+            room: Arc::new(LiveCapacity::new(32)),
+        });
+        coordinator.resume().await.unwrap();
+        service
+            .bind_owned_threads(coordinator.clone(), true)
+            .unwrap();
+        let parent = id();
+        opened(&service, &provider, &parent).await;
+        let parent_release = hold_turn(&service, &provider, &parent, "parent").await;
+        let preparing = tokio::spawn({
+            let service = service.clone();
+            let unrelated = unrelated.clone();
+            let parent = parent.clone();
+            async move {
+                service
+                    .create_owned_thread(
+                        source(&parent, "parent", "foreign-collision"),
+                        unrelated,
+                        RequestedConversation::default(),
+                    )
+                    .await
+            }
+        });
+        tokio::time::timeout(TURN_HOLD_HANG, audit.entered.notified())
+            .await
+            .unwrap();
+        // Hold the principal stream only after source admission, so the fault
+        // occurs in the factory's command owner, not before child reservation.
+        let principal_lease = if busy {
+            storage.open_creation("person".into(), true).await.unwrap()
+        } else {
+            None
+        };
+        audit.release.notify_one();
+        assert!(tokio::time::timeout(TURN_HOLD_HANG, preparing)
+            .await
+            .unwrap()
+            .unwrap()
+            .is_err());
+        drop(principal_lease);
+        assert_eq!(
+            provider.close_calls.load(Ordering::SeqCst),
+            0,
+            "a failure diagnostic cannot transfer another caller's live slot"
+        );
+        assert!(coordinator
+            .active_lifetime_for_session(&conversation_session(&unrelated))
+            .is_none());
+        drop(parent_release);
+        assert!(service
+            .delete(parent, caller("delete-parent"))
+            .await
+            .unwrap());
+        assert_eq!(
+            provider.close_calls.load(Ordering::SeqCst),
+            1,
+            "parent cleanup owns only the parent attachment"
+        );
+        assert_eq!(metadata.load(&unrelated).await.unwrap().unwrap(), original);
+        let live = service.resolve(&unrelated, &foreign).await.unwrap();
+        assert_eq!(
+            live.agent.active_execution_id().unwrap().as_str(),
+            "foreign-active"
+        );
+        drop(live);
+        drop(unrelated_release);
+        service
+            .close(unrelated.clone(), foreign.clone())
+            .await
+            .unwrap();
+        service
+            .create(
+                unrelated.clone(),
+                foreign.clone(),
+                RequestedConversation::default(),
+            )
+            .await
+            .unwrap();
+        service
+            .submit(
+                unrelated.clone(),
+                foreign.clone(),
+                "foreign-next".into(),
+                message("new foreign work"),
+                SubmissionMode::Queue,
+            )
+            .await
+            .unwrap();
+        assert!(
+            service
+                .resolve(&unrelated, &foreign)
+                .await
+                .unwrap()
+                .agent
+                .attachment_status()
+                .phase()
+                == AttachmentPhase::Attached
+        );
+        retire(service, storage, metadata).await;
+    }
 }

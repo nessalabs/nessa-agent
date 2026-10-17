@@ -23,8 +23,9 @@ use nessa_sdk::application::agent_execution::{
     },
 };
 use nessa_sdk::domain::agent_execution::subagents::{
-    ApprovalPolicy, EvidenceFact, HostActor, Initiator, LifetimeCause, LifetimeState, PhysicalFact,
-    PolicyRead, SpawnOrigin, SpawnProgress, SpawnRequestId, TaskReceiptId,
+    AgentLifetimeId, ApprovalPolicy, EvidenceFact, HostActor, Initiator, LifetimeCause,
+    LifetimeState, PhysicalFact, PolicyRead, SpawnBinding, SpawnOrigin, SpawnProgress,
+    SpawnRequestId, TaskReceiptId,
 };
 use nessa_sdk::domain::agent_execution::{
     executions::{ExecutionId, Initiation},
@@ -37,6 +38,13 @@ use std::sync::{Arc, Weak};
 pub(super) struct Ownership {
     pub coordinator: OwnershipCoordinator,
     pub cascade: bool,
+}
+
+/// The factory's existing transfer slot retains the actual cleanup capability
+/// acquired by creation, separately from its not-yet-installed lifetime gate.
+pub(super) struct PendingPreparation {
+    gate: Arc<dyn OwnedLifetime>,
+    resources: Option<Arc<dyn ChildResources>>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -180,16 +188,10 @@ impl ConversationService {
             .ok_or(CreationFailure::Target(ConversationError::Unavailable))?;
         let description = serde_json::to_string(&preparation)
             .map_err(|_| CreationFailure::Target(ConversationError::InvalidInput))?;
-        let request = format!(
-            "create-{:x}",
-            Sha256::digest(
-                serde_json::to_vec(&(
-                    caller.principal_id.as_str(),
-                    &caller.surface_id,
-                    &caller.action_id
-                ))
-                .expect("strings serialize")
-            )
+        let request = creation_request(
+            caller.principal_id.as_str(),
+            &caller.surface_id,
+            &caller.action_id,
         );
         // This is the ordinary creation policy, not inherited authority.
         let policy = creation_policy();
@@ -198,7 +200,7 @@ impl ConversationService {
             .prepare_child(
                 SpawnCommand {
                     parent: lifetime,
-                    request_id: SpawnRequestId::new(request).expect("digest identity"),
+                    request_id: request,
                     task: description,
                     policy: PolicyRead::Committed(policy),
                     child_supports_policy: true,
@@ -222,7 +224,11 @@ impl ConversationService {
         let storage = self
             .commands()
             .ok_or(CreationFailure::Target(ConversationError::Unavailable))?;
-        self.lookup_creation(storage, id, caller, preparation.requested())
+        let binding = ownership
+            .coordinator
+            .spawn_binding_for_lifetime(&prepared.child)
+            .ok_or(CreationFailure::Target(ConversationError::Unavailable))?;
+        self.lookup_child_creation(storage, id, caller, binding.task_digest)
             .await?
             .ok_or(CreationFailure::Target(ConversationError::Unavailable))
     }
@@ -239,6 +245,9 @@ impl ConversationService {
         for row in &snapshot.lifetimes {
             let id = ConversationId::new(row.session_id.as_str())
                 .map_err(|_| ConversationError::InvalidInput)?;
+            if !self.confirm_child_creation(&id, &row.lifetime_id).await? {
+                continue;
+            }
             let _ = ownership.coordinator.bind_resources(
                 row.lifetime_id.clone(),
                 Arc::new(Resources {
@@ -280,6 +289,9 @@ impl ConversationService {
         else {
             return Ok(());
         };
+        if !self.confirm_child_creation(id, &lifetime).await? {
+            return Err(ConversationError::Unavailable);
+        }
         let resources = Arc::new(Resources {
             service: Arc::downgrade(&self.inner),
             id: id.clone(),
@@ -358,17 +370,19 @@ impl ConversationService {
             return Ok(None);
         };
         let session = conversation_session(id);
-        if let Some(gate) = self
-            .inner
-            .ownership_preparations
-            .lock()
-            .await
-            .get(&session)
-            .cloned()
-        {
-            return Ok(Some(gate));
-        }
         let coordinator = &ownership.coordinator;
+        // A pending gate belongs to the creation's original metadata, not to
+        // another opener that happens to name the same reserved session.
+        if let Some(lifetime) = coordinator
+            .active_lifetime_for_session(&session)
+            .or_else(|| coordinator.child_lifetime_for_session(&session))
+        {
+            if let Some(binding) = coordinator.spawn_binding_for_lifetime(&lifetime) {
+                if self.child_creation_caller(id, &binding).await?.is_none() {
+                    return Err(ConversationError::Unavailable);
+                }
+            }
+        }
         if coordinator.active_lifetime_for_session(&session).is_none()
             && coordinator.child_lifetime_for_session(&session).is_some()
         {
@@ -393,6 +407,18 @@ impl ConversationService {
         };
         // A restored lifetime's cleanup adapter must be rebound before attachment.
         // Reopening does not replay its child factory or initial submission.
+        if coordinator.spawn_binding_for_lifetime(&lifetime).is_some() {
+            // Factory success or composition recovery supplied this adapter
+            // from the original child receipt. A cold submit may already hold
+            // the principal command lease, so consume that prior transfer.
+            if !coordinator.has_bound_resources(&lifetime) {
+                return Err(ConversationError::Unavailable);
+            }
+            return coordinator
+                .participation(&lifetime)
+                .map(Some)
+                .ok_or(ConversationError::Unavailable);
+        }
         let resources = Arc::new(Resources {
             service: Arc::downgrade(&self.inner),
             id: id.clone(),
@@ -406,6 +432,100 @@ impl ConversationService {
             .participation(&lifetime)
             .map(Some)
             .ok_or(ConversationError::Unavailable)
+    }
+
+    /// Called only by the ordinary creation owner after acknowledged Created,
+    /// under its creation lock. The factory retains this actual acquisition
+    /// through the existing PrepareFailure/PreparedChild resource transfer.
+    pub(super) async fn claim_owned_preparation(
+        &self,
+        id: &ConversationId,
+        actor: &ActionContext,
+    ) -> Result<Option<Arc<dyn OwnedLifetime>>, ConversationError> {
+        let Some(ownership) = self.inner.ownership.get() else {
+            return Ok(None);
+        };
+        let session = conversation_session(id);
+        let lifetime = ownership
+            .coordinator
+            .active_lifetime_for_session(&session)
+            .ok_or(ConversationError::Unavailable)?;
+        let binding = ownership
+            .coordinator
+            .spawn_binding_for_lifetime(&lifetime)
+            .ok_or(ConversationError::Unavailable)?;
+        if binding.request_id
+            != creation_request(actor.principal_id(), actor.surface_id(), actor.request_id())
+            || self.child_creation_caller(id, &binding).await?.is_none()
+        {
+            return Err(ConversationError::Unavailable);
+        }
+        let mut preparations = self.inner.ownership_preparations.lock().await;
+        let preparation = preparations
+            .get_mut(&session)
+            .ok_or(ConversationError::Unavailable)?;
+        if preparation.resources.is_some() {
+            return Err(ConversationError::RequestConflict);
+        }
+        preparation.resources = Some(Arc::new(Resources {
+            service: Arc::downgrade(&self.inner),
+            id: id.clone(),
+        }));
+        Ok(Some(preparation.gate.clone()))
+    }
+
+    async fn child_creation_caller(
+        &self,
+        id: &ConversationId,
+        binding: &SpawnBinding,
+    ) -> Result<Option<ConversationCaller>, ConversationError> {
+        let Some(record) = super::load_conversation(self.inner.metadata.as_ref(), id).await? else {
+            return Ok(None);
+        };
+        if creation_request(
+            record.owner().as_str(),
+            record.creator_surface(),
+            record.creation_action(),
+        ) != binding.request_id
+        {
+            return Ok(None);
+        }
+        let parent = ConversationId::new(binding.parent_session.as_str())
+            .map_err(|_| ConversationError::InvalidInput)?;
+        let Some(parent) = super::load_conversation(self.inner.metadata.as_ref(), &parent).await?
+        else {
+            return Ok(None);
+        };
+        if record.organization() != parent.organization() {
+            return Ok(None);
+        }
+        Ok(Some(ConversationCaller {
+            organization_id: record.organization().clone(),
+            principal_id: record.owner().clone(),
+            surface_id: record.creator_surface().into(),
+            action_id: record.creation_action().into(),
+        }))
+    }
+
+    /// Resource adapters are bound only from the original child command and
+    /// immutable metadata origin. A cached slot alone belongs to no new attempt.
+    async fn confirm_child_creation(
+        &self,
+        id: &ConversationId,
+        lifetime: &AgentLifetimeId,
+    ) -> Result<bool, ConversationError> {
+        let Some(ownership) = self.inner.ownership.get() else {
+            return Ok(false);
+        };
+        let Some(binding) = ownership.coordinator.spawn_binding_for_lifetime(lifetime) else {
+            return Ok(true); // An existing root has no child creation command.
+        };
+        let Some(caller) = self.child_creation_caller(id, &binding).await? else {
+            return Ok(false);
+        };
+        let storage = self.commands().ok_or(ConversationError::Unavailable)?;
+        self.has_child_creation_receipt(storage, id, &caller, &binding.task_digest)
+            .await
     }
 }
 
@@ -445,43 +565,47 @@ impl ChildFactory for Factory {
         let caller = preparation.caller().map_err(|_| refused())?;
         let id = ConversationId::new(request.session.as_str()).map_err(|_| refused())?;
         let storage = service.commands().ok_or_else(refused)?;
-        service
-            .inner
-            .ownership_preparations
-            .lock()
-            .await
-            .insert(request.session.clone(), request.owned_lifetime);
+        let binding = ownership
+            .coordinator
+            .spawn_binding_for_lifetime(&request.child)
+            .filter(|binding| binding.request_id == request.request)
+            .ok_or_else(refused)?;
+        service.inner.ownership_preparations.lock().await.insert(
+            request.session.clone(),
+            PendingPreparation {
+                gate: request.owned_lifetime,
+                resources: None,
+            },
+        );
         let result = service
-            .create_command(storage, id.clone(), caller, preparation.requested())
+            .create_child_command(
+                storage,
+                id.clone(),
+                caller,
+                preparation.requested(),
+                binding.task_digest,
+            )
             .await;
-        service
+        let resources = service
             .inner
             .ownership_preparations
             .lock()
             .await
-            .remove(&request.session);
-        let resources: Arc<dyn ChildResources> = Arc::new(Resources {
-            service: self.service.clone(),
-            id: id.clone(),
-        });
+            .remove(&request.session)
+            .and_then(|preparation| preparation.resources);
         if result.is_err() {
-            let no_owner = service.inner.conversations.lock().await.get(&id).is_none();
-            if no_owner
-                && !matches!(
-                    result,
-                    Err(CreationFailure::TaskFault(_) | CreationFailure::Interrupted(_))
-                )
-            {
-                return Err(PrepareFailure {
-                    failure: PortFailure::Rejected,
-                    cleanup: None,
-                });
-            }
-            return Err(PrepareFailure {
-                failure: PortFailure::Uncertain,
-                cleanup: Some(resources),
+            return Err(match resources {
+                Some(resources) => PrepareFailure {
+                    failure: PortFailure::Uncertain,
+                    cleanup: Some(resources),
+                },
+                None => refused(),
             });
         }
+        let resources = resources.ok_or(PrepareFailure {
+            failure: PortFailure::Uncertain,
+            cleanup: None,
+        })?;
         Ok(PreparedChild {
             resources,
             submit: Arc::new(NoInitialTurn),
@@ -638,4 +762,9 @@ impl ConversationService {
 fn creation_policy() -> ApprovalPolicy {
     ApprovalPolicy::new("ask", "ordinary-creation", "gateway-creation")
         .expect("static ordinary creation policy")
+}
+
+fn creation_request(principal: &str, surface: &str, action: &str) -> SpawnRequestId {
+    let bytes = serde_json::to_vec(&(principal, surface, action)).expect("strings serialize");
+    SpawnRequestId::new(format!("create-{:x}", Sha256::digest(bytes))).expect("digest identity")
 }

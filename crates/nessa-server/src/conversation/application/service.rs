@@ -749,7 +749,7 @@ struct Inner {
     thread_reports: thread_reports::ThreadReports,
     ownership: OnceLock<owned_threads::Ownership>,
     thread_admission: Arc<Mutex<()>>,
-    ownership_preparations: Mutex<HashMap<SessionId, Arc<dyn OwnedLifetime>>>,
+    ownership_preparations: Mutex<HashMap<SessionId, owned_threads::PendingPreparation>>,
 
     /// Decides every command's admission to a conversation.
     access_policy: Arc<dyn ConversationAccessPolicyEvaluator>,
@@ -1281,7 +1281,7 @@ impl ConversationService {
         supervised(async move {
             let _admission = service.admit().await?;
             service
-                .create_admitted(id, caller, requested)
+                .create_admitted(id, caller, requested, false)
                 .await
                 .map(|_| ())
         })
@@ -1294,6 +1294,7 @@ impl ConversationService {
         id: ConversationId,
         caller: ConversationCaller,
         requested: RequestedConversation,
+        new_only: bool,
     ) -> Result<Arc<LiveConversation>, ConversationError> {
         let service = self.clone();
         // Asked of every creation, not only the ones that build a
@@ -1314,7 +1315,18 @@ impl ConversationService {
             // A deleted conversation is not created again under its
             // identity, whoever asks; only its owner is told why
             // (`a_deleted_conversation_refuses_every_command_on_it`).
-            service.access().admit(&record, &caller)?;
+            service.access().admit(&record, &caller).map_err(|cause| {
+                if new_only {
+                    ConversationError::ChildCreationRefused(Box::new(cause.into()))
+                } else {
+                    ConversationError::from(cause)
+                }
+            })?;
+            if new_only {
+                return Err(ConversationError::ChildCreationRefused(Box::new(
+                    ConversationError::RequestConflict,
+                )));
+            }
             drop(creation_guard);
             // Acknowledge the original creation from its stored creator
             // evidence before attributing this reopen to its caller, and
@@ -1425,7 +1437,18 @@ impl ConversationService {
         let outcome = service.inner.metadata.create(proposed.clone()).await?;
         let record = &outcome.conversation;
         validate_target(&id, record)?;
-        service.access().admit(record, &caller)?;
+        service.access().admit(record, &caller).map_err(|cause| {
+            if new_only && outcome.disposition == super::ConversationCreationDisposition::Existing {
+                ConversationError::ChildCreationRefused(Box::new(cause.into()))
+            } else {
+                ConversationError::from(cause)
+            }
+        })?;
+        if new_only && outcome.disposition == super::ConversationCreationDisposition::Existing {
+            return Err(ConversationError::ChildCreationRefused(Box::new(
+                ConversationError::RequestConflict,
+            )));
+        }
         // Created acknowledges this exact admitted proposal. Existing alone
         // retains another creator's historical evidence. The regressions are
         // `creation_created_acknowledgement_preserves_the_admitted_origin` and
@@ -1435,6 +1458,11 @@ impl ConversationService {
         {
             return Err(ConversationError::Metadata);
         }
+        let owned_preparation = if new_only {
+            service.claim_owned_preparation(&id, &actor).await?
+        } else {
+            None
+        };
         service.reconcile_creation_audit(record).await?;
         if outcome.disposition == super::ConversationCreationDisposition::Existing
             && caller.action_id != record.creation_action()
@@ -1476,7 +1504,7 @@ impl ConversationService {
                         stopping: AtomicBool::new(false),
                     });
                     entry.insert(slot.clone());
-                    service.start_slot(id.clone(), slot.clone(), actor.clone());
+                    service.start_slot(id.clone(), slot.clone(), actor.clone(), owned_preparation);
                     slot
                 }
             }
@@ -1580,14 +1608,20 @@ impl ConversationService {
                     stopping: AtomicBool::new(false),
                 });
                 owners.insert(id.clone(), slot.clone());
-                self.start_slot(id.clone(), slot.clone(), actor);
+                self.start_slot(id.clone(), slot.clone(), actor, None);
                 slot
             }
         };
         let live = self.wait_for_slot(id, slot.clone()).await?;
         Ok((slot, live))
     }
-    fn start_slot(&self, id: ConversationId, slot: Arc<Slot>, actor: ActionContext) {
+    fn start_slot(
+        &self,
+        id: ConversationId,
+        slot: Arc<Slot>,
+        actor: ActionContext,
+        owned_preparation: Option<Arc<dyn OwnedLifetime>>,
+    ) {
         let service = self.clone();
         let owner = slot.clone();
         if !slot.started.swap(true, Ordering::SeqCst) {
@@ -1704,8 +1738,11 @@ impl ConversationService {
                                     cause,
                                     holds: false,
                                 })?;
-                            let ownership = service.ownership_gate(&id, &actor).await
-                                .map_err(|cause| OpeningFailure { cause, holds: false })?;
+                            let ownership = match owned_preparation {
+                                Some(ref gate) => Some(gate.clone()),
+                                None => service.ownership_gate(&id, &actor).await
+                                    .map_err(|cause| OpeningFailure { cause, holds: false })?,
+                            };
                             if ownership.as_ref().is_some_and(|gate| gate.is_sealed()) {
                                 return Err(OpeningFailure { cause: ConversationError::Unavailable, holds: false });
                             }

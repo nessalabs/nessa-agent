@@ -89,6 +89,7 @@ pub fn error_code(error: &ConversationError) -> ConversationErrorCode {
             ConversationErrorCode::ApprovalModeUnavailable
         }
         ConversationError::RequestConflict => ConversationErrorCode::ApprovalRequestConflict,
+        ConversationError::ChildCreationRefused(cause) => error_code(cause),
         ConversationError::TurnRunning => ConversationErrorCode::TurnRunning,
         ConversationError::ApprovalModeNotApplied => ConversationErrorCode::ApprovalModeNotApplied,
         ConversationError::ApprovalModeUncertain => ConversationErrorCode::ApprovalModeUncertain,

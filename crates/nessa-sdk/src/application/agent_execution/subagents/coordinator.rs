@@ -316,14 +316,47 @@ impl OwnershipCoordinator {
     /// Read a retained child session identity, including closed history.
     /// This grants no admission authority. Hosts can distinguish an ordinary
     /// root opening from a session whose existing child ancestry is sealed.
+    /// A closed reservation with validated absence never acquired that session.
     pub fn child_lifetime_for_session(&self, session: &SessionId) -> Option<AgentLifetimeId> {
         self.inner.with_graph(|graph| {
             graph
                 .snapshot()
                 .spawns
                 .into_iter()
-                .find(|row| row.child_session == *session)
+                .find(|row| {
+                    row.child_session == *session
+                        && !(graph.lifetime_state(&row.child_lifetime)
+                            == Some(LifetimeState::Closed)
+                            && graph.has_absence(&row.child_lifetime))
+                })
                 .map(|row| row.child_lifetime)
+        })
+    }
+
+    /// Read the original spawn binding for a child lifetime, including retained
+    /// history. Roots return `None`. This immutable correlation grants no
+    /// preparation, attachment, cancellation or resource-cleanup authority.
+    pub fn spawn_binding_for_lifetime(&self, lifetime: &AgentLifetimeId) -> Option<SpawnBinding> {
+        self.inner.with_graph(|graph| {
+            graph
+                .snapshot()
+                .spawns
+                .into_iter()
+                .find(|row| &row.child_lifetime == lifetime)
+                .map(|row| row.binding)
+        })
+    }
+
+    /// Whether this coordinator retains a cleanup adapter for the lifetime.
+    /// This observes an existing transfer; it grants no attachment or cleanup
+    /// authority and does not imply physical release.
+    pub fn has_bound_resources(&self, lifetime: &AgentLifetimeId) -> bool {
+        self.inner.with_graph(|_| {
+            self.inner
+                .resources
+                .lock()
+                .expect("child resources")
+                .contains_key(lifetime)
         })
     }
 

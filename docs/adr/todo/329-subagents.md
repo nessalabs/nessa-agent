@@ -37,6 +37,15 @@ The SDK's atomic `unsettled_execution_ids` read includes dispatch handoff work.
 No lifetime seal or new scheduler is involved. Later explicit person input can
 run on the same open lifetime.
 
+Child preparation uses the existing creation coordinator with a distinct
+fingerprint derived from the ownership graph's retained preparation digest.
+Ordinary creation still reopens existing conversations; child initialization
+requires a new target under the same creation mutex and repository outcome.
+An ordinary Ready receipt cannot stand in for child preparation. Cleanup binding
+requires the matching original child receipt and metadata origin, including after
+restart. A closed reservation with validated absence never acquired the session
+and does not prevent that unrelated conversation from opening later.
+
 Existing mutation receipts persist each exact child Stop before the root complete
 selection marker. The marker fingerprints that immutable selection. Retry and
 startup recovery use those original targets even after settings change; an
@@ -110,6 +119,7 @@ a draft implementation is not evidence that those gates passed.
 | An exact creation retry follows child lifetime closure | SDK preparation progress and current lifetime state jointly authorize a Ready creation response; cached Ready does not reopen a sealed child | `owned_creation_retry_cannot_report_a_sealed_child_as_ready` |
 | A queued report's Stop fails before its effect or confirmation | Same-parent report withdrawal is a root cancellation prerequisite. Leave the root Accepted for retry on failure; continue independent descendant attempts | `failed_queued_report_withdrawal_keeps_root_active_and_retries_before_root_stop` |
 | Captured descendant queued work dispatches during active cancellation | Withdraw a still-queued identity or cancel that same identity after dispatch; preserve Open lifetimes and later explicit work. The override preserves descendant active and queued inputs | `parent_stop_cancels_owned_active_and_queued_turns_and_keeps_threads_reusable` |
+| Child preparation names an existing ordinary conversation, including one created concurrently | The existing creation owner refuses adoption before reopening or binding cleanup. Exact saved Ready retries remain valid; Attempted is not re-executed. Parent Stop/deletion cannot affect the unrelated target | `owned_preparation_cannot_adopt_an_existing_unowned_conversation` and creation-owner collision regression |
 
 
 

@@ -111,7 +111,9 @@ this primitive; preparing a child changes no approval decision.
 
 `OwnershipCoordinator::child_lifetime_for_session` reads retained child ancestry,
 including closed history. It grants no admission authority; host policy can use
-it to refuse turning a sealed child session into a new root. The gateway's
+it to refuse turning a sealed child session into a new root. Closed
+reservations with validated absence are excluded: they never acquired
+the session and cannot seal an unrelated ordinary conversation. The gateway's
 `deleting_a_cold_owned_tree_reconciles_confirmed_leases_and_cannot_reparent_children`
 regression verifies that distinction across an actual SQLite restart.
 

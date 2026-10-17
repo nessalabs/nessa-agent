@@ -609,6 +609,24 @@ async fn rejected_startup_without_owner_then_parent_close_settles() {
     assert_eq!(world.factory.submits(), 0);
     assert!(world.factory.children.lock().expect("children").is_empty());
 
+    let session = world
+        .store
+        .read()
+        .await
+        .unwrap()
+        .spawns
+        .into_iter()
+        .find(|row| row.child_lifetime == child)
+        .unwrap()
+        .child_session;
+    assert!(
+        world
+            .coordinator
+            .child_lifetime_for_session(&session)
+            .is_none(),
+        "validated absence is not ownership of the reserved session"
+    );
+
     let closed = tokio::time::timeout(Duration::from_secs(2), world.close(&root))
         .await
         .expect("parent close must finish after definite preparation rejection");

@@ -9,6 +9,7 @@ use nessa_sdk::application::agent_execution::commands::{
     CreationInitializationFailure, CreationReceipt, CreationStage, CreationStorage,
     CreationStorageError, CreationTarget, CreationTaskFault,
 };
+use nessa_sdk::domain::agent_execution::subagents::TaskDigest;
 use sha2::{Digest, Sha256};
 use std::sync::{Arc, Mutex};
 
@@ -31,12 +32,44 @@ impl ConversationService {
         caller: ConversationCaller,
         requested: RequestedConversation,
     ) -> Result<CreationReceipt, CreationFailure<ConversationError>> {
-        let binding = binding(&id, &caller, &requested).map_err(CreationFailure::Target)?;
-        if let Some(reopened) = self
-            .reopen_owned(storage.clone(), &id, &caller, &requested, &binding)
-            .await?
-        {
-            return Ok(reopened);
+        self.create_with_intent(storage, id, caller, requested, None)
+            .await
+    }
+
+    /// Ownership preparation cannot adopt the ordinary creation owner's reopen.
+    pub(super) async fn create_child_command(
+        &self,
+        storage: Arc<dyn CreationStorage>,
+        id: ConversationId,
+        caller: ConversationCaller,
+        requested: RequestedConversation,
+        preparation: TaskDigest,
+    ) -> Result<CreationReceipt, CreationFailure<ConversationError>> {
+        self.create_with_intent(storage, id, caller, requested, Some(preparation))
+            .await
+    }
+
+    async fn create_with_intent(
+        &self,
+        storage: Arc<dyn CreationStorage>,
+        id: ConversationId,
+        caller: ConversationCaller,
+        requested: RequestedConversation,
+        child: Option<TaskDigest>,
+    ) -> Result<CreationReceipt, CreationFailure<ConversationError>> {
+        let new_only = child.is_some();
+        let binding = match child {
+            Some(digest) => child_binding(&id, &caller, &digest),
+            None => binding(&id, &caller, &requested),
+        }
+        .map_err(CreationFailure::Target)?;
+        if !new_only {
+            if let Some(reopened) = self
+                .reopen_owned(storage.clone(), &id, &caller, &requested, &binding)
+                .await?
+            {
+                return Ok(reopened);
+            }
         }
         let service = self.clone();
         tokio::spawn(async move {
@@ -50,6 +83,7 @@ impl ConversationService {
                 id,
                 caller,
                 requested: Mutex::new(Some(requested)),
+                new_only,
             });
             CreationCoordinator::new(storage)
                 .create(binding, target)
@@ -75,10 +109,63 @@ impl ConversationService {
             id,
             caller,
             requested: Mutex::new(None),
+            new_only: false,
         };
         CreationCoordinator::new(storage)
             .lookup(&binding, &target)
             .await
+    }
+
+    /// Validate the original preparation against the graph's retained digest.
+    pub(super) async fn lookup_child_creation(
+        &self,
+        storage: Arc<dyn CreationStorage>,
+        id: ConversationId,
+        caller: ConversationCaller,
+        preparation: TaskDigest,
+    ) -> Result<Option<CreationReceipt>, CreationFailure<ConversationError>> {
+        let binding = child_binding(&id, &caller, &preparation).map_err(CreationFailure::Target)?;
+        let target = Target {
+            service: self.clone(),
+            id,
+            caller,
+            requested: Mutex::new(None),
+            new_only: true,
+        };
+        CreationCoordinator::new(storage)
+            .lookup(&binding, &target)
+            .await
+    }
+
+    /// Internal ownership evidence, including after deletion. The caller already
+    /// correlates immutable metadata and graph origin; this grants no live access.
+    pub(super) async fn has_child_creation_receipt(
+        &self,
+        storage: Arc<dyn CreationStorage>,
+        id: &ConversationId,
+        caller: &ConversationCaller,
+        preparation: &TaskDigest,
+    ) -> Result<bool, ConversationError> {
+        let binding = child_binding(id, caller, preparation)?;
+        let lease = match storage
+            .open_creation(caller.principal_id.as_str().into(), false)
+            .await
+        {
+            Ok(Some(lease)) => lease,
+            Ok(None) | Err(CreationStorageError::ForeignRequest) => return Ok(false),
+            Err(CreationStorageError::Storage(error)) => return Err(error.into()),
+            Err(CreationStorageError::TaskFault(_)) => return Err(ConversationError::Unavailable),
+        };
+        match lease.load(binding.actor().request_id()).await {
+            Ok(Some(receipt)) if receipt.binding() == &binding => match receipt.stage() {
+                CreationStage::Ready => Ok(true),
+                CreationStage::Attempted => Err(ConversationError::Unavailable),
+                CreationStage::Accepted => Ok(false),
+            },
+            Ok(_) | Err(CreationStorageError::ForeignRequest) => Ok(false),
+            Err(CreationStorageError::Storage(error)) => Err(error.into()),
+            Err(CreationStorageError::TaskFault(_)) => Err(ConversationError::Unavailable),
+        }
     }
 
     /// A new request for a conversation that already exists is the existing
@@ -146,6 +233,7 @@ struct Target {
     id: ConversationId,
     caller: ConversationCaller,
     requested: Mutex<Option<RequestedConversation>>,
+    new_only: bool,
 }
 impl CreationTarget for Target {
     type Error = ConversationError;
@@ -155,23 +243,36 @@ impl CreationTarget for Target {
         stage: Option<CreationStage>,
     ) -> CreationFuture<'_, (), Self::Error> {
         Box::pin(async move {
-            if let Some(record) =
-                load_conversation(self.service.inner.metadata.as_ref(), &self.id).await?
-            {
-                self.service.access().admit(&record, &self.caller)?;
-                // A missing receipt is not a conflict. The creator comparison
-                // applies to a saved stage for this request. Lookup of an
-                // unknown request on a live conversation is absent evidence.
-                if stage.is_some()
-                    && (record.creation_action() != self.caller.action_id
-                        || record.creator_surface() != self.caller.surface_id)
+            let checked = async {
+                if let Some(record) =
+                    load_conversation(self.service.inner.metadata.as_ref(), &self.id).await?
                 {
-                    return Err(ConversationError::RequestConflict);
+                    self.service.access().admit(&record, &self.caller)?;
+                    if self.new_only && matches!(stage, None | Some(CreationStage::Accepted)) {
+                        return Err(ConversationError::RequestConflict);
+                    }
+                    // A missing receipt is not a conflict. The creator comparison
+                    // applies to a saved stage for this request. Lookup of an
+                    // unknown request on a live conversation is absent evidence.
+                    if stage.is_some()
+                        && (record.creation_action() != self.caller.action_id
+                            || record.creator_surface() != self.caller.surface_id)
+                    {
+                        return Err(ConversationError::RequestConflict);
+                    }
+                } else if stage == Some(CreationStage::Ready) {
+                    return Err(ConversationError::NotFound);
                 }
-            } else if stage == Some(CreationStage::Ready) {
-                return Err(ConversationError::NotFound);
+                Ok(())
             }
-            Ok(())
+            .await;
+            checked.map_err(|cause| {
+                if self.new_only && matches!(stage, None | Some(CreationStage::Accepted)) {
+                    ConversationError::ChildCreationRefused(Box::new(cause))
+                } else {
+                    cause
+                }
+            })
         })
     }
     fn initialize(
@@ -190,6 +291,7 @@ impl CreationTarget for Target {
                     self.id.clone(),
                     self.caller.clone(),
                     requested.map_err(CreationInitializationFailure::Target)?,
+                    self.new_only,
                 )
                 .await
                 .map_err(CreationInitializationFailure::Target)?;
@@ -246,6 +348,21 @@ fn binding(
     let mut digest = Sha256::new();
     digest.update(b"nessa.conversation.create\0");
     digest.update(canonical);
+    Ok(CreationBinding::new(
+        caller.actor()?,
+        conversation_session(id),
+        digest.finalize().into(),
+    ))
+}
+
+fn child_binding(
+    id: &ConversationId,
+    caller: &ConversationCaller,
+    preparation: &TaskDigest,
+) -> Result<CreationBinding, ConversationError> {
+    let mut digest = Sha256::new();
+    digest.update(b"nessa.conversation.prepare-child\0");
+    digest.update(preparation.as_str());
     Ok(CreationBinding::new(
         caller.actor()?,
         conversation_session(id),
