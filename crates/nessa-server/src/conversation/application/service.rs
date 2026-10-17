@@ -3420,6 +3420,7 @@ impl ConversationService {
         // Inspect the actual SDK receipt, not a second admission ledger. A retry
         // can already be settled; dropping this wait never cancels SDK work.
         if let Some(_result) = completion.as_mut().now_or_never() {
+            self.wake_thread_reports(conversation);
             let snapshot = live.agent.session_manager().snapshot().await;
             let reply = completed_reply(snapshot.as_ref(), &id).filter(|_| new_submission);
             // Decided once whoever submitted it lets the conversation go.
@@ -3443,6 +3444,9 @@ impl ConversationService {
         let conversation = conversation.clone();
         tokio::spawn(async move {
             let _result = completion.await;
+            // The SDK receipt follows final settlement, unlike invocation hooks.
+            // Wake reports before summaries or resumption can wait on other work.
+            service.wake_thread_reports(&conversation);
             let snapshot = live.agent.session_manager().snapshot().await;
             let reply = completed_reply(snapshot.as_ref(), &id);
             live.watched.lock().await.remove(&id);

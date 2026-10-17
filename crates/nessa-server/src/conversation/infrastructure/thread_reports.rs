@@ -76,16 +76,56 @@ impl ThreadReportStore for LocalThreadReports {
                     ],
                 )
                 .map_err(failed)?;
+            if written == 0 {
+                let same: bool = connection
+                    .query_row(
+                        "SELECT child = ?2 AND execution = ?3 AND parent = ?4 AND \
+                         organization_id = ?5 AND principal_id = ?6 AND \
+                         surface_id = ?7 AND action_id = ?8 \
+                         FROM waiting_reports WHERE report = ?1",
+                        params![
+                            report.report.execution,
+                            report.child.to_string(),
+                            report.execution,
+                            report.report.parent.to_string(),
+                            caller.organization_id.as_str(),
+                            caller.principal_id.as_str(),
+                            caller.surface_id,
+                            caller.action_id,
+                        ],
+                        |row| row.get(0),
+                    )
+                    .map_err(failed)?;
+                if !same {
+                    return Err(ConversationError::RequestConflict);
+                }
+            }
             Ok(written == 1)
         })
     }
 
-    fn settle(&self, report: &str) -> ConversationFuture<'_, ()> {
+    fn settle(&self, child: &ConversationId, report: &str) -> ConversationFuture<'_, ()> {
+        let child = child.to_string();
         let report = report.to_owned();
         self.run(move |connection| {
-            connection
-                .execute("DELETE FROM waiting_reports WHERE report = ?1", [report])
+            let removed = connection
+                .execute(
+                    "DELETE FROM waiting_reports WHERE child = ?1 AND report = ?2",
+                    params![child, report],
+                )
                 .map_err(failed)?;
+            if removed == 0 {
+                let exists: bool = connection
+                    .query_row(
+                        "SELECT EXISTS(SELECT 1 FROM waiting_reports WHERE report = ?1)",
+                        [report],
+                        |row| row.get(0),
+                    )
+                    .map_err(failed)?;
+                if exists {
+                    return Err(ConversationError::RequestConflict);
+                }
+            }
             Ok(())
         })
     }
@@ -192,6 +232,62 @@ mod tests {
         }
     }
 
+    fn binding(report: &PendingReport) -> Vec<String> {
+        vec![
+            report.child.to_string(),
+            report.execution.clone(),
+            report.report.parent.to_string(),
+            report.report.caller.organization_id.as_str().into(),
+            report.report.caller.principal_id.as_str().into(),
+            report.report.caller.surface_id.clone(),
+            report.report.caller.action_id.clone(),
+        ]
+    }
+
+    #[tokio::test]
+    async fn a_report_identity_refuses_a_different_saved_binding() {
+        let directory = tempfile::tempdir().unwrap();
+        let private = directory.path().join("reports");
+        nessa_local_storage::create_directory(&private).unwrap();
+        let path = private.join("reports.sqlite3");
+        let child = "00000000-0000-4000-8000-000000000001";
+        let parent = "00000000-0000-4000-8000-000000000002";
+        let other = "00000000-0000-4000-8000-000000000003";
+        let original = report(child, parent, "report");
+        let store = LocalThreadReports::open(&path).unwrap();
+        assert!(store.save(&original).await.unwrap());
+        for field in 0..7 {
+            let mut changed = original.clone();
+            match field {
+                0 => changed.child = ConversationId::new(other).unwrap(),
+                1 => changed.execution = "other-turn".into(),
+                2 => changed.report.parent = ConversationId::new(other).unwrap(),
+                3 => changed.report.caller.organization_id = OrganizationId::new("other").unwrap(),
+                4 => changed.report.caller.principal_id = PrincipalId::new("other").unwrap(),
+                5 => changed.report.caller.surface_id = "other".into(),
+                6 => changed.report.caller.action_id = "other".into(),
+                _ => unreachable!(),
+            }
+            assert!(
+                matches!(
+                    store.save(&changed).await,
+                    Err(ConversationError::RequestConflict)
+                ),
+                "field {field}"
+            );
+            let saved = store.pending().await.unwrap();
+            assert_eq!(saved.len(), 1);
+            assert_eq!(binding(&saved[0]), binding(&original));
+        }
+        drop(store);
+        let store = LocalThreadReports::open(&path).unwrap();
+        assert!(!store.save(&original).await.unwrap());
+        assert_eq!(
+            binding(&store.pending().await.unwrap()[0]),
+            binding(&original)
+        );
+    }
+
     /// Saved reports outlive the store that saved them; a second save of one
     /// changes nothing, and settling or deleting a conversation lets go.
     #[tokio::test]
@@ -220,8 +316,16 @@ mod tests {
         assert_eq!(pending[0].execution, "a-turn");
         assert_eq!(pending[0].report.caller.action_id, "a-action");
         assert_eq!(pending[0].report.parent.to_string(), parent);
-        store.settle("a").await.unwrap();
-        store.settle("missing").await.unwrap();
+        let child_id = ConversationId::new(child).unwrap();
+        assert!(matches!(
+            store
+                .settle(&ConversationId::new(other).unwrap(), "a")
+                .await,
+            Err(ConversationError::RequestConflict)
+        ));
+        assert_eq!(store.pending().await.unwrap().len(), 3);
+        store.settle(&child_id, "a").await.unwrap();
+        store.settle(&child_id, "missing").await.unwrap();
         let left: Vec<_> = store
             .pending()
             .await
