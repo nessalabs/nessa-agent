@@ -102,11 +102,12 @@ not taken for an earlier run's.
 | Parent already has it (crash before settle) | Settled, not queued again |
 | Gateway retires before delivery | Stays saved; the next start delivers it |
 | Saved by an earlier run, turn finished | Delivered at start |
-| Saved by an earlier run, turn unfinished | Reported `interrupted` at start, with any result it saved |
+| Saved by an earlier run, turn unfinished | Reported at start: `interrupted` when no result was saved, else that saved result and reply |
+| Parent's agent cannot open in this run (configuration, placement) | Not retried in this run; stays saved for the next start |
 | Person may no longer view the thread, or it is deleted | Let go, nothing told |
 
 No turn the earlier run left unfinished runs again after a restart, so a saved
-report whose turn has not finished is reported `interrupted`;
+report whose turn saved no result is reported `interrupted`;
 `restored_unfinished` owns that decision, and is what changes once interrupted
 turns resume. A thread cannot report to itself. Two agents that keep messaging
 each other keep reporting to each other: that is their own conversation, and the

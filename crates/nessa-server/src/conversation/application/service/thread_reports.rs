@@ -220,14 +220,30 @@ impl ThreadReports {
         }
     }
 
-    /// Let go of every watch on, or reporting to, `id`.
+    /// Let go of every watch on, or reporting to, `id`, and of the fresh
+    /// marks of those reports.
     fn forget_conversation(&self, id: &ConversationId) {
-        let mut watches = self.lock();
-        watches.remove(id);
-        watches.retain(|_, list| {
-            list.retain(|watch| &watch.report.parent != id);
-            !list.is_empty()
-        });
+        let mut gone: Vec<String> = Vec::new();
+        {
+            let mut watches = self.lock();
+            if let Some(list) = watches.remove(id) {
+                gone.extend(list.into_iter().map(|watch| watch.report.execution));
+            }
+            watches.retain(|_, list| {
+                list.retain(|watch| {
+                    let keep = &watch.report.parent != id;
+                    if !keep {
+                        gone.push(watch.report.execution.clone());
+                    }
+                    keep
+                });
+                !list.is_empty()
+            });
+        }
+        let mut fresh = self.fresh();
+        for report in gone {
+            fresh.remove(&report);
+        }
     }
 
     /// One caller for each person with a report waiting on `child`.
@@ -659,7 +675,10 @@ impl ConversationService {
     /// holds is not queued again, and the report's fixed execution identity
     /// makes a second submit answer from the first. A parent that cannot take
     /// it yet is tried again until the gateway retires, which leaves it saved
-    /// for the next start. One the parent refuses for good is let go.
+    /// for the next start. A parent whose agent cannot open in this run, from
+    /// its configuration or placement, is not tried again in it: the report
+    /// stays saved for the next start. One the parent refuses for good is let
+    /// go.
     async fn deliver_report(&self, taken: Taken) {
         let Taken { report, text, .. } = &taken;
         let mut delay = DELIVERY_RETRY_FIRST;
@@ -701,6 +720,19 @@ impl ConversationService {
                         let parent = &report.parent;
                         tracing::warn!(%parent, %error, "a thread report was refused by its parent; it is let go");
                         break;
+                    }
+                    Err(
+                        error @ (ConversationError::LeaseRefused(_)
+                        | ConversationError::LeaseUnreadable
+                        | ConversationError::PlacementUnreadable
+                        | ConversationError::AgentNotConfigured
+                        | ConversationError::EnvironmentNotConfigured
+                        | ConversationError::ModelUnavailable
+                        | ConversationError::ApprovalModeUnavailable),
+                    ) => {
+                        let parent = &report.parent;
+                        tracing::warn!(%parent, %error, "a thread report's parent cannot open in this run; it stays saved for the next start");
+                        return;
                     }
                     Err(error) => {
                         let parent = &report.parent;
@@ -744,8 +776,9 @@ fn watched(
 }
 
 /// A report an earlier run saved, whose turn that run left unfinished. No
-/// turn is run again after a restart, so it was interrupted: with the result
-/// and reply it saved, when it saved one before its settlement.
+/// turn is run again after a restart, so one that saved no result is reported
+/// interrupted. One that saved its result, but not its settlement, did end:
+/// it is reported with that result and reply.
 fn restored_unfinished(
     child: &ConversationId,
     execution: &str,
