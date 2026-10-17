@@ -7,6 +7,7 @@
 //! undispatched immediate close --> InvocationCancellation --> cause/initiator
 //! host admission --> Initiation --> owner or share grant + tool checking
 //! ordered transitions --> validate_history --> continuous stages + stable kind/target
+//! cut-off turn id --> Resumption --> derived successor id (at most three)
 //! ```
 //!
 //! The arrow means the application combines these values to correlate output.
@@ -40,6 +41,9 @@ pub use queue_order::{QueueOrderChange, QueueOrderError};
 
 mod queue_history;
 pub use queue_history::{QueueMutation, QueueRemovalCause};
+
+mod resumption;
+pub use resumption::Resumption;
 
 #[cfg(test)]
 pub(crate) use message::MESSAGE_CLONES;

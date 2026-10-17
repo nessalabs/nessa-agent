@@ -28,7 +28,7 @@ jobs:
     # dependency downloads and both engines must fit; a timeout remains failure.
     timeout-minutes: 60
     env:
-      BROWSER_EVIDENCE: ${{ github.workspace }}/../canonical-browser-evidence
+      BROWSER_EVIDENCE: ${{ github.workspace }}-browser-evidence
     steps:
       - uses: actions/checkout@v4
         with:

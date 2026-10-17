@@ -128,6 +128,9 @@ fn answers(audit: &AnswerAudit) -> Vec<PermissionAnswerRecord> {
             ExecutionAuditRecord::NativeHooksLaunch(record) => {
                 panic!("a review is not a hooks launch: {record:?}")
             }
+            ExecutionAuditRecord::TurnResumed(record) => {
+                panic!("a review is not a resumed turn: {record:?}")
+            }
         })
         .collect()
 }

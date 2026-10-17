@@ -298,12 +298,13 @@ export function report(check, options) {
     /** Adds a result; `failures` are the assertion messages that did not hold. */
     add(result) {
       const lined = applyLines(result)
-      const entry = { ok: (lined.failures ?? []).length === 0, failures: [], ...lined }
-      entry.ok = entry.failures.length === 0 && !entry.error && !entry.skipped
+      const entry = { ...lined, failures: lined.failures ?? [] }
+      entry.ok =
+        entry.failures.length === 0 && !entry.error && !entry.skipped && !entry.cannotRun
       results.push(entry)
       const tag = entry.skipped
         ? "skip "
-        : entry.error
+        : entry.error || entry.cannotRun
           ? "ERROR"
           : entry.ok
             ? "ok   "

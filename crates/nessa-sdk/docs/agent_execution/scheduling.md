@@ -314,11 +314,52 @@ result even when a local cancellation outcome is retained separately.
 Running evidence with an already-saved result recovers that outcome even if
 the final scheduling transition was not saved. Pending/running evidence with no
 recorded result and no live owner returns `SubmissionUnresolved`; the SDK never risks replaying delivery that may already
-have happened. Late receipt errors are retained for subsequent snapshot saves; if
+have happened. Once the host has resumed such a turn (below), a retry answers as its successor. Late receipt errors are retained for subsequent snapshot saves; if
 storage remains unavailable through a crash, only the last persisted evidence can
 be recovered, not an error response that never reached storage. No manual snapshot
 inspection is required before retrying. This contract covers scheduled admission and steering; immediate `invoke` remains a
 supervised operation without receipt recovery.
+
+## Resuming turns a restart or a failure cut off
+
+The SDK never replays a turn by itself; the host decides what to continue.
+`owed_turns()` lists every turn whose work is owed:
+
+- one still Queued or Running with no result and nothing in this process
+  running it (a crash cut it off);
+- one cancelled with a cause that leaves work owed (`Suspended`, `Interrupted`);
+- one a failure ended (`ExecutionFailed`, `DispatchFailed`, or `RunnerStopped`
+  behind another turn's failure) whose retained error is one a retry can fix
+  (`AgentError::leaves_work_owed`: the provider, its transport, a deadline, a
+  passing storage failure). A refusal, invalid input, a sign-in the provider
+  needs, or a known result stays final. A failure is owed only while no later
+  turn moved past it: once a person's next message runs, or they stop it, the
+  failed turn is not sent again. A successor and a steering message do not
+  count as moving past it.
+
+`suspend(actor)` is the host's own shutdown: it stops the Agent like `close`,
+but records the stopped turns as `Cancelled(Suspended)` instead of
+`SessionClosed`, so they are owed. A person's close and a withdrawal stay final;
+a suspend after a close keeps the close's cause.
+
+`resume_turn(turn, actor)` first records a cut-off turn `Cancelled(Interrupted)`,
+then queues a successor turn: a notice that says why the turn stopped (a
+restart or a failure, and whether the provider had it), then the original
+request (a successor's own notice is replaced, never stacked), under the
+original caller and initiation. Nessa never re-runs a tool
+call; the model checks what is already done, carries on, or says it is
+finished. The successor's identity is derived from the original
+(`Resumption`), so resuming twice queues one successor, a retry of the original
+answers as the successor, and a chain is resumed at most three times, counting
+shutdowns, crashes and failures alike. A turn that is not resumed is ended by
+one more edge, `Cancelled(NotResumed)`, recorded after its owed ending: the
+host's final decision, and the only edge that may follow a cancellation or a
+settlement, and only one that left work owed or ended with a failure. A spent
+chain gets it and is audited `Exhausted`. The host checks who may resume a turn
+(a share grant still in force, say) before calling it; `decline_turn` gives one
+it will not resume the same edge and audits `Declined`, so each turn is decided
+once. Each decision records one `TurnResumed` audit record. `is_idle()` says when every
+admitted turn has settled, so a host can tell when nothing is left to resume.
 
 ## Native steering
 
@@ -438,8 +479,8 @@ Storage failures are returned even while necessary cleanup proceeds. The separat
 `ExecutionAudit` port owns provider lifecycle and permission evidence.
 
 Snapshots retain pending/unresolved work after a runtime or process interruption;
-reconstruction never automatically replays it. This is not a durable job service
-or a guarantee of background execution after the host exits.
+reconstruction never replays it by itself; the host resumes what is owed
+([Resuming turns a restart or a failure cut off](#resuming-turns-a-restart-or-a-failure-cut-off)).
 
 ## Review and regression evidence
 

@@ -348,6 +348,9 @@ impl ProviderSessionBackend for InMemoryPermissionBackend {
                             ExecutionAuditRecord::NativeHooksLaunch(_) => {
                                 panic!("close cannot record a hooks launch")
                             }
+                            ExecutionAuditRecord::TurnResumed(_) => {
+                                panic!("close cannot resume a turn")
+                            }
                         }
                     }
                     Ok(CloseOutcome { forced: false })

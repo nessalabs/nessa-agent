@@ -390,6 +390,15 @@ impl CompositionRoot {
         // a deletion that cannot finish is reported, never a reason to hold up
         // startup. Asking an agent about its own record of a session does not
         // wait for the warm-up just above; it spends its own launch budget.
+        // Thread reports the last run saved are looked at again: delivered
+        // when their turn finished, reported interrupted when it did not.
+        if let Some(service) = conversations.clone() {
+            tokio::spawn(async move {
+                if let Err(error) = service.resume_thread_reports().await {
+                    tracing::error!(%error, "saved thread reports could not be read to resume them");
+                }
+            });
+        }
         if let Some(service) = conversations.clone() {
             tokio::spawn(async move {
                 match service.finish_deletions().await {
@@ -404,6 +413,27 @@ impl CompositionRoot {
                     Err(error) => tracing::error!(
                         %error,
                         "deleted conversations could not be listed to finish their erasure"
+                    ),
+                }
+            });
+        }
+        // Turns the last run left unfinished — cut off by a crash, or
+        // suspended by its shutdown — are carried on now, in the background,
+        // each conversation opened as its owner's and its agent told what was
+        // cut off (#970). Turns a failure left owed are retried after their
+        // backoff, by the retry loop, for as long as the gateway runs.
+        if let Some(service) = conversations.clone() {
+            let retries = service.clone();
+            tokio::spawn(async move { retries.run_failure_retries().await });
+            tokio::spawn(async move {
+                match service.resume_unfinished().await {
+                    Ok(0) => {}
+                    Ok(marked) => {
+                        tracing::info!(marked, "resumed conversations with unfinished turns")
+                    }
+                    Err(error) => tracing::error!(
+                        %error,
+                        "conversations with unfinished turns could not be listed to resume them"
                     ),
                 }
             });

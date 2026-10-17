@@ -3,10 +3,25 @@ import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 import test from "node:test"
 
 import { prepareBrowserVerification } from "./prepare-browser-verification.mjs"
+
+test("workflow evidence uses a sibling path accepted by artifact upload", () => {
+  const workflow = readFileSync(
+    new URL("../.github/workflows/canonical-browser-verification.yml", import.meta.url),
+    "utf8",
+  )
+  const workspace = "/home/runner/work/repository/repository"
+  const evidence = workflow
+    .match(/^\s+BROWSER_EVIDENCE: (.+)$/m)[1]
+    .replace("${{ github.workspace }}", workspace)
+  // upload-artifact rejects literal dot segments even in absolute paths.
+  assert.ok(!evidence.split("/").some((part) => part === "." || part === ".."))
+  assert.equal(dirname(evidence), dirname(workspace))
+  assert.notEqual(evidence, workspace)
+})
 
 function fixture(t) {
   const cwd = mkdtempSync(join(tmpdir(), "nessa-browser-ci-"))

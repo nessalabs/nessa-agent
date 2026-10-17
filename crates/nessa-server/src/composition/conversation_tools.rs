@@ -2,7 +2,8 @@
 use crate::conversation::application::{
     error_code, event_error_code, project_events, validate_event_cursor, AgentToolRequest,
     ConversationCaller, ConversationError, ConversationEventError, ConversationService,
-    EventProgress, RequestedAgent, RequestedConversation, SubmissionMode, SubmittedMessage,
+    EventProgress, ReportRegistration, RequestedAgent, RequestedConversation, SubmissionMode,
+    SubmittedMessage, ThreadReport,
 };
 use crate::mcp_servers::application::{BuiltInFuture, BuiltInServer};
 use nessa_protocol::agents::AgentId;
@@ -85,7 +86,7 @@ impl BuiltInServer for ConversationTools {
             }),
             json!({
                 "name": "send_message",
-                "description": "Send plain text in another thread of the same owner. queued (default) starts a queued turn; steering uses the existing steering semantics; passive records a note without starting or steering a turn. Retry with identical thread, text and mode using the same requestId. Passive notes and active submissions retain separate existing operation namespaces.",
+                "description": "Send plain text in another thread of the same owner. queued (default) starts a queued turn; steering uses the existing steering semantics; passive records a note without starting or steering a turn. When a queued or steering message's turn ends, a report with the thread's outcome and final reply is queued into this conversation as a new turn (reportsBack: true), so there is no need to poll for it. Retry with identical thread, text and mode using the same requestId. Passive notes and active submissions retain separate existing operation namespaces.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -374,6 +375,8 @@ async fn run(
             let request = request(args.request_id, &call)?;
             let execution = identity(&source, &request, "execution");
             let action = identity(&source, &request, "send");
+            let report = identity(&source, &request, "report");
+            let report_action = identity(&source, &request, "report-send");
             let source = service
                 .admit_agent_tool(
                     source,
@@ -413,9 +416,23 @@ async fn run(
                     );
                 }
             };
-            let submitted = service
+            let storage = service.commands().ok_or("command_unavailable")?;
+            let answer = ThreadReport {
+                parent: source.conversation().clone(),
+                caller: ConversationCaller {
+                    action_id: report_action,
+                    ..source.caller()
+                },
+                execution: report.clone(),
+            };
+            // Registered before the submit, so a turn that ends at once is
+            // not missed; the look after it catches one that already had.
+            let registration = service
+                .report_thread_turn(target.clone(), execution.clone(), answer.clone())
+                .await;
+            let submitted = match service
                 .submit_command(
-                    service.commands().ok_or("command_unavailable")?,
+                    storage,
                     target.clone(),
                     source.caller(),
                     Initiation::owner(),
@@ -428,9 +445,35 @@ async fn run(
                     mode,
                 )
                 .await
-                .map_err(mutation)?;
+            {
+                Ok(submitted) => submitted,
+                Err(error) => {
+                    // The thread's saved history decides whether a turn will
+                    // finish; a report already waiting stays as it is.
+                    if registration == ReportRegistration::Registered {
+                        service
+                            .settle_failed_thread_report(
+                                target.clone(),
+                                &execution,
+                                &report,
+                                &source.caller(),
+                            )
+                            .await;
+                    }
+                    return Err(mutation(error));
+                }
+            };
+            // A concurrent retry under this request may have failed and let
+            // the report go after this one registered: hold it again.
+            let held = service
+                .report_thread_turn(target.clone(), execution.clone(), answer)
+                .await;
+            let reports = registration.reports() || held.reports();
+            if held.reports() {
+                service.look_for_reports(target.clone(), false).await;
+            }
             Ok(
-                json!({"threadId":target.to_string(),"requestId":request,"mode":args.mode.name(),"executionId":execution,"command":receipt(&submitted.progress)}),
+                json!({"threadId":target.to_string(),"requestId":request,"mode":args.mode.name(),"executionId":execution,"command":receipt(&submitted.progress),"reportsBack":reports}),
             )
         }
         "stop_thread" => {
