@@ -264,7 +264,20 @@ export async function runParallelCargoTests({
   const failures = await runPool(selected, concurrency, async ({ label, executable }) => {
     stderr.write(`starting ${label}\n`)
     const started = Date.now()
-    const prefixed = linePrefix(label, (line) => stdout.write(line))
+    const prefixed = linePrefix(label, (line) => {
+      stdout.write(line)
+      const failed = /^test (.+) \.\.\. FAILED\r?\n?$/.exec(
+        line.slice(label.length + 3),
+      )
+      if (failed) {
+        const name = `${label}: ${failed[1]}`.slice(0, 1024)
+        const message = name
+          .replaceAll("%", "%25")
+          .replaceAll("\r", "%0D")
+          .replaceAll("\n", "%0A")
+        stderr.write(`::error title=Rust test failed::${message}\n`)
+      }
+    })
     const code = await run(executable, [], {
       cwd,
       onStdout: (chunk) => prefixed.push(chunk),
