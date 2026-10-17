@@ -13,6 +13,7 @@ use std::{
 };
 use tokio::sync::{oneshot, Notify};
 
+/// Physical read workers at once; each runs one bounded read step.
 const MAX_READS: usize = 4;
 type ReadTask = thread::JoinHandle<Result<(), StorageError>>;
 
@@ -23,6 +24,8 @@ pub(super) struct StorageOwner {
 #[derive(Default)]
 struct State {
     leases: HashSet<String>,
+    // Retained event readers. Not bounded here: each belongs to a follower
+    // its host already bounds, so the total grows with the followers.
     event_readers: usize,
     reads: Vec<ReadTask>,
     read_failure: Option<StorageError>,
@@ -56,11 +59,16 @@ impl StorageOwner {
         if state.shutdown.is_some() {
             return Err(StorageError::Closed);
         }
-        if state.event_readers == MAX_READS {
-            return Err(StorageError::ReadCapacity);
-        }
         state.event_readers += 1;
         Ok(EventReadOwner(self.clone()))
+    }
+    /// How many event readers are retained now.
+    #[cfg(test)]
+    pub(super) fn event_readers(&self) -> usize {
+        self.state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .event_readers
     }
 
     pub fn reserve(&self, id: &str) -> Result<(), StorageError> {

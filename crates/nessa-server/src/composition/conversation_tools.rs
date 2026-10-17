@@ -14,7 +14,8 @@ use nessa_sdk::application::agent_execution::{
         MutationStage,
     },
     sessions::{
-        CommittedEventCursor, EventRead, EventReadLimits, EventStart, NoteDelivery, NoteState,
+        CommittedEventCursor, EventRead, EventReadError, EventReadLimits, EventStart, NoteDelivery,
+        NoteState,
     },
 };
 use nessa_sdk::domain::agent_execution::{
@@ -42,6 +43,8 @@ const MAX_LIMIT: usize = 100;
 /// connection's eight calls, so it keeps room for command and control calls.
 pub(crate) const MAX_EVENT_READERS: usize = 4;
 const SUBSCRIPTION_SETUP_TIMEOUT: Duration = Duration::from_secs(10);
+/// The wait before retrying a read step every physical read worker refused.
+const READ_RETRY: Duration = Duration::from_millis(25);
 
 pub(crate) struct ConversationTools {
     service: OnceLock<ConversationService>,
@@ -684,6 +687,14 @@ async fn observe(
             Err(ended) => return control.finish(target, ended),
         }
         let read = match control.step(reader.read(limits)).await {
+            // Every physical read worker is busy: a moment's wait, not a
+            // refusal, within this call's own deadline.
+            Ok(Err(EventReadError::Capacity)) => {
+                if let Err(ended) = control.step(sleep(READ_RETRY)).await {
+                    return control.finish(target, ended);
+                }
+                continue;
+            }
             Ok(result) => result.map_err(|error| {
                 event_error_code(&ConversationEventError::Events(error)).to_owned()
             })?,

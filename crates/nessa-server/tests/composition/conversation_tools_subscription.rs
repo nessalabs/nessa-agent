@@ -283,7 +283,7 @@ async fn repeated_cancelled_observers_cannot_exceed_detached_source_capacity() {
         releases.push(release);
     }
     let (entered, mut read_entered) = oneshot::channel();
-    let (_release, read_release) = oneshot::channel();
+    let (release_other, read_release) = oneshot::channel();
     *metadata.metadata_load_gate.lock().unwrap() = Some((entered, read_release));
     let (_stop, stopped) = watch::channel(false);
     let result = tokio::time::timeout(
@@ -309,6 +309,29 @@ async fn repeated_cancelled_observers_cannot_exceed_detached_source_capacity() {
         ),
         "capacity refusal must precede source metadata I/O"
     );
+    // Another agent is not counted against this one's admissions: its call
+    // reaches the metadata read the full source was refused before.
+    let other = thread("00000000-0000-4000-8000-000000000002").unwrap();
+    let (stop_other, stopped) = watch::channel(false);
+    let work = tokio::spawn(tools.call(
+        &SessionId::new(other.to_string()).unwrap(),
+        "other-source".into(),
+        "subscribe".into(),
+        json!({"threadId":other.to_string(),"waitMs":30000}),
+        stopped,
+    ));
+    tokio::time::timeout(Duration::from_secs(1), read_entered)
+        .await
+        .expect("another source is admitted while this one is full")
+        .unwrap();
+    assert_eq!(tools.readers.held(&other), 1);
+    stop_other.send_replace(true);
+    let result = tokio::time::timeout(Duration::from_secs(1), work)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(result["structuredContent"]["error"], "cancelled");
+    drop(release_other);
     drop(metadata.metadata_load_gate.lock().unwrap().take());
     let owned = service.clone();
     let mut shutdown = tokio::spawn(async move { owned.shutdown().await });
@@ -535,7 +558,17 @@ async fn delivery_reauthorizes_page_idle_and_cached_deadline_after_target_deleti
             }
             let result = work.await.unwrap();
             if matches!(phase, DeliveryPhase::Capacity) {
-                assert_eq!(result.unwrap_err(), "subscription_capacity");
+                // Busy read workers are retried, not refused: the retry
+                // reauthorizes, and a source that never frees ends at the
+                // preparation bound.
+                assert_eq!(
+                    result.unwrap_err(),
+                    if deleted {
+                        "conversation_deleted"
+                    } else {
+                        "event_source_preparing"
+                    }
+                );
             } else if deleted {
                 assert_eq!(result.unwrap_err(), "conversation_deleted");
             } else {

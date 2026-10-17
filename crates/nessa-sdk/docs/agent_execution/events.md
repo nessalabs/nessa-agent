@@ -45,7 +45,7 @@ semantic validation and rollback, including its rules for skipping dependent
 changes after a gap. It preserves transitions such as context A to B to A in one
 save, even when the final snapshot is unchanged.
 
-The adapter admits four retained readers per store. Output pages accept at most
+The adapter retains any number of readers per store; each belongs to a follower its host bounds. At most four physical read steps run at once, and a step past that is refused `Capacity` for the caller to retry. Output pages accept at most
 256 events and 256 MiB encoded semantic payload bytes. The pending output holds
 at most one decoded unit, whose encoded body is limited by the existing 160 MiB
 fact bound. Each single change's encoded semantic batch is charged; gap payload

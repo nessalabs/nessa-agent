@@ -20,6 +20,8 @@ pub struct SourcePermit {
 
 impl SourcePermits {
     pub fn new(limit: usize) -> Self {
+        // A zero limit would leave an entry for every source refused.
+        assert!(limit > 0, "a source needs room for one permit");
         Self {
             limit,
             held: Arc::default(),
