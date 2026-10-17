@@ -53,12 +53,12 @@ pub const MAX_REPORT_REPLY_BYTES: usize = 8 * 1024;
 /// A report whose turn has not finished in this long is let go, so a thread
 /// deleted or never run cannot hold a place for good.
 const REPORT_LIFETIME: Duration = Duration::from_secs(24 * 60 * 60);
-/// A failed turn, or a failed admission, makes the agent cancel the turns
-/// queued behind it after the look that followed, outside any invocation, so
-/// no hook follows: look again this many times, this far apart, while a
-/// watched turn is still queued.
-const STRANDED_LOOKS: usize = 50;
-const STRANDED_LOOK_DELAY: Duration = Duration::from_millis(100);
+/// A turn's hook runs before its settlement is saved, and a failed turn, or a
+/// failed admission, makes the agent cancel the turns queued behind it after
+/// that, outside any invocation: no hook follows either. Look again this many
+/// times, this far apart, while a watched turn is settling.
+const SETTLING_LOOKS: usize = 50;
+const SETTLING_LOOK_DELAY: Duration = Duration::from_millis(100);
 
 /// A report meeting another command of the same person tries again this many
 /// times, this far apart.
@@ -114,6 +114,18 @@ impl ReportRegistration {
 pub(crate) struct ThreadReports {
     watches: Mutex<HashMap<ConversationId, Vec<Watch>>>,
     delivering: Arc<AtomicUsize>,
+    /// Threads being looked at, and whether another look (after a failure,
+    /// when `true`) was asked for meanwhile.
+    looking: Mutex<HashMap<ConversationId, Option<bool>>>,
+}
+
+/// What a look found of one watched turn.
+enum Watched {
+    Finished(String),
+    /// Its result is saved and its settlement is not, or it is queued behind
+    /// a failure that will cancel it.
+    Settling,
+    Waiting,
 }
 
 /// Counts one report being queued until dropped.
@@ -159,7 +171,10 @@ impl ThreadReports {
             list.retain(|watch| !watch.expired());
             !list.is_empty()
         });
-        if watches.values().map(Vec::len).sum::<usize>() >= MAX_THREAD_REPORTS {
+        // A report holds its place until it is queued in its parent.
+        let held =
+            watches.values().map(Vec::len).sum::<usize>() + self.delivering.load(Ordering::SeqCst);
+        if held >= MAX_THREAD_REPORTS {
             return ReportRegistration::Refused;
         }
         watches.entry(child).or_default().push(Watch {
@@ -240,6 +255,33 @@ impl ThreadReports {
             watches.remove(child);
         }
         taken
+    }
+
+    /// Take the look at `child`, or leave another for the look under way.
+    fn begin_look(&self, child: &ConversationId, failure: bool) -> bool {
+        let mut looking = self.looking.lock().unwrap_or_else(PoisonError::into_inner);
+        match looking.get_mut(child) {
+            Some(again) => {
+                *again = Some(again.unwrap_or(false) || failure);
+                false
+            }
+            None => {
+                looking.insert(child.clone(), None);
+                true
+            }
+        }
+    }
+
+    /// End a look at `child`: the look asked for meanwhile, if any.
+    fn end_look(&self, child: &ConversationId) -> Option<bool> {
+        let mut looking = self.looking.lock().unwrap_or_else(PoisonError::into_inner);
+        match looking.get_mut(child) {
+            Some(again @ Some(_)) => again.take(),
+            _ => {
+                looking.remove(child);
+                None
+            }
+        }
     }
 
     /// The executions still watched on `child` for an `admitted` person.
@@ -345,31 +387,51 @@ impl ConversationService {
             return;
         }
         // One look now; the follow-up a failure may need runs off the send.
-        if self.look_once(&child).await {
-            let service = ConversationService {
-                inner: self.inner.clone(),
-            };
+        if self.look_once(&child, true).await {
+            let service = self.clone();
             tokio::spawn(async move { service.look_for_reports(child, true).await });
         }
     }
 
     /// Queue every report on `child` whose turn has finished, for each
-    /// person who may still view it. After a `failure` the turns queued
-    /// behind it are about to be cancelled: keep looking until they are.
+    /// person who may still view it, looking again while a watched turn
+    /// settles. After a `failure` the turns queued behind it are about to be
+    /// cancelled: those count as settling too. One look runs per thread at a
+    /// time; one asked for meanwhile runs after it.
     pub async fn look_for_reports(&self, child: ConversationId, failure: bool) {
-        let looks = if failure { STRANDED_LOOKS } else { 0 };
-        for look in 0..=looks {
-            if look > 0 {
-                tokio::time::sleep(STRANDED_LOOK_DELAY).await;
+        if !self.inner.thread_reports.begin_look(&child, failure) {
+            return;
+        }
+        let mut failure = failure;
+        loop {
+            for look in 0..=SETTLING_LOOKS {
+                if look > 0 {
+                    tokio::time::sleep(SETTLING_LOOK_DELAY).await;
+                }
+                if !self.look_once(&child, failure).await {
+                    break;
+                }
             }
-            if !self.look_once(&child).await {
-                return;
+            match self.inner.thread_reports.end_look(&child) {
+                Some(again) => failure = again,
+                None => return,
             }
         }
     }
 
-    /// One look; whether a watched turn is still queued.
-    async fn look_once(&self, child: &ConversationId) -> bool {
+    /// Look at a thread whose watched queued turn was withdrawn, outside
+    /// any invocation.
+    pub(crate) fn wake_thread_reports(&self, child: &ConversationId) {
+        if !self.inner.thread_reports.watched(child) {
+            return;
+        }
+        let service = self.clone();
+        let child = child.clone();
+        tokio::spawn(async move { service.look_for_reports(child, false).await });
+    }
+
+    /// One look; whether a watched turn is settling.
+    async fn look_once(&self, child: &ConversationId, failure: bool) -> bool {
         let mut live = None;
         let mut admitted = Vec::new();
         for caller in self.inner.thread_reports.callers(child) {
@@ -397,7 +459,10 @@ impl ConversationService {
             .inner
             .thread_reports
             .take(child, &admitted, |execution| {
-                finished(child, &snapshot, execution)
+                match watched(child, &snapshot, execution, failure) {
+                    Watched::Finished(text) => Some(text),
+                    Watched::Settling | Watched::Waiting => None,
+                }
             });
         for taken in taken {
             self.deliver_report(taken).await;
@@ -407,10 +472,10 @@ impl ConversationService {
             .waiting_on(child, &admitted)
             .iter()
             .any(|execution| {
-                invocation(&snapshot, execution).is_some_and(|record| {
-                    record.scheduling.last().map(|event| event.stage)
-                        == Some(InvocationStage::Queued)
-                })
+                matches!(
+                    watched(child, &snapshot, execution, failure),
+                    Watched::Settling
+                )
             })
     }
 
@@ -457,23 +522,55 @@ impl ConversationService {
     }
 }
 
-/// The report text for `execution` if its turn has finished.
-fn finished(child: &ConversationId, snapshot: &SessionSnapshot, execution: &str) -> Option<String> {
-    let record = invocation(snapshot, execution)?;
-    let last = record.scheduling.last();
-    let stage = last.map(|event| event.stage);
-    let (outcome, reply) = match (&record.result, stage) {
-        (Some(result), _) => (outcome(result), reply(record)),
-        (None, Some(InvocationStage::Cancelled)) => ("cancelled", None),
-        // Steering delivered into a turn that has since settled: that
-        // turn's outcome and reply are this message's.
-        (None, Some(InvocationStage::Injected)) => {
-            let host = invocation(snapshot, last?.target.as_ref()?.as_str())?;
-            (outcome(host.result.as_ref()?), reply(host))
-        }
-        _ => return None,
+/// What `snapshot` says of the watched `execution`: finished once its
+/// settlement is saved, with the report text. After a `failure`, a turn still
+/// queued is about to be cancelled.
+fn watched(
+    child: &ConversationId,
+    snapshot: &SessionSnapshot,
+    execution: &str,
+    failure: bool,
+) -> Watched {
+    let Some(record) = invocation(snapshot, execution) else {
+        return Watched::Waiting;
     };
-    Some(report_text(child, execution, outcome, reply))
+    let last = record.scheduling.last();
+    let (outcome, reply) = match last.map(|event| event.stage) {
+        _ if settled(record) => match &record.result {
+            Some(result) => (outcome(result), reply(record)),
+            None => ("cancelled", None),
+        },
+        // Steering delivered into a turn: that turn's outcome and reply are
+        // this message's, once it has settled.
+        Some(InvocationStage::Injected) => {
+            let host = last
+                .and_then(|event| event.target.as_ref())
+                .and_then(|target| invocation(snapshot, target.as_str()));
+            let Some(host) = host else {
+                return Watched::Waiting;
+            };
+            match (settled(host), &host.result) {
+                (true, Some(result)) => (outcome(result), reply(host)),
+                (true, None) => ("cancelled", None),
+                (false, Some(_)) => return Watched::Settling,
+                (false, None) => return Watched::Waiting,
+            }
+        }
+        _ if record.result.is_some() => return Watched::Settling,
+        Some(InvocationStage::Queued) if failure => return Watched::Settling,
+        _ => return Watched::Waiting,
+    };
+    Watched::Finished(report_text(child, execution, outcome, reply))
+}
+
+/// Whether the record's settlement is saved: it ran to an end, or was cancelled.
+fn settled(record: &InvocationRecord) -> bool {
+    record.scheduling.last().is_some_and(|event| {
+        matches!(
+            event.stage,
+            InvocationStage::Settled | InvocationStage::Cancelled
+        )
+    })
 }
 
 fn invocation<'s>(snapshot: &'s SessionSnapshot, execution: &str) -> Option<&'s InvocationRecord> {

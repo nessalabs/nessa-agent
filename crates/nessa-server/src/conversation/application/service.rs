@@ -3621,6 +3621,9 @@ impl ConversationService {
                 ExecutionId::new(&execution).map_err(|_| ConversationError::InvalidInput)?;
             let live = service.resolve(&id, &caller).await?;
             let result = live.agent.remove_queued(execution.clone(), actor).await?;
+            if result == QueueRemoval::Removed {
+                service.wake_thread_reports(&id);
+            }
             Ok(result == QueueRemoval::Removed)
         })
         .await

@@ -1158,6 +1158,33 @@ async fn a_thread_turn_reports_its_outcome_and_reply_back_to_the_sender() {
         reports[2]
     );
 
+    // A queued turn withdrawn while the turn ahead still runs reports as
+    // cancelled, though no invocation ends.
+    let release_ahead = hold_turn(&service, &provider, &worker_id, "worker-ahead").await;
+    let withdrawn = client
+        .call(
+            "send_message",
+            json!({"threadId":worker,"message":"withdraw me","requestId":"report-withdrawn"}),
+        )
+        .await;
+    assert_eq!(withdrawn["isError"], false, "{withdrawn}");
+    let withdrawn = withdrawn["structuredContent"]["executionId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let stopped = client
+        .call(
+            "stop_thread",
+            json!({"threadId":worker,"executionId":withdrawn,"requestId":"report-withdraw"}),
+        )
+        .await;
+    assert_eq!(stopped["isError"], false, "{stopped}");
+    let reports = reports_in(&service, &source, 4).await;
+    assert_eq!(reports.len(), 4, "{reports:?}");
+    assert!(reports[3].contains(&withdrawn), "{}", reports[3]);
+    assert!(reports[3].contains(": cancelled."), "{}", reports[3]);
+    drop(release_ahead);
+
     // A thread cannot report to itself.
     assert_eq!(
         service.report_thread_turn(
