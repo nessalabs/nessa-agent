@@ -139,18 +139,20 @@ async function mount({
     if (held)
       source.transcripts.set(sessionId, {
         ...held,
-        approval: {
-          id: `${sessionId}-ask`,
-          // An app's review runs the tool it named, as the gateway says it.
-          command:
-            sessionId === "second" && secondAsker.kind === "app"
-              ? `${secondAsker.tool} {}`
-              : command,
-          reason: `Why ${sessionId}.`,
-          origin: sessionId === "second" ? secondAsker : { kind: "agent" },
-          options,
-          ask: sessionId === "second" ? secondAsks : "tool",
-        },
+        approvals: [
+          {
+            id: `${sessionId}-ask`,
+            // An app's review runs the tool it named, as the gateway says it.
+            command:
+              sessionId === "second" && secondAsker.kind === "app"
+                ? `${secondAsker.tool} {}`
+                : command,
+            reason: `Why ${sessionId}.`,
+            origin: sessionId === "second" ? secondAsker : { kind: "agent" },
+            options,
+            ask: sessionId === "second" ? secondAsks : "tool",
+          },
+        ],
       })
   }
   const running = source.transcripts.get("run")
@@ -457,10 +459,10 @@ describe("the agents overview", () => {
       secondAsks: "message",
       beforeLoad: (source) => {
         const held = source.transcripts.get("second")
-        if (!held?.approval) return
+        if (!held?.approvals[0]) return
         source.transcripts.set("second", {
           ...held,
-          approval: { ...held.approval, reason },
+          approvals: [{ ...held.approvals[0], reason }],
         })
       },
     })
@@ -972,10 +974,10 @@ describe("the agents overview", () => {
     await mount({
       beforeLoad: (source) => {
         const held = source.transcripts.get("first")
-        if (!held?.approval) throw new Error("no approval")
+        if (!held?.approvals[0]) throw new Error("no approval")
         source.transcripts.set("first", {
           ...held,
-          approval: { ...held.approval, command },
+          approvals: [{ ...held.approvals[0], command }],
         })
       },
     })

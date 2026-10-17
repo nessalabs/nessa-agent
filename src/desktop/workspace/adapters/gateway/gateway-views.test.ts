@@ -687,7 +687,8 @@ describe("a conversation view as a transcript", () => {
       [[{ state: "loading", entry }], "reading"],
       [[{ state: "failed", entry, error: new Error("unavailable") }], "failed"],
     ] as const) {
-      const approval = transcriptFrom(listed, 1, at, GATEWAY_NOW_MS, details).approval!
+      const approval = transcriptFrom(listed, 1, at, GATEWAY_NOW_MS, details)
+        .approvals[0]!
       expect(approval).toMatchObject({
         id: reviewKey(0),
         command: "Write",
@@ -698,7 +699,32 @@ describe("a conversation view as a transcript", () => {
     }
   })
 
-  it("asks the first pending permission as the approval, under an id that names the review", () => {
+  it("projects every review the view lists, in its order, each loading on its own", () => {
+    const entries = [0, 1, 2].map((index) => ({
+      review: reviewKey(index),
+      origin: "harness" as const,
+      toolName: `Tool${index}`,
+    }))
+    const listed = view("c", {
+      messages: [turn({ status: "running" })],
+      permissions: entries,
+    })
+    const failed = {
+      state: "failed",
+      entry: entries[0],
+      error: new Error("unavailable"),
+    } as const
+    const { approvals } = transcriptFrom(listed, 1, at, GATEWAY_NOW_MS, [failed])
+    expect(
+      approvals.map((approval) => [approval.id, approval.command, approval.loading]),
+    ).toEqual([
+      [reviewKey(0), "Tool0", "failed"],
+      [reviewKey(1), "Tool1", "reading"],
+      [reviewKey(2), "Tool2", "reading"],
+    ])
+  })
+
+  it("asks a pending permission as an approval, under an id that names the review", () => {
     const transcript = reviewedTranscript({
       messages: [turn({ status: "running" })],
       permissions: [
@@ -715,7 +741,7 @@ describe("a conversation view as a transcript", () => {
         },
       ],
     })
-    expect(transcript.approval).toMatchObject({
+    expect(transcript.approvals[0]).toMatchObject({
       // The exact input approved, whatever the provider titles the review.
       command: 'bash {"command":"rm -rf build"}',
       reason: "Tool permission",
@@ -724,7 +750,7 @@ describe("a conversation view as a transcript", () => {
       options: [{ id: "a", label: "Allow", choice: "once" }],
       ask: "tool",
     })
-    expect(transcript.approval?.deadline).toBeUndefined()
+    expect(transcript.approvals[0]?.deadline).toBeUndefined()
     const waiting = reviewedTranscript({
       messages: [turn({ status: "running" })],
       permissions: [
@@ -749,7 +775,7 @@ describe("a conversation view as a transcript", () => {
         },
       ],
     })
-    expect(waiting.approval?.deadline).toEqual({
+    expect(waiting.approvals[0]?.deadline).toEqual({
       waitMs: 30_000,
       dueAtMs: 1_700_000_030_000,
       effect: "deny",
@@ -758,7 +784,7 @@ describe("a conversation view as a transcript", () => {
       stopsTurn: true,
     })
     // The approval is the review's key, whatever its ids: they can be used again.
-    expect(reviewOf(transcript.approval!.id)).toBe(reviewKey(0))
+    expect(reviewOf(transcript.approvals[0]!.id)).toBe(reviewKey(0))
   })
 
   it("puts the deadline on the window's clock, so a clock ahead or behind the gateway's counts down the same", () => {
@@ -790,7 +816,7 @@ describe("a conversation view as a transcript", () => {
         },
         receivedAtMs,
       )
-      return { deadline: transcript.approval!.deadline!, receivedAtMs }
+      return { deadline: transcript.approvals[0]!.deadline!, receivedAtMs }
     }
     for (const skewMs of [0, 60_000, -60_000]) {
       const { deadline, receivedAtMs } = asked(skewMs)
@@ -822,7 +848,7 @@ describe("who asks for an approval (#436)", () => {
           argumentsJson: "{}",
         },
       ],
-    }).approval
+    }).approvals[0]
 
   it("carries each offered answer in the view's order and words, and none it did not offer (#444)", () => {
     const approval = asked({ kind: "harness" })
@@ -857,7 +883,7 @@ describe("who asks for an approval (#436)", () => {
           argumentsJson: "{}",
         },
       ],
-    }).approval
+    }).approvals[0]
     expect(remembered?.options).toEqual([
       { id: "allow-once", label: "Allow", choice: "once" },
       { id: "allow_always", label: "Always allow", choice: "once" },
@@ -886,7 +912,7 @@ describe("who asks for an approval (#436)", () => {
           argumentsJson: "{}",
         },
       ],
-    }).approval
+    }).approvals[0]
     expect(both?.options).toEqual([
       { id: "opt-b", label: "Nope", choice: "deny" },
       { id: "opt-a", label: "Sure", choice: "once" },

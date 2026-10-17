@@ -603,7 +603,7 @@ describe("conversations", () => {
     // Read whole from its live owner, then put on the window's clock.
     await flush()
     const transcript = await source.transcript(conversationA)
-    expect(transcript.approval?.deadline?.dueAtMs).toBe(1_000_000 + 30_000)
+    expect(transcript.approvals[0]?.deadline?.dueAtMs).toBe(1_000_000 + 30_000)
   })
 
   it("a summary says a session waits on the person when its conversation holds a question", async () => {
@@ -731,7 +731,7 @@ describe("conversations", () => {
     await source.index()
     follow()
     const shown = await source.transcript("a")
-    expect(shown.approval).toBeNull()
+    expect(shown.approvals).toEqual([])
     expect(atWork(shown)).toBe(true)
     await source.stop("a", "person")
     // The conversation alone: the peek, not the view, picks the execution.
@@ -2374,7 +2374,7 @@ describe("writes", () => {
     // Its first count listed the review loading, its second showed it read.
     expect(updates).toContainEqual({
       kind: "transcript",
-      transcript: expect.objectContaining({ approval: null, revision: 3 }),
+      transcript: expect.objectContaining({ approvals: [], revision: 3 }),
     })
   })
 
@@ -2394,7 +2394,7 @@ describe("writes", () => {
     )
     follow()
     const shown = await source.transcript(conversationA)
-    expect(shown.approval).toMatchObject({ command: "Write", loading: "reading" })
+    expect(shown.approvals[0]).toMatchObject({ command: "Write", loading: "reading" })
     // Nothing is answered before the person could see all of what it allows.
     await expect(
       source.approve(
@@ -2409,8 +2409,8 @@ describe("writes", () => {
     release()
     await flush()
     const loaded = transcriptsOf(updates, conversationA).at(-1)
-    expect(loaded?.approval?.command).toBe(`Write ${whole}`)
-    expect(loaded?.approval?.loading).toBeUndefined()
+    expect(loaded?.approvals[0]?.command).toBe(`Write ${whole}`)
+    expect(loaded?.approvals[0]?.loading).toBeUndefined()
     expect(gateway.count("permissionReview")).toBe(1)
     await source.approve(
       conversationA,
@@ -2443,7 +2443,7 @@ describe("writes", () => {
     follow()
     await source.transcript(conversationA)
     await flush()
-    expect(transcriptsOf(updates, conversationA).at(-1)?.approval).toMatchObject({
+    expect(transcriptsOf(updates, conversationA).at(-1)?.approvals[0]).toMatchObject({
       loading: "failed",
     })
     await expect(
@@ -2459,7 +2459,7 @@ describe("writes", () => {
     await flush()
     expect(gateway.count("permissionReview")).toBe(2)
     const loaded = transcriptsOf(updates, conversationA).at(-1)
-    expect(loaded?.approval?.loading).toBeUndefined()
+    expect(loaded?.approvals[0]?.loading).toBeUndefined()
     await source.approve(
       conversationA,
       approvalId(reviewEntry(asked)),
@@ -3563,17 +3563,19 @@ describe("an app's review is shown after its turn ended (#436)", () => {
       kind: "transcript",
       transcript: expect.objectContaining({
         sessionId: conversationA,
-        approval: {
-          id: approvalId(reviewEntry(appReview)),
-          command: "app_delete_row {}",
-          reason: "An app asks to run app_delete_row on mcptest",
-          origin: { kind: "app", server: "mcptest", tool: "app_delete_row" },
-          options: [
-            { id: "allow", label: "Allow", choice: "once" },
-            { id: "deny", label: "Deny", choice: "deny" },
-          ],
-          ask: "tool",
-        },
+        approvals: [
+          {
+            id: approvalId(reviewEntry(appReview)),
+            command: "app_delete_row {}",
+            reason: "An app asks to run app_delete_row on mcptest",
+            origin: { kind: "app", server: "mcptest", tool: "app_delete_row" },
+            options: [
+              { id: "allow", label: "Allow", choice: "once" },
+              { id: "deny", label: "Deny", choice: "deny" },
+            ],
+            ask: "tool",
+          },
+        ],
       }),
     })
     expect(updates).toContainEqual({
@@ -3624,7 +3626,7 @@ describe("an app's review is shown after its turn ended (#436)", () => {
     await flush()
     expect(updates).toContainEqual({
       kind: "transcript",
-      transcript: expect.objectContaining({ approval: null, revision: 3 }),
+      transcript: expect.objectContaining({ approvals: [], revision: 3 }),
     })
   })
 

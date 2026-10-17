@@ -16,6 +16,7 @@ import type { SessionSummary } from "../../model/workspace-index"
 import {
   atWork,
   emptyTranscript,
+  type Approval,
   type ApprovalChoice,
   type Message,
   type MessageApp,
@@ -174,7 +175,7 @@ export function inMemorySource(
     const held = sessions.get(sessionId)
     if (!held) return null
     const transcript = transcripts.get(sessionId)
-    const approval = transcript?.approval
+    const approval = transcript?.approvals[0]
     return Object.freeze({
       revision: held.revision,
       pinned: held.pinned,
@@ -466,8 +467,8 @@ export function inMemorySource(
         ...transcript.messages.filter((other) => other.id !== written.id),
         written,
       ],
-      // A new message moves the turn on: an approval still asked is let go.
-      approval: null,
+      // A new message moves the turn on: every approval still asked is let go.
+      approvals: [],
       activity: { label: "Thinking", since: at },
       // A session begins at the access chosen for it; one begun keeps its own.
       ...(!existing && message.start?.access
@@ -485,9 +486,9 @@ export function inMemorySource(
   const waiting = (sessionId: string, approvalId: string) => {
     known(sessionId)
     const transcript = transcriptOf(sessionId)
-    if (transcript.approval?.id !== approvalId)
-      throw new WorkspaceSourceError("not-waiting")
-    return transcript
+    const approval = transcript.approvals.find((asked) => asked.id === approvalId)
+    if (!approval) throw new WorkspaceSourceError("not-waiting")
+    return { transcript, approval }
   }
 
   const waitingQuestion = (
@@ -506,8 +507,8 @@ export function inMemorySource(
   }
 
   /** An option the review does not offer, or of another choice, is not supported. */
-  const offered = (transcript: Transcript, choice: ApprovalChoice, optionId: string) => {
-    const option = transcript.approval?.options.find((each) => each.id === optionId)
+  const offered = (approval: Approval, choice: ApprovalChoice, optionId: string) => {
+    const option = approval.options.find((each) => each.id === optionId)
     if (!option || option.choice !== choice)
       throw new WorkspaceSourceError("not-supported")
   }
@@ -561,9 +562,9 @@ export function inMemorySource(
           initiator,
         },
         () => {
-          const transcript = waiting(sessionId, approvalId)
-          offered(transcript, scope === "always" ? "always" : "once", optionId)
-          const command = transcript.approval?.command ?? ""
+          const { transcript, approval } = waiting(sessionId, approvalId)
+          offered(approval, scope === "always" ? "always" : "once", optionId)
+          const command = approval.command
           putSession({
             ...known(sessionId),
             status: "running",
@@ -572,7 +573,7 @@ export function inMemorySource(
           })
           putTranscript({
             ...transcript,
-            approval: null,
+            approvals: transcript.approvals.filter((asked) => asked.id !== approvalId),
             activity: {
               label: `Running ${command.split(" ").slice(0, 2).join(" ")}`,
               since: schedule.now(),
@@ -642,12 +643,12 @@ export function inMemorySource(
       ),
     deny: (sessionId, approvalId, initiator, optionId) =>
       audited({ sessionId, approvalId, action: "deny", initiator }, () => {
-        const transcript = waiting(sessionId, approvalId)
-        offered(transcript, "deny", optionId)
-        const reply = deniedReply(transcript.approval?.command ?? "")
+        const { transcript, approval } = waiting(sessionId, approvalId)
+        offered(approval, "deny", optionId)
+        const reply = deniedReply(approval.command)
         putTranscript({
           ...transcript,
-          approval: null,
+          approvals: transcript.approvals.filter((asked) => asked.id !== approvalId),
           activity: null,
           messages: [...transcript.messages, agentMessage(sessionId, reply.parts)],
         })
@@ -664,7 +665,7 @@ export function inMemorySource(
         putTranscript({
           ...transcriptOf(sessionId),
           activity: null,
-          approval: null,
+          approvals: [],
           questions: [],
         })
         return putSession({

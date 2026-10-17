@@ -486,12 +486,10 @@ export function transcriptFrom(
   // What runs is the tool and its exact input; why is the provider's title
   // for it. The view lists a review by its key; what it shows is read from
   // its live owner, and the card offers no answer until then (`loading`).
-  const entry = view.permissions[0]
-  const detail = entry && details.find((each) => each.entry.review === entry.review)
-  const asked = detail?.state === "loaded" ? detail.shown : undefined
-  const approval: Approval | null = !entry
-    ? null
-    : !asked
+  const approvals: Approval[] = view.permissions.map((entry): Approval => {
+    const detail = details.find((each) => each.entry.review === entry.review)
+    const asked = detail?.state === "loaded" ? detail.shown : undefined
+    return !asked
       ? {
           id: approvalId(entry),
           command: entry.toolName,
@@ -527,11 +525,12 @@ export function transcriptFrom(
             stopsTurn: asked.deadline.stopsTurn,
           },
         }
+  })
   return {
     sessionId: view.conversationId,
     messages,
     activity,
-    approval,
+    approvals,
     revision,
     agent: view.runtime?.agent,
     lease: view.lease && {

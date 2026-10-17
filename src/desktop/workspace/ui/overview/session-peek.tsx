@@ -88,7 +88,8 @@ export const SessionPeek = memo(function SessionPeek({
   )
   const now = useNow(30_000)
   const waiting = settling !== undefined || live?.status === "needs-you"
-  const approval = settling?.approval ?? (waiting ? (transcript?.approval ?? null) : null)
+  const approval =
+    settling?.approval ?? (waiting ? (transcript?.approvals[0] ?? null) : null)
   const answer = useWorkspaceSelector((state) =>
     approval ? selectAnswer(state, sessionId, approval.id) : undefined,
   )

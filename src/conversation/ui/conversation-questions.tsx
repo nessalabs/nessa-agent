@@ -63,7 +63,14 @@ export function ConversationQuestions({
       ))}
       {questions.map((ask) => (
         <ConversationQuestion
-          key={JSON.stringify([ask.conversationId, ask.executionId, ask.questionId])}
+          // The view's key for the ask, beside its ids: an ask opened again
+          // under the same ids is a new card, with none of the old choices.
+          key={JSON.stringify([
+            ask.conversationId,
+            ask.question,
+            ask.executionId,
+            ask.questionId,
+          ])}
           ask={ask}
           conversation={conversation}
           gatewayAvailable={gatewayAvailable}

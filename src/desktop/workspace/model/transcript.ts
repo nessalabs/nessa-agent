@@ -3,7 +3,7 @@ import type { FailureDiagnostic } from "./failure"
 import type { SessionAccess } from "./access"
 /**
  * A session's conversation: messages from the person and the agent, what the
- * agent is doing now, and the approval it is waiting on, if any. The agent's
+ * agent is doing now, and the approvals it is waiting on, if any. The agent's
  * messages are made of parts — prose, the steps it took, code, lists — and
  * the rules for reading them (grouping steps, inline code and emphasis, a
  * title from a first message) live here, not in the views.
@@ -394,7 +394,12 @@ export interface Transcript {
   readonly sessionId: string
   readonly messages: readonly Message[]
   readonly activity: Activity | null
-  readonly approval: Approval | null
+  /**
+   * Every review the agent waits on, in the order the source lists them.
+   * Each is shown and answered on its own: one that cannot be read yet
+   * (`loading`) holds back none of the others.
+   */
+  readonly approvals: readonly Approval[]
   /**
    * What the bounded view left out (`historyExtent`). Absent when the source
    * did not say, or said this is the whole confirmed history.
@@ -436,7 +441,7 @@ export function atWork(transcript: Transcript | undefined): boolean {
   if (!transcript) return false
   return (
     transcript.activity !== null ||
-    transcript.approval !== null ||
+    transcript.approvals.length > 0 ||
     (transcript.questions?.length ?? 0) > 0 ||
     transcript.messages.some(
       (message) => "working" in message && message.working === true,
@@ -446,7 +451,7 @@ export function atWork(transcript: Transcript | undefined): boolean {
 
 /** A conversation with nothing in it, before the source has said anything of it. */
 export function emptyTranscript(sessionId: string): Transcript {
-  return { sessionId, messages: [], activity: null, approval: null, revision: 0 }
+  return { sessionId, messages: [], activity: null, approvals: [], revision: 0 }
 }
 
 /**

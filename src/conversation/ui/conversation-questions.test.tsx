@@ -62,6 +62,7 @@ function question(key: string, required: boolean): Asked {
 function show(
   questions: Asked[],
   conversationId = "00000000-0000-4000-8000-000000000001",
+  key = "0".repeat(32),
 ) {
   const conversation = {
     id: "conversation",
@@ -71,7 +72,7 @@ function show(
       questionsWaiting: [],
       questions: [
         {
-          question: "0".repeat(32),
+          question: key,
           executionId: "execution",
           questionId: "1",
           message: "Which?",
@@ -194,6 +195,16 @@ it("QT1: equal turn and ask names in another conversation do not inherit its ans
   expect(answer().disabled).toBe(false)
   show([question("field", false)], "00000000-0000-4000-8000-000000000002")
   expect(answer().disabled).toBe(true)
+})
+
+it("an ask opened again under the same ids, with a new key, starts with nothing chosen", () => {
+  const conversationId = "00000000-0000-4000-8000-000000000001"
+  show([question("field", false)], conversationId, "0".repeat(32))
+  choose("field", "a")
+  expect(answer().disabled).toBe(false)
+  show([question("field", false)], conversationId, "1".repeat(32))
+  expect(answer().disabled).toBe(true)
+  expect(host.querySelector<HTMLInputElement>('input[value="a"]')?.checked).toBe(false)
 })
 
 it("QT10: simultaneous asks with equal field keys have independent native radio groups", () => {

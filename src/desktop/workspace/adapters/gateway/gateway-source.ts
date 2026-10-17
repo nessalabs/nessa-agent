@@ -296,7 +296,9 @@ function viewKey(
 
 /** An approval or a question is the person being asked. A withheld-review notice is not. */
 function waitsOnPerson(transcript: Transcript | undefined): boolean {
-  return Boolean(transcript?.approval) || (transcript?.questions?.length ?? 0) > 0
+  return (
+    (transcript?.approvals.length ?? 0) > 0 || (transcript?.questions?.length ?? 0) > 0
+  )
 }
 
 /** A caller waiting for a subscription's first frame. */

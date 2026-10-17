@@ -40,6 +40,7 @@ import { paneItemOf } from "../../model/pane-item"
 import type { WidgetRef } from "../../../widgets/model/widget-ref"
 import { fromSource, knownToSource } from "../../model/revision"
 import {
+  answerOf,
   answering,
   draftOf,
   entry,
@@ -578,11 +579,13 @@ function answer(
 ): WorkspaceCommand<Promise<AnswerOutcome>> {
   return async (dispatch, getState, dependencies) => {
     const state = getState().workspace
-    const approval = entry(state.transcripts, sessionId)?.approval
+    const approval = entry(state.transcripts, sessionId)?.approvals.find(
+      (asked) => asked.id === approvalId,
+    )
     // Only an approval on screen is answered: one a pane or the open overview shows.
-    if (!onScreen(state, sessionId) || approval?.id !== approvalId) return "not-asked"
-    // One answer at a time: a second waits until the first is refused.
-    if (answering(entry(state.answers, sessionId), approvalId)) return "answering"
+    if (!onScreen(state, sessionId) || !approval) return "not-asked"
+    // One answer to an approval at a time: a second waits until the first is refused.
+    if (answering(answerOf(state, sessionId, approvalId), approvalId)) return "answering"
     const token = dependencies.newId()
     dispatch(approvalAnswering({ sessionId, approvalId: approval.id, token }))
     try {

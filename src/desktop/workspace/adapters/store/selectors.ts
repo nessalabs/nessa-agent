@@ -55,6 +55,7 @@ import {
   widgetIn,
   windowWidget,
   contentKind,
+  answerOf,
   type Answer,
   type ContentKind,
   type Chrome,
@@ -198,10 +199,7 @@ export const selectAnswer = (
   state: Root,
   sessionId: string,
   approvalId: string,
-): Answer | undefined => {
-  const answer = entry(state.workspace.answers, sessionId)
-  return answer?.approvalId === approvalId ? answer : undefined
-}
+): Answer | undefined => answerOf(state.workspace, sessionId, approvalId)
 
 export const selectTranscriptFailure = (
   state: Root,

@@ -141,9 +141,13 @@ export function fakeSource(index: WorkspaceIndex = testIndex()): FakeSource {
     if (archived.has(sessionId) || !summaries.has(sessionId))
       throw new WorkspaceSourceError("unknown-session")
     const transcript = transcripts.get(sessionId)
-    if (transcript?.approval?.id !== approvalId)
+    if (!transcript?.approvals.some((approval) => approval.id === approvalId))
       throw new WorkspaceSourceError("not-waiting")
-    const next = { ...transcript, approval: null, revision: transcript.revision + 1 }
+    const next = {
+      ...transcript,
+      approvals: transcript.approvals.filter((approval) => approval.id !== approvalId),
+      revision: transcript.revision + 1,
+    }
     transcripts.set(sessionId, next)
     emit({ kind: "transcript", transcript: next })
   }
@@ -246,7 +250,7 @@ export function fakeSource(index: WorkspaceIndex = testIndex()): FakeSource {
         const next: Transcript = {
           ...transcript,
           activity: null,
-          approval: null,
+          approvals: [],
           questions: [],
           messages: transcript.messages.map((message) => {
             if (!("working" in message) || !message.working) return message

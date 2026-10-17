@@ -85,7 +85,13 @@ export function ConversationControls({
       ))}
       {remote?.permissions.map((permission, index) => (
         <ToolApproval
-          key={JSON.stringify([permission.executionId, permission.permissionId])}
+          // The review's key beside its ids: one opened again under the same
+          // ids is a new card.
+          key={JSON.stringify([
+            permission.review,
+            permission.executionId,
+            permission.permissionId,
+          ])}
           variant="floating"
           aria-label={`Approve ${permission.title}`}
           aria-busy={conversation.controlPending}
