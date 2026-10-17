@@ -22,6 +22,35 @@ pub struct PrivateDirectory {
 }
 
 impl PrivateDirectory {
+    /// Retain an existing private directory as the caller-trusted root.
+    ///
+    /// `root` must be absolute, current-user-owned private storage, without a
+    /// final symbolic link or reparse point. Ancestry above `root` remains the
+    /// caller's trust boundary, including when its parent is publicly writable.
+    /// Acquisition opens existing directories only; it creates or repairs nothing.
+    /// Lexical trailing separators and `.` components are normalized before the
+    /// no-follow open; parent components and ancestor trust are unchanged.
+    /// The handle retains the root identity for [`Self::verify_binding`].
+    pub fn open_root(root: &Path) -> io::Result<Self> {
+        Ok(Self {
+            inner: platform::RetainedDirectory::open_root(root)?,
+        })
+    }
+
+    /// Retain one existing private child and this handle's captured ancestry.
+    ///
+    /// `name` must be a native single-component name. Acquisition requests
+    /// read/search access, validates the retained binding, and refuses links or
+    /// unsafe storage without creating or changing permissions. The child keeps
+    /// the captured root and parent identities after this handle is dropped.
+    pub fn open_directory(&self, name: &OsStr) -> io::Result<Self> {
+        validate_name(name)?;
+        let name = Path::new(name).file_name().ok_or_else(unsafe_file)?;
+        Ok(Self {
+            inner: self.inner.open_directory(name)?,
+        })
+    }
+
     /// Create and retain an absolute private directory in one transaction.
     ///
     /// Every newly created component from `private_root` through `directory`

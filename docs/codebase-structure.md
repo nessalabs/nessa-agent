@@ -618,6 +618,11 @@ acknowledgement checkpoints rather than continuous attachment. Windows `sync` on
 revalidates binding and does not claim directory durability or arbitrary power-loss
 survival. See the [local-storage module map](../crates/nessa-local-storage/README.md#module-map)
 and [retained publication design](design/retained-directory-publication.md).
+`PrivateDirectory::open_root` retains an existing caller-trusted private root;
+`open_directory` carries that captured ancestry into an existing child. Backup
+verification uses these read/search acquisitions for manifest reads, enumeration
+and body access, including cuts without a records directory. Neither acquisition
+creates storage or repairs permissions.
 
 On Unix, `create_private_directory_path` and `PrivateDirectory::open_path` retain an
 absolute private store through ordinary locator ancestry. System and account

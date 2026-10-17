@@ -26,6 +26,14 @@ pub struct Fixture {
 
 impl Fixture {
     pub async fn published() -> Self {
+        Self::publish(true).await
+    }
+
+    pub async fn empty() -> Self {
+        Self::publish(false).await
+    }
+
+    async fn publish(include_bodies: bool) -> Self {
         let parent = tempfile::tempdir().unwrap();
         let bundle = parent.path().join("bundle");
         let key_file = parent.path().join("explicit-mac-key");
@@ -35,7 +43,7 @@ impl Fixture {
         let cuts = WRITER_INVENTORY
             .iter()
             .map(|store| {
-                if *store == kind {
+                if *store == kind && include_bodies {
                     SourceCut::new(
                         kind,
                         Watermark::new("synthetic-cut").unwrap(),
@@ -66,15 +74,17 @@ impl Fixture {
         let manifest = Manifest::new(123, cuts).unwrap();
         let mac = key.mac(&manifest.canonical()).unwrap();
         let encoded = AuthenticatedManifest::seal(manifest, mac).encoded();
+        let records = if include_bodies {
+            vec![PublishedRecord {
+                store: kind,
+                identity: "public-row".to_owned(),
+                bytes: BODY.to_vec(),
+            }]
+        } else {
+            Vec::new()
+        };
         DirectoryPublisher::new(&bundle)
-            .put(
-                &encoded,
-                &[PublishedRecord {
-                    store: kind,
-                    identity: "public-row".to_owned(),
-                    bytes: BODY.to_vec(),
-                }],
-            )
+            .put(&encoded, &records)
             .await
             .unwrap();
         Self {

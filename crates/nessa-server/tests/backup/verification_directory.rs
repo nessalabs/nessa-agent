@@ -15,10 +15,20 @@ use fixture::{private_file, Fixture, BODY};
 
 fn verify(fixture: &Fixture) -> Result<VerificationReport, VerificationFailure> {
     verify_bundle(
-        &DirectoryVerificationSource::new(fixture.bundle.clone()),
+        &DirectoryVerificationSource::open(fixture.bundle.clone())?,
         &fixture.key,
         VerificationLimits::default(),
     )
+}
+
+#[tokio::test]
+async fn an_empty_published_directory_verifies() {
+    let fixture = Fixture::empty().await;
+    let report = verify(&fixture).unwrap();
+    assert_eq!(report.public_records_verified, 0);
+    assert_eq!(report.body_bytes_verified, 0);
+    assert!(report.omissions.is_empty());
+    assert!(!fixture.bundle.join("records").exists());
 }
 
 #[tokio::test]
@@ -26,7 +36,7 @@ async fn a_published_directory_verifies_with_its_explicit_private_key() {
     let fixture = Fixture::published().await;
     let key = read_verification_key(&fixture.key_file).unwrap();
     let report = verify_bundle(
-        &DirectoryVerificationSource::new(fixture.bundle.clone()),
+        &DirectoryVerificationSource::open(fixture.bundle.clone()).unwrap(),
         &key,
         VerificationLimits::default(),
     )
@@ -60,7 +70,7 @@ async fn corrupted_and_truncated_directory_bodies_are_refused() {
 async fn a_wrong_key_refuses_an_authentic_directory() {
     let fixture = Fixture::published().await;
     let result = verify_bundle(
-        &DirectoryVerificationSource::new(fixture.bundle.clone()),
+        &DirectoryVerificationSource::open(fixture.bundle.clone()).unwrap(),
         &MacKey([38; 32]),
         VerificationLimits::default(),
     );
@@ -133,6 +143,286 @@ mod unix {
 
     use super::*;
 
+    #[derive(Clone, Copy, Debug)]
+    enum RootChange {
+        Unchanged,
+        Symlink,
+        SharedDirectory,
+        PrivateDirectory,
+        Missing,
+        UnsafeMode,
+    }
+
+    struct ChangeRootAfterAuthentication<'a> {
+        fixture: &'a Fixture,
+        change: RootChange,
+    }
+
+    impl crate::backup::application::ManifestMacVerifier for ChangeRootAfterAuthentication<'_> {
+        fn verify(
+            &self,
+            canonical: &str,
+            mac: crate::backup::domain::Fingerprint,
+        ) -> Result<(), VerificationFailure> {
+            self.fixture.key.verify(canonical, mac)?;
+            if matches!(self.change, RootChange::Unchanged) {
+                return Ok(());
+            }
+            if matches!(self.change, RootChange::UnsafeMode) {
+                fs::set_permissions(&self.fixture.bundle, fs::Permissions::from_mode(0o777))
+                    .unwrap();
+                return Ok(());
+            }
+            let manifest = fs::read(self.fixture.bundle.join("manifest.txt")).unwrap();
+            fs::rename(
+                &self.fixture.bundle,
+                self.fixture.parent.path().join("detached-root"),
+            )
+            .unwrap();
+            match self.change {
+                RootChange::Symlink => {
+                    let replacement = self.fixture.parent.path().join("replacement-root");
+                    create_directory(&replacement).unwrap();
+                    private_file(&replacement.join("manifest.txt"), &manifest);
+                    symlink(&replacement, &self.fixture.bundle).unwrap();
+                }
+                RootChange::SharedDirectory | RootChange::PrivateDirectory => {
+                    create_directory(&self.fixture.bundle).unwrap();
+                    private_file(&self.fixture.bundle.join("manifest.txt"), &manifest);
+                    if matches!(self.change, RootChange::SharedDirectory) {
+                        fs::set_permissions(
+                            &self.fixture.bundle,
+                            fs::Permissions::from_mode(0o777),
+                        )
+                        .unwrap();
+                    }
+                }
+                RootChange::Missing => {}
+                RootChange::Unchanged | RootChange::UnsafeMode => unreachable!(),
+            }
+            Ok(())
+        }
+    }
+
+    async fn empty_cut_after_root_change(change: RootChange) {
+        let fixture = Fixture::empty().await;
+        let manifest = fs::read(fixture.bundle.join("manifest.txt")).unwrap();
+        let source = DirectoryVerificationSource::open(fixture.bundle.clone()).unwrap();
+        let verifier = ChangeRootAfterAuthentication {
+            fixture: &fixture,
+            change,
+        };
+        let result = verify_bundle(&source, &verifier, VerificationLimits::default());
+        if matches!(change, RootChange::Unchanged) {
+            let report = result.unwrap();
+            assert_eq!(report.public_records_verified, 0);
+            assert_eq!(report.body_bytes_verified, 0);
+            assert_eq!(
+                fs::read(fixture.bundle.join("manifest.txt")).unwrap(),
+                manifest
+            );
+        } else {
+            assert!(
+                matches!(
+                    result,
+                    Err(VerificationFailure::UnsafeObject | VerificationFailure::Unreadable)
+                ),
+                "root change {change:?} returned {result:?}"
+            );
+            let original = if matches!(change, RootChange::UnsafeMode) {
+                fixture.bundle.clone()
+            } else {
+                fixture.parent.path().join("detached-root")
+            };
+            assert_eq!(fs::read(original.join("manifest.txt")).unwrap(), manifest);
+            if matches!(change, RootChange::Missing) {
+                assert!(!fixture.bundle.exists());
+            } else {
+                assert_eq!(
+                    fs::read(fixture.bundle.join("manifest.txt")).unwrap(),
+                    manifest
+                );
+                if matches!(change, RootChange::Symlink) {
+                    assert!(fs::symlink_metadata(&fixture.bundle)
+                        .unwrap()
+                        .file_type()
+                        .is_symlink());
+                } else {
+                    let mode = fs::metadata(&fixture.bundle).unwrap().permissions().mode() & 0o777;
+                    assert_eq!(
+                        mode,
+                        if matches!(change, RootChange::SharedDirectory | RootChange::UnsafeMode) {
+                            0o777
+                        } else {
+                            0o700
+                        }
+                    );
+                }
+            }
+        }
+        assert_eq!(fs::read(&fixture.key_file).unwrap(), fixture.key.0);
+    }
+
+    #[tokio::test]
+    async fn an_empty_cut_with_unchanged_root_verifies() {
+        empty_cut_after_root_change(RootChange::Unchanged).await;
+    }
+
+    #[tokio::test]
+    async fn an_empty_cut_root_symlink_after_authentication_is_refused() {
+        empty_cut_after_root_change(RootChange::Symlink).await;
+    }
+
+    #[tokio::test]
+    async fn an_empty_cut_shared_root_after_authentication_is_refused() {
+        empty_cut_after_root_change(RootChange::SharedDirectory).await;
+    }
+
+    #[tokio::test]
+    async fn an_empty_cut_private_root_replacement_after_authentication_is_refused() {
+        empty_cut_after_root_change(RootChange::PrivateDirectory).await;
+    }
+
+    #[tokio::test]
+    async fn an_empty_cut_missing_root_after_authentication_is_refused() {
+        empty_cut_after_root_change(RootChange::Missing).await;
+    }
+
+    #[tokio::test]
+    async fn an_empty_cut_unsafe_root_mode_after_authentication_is_refused() {
+        empty_cut_after_root_change(RootChange::UnsafeMode).await;
+    }
+
+    struct ReplaceRootDuringVisit<'a> {
+        source: DirectoryVerificationSource,
+        fixture: &'a Fixture,
+    }
+
+    impl VerificationSource for ReplaceRootDuringVisit<'_> {
+        fn manifest(&self) -> Result<Box<dyn Read + '_>, VerificationFailure> {
+            self.source.manifest()
+        }
+
+        fn record(
+            &self,
+            store: StoreKind,
+            encoded_identity: &str,
+        ) -> Result<Box<dyn Read + '_>, VerificationFailure> {
+            self.source.record(store, encoded_identity)
+        }
+
+        fn visit_records(
+            &self,
+            visitor: &mut dyn FnMut(StoreKind, &str) -> Result<(), VerificationFailure>,
+        ) -> Result<(), VerificationFailure> {
+            let manifest = fs::read(self.fixture.bundle.join("manifest.txt")).unwrap();
+            let mut replaced = false;
+            self.source.visit_records(&mut |store, identity| {
+                visitor(store, identity)?;
+                if !replaced {
+                    replaced = true;
+                    fs::rename(
+                        &self.fixture.bundle,
+                        self.fixture.parent.path().join("detached-root"),
+                    )
+                    .unwrap();
+                    create_directory(&self.fixture.store()).unwrap();
+                    private_file(&self.fixture.bundle.join("manifest.txt"), &manifest);
+                    private_file(&self.fixture.body(), BODY);
+                }
+                Ok(())
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn a_root_replacement_during_body_enumeration_is_refused() {
+        let fixture = Fixture::published().await;
+        let manifest = fs::read(fixture.bundle.join("manifest.txt")).unwrap();
+        let source = ReplaceRootDuringVisit {
+            source: DirectoryVerificationSource::open(fixture.bundle.clone()).unwrap(),
+            fixture: &fixture,
+        };
+        let result = verify_bundle(&source, &fixture.key, VerificationLimits::default());
+        assert!(
+            matches!(
+                result,
+                Err(VerificationFailure::UnsafeObject | VerificationFailure::Unreadable)
+            ),
+            "root replacement during enumeration returned {result:?}"
+        );
+        let detached = fixture.parent.path().join("detached-root");
+        assert_eq!(fs::read(detached.join("manifest.txt")).unwrap(), manifest);
+        assert_eq!(
+            fs::read(detached.join("records/conversation-metadata/public-row")).unwrap(),
+            BODY
+        );
+        assert_eq!(
+            fs::read(fixture.bundle.join("manifest.txt")).unwrap(),
+            manifest
+        );
+        assert_eq!(fs::read(fixture.body()).unwrap(), BODY);
+        assert_eq!(fs::read(&fixture.key_file).unwrap(), fixture.key.0);
+    }
+
+    struct ReplaceManifestAfterOpen<'a> {
+        source: DirectoryVerificationSource,
+        fixture: &'a Fixture,
+    }
+
+    impl VerificationSource for ReplaceManifestAfterOpen<'_> {
+        fn manifest(&self) -> Result<Box<dyn Read + '_>, VerificationFailure> {
+            let mut reader = self.source.manifest()?;
+            let mut first = [0];
+            reader.read_exact(&mut first).unwrap();
+            let path = self.fixture.bundle.join("manifest.txt");
+            let bytes = fs::read(&path).unwrap();
+            assert_eq!(first[0], bytes[0]);
+            fs::rename(&path, self.fixture.parent.path().join("detached-manifest")).unwrap();
+            private_file(&path, &bytes);
+            Ok(Box::new(Cursor::new(first).chain(reader)))
+        }
+
+        fn record(
+            &self,
+            store: StoreKind,
+            encoded_identity: &str,
+        ) -> Result<Box<dyn Read + '_>, VerificationFailure> {
+            self.source.record(store, encoded_identity)
+        }
+
+        fn visit_records(
+            &self,
+            visitor: &mut dyn FnMut(StoreKind, &str) -> Result<(), VerificationFailure>,
+        ) -> Result<(), VerificationFailure> {
+            self.source.visit_records(visitor)
+        }
+    }
+
+    #[tokio::test]
+    async fn an_identical_manifest_replacement_after_open_is_refused() {
+        let fixture = Fixture::published().await;
+        let manifest = fs::read(fixture.bundle.join("manifest.txt")).unwrap();
+        let source = ReplaceManifestAfterOpen {
+            source: DirectoryVerificationSource::open(fixture.bundle.clone()).unwrap(),
+            fixture: &fixture,
+        };
+        assert_eq!(
+            verify_bundle(&source, &fixture.key, VerificationLimits::default()).unwrap_err(),
+            VerificationFailure::Unreadable
+        );
+        assert_eq!(
+            fs::read(fixture.bundle.join("manifest.txt")).unwrap(),
+            manifest
+        );
+        assert_eq!(
+            fs::read(fixture.parent.path().join("detached-manifest")).unwrap(),
+            manifest
+        );
+        assert_eq!(fs::read(fixture.body()).unwrap(), BODY);
+        assert_eq!(fs::read(&fixture.key_file).unwrap(), fixture.key.0);
+    }
+
     #[derive(Clone, Copy)]
     enum Replacement {
         Body,
@@ -188,7 +478,7 @@ mod unix {
     async fn replacement_after_open_is_refused(replacement: Replacement) {
         let fixture = Fixture::published().await;
         let source = ReplaceAfterOpen {
-            source: DirectoryVerificationSource::new(fixture.bundle.clone()),
+            source: DirectoryVerificationSource::open(fixture.bundle.clone()).unwrap(),
             fixture: &fixture,
             replacement,
         };

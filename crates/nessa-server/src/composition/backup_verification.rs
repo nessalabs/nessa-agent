@@ -42,11 +42,8 @@ pub fn run_backup_verifier(arguments: &[OsString], output: &mut dyn Write) -> u8
         };
     };
     let result = read_verification_key(&mac_key_file).and_then(|key| {
-        verify_bundle(
-            &DirectoryVerificationSource::new(bundle),
-            &key,
-            VerificationLimits::default(),
-        )
+        let source = DirectoryVerificationSource::open(bundle)?;
+        verify_bundle(&source, &key, VerificationLimits::default())
     });
     match result {
         Ok(report) => print(output, &VerificationOutput::Verified { report }, 0),

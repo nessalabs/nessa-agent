@@ -126,7 +126,7 @@ async fn current_writer_omissions_verify_without_publishing_secret_bytes() {
         .await
         .unwrap();
         let report = verify_bundle(
-            &DirectoryVerificationSource::new(bundle.clone()),
+            &DirectoryVerificationSource::open(bundle.clone()).unwrap(),
             &inventory.key(),
             VerificationLimits::default(),
         )

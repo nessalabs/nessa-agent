@@ -34,7 +34,7 @@ open for those contracts and their end-to-end drills.
 | V3 | Named-entry budget is exceeded | Refuse before adding the next entry. `manifest_entry_limit_is_checked` |
 | V4 | Manifest parses but HMAC is wrong or key differs | Authentication refusal before enumerating or opening record bodies. `authentication_precedes_payload_reads` |
 | V5 | Authenticated layout has an extra, missing or repeated body | Refuse; only public records authorize body paths. `layout_matches_only_public_records` |
-| V6 | Bundle root, manifest, records directory, store directory or body is a symlink, special file, hard-linked body or unsafe private storage | Refuse using the private-storage reader; create/repair nothing. Directory-adapter tests |
+| V6 | Bundle root (including trailing separator/dot spellings), manifest, records directory, store directory or body is a symlink, special file, hard-linked body or unsafe private storage | Refuse using the private-storage reader; create/repair nothing. Directory-adapter and retained-root tests |
 | V7 | Public body is truncated or corrupted | Stream SHA-256 disagrees with its authenticated fingerprint; no success report. `corrupted_and_truncated_bodies_are_refused` |
 | V8 | Aggregate body-byte budget is exhausted, including a growing stream | Stop after remaining budget + 1 bytes with a resource-limit result. `body_reads_share_one_budget` |
 | V9 | Deletion inventory has an unsupported version, malformed/noncanonical entries, duplicate fence keys or mismatched watermark | Typed refusal, even if the outer manifest was deliberately re-signed. Inventory-verification tests |
@@ -43,6 +43,7 @@ open for those contracts and their end-to-end drills.
 | V12 | Key file is missing, oversized, truncated or unsafe | Refuse without generating or repairing a key. Standalone command tests |
 | V13 | A public body or its store directory is replaced after its reader opens, even with identical bytes | Refuse at EOF when the retained name/binding differs. `a_body_replacement_after_open_is_refused` and `a_store_replacement_after_open_is_refused` |
 | V14 | Writer omission rows repeat an identity or overlap a public record: redaction plus secret skip, repeated unnameable/JSONL skips, or a public row plus another file's skipped line | Accept the authenticated metadata and report each omission. Only public body paths require uniqueness; every row still consumes the entry budget. `writer_omission_rows_can_repeat_and_overlap_public_names` and `current_writer_omissions_verify_without_publishing_secret_bytes` |
+| V15 | Bundle root is replaced or becomes unsafe after manifest authentication, including an empty cut without `records/` | Source acquisition retains the private root once. Manifest reads, root enumeration and child directory acquisition use that retained authority, and enumeration validates its binding even on the empty path. Root-replacement regression tests |
 
 The default work budget is 4 MiB of manifest text, 16,384 named entries,
 4 MiB of inventory text and 1 GiB of public bodies in total. Reads use an 8 KiB
@@ -61,6 +62,14 @@ authenticated rows without inferring an origin or resolving their ambiguity.
 An omission row does not authorize a body; another public row with the same
 label may authorize that path. Recoverable identities and payload schemas
 remain outside this format/integrity milestone.
+
+The directory source owns a retained private root from acquisition until it is
+dropped. The private-storage owner exposes read-only root and child-directory
+acquisition using its existing identity, ownership and link checks. Enumeration
+does not reopen the root by path, and opening a child carries the same retained
+root chain forward. This closes the previous ownership gap between reading an
+authenticated manifest and enumerating an empty cut; a later path lookup is not
+allowed to substitute a new root for the acquired one.
 
 Verification observes the bytes read; it does not reserve a bundle for a later
 restore or establish off-device freshness. A later consumer must verify its own

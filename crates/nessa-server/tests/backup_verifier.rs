@@ -106,6 +106,21 @@ async fn a_published_cut_verifies_without_profile_effects() {
     assert!(!fixture.store().join("redacted-row").exists());
 }
 
+#[tokio::test]
+async fn an_empty_published_cut_verifies_without_profile_effects() {
+    let fixture = Fixture::empty().await;
+    let before = tree(fixture.parent.path());
+    let report = json(&run(&arguments(&fixture), fixture.parent.path()), 0);
+    assert_eq!(report["status"], "verified");
+    assert_eq!(report["report"]["public_records_verified"], 0);
+    assert_eq!(report["report"]["body_bytes_verified"], 0);
+    assert_eq!(report["report"]["omissions"], serde_json::json!([]));
+    assert_eq!(report["report"]["restore_readiness"], "not_assessed");
+    assert_eq!(report["report"]["inventory_freshness"], "not_assessed");
+    assert_eq!(tree(fixture.parent.path()), before);
+    assert!(!fixture.bundle.join("records").exists());
+}
+
 fn tree(path: &Path) -> Vec<(OsString, Vec<u8>)> {
     fn visit(root: &Path, path: &Path, result: &mut Vec<(OsString, Vec<u8>)>) {
         for entry in fs::read_dir(path).unwrap() {
