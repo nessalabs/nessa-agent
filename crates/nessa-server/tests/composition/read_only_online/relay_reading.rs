@@ -229,8 +229,13 @@ fn a_relayed_read_is_the_same_session_as_a_direct_one() {
     let relay = device.relay();
 
     let mut relayed = device.cache("relayed.sqlite3");
+    let started = Instant::now();
     let report = device.read_once_registered(&mut relayed, &relay).unwrap();
-    assert!(report.complete);
+    assert!(
+        report.complete,
+        "first relayed read after {:?}: {report:?}",
+        started.elapsed()
+    );
     assert!(report.conversations >= 2);
 
     let mut direct = device.cache("direct.sqlite3");
