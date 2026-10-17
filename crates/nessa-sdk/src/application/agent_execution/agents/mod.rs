@@ -43,6 +43,7 @@ pub(crate) use error_limits::DiagnosticTreeLimits;
 mod initialization;
 pub(crate) mod lifecycle;
 mod lifetime;
+mod resumption;
 mod scheduling;
 mod submissions;
 
@@ -57,6 +58,7 @@ pub use error::{
 };
 pub use initialization::AgentInitializationError;
 pub use lifetime::{lifetime_disposition, LifetimeDisposition, OwnedLifetime};
+pub use resumption::{OwedTurn, Resumed};
 pub use scheduling::{
     AdmissionEvidence, AdmissionEvidenceFailure, QueueAdmission, QueueRemoval, QueueReorder,
     SteeringDelivery, SteeringEvidence,

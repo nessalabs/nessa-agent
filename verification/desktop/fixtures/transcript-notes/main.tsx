@@ -199,6 +199,10 @@ createRoot(rootElement).render(
 // The panel's transcript of the same view, applied as its follow applies it.
 const panelConversation = applyView(newConversation("panel"), {
   ...wireView,
+  reviewsWaiting: [],
+  questionsWaiting: [],
+  questions: [],
+  permissions: [],
   notes: wireView.notes.map(shownNote),
 })
 const panelStore = {

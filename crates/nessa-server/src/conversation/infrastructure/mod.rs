@@ -20,6 +20,10 @@
 //! runs each SDK source on a tracked non-entered thread, and joins those threads
 //! before storage shutdown.
 //!
+//! `LocalThreadReports` keeps the thread reports waiting for a turn to finish
+//! (`ThreadReportStore`) in their own private SQLite dataset,
+//! `conversations/thread-reports.sqlite3`, so a gateway restart keeps them.
+//!
 //! `catalogue_changes` publishes coalesced payloadless notices after visible
 //! metadata transactions commit; final publisher drop closes remaining handles.
 //! Registration/head recheck belongs to its consuming authorized application.
@@ -67,7 +71,7 @@
 //! MCP App reach a server, call a tool on it).
 //! `CedarConversationAccessPolicy` answers `ConversationAccessPolicyEvaluator`
 //! (`access_policy/cedar/`): who may locate, act on, read, comment in, drive
-//! or share a conversation, receive its review notices, and watch a catalogue. The store asks it inside
+//! or share a conversation, and receive its review notices. The store asks it inside
 //! the transaction that writes a share grant.
 //! `DurableReviewNoticeAudit` acknowledges private immutable selection records
 //! after file sync and create-only publication, with directory sync where
@@ -87,7 +91,7 @@
 pub mod owner_phone_policy;
 pub use owner_phone_policy::CedarOwnerPhonePolicyEvaluator;
 mod change_watch;
-pub use change_watch::{NessaRecordWatches, UuidWatchNamespaces};
+pub use change_watch::NessaRecordWatches;
 // Composed only by the Unix gateway (`composition/local_auth.rs`), as
 // `LaunchedDeletions` below is; the conversation tests build it on every host.
 #[cfg(any(unix, test))]
@@ -105,11 +109,13 @@ mod receiver_authority;
 #[cfg(unix)]
 pub(crate) mod ssh_environment;
 mod store;
+mod thread_reports;
 pub use catalogue_changes::MAX_CATALOGUE_CHANGE_WATCHES;
 pub use receiver_authority::{
     export_receivers, ExportedReceiver, LocalReceiverAuthority, ReceiverChangeError,
     ReceiverSnapshot, ReceiverSnapshotError,
 };
+pub use thread_reports::LocalThreadReports;
 mod record_scope;
 pub use record_scope::{exact_record_scope, record_scope_from_identity};
 mod catalogue_read;

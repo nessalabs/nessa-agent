@@ -288,6 +288,7 @@ async fn an_approval_with_no_arguments_still_reaches_the_host_with_what_codex_sa
     opened
         .session
         .answer_permission(PermissionAnswer {
+            key: None,
             attribution: attribution(),
             execution_id: ExecutionId::new("edit the config").unwrap(),
             id,
@@ -669,6 +670,7 @@ async fn a_refused_codex_approval_is_the_answer_codex_is_given() {
     opened
         .session
         .answer_permission(PermissionAnswer {
+            key: None,
             attribution: attribution(),
             execution_id: ExecutionId::new("edit the config").unwrap(),
             id,
@@ -721,6 +723,7 @@ async fn a_codex_approval_the_audit_cannot_record_is_never_given_to_codex() {
     let failure = opened
         .session
         .answer_permission(PermissionAnswer {
+            key: None,
             attribution: attribution(),
             execution_id: ExecutionId::new("edit the config").unwrap(),
             id,
@@ -793,6 +796,7 @@ async fn sparse_mcp_approval_preserves_input_and_attribution_in_both_answer_stag
         opened
             .session
             .answer_permission(PermissionAnswer {
+                key: None,
                 attribution: attribution(),
                 execution_id: ExecutionId::new("review MCP").unwrap(),
                 id: id.clone(),

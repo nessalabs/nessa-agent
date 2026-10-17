@@ -10,7 +10,7 @@ function message(role: TurnMessage["role"], at: number, ...parts: Part[]): Messa
 }
 
 function conversation(...messages: Message[]): Transcript {
-  return { sessionId: "s", messages, activity: null, approval: null, revision: 1 }
+  return { sessionId: "s", messages, activity: null, approvals: [], revision: 1 }
 }
 
 describe("peekOf", () => {

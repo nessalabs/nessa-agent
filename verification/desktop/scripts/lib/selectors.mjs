@@ -178,6 +178,7 @@ export const css = {
   approvalHead: ".workspace-approval-head", // class: who asks, and what
   approvalHeadWords: ".workspace-approval-head-words", // class: the head's words, without its icon
   approvalCommand: ".workspace-approval-command", // class: what is asked, whole: a command, or an app's tool and its message
+  approvalDisclose: ".workspace-approval-disclose", // class: Show All, which unfolds an agent's long script past its first lines
 
   // A message of the person's that an MCP App wrote (#390)
   messageAuthor: ".workspace-message-author", // class: which app wrote it, above its bubble
@@ -507,6 +508,7 @@ export const zoneSaid = {
 
 /** Accessible names, for getByRole / getByText. */
 export const names = {
+  notificationAllow: "Allow",
   agentsEntry: "Agents",
   /** An app's review card's head: the app by its server, and the tool it asked to run (`approvalHead`). */
   appAsks: (server, tool) => `The ${server} app wants to run ${tool}`,

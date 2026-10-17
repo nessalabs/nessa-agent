@@ -699,9 +699,22 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   command broken, no button label wrapped, nothing overflowing.
   _ADR 238 › Decision_ (`ui/`, `approval-request.tsx`).
   _Check:_ `responsive.mjs --only approval-card --shots <dir>`, then look at the shots.
+- [ ] **An agent's command is always shown, with what it names above it.**
+  The card's row names the sites the command names (each by a globe: no
+  site is asked for its icon before the person answers) and the programs it
+  names, the shell's own words (`if`, `then`, `do`, `fi`) left out (no row when it would only repeat the command's first
+  word); under it the script, one step per line where the card
+  follows its quotes and exactly as sent where it does not, then the tool it
+  calls, the tool's other input, and Copy Command. A script over six lines
+  shows its first four and Show All N Lines; the next approval starts folded.
+  A title that only repeats the tool's name is not shown as a reason
+  (`approval-card.tsx`, `approval-gist.ts`).
+  _Check:_ `transcript.test.tsx`, `approval-gist.test.ts`; `responsive.mjs
+  --only approval-card` unfolds a long script before it measures.
 - [ ] **An armed review counts down, then the card is the automatic notice**
-  (#141): the deadline row says "If nobody answers within N seconds, this is
-  denied automatically.", N goes down while the card is up, and at expiry the
+  (#141): the deadline ring shows the seconds left ("Denies in Ns" in its last
+  ten) and is named "If nobody answers within N seconds, this is denied
+  automatically.", N goes down while the card is up, and at expiry the
   card is gone and the transcript says "Denied automatically: …". The
   fixture's gateway clock runs a minute ahead of the page's, and N starts no
   higher than the wait: the card counts down from the gateway's `serverNowMs`,

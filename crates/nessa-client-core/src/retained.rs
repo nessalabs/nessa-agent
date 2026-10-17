@@ -211,7 +211,7 @@ pub enum ReadFailure {
     /// head. Follow again with no cursor. A checkpoint read does not produce
     /// this, and it does not ask pinned status again.
     CursorAhead,
-    /// The gateway's shared watch registry, or this connection's subscription
+    /// The gateway's shared record watch capacity, or this connection's subscription
     /// limit, is full. Follow again. A checkpoint read does not produce this,
     /// and it does not ask pinned status again. It is not an ungranted
     /// conversation.

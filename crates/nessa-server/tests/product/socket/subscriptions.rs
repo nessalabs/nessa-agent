@@ -1229,10 +1229,10 @@ async fn a_grant_revoked_while_a_batch_waits_for_capacity_ends_it_before_the_rea
     client.close().await;
 }
 
-/// Row S31: the subscribe reply is owed by the request's reply deadline, as
-/// a watch's is. A writer held past it closes the socket rather than write
-/// the identity after the client stopped waiting for it, which would leave
-/// a live subscription the client cannot name and every retry refused
+/// Row S31: the subscribe reply is owed by the request's reply deadline. A
+/// writer held past it closes the socket rather than write the identity
+/// after the client stopped waiting for it, which would leave a live
+/// subscription the client cannot name and every retry refused
 /// `subscription_duplicate`.
 #[tokio::test]
 async fn a_subscribe_reply_not_written_by_its_deadline_closes_the_socket() {
@@ -2729,11 +2729,13 @@ async fn a_comment_or_drive_grant_reads_on_the_socket_as_read_does() {
 
 /// The commands a Drive grant admits (row J11), in the order a test sends
 /// them.
-const DRIVE_COMMANDS: [&str; 7] = [
+const DRIVE_COMMANDS: [&str; 9] = [
     "conversation.send",
     "conversation.steer",
     "conversation.stop",
     "conversation.answer",
+    "conversation.permissionReview",
+    "conversation.questionReview",
     "conversation.answerQuestion",
     "conversation.cancel",
     "conversation.receipt",
@@ -2766,13 +2768,36 @@ fn drive_params(method: &str, id: &ConversationId, execution: &str) -> Value {
         }
         "conversation.answer" => {
             params["permissionId"] = json!("permission");
+            params["review"] = json!("0123456789abcdef0123456789abcdef");
             params["optionId"] = json!("allow");
         }
         "conversation.cancel" => {
             params["permissionId"] = json!("permission");
+            params["review"] = json!("0123456789abcdef0123456789abcdef");
             params["reason"] = json!("no");
         }
-        "conversation.answerQuestion" => params["questionId"] = json!("question"),
+        "conversation.permissionReview" => {
+            let _ = execution;
+            params = json!({
+                "conversationId": id.to_string(),
+                "review": "0123456789abcdef0123456789abcdef",
+                "offset": 0,
+                "maxBytes": 1,
+            });
+        }
+        "conversation.questionReview" => {
+            let _ = execution;
+            params = json!({
+                "conversationId": id.to_string(),
+                "question": "0123456789abcdef0123456789abcdef",
+                "offset": 0,
+                "maxBytes": 1,
+            });
+        }
+        "conversation.answerQuestion" => {
+            params["questionId"] = json!("question");
+            params["question"] = json!("0123456789abcdef0123456789abcdef");
+        }
         // The receipt of the message `SubscriptionFixture::turn` sent.
         "conversation.receipt" => {
             params["requestId"] = json!(format!("send-{execution}"));
@@ -4494,6 +4519,52 @@ async fn the_agent_catalog_is_sent_again_as_paired_environments_come_and_go() {
     client.close().await;
 }
 
+/// Row E1: `session.challenge` is the socket's event 1, and every event
+/// after it, a waiting-review snapshot or a subscription frame alike, takes
+/// the next number of the socket's one numbering in the order the writer
+/// sends it, so one socket never repeats a number.
+#[tokio::test]
+async fn review_snapshots_and_subscription_frames_continue_one_socket_numbering() {
+    let fixture = SubscriptionFixture::new().await;
+    let (_rules, board) = open_rules();
+    let mut client = connect(
+        fixture.state.clone().with_permission_rules(board.clone()),
+        &fixture.session,
+    );
+    let snapshot = client.next().await;
+    assert_eq!(
+        snapshot["event"],
+        product_event::PERMISSION_REVIEW_WAITING,
+        "{snapshot}"
+    );
+    assert_eq!(snapshot["seq"], CHALLENGE_EVENT_SEQUENCE + 1, "{snapshot}");
+    client.send("agents", "agents.subscribe", json!({}));
+    let (reply, before) = client.reply("agents").await;
+    assert_eq!(reply["ok"], true, "{reply}");
+    assert!(before.is_empty(), "{before:?}");
+    let id = reply["payload"]["subscriptionId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let catalog = client.until(&id, |_| true).await.remove(0);
+    assert_eq!(catalog["seq"], CHALLENGE_EVENT_SEQUENCE + 2, "{catalog}");
+    // A change of the waiting set is the next event after the frame.
+    board.waiting(&ReviewNotice {
+        conversation_id: fixture.id.to_string(),
+        execution_id: ExecutionId::new("turn").unwrap(),
+        permission_id: PermissionId::new("waiting").unwrap(),
+        tool: "Bash".into(),
+    });
+    let changed = client.next().await;
+    assert_eq!(
+        changed["event"],
+        product_event::PERMISSION_REVIEW_WAITING,
+        "{changed}"
+    );
+    assert_eq!(changed["seq"], CHALLENGE_EVENT_SEQUENCE + 3, "{changed}");
+    client.close().await;
+}
+
 /// Row AC1 on a gateway that pairs no environments: nothing changes its
 /// catalog after startup, so the first frame is the only one, and the
 /// subscription stays open until stopped.
@@ -5185,11 +5256,19 @@ async fn a_drivers_tool_call_is_checked_against_the_grants_policy() {
                     .read(fixture.id.clone(), caller(&fixture.session, "read".into()))
                     .await
                     .unwrap();
-                if view
-                    .permissions
-                    .iter()
-                    .any(|permission| permission.execution_id == execution)
-                {
+                let mut waiting = false;
+                for entry in &view.permissions {
+                    waiting |= fixture
+                        .service
+                        .waiting_review(
+                            fixture.id.clone(),
+                            caller(&fixture.session, "read".into()),
+                            &entry.review,
+                        )
+                        .await
+                        .is_ok_and(|review| review.execution_id == execution);
+                }
+                if waiting {
                     break;
                 }
                 tokio::time::sleep(Duration::from_millis(10)).await;

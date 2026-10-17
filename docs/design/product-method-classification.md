@@ -28,7 +28,7 @@ independent choices from the original string:
    handler also applies paired Share/Unshare/Shares checks after manifest-grant
    admission.
 
-Handler modules make further exact-name choices. Watches and subscriptions have
+Handler modules make further exact-name choices. Subscriptions have
 connection-owned dispatch before the ordinary handler; the handshake and
 `auth.session` have lifecycle-owned dispatch. Unknown strings are refused as
 `unknown_method`, but they currently inherit the Ordinary lane on their way to
@@ -48,7 +48,7 @@ The extension path therefore crosses these owners:
 | --- | --- | --- |
 | Wire name, params, grant | `protocol/product/manifest.json` and `v1.json` | Add the method/schema and regenerate Rust and TypeScript |
 | Known-name identity | generated string constants/list | Generated indirectly from the manifest |
-| Authentication lifecycle | product socket | Place handshake/session/watch methods in their lifecycle path |
+| Authentication lifecycle | product socket | Place handshake and session methods in their lifecycle path |
 | Handler route | product socket and handler module | Add a top-level route and the handler's exact method case |
 | Response capacity | product socket | Add a lane case only when the Ordinary default is wrong |
 | Execution capacity | product socket | Select a server pool; otherwise the ordinary-request pool is inherited |
@@ -67,7 +67,6 @@ Current source owners (reviewed at `9812c3c`):
 [generator](../../scripts/generate-product-protocol.mjs),
 [socket](../../crates/nessa-server/src/product/socket.rs),
 [paired access](../../crates/nessa-server/src/product/read_access.rs),
-[connection watches](../../crates/nessa-server/src/product/change_watch/connection.rs),
 [subscriptions](../../crates/nessa-server/src/product/subscription/mod.rs), and
 [writer tests](../../crates/nessa-server/tests/product/socket/writer.rs),
 [artifact reader](../../crates/nessa-server/src/product/attachment.rs),
@@ -94,8 +93,6 @@ admission, not downstream application policies inside a successful handler.
 | ManifestThenArtifactRead | Request owner admits generated grant, then attachment reader calls `admit_conversation` before artifact effects |
 | PassiveRecord / PassiveCatalogue | Record/catalogue read facade constructs `AdmitPassiveRead`: generated passive grant, current identity/binding, metadata/grant and policy checks before source work |
 | ManifestThenShare(Share / Unshare / Shares) | Request owner admits generated grant, then `dispatch_share` asks paired-share admission with the typed action before effects; transactional share checks remain in application/storage |
-| WatchRecords / WatchCatalogue | Connection watch owner uses the corresponding passive-read admission; catalogue watch additionally asks `catalogue_watch`; refresh and teardown retain connection ownership |
-| Unwatch | Connection watch owner verifies its own watch token and stops it |
 | FollowConversation / FollowList / FollowAgents | Subscription owner calls `authorize_batch` before registration and before each batch; conversation follow retains pairing-grant substitution, list follow calls `admit_list`, and agents follow asks its manifest grant |
 | UnsubscribeConversation / UnsubscribeAgents | Socket calls `admit_now` inline before connection-owned stop; conversation unsubscribe retains paired-follow grant substitution and token ownership |
 
@@ -188,9 +185,6 @@ as described above; unknown names are absent and retain Requests/Ordinary refusa
 | `peer.list` | `peers` | Ordinary | Requests | Manifest |
 | `peer.forget` | `peers` | Ordinary | Requests | Manifest |
 | `peer.relay` | `peers` | Ordinary | Requests | Manifest |
-| `conversation.watchRecords` | `change_watch` | Ordinary | ConnectionOwned | WatchRecords |
-| `conversation.watchCatalogue` | `change_watch` | Ordinary | ConnectionOwned | WatchCatalogue |
-| `conversation.unwatch` | `change_watch` | Ordinary | ConnectionOwned | Unwatch |
 | `conversation.subscribe` | `subscription` | Ordinary | ConnectionOwned | FollowConversation |
 | `conversation.subscribeList` | `subscription` | Ordinary | ConnectionOwned | FollowList |
 | `conversation.unsubscribe` | `subscription` | Ordinary | ConnectionOwned | UnsubscribeConversation |
@@ -266,7 +260,7 @@ adds exact test names to the PR, rather than treating this design as executed pr
 | Paired Drive, Comment, catalogue Write and own-check method | Same target, initiator and Cedar question before effects; unchanged policy verdict authority | Paired-access and socket tests |
 | Record head/page or artifact read with manifest grant refused, then with grant admitted but conversation read refused | Either stage prevents source/handler effects; valid grant plus admitted read succeeds | Passive-read and artifact socket tests |
 | Share/unshare/shares from a paired party, including a credential holding the manifest grant | Preserve both the manifest grant and the distinct paired Share/Unshare/Shares question before effects; refusing either stage prevents handler effects | Paired share admission and socket tests |
-| Watch/subscription starts, refreshes and ends | Existing connection ownership, per-batch authority checks and teardown | Watch/subscription socket tests |
+| Subscription starts, refreshes and ends | Existing connection ownership, per-batch authority checks and teardown | Subscription socket tests |
 
 Each slice updates generated output and consumers together. There is one current
 wire contract: no alias parser, legacy enum, dual dispatch, schema-version bump,

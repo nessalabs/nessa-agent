@@ -342,7 +342,7 @@ describe("what goes with a session", () => {
   it("drops an answer and a chosen model with a removed session", () => {
     const state = {
       ...loaded(),
-      answers: { c: { approvalId: "ap", token: "t1" } },
+      answers: { c: [{ approvalId: "ap", token: "t1" }] },
       chosenModels: { c: testIndex().sessions[3].model },
     }
     const removed = sessionRemoved(state, {
@@ -845,19 +845,21 @@ describe("what is kept of sessions no pane shows", () => {
       transcript: {
         ...again,
         activity: { label: "Thinking", since: 10 },
-        approval: {
-          id: "ap",
-          command: "cargo test",
-          reason: "Runs the tests.",
-          origin: { kind: "agent" },
-          options: [],
-          ask: "tool",
-        },
+        approvals: [
+          {
+            id: "ap",
+            command: "cargo test",
+            reason: "Runs the tests.",
+            origin: { kind: "agent" },
+            options: [],
+            ask: "tool",
+          },
+        ],
       },
     })
     expect(reread.transcripts.s0?.messages).toEqual(again.messages)
     expect(reread.transcripts.s0?.activity).toEqual({ label: "Thinking", since: 10 })
-    expect(reread.transcripts.s0?.approval?.id).toBe("ap")
+    expect(reread.transcripts.s0?.approvals[0]?.id).toBe("ap")
     expect(reread.conversationRevisions.s0).toBe(10)
     expect(reread.transcriptFailures.s0).toBeUndefined()
     // Held at that revision, the same revision changes nothing, even a different body.

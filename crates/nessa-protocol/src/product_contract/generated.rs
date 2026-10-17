@@ -272,46 +272,6 @@ impl CatalogueReadErrorCode {
         }
     }
 }
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ChangeWatchEndReason {
-    Closed,
-    NotificationFailed,
-}
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ChangeWatchErrorCode {
-    InvalidRequest,
-    Unauthorized,
-    Forbidden,
-    WrongOwner,
-    WrongReceiver,
-    StaleEpoch,
-    Unverifiable,
-    TemporarilyUnavailable,
-    WatchDuplicate,
-    WatchCapacity,
-    WatchClosed,
-    InvalidWatch,
-}
-impl ChangeWatchErrorCode {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::InvalidRequest => "invalid_request",
-            Self::Unauthorized => "unauthorized",
-            Self::Forbidden => "forbidden",
-            Self::WrongOwner => "wrong_owner",
-            Self::WrongReceiver => "wrong_receiver",
-            Self::StaleEpoch => "stale_epoch",
-            Self::Unverifiable => "unverifiable",
-            Self::TemporarilyUnavailable => "temporarily_unavailable",
-            Self::WatchDuplicate => "watch_duplicate",
-            Self::WatchCapacity => "watch_capacity",
-            Self::WatchClosed => "watch_closed",
-            Self::InvalidWatch => "invalid_watch",
-        }
-    }
-}
 /// Published bound from the product schema.
 pub const MAX_MCP_MESSAGE_BYTES: usize = 8192;
 /// Published MCP App call timing from the product schema, in milliseconds.

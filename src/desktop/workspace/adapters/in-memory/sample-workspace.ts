@@ -82,7 +82,7 @@ export function sampleWorkspace(now: number): {
           sessionId: sample.id,
           messages,
           activity,
-          approval: sample.approval ?? null,
+          approvals: sample.approval ? [sample.approval] : [],
           revision: 1,
         },
       ]

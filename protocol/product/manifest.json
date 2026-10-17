@@ -82,6 +82,14 @@
       "params": "ConversationAnswerParams",
       "grant": "conversation.write"
     },
+    "conversation.permissionReview": {
+      "params": "ConversationPermissionReviewParams",
+      "grant": "conversation.write"
+    },
+    "conversation.questionReview": {
+      "params": "ConversationQuestionReviewParams",
+      "grant": "conversation.write"
+    },
     "conversation.answerQuestion": {
       "params": "ConversationAnswerQuestionParams",
       "grant": "conversation.write"
@@ -254,18 +262,6 @@
       "params": "PeerRelayParams",
       "grant": "credential.manage"
     },
-    "conversation.watchRecords": {
-      "params": "ConversationWatchRecordsParams",
-      "grant": null
-    },
-    "conversation.watchCatalogue": {
-      "params": "ConversationWatchCatalogueParams",
-      "grant": null
-    },
-    "conversation.unwatch": {
-      "params": "ConversationUnwatchParams",
-      "grant": null
-    },
     "conversation.subscribe": {
       "params": "ConversationSubscribeParams",
       "grant": "conversation.write"
@@ -310,8 +306,6 @@
   "events": {
     "session.challenge": "SessionChallenge",
     "session.terminated": "SessionTermination",
-    "conversation.changed": "ConversationChanged",
-    "conversation.watchEnded": "ConversationWatchEnded",
     "conversation.view": "ConversationViewed",
     "conversation.listed": "ConversationListed",
     "agents.listed": "AgentsListed",

@@ -94,9 +94,12 @@
  * app's calls go on that client too (`connected`).
  */
 import {
+  executionTargets,
   prepareSubmission,
   permissionTargets,
+  questionDetails,
   questionTargets,
+  reviewDetails,
   ConversationErrorCode,
   conversationErrorCode,
   isRetryableConnectionError,
@@ -114,8 +117,13 @@ import {
   type ConversationSummary,
   type ConversationView,
   type ConversationViewCursor,
+  type QuestionDetail,
+  type QuestionDetails,
+  type ReviewDetail,
+  type ReviewDetails,
   type Subscription,
   type SubscriptionApi,
+  type StopThreadResult,
   type SubscriptionEnd,
   type ViewFrame,
 } from "@nessa/client"
@@ -147,9 +155,20 @@ import { waitingReviews, type WaitingReview } from "./review-notices"
 export interface GatewayClient {
   readonly conversation: Pick<
     ConversationApi,
-    "observe" | "create" | "submit" | "answer" | "answerQuestion" | "archive"
+    | "observe"
+    | "create"
+    | "submit"
+    | "answer"
+    | "permissionReview"
+    | "questionReview"
+    | "answerQuestion"
+    | "stop"
+    | "setApprovalMode"
+    | "archive"
   >
   readonly subscriptions: Pick<SubscriptionApi, "view" | "list">
+  /** Stops the active execution, which the gateway names from its own peek. */
+  stopThread(threadId: string): Promise<StopThreadResult>
   readonly connectionState: ConnectionState
   onConnectionStateChange(handler: (state: ConnectionState) => void): () => void
   /** Server pushes, when the client has them. Absent on a client that only answers calls. */
@@ -240,7 +259,12 @@ export interface GatewayViewObserver {
 
 /** What one conversation's latest frame left: its view, its count, and where it was read. */
 interface Read {
+  /** The view as the gateway sent it. */
+  readonly sent: ConversationView
+  /** `sent`, the view this read stands on. */
   readonly view: ConversationView
+  /** When `sent` arrived, on the window's clock. */
+  readonly receivedAtMs: number
   /** What a person could see of `view` ([`viewKey`]). */
   readonly key: string
   readonly transcript: Transcript
@@ -255,13 +279,26 @@ interface Read {
  * content anew. `serverNowMs` moves on every read. The gateway sends a frame
  * when this changes (`view_key`, row S9), so it is what decides here.
  */
-function viewKey(view: ConversationView): string {
-  return JSON.stringify({ ...view, revision: undefined, serverNowMs: undefined })
+function viewKey(
+  view: ConversationView,
+  details: readonly ReviewDetail[],
+  questions: readonly QuestionDetail[],
+): string {
+  return JSON.stringify({
+    ...view,
+    revision: undefined,
+    serverNowMs: undefined,
+    // A review's or question's content, once read, never changes under its key.
+    reviews: details.map((detail) => [detail.entry.review, detail.state]),
+    asked: questions.map((detail) => [detail.entry.question, detail.state]),
+  })
 }
 
 /** An approval or a question is the person being asked. A withheld-review notice is not. */
 function waitsOnPerson(transcript: Transcript | undefined): boolean {
-  return Boolean(transcript?.approval) || (transcript?.questions?.length ?? 0) > 0
+  return (
+    (transcript?.approvals.length ?? 0) > 0 || (transcript?.questions?.length ?? 0) > 0
+  )
 }
 
 /** A caller waiting for a subscription's first frame. */
@@ -358,6 +395,32 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
   const reads = new Map<string, Read>()
   // When each message was first seen, per session: the gateway's view has no times.
   const firstSeen = new Map<string, Map<string, number>>()
+  // What each conversation's listed reviews show, read from their live owner.
+  const reviews = new Map<string, ReviewDetails>()
+  // And what each of its listed questions asks, read the same way.
+  const questions = new Map<string, QuestionDetails>()
+  // The keys of what a conversation's window had read whole when it let the
+  // conversation go: an answer to one of them answers what the person saw.
+  const readBefore = new Map<string, ReadonlySet<string>>()
+  const dropReviews = (sessionId: string, remember = false) => {
+    if (remember)
+      readBefore.set(
+        sessionId,
+        new Set([
+          ...(reviews.get(sessionId)?.details() ?? []).flatMap((detail) =>
+            detail.state === "loaded" ? [detail.entry.review] : [],
+          ),
+          ...(questions.get(sessionId)?.details() ?? []).flatMap((detail) =>
+            detail.state === "loaded" ? [detail.entry.question] : [],
+          ),
+        ]),
+      )
+    else readBefore.delete(sessionId)
+    reviews.get(sessionId)?.dispose()
+    reviews.delete(sessionId)
+    questions.get(sessionId)?.dispose()
+    questions.delete(sessionId)
+  }
 
   // Nothing is said after `dispose`, which lets every listener go and admits no new one.
   const emit = (update: WorkspaceUpdate) => {
@@ -712,6 +775,7 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     unfollow(sessionId, new WorkspaceSourceError("unknown-session"))
     // Its last frame goes with it: listed again, nothing it said then speaks for it.
     reads.delete(sessionId)
+    dropReviews(sessionId)
     emit({ kind: "session-removed", sessionId, revision })
   }
 
@@ -947,17 +1011,59 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     cursor: ConversationViewCursor,
     receivedAtMs: number,
   ): Transcript => {
+    const sent = view
+    // A view lists each waiting review by its key; what it shows is read
+    // from its live owner, and the frame applied again as each arrives,
+    // before the review offers any answer (`Approval.loading`).
+    const changed = () => {
+      const latest = reads.get(sessionId)
+      if (!disposed && latest)
+        applyRead(sessionId, latest.sent, latest.cursor, latest.receivedAtMs)
+    }
+    let loader = reviews.get(sessionId)
+    if (!loader) {
+      loader = reviewDetails({
+        read: (review, signal) =>
+          client("person").then((connected) =>
+            connected.conversation.permissionReview(sessionId, review, { signal }),
+          ),
+        changed,
+      })
+      reviews.set(sessionId, loader)
+    }
+    loader.follow(sent.permissions)
+    const details = loader.details()
+    let asking = questions.get(sessionId)
+    if (!asking) {
+      asking = questionDetails({
+        read: (question, signal) =>
+          client("person").then((connected) =>
+            connected.conversation.questionReview(sessionId, question, { signal }),
+          ),
+        changed,
+      })
+      questions.set(sessionId, asking)
+    }
+    asking.follow(sent.questions)
+    const asked = asking.details()
     const held = reads.get(sessionId)
-    const key = viewKey(view)
+    const key = viewKey(view, details, asked)
     if (held && held.key === key) {
-      reads.set(sessionId, { ...held, cursor })
+      reads.set(sessionId, { ...held, sent, cursor, receivedAtMs })
       return held.transcript
     }
     const revision = (transcriptCounts.get(sessionId) ?? 0) + 1
     transcriptCounts.set(sessionId, revision)
-    const transcript = transcriptFrom(view, revision, seenIn(sessionId), receivedAtMs)
-    reads.set(sessionId, { view, key, transcript, cursor })
-    tellApps(() => options.apps?.observe(view))
+    const transcript = transcriptFrom(
+      view,
+      revision,
+      seenIn(sessionId),
+      receivedAtMs,
+      details,
+      asked,
+    )
+    reads.set(sessionId, { sent, view, receivedAtMs, key, transcript, cursor })
+    tellApps(() => options.apps?.observe(sent))
     emit({ kind: "transcript", transcript })
     // The summary follows what the frame says: an approval waiting, the model it runs on.
     publish(sessionId)
@@ -1084,6 +1190,7 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
                 throw error
               // The client is ahead of the history the gateway holds: start over.
               reads.delete(sessionId)
+              dropReviews(sessionId, true)
               if (!live() || !current()) throw new WorkspaceSourceError("unavailable")
               return subscribe(connected, undefined)
             },
@@ -1145,6 +1252,7 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
         unfollow(oldest, new WorkspaceSourceError("unavailable"))
         // Not followed, it says only what its row says (`needs-you` is a frame's).
         reads.delete(oldest)
+        dropReviews(oldest, true)
         publish(oldest)
       }
     }
@@ -1193,19 +1301,29 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
   }
 
   const waitingReview = async (sessionId: string, approvalId: string) => {
-    const review = reviewOf(approvalId)
-    if (!review) throw new WorkspaceSourceError("not-waiting")
+    const key = reviewOf(approvalId)
+    if (!key) throw new WorkspaceSourceError("not-waiting")
+    // Only a review this window holds, or read whole before it let its
+    // conversation go: one first read now is one the person was never shown.
+    // One let go of is read again, and its key says it is the same review.
+    const held = reviews.get(sessionId)?.get(key)
+    if (!held && !readBefore.get(sessionId)?.has(key))
+      throw new WorkspaceSourceError("not-waiting")
     await transcriptOf(sessionId, "person")
-    const view = reads.get(sessionId)?.view
-    const index =
-      view?.permissions.findIndex(
-        (asked) =>
-          asked.executionId === review.executionId &&
-          asked.permissionId === review.permissionId,
-      ) ?? -1
-    const permission = view?.permissions[index]
-    const target = view && permissionTargets(view)[index]
-    if (!permission || !target) throw new WorkspaceSourceError("not-waiting")
+    const listed = reads
+      .get(sessionId)
+      ?.sent.permissions.some((entry) => entry.review === key)
+    const loader = reviews.get(sessionId)
+    const detail = held ? loader?.get(key) : await loader?.settled(key)
+    if (!listed || !detail) throw new WorkspaceSourceError("not-waiting")
+    // No answer before the person could see the whole of what it allows.
+    if (detail.state !== "loaded") throw new WorkspaceSourceError("not-supported")
+    const permission = detail.shown
+    const [target] = permissionTargets({
+      conversationId: sessionId,
+      permissions: [permission],
+    })
+    if (!target) throw new WorkspaceSourceError("not-waiting")
     return { permission, target }
   }
 
@@ -1265,6 +1383,7 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
       // draft or model object while either effect is pending (PS16).
       const model = Object.freeze({ ...message.model })
       const start = message.start !== undefined
+      const access = message.start?.access
       let prepared
       try {
         prepared = prepareSubmission({
@@ -1294,6 +1413,8 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
               conversationId: prepared.conversationId,
               ...(agent ? { agent } : {}),
               model: model.modelId,
+              // The access chosen in the home; the gateway asks when told none.
+              ...(access ? { approvalMode: access } : {}),
             })
           })
         }
@@ -1332,16 +1453,35 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
         : answer(sessionId, approvalId, optionId, "allow"),
     deny: (sessionId, approvalId, _initiator, optionId) =>
       answer(sessionId, approvalId, optionId, "deny"),
-    answerQuestion: (sessionId, executionId, questionId, choices, _initiator) =>
+    retryReview: (sessionId, approvalId) => {
+      const key = reviewOf(approvalId)
+      if (key) reviews.get(sessionId)?.retry(key)
+      if (key) questions.get(sessionId)?.retry(key)
+    },
+    answerQuestion: (sessionId, executionId, questionId, choices, _initiator, key) =>
       within(async (live) => {
+        // Only the question shown under `key`, held as `waitingReview` holds
+        // a review: one asked again under the same identities has another
+        // key, and one first read now was never shown.
+        const held = key === undefined ? undefined : questions.get(sessionId)?.get(key)
+        if (key === undefined || (!held && !readBefore.get(sessionId)?.has(key)))
+          throw new WorkspaceSourceError("not-waiting")
         await transcriptOf(sessionId, "person")
-        const view = reads.get(sessionId)?.view
+        const listed = reads
+          .get(sessionId)
+          ?.sent.questions.some((entry) => entry.question === key)
+        const asking = questions.get(sessionId)
+        const detail = held ? asking?.get(key) : await asking?.settled(key)
         const target =
-          view &&
-          questionTargets(view).find(
-            (asked) =>
-              asked.executionId === executionId && asked.questionId === questionId,
-          )
+          listed && detail?.state === "loaded"
+            ? questionTargets({
+                conversationId: sessionId,
+                questions: [detail.shown],
+              }).find(
+                (asked) =>
+                  asked.executionId === executionId && asked.questionId === questionId,
+              )
+            : undefined
         if (!target) throw new WorkspaceSourceError("not-waiting")
         await dispatch(live, (connected) => {
           try {
@@ -1363,6 +1503,43 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
             if (error instanceof TypeError) throw new WorkspaceSourceError("not-waiting")
             throw error
           }
+        })
+      }),
+    // Two owners, each asked for its own: the view says which turns the
+    // person queued, and they are withdrawn first, so none starts once the
+    // active one ends; the gateway's peek names the active execution
+    // (`stopThread`), since a view's message can still say running after
+    // its turn stopped.
+    stop: (sessionId, _initiator) =>
+      within(async (live) => {
+        await transcriptOf(sessionId, "person")
+        const view = reads.get(sessionId)?.view
+        const queued = view
+          ? executionTargets({
+              conversationId: view.conversationId,
+              messages: view.messages.filter((turn) => turn.status === "queued"),
+              pending: view.pending,
+            })
+          : []
+        for (const target of queued)
+          await dispatch(live, (connected) => {
+            held(sessionId)
+            return connected.conversation.stop(target)
+          })
+        const result = await dispatch(live, (connected) => {
+          held(sessionId)
+          return connected.stopThread(sessionId)
+        })
+        if (result.outcome === "no_active_turn" && queued.length === 0)
+          throw new WorkspaceSourceError("not-waiting")
+      }),
+    // Committed by the gateway, which refuses it while a turn runs. The
+    // conversation saying so follows as a frame, as an answer's does (D12).
+    setAccess: (sessionId, mode, _initiator) =>
+      within(async (live) => {
+        await dispatch(live, (connected) => {
+          held(sessionId)
+          return connected.conversation.setApprovalMode(sessionId, mode)
         })
       }),
     // The gateway keeps no pin.
@@ -1398,6 +1575,7 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     dispose() {
       disposed = true
       stopStreams()
+      for (const sessionId of [...reviews.keys()]) dropReviews(sessionId)
       settle(list, { error: new WorkspaceSourceError("unavailable") })
       for (const sessionId of [...views.keys()])
         unfollow(sessionId, new WorkspaceSourceError("unavailable"))

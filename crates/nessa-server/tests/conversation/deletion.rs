@@ -428,6 +428,7 @@ async fn a_deleted_conversation_refuses_every_command_on_it() {
                 caller("answer"),
                 "turn-1".into(),
                 "permission".into(),
+                "0".repeat(32),
                 "allow".into(),
                 PermissionCaller::Owner,
             )
@@ -440,6 +441,7 @@ async fn a_deleted_conversation_refuses_every_command_on_it() {
                 caller("cancel"),
                 "turn-1".into(),
                 "permission".into(),
+                "0".repeat(32),
                 "no".into(),
             )
             .await,

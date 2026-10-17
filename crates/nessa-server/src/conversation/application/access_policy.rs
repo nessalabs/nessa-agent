@@ -115,8 +115,6 @@ pub enum AccessAction {
     Unshare,
     /// List the shares of the conversation.
     Shares,
-    /// Watch the owner's catalogue for changes.
-    CatalogueWatch,
     /// Read the bytes of a file the conversation holds.
     ArtifactRead,
     /// Deliver a note a grant holder left.
@@ -127,7 +125,7 @@ pub enum AccessAction {
 
 impl AccessAction {
     /// Every action, in declaration order.
-    pub const ALL: [Self; 17] = [
+    pub const ALL: [Self; 16] = [
         Self::AgentTools,
         Self::Locate,
         Self::Act,
@@ -141,7 +139,6 @@ impl AccessAction {
         Self::Share,
         Self::Unshare,
         Self::Shares,
-        Self::CatalogueWatch,
         Self::ArtifactRead,
         Self::NoteDeliver,
         Self::ReviewNotice,
@@ -163,7 +160,6 @@ impl AccessAction {
             Self::Share => "conversation.share",
             Self::Unshare => "conversation.unshare",
             Self::Shares => "conversation.shares",
-            Self::CatalogueWatch => "catalogue.watch",
             Self::ArtifactRead => "artifact.read",
             Self::NoteDeliver => "note.deliver",
             Self::ReviewNotice => "review.notice",
@@ -574,8 +570,8 @@ impl<'a> PairedAccess<'a> {
     }
 
     /// Whether the party may take `action` on the owner's catalogue its
-    /// binding reads: `conversation.list`, `catalogue.watch`, or
-    /// `conversation.write` for a command no grant role names.
+    /// binding reads: `conversation.list`, or `conversation.write` for a
+    /// command no grant role names.
     ///
     /// # Errors
     /// `Forbidden` when the policy refuses, `Unavailable` when it could not

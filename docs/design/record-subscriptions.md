@@ -64,8 +64,12 @@ a second fold (rule "one fold" in the transcript-fold design). A linked device
 follows one conversation with `conversation.subscribe` on a new pinned
 session to the same gateway as its checkpoint read. The two calls do not
 share a connection. The checkpoint read still copies records
-(`conversation.recordsHead` / `recordsPage`). `conversation.watchRecords`
-remains for that retained path until nessa-ios is confirmed to have stopped using `conversation.watchRecords`.
+(`conversation.recordsHead` / `recordsPage`). Subscriptions are the only live
+read path: the product-socket watch (`conversation.watchRecords`,
+`conversation.watchCatalogue`, `conversation.unwatch`) was deleted in #257. The
+example client's bounded `follow` keeps its private record cache fresh by
+running a checkpoint pass whenever a view's cursor moves, on the same
+connection as that pass ([read-only sync example](read-only-sync-example.md#following-a-conversation)).
 `conversation.subscribeList` stays refused to a paired device until #724
 scopes the catalogue head to the device's grants. The desktop shows the
 view's own `truncated` and `transcriptState` (`history` on its transcript).
@@ -184,8 +188,8 @@ kept busy with its own traffic for the whole timeout can end a subscription
 `lagging` too; the client resumes it the same way. A write that has started
 and stalls past the socket's write timeout closes the socket, as every other
 frame does. The terminal frame itself must be written by its deadline or the
-socket closes, as a watch's terminal notice does; so must the subscribe reply,
-by the request's reply deadline, as a watch's reply (row S31): written after
+socket closes; so must the subscribe reply, by the request's reply deadline
+(row S31): written after
 the client stopped waiting, it would name a live subscription the client never
 learns, and every subscribe again would be refused `subscription_duplicate`.
 
@@ -271,7 +275,7 @@ guarantee (#935).
 | S28 | The agent's opening fails while a follower waits on it (or failed and holds its slot) | The follower is shown the committed history, read-only; `conversation.read` and a send report the failure | `a_failed_opening_holding_its_slot_is_read_by_a_follower_as_its_history` (`tests/conversation/desktop_stop.rs`) |
 | S29 | A subscribe or unsubscribe the session may not make (grant, presence, or no longer current) | Refused with the admission's code; a subscribe takes no watch from the shared pools first | `a_forbidden_subscribe_is_refused_before_it_takes_a_watch`, `a_forbidden_unsubscribe_is_refused` |
 | S30 | Every request permit taken when a batch is woken; the grant is revoked while it waits for one | Ended `refused` with `forbidden`; no frame is read under the old grant, because a batch is admitted only once it holds its capacity, as `dispatch` admits a request | `a_grant_revoked_while_a_batch_waits_for_capacity_ends_it_before_the_read` |
-| S31 | The subscribe reply is not written by the request's reply deadline (the writer held behind other traffic) | The socket closes, as for a watch's reply; the client reconnects and subscribes again, never left with a live subscription it cannot name | `a_subscribe_reply_not_written_by_its_deadline_closes_the_socket`; `the_reply_and_the_last_frame_carry_a_deadline_through_their_write` (unit, `product/subscription/delivery.rs`) |
+| S31 | The subscribe reply is not written by the request's reply deadline (the writer held behind other traffic) | The socket closes; the client reconnects and subscribes again, never left with a live subscription it cannot name | `a_subscribe_reply_not_written_by_its_deadline_closes_the_socket`; `the_reply_and_the_last_frame_carry_a_deadline_through_their_write` (unit, `product/subscription/delivery.rs`) |
 | L1 | List subscription; a catalogue change | A new list frame | `a_list_subscription_follows_the_catalogue` |
 | L2 | A turn starts or ends without a summary change | A new list frame with `running` changed | `a_turn_without_a_summary_change_updates_the_list` |
 | L3 | A list larger than one frame | Cut newest first, `complete: false` | `a_list_too_large_for_one_frame_is_cut_and_marked_incomplete` (unit) |

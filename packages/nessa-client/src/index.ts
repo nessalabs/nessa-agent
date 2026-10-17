@@ -31,7 +31,6 @@ export {
   type ServerApi,
   type AgentsApi,
   type RecordReadApi,
-  type ChangeWatchApi,
   type AgentsSubscriptionHandlers,
   type ListSubscriptionHandlers,
   type Subscription,
@@ -115,6 +114,19 @@ export {
   permissionTargetConversation,
   type PermissionTarget,
 } from "./application/permission-target.js"
+export {
+  interactionDetails,
+  questionDetails,
+  reviewDetails,
+  REVIEW_RETRY_FIRST_MS,
+  REVIEW_RETRY_MOST_MS,
+  type InteractionDetail,
+  type QuestionDetail,
+  type QuestionDetails,
+  type ReviewDetail,
+  type ReviewDetails,
+  type ReviewDetailsTimer,
+} from "./application/review-details.js"
 
 export {
   captureQuestionChoices,
@@ -151,21 +163,12 @@ export type {
   RecordPageRequest,
 } from "./generated/product.js"
 export type { DecodedRecord, DecodedRecordPage } from "./protocol/record-read-validate.js"
-export { ChangeWatchEndReason, ChangeWatchErrorCode } from "./generated/product.js"
 export {
   ConversationSubscriptionEndReason,
   ConversationSubscriptionErrorCode,
   subscriptionLimits,
 } from "./generated/product.js"
 export type { ConversationViewCursor } from "./generated/product.js"
-export type {
-  ConversationWatchRecordsParams,
-  ConversationWatchCatalogueParams,
-  ConversationWatchResult,
-  ConversationUnwatchResult,
-  ConversationChanged,
-  ConversationWatchEnded,
-} from "./generated/product.js"
 
 export { NessaMutationError } from "./application/mutation-error.js"
 export type {
@@ -321,6 +324,9 @@ export type {
   ConversationRuntime,
   ConversationPending,
   ConversationPermission,
+  ConversationQuestion,
+  ConversationQuestionEntry,
+  ConversationReviewEntry,
   ConversationPermissionOption,
   ConversationTool,
   ConversationCapabilities,
@@ -361,7 +367,11 @@ export {
   ConversationCapability,
   ConversationToolPreset,
 } from "./generated/product.js"
-export { sharePage, toolPolicyBounds } from "./protocol/conversation-validate.js"
+export {
+  sharePage,
+  toolPolicyBounds,
+  viewEntryBounds,
+} from "./protocol/conversation-validate.js"
 export { conversationErrorCode } from "./application/conversation-error-code.js"
 export type { ConversationLease } from "./generated/product.js"
 export {

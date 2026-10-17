@@ -3,7 +3,7 @@ use nessa_sdk::application::agent_execution::{
     executions::{
         AdmissionAuditCause, AdmissionAuditStage, AttachmentAuditCause, AttachmentAuditStage,
         EffortChangeStage, ExecutionAuditRecord, NativeHooksLaunchCause, QueueOrderCause,
-        SteeringAuditCause, SteeringAuditStage,
+        SteeringAuditCause, SteeringAuditStage, TurnResumption,
     },
     permissions::{
         ActionContext, ApprovalAttribution, ApprovalBasis, CancellationOrigin,
@@ -186,6 +186,22 @@ pub(super) fn record_value(record: &ExecutionAuditRecord) -> Value {
                 Err(error) => json!({"failed":error.to_string()}),
             },
         }),
+        ExecutionAuditRecord::TurnResumed(record) => json!({
+            "kind":"turn_resumed",
+            "sessionId":record.session_id().as_str(),
+            "executionId":record.execution_id().as_str(),
+            "cause":scheduling_cause(record.cause()),
+            "dispatched":record.dispatched(),
+            "submittedBy":actor(record.submitted_by()),
+            "actor":actor(record.resumed_by()),
+            "resumption":match record.resumption() {
+                TurnResumption::Continued { successor } => {
+                    json!({"kind":"continued","successor":successor.as_str()})
+                }
+                TurnResumption::Exhausted => json!({"kind":"exhausted"}),
+                TurnResumption::Declined => json!({"kind":"declined"}),
+            },
+        }),
         ExecutionAuditRecord::QuestionAnswered(record) => {
             json!({
                 "kind":"question_answered",
@@ -281,6 +297,9 @@ fn scheduling_cause(cause: SchedulingCause) -> &'static str {
         SchedulingCause::SessionClosed => "session_closed",
         SchedulingCause::RunnerStopped => "runner_stopped",
         SchedulingCause::Withdrawn => "withdrawn",
+        SchedulingCause::Suspended => "suspended",
+        SchedulingCause::Interrupted => "interrupted",
+        SchedulingCause::NotResumed => "not_resumed",
     }
 }
 fn steering_stage(stage: SteeringAuditStage) -> &'static str {

@@ -350,6 +350,7 @@ function gatewayWithApp() {
       return Promise.resolve({
         conversation: client.conversation,
         subscriptions: client.subscriptions,
+        stopThread: client.stopThread,
         get connectionState() {
           return client.connectionState
         },

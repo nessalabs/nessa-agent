@@ -942,7 +942,6 @@ source adapter. Attachment adapters consume this owner when activated.
 `conversation/application/metadata_target.rs` correlates existing metadata loads and creation acknowledgements with the requested identity before ownership, selection, grant admission or effects. Created receipts additionally match the admitted full immutable proposal; Existing retains original creator evidence. Current mode intent/terminal/retirement tests live in `tests/conversation/approval_mode.rs`; creation receipt tests in `tests/conversation/creation_metadata.rs`. Projection owns selection/runtime replacements and their revision; no display-history or paging API is added.
 
 Named record-read owners: `conversation/application/record_read/read.rs` owns passive read orchestration and its port/types; `conversation/infrastructure/record_read/source.rs` owns tracked read lifecycle, `operation.rs` owns SDK physical execution; `product/record_read/dispatch.rs` owns routing and typed outcome presentation, with `wire.rs` the codec. Their mod.rs files contain module documentation/declarations/reexports. Infrastructure tests live under `tests/conversation/record_read/`.
-`product/change_watch/` owns live change hints on the product socket: `registration.rs` the watch identity and the one current-admission call (through `AdmitPassiveRead`), `connection.rs` a connection's two target positions and their authority tasks, `delivery.rs` the pending/in-flight notice positions the single writer in `socket.rs` takes from, and `owner.rs` the gateway-wide watch permits and first task fault. Producers are injected through `conversation/application/change_watch.rs` (`WatchRecords`, `WatchNamespaces`) with adapters in `conversation/infrastructure/change_watch.rs`; a watch never reads a head or takes a passive-read permit. The client side is `packages/nessa-client/src/presentation/change-watch-api.ts` and `protocol/change-watch-validate.ts`, through the existing dispatcher. The state and order table is in [committed change watches](design/committed-change-watches.md#298b-authorized-live-hints-over-the-product-socket); socket tests are `tests/product/socket/watches.rs`.
 `product/subscription/` owns replay-to-live view and list subscriptions on the product socket ([record subscriptions](design/record-subscriptions.md)): `connection.rs` a connection's subscriptions and their limits, `target.rs` one task per subscription — wake sources registered before each read, every batch admitted in `authorize_batch`, read through the same fold as `conversation.read` and `conversation.list`, `lagging` when a frame is not taken in time — and `delivery.rs` the frames the single writer in `socket.rs` takes, one in flight per subscription. `conversation/application/live_changes.rs` wakes a reader on live facts that are not records. The client side is `packages/nessa-client/src/presentation/subscription-api.ts` and `protocol/subscription-validate.ts`; socket tests are `tests/product/socket/subscriptions.rs`. The desktop workspace's gateway source (`src/desktop/workspace/adapters/gateway/gateway-source.ts`) follows these subscriptions and polls nothing.
 
 `product/subscription/events.rs` follows committed semantic events through the same connection and delivery owners. `conversation/application/service/event_read.rs` owns target admission, shared `EventProgress` correlation of reader outputs with their start/prior checkpoint, and the metadata-only projection from the SDK reader; it never opens an Agent. Event consumers share that continuity validator before publishing data or retaining checkpoints. Event subscriptions retain a replay cursor rather than replacing a conversation view. Their socket regressions are `tests/product/socket/subscriptions/events.rs`, with delivery deadline tests in `tests/product/subscription_event_delivery.rs`; shared continuity and projection regressions are `tests/conversation/event_read.rs`.
@@ -995,14 +994,17 @@ The same store implements `ConversationCatalogue` for owner-scoped current
 metadata reads. Its per-owner head and per-conversation creation/change revisions
 are committed with the visible write; a retained tombstone is a catalogue deletion
 marker. The finite pass order is in [conversation catalogue](design/conversation-catalogue.md).
-`application/catalogue_watch.rs` owns payloadless owner-scoped watch interest;
+`application/catalogue_watch.rs` owns payloadless owner-scoped change interest,
+which only wakes record subscriptions (`conversation.subscribe`);
 `infrastructure/catalogue_changes.rs` bounds and coalesces actual registrations.
 `LocalConversationStore` publishes after visible metadata transaction commits,
 inside the retained blocking owner. SDK `sessions/committed_changes.rs` and
 `session_storage/record_changes.rs` separately own record interest and publish
 outer save completions and reset receipts. Neither producer starts
 a read or changes receiver progress. [Committed change watches](design/committed-change-watches.md)
-owns their registration/recheck and accounting contract; wire activation remains #298.
+owns their registration/recheck and accounting contract. Their one consumer is
+the product socket's record subscriptions (`product/subscription/`), which
+register them as wake sources.
 `infrastructure/catalogue_source.rs` adapts that port to sync-engine's
 `CatalogueSource` through a bounded blocking worker bound to one authenticated
 caller and exact scope. The worker owns a Tokio runtime so metadata reads can
@@ -2185,11 +2187,11 @@ bounded private profile and opens the device's private enrollment state; its
 `device.rs` child pairs and reads the pinned enrollment status. Its `online.rs`
 child admits each run by that status, composes the protected native session's
 facades and the private cache after actual authenticated discovery; the
-existing finite drivers own work. For `watch` it also adapts that connection,
-driver and cache to the session port of `application/watch.rs`, the bounded
-loop of one record watch, whose hints the session keeps in its inbox
-(`infrastructure/gateway/session.rs`) and whose lines `entrypoint/watch.rs`
-writes.
+existing finite drivers own work. For `follow` it also adapts that connection,
+driver and cache to the session port of `application/follow.rs`, the bounded
+loop of one `conversation.subscribe`, whose views the session keeps in its
+subscription inbox (`infrastructure/gateway/session.rs`) and whose lines
+`entrypoint/follow.rs` writes.
 Paths in this module map are relative to `crates/nessa-client-core/src/` unless
 a crate is named. The `read_only_sync/entrypoint/`
 owns argument parsing and JSON output; its `online.rs` presents separate captured
@@ -2214,13 +2216,13 @@ produce real SDK Agent decisions through the gateway service and its canonical
 record/metadata stores. Its `semantic/storage.rs` child delegates the real writer
 and captures only successfully confirmed producer candidates. Public fold replay
 and checkpoint continuation compare with those independent snapshots; cached
-committed reads separately check incremental/full parity. The public core watch
-command resumes the rich prefix through actual hint passes. Independent native
+committed reads separately check incremental/full parity. The public core follow
+command resumes the rich prefix through passes woken by subscription views. Independent native
 core processes compare retained views,
 progress, live suffixes and deletion after restart. Pure parser
 and JSON presentation evidence lives under `crates/nessa-client-core/tests/read_only_sync/entrypoint/`,
-the status decision's and the watch loop's under `crates/nessa-client-core/tests/read_only_sync/application/`,
-the session's watch evidence in `crates/nessa-client-core/tests/read_only_sync/gateway/session/watch.rs`, and the
+the status decision's and the follow loop's under `crates/nessa-client-core/tests/read_only_sync/application/`,
+the session's subscription and follow-wait evidence in `crates/nessa-client-core/tests/read_only_sync/gateway/session/subscribe.rs`, and the
 code-line reader's in `crates/nessa-client-core/tests/composition/read_only_device.rs`.
 The five-mode saved-output race is in the client's
 `tests/read_only_sync/infrastructure/saved_output.rs`, beside the private cache
@@ -2249,21 +2251,23 @@ Tests mirror those owners under `nessa-sdk/tests/infrastructure/session_storage/
 [command creation](design/command-creation.md). The phone send both sides share
 is [phone send](design/phone-send-contract.md).
 
-Watch shutdown is part of normal host cleanup in `composition/root.rs`: after native
-pairing is signalled to stop, it closes
-`ProductRouteState` watch and review-notice audit admission before polling the
-reader, watch, and review-audit drains under one shared deadline. Audit deadline
+Product shutdown is part of normal host cleanup in `composition/root.rs`. After
+native pairing is signalled to stop, `cleanup_product` first calls
+`ProductRouteState::close_sockets`, so every authenticated product socket closes
+`temporary_unavailable` and its client may retry. It then closes review-notice
+audit and MCP server admission, and polls the record and catalogue reader drains
+and the review-audit drain under one shared deadline. Audit deadline
 observation records an unconfirmed result without claiming physical release;
-reader/watch drains retain their existing physical joins. Composition then
+reader drains keep their existing physical joins. Composition then
 carries their outcomes through conversation/storage, MCP and the native join
 in the same `ShutdownReport` (one `Outcome` per cleanup owner and a derived
 stage, in `core/shutdown.rs`). Interleaving tests are
-`tests/composition/watch_shutdown.rs` and `tests/composition/review_notice_shutdown.rs`,
-using the watch fixture in
-`tests/product/socket/watches.rs`; the MCP stage through the same cleanup —
-`composition/mcp_servers.rs::stop` draining stored-server changes before the
-servers stop — in `tests/composition/mcp_shutdown.rs`. The separate-process replay-to-live tests, with
-the probe client and with the example's own `watch` on two paired devices, are in
+`tests/composition/reader_shutdown.rs` and `tests/composition/review_notice_shutdown.rs`,
+using `HostProductFixture` in `tests/product/socket/host_fixture.rs`; the MCP
+stage through the same cleanup — `composition/mcp_servers.rs::stop` draining
+stored-server changes before the servers stop — in
+`tests/composition/mcp_shutdown.rs`. The separate-process replay-to-live tests,
+with the example's own `follow` on two paired devices, are in
 `tests/composition/read_only_online.rs`, with the gateway's `live` mode in its
 `fixtures/gateway.rs`.
 

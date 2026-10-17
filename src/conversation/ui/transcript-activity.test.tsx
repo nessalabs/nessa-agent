@@ -81,8 +81,11 @@ function workingConversation(id: string): Conversation {
       ],
       questions: [],
       running: true,
+      reviewsWaiting: [],
+      questionsWaiting: [],
       permissions: [
         {
+          review: "0".repeat(32),
           executionId: "run",
           permissionId: "permission",
           toolId: "two",
@@ -204,6 +207,8 @@ function terminalConversation(
       ],
       questions: [],
       running: false,
+      reviewsWaiting: [],
+      questionsWaiting: [],
       permissions: [],
       tools,
       pending: [],
@@ -252,6 +257,8 @@ function queuedConversation(): Conversation {
       ],
       questions: [],
       running: false,
+      reviewsWaiting: [],
+      questionsWaiting: [],
       permissions: [],
       tools: [],
       pending: [
@@ -803,6 +810,7 @@ it("counts a permission's deadline down by the clock composition supplies", asyn
       running: true,
       permissions: [
         {
+          review: "0".repeat(32),
           executionId: "queued-run",
           permissionId: "permission",
           toolId: "tool",

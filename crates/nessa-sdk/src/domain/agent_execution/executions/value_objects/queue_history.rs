@@ -11,6 +11,8 @@ pub enum QueueRemovalCause {
     SessionClosed,
     /// Automatic runner cleanup stopped pending work.
     RunnerStopped,
+    /// The host's own shutdown stopped pending work, which stays owed.
+    Suspended,
     /// Provider attachment failed before pending work could be dispatched.
     DispatchFailed,
 }

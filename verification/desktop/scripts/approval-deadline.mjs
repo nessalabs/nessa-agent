@@ -20,12 +20,15 @@ const meta = {
   help: `
 Usage: node verification/desktop/scripts/approval-deadline.mjs [options] [--shots <dir>]
 
-Chromium and WebKit. The deadline row says the review is denied automatically
-within N seconds, N goes down, and at expiry the card is replaced by
+Chromium and WebKit. The deadline ring shows the seconds left (in its last ten,
+"Denies in Ns") and is named "If nobody answers within N seconds, this is denied
+automatically."; N goes down, and at expiry the card is replaced by
 "Denied automatically: …".`,
 }
 
 const pending = /^If nobody answers within (\d+) seconds, this is denied automatically\.$/
+/** What the ring shows: the seconds, or in its last ten, what it will do. */
+const shown = /^(?:Denies in )?(\d+)s$/
 
 const shot = async (options, page, name, locator) => {
   if (!options.shots) return
@@ -65,9 +68,9 @@ await main(meta, async ({ options, rep, url, mode }) => {
           css.approvalDeadline,
           10_000,
         )
-        const firstText = drawn
-          ? (await page.locator(css.approvalDeadline).innerText()).trim()
-          : ""
+        const ring = page.locator(css.approvalDeadline)
+        const firstText = drawn ? ((await ring.getAttribute("aria-label")) ?? "") : ""
+        const firstShown = drawn ? (await ring.innerText()).trim() : ""
         const first = pending.exec(firstText)
         const firstSeconds = first ? Number(first[1]) : NaN
         if (drawn)
@@ -81,14 +84,14 @@ await main(meta, async ({ options, rep, url, mode }) => {
           page,
           ([sel, started]) => {
             const line = document.querySelector(sel)
-            const match = line?.textContent?.match(/within (\d+) second/)
+            const match = line?.getAttribute("aria-label")?.match(/within (\d+) second/)
             return Boolean(match && Number(match[1]) < started)
           },
           [css.approvalDeadline, firstSeconds],
           8_000,
         )
         const laterText = decreased
-          ? (await page.locator(css.approvalDeadline).innerText()).trim()
+          ? ((await ring.getAttribute("aria-label")) ?? "")
           : firstText
         const later = pending.exec(laterText)
         const notice = approvalDeadline.notice(approvalDeadline.reason)
@@ -111,7 +114,11 @@ await main(meta, async ({ options, rep, url, mode }) => {
           )
         const failures = []
         if (!drawn) failures.push("the deadline row was not drawn")
-        else if (!first) failures.push(`pending text was ${JSON.stringify(firstText)}`)
+        else if (!first) failures.push(`pending name was ${JSON.stringify(firstText)}`)
+        else if (Number(shown.exec(firstShown)?.[1]) !== firstSeconds)
+          failures.push(
+            `the ring shows ${JSON.stringify(firstShown)}, not the ${firstSeconds}s its name says`,
+          )
         else if (firstSeconds < 2)
           failures.push(
             `countdown started at ${firstSeconds}s, too late to watch it fall`,

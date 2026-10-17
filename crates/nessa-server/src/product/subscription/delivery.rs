@@ -10,9 +10,8 @@
 //! none is taken after (`a_retired_subscription_offers_nothing_more`).
 //!
 //! The subscribe reply and a terminal frame carry a deadline the writer
-//! keeps: missing it closes the socket, as a watch's reply and terminal
-//! notice do. A view frame's deadline is its subscription's to keep, by
-//! withdrawing it.
+//! keeps: missing it closes the socket. A view frame's deadline is its
+//! subscription's to keep, by withdrawing it.
 
 use super::super::event_sequence::EventSequence;
 use nessa_protocol::product::generated::{

@@ -34,7 +34,7 @@ use nessa_sdk::application::agent_execution::providers::{
     ProviderExecutionReply, ProviderIdentity, ProviderObservationFuture, ProviderOpenError,
     ProviderOpenFuture, ProviderOpenRequest, ProviderOperationCapabilities,
     ProviderOperationFailure, ProviderOperationFuture, ProviderSession, ProviderSessionBackend,
-    ProviderSessionState, SessionCloseRequest,
+    ProviderSessionState, SessionCloseRequest, SteeringOutcome,
 };
 use nessa_sdk::application::agent_execution::tools::ToolReviewInput;
 use nessa_sdk::application::dto::{ImageInputLimitsDto, ModalitiesDto, ModelMetadataDto};
@@ -45,6 +45,7 @@ use nessa_sdk::domain::agent_execution::permissions::{
     PermissionScope,
 };
 use nessa_sdk::domain::agent_execution::prompts::{ImageReference, UserMessage};
+use nessa_sdk::domain::agent_execution::questions::{AgentQuestion, QuestionId};
 use nessa_sdk::domain::agent_execution::sessions::ExecutionSessionId;
 use nessa_sdk::domain::agent_execution::tools::{ToolCallId, ToolCallUpdate};
 use nessa_sdk::domain::effective_capabilities::value_objects::{
@@ -930,6 +931,10 @@ pub(crate) struct ProviderFactory {
     pub(crate) execution_observation_failure: Mutex<Option<ObservationFailure>>,
     /// Number of independent reviews to publish before the execution gate.
     pub(crate) request_permission: AtomicUsize,
+    /// Questions to ask, as `question`, `question-1`…, before the gate.
+    pub(crate) ask_questions: Mutex<Vec<AgentQuestion>>,
+    /// Every question answer the agent was given, in order.
+    pub(crate) question_answers: Mutex<Vec<QuestionAnswer>>,
     pub(crate) permission_gate: Mutex<Option<Receiver<()>>>,
     /// Every permission answer the agent was given, in order.
     pub(crate) permission_answers: Mutex<Vec<PermissionAnswer>>,
@@ -937,6 +942,8 @@ pub(crate) struct ProviderFactory {
     pub(crate) native_hooks: AtomicBool,
     /// Offer "Reject once" beside "Allow once", so a refusal can be answered.
     pub(crate) offer_deny: AtomicBool,
+    /// The input each review carries; `{}` when unset.
+    pub(crate) review_arguments: Mutex<Option<String>>,
     /// Gate after domain consumption rather than before it.
     pub(crate) consume_before_answer_gate: AtomicBool,
     /// Return the controller's actual confirmed selection for successful corpus fixtures.
@@ -964,6 +971,9 @@ pub(crate) struct ProviderFactory {
     pub(crate) image_input: AtomicBool,
     /// Whether the attached agent can inject a steer into the active turn.
     pub(crate) native_steering: AtomicBool,
+    /// Whether a steer is taken into the running turn; otherwise steering
+    /// is refused as unsupported.
+    pub(crate) inject_steers: AtomicBool,
     /// Set while the agent's answer is not known, as during a restoration.
     pub(crate) answer_unknown: AtomicBool,
     /// Whether the selected model is offered images: it records image limits
@@ -1592,6 +1602,23 @@ impl ProviderSessionBackend for Backend {
             }
         })
     }
+    fn steer<'a>(
+        &'a self,
+        _: nessa_sdk::domain::agent_execution::executions::ExecutionId,
+        _: ExecutionRequest,
+        started: &'a (dyn Fn() + Send + Sync),
+    ) -> ProviderOperationFuture<'a, SteeringOutcome> {
+        Box::pin(async move {
+            started();
+            if self.factory.inject_steers.load(Ordering::SeqCst) {
+                return Ok(SteeringOutcome::Injected);
+            }
+            Err(ProviderOperationFailure::new(
+                AgentError::Unsupported("provider does not support steering".into()),
+                ProviderSessionState::Usable,
+            ))
+        })
+    }
     fn execute(&self, request: ExecutionRequest) -> ProviderExecutionFuture<'_> {
         Box::pin(async move {
             self.controller
@@ -1650,7 +1677,34 @@ impl ProviderSessionBackend for Backend {
                 }
                 return reply;
             }
+            let questions = std::mem::take(&mut *self.factory.ask_questions.lock().unwrap());
+            let asked = !questions.is_empty();
+            for (index, question) in questions.into_iter().enumerate() {
+                let id = if index == 0 {
+                    "question".to_owned()
+                } else {
+                    format!("question-{index}")
+                };
+                let event = self
+                    .controller
+                    .lock()
+                    .unwrap()
+                    .ask_question(
+                        &request.execution_id,
+                        QuestionId::new(id).unwrap(),
+                        question,
+                    )
+                    .unwrap()
+                    .event();
+                let _ = self.sender.lock().unwrap().as_ref().unwrap().send(event);
+            }
             let reviews = self.factory.request_permission.load(Ordering::SeqCst);
+            if asked && reviews == 0 {
+                let gate = self.factory.permission_gate.lock().unwrap().take();
+                if let Some(gate) = gate {
+                    let _ = gate.await;
+                }
+            }
             if reviews != 0 {
                 for index in 0..reviews {
                     let permission = if index == 0 {
@@ -1705,7 +1759,13 @@ impl ProviderSessionBackend for Backend {
                             ),
                             ToolReviewInput {
                                 name: "write_file".into(),
-                                arguments_json: "{}".into(),
+                                arguments_json: self
+                                    .factory
+                                    .review_arguments
+                                    .lock()
+                                    .unwrap()
+                                    .clone()
+                                    .unwrap_or_else(|| "{}".into()),
                             },
                             options,
                             None,
@@ -1753,12 +1813,31 @@ impl ProviderSessionBackend for Backend {
             ))
         })
     }
-    fn answer_question(&self, _: QuestionAnswer) -> ProviderOperationFuture<'_, ()> {
-        Box::pin(async {
-            Err(ProviderOperationFailure::new(
-                AgentError::Unsupported("this fixture asks nothing".into()),
-                ProviderSessionState::Usable,
-            ))
+    fn answer_question(&self, answer: QuestionAnswer) -> ProviderOperationFuture<'_, ()> {
+        Box::pin(async move {
+            let controller = self.controller.lock().unwrap();
+            // The owner of the question compares the key it was shown under.
+            if answer
+                .key
+                .as_deref()
+                .is_some_and(|key| controller.question_key(&answer.id).as_deref() != Some(key))
+            {
+                return Err(ProviderOperationFailure::new(
+                    AgentError::StalePermission,
+                    ProviderSessionState::Usable,
+                ));
+            }
+            controller.close_question(&answer.id);
+            let closed = ExecutionEvent::new(
+                answer.execution_id.clone(),
+                ExecutionUpdate::QuestionClosed {
+                    id: answer.id.clone(),
+                },
+            );
+            drop(controller);
+            self.factory.question_answers.lock().unwrap().push(answer);
+            let _ = self.sender.lock().unwrap().as_ref().unwrap().send(closed);
+            Ok(())
         })
     }
     fn answer_permission(

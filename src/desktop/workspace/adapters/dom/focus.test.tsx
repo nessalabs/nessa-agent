@@ -51,7 +51,7 @@ function Page() {
   const asking = useWorkspaceSelector(
     (state) =>
       Object.values(state.workspace.transcripts)
-        .filter((transcript) => transcript.approval)
+        .filter((transcript) => transcript.approvals[0])
         .map((transcript) => transcript.sessionId),
     shallowEqual,
   )
@@ -159,14 +159,18 @@ it("follows a pane taking focus even from a list, and leaves a list walked in on
 
 it("picks the caret up when what held it in the pane goes away, as an answered approval", async () => {
   const store = await page()
-  const asked = (approval: Transcript["approval"], revision: number) =>
+  const asked = (approval: Transcript["approvals"][number] | null, revision: number) =>
     act(
       async () =>
         void store.dispatch(
           workspaceActions.updateReceived({
             update: {
               kind: "transcript",
-              transcript: { ...emptyTranscript("a"), approval, revision },
+              transcript: {
+                ...emptyTranscript("a"),
+                approvals: approval ? [approval] : [],
+                revision,
+              },
             },
           }),
         ),

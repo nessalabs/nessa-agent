@@ -51,7 +51,7 @@ use tokio::sync::oneshot;
 use uuid::Uuid;
 
 /// The semantic producer, built before the gateway binds so a paired device
-/// can follow the same conversation the retained watch folds.
+/// can follow the same conversation the retained records fold.
 pub(super) struct Corpus {
     pub(super) service: Arc<ConversationService>,
     producer: Arc<RecordingStorage>,
@@ -76,11 +76,35 @@ pub(super) fn prepare(
         )));
     let (release, gate) = oneshot::channel();
     *provider.permission_gate.lock().unwrap() = Some(gate);
+    let service = service(producer.clone(), metadata, provider.clone());
+    Corpus {
+        service,
+        producer,
+        provider,
+        release,
+    }
+}
+
+/// The conversations a `follow` subscribes to in the other live modes: the
+/// same owners as the reads, with a provider that is never asked, since those
+/// modes commit through storage and open no agent.
+pub(super) fn reader(
+    storage: Arc<RecordStorage>,
+    metadata: Arc<LocalConversationStore>,
+) -> Arc<ConversationService> {
+    service(storage, metadata, Arc::new(ProviderFactory::default()))
+}
+
+fn service(
+    storage: Arc<dyn SessionStorage>,
+    metadata: Arc<LocalConversationStore>,
+    provider: Arc<ProviderFactory>,
+) -> Arc<ConversationService> {
     let service = ConversationService::new(
         ConversationDependencies {
             access_policy: crate::conversation_test_support::access_policy(),
-            agents: only(Arc::new(Provider::new(provider.clone()))),
-            storage: producer.clone(),
+            agents: only(Arc::new(Provider::new(provider))),
+            storage,
             metadata,
             mode_audit: Arc::new(AcceptingModeAudit),
             creation_audit: Arc::new(AcceptingCreationAudit),
@@ -99,25 +123,25 @@ pub(super) fn prepare(
         None,
     )
     .unwrap();
-    Corpus {
-        service: Arc::new(service),
-        producer,
-        provider,
-        release,
-    }
+    Arc::new(service)
 }
 
 /// The catalog `wire_view` resolves for this corpus: Claude, model `test`,
 /// approval `ask`, matching the provider the corpus opens.
 pub(super) fn catalog() -> AgentsListResult {
+    catalog_for("test")
+}
+
+/// As [`catalog`], with Claude's one model named `model`.
+pub(super) fn catalog_for(model: &str) -> AgentsListResult {
     serde_json::from_value(json!({
         "environments": [],
         "commandHosts": [],
         "agents": [{
             "agent": "claude",
-            "defaultModel": "test",
+            "defaultModel": model,
             "models": [{
-                "modelId": "test",
+                "modelId": model,
                 "displayName": "Test model",
                 "maxContextWindowTokens": 100000,
                 "reasoning": false,
@@ -236,12 +260,21 @@ pub(super) async fn serve(
             "hold" => heads.hold_next(),
             "release" => heads.release(),
             "settle" => {
+                // The key the one waiting review is listed under.
+                let review = service
+                    .read(id.clone(), caller("answer-key"))
+                    .await
+                    .unwrap()
+                    .permissions[0]
+                    .review
+                    .clone();
                 service
                     .answer(
                         id.clone(),
                         caller("answer-permission"),
                         "first".into(),
                         "permission".into(),
+                        review,
                         "allow".into(),
                         PermissionCaller::Owner,
                     )

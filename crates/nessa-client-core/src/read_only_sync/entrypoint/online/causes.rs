@@ -1,8 +1,9 @@
 //! Stable sanitized JSON values preserve each typed refusal owner.
+use crate::read_only_sync::application::follow::SubscriptionEnd;
 use crate::read_only_sync::application::{
     CacheError, GatewayError, HeldFileRefusal, SubscriptionRefusal,
 };
-use nessa_protocol::product_contract::generated::{ChangeWatchEndReason, ConversationErrorCode};
+use nessa_protocol::product_contract::generated::ConversationErrorCode;
 use nessa_sdk::application::agent_execution::sessions::StorageError;
 use nessa_sync::replication::{
     application::{SourceError, StoreError, SyncError},
@@ -35,7 +36,6 @@ pub(crate) fn gateway_failure(error: GatewayError) -> Value {
         GatewayError::Busy => ("busy", None),
         GatewayError::Record(reason) => ("record", Some(reason.as_str())),
         GatewayError::Catalogue(reason) => ("catalogue", Some(reason.as_str())),
-        GatewayError::Watch(reason) => ("watch", Some(reason.as_str())),
         GatewayError::HeldFile(refusal) => (
             "heldFile",
             Some(match refusal {
@@ -57,9 +57,9 @@ pub(crate) fn gateway_failure(error: GatewayError) -> Value {
     };
     json!({"code":code,"productCode":product})
 }
-/// The gateway's end of a watch, with its product reason.
-pub(crate) fn watch_ended(reason: ChangeWatchEndReason) -> Value {
-    json!({"code":"watchEnded","productCode":reason})
+/// The gateway's end of a subscription, with its product reason.
+pub(crate) fn subscription_ended(reason: SubscriptionEnd) -> Value {
+    json!({"code":"subscriptionEnded","productCode":reason.as_str()})
 }
 fn storage_failure(error: &StorageError) -> Value {
     let code = match error {

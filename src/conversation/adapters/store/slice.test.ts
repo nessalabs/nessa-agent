@@ -49,6 +49,8 @@ const view = (id: string, text = ""): ConversationView => ({
   revision: text,
   messages: [],
   pending: [],
+  reviewsWaiting: [],
+  questionsWaiting: [],
   permissions: [],
   questions: [],
   tools: [],
@@ -652,6 +654,7 @@ describe("gateway conversation projection", () => {
     expect(answer).toHaveBeenCalledWith(
       expect.objectContaining({
         conversationId: id,
+        review: "0".repeat(32),
         executionId: "execution",
         permissionId: "permission",
       }),
@@ -660,6 +663,7 @@ describe("gateway conversation projection", () => {
     expect(cancel).toHaveBeenCalledWith(
       expect.objectContaining({
         conversationId: id,
+        review: "0".repeat(32),
         executionId: "execution",
         permissionId: "permission",
       }),
@@ -746,6 +750,7 @@ function reviewTarget(conversationId: string) {
     conversationId,
     permissions: [
       {
+        review: "0".repeat(32),
         executionId: "execution",
         permissionId: "permission",
         options: [{ id: "deny" }],

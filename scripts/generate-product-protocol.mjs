@@ -272,8 +272,6 @@ const sharedOutcomes = new Set([
   "SessionCloseReason",
   "RecordReadErrorCode",
   "CatalogueReadErrorCode",
-  "ChangeWatchErrorCode",
-  "ChangeWatchEndReason",
   "ConversationErrorCode",
 ])
 // Outcome enums referenced by typed payload fields serialize through Serde.
@@ -368,49 +366,12 @@ function agreeing(name, values) {
     throw new Error(`${name} disagree: ${JSON.stringify(values)}`)
   return first
 }
-// Watch capacity is product policy. The server reads these constants and holds
-// no limit of its own; per-connection capacity is the sum of the per-kind limits.
-const watchLimits = schema["x-changeWatchLimits"]
-const watchLimitNames = [
-  "globalOwners",
-  "principalOwners",
-  "recordTargets",
-  "catalogueTargets",
-]
-for (const name of watchLimitNames) {
-  if (
-    !watchLimits ||
-    !Object.hasOwn(watchLimits, name) ||
-    !Number.isSafeInteger(watchLimits[name]) ||
-    watchLimits[name] <= 0
-  )
-    throw new Error(`Invalid change watch limit: ${name}`)
-}
-if (Object.keys(watchLimits).length !== watchLimitNames.length)
-  throw new Error("Invalid change watch limit: unknown policy key")
-if (watchLimits.principalOwners > watchLimits.globalOwners)
-  throw new Error("Invalid change watch limit: principalOwners exceeds globalOwners")
-const connectionWatches = watchLimits.recordTargets + watchLimits.catalogueTargets
-const watchId = schema.$defs.ChangeWatchId
-if (typeof watchId.pattern !== "string" || !Number.isSafeInteger(watchId.maxLength))
-  throw new Error("Invalid change watch ID publication")
-rs += `pub const MAX_CHANGE_WATCH_ID_BYTES: usize = ${watchId.maxLength};\n`
-// Published so the server can test the identities it mints against the schema.
-rs += `pub const CHANGE_WATCH_ID_PATTERN: &str = ${JSON.stringify(watchId.pattern)};\n`
-rs += `pub const MAX_GLOBAL_CHANGE_WATCHES: usize = ${watchLimits.globalOwners};\n`
-rs += `pub const MAX_PRINCIPAL_CHANGE_WATCHES: usize = ${watchLimits.principalOwners};\n`
-rs += `pub const MAX_CONNECTION_RECORD_WATCHES: usize = ${watchLimits.recordTargets};\n`
-rs += `pub const MAX_CONNECTION_CATALOGUE_WATCHES: usize = ${watchLimits.catalogueTargets};\n`
-rs += `pub const MAX_CONNECTION_CHANGE_WATCHES: usize = ${connectionWatches};\n`
 // The most peer gateways one gateway keeps: the list's bound is the store's,
 // so the server refuses one more rather than list fewer than it holds.
 const maxPeers = schema.$defs.PeerListResult.properties.items.maxItems
 if (!Number.isSafeInteger(maxPeers) || maxPeers <= 0)
   throw new Error("Invalid peer list bound")
 rs += `pub const MAX_PEERS: usize = ${maxPeers};\n`
-ts += `export const maxChangeWatchIdBytes = ${watchId.maxLength} as const\n`
-ts += `export const changeWatchIdPattern = ${JSON.stringify(watchId.pattern)} as const\n`
-ts += `export const changeWatchLimits = ${JSON.stringify(watchLimits)} as const\n`
 // Subscription capacity and delivery deadline are product policy too: the
 // server reads these constants, and the desktop keeps within the same limit.
 const subscriptionLimits = schema["x-subscriptionLimits"]
@@ -492,6 +453,67 @@ const sharePage = agreeing("conversation.shares page size", [
 ])
 if (!Number.isSafeInteger(schema.$defs.ConversationSharesResult["x-maxGrants"]))
   throw new Error("ConversationSharesResult must publish x-maxGrants")
+// What one review may hold, and how many may be open, are the SDK's: it
+// refuses a live review past them when it arrives. The schema publishes the
+// same numbers, so a view never has to leave a waiting review out.
+const reviewLimits = readFileSync(
+  resolve(
+    root,
+    "crates/nessa-sdk/src/domain/agent_execution/permissions/value_objects/review_limits.rs",
+  ),
+  "utf8",
+)
+const reviewLimit = (constant) => {
+  const owned = Number(
+    reviewLimits
+      .match(new RegExp(`pub const ${constant}: usize = ([0-9_]+);`))?.[1]
+      .replaceAll("_", ""),
+  )
+  if (!Number.isSafeInteger(owned)) throw new Error(`SDK ${constant} is not readable`)
+  return owned
+}
+const permission = schema.$defs.ConversationPermission.properties
+// A view lists every review the agent holds open and every app review beside
+// them; the gateway holds the second number and asserts the sum where it
+// lists them (`MAX_LISTED_REVIEWS`).
+if (
+  !(
+    schema.$defs.ConversationView.properties.permissions.maxItems >
+    reviewLimit("MAX_OPEN_REVIEWS")
+  )
+)
+  throw new Error("The product schema lists fewer reviews than the SDK holds open")
+// A view lists every question the agent holds open, each by a small entry
+// the projection keeps room for (`MAX_QUESTION_LIST_BYTES`).
+const questionLimits = readFileSync(
+  resolve(
+    root,
+    "crates/nessa-sdk/src/domain/agent_execution/questions/value_objects/question.rs",
+  ),
+  "utf8",
+)
+const maxOpenQuestions = Number(
+  questionLimits
+    .match(/pub const MAX_OPEN_QUESTIONS: usize = ([0-9_]+);/)?.[1]
+    .replaceAll("_", ""),
+)
+if (schema.$defs.ConversationView.properties.questions.maxItems !== maxOpenQuestions)
+  throw new Error(
+    "The product schema's question list drifted from the SDK's MAX_OPEN_QUESTIONS",
+  )
+for (const [published, constant] of [
+  [permission.options.maxItems, "MAX_REVIEW_OPTIONS"],
+  [
+    schema.$defs.ConversationPermissionOption.properties.label["x-utf8MaxBytes"],
+    "MAX_REVIEW_OPTION_LABEL_BYTES",
+  ],
+  [permission.toolName["x-utf8MaxBytes"], "MAX_REVIEW_TOOL_NAME_BYTES"],
+]) {
+  if (published !== reviewLimit(constant))
+    throw new Error(
+      `The product schema's review bound drifted from the SDK's ${constant}`,
+    )
+}
 const bounds = {
   maxOrdinaryResponseBytes,
   // The same gateway limit, read where it bites a client: the gateway takes no
@@ -616,8 +638,27 @@ const bounds = {
   // carries of a call the connection saw: one bound.
   maxMcpArgumentsBytes: agreeing("app arguments and review bytes", [
     mcpCall.argumentsJson["x-utf8MaxBytes"],
-    schema.$defs.ConversationPermission.properties.argumentsJson["x-utf8MaxBytes"],
     schema.$defs.ConversationMcpTool.properties.argumentsJson["x-utf8MaxBytes"],
+  ]),
+  maxOpenReviews: reviewLimit("MAX_OPEN_REVIEWS"),
+  maxListedReviews: schema.$defs.ConversationView.properties.permissions.maxItems,
+  maxReviewEntryToolNameBytes:
+    schema.$defs.ConversationReviewEntry.properties.toolName["x-utf8MaxBytes"],
+  maxQuestionEntryMessageBytes:
+    schema.$defs.ConversationQuestionEntry.properties.message["x-utf8MaxBytes"],
+  maxOpenQuestions: maxOpenQuestions,
+  maxReviewInputBytes: permission.argumentsJson["x-utf8MaxBytes"],
+  maxReviewOptions: permission.options.maxItems,
+  maxReviewOptionLabelBytes:
+    schema.$defs.ConversationPermissionOption.properties.label["x-utf8MaxBytes"],
+  maxReviewToolNameBytes: permission.toolName["x-utf8MaxBytes"],
+  maxReviewBytes: agreeing("review bytes", [
+    schema.$defs.ConversationPermissionReviewResult.properties.totalBytes.maximum,
+    schema.$defs.ConversationPermissionReviewParams.properties.offset.maximum + 1,
+  ]),
+  maxReviewRangeBytes: agreeing("review range bytes", [
+    schema.$defs.ConversationPermissionReviewParams.properties.maxBytes.maximum,
+    schema.$defs.ConversationQuestionReviewParams.properties.maxBytes.maximum,
   ]),
   maxMcpResultBytes:
     schema.$defs.McpCallToolResult.properties.resultJson["x-utf8MaxBytes"],
@@ -676,6 +717,14 @@ for (const name of [
   "maxRecordPagePayloadBytes",
   "maxRecordResponseBytes",
   "maxSharePage",
+  // The most of a review one conversation.permissionReview answers.
+  "maxReviewRangeBytes",
+  // The most reviews a view lists, the agent's and the apps' together.
+  "maxListedReviews",
+  // How much of a tool's name a view's review entry carries.
+  "maxReviewEntryToolNameBytes",
+  // How much of the agent's message a view's question entry carries.
+  "maxQuestionEntryMessageBytes",
   // Each part of an app's context past it is refused at the wire, before
   // anything is recorded; both together are the gateway's to bound.
   "maxMcpContextBytes",
@@ -790,7 +839,7 @@ ts += `export const ProductHandshakeMethod = ${JSON.stringify(manifest.handshake
 export const productReadyMethods = ${JSON.stringify(readyMethods)} as const
 `
 ts += `${doc(
-  "The grant each product method asks Cedar for, generated from protocol/product/manifest.json. null means another owner admits the method: the handshake, auth.session, or a watch. Writing to a conversation — an answer, an upload, an app's calls — asks for conversation.write; reading its records or catalogue asks for conversation.read; running a configured server, or enrolling a device, asks for credential.manage.",
+  "The grant each product method asks Cedar for, generated from protocol/product/manifest.json. null means another owner admits the method: the handshake or auth.session. Writing to a conversation — an answer, an upload, an app's calls — asks for conversation.write; reading its records or catalogue asks for conversation.read; running a configured server, or enrolling a device, asks for credential.manage.",
 )}export const productMethodGrants = ${JSON.stringify(methodGrants(productMethods))} as const\n`
 rs += `pub const PRODUCT_VERSION: u64 = ${manifest.version};\npub const PRODUCT_SESSION_PATH: &str = ${JSON.stringify(manifest.path)};\n`
 function wireShape(node) {
@@ -945,8 +994,7 @@ function actionForMethodRust(methods) {
 /// catalogue asks for \`conversation.read\`. Running a configured server with
 /// the gateway's authority, and enrolling a device, asks for
 /// \`credential.manage\`; Auth asks again for the exact consent. \`None\`
-/// means another owner admits the method: the handshake, \`auth.session\`, or
-/// a watch.
+/// means another owner admits the method: the handshake or \`auth.session\`.
 pub fn action_for_method(method: &str) -> Option<&'static str> {
     match method {
         ${arms.join("\n        ")}

@@ -20,6 +20,7 @@ import { transcriptFrom } from "../../adapters/gateway/gateway-views"
 import { GATEWAY_NOW_MS, view } from "../../adapters/gateway/fake-gateway"
 import { workspaceActions } from "../../adapters/store/slice"
 import { ClockProvider } from "../../../../clock"
+import { ClipboardProvider } from "../../../../conversation"
 import {
   emptyTranscript,
   type Transcript as TranscriptValue,
@@ -83,19 +84,24 @@ const conversation: TranscriptValue = {
       ],
     },
   ],
-  approval: {
-    id: "ap",
-    command: "cargo test",
-    reason: "Runs the tests.",
-    origin: { kind: "agent" },
-    options: [
-      { id: "deny", label: "Deny", choice: "deny" },
-      { id: "always", label: "Always Allow", choice: "always" },
-      { id: "once", label: "Allow Once", choice: "once" },
-    ],
-    ask: "tool",
-  },
+  approvals: [
+    {
+      id: "ap",
+      command: "cargo test",
+      reason: "Runs the tests.",
+      origin: { kind: "agent" },
+      options: [
+        { id: "deny", label: "Deny", choice: "deny" },
+        { id: "always", label: "Always Allow", choice: "always" },
+        { id: "once", label: "Allow Once", choice: "once" },
+      ],
+      ask: "tool",
+    },
+  ],
 }
+
+/** The host's clipboard, as every test's window supplies it. */
+const clipboardWrite = vi.fn((_text: string) => Promise.resolve())
 
 async function shown(
   source = fakeSource(),
@@ -112,12 +118,14 @@ async function shown(
       <StrictMode>
         <Provider store={store}>
           <ClockProvider now={() => 1000}>
-            <Transcript
-              sessionId="b"
-              scrollRef={createRef()}
-              onHeadingVisible={onHeadingVisible}
-            />
-            <WorkspaceSendFailure sessionId="b" />
+            <ClipboardProvider write={clipboardWrite}>
+              <Transcript
+                sessionId="b"
+                scrollRef={createRef()}
+                onHeadingVisible={onHeadingVisible}
+              />
+              <WorkspaceSendFailure sessionId="b" />
+            </ClipboardProvider>
           </ClockProvider>
         </Provider>
       </StrictMode>,
@@ -127,7 +135,7 @@ async function shown(
 }
 
 const buttons = () =>
-  [...host.querySelectorAll<HTMLButtonElement>(".workspace-approval button")].map(
+  [...host.querySelectorAll<HTMLButtonElement>(".workspace-approval-actions button")].map(
     (button) => [
       button.getAttribute("aria-label") ?? button.textContent,
       button.disabled,
@@ -306,7 +314,7 @@ describe("a transcript", () => {
           terminal: { status: "unresolved" },
         },
       ],
-      approval: null,
+      approvals: [],
     })
     const marks = [...host.querySelectorAll<HTMLElement>("[data-turn-terminal]")]
     expect(marks.map((mark) => mark.dataset.turnTerminal)).toEqual([
@@ -332,7 +340,7 @@ describe("a transcript", () => {
   it("shows the gateway's interaction notice in its own words", async () => {
     await shown(fakeSource(), {
       ...conversation,
-      approval: null,
+      approvals: [],
       interactionNotice: "A review was left out of this view.",
     })
     expect(host.querySelector("[data-interaction-notice]")?.textContent).toBe(
@@ -344,7 +352,7 @@ describe("a transcript", () => {
     const source = fakeSource()
     const { store } = await shown(source, {
       ...conversation,
-      approval: null,
+      approvals: [],
       questions: [
         {
           executionId: "e1",
@@ -416,7 +424,7 @@ describe("a transcript", () => {
     source.hold("answerQuestion")
     const { store } = await shown(source, {
       ...conversation,
-      approval: null,
+      approvals: [],
       questions: [
         {
           executionId: "e1",
@@ -456,7 +464,7 @@ describe("a transcript", () => {
     source.hold("answerQuestion")
     const { store } = await shown(source, {
       ...conversation,
-      approval: null,
+      approvals: [],
       questions: [
         {
           executionId: "e1",
@@ -543,7 +551,7 @@ describe("a transcript", () => {
     }
     const { store } = await shown(source, {
       ...conversation,
-      approval: null,
+      approvals: [],
       questions: [question],
     })
     await act(async () => {
@@ -612,7 +620,7 @@ describe("a transcript", () => {
     }
     const { store } = await shown(source, {
       ...conversation,
-      approval: null,
+      approvals: [],
       questions: [question],
     })
     await act(async () => {
@@ -690,7 +698,7 @@ describe("a transcript", () => {
     const open = async (source: ReturnType<typeof fakeSource>) => {
       source.transcripts.set("b", {
         ...conversation,
-        approval: null,
+        approvals: [],
         questions: [question],
       })
       const store = testStore(source)
@@ -730,7 +738,7 @@ describe("a transcript", () => {
     await store.dispatch(loadWorkspace())
     store.dispatch(
       workspaceActions.transcriptLoaded({
-        transcript: { ...conversation, approval: null, questions: [question] },
+        transcript: { ...conversation, approvals: [], questions: [question] },
       }),
     )
     await act(async () => {
@@ -757,7 +765,7 @@ describe("a transcript", () => {
     source.refuse("answerQuestion", "not-waiting")
     await shown(source, {
       ...conversation,
-      approval: null,
+      approvals: [],
       questions: [
         {
           executionId: "e1",
@@ -850,17 +858,19 @@ describe("a transcript", () => {
           app: { server: "evil\u202Egnp.exe", tool: "show" },
         },
       ],
-      approval: {
-        id: "app-ap",
-        command: `${tool} {"text":"keep \u202E this"}`,
-        reason: `An app asks to run ${tool} on evil\u202Egnp.exe`,
-        origin: { kind: "app", server: "evil\u202Egnp.exe", tool },
-        options: [
-          { id: "allow", label: "Allow", choice: "once" },
-          { id: "deny", label: "Deny", choice: "deny" },
-        ],
-        ask: "tool",
-      },
+      approvals: [
+        {
+          id: "app-ap",
+          command: `${tool} {"text":"keep \u202E this"}`,
+          reason: `An app asks to run ${tool} on evil\u202Egnp.exe`,
+          origin: { kind: "app", server: "evil\u202Egnp.exe", tool },
+          options: [
+            { id: "allow", label: "Allow", choice: "once" },
+            { id: "deny", label: "Deny", choice: "deny" },
+          ],
+          ask: "tool",
+        },
+      ],
     })
     const authors = [...host.querySelectorAll<HTMLElement>(".workspace-message-author")]
     expect(authors.map((author) => author.textContent)).toEqual([
@@ -1019,30 +1029,158 @@ describe("a transcript", () => {
   })
 
   it("shows the deadline that will answer a review nobody has answered", async () => {
-    const approval = conversation.approval
+    const approval = conversation.approvals[0]
     if (!approval) throw new Error("the sample asks for nothing")
     await shown(fakeSource(), {
       ...conversation,
-      approval: {
-        ...approval,
-        deadline: {
-          waitMs: 30_000,
-          dueAtMs: 31_000,
-          effect: "deny",
-          reason:
-            "No human answered in time. Continue without this tool or try another approach.",
-          stopsTurn: false,
+      approvals: [
+        {
+          ...approval,
+          deadline: {
+            waitMs: 30_000,
+            dueAtMs: 31_000,
+            effect: "deny",
+            reason:
+              "No human answered in time. Continue without this tool or try another approach.",
+            stopsTurn: false,
+          },
         },
-      },
+      ],
     })
     const deadline = host.querySelector<HTMLElement>("[data-deadline]")
     expect(deadline?.dataset.deadline).toBe("deny")
-    expect(deadline?.textContent).toBe(
+    // Quiet until its last seconds: the seconds left, the sentence its name.
+    expect(deadline?.textContent).toBe("30s")
+    expect(deadline?.getAttribute("aria-label")).toBe(
       "If nobody answers within 30 seconds, this is denied automatically.",
     )
     expect(host.querySelector(".workspace-approval-reason")?.textContent).toBe(
       "Runs the tests.",
     )
+  })
+
+  it("names what an agent's command reaches and runs, above the command itself", async () => {
+    const approval = conversation.approvals[0]
+    if (!approval) throw new Error("the sample asks for nothing")
+    const script =
+      'curl -s "https://tad2026.eventive.org/api" | head -c 1000; curl -I https://tad2026.eventive.org/'
+    await shown(fakeSource(), {
+      ...conversation,
+      approvals: [
+        {
+          ...approval,
+          command: `mcp__nessa__shell ${JSON.stringify({ command: script })}`,
+          reason: "mcp__nessa__shell",
+          deadline: {
+            waitMs: 30_000,
+            dueAtMs: 7_000,
+            effect: "deny",
+            reason: "No human answered in time.",
+            stopsTurn: false,
+          },
+        },
+      ],
+    })
+    const card = host.querySelector<HTMLElement>(".workspace-approval")
+    // A title that only names the tool is not repeated as a reason.
+    expect(card?.querySelector(".workspace-approval-reason")).toBeNull()
+    expect(card?.querySelector('[aria-label="Sites named"]')?.textContent).toBe(
+      "tad2026.eventive.org",
+    )
+    expect(card?.querySelector('[aria-label="Programs named"]')?.textContent).toBe(
+      "curl×2head",
+    )
+    // The last seconds say what will happen.
+    const deadline = card?.querySelector<HTMLElement>("[data-deadline]")
+    expect(deadline?.textContent).toBe("Denies in 6s")
+    expect(deadline?.hasAttribute("data-ending")).toBe(true)
+    // The command is always shown, a step per line, with the tool it calls.
+    expect(card?.querySelector(".workspace-approval-command")?.textContent).toBe(
+      '$ curl -s "https://tad2026.eventive.org/api" |\n  head -c 1000;\ncurl -I https://tad2026.eventive.org/',
+    )
+    expect(card?.querySelector(".workspace-approval-meta dd")?.textContent).toBe(
+      "mcp__nessa__shell",
+    )
+    // Short enough to show whole: nothing to unfold.
+    expect(card?.querySelector(".workspace-approval-disclose")).toBeNull()
+  })
+
+  it("shows a script it cannot follow exactly as sent", async () => {
+    const approval = conversation.approvals[0]
+    if (!approval) throw new Error("the sample asks for nothing")
+    await shown(fakeSource(), {
+      ...conversation,
+      approvals: [{ ...approval, command: 'echo "$(echo "a; b")"' }],
+    })
+    expect(host.querySelector(".workspace-approval-command")?.textContent).toBe(
+      '$ echo "$(echo "a; b")"',
+    )
+  })
+
+  it("folds a long script to its first lines, and says how many there are", async () => {
+    const approval = conversation.approvals[0]
+    if (!approval) throw new Error("the sample asks for nothing")
+    const steps = Array.from({ length: 8 }, (_, step) => `echo ${step}`)
+    await shown(fakeSource(), {
+      ...conversation,
+      approvals: [{ ...approval, command: steps.join("; ") }],
+    })
+    const command = () => host.querySelector(".workspace-approval-command")?.textContent
+    const unfold = host.querySelector<HTMLButtonElement>(".workspace-approval-disclose")
+    expect(unfold?.textContent).toBe("Show All 8 Lines")
+    expect(unfold?.getAttribute("aria-expanded")).toBe("false")
+    expect(command()).toBe("$ echo 0;\necho 1;\necho 2;\necho 3;")
+    // It unfolds the block it names.
+    const block = document.getElementById(unfold?.getAttribute("aria-controls") ?? "")
+    expect(block?.contains(host.querySelector(".workspace-approval-command"))).toBe(true)
+    // Folded or not, Copy Command copies the command as the agent sent it,
+    // through the host's clipboard.
+    clipboardWrite.mockClear()
+    await act(async () =>
+      host.querySelector<HTMLButtonElement>(".workspace-approval-copy")?.click(),
+    )
+    expect(clipboardWrite).toHaveBeenCalledWith(steps.join("; "))
+    await act(async () => unfold?.click())
+    expect(unfold?.getAttribute("aria-expanded")).toBe("true")
+    expect(command()).toBe(`$ ${steps.join(";\n")}`)
+  })
+
+  it("folds a script it cannot follow by its own lines, as sent", async () => {
+    const approval = conversation.approvals[0]
+    if (!approval) throw new Error("the sample asks for nothing")
+    const lines = Array.from({ length: 6 }, (_, line) => `echo $(date) ${line}`)
+    await shown(fakeSource(), {
+      ...conversation,
+      approvals: [{ ...approval, command: `${lines.join("\n")}\n` }],
+    })
+    // Six lines and the newline that ends them: short enough to show whole.
+    expect(host.querySelector(".workspace-approval-disclose")).toBeNull()
+    expect(host.querySelector(".workspace-approval-command")?.textContent).toBe(
+      `$ ${lines.join("\n")}\n`,
+    )
+    // Its words are not read as programs.
+    expect(host.querySelector('[aria-label="Programs named"]')).toBeNull()
+  })
+
+  it("starts the next approval folded, whatever the last one showed", async () => {
+    const approval = conversation.approvals[0]
+    if (!approval) throw new Error("the sample asks for nothing")
+    const long = Array.from({ length: 8 }, (_, step) => `echo ${step}`).join("; ")
+    const source = fakeSource()
+    await shown(source, {
+      ...conversation,
+      approvals: [{ ...approval, command: long }],
+    })
+    await act(async () =>
+      host.querySelector<HTMLButtonElement>(".workspace-approval-disclose")?.click(),
+    )
+    await shown(source, {
+      ...conversation,
+      approvals: [{ ...approval, id: `${approval.id}-next`, command: `${long}; echo 8` }],
+    })
+    expect(
+      host.querySelector(".workspace-approval-disclose")?.getAttribute("aria-expanded"),
+    ).toBe("false")
   })
 
   it("answers an approval once, resting its buttons while the answer is on its way", async () => {
@@ -1065,19 +1203,97 @@ describe("a transcript", () => {
     ])
   })
 
-  it("answers the clicked option when two allow the same way", async () => {
+  it("offers no answer on an approval whose review is still being read, and offers reading it again when it could not be", async () => {
     const source = fakeSource()
-    const approval = conversation.approval
+    const approval = conversation.approvals[0]
     if (!approval) throw new Error("the sample asks for nothing")
     await shown(source, {
       ...conversation,
-      approval: {
-        ...approval,
-        options: [
-          { id: "ship", label: "Ship it", choice: "once" },
-          { id: "run", label: "Run it", choice: "once" },
-        ],
-      },
+      approvals: [{ ...approval, loading: "reading" }],
+    })
+    expect(host.querySelector(".workspace-approval-loading")?.textContent).toBe(
+      "Loading this review before you can answer…",
+    )
+    // Its command is only the tool's name until it is read: not shown as the command.
+    expect(host.querySelector(".workspace-approval-command")).toBeNull()
+    expect(buttons().every(([, disabled]) => disabled)).toBe(true)
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>(".workspace-approval [data-primary]")?.click()
+    })
+    expect(source.calls.filter((call) => call[0] === "approve")).toEqual([])
+    await shown(source, {
+      ...conversation,
+      approvals: [{ ...approval, loading: "failed" }],
+    })
+    expect(host.querySelector(".workspace-approval-loading")?.textContent).toContain(
+      "This review could not be loaded.",
+    )
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>(".workspace-approval-retry")?.click()
+    })
+    expect(source.calls.filter((call) => call[0] === "retryReview")).toEqual([
+      ["retryReview", conversation.sessionId, approval.id],
+    ])
+  })
+
+  it("shows a card for every review, in order, each loading and answered on its own", async () => {
+    const source = fakeSource()
+    source.hold("approve")
+    const approval = conversation.approvals[0]
+    if (!approval) throw new Error("the sample asks for nothing")
+    // Three reviews at once: the first could not be loaded, and holds back
+    // neither of the others.
+    await shown(source, {
+      ...conversation,
+      approvals: [
+        { ...approval, id: "first", loading: "failed" },
+        { ...approval, id: "second", command: "cargo build" },
+        { ...approval, id: "third", command: "cargo clippy" },
+      ],
+    })
+    const cards = () => [...host.querySelectorAll<HTMLElement>(".workspace-approval")]
+    expect(cards()).toHaveLength(3)
+    expect(
+      cards()[0].querySelector(".workspace-approval-loading")?.textContent,
+    ).toContain("This review could not be loaded.")
+    const allow = (card: HTMLElement) =>
+      card.querySelector<HTMLButtonElement>("[data-primary]")
+    expect(allow(cards()[0])?.disabled).toBe(true)
+    await act(async () => allow(cards()[1])?.click())
+    // The second's answer on its way rests only its own card.
+    expect(allow(cards()[1])?.disabled).toBe(true)
+    expect(allow(cards()[2])?.disabled).toBe(false)
+    await act(async () => allow(cards()[2])?.click())
+    await act(async () =>
+      cards()[0].querySelector<HTMLButtonElement>(".workspace-approval-retry")?.click(),
+    )
+    expect(
+      source.calls
+        .filter((call) => call[0] === "approve" || call[0] === "retryReview")
+        .map((call) => [call[0], call[2]]),
+    ).toEqual([
+      ["approve", "second"],
+      ["approve", "third"],
+      ["retryReview", "first"],
+    ])
+    await act(async () => source.release("approve"))
+  })
+
+  it("answers the clicked option when two allow the same way", async () => {
+    const source = fakeSource()
+    const approval = conversation.approvals[0]
+    if (!approval) throw new Error("the sample asks for nothing")
+    await shown(source, {
+      ...conversation,
+      approvals: [
+        {
+          ...approval,
+          options: [
+            { id: "ship", label: "Ship it", choice: "once" },
+            { id: "run", label: "Run it", choice: "once" },
+          ],
+        },
+      ],
     })
     const run = [...host.querySelectorAll("button")].find(
       (button) => button.textContent === "Run it",
@@ -1100,17 +1316,19 @@ describe("a transcript", () => {
     await act(async () => root.render(<></>))
     await shown(fakeSource(), {
       ...conversation,
-      approval: {
-        id: "app-ap",
-        command: "app_delete_row {}",
-        reason: "An app asks to run app_delete_row on mcptest",
-        origin: { kind: "app", server: "mcptest", tool: "app_delete_row" },
-        options: [
-          { id: "allow", label: "Allow", choice: "once" },
-          { id: "deny", label: "Deny", choice: "deny" },
-        ],
-        ask: "tool",
-      },
+      approvals: [
+        {
+          id: "app-ap",
+          command: "app_delete_row {}",
+          reason: "An app asks to run app_delete_row on mcptest",
+          origin: { kind: "app", server: "mcptest", tool: "app_delete_row" },
+          options: [
+            { id: "allow", label: "Allow", choice: "once" },
+            { id: "deny", label: "Deny", choice: "deny" },
+          ],
+          ask: "tool",
+        },
+      ],
     })
     expect(head()).toBe("The mcptest app wants to run app_delete_row")
     expect(head()).not.toContain(agent)
@@ -1127,17 +1345,19 @@ describe("a transcript", () => {
     const source = fakeSource()
     await shown(source, {
       ...conversation,
-      approval: {
-        id: "app-ap",
-        command: "app_delete_row {}",
-        reason: "An app asks to run app_delete_row on mcptest",
-        origin: { kind: "app", server: "mcptest", tool: "app_delete_row" },
-        options: [
-          { id: "allow", label: "Allow", choice: "once" },
-          { id: "deny", label: "Deny", choice: "deny" },
-        ],
-        ask: "tool",
-      },
+      approvals: [
+        {
+          id: "app-ap",
+          command: "app_delete_row {}",
+          reason: "An app asks to run app_delete_row on mcptest",
+          origin: { kind: "app", server: "mcptest", tool: "app_delete_row" },
+          options: [
+            { id: "allow", label: "Allow", choice: "once" },
+            { id: "deny", label: "Deny", choice: "deny" },
+          ],
+          ask: "tool",
+        },
+      ],
     })
     // Deny stays at the left; the review's allow is the primary button, in the review's words.
     expect(buttons()).toEqual([
@@ -1168,17 +1388,19 @@ describe("a transcript", () => {
     ).toBe("Claude wants to run a command")
     await shown(fakeSource(), {
       ...conversation,
-      approval: {
-        id: "app-message",
-        command: 'show_rows {"text":"Plot May next to April"}',
-        reason: "The show_rows app on mcptest asks to send a message as you",
-        origin: app,
-        options: [
-          { id: "allow", label: "Allow", choice: "once" },
-          { id: "deny", label: "Deny", choice: "deny" },
-        ],
-        ask: "message",
-      },
+      approvals: [
+        {
+          id: "app-message",
+          command: 'show_rows {"text":"Plot May next to April"}',
+          reason: "The show_rows app on mcptest asks to send a message as you",
+          origin: app,
+          options: [
+            { id: "allow", label: "Allow", choice: "once" },
+            { id: "deny", label: "Deny", choice: "deny" },
+          ],
+          ask: "message",
+        },
+      ],
     })
     const card = host.querySelector<HTMLElement>(".workspace-approval")
     expect(card?.querySelector(".workspace-approval-head")?.textContent).toBe(
@@ -1200,7 +1422,7 @@ describe("a transcript", () => {
     source.refuse("deny", "not-waiting")
     await shown(source)
     await act(async () => {
-      host.querySelector<HTMLButtonElement>(".workspace-approval button")?.click()
+      host.querySelector<HTMLButtonElement>(".workspace-approval-actions button")?.click()
     })
     await act(async () => settle())
     expect(host.querySelector(".workspace-approval-failure")?.textContent).toBe(

@@ -78,6 +78,7 @@ async fn provider_reply_updates_control_admission_before_stalled_save_finishes()
                     .await
                     .unwrap();
                 let control = bounded(agent.answer_question(QuestionAnswer {
+                    key: None,
                     actor: actor(),
                     execution_id,
                     id: QuestionId::new("ask").unwrap(),

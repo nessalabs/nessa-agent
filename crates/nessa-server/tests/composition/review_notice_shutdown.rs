@@ -7,7 +7,7 @@ use crate::conversation::application::{
 use crate::conversation::infrastructure::{DurableReviewNoticeAudit, MonotonicReviewNoticeClock};
 use crate::conversation_test_support::RecordingReviewNoticeAudit;
 use crate::core::{Outcome, ShutdownStage};
-use crate::product::HostWatchFixture;
+use crate::product::HostProductFixture;
 use nessa_auth::application::{
     ports::{Clock, CredentialEvidence},
     session::AuthenticateSession,
@@ -18,8 +18,7 @@ use tokio::sync::{Notify, Semaphore};
 
 #[tokio::test]
 async fn review_audit_admission_is_fenced_and_pending_metadata_prevents_confirmation() {
-    let mut fixture = HostWatchFixture::held_authority(false).await;
-    fixture.release();
+    let fixture = HostProductFixture::new().await;
     let auditor = Arc::new(ReviewNoticeAuditor::new(
         Arc::new(RecordingReviewNoticeAudit::default()),
         Arc::new(MonotonicReviewNoticeClock::new()),
@@ -70,7 +69,6 @@ async fn review_audit_ready_completion_wins_expired_deadline() {
     let mut cleanup = Box::pin(passive_cleanup(
         &slot,
         Some(&auditor),
-        async { Ok(()) },
         async {
             released.await.unwrap();
             drop(admitted);
@@ -155,8 +153,7 @@ async fn review_audit_host_shutdown_joins_physical_write_and_queued_selection() 
         sink.clone(),
         Arc::new(MonotonicReviewNoticeClock::new()),
     ));
-    let mut fixture = HostWatchFixture::held_authority(false).await;
-    fixture.release();
+    let fixture = HostProductFixture::new().await;
     let state = fixture.state().with_review_notice_auditor(auditor);
     let session = AuthenticateSession {
         verifier: state.verifier.as_ref(),
@@ -223,7 +220,7 @@ async fn review_audit_host_shutdown_joins_physical_write_and_queued_selection() 
                 .lock()
                 .unwrap()
                 .as_ref()
-                .is_some_and(|r| r.watches().outcome().is_known() && r.readers().complete())
+                .is_some_and(|r| r.readers().complete())
             {
                 break;
             }
@@ -277,7 +274,6 @@ async fn review_audit_cancelled_cleanup_retains_unknown_outcome() {
         Some(&auditor),
         async { Ok(()) },
         async { Ok(()) },
-        async { Ok(()) },
         None::<Ready<Result<(), ConversationError>>>,
         async { Ok(()) },
         async { Ok(()) },
@@ -289,7 +285,6 @@ async fn review_audit_cancelled_cleanup_retains_unknown_outcome() {
     assert_eq!(auditor.drain().await, Ok(()));
     assert!(read_report(&slot, |r| r.stage() == ShutdownStage::Drains
         && r.review_audit() == &Outcome::Unknown
-        && r.watches().confirmed()
         && r.readers().confirmed()));
     assert!(shutdown_result(&slot).is_err());
 }
@@ -305,7 +300,6 @@ async fn review_audit_ready_at_zero_deadline_confirms() {
     passive_cleanup(
         &slot,
         Some(&auditor),
-        async { Ok(()) },
         async { Ok(()) },
         async { Ok(()) },
         None::<Ready<Result<(), ConversationError>>>,
@@ -329,8 +323,7 @@ impl ReviewNoticeAudit for RejectAudit {
 
 #[tokio::test]
 async fn review_audit_host_deadline_preserves_first_delivery_failure() {
-    let mut fixture = HostWatchFixture::held_authority(false).await;
-    fixture.release();
+    let fixture = HostProductFixture::new().await;
     let auditor = Arc::new(ReviewNoticeAuditor::new(
         Arc::new(RejectAudit),
         Arc::new(MonotonicReviewNoticeClock::new()),

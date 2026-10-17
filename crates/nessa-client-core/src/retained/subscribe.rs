@@ -102,7 +102,7 @@ impl ConversationFeed {
     /// subscribe; [`SubscribeError::asks_status`] is set only for this
     /// credential's authority. `CursorAhead` when `after` is past the
     /// gateway head: follow again with no cursor, and do not ask status.
-    /// `SubscriptionCapacity` when the gateway's watch capacity is full:
+    /// `SubscriptionCapacity` when the gateway's record watch capacity is full:
     /// follow again, and do not ask status.
     /// `Protocol` when a frame is outside the session, including a `next`
     /// after the feed has ended or been closed.

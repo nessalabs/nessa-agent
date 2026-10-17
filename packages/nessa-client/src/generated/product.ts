@@ -562,8 +562,10 @@ export interface ConversationPermissionDeadline {
   /** True when the only refusal this agent offered stops the turn; never true for an allow. The pending line and the notice say that, rather than that the turn continues without the tool. */
   stopsTurn: boolean
 }
-/** A pending review with its complete offered choices. */
+/** A pending review with all it shows, as conversation.permissionReview reads it for one entry of a view. */
 export interface ConversationPermission {
+  /** The key the view lists it under. An answer names it, so a review whose identities are reused is never answered by mistake. */
+  review: string
   /** Stable invocation identifier retained for retries of one logical message, at most 256 UTF-8 bytes. */
   executionId: string
   /** Permission identity within the execution. */
@@ -580,10 +582,26 @@ export interface ConversationPermission {
   origin: ConversationPermissionOrigin
   /** What the review asks the person to allow. */
   ask: ConversationPermissionAsk
-  /** Exact original JSON input reviewed by the user; never truncated. */
+  /** The reviewed input, exactly as the agent or the app gave it. */
   argumentsJson: string
   /** Present when the review answers itself if nobody does. Absent for a review that waits for a person, including an app review. */
   deadline?: ConversationPermissionDeadline
+}
+/** One review waiting on a person, as a view lists it: its key, who asked, and the start of the tool's name. A view never leaves one out for its size. Read what it shows with conversation.permissionReview, and offer no answer until that has loaded. */
+export interface ConversationReviewEntry {
+  /** The review's own key: new for every review opened, so a review whose identities are reused is a new entry. */
+  review: string
+  /** Who asked: the agent, or an MCP App. */
+  origin: "harness" | "app"
+  /** The start of the reviewed tool's name, to say what the review is while the rest is read. */
+  toolName: string
+}
+/** One question waiting on a person, as a view lists it: its key and the start of the agent's message. A view never leaves one out for its size. Read all it asks with conversation.questionReview, and offer no answer until that has loaded. */
+export interface ConversationQuestionEntry {
+  /** The question's own key: new for every question asked, so a question whose identities are reused is a new entry. */
+  question: string
+  /** The start of the agent's message, to say what the question is while the rest is read. */
+  message: string
 }
 /** Bounded presentation of an observed tool call. */
 export interface ConversationTool {
@@ -642,8 +660,8 @@ export interface ConversationView {
   messages: ConversationMessage[]
   /** Current removable queue entries. */
   pending: ConversationPending[]
-  /** Actionable permission reviews. */
-  permissions: ConversationPermission[]
+  /** Every review waiting on a person now, oldest first: the agent's (the SDK holds at most MAX_OPEN_REVIEWS open) and then the MCP Apps'. Each entry is small and of fixed size, and a bounded view gives up everything else before any of them, so none is ever left out. */
+  permissions: ConversationReviewEntry[]
   /** Recent tool states. */
   tools: ConversationTool[]
   /** Agent operation support. */
@@ -673,8 +691,8 @@ export interface ConversationView {
   unreadableTruncated: boolean
   /** Name the gateway derived from the conversation's first message, the same one conversation.list shows; null before anything was said. */
   title: string | null
-  /** Questions the agent is waiting on, oldest first. */
-  questions: ConversationQuestion[]
+  /** Every question the agent is waiting on now, oldest first (the SDK holds at most MAX_OPEN_QUESTIONS open). Each entry is small and of fixed size, and a bounded view gives up everything else before any of them, so none is ever left out. */
+  questions: ConversationQuestionEntry[]
   /** Last durably committed preset. */
   approvalMode: ApprovalMode
   /** Presets supported by this model. */
@@ -913,10 +931,52 @@ export interface ConversationAnswerParams {
   requestId: string
   /** Stable invocation identifier retained for retries of one logical message, at most 256 UTF-8 bytes. */
   executionId: string
+  /** The review's key, as the view lists it. Refused with stale_permission when the review waiting under these identities has another. */
+  review: string
   /** Pending permission identity. */
   permissionId: string
   /** Exact provider-offered option identity. */
   optionId: string
+}
+/** Read one range of what a waiting review shows: the UTF-8 JSON of its ConversationPermission, from the live owner of the review. A surface reads from 0 until totalBytes, checks the whole is that long, and offers no answer until it has. Refused with stale_permission once the view no longer lists the review. */
+export interface ConversationPermissionReviewParams {
+  /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
+  conversationId: string
+  /** The review's key, as the view lists it. */
+  review: string
+  /** First byte of the range: 0, or less than the review's length. */
+  offset: number
+  /** Most bytes to answer with. The answer carries fewer only at the end of the review. */
+  maxBytes: number
+}
+/** Read one range of all a waiting question asks: the UTF-8 JSON of its ConversationQuestion, from the agent's live invocation. A surface reads from 0 until totalBytes, checks the whole is that long, and offers no answer until it has. Refused with stale_permission once the view no longer lists the question. */
+export interface ConversationQuestionReviewParams {
+  /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
+  conversationId: string
+  /** The question's key, as the view lists it. */
+  question: string
+  /** First byte of the range: 0, or less than the question's length. */
+  offset: number
+  /** Most bytes to answer with. The answer carries fewer only at the end of the question. */
+  maxBytes: number
+}
+/** One range of what a waiting review shows. Assemble the ranges, check the whole is totalBytes long, is UTF-8 and is the ConversationPermission of the review asked for, then show it. */
+export interface ConversationPermissionReviewResult {
+  /** First byte of this range, as asked. */
+  offset: number
+  /** Length of the whole review, in UTF-8 bytes. */
+  totalBytes: number
+  /** The range's bytes, standard base64 with padding: at most maxBytes, and fewer only when the review ends first. */
+  data: string
+}
+/** One range of all a waiting question asks. Assemble the ranges, check the whole is totalBytes long, is UTF-8 and is the ConversationQuestion of the question asked for, then show it. */
+export interface ConversationQuestionReviewResult {
+  /** First byte of this range, as asked. */
+  offset: number
+  /** Length of the whole question, in UTF-8 bytes. */
+  totalBytes: number
+  /** The range's bytes, standard base64 with padding: at most maxBytes, and fewer only when the question ends first. */
+  data: string
 }
 /** Cancel one permission review with a caller reason. */
 export interface ConversationCancelParams {
@@ -926,6 +986,8 @@ export interface ConversationCancelParams {
   requestId: string
   /** Stable invocation identifier retained for retries of one logical message, at most 256 UTF-8 bytes. */
   executionId: string
+  /** The review's key, as the view lists it. Refused with stale_permission when the review waiting under these identities has another. */
+  review: string
   /** Pending permission identity. */
   permissionId: string
   /** Reason recorded with authenticated caller attribution. */
@@ -952,7 +1014,7 @@ export interface ConversationDeleteParams {
   /** Stable action identifier retained for retries of one logical command. */
   requestId: string
 }
-/** One capability a conversation grant may include. read: list, read and watch the conversation's records. comment: leave notes with conversation.message and ask where its own note stands with conversation.messageStatus. drive: start, steer and stop turns, answer or cancel their permission requests, answer their questions and look up those commands' receipts (conversation.send, steer, stop, answer, answerQuestion, cancel, receipt), with text only and under the grant's constraints. The only sets are read; read and comment; and read, comment and drive. Comment and drive are refused for a gateway principal. No capability deletes, archives, exports, re-shares or changes the model: those stay the owner's. */
+/** One capability a conversation grant may include. read: list, read and follow the conversation's records. comment: leave notes with conversation.message and ask where its own note stands with conversation.messageStatus. drive: start, steer and stop turns, answer or cancel their permission requests, answer their questions and look up those commands' receipts (conversation.send, steer, stop, answer, answerQuestion, cancel, receipt), with text only and under the grant's constraints. The only sets are read; read and comment; and read, comment and drive. Comment and drive are refused for a gateway principal. No capability deletes, archives, exports, re-shares or changes the model: those stay the owner's. */
 export const ConversationCapability = {
   Read: "read",
   Comment: "comment",
@@ -980,7 +1042,7 @@ export interface ConversationToolPolicy {
   /** The hosts the holder's turns may run commands on with run, by the name environments_list gives them: an SSH destination or a paired environment's peer: name, never here, each named once and at most 253 bytes, the longest destination config.json accepts. Beside either preset or allow and deny, and not counted against the patterns: a policy may name 16 hosts however full its allow and deny lists are. A host is used only where the gateway also grants commands on it. Absent or empty, the holder's turns run commands nowhere: a drive grant never inherits the owner's hosts. A host that is no such name, one named twice, one longer than 253 bytes, or more than 16 is refused invalid_request. Listed only when it names a host. */
   commandHosts?: string[]
 }
-/** Grant (conversation.share) one paired device or peer gateway a capability set on one of the caller's conversations, or change the capabilities and constraints it already holds there. Nothing is granted by default or by list: a paired party sees only the conversations granted to it, one grant per conversation, and an ungranted one is not listed, not readable and not watchable. The only sets are read; read and comment; and read, comment and drive. drive needs a policy and the others take none, and either mistake is refused invalid_request. Comment and drive are written only when Cedar permits grant.comment and grant.drive for the target principal. A denial writes nothing and is refused capabilities_refused; details.policies are the Cedar policy ids, empty when no permit matched. The share does not decide by the principal's kind. A grant is refused share_target_not_paired unless the credential is an active paired device or peer gateway of the conversation's owner that holds conversation.read (an environment's credential never does), and conversation_deleted on a deleted conversation. The result names the grant's policyRevision, the grant epoch, once the share is made; applied is false when nothing changed: granting the capabilities and constraints already held, whose epoch is kept. With expectedPolicyRevision, a grant that is no longer at that epoch (changed or revoked since) is refused share_grant_changed, and nothing is changed. A conversation holds at most 64 grants, and at most 8 drive grants; one more is refused invalid_request. A retried requestId answers what it answered the first time, its policyRevision included, before expectedPolicyRevision is compared, so a share retried after a later unshare grants nothing; the same requestId naming another device, another capability set or policy, or the other change is refused invalid_request. A retried share is checked like a new one first, so once the conversation is deleted or the device unpaired it is refused conversation_deleted or share_target_not_paired and changes nothing. */
+/** Grant (conversation.share) one paired device or peer gateway a capability set on one of the caller's conversations, or change the capabilities and constraints it already holds there. Nothing is granted by default or by list: a paired party sees only the conversations granted to it, one grant per conversation, and an ungranted one is not listed, not readable and cannot be followed. The only sets are read; read and comment; and read, comment and drive. drive needs a policy and the others take none, and either mistake is refused invalid_request. Comment and drive are written only when Cedar permits grant.comment and grant.drive for the target principal. A denial writes nothing and is refused capabilities_refused; details.policies are the Cedar policy ids, empty when no permit matched. The share does not decide by the principal's kind. A grant is refused share_target_not_paired unless the credential is an active paired device or peer gateway of the conversation's owner that holds conversation.read (an environment's credential never does), and conversation_deleted on a deleted conversation. The result names the grant's policyRevision, the grant epoch, once the share is made; applied is false when nothing changed: granting the capabilities and constraints already held, whose epoch is kept. With expectedPolicyRevision, a grant that is no longer at that epoch (changed or revoked since) is refused share_grant_changed, and nothing is changed. A conversation holds at most 64 grants, and at most 8 drive grants; one more is refused invalid_request. A retried requestId answers what it answered the first time, its policyRevision included, before expectedPolicyRevision is compared, so a share retried after a later unshare grants nothing; the same requestId naming another device, another capability set or policy, or the other change is refused invalid_request. A retried share is checked like a new one first, so once the conversation is deleted or the device unpaired it is refused conversation_deleted or share_target_not_paired and changes nothing. */
 export interface ConversationShareParams {
   /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
   conversationId: string
@@ -1687,8 +1749,10 @@ export interface ConversationAsked {
   /** What may be chosen, in the order the agent offered it. */
   options: ConversationAnswerOption[]
 }
-/** A question the agent is waiting on an answer to. Nothing is authorised by answering; the agent simply cannot continue that path until it hears back. */
+/** A question the agent is waiting on an answer to, with all it asks, as conversation.questionReview reads it for one entry of a view. Nothing is authorised by answering; the agent simply cannot continue that path until it hears back. */
 export interface ConversationQuestion {
+  /** The key the view lists it under. An answer names it, so a question whose identities are reused is never answered by mistake. */
+  question: string
   /** Stable invocation identifier retained for retries of one logical message, at most 256 UTF-8 bytes. */
   executionId: string
   /** Identity the answer names. */
@@ -1715,6 +1779,8 @@ export interface ConversationAnswerQuestionParams {
   requestId: string
   /** Stable invocation identifier retained for retries of one logical message, at most 256 UTF-8 bytes. */
   executionId: string
+  /** The question's key, as the view lists it. Refused with stale_permission when the question waiting under these identities has another. */
+  question: string
   /** The ask being answered. */
   questionId: string
   /** What was chosen. Null declines the question, which is an answer the agent is told. */
@@ -2374,75 +2440,6 @@ export const PeerErrorCode = {
   PeerAuditUnavailable: "peer_audit_unavailable",
 } as const
 export type PeerErrorCode = (typeof PeerErrorCode)[keyof typeof PeerErrorCode]
-/** Opaque current-connection watch identity. It grants no permission, is not a source position, and must be discarded on connection replacement. */
-export type ChangeWatchId = string
-/** Register catalogue interest before the final authorized head recheck. Acknowledgement precedes notices; no head or source read is performed. */
-export interface ConversationWatchCatalogueParams {
-  /** Server-bound receiver identity requesting this owner catalogue. */
-  receiverId: string
-  /** Positive current numeric receiver binding epoch. */
-  accessEpoch: string
-}
-/** Register stable conversation interest before final head recheck. Reset notices do not carry a source incarnation. */
-export interface ConversationWatchRecordsParams {
-  /** Conversation selected under authenticated ownership. */
-  conversationId: string
-  /** Trusted receiver binding selector; the actual physical scope is returned by the authenticated head read. */
-  receiverId: string
-  /** Positive current numeric receiver binding epoch. */
-  accessEpoch: string
-}
-/** A physically delivered acknowledgement activates this connection-local registration. */
-export interface ConversationWatchResult {
-  /** Opaque identity minted for this physical connection after producer installation; retain it only for this connection. */
-  watchId: ChangeWatchId
-}
-/** Remove only this connection’s watch interest. Repeating an allocated identity is idempotent. */
-export interface ConversationUnwatchParams {
-  /** Exact identity minted on this connection whose source interest is to be removed. */
-  watchId: ChangeWatchId
-}
-/** Removal acknowledgement. An already-started frame may finish before this response; no subsequent hint is admitted. */
-export interface ConversationUnwatchResult {
-  /** Original connection identity echoed after interest removal; previously admitted authority or physical frame work may remain. */
-  watchId: ChangeWatchId
-}
-/** Advisory payloadless dirty notice. Reauthorize and recheck heads; never advance progress from this event. */
-export interface ConversationChanged {
-  /** Opaque connection identity of the advisory hint; this field carries no source progress or authority. */
-  watchId: ChangeWatchId
-}
-/** Terminal advisory producer state. Neither outcome proves current source freshness or lost permission. */
-export const ChangeWatchEndReason = {
-  Closed: "closed",
-  NotificationFailed: "notification_failed",
-} as const
-export type ChangeWatchEndReason =
-  (typeof ChangeWatchEndReason)[keyof typeof ChangeWatchEndReason]
-/** Terminal producer notice under the same bounded delivery owner as changed notices. Recover with explicit reads/fallback. */
-export interface ConversationWatchEnded {
-  /** Opaque connection identity of the producer interest that ended. */
-  watchId: ChangeWatchId
-  /** Typed terminal producer outcome; neither value proves source freshness or permission revocation. */
-  reason: ChangeWatchEndReason
-}
-/** Typed watch admission/refusal. Watch state never changes downloaded/applied progress. */
-export const ChangeWatchErrorCode = {
-  InvalidRequest: "invalid_request",
-  Unauthorized: "unauthorized",
-  Forbidden: "forbidden",
-  WrongOwner: "wrong_owner",
-  WrongReceiver: "wrong_receiver",
-  StaleEpoch: "stale_epoch",
-  Unverifiable: "unverifiable",
-  TemporarilyUnavailable: "temporarily_unavailable",
-  WatchDuplicate: "watch_duplicate",
-  WatchCapacity: "watch_capacity",
-  WatchClosed: "watch_closed",
-  InvalidWatch: "invalid_watch",
-} as const
-export type ChangeWatchErrorCode =
-  (typeof ChangeWatchErrorCode)[keyof typeof ChangeWatchErrorCode]
 /** Opaque identity of one subscription on this connection. It grants nothing and is discarded with the connection. */
 export type ConversationSubscriptionId = string
 /** Where in the committed history a view was read. Compare positions only within one incarnation. */
@@ -2505,7 +2502,7 @@ export interface ConversationSubscriptionEnded {
   /** Where a view subscription resumes from: the cursor of the last view frame written or, when none was, the after it was opened with. Absent for a list, and for a view subscription opened without after that wrote no frame. */
   lastDelivered?: ConversationViewCursor
 }
-/** Refusals of subscribe and unsubscribe beside the conversation error codes a refused first read carries. subscription_capacity: the connection's published limit, or the gateway's watch capacity, is full. subscription_duplicate: this connection already follows that target; the agent catalog is one target, so a connection follows it at most once. unknown_subscription: no such live subscription on this connection, or one the other unsubscribe stops. cursor_ahead: after names a position past the stored history. */
+/** Refusals of subscribe and unsubscribe beside the conversation error codes a refused first read carries. subscription_capacity: the connection's published limit, or a gateway-wide watch capacity (record.change_watches, or conversation.catalogue_watches for a list subscription), is full. subscription_duplicate: this connection already follows that target; the agent catalog is one target, so a connection follows it at most once. unknown_subscription: no such live subscription on this connection, or one the other unsubscribe stops. cursor_ahead: after names a position past the stored history. */
 export const ConversationSubscriptionErrorCode = {
   SubscriptionCapacity: "subscription_capacity",
   SubscriptionDuplicate: "subscription_duplicate",
@@ -2739,15 +2736,6 @@ export interface ConversationEvents {
   /** Committed semantic events in source order; empty advances filtered progress. */
   events: ConversationEvent[]
 }
-export const maxChangeWatchIdBytes = 57 as const
-export const changeWatchIdPattern =
-  "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-[1-9][0-9]{0,19}$" as const
-export const changeWatchLimits = {
-  globalOwners: 64,
-  principalOwners: 8,
-  recordTargets: 1,
-  catalogueTargets: 1,
-} as const
 export const subscriptionLimits = {
   conversationTargets: 8,
   listTargets: 2,
@@ -2799,7 +2787,7 @@ export const mcpServerRules = {
 export const bounds = {
   maxOrdinaryResponseBytes: 65536,
   maxRequestFrameBytes: 65536,
-  maxReadyMethods: 75,
+  maxReadyMethods: 74,
   maxAuthCredentialCharacters: 16384,
   maxProductClientIdCharacters: 256,
   maxProductSurfaceInstanceCharacters: 256,
@@ -2848,6 +2836,17 @@ export const bounds = {
   mcpAppInstanceIdPattern:
     "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
   maxMcpArgumentsBytes: 32768,
+  maxOpenReviews: 128,
+  maxListedReviews: 144,
+  maxReviewEntryToolNameBytes: 64,
+  maxQuestionEntryMessageBytes: 48,
+  maxOpenQuestions: 8,
+  maxReviewInputBytes: 33554432,
+  maxReviewOptions: 64,
+  maxReviewOptionLabelBytes: 2048,
+  maxReviewToolNameBytes: 256,
+  maxReviewBytes: 268435456,
+  maxReviewRangeBytes: 32768,
   maxMcpResultBytes: 57344,
   maxMcpMessageBytes: 8192,
   minMcpMessageCharacters: 1,
@@ -3024,6 +3023,8 @@ export const ProductMethod = {
   ConversationMessage: "conversation.message",
   ConversationMessageStatus: "conversation.messageStatus",
   ConversationAnswer: "conversation.answer",
+  ConversationPermissionReview: "conversation.permissionReview",
+  ConversationQuestionReview: "conversation.questionReview",
   ConversationAnswerQuestion: "conversation.answerQuestion",
   ConversationCancel: "conversation.cancel",
   ConversationClose: "conversation.close",
@@ -3067,9 +3068,6 @@ export const ProductMethod = {
   PeerList: "peer.list",
   PeerForget: "peer.forget",
   PeerRelay: "peer.relay",
-  ConversationWatchRecords: "conversation.watchRecords",
-  ConversationWatchCatalogue: "conversation.watchCatalogue",
-  ConversationUnwatch: "conversation.unwatch",
   ConversationSubscribe: "conversation.subscribe",
   ConversationSubscribeList: "conversation.subscribeList",
   ConversationUnsubscribe: "conversation.unsubscribe",
@@ -3084,8 +3082,6 @@ export const ProductMethod = {
 export const ProductEvent = {
   SessionChallenge: "session.challenge",
   SessionTerminated: "session.terminated",
-  ConversationChanged: "conversation.changed",
-  ConversationWatchEnded: "conversation.watchEnded",
   ConversationView: "conversation.view",
   ConversationListed: "conversation.listed",
   AgentsListed: "agents.listed",
@@ -3114,6 +3110,8 @@ export const productReadyMethods = [
   "conversation.message",
   "conversation.messageStatus",
   "conversation.answer",
+  "conversation.permissionReview",
+  "conversation.questionReview",
   "conversation.answerQuestion",
   "conversation.cancel",
   "conversation.close",
@@ -3157,9 +3155,6 @@ export const productReadyMethods = [
   "peer.list",
   "peer.forget",
   "peer.relay",
-  "conversation.watchRecords",
-  "conversation.watchCatalogue",
-  "conversation.unwatch",
   "conversation.subscribe",
   "conversation.subscribeList",
   "conversation.unsubscribe",
@@ -3171,7 +3166,7 @@ export const productReadyMethods = [
   "conversation.subscribeEvents",
   "conversation.peek",
 ] as const
-/** The grant each product method asks Cedar for, generated from protocol/product/manifest.json. null means another owner admits the method: the handshake, auth.session, or a watch. Writing to a conversation — an answer, an upload, an app's calls — asks for conversation.write; reading its records or catalogue asks for conversation.read; running a configured server, or enrolling a device, asks for credential.manage. */
+/** The grant each product method asks Cedar for, generated from protocol/product/manifest.json. null means another owner admits the method: the handshake or auth.session. Writing to a conversation — an answer, an upload, an app's calls — asks for conversation.write; reading its records or catalogue asks for conversation.read; running a configured server, or enrolling a device, asks for credential.manage. */
 export const productMethodGrants = {
   "session.authenticate": null,
   "auth.session": null,
@@ -3193,6 +3188,8 @@ export const productMethodGrants = {
   "conversation.message": "conversation.write",
   "conversation.messageStatus": "conversation.write",
   "conversation.answer": "conversation.write",
+  "conversation.permissionReview": "conversation.write",
+  "conversation.questionReview": "conversation.write",
   "conversation.answerQuestion": "conversation.write",
   "conversation.cancel": "conversation.write",
   "conversation.close": "conversation.write",
@@ -3236,9 +3233,6 @@ export const productMethodGrants = {
   "peer.list": "credential.manage",
   "peer.forget": "credential.manage",
   "peer.relay": "credential.manage",
-  "conversation.watchRecords": null,
-  "conversation.watchCatalogue": null,
-  "conversation.unwatch": null,
   "conversation.subscribe": "conversation.write",
   "conversation.subscribeList": "conversation.write",
   "conversation.unsubscribe": "conversation.write",

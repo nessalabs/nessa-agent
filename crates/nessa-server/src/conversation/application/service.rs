@@ -1,12 +1,15 @@
 mod agent_tools;
 mod creation;
 mod mutation;
+mod thread_reports;
 use super::metadata_target::{load_conversation, validate_target};
 use super::session_key::conversation_session;
 use super::{
     app_reviews::{AppReviews, ReviewAnswer, ReviewAnswerer},
     drive_tools::{checked_source, AdmittedPolicies, DriveToolHook, DriveTools},
-    environment::{confirmed_despite, issue, open_lease, LeaseIssueError, LeaseRequest, LiveLease},
+    environment::{
+        confirmed_despite, issue, open_lease, AgentEnd, LeaseIssueError, LeaseRequest, LiveLease,
+    },
     live_changes::LiveChanges,
     locks::ConversationLocks,
     mcp_apps::{McpAppError, McpAppInitiator, McpAppPorts, McpAppRef},
@@ -36,16 +39,21 @@ use nessa_protocol::conversation::domain::{
     ConversationApprovalMode, ConversationId, ConversationModelId, ConversationSummary,
 };
 use nessa_protocol::conversation::{
-    projection::{bound_view, clipped, CommittedCursor, Projection, MAX_TEXT},
+    projection::{
+        agent_question, agent_review, bound_view, clipped, question_entry, review_entry,
+        CommittedCursor, Projection, MAX_TEXT,
+    },
     tool_uis::{McpToolUis, NoMcpToolUis},
     view::{
         ConversationApprovalModeChangeStatus, ConversationApprovalModeChangeView,
         ConversationAttachmentEvidenceFailure, ConversationAttachmentEvidenceFailureCode,
         ConversationCapabilities, ConversationDisposition, ConversationLifecycle,
         ConversationLifecyclePhase, ConversationList, ConversationListEntry,
-        ConversationObservation, ConversationObservationCursor, ConversationReorderOutcome,
-        ConversationRuntime, ConversationSelectionView, ConversationStartupFailure,
-        ConversationStartupFailureCode, ConversationView, SubmissionReceipt,
+        ConversationObservation, ConversationObservationCursor, ConversationPermission,
+        ConversationQuestion, ConversationQuestionEntry, ConversationReorderOutcome,
+        ConversationReviewEntry, ConversationReviewKind, ConversationRuntime,
+        ConversationSelectionView, ConversationStartupFailure, ConversationStartupFailureCode,
+        ConversationView, SubmissionReceipt,
     },
 };
 use nessa_protocol::product_contract::generated::MAX_MCP_MESSAGE_BYTES;
@@ -99,6 +107,9 @@ use std::{
     },
     time::Duration,
 };
+#[cfg(test)]
+pub(crate) use thread_reports::report_text_for_test;
+pub use thread_reports::{PendingReport, ReportRegistration, ThreadReport, ThreadReportStore};
 
 use tokio::{
     sync::{
@@ -725,6 +736,8 @@ struct Inner {
     agent_tool_audit: OnceLock<Arc<dyn AgentToolAudit>>,
     /// Physical source admission owners retain their slot after response loss.
     agent_tool_admissions: Arc<Semaphore>,
+    /// Agent sends waiting to report their thread's finished turn.
+    thread_reports: thread_reports::ThreadReports,
     /// Decides every command's admission to a conversation.
     access_policy: Arc<dyn ConversationAccessPolicyEvaluator>,
     limits: ConversationLimits,
@@ -776,6 +789,19 @@ struct Inner {
     /// turn takes it. Composition binds the gateway's table; without one, a
     /// grant's note is never checked and waits, and an owner's is taken.
     note_authors: Arc<OnceLock<Arc<dyn super::ShareGrants>>>,
+    /// Where a conversation that may have unfinished turns is marked
+    /// (`resumption`). Unbound, nothing is marked or resumed.
+    unfinished_turns: OnceLock<Arc<dyn super::UnfinishedTurns>>,
+    /// The marks this run has written or read, so a busy conversation's
+    /// turns write one mark, not one each. Set under the conversation's
+    /// submission lock, and cleared under it too, except where nothing can
+    /// still run there: an agent closed for good, a conversation deleted.
+    unfinished_marked: std::sync::Mutex<HashMap<ConversationId, resumption::Retry>>,
+    /// How long a failure's retry waits (`resumption`), bound with the marks.
+    failure_backoff: OnceLock<resumption::FailureBackoff>,
+    /// Woken when a failure retry is scheduled, so the retry loop waits for
+    /// the new earliest one.
+    retry_scheduled: tokio::sync::Notify,
     /// What checks a Drive grant's tools. Composition binds it; until then
     /// no Drive turn is admitted (`drive_policy_unenforceable`).
     drive: Arc<OnceLock<DriveTools>>,
@@ -972,31 +998,108 @@ pub struct QuestionChoiceInput {
     pub own_words: Option<String>,
 }
 
-/// Reviews `agent` is still waiting on, as execution id and permission id.
-///
-/// A saved deadline is restored unarmed. The card counts one of these down,
-/// because this process's worker is still holding it.
-/// `a_saved_deadline_counts_down_while_this_process_holds_the_review`.
-fn reviews_this_process_holds(
+/// The reviews `agent`'s live invocation waits on, oldest first, as a view
+/// lists them. The live owner says which wait and what each shows; a review
+/// is listed once its request is on record in `snapshot` exactly as it waits
+/// (the SDK admits an answer only to a recorded request), and not if the
+/// owner cannot show it as what it is ([`agent_review`]). An unreadable
+/// owner lists none.
+fn agent_review_entries(
     agent: &Agent,
     snapshot: Option<&SessionSnapshot>,
-) -> HashSet<(String, String)> {
-    let mut holding = HashSet::new();
-    let Some(snapshot) = snapshot else {
-        return holding;
-    };
-    for record in &snapshot.invocations {
-        let execution = &record.request.execution_id;
+) -> Vec<ConversationReviewEntry> {
+    let reviews = agent.pending_reviews().unwrap_or_default();
+    if reviews.is_empty() {
+        return Vec::new();
+    }
+    let mut recorded = HashMap::new();
+    for record in snapshot.map_or(&[][..], |snapshot| &snapshot.invocations[..]) {
         for event in &record.events {
-            let ExecutionUpdate::PermissionRequested { id, .. } = event.update() else {
-                continue;
-            };
-            if agent.pending_permission(execution, id).unwrap_or(false) {
-                holding.insert((execution.as_str().to_owned(), id.as_str().to_owned()));
+            if let ExecutionUpdate::PermissionRequested {
+                id,
+                tool_id,
+                input,
+                options,
+                ..
+            } = event.update()
+            {
+                recorded.insert(
+                    (&record.request.execution_id, id),
+                    (tool_id, input, options),
+                );
             }
         }
     }
-    holding
+    reviews
+        .iter()
+        .filter(|review| {
+            recorded
+                .get(&(&review.execution_id, &review.id))
+                .is_some_and(|(tool, input, options)| {
+                    **tool == review.tool_id
+                        && **options == review.options
+                        && input.name == review.content.tool_name()
+                        && input.arguments_json == review.content.arguments_json()
+                })
+        })
+        .filter(|review| agent_review(review).is_some())
+        .map(|review| {
+            review_entry(
+                &review.content.key(),
+                ConversationReviewKind::Harness,
+                review.content.tool_name(),
+            )
+        })
+        .collect()
+}
+
+/// The questions `agent`'s live invocation waits on, oldest first, as a view
+/// lists them. The live owner says which wait and what each asks; one is
+/// listed once its ask is on record in `snapshot` exactly as it waits (the
+/// SDK admits an answer only to a recorded ask). An unreadable owner lists
+/// none.
+fn agent_question_entries(
+    agent: &Agent,
+    snapshot: Option<&SessionSnapshot>,
+) -> Vec<ConversationQuestionEntry> {
+    let questions = agent.pending_questions().unwrap_or_default();
+    if questions.is_empty() {
+        return Vec::new();
+    }
+    let mut recorded = HashMap::new();
+    for record in snapshot.map_or(&[][..], |snapshot| &snapshot.invocations[..]) {
+        for event in &record.events {
+            if let ExecutionUpdate::QuestionAsked { id, question } = event.update() {
+                recorded.insert((&record.request.execution_id, id), question);
+            }
+        }
+    }
+    questions
+        .iter()
+        .filter(|pending| {
+            recorded
+                .get(&(&pending.execution_id, &pending.id))
+                .is_some_and(|asked| **asked == *pending.question)
+        })
+        .map(|pending| question_entry(&pending.key(), pending.question.message()))
+        .collect()
+}
+
+/// The range of `shown`'s UTF-8 JSON from `offset`, at most `max_bytes`,
+/// and its whole length. `InvalidInput` for an offset past its end.
+fn range_of(
+    shown: &impl serde::Serialize,
+    offset: u64,
+    max_bytes: usize,
+) -> Result<(Vec<u8>, u64), ConversationError> {
+    let bytes = serde_json::to_vec(shown).map_err(|_| ConversationError::InvalidInput)?;
+    let total = bytes.len() as u64;
+    if offset > total || (offset == total && total != 0) {
+        return Err(ConversationError::InvalidInput);
+    }
+    let start = offset as usize;
+    let end = start.saturating_add(max_bytes).min(bytes.len());
+    Ok((bytes[start..end].to_vec(), total))
 }
 
 /// The export cut's hold on admission. Dropping it lets the next command in.
@@ -1114,6 +1217,7 @@ impl ConversationService {
                 clock,
                 agent_tool_audit: OnceLock::new(),
                 agent_tool_admissions: Arc::new(Semaphore::new(super::MAX_AGENT_TOOL_ADMISSIONS)),
+                thread_reports: Default::default(),
                 access_policy,
                 limits,
                 conversations: Mutex::new(HashMap::new()),
@@ -1132,6 +1236,10 @@ impl ConversationService {
                 fetch_reads: Arc::new(Semaphore::new(artifact_fetch::FETCH_READS)),
                 commands: Arc::new(OnceLock::new()),
                 note_authors: Arc::new(OnceLock::new()),
+                unfinished_turns: OnceLock::new(),
+                unfinished_marked: std::sync::Mutex::default(),
+                failure_backoff: OnceLock::new(),
+                retry_scheduled: tokio::sync::Notify::new(),
                 drive: Arc::new(OnceLock::new()),
                 permission_rules: Arc::new(OnceLock::new()),
                 fence_capture: Arc::new(OnceLock::new()),
@@ -1614,6 +1722,14 @@ impl ConversationService {
                                     source,
                                 }));
                             }
+                            // Every agent: whether a send to this thread
+                            // waits on a report is decided as each turn ends.
+                            agent.add_invocation_hook(Arc::new(
+                                thread_reports::ThreadReportHook {
+                                    service: Arc::downgrade(&service.inner),
+                                    child: id.clone(),
+                                },
+                            ));
                             let issued = issue(
                                 agent.session_manager(),
                                 environment.as_ref(),
@@ -1702,6 +1818,7 @@ impl ConversationService {
                                             LeaseEndCause::Closed,
                                             actor.clone(),
                                             service.inner.deletion_budgets.stop,
+                                            AgentEnd::Close,
                                         )
                                         .await
                                 } else {
@@ -1862,8 +1979,15 @@ impl ConversationService {
                 service.inner.live_changes.publish(&id);
                 if let Ok(live) = result {
                     if let Some(ends) = live.lease.ends() {
-                        service.stop_when_environment_ends(id, Arc::downgrade(&owner), ends);
+                        service.stop_when_environment_ends(
+                            id.clone(),
+                            Arc::downgrade(&owner),
+                            ends,
+                        );
                     }
+                    // A conversation a restart left with unfinished turns
+                    // carries them on as soon as it is open again.
+                    service.resume_owed(&id, live.clone()).await;
                 }
             });
         }
@@ -1911,7 +2035,14 @@ impl ConversationService {
             };
             tracing::warn!(conversation_id = %id, ?cause, "the environment ended this conversation's lease; stopping it");
             if let Err(stop) = service
-                .stop_and_release(&id, slot, &actor, &McpAppInitiator::System, cause)
+                .stop_and_release(
+                    &id,
+                    slot,
+                    &actor,
+                    &McpAppInitiator::System,
+                    cause,
+                    AgentEnd::Close,
+                )
                 .await
             {
                 tracing::warn!(conversation_id = %id, ?stop, "an environment-ended lease's stop did not confirm cleanup");
@@ -1981,12 +2112,14 @@ impl ConversationService {
             // agent, and the next submission would be admitted there.
             // An agent let go whose record only was not saved answers that
             // failure: the mode is not uncertain, the records are.
+            // The agent is opened again at once: what it owed stays owed.
             self.stop_and_release(
                 id,
                 slot,
                 &actor,
                 &McpAppInitiator::System,
                 LeaseEndCause::Stopped,
+                AgentEnd::Suspend,
             )
             .await
             .map_err(|stop| match stop {
@@ -2355,18 +2488,8 @@ impl ConversationService {
             .transpose()?
             .unwrap_or_default();
         let active = live.agent.active_execution_id();
-        // Storage restores a deadline unarmed. A review this process is still
-        // waiting on is that worker's promise, so the card counts down.
-        // `a_saved_deadline_counts_down_while_this_process_holds_the_review`.
-        let holding = reviews_this_process_holds(&live.agent, committed.snapshot());
         let mut projection = live.projection.lock().await;
-        let accepted = projection.replace_committed_while_holding(
-            &committed,
-            &order,
-            active.as_ref(),
-            &holding,
-        );
-        if accepted {
+        if projection.replace_committed(&committed, &order, active.as_ref()) {
             projection.transcript_state(committed.state().into());
         }
         let operation_capabilities = live.agent.operation_capabilities();
@@ -2387,20 +2510,16 @@ impl ConversationService {
         let mut view = projection.read();
         let cursor = projection.committed_cursor();
         drop(projection);
-        view.permissions.retain(|review| {
-            let execution = ExecutionId::new(&review.execution_id);
-            let permission = PermissionId::new(&review.permission_id);
-            match (execution, permission) {
-                (Ok(execution), Ok(permission)) => live
-                    .agent
-                    .pending_permission(&execution, &permission)
-                    .unwrap_or(false),
-                _ => false,
-            }
-        });
         view.title = self.title(&id).await;
-        // Bounded there, before its app reviews are added beside it.
-        let view = app_calls::with_app_reviews(view, live.app_reviews.reviews());
+        // Every review waiting is listed from its live owner, never from
+        // history: an answer by a person or a remembered choice leaves no
+        // event there, so only the owner knows it is settled.
+        let view = app_calls::with_reviews(
+            view,
+            agent_review_entries(&live.agent, committed.snapshot()),
+            live.app_reviews.entries(),
+            agent_question_entries(&live.agent, committed.snapshot()),
+        );
         self.check_view_access(&id, &caller).await?;
         let slot = self
             .readable_slot(&id)
@@ -2739,7 +2858,22 @@ impl ConversationService {
         grant: &GrantInitiator,
         non_default_mode: bool,
     ) -> Result<(), ConversationError> {
-        let refused = Err(ConversationError::DrivePolicyUnenforceable);
+        self.check_drive_turn(live, id, grant, non_default_mode)
+            .await
+            .unwrap_or(Err(ConversationError::DrivePolicyUnenforceable))
+    }
+
+    /// [`Self::admit_drive_turn`]'s verdict, or `Err` when the grant's policy
+    /// could not be read at all: a resume tells "this grant no longer admits
+    /// it" from "not known now", and leaves the second for the next try.
+    async fn check_drive_turn(
+        &self,
+        live: &LiveConversation,
+        id: &ConversationId,
+        grant: &GrantInitiator,
+        non_default_mode: bool,
+    ) -> Result<Result<(), ConversationError>, ConversationError> {
+        let refused = Ok(Err(ConversationError::DrivePolicyUnenforceable));
         let Some(drive) = self.inner.drive.get() else {
             return refused;
         };
@@ -2763,9 +2897,10 @@ impl ConversationService {
             Ok(Some(policy)) => {
                 live.admitted_policies
                     .admit(grant.grant(), grant.policy_revision(), policy);
-                Ok(())
+                Ok(Ok(()))
             }
-            Ok(None) | Err(_) => refused,
+            Ok(None) => refused,
+            Err(error) => Err(error),
         }
     }
 
@@ -3123,6 +3258,9 @@ impl ConversationService {
                 revision_hold = Some(grants.hold_revision(&id, &receiver, revision).await?);
                 saved_grant = Some((grants, receiver, revision));
             }
+            // Marked before the agent is asked, so a restart from here on
+            // finds this conversation and resumes the turn (`resumption`).
+            service.mark_unfinished(&id).await?;
             // Asked from here: whatever becomes of this task, what it took
             // follows the message, and only the agent's own refusal hands
             // it back (C11b).
@@ -3284,6 +3422,11 @@ impl ConversationService {
         if let Some(_result) = completion.as_mut().now_or_never() {
             let snapshot = live.agent.session_manager().snapshot().await;
             let reply = completed_reply(snapshot.as_ref(), &id).filter(|_| new_submission);
+            // Decided once whoever submitted it lets the conversation go.
+            let service = self.clone();
+            let settled_in = conversation.clone();
+            let settled = live.clone();
+            tokio::spawn(async move { service.after_settle(&settled_in, settled).await });
             // Let go of the agent before waiting for the summary lock: a
             // summary is not a reason to keep a stopped agent's history
             // leased (`a_reply_waiting_to_be_summarized_does_not_keep_a_deleted_history_leased`).
@@ -3306,7 +3449,7 @@ impl ConversationService {
             // As above: the agent is let go of before the summary lock is
             // waited for, so a watcher cannot hold a stopped agent's history
             // leased past a delete's wait for it.
-            drop(live);
+            service.after_settle(&conversation, live).await;
             if let Some(reply) = reply {
                 service.summarize_reply(&conversation, &reply).await;
             }
@@ -3606,6 +3749,9 @@ impl ConversationService {
                 ExecutionId::new(&execution).map_err(|_| ConversationError::InvalidInput)?;
             let live = service.resolve(&id, &caller).await?;
             let result = live.agent.remove_queued(execution.clone(), actor).await?;
+            if result == QueueRemoval::Removed {
+                service.wake_thread_reports(&id);
+            }
             Ok(result == QueueRemoval::Removed)
         })
         .await
@@ -3621,6 +3767,7 @@ impl ConversationService {
         caller: ConversationCaller,
         execution: String,
         question: String,
+        key: String,
         choices: Option<Vec<QuestionChoiceInput>>,
     ) -> Result<(), ConversationError> {
         let service = self.clone();
@@ -3645,24 +3792,35 @@ impl ConversationService {
                 })
                 .transpose()?;
             let live = service.resolve(&id, &caller).await?;
+            // Only the question the person was shown: one asked again under
+            // the same identities has a key of its own, and the agent that
+            // holds it refuses another as stale.
             live.agent
                 .answer_question(QuestionAnswer {
+                    key: Some(key),
                     actor,
                     execution_id,
                     id: question_id,
                     choices,
                 })
                 .await
-                .map_err(|_| ConversationError::Unavailable)
+                .map_err(|error| match error {
+                    AgentError::StalePermission => error.into(),
+                    _ => ConversationError::Unavailable,
+                })
         })
         .await
     }
+    // The review is named three ways, each checked: its execution, its id,
+    // and the key it was shown under.
+    #[allow(clippy::too_many_arguments)]
     pub async fn answer(
         &self,
         id: ConversationId,
         caller: ConversationCaller,
         execution: String,
         permission: String,
+        review: String,
         option: String,
         permission_caller: PermissionCaller,
     ) -> Result<(), ConversationError> {
@@ -3690,17 +3848,23 @@ impl ConversationService {
             }
             let live = service.resolve(&id, &caller).await?;
             // An app's review first: it is the gateway's own, not the agent's.
-            match live
-                .app_reviews
-                .answer(&execution, &permission, &option, answerer(&caller))
-            {
+            match live.app_reviews.answer(
+                &execution,
+                &permission,
+                &review,
+                &option,
+                answerer(&caller),
+            ) {
                 ReviewAnswer::Ended => return Ok(()),
                 ReviewAnswer::Stale => return Err(AgentError::StalePermission.into()),
                 ReviewAnswer::NotAnAppReview => {}
             }
+            // Only the review the person was shown: the agent refuses another
+            // key as stale, and whatever waits under these identities waits on.
             let answer = live
                 .agent
                 .answer_permission(PermissionAnswer {
+                    key: Some(review),
                     attribution: ApprovalAttribution::new(actor, ApprovalBasis::Explicit),
                     execution_id,
                     id: permission_id,
@@ -3717,12 +3881,97 @@ impl ConversationService {
         })
         .await
     }
+    /// The waiting review a view lists under `review`, with all it shows,
+    /// from its live owner: the app review store, or the agent's live
+    /// invocation. `StalePermission` once nothing live holds it.
+    pub(crate) async fn waiting_review(
+        &self,
+        id: ConversationId,
+        caller: ConversationCaller,
+        review: &str,
+    ) -> Result<ConversationPermission, ConversationError> {
+        let _admission = self.admit().await?;
+        let stale = || ConversationError::from(AgentError::StalePermission);
+        let Some(live) = self.live_now(&id, &caller).await? else {
+            return Err(stale());
+        };
+        if let Some(shown) = live.app_reviews.review(review) {
+            return Ok(shown);
+        }
+        live.agent
+            .pending_reviews()
+            .unwrap_or_default()
+            .iter()
+            .find(|pending| pending.content.key() == review)
+            .and_then(agent_review)
+            .ok_or_else(stale)
+    }
+    /// One range of what the waiting review a view lists under `review`
+    /// shows: the UTF-8 JSON of its [`ConversationPermission`], from the
+    /// review's live owner — the app review store, or the agent's live
+    /// invocation — never from history, and the review's total length.
+    ///
+    /// # Errors
+    /// `StalePermission` once nothing live holds a review under that key;
+    /// `InvalidInput` for an offset past its end.
+    pub async fn permission_review(
+        &self,
+        id: ConversationId,
+        caller: ConversationCaller,
+        review: String,
+        offset: u64,
+        max_bytes: usize,
+    ) -> Result<(Vec<u8>, u64), ConversationError> {
+        let shown = self.waiting_review(id, caller, &review).await?;
+        range_of(&shown, offset, max_bytes)
+    }
+    /// The waiting question a view lists under `question`, with all it
+    /// asks, from the agent's live invocation. `StalePermission` once
+    /// nothing live holds it.
+    pub(crate) async fn waiting_question(
+        &self,
+        id: ConversationId,
+        caller: ConversationCaller,
+        question: &str,
+    ) -> Result<ConversationQuestion, ConversationError> {
+        let _admission = self.admit().await?;
+        let stale = || ConversationError::from(AgentError::StalePermission);
+        let Some(live) = self.live_now(&id, &caller).await? else {
+            return Err(stale());
+        };
+        live.agent
+            .pending_questions()
+            .unwrap_or_default()
+            .iter()
+            .find(|pending| pending.key() == question)
+            .map(agent_question)
+            .ok_or_else(stale)
+    }
+    /// One range of all the waiting question a view lists under `question`
+    /// asks: the UTF-8 JSON of its [`ConversationQuestion`], from the
+    /// agent's live invocation, never from history, and its total length.
+    ///
+    /// # Errors
+    /// `StalePermission` once nothing live holds a question under that key;
+    /// `InvalidInput` for an offset past its end.
+    pub async fn question_review(
+        &self,
+        id: ConversationId,
+        caller: ConversationCaller,
+        question: String,
+        offset: u64,
+        max_bytes: usize,
+    ) -> Result<(Vec<u8>, u64), ConversationError> {
+        let shown = self.waiting_question(id, caller, &question).await?;
+        range_of(&shown, offset, max_bytes)
+    }
     pub async fn cancel_permission(
         &self,
         id: ConversationId,
         caller: ConversationCaller,
         execution: String,
         permission: String,
+        review: String,
         reason: String,
     ) -> Result<(), ConversationError> {
         let service = self.clone();
@@ -3741,7 +3990,7 @@ impl ConversationService {
             let live = service.resolve(&id, &caller).await?;
             match live
                 .app_reviews
-                .cancel(&execution, &permission, answerer(&caller))
+                .cancel(&execution, &permission, &review, answerer(&caller))
             {
                 ReviewAnswer::Ended => return Ok(()),
                 ReviewAnswer::Stale => return Err(AgentError::StalePermission.into()),
@@ -3750,6 +3999,7 @@ impl ConversationService {
             let _cancellation = live
                 .agent
                 .cancel_permission(PermissionCancellationRequest {
+                    key: Some(review),
                     execution_id,
                     id: permission_id,
                     reason: PermissionCancellationReason::custom(reason),
@@ -3766,7 +4016,8 @@ impl ConversationService {
         caller: ConversationCaller,
     ) -> Result<(), ConversationError> {
         let service = self.clone();
-        supervised(async move {
+        let closing = id.clone();
+        let closed = supervised(async move {
             let _admission = service.admit().await?;
             let _mode = service.inner.mode_changes.lock(&id).await;
             let actor = caller.actor()?;
@@ -3828,6 +4079,7 @@ impl ConversationService {
                                     actor: &actor,
                                     ended_by: &initiator_of(&actor),
                                     cause: LeaseEndCause::Closed,
+                                    end: AgentEnd::Close,
                                 },
                                 ConfirmedClose::ReleaseSlot,
                             )
@@ -3883,7 +4135,12 @@ impl ConversationService {
                 }),
             }
         })
-        .await
+        .await;
+        // Turns a closed agent held were cancelled with no invocation to
+        // follow. Every close attempt looks, whatever it answers: one that did
+        // not close finds nothing new.
+        self.wake_thread_reports(&closing);
+        closed
     }
     /// Archive the conversation, or unarchive it: whether `list` shows it by
     /// default. Nothing is stopped or removed. Returns whether this changed
@@ -4351,6 +4608,7 @@ impl ConversationService {
                         actor: &actor,
                         ended_by: deleted_by,
                         cause: LeaseEndCause::Closed,
+                        end: AgentEnd::Close,
                     },
                 ) => stopped,
                 () = self.retired() => Err(StopFailure::Failed(AgentError::Closed)),
@@ -4495,6 +4753,7 @@ impl ConversationService {
                     failures.history = Some(ConversationError::Storage(error));
                 }
             }
+            self.forget_thread_reports_of(&id).await;
             let _writes = self.inner.summary_writes.lock(&id).await;
             if let Err(error) = self.inner.summaries.erase(&id).await {
                 failures.summary = Some(error);
@@ -4986,6 +5245,10 @@ impl ConversationService {
                             actor,
                             ended_by: &McpAppInitiator::System,
                             cause: LeaseEndCause::Stopped,
+                            // The gateway is going away, not the work: what
+                            // its agents were doing is resumed at the next
+                            // start (`resume_unfinished`).
+                            end: AgentEnd::Suspend,
                         },
                     )
                     .await
@@ -5090,6 +5353,7 @@ impl ConversationService {
                         actor: &actor,
                         ended_by: &McpAppInitiator::System,
                         cause: LeaseEndCause::Stopped,
+                        end: AgentEnd::Close,
                     },
                     ConfirmedClose::ReleaseSlot,
                 )
@@ -5113,6 +5377,7 @@ impl ConversationService {
         actor: &ActionContext,
         ended_by: &McpAppInitiator,
         cause: LeaseEndCause,
+        end: AgentEnd,
     ) -> Result<(), StopFailure> {
         let service = self.clone();
         let id = id.clone();
@@ -5128,6 +5393,7 @@ impl ConversationService {
                         actor: &actor,
                         ended_by: &ended_by,
                         cause,
+                        end,
                     },
                     ConfirmedClose::ReleaseSlot,
                 )
@@ -5181,6 +5447,7 @@ impl ConversationService {
                         actor: &stop_actor,
                         ended_by: &ended_by,
                         cause: LeaseEndCause::Closed,
+                        end: AgentEnd::Close,
                     },
                     ConfirmedClose::HoldSlot,
                 )
@@ -5283,6 +5550,7 @@ impl ConversationService {
             actor,
             ended_by,
             cause,
+            end,
         } = by;
         slot.stopping.store(true, Ordering::SeqCst);
         let mut submissions = submissions;
@@ -5300,7 +5568,7 @@ impl ConversationService {
                         // (`m10_a_message_after_a_desktop_stops_mark_is_refused_and_opens_nothing`).
                         drop(submissions.take());
                         let closed = self
-                            .close_leased(live, cause, actor.clone())
+                            .close_leased(live, cause, actor.clone(), end)
                             .await
                             .map(|_| ());
                         // Its cleanup confirmed, the agent holds nothing, and
@@ -5309,6 +5577,11 @@ impl ConversationService {
                         // opening accounts for the lease
                         // (`l5_a_desktop_stop_whose_cleanup_record_cannot_be_saved_says_so_and_the_conversation_opens_again`).
                         if let_go(&closed) {
+                            // Closed for good: whatever it was doing ended
+                            // with it, so a restart has nothing to resume.
+                            if end == AgentEnd::Close {
+                                self.forget_unfinished(id).await;
+                            }
                             let _ = live.join_attachment_owner().await;
                             if on_confirm == ConfirmedClose::ReleaseSlot {
                                 self.release_slot(id, &slot).await;
@@ -5337,12 +5610,17 @@ impl ConversationService {
         live: &Arc<LiveConversation>,
         cause: LeaseEndCause,
         actor: ActionContext,
+        end: AgentEnd,
     ) -> Result<CloseOutcome, AgentError> {
         let live = live.clone();
         let deadline = self.inner.deletion_budgets.stop;
-        tokio::spawn(async move { live.lease.close(&live.agent, cause, actor, deadline).await })
-            .await
-            .unwrap_or(Err(AgentError::CleanupUncertain))
+        tokio::spawn(async move {
+            live.lease
+                .close(&live.agent, cause, actor, deadline, end)
+                .await
+        })
+        .await
+        .unwrap_or(Err(AgentError::CleanupUncertain))
     }
 
     /// Close the agent `slot` holds, which stopped itself and waits for that
@@ -5358,6 +5636,7 @@ impl ConversationService {
             return;
         };
         tracing::warn!(conversation_id = %id, "the agent stopped itself; closing it to open the conversation again");
+        // What it owed stays owed: the agent opened next resumes it.
         if let Err(stop) = self
             .stop_and_release(
                 id,
@@ -5365,6 +5644,7 @@ impl ConversationService {
                 &actor,
                 &McpAppInitiator::System,
                 LeaseEndCause::Stopped,
+                AgentEnd::Suspend,
             )
             .await
         {
@@ -5414,6 +5694,9 @@ struct StopBy<'a> {
     actor: &'a ActionContext,
     ended_by: &'a McpAppInitiator,
     cause: LeaseEndCause,
+    /// Only the gateway's own retirement and a mode recovery, which opens the
+    /// agent again at once, suspend; every other stop is final.
+    end: AgentEnd,
 }
 
 /// Whether a stop let its agent go: it closed, or it confirmed the cleanup
@@ -5971,6 +6254,7 @@ pub use artifact_publish::{PublishAnswer, PublishCall, PublishCallRefusal};
 mod environment_tools;
 mod event_read;
 mod notes;
+mod resumption;
 pub use environment_tools::{
     CommandAnswer, CommandCall, CommandCallError, EnvironmentListing, HERE,
 };
@@ -5978,6 +6262,7 @@ pub use event_read::{
     event_error_code, project_events, validate_event_cursor, ConversationEventError, EventProgress,
     ThreadEvent,
 };
+pub use resumption::FailureBackoff;
 
 mod app_calls;
 pub use app_calls::{
@@ -5996,6 +6281,10 @@ mod offers_notes_tests;
 #[cfg(test)]
 #[path = "../../../tests/conversation/retirement.rs"]
 mod retirement_tests;
+
+#[cfg(test)]
+#[path = "../../../tests/conversation/resumption.rs"]
+mod resumption_tests;
 
 #[cfg(test)]
 #[path = "../../../tests/conversation/desktop_stop.rs"]

@@ -170,12 +170,6 @@ fn catalogue() -> &'static [Limit] {
             meaning: "a record response still queued at this deadline is noted and dropped",
         },
         Limit {
-            id: "socket.watch_delivery_deadline",
-            tier: "fixed",
-            owner: "RECORD_SEND_TIMEOUT, the same duration as record delivery",
-            meaning: "a watch frame still queued at this deadline is noted and dropped",
-        },
-        Limit {
             id: "socket.subscription_delivery_deadline",
             tier: "fixed",
             owner: "protocol/product/v1.json x-subscriptionLimits.deliveryTimeoutMs",
@@ -197,13 +191,13 @@ fn catalogue() -> &'static [Limit] {
             id: "record.change_watches",
             tier: "fixed",
             owner: "MAX_RECORD_CHANGE_WATCHES in crates/nessa-sdk/src/infrastructure/session_storage/record_changes.rs",
-            meaning: "the record watches every socket shares, devices' and subscriptions' alike; past this a watch or subscription is refused subscription_capacity. A view subscription holds one record watch and each list subscription holds one (any commit); a connection consumes a watch for each followed target",
+            meaning: "the record watches every socket's subscriptions share; past this a subscription is refused subscription_capacity. An events or view subscription holds one record watch on its conversation and each list subscription holds one (any commit)",
         },
         Limit {
             id: "conversation.catalogue_watches",
             tier: "fixed",
             owner: "MAX_CATALOGUE_CHANGE_WATCHES in crates/nessa-server/src/conversation/infrastructure/catalogue_changes.rs",
-            meaning: "the catalogue watches every socket shares; a list subscription holds one beside its record watch, as a device's catalogue watch does; past this one is refused subscription_capacity",
+            meaning: "the catalogue watches every socket's list subscriptions share; a list subscription holds one beside its record watch; past this one is refused subscription_capacity",
         },
         Limit {
             id: "conversation.share_grants",
@@ -571,10 +565,6 @@ pub(crate) fn effective_json(
         millis(RECORD_SEND_TIMEOUT),
     );
     put(
-        "socket.watch_delivery_deadline",
-        millis(RECORD_SEND_TIMEOUT),
-    );
-    put(
         "socket.subscription_delivery_deadline",
         SUBSCRIPTION_DELIVERY_TIMEOUT_MS,
     );
@@ -725,7 +715,7 @@ fn render(limits: &OperationalLimits, session: &SessionSettings) -> String {
          The number is the owner's, read when this document is rendered; this file is compared \
          to that rendering and is not edited by hand. \
          The client's preparing retries are named here and counted only in \
-         `PREPARING_ATTEMPTS` (`crates/nessa-client-core/src/read_only_sync/application/watch.rs`); \
+         `PREPARING_ATTEMPTS` (`crates/nessa-client-core/src/read_only_sync/application/follow.rs`); \
          this document does not copy that count. \
          The client's foreground phone sends are named here and counted only in \
          `FOREGROUND_SENDS` (`crates/nessa-client-core/src/outbox/domain/decide.rs`); \
@@ -746,7 +736,7 @@ fn render(limits: &OperationalLimits, session: &SessionSettings) -> String {
     }
     document.push_str(
         "\n| client.preparing_attempts | client | the client's own | \
-         `PREPARING_ATTEMPTS` in `crates/nessa-client-core/src/read_only_sync/application/watch.rs` | \
+         `PREPARING_ATTEMPTS` in `crates/nessa-client-core/src/read_only_sync/application/follow.rs` | \
          how many times a preparing read is asked again |\n\
          | client.foreground_sends | client | the client's own | \
          `FOREGROUND_SENDS` in `crates/nessa-client-core/src/outbox/domain/decide.rs` | \
