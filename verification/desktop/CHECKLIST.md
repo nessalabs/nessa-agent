@@ -374,15 +374,18 @@ _ADR 238 › What fills the content region_ (the overview is workspace state).
 - [ ] **The keyboard walks its items; ⌘↩ allows, ⌘⌫ denies, ⌘R replies**, and
   the caret stays in the overview after an answer. _Check:_ `focus.mjs`
   (`focus-overview`, the walk); `perf-budget.mjs --only overview-answer` (answer lands); ⌘⌫ and ⌘R by hand.
-- [ ] **One row at a time shows its answers, and only when pointed at or
-  reached by the keyboard**: at rest a request row shows its title and time,
+- [ ] **Each request shows its answers when pointed at or reached by the
+  keyboard**: at rest a request row shows its title and time,
   its why and its command, and no answers — nor room kept for them: the why
   and the command run on to the time (the row's 12px gap before it, ±4).
   Pointed at, or with the keyboard visibly on it (`:focus-visible`), Deny and
   Allow Once (⌥ turns it into Always Allow where offered) take the time's
   place at its end, sliding in (at once with less motion); the row's height
-  and the list do not change. A row clicked and chosen (its peek beside the
-  list) shows none while the pointer is on another row or off the list. The
+  and the list do not change. A keyboard-focused row or answer button keeps
+  its controls visible and its time hidden while the pointer explores another
+  row; both rows can show controls. A row clicked and chosen without visible
+  keyboard focus (its peek beside the list) shows none while the pointer is
+  on another row or off the list. The
   answers carry no tooltip; each names its chord (`aria-keyshortcuts`);
   labels ≥ 4.5:1. _Check:_ `responsive.mjs --only overview-row-answers`
   (Chromium and WebKit); unit tests `overview.test.tsx`.

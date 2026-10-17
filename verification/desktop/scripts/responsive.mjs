@@ -69,9 +69,9 @@
  *   overview-row-answers a request row shows its title and time, its why and
  *                   its command, and no answers — nor room kept for them: the
  *                   why and the command run on to the time; pointed at (or the
- *                   keyboard visibly on it — one row at a time, never just the
- *                   chosen one), Deny and Allow Once take the time's place with
- *                   the row's height and the list unchanged; no tooltips;
+ *                   keyboard visibly on it, even while another row is hovered;
+ *                   never just the chosen one), Deny and Allow Once take the
+ *                   time's place with the row's height and the list unchanged; no tooltips;
  *                   Allow Once names its chord; labels at ≥ 4.5:1; with less
  *                   motion they show at once
  *   overview-leave  answered, a row says nothing on itself and nothing is drawn
@@ -2038,8 +2038,8 @@ checks["overview-row-answers"] = async ({ page, engine, options }) => {
   for (const { label, ratio } of ratios)
     if (ratio < 4.5) failures.push(`${label}'s label has contrast ${ratio} (≥ 4.5)`)
 
-  // One row at a time: chosen by a click, the pointer on another row, only
-  // that one shows them; the pointer away, the chosen row shows none.
+  // Chosen by a click without visible keyboard focus: only the hovered row
+  // shows them; the pointer away, the chosen row shows none.
   const showing = (list) => list.filter((row) => row.shown).map((row) => row.id)
   await rows.nth(2).click({ position: { x: 80, y: 10 } })
   await rows.nth(1).hover({ position: { x: 80, y: 10 } })
@@ -2052,7 +2052,7 @@ checks["overview-row-answers"] = async ({ page, engine, options }) => {
   const away = await answersShown(page)
   if (showing(away).length > 0)
     failures.push(`pointer away, the chosen row's answers show: [${showing(away)}]`)
-  // The keyboard's row shows them — until the pointer is on another.
+  // The keyboard's row keeps its controls while the pointer explores another.
   await page.keyboard.press(keys.down)
   await page.waitForTimeout(300)
   const walked = await answersShown(page)
@@ -2061,10 +2061,16 @@ checks["overview-row-answers"] = async ({ page, engine, options }) => {
   await rows.nth(0).hover({ position: { x: 80, y: 10 } })
   await page.waitForTimeout(300)
   const both = await answersShown(page)
-  if (showing(both).join() !== both[0].id)
+  const expected = [both[0].id, both[3].id]
+  if (showing(both).join() !== expected.join())
     failures.push(
-      `keyboard on ${both[3]?.id}, pointer on ${both[0].id}: answers shown on [${showing(both)}]`,
+      `keyboard on ${both[3]?.id}, pointer on ${both[0].id}: answers shown on [${showing(both)}], expected [${expected}]`,
     )
+  for (const index of [0, 3]) {
+    const row = await requestRow(page, index)
+    if (row.time.opacity > 0)
+      failures.push(`keyboard or pointer on ${both[index].id}, its time still shows`)
+  }
   // A button the keyboard is on is seen, wherever the pointer rests.
   await rows.nth(3).locator('[data-answer="once"]').first().focus()
   await rows.nth(0).hover({ position: { x: 80, y: 10 } })

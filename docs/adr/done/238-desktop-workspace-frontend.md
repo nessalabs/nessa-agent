@@ -484,6 +484,7 @@ and one-press guard remain the owner of repeat protection.
 
 | Held state | Event | Next and visible result |
 | --- | --- | --- |
+| any | pointer or visible keyboard focus changes | each request independently reveals its actions and hides its time while hovered or keyboard-focused, including its answer buttons; another row's pointer state does not hide keyboard controls. Expanded and answering/leaving rules retain precedence |
 | answering | refused, unconfirmed, or not asked | released; the row shows the workspace's current request or failure |
 | answering | sent, session already moved | released directly into its current group; live region announces the answer |
 | answering | sent, session still waits | leaving; row held with answers put away, watching the source |
