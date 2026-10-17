@@ -447,20 +447,17 @@ async fn run(
             {
                 Ok(submitted) => submitted,
                 Err(error) => {
-                    // Only a send that saved nothing lets its report go; one
-                    // that may have run keeps it until it settles or expires.
-                    let admitted_nothing = matches!(
-                        &error,
-                        MutationFailure::Conflict | MutationFailure::Target(_)
-                    ) && !matches!(
-                        &error,
-                        MutationFailure::Target(
-                            ConversationError::RevokedAfterSave
-                                | ConversationError::UnavailableAfterSave
-                        )
-                    );
-                    if registration == ReportRegistration::Registered && admitted_nothing {
-                        service.forget_thread_report(&target, &report);
+                    // The thread's saved history decides whether a turn will
+                    // finish; a report already waiting stays as it is.
+                    if registration == ReportRegistration::Registered {
+                        service
+                            .settle_failed_thread_report(
+                                target.clone(),
+                                &execution,
+                                &report,
+                                &source.caller(),
+                            )
+                            .await;
                     }
                     return Err(mutation(error));
                 }
@@ -468,11 +465,12 @@ async fn run(
             // A concurrent retry under this request may have failed and let
             // the report go after this one registered: hold it again.
             let held = service.report_thread_turn(target.clone(), execution.clone(), answer);
+            let reports = registration.reports() || held.reports();
             if held.reports() {
-                service.look_for_reports(target.clone()).await;
+                service.look_for_reports(target.clone(), false).await;
             }
             Ok(
-                json!({"threadId":target.to_string(),"requestId":request,"mode":args.mode.name(),"executionId":execution,"command":receipt(&submitted.progress),"reportsBack":registration.reports()}),
+                json!({"threadId":target.to_string(),"requestId":request,"mode":args.mode.name(),"executionId":execution,"command":receipt(&submitted.progress),"reportsBack":reports}),
             )
         }
         "stop_thread" => {

@@ -13,6 +13,7 @@ use crate::mcp_servers::{
         built_in_digest, read_line, write_line, Answer, ConversationGrants, Hello, OsTokens, Relay,
     },
 };
+use nessa_sdk::application::agent_execution::providers;
 #[cfg(unix)]
 use nessa_sdk::{
     application::agent_execution::executions::{
@@ -1119,6 +1120,43 @@ async fn a_thread_turn_reports_its_outcome_and_reply_back_to_the_sender() {
     .await
     .expect("the queued turn ran");
     assert_eq!(reports_in(&service, &source, 2).await.len(), 2);
+
+    // A queued turn the thread drops because the turn ahead of it failed
+    // reports as cancelled, though no invocation follows the drop.
+    *provider.execution_reply.lock().unwrap() = Some(providers::ProviderExecutionReply::Finished(
+        providers::ExecutionReport::new(
+            Some(Err(AgentError::Unsupported("worker failed".into()))),
+            None,
+            ProviderSessionState::Usable,
+        ),
+    ));
+    *provider.execution_observation_failure.lock().unwrap() =
+        Some(providers::ObservationFailure::new(
+            AgentError::Unsupported("worker failed".into()),
+            providers::ObservationFailureCause::ExecutionFailed,
+        ));
+    let release_failing = hold_turn(&service, &provider, &worker_id, "worker-fails").await;
+    let dropped = client
+        .call(
+            "send_message",
+            json!({"threadId":worker,"message":"after the failure","requestId":"report-dropped"}),
+        )
+        .await;
+    assert_eq!(dropped["isError"], false, "{dropped}");
+    let dropped = dropped["structuredContent"]["executionId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    drop(release_failing);
+    let reports = reports_in(&service, &source, 3).await;
+    assert_eq!(reports.len(), 3, "{reports:?}");
+    assert!(reports[2].contains(&dropped), "{}", reports[2]);
+    assert!(reports[2].contains(": cancelled."), "{}", reports[2]);
+    assert!(
+        reports[2].contains("It gave no reply text."),
+        "{}",
+        reports[2]
+    );
 
     // A thread cannot report to itself.
     assert_eq!(

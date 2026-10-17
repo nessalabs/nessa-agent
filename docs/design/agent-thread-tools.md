@@ -48,15 +48,19 @@ still running reads it next. A passive note starts no turn and reports nothing.
 submits, so a turn that ends at once is not missed, and again after a submit
 that succeeded, so a concurrent retry that failed cannot let it go. It then
 looks once, so a retry of a turn that already ended still reports. A refused
-send lets the report go only when nothing was saved: a request conflict, or the
-thread refusing it before save. Every opened agent carries `ThreadReportHook`;
+send asks the thread's saved history: with no turn under its execution, the
+report goes; with one, it waits for that turn like any other. Every opened agent carries `ThreadReportHook`;
 after each invocation, once its result is saved, it asks the service to look at
 that thread when a report waits on it. Each look checks that every person with
 a report waiting may still view the thread: a refusal, or a thread gone, lets
 that person's reports go and tells them nothing. It reads the thread's saved
 invocations: a watched execution is finished when it settled, was cancelled, or
 was injected into the turn its scheduling names as `target` and that turn has
-settled, in which case that turn's outcome and reply are its own. The report's
+settled, in which case that turn's outcome and reply are its own. A failed
+turn makes the agent cancel the turns queued behind it after its hook, with no
+invocation to follow, so a look after a failure keeps looking for up to five
+seconds while a watched turn is still queued. A queued turn dropped because the
+thread closed reports when the thread next runs, or not at all. The report's
 execution identity derives from the send's source, request and purpose, so a
 second look or a retried send answers from the first receipt. One person's
 commands are taken one at a time without a queue, so a report that meets the

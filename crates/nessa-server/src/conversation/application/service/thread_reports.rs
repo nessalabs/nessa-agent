@@ -53,6 +53,13 @@ pub const MAX_REPORT_REPLY_BYTES: usize = 8 * 1024;
 /// A report whose turn has not finished in this long is let go, so a thread
 /// deleted or never run cannot hold a place for good.
 const REPORT_LIFETIME: Duration = Duration::from_secs(24 * 60 * 60);
+/// A failed turn, or a failed admission, makes the agent cancel the turns
+/// queued behind it after the look that followed, outside any invocation, so
+/// no hook follows: look again this many times, this far apart, while a
+/// watched turn is still queued.
+const STRANDED_LOOKS: usize = 50;
+const STRANDED_LOOK_DELAY: Duration = Duration::from_millis(100);
+
 /// A report meeting another command of the same person tries again this many
 /// times, this far apart.
 const DELIVERY_BUSY_TRIES: usize = 50;
@@ -235,6 +242,21 @@ impl ThreadReports {
         taken
     }
 
+    /// The executions still watched on `child` for an `admitted` person.
+    fn waiting_on(&self, child: &ConversationId, admitted: &[ConversationCaller]) -> Vec<String> {
+        let watches = self.lock();
+        watches
+            .get(child)
+            .into_iter()
+            .flatten()
+            .filter(|watch| {
+                let caller = &watch.report.caller;
+                admitted.iter().any(|seen| person(seen) == person(caller))
+            })
+            .map(|watch| watch.execution.clone())
+            .collect()
+    }
+
     /// Reports registered or being queued.
     #[cfg(test)]
     pub(crate) fn waiting(&self) -> usize {
@@ -257,7 +279,10 @@ impl InvocationHook for ThreadReportHook {
     fn after_invocation(
         &self,
         _: &InvocationContext<'_>,
-        _: &Result<ExecutionOutcome, nessa_sdk::application::agent_execution::agents::AgentError>,
+        result: &Result<
+            ExecutionOutcome,
+            nessa_sdk::application::agent_execution::agents::AgentError,
+        >,
     ) -> Result<(), HookError> {
         let Some(inner) = self.service.upgrade() else {
             return Ok(());
@@ -269,7 +294,8 @@ impl InvocationHook for ThreadReportHook {
         if let Ok(runtime) = tokio::runtime::Handle::try_current() {
             let service = ConversationService { inner };
             let child = self.child.clone();
-            runtime.spawn(async move { service.look_for_reports(child).await });
+            let failed = result.is_err();
+            runtime.spawn(async move { service.look_for_reports(child, failed).await });
         }
         Ok(())
     }
@@ -295,40 +321,91 @@ impl ConversationService {
         self.inner.thread_reports.forget(child, report);
     }
 
+    /// Settle the report of a send that failed: the thread saved no turn
+    /// under `execution`, so none will finish and the report goes; or it did,
+    /// and the report waits for that turn like any other.
+    pub async fn settle_failed_thread_report(
+        &self,
+        child: ConversationId,
+        execution: &str,
+        report: &str,
+        caller: &ConversationCaller,
+    ) {
+        let saved = match self.live_now(&child, caller).await {
+            Ok(Some(live)) => match live.agent.session_manager().snapshot().await {
+                Some(snapshot) => invocation(&snapshot, execution).is_some(),
+                None => return,
+            },
+            Err(ConversationError::NotFound | ConversationError::Deleted) => false,
+            // Not known now: the report's lifetime settles it.
+            Ok(None) | Err(_) => return,
+        };
+        if saved {
+            self.look_for_reports(child, true).await;
+        } else {
+            self.forget_thread_report(&child, report);
+        }
+    }
+
     /// Queue every report on `child` whose turn has finished, for each
-    /// person who may still view it.
-    pub async fn look_for_reports(&self, child: ConversationId) {
-        let mut snapshot = None;
+    /// person who may still view it. After a `failure` the turns queued
+    /// behind it are about to be cancelled: keep looking until they are.
+    pub async fn look_for_reports(&self, child: ConversationId, failure: bool) {
+        let looks = if failure { STRANDED_LOOKS } else { 0 };
+        for look in 0..=looks {
+            if look > 0 {
+                tokio::time::sleep(STRANDED_LOOK_DELAY).await;
+            }
+            if !self.look_once(&child).await {
+                return;
+            }
+        }
+    }
+
+    /// One look; whether a watched turn is still queued.
+    async fn look_once(&self, child: &ConversationId) -> bool {
+        let mut live = None;
         let mut admitted = Vec::new();
-        for caller in self.inner.thread_reports.callers(&child) {
-            match self.live_now(&child, &caller).await {
-                Ok(Some(live)) => {
-                    if snapshot.is_none() {
-                        snapshot = live.agent.session_manager().snapshot().await;
-                    }
+        for caller in self.inner.thread_reports.callers(child) {
+            match self.live_now(child, &caller).await {
+                Ok(Some(found)) => {
+                    live.get_or_insert(found);
                     admitted.push(caller);
                 }
                 // Refused, or gone for good: this person is told nothing.
                 Err(ConversationError::NotFound | ConversationError::Deleted) => {
-                    self.inner.thread_reports.drop_person(&child, &caller);
+                    self.inner.thread_reports.drop_person(child, &caller);
                 }
                 // Not open, or not readable now: a later look, or the
                 // report's lifetime, settles it.
                 Ok(None) | Err(_) => {}
             }
         }
-        let Some(snapshot) = snapshot else {
-            return;
+        let Some(live) = live else {
+            return false;
+        };
+        let Some(snapshot) = live.agent.session_manager().snapshot().await else {
+            return false;
         };
         let taken = self
             .inner
             .thread_reports
-            .take(&child, &admitted, |execution| {
-                finished(&child, &snapshot, execution)
+            .take(child, &admitted, |execution| {
+                finished(child, &snapshot, execution)
             });
         for taken in taken {
             self.deliver_report(taken).await;
         }
+        self.inner
+            .thread_reports
+            .waiting_on(child, &admitted)
+            .iter()
+            .any(|execution| {
+                invocation(&snapshot, execution).is_some_and(|record| {
+                    record.scheduling.last().map(|event| event.stage)
+                        == Some(InvocationStage::Queued)
+                })
+            })
     }
 
     /// Queue one report into its parent. Commands of one person are taken
