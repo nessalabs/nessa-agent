@@ -6,8 +6,10 @@ pub use url::Url;
 #[path = "page_load/state.rs"]
 mod state;
 
+use state::Loads;
+
 fn main() {
-    let loads = state::Loads::new();
+    let loads = Loads::new();
     assert_eq!(
         loads.unserved_page("desktop", "configured").as_deref(),
         Some("configured")
