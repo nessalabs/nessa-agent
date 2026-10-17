@@ -2,8 +2,6 @@
 //! Redacted records have no file. On Unix, directories are mode `0700` and
 //! files are mode `0600` (`a_published_bundle_is_owner_only`).
 
-use crate::backup::domain::encode_identity as encode;
-
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -14,7 +12,7 @@ use nessa_local_storage::{create_directory, open, sync_directory, OpenMode};
 use async_trait::async_trait;
 
 use crate::backup::application::{ManifestPublisher, PublishedRecord};
-use crate::backup::domain::StoreKind;
+use crate::backup::domain::{encode_identity as encode, StoreKind};
 
 /// Writes a bundle under `root`. Identities are percent-encoded, so a
 /// record cannot choose a path outside its store directory.

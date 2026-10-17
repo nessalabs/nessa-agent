@@ -13,7 +13,7 @@ pub use deletion::{
     GrantRole,
 };
 pub use inventory::{StoreKind, WRITER_INVENTORY};
-pub use manifest::{AuthenticatedManifest, Manifest};
+pub use manifest::{AuthenticatedManifest, Manifest, EXPORT_HEADER};
 pub use record::{
     outbox_watermark, CapturedRecord, DeferredEntry, Fingerprint, RecordBody, RecordError,
     Sensitivity, SkipReason, SkippedRecord, SourceCut, Watermark,
@@ -21,5 +21,4 @@ pub use record::{
 
 pub use deletion_decode::DeletionReadError;
 pub(crate) use encoding::encode_identity;
-pub use manifest::EXPORT_HEADER;
 pub use verification::{ListedRecord, ListedStore, ManifestListing, ManifestReadError};
