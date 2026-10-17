@@ -405,6 +405,10 @@ jobs:
       # the ACP
       # process-contract semaphore is process-local, and a process-per-test
       # runner would make that semaphore admit every contract test at once.
+      - name: Diagnose C324 native restart reflush (isolated probe only)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: cargo test --locked -p nessa-auth --lib adapters::pairing::private_state::tests::recovery::restart_reconciliation_reflushes_existing_record -- --exact --nocapture
       - shell: bash
         run: node scripts/cargo-test-parallel.mjs --concurrency 2 --partition ${{ matrix.partition }} -- -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk
         timeout-minutes: 45
