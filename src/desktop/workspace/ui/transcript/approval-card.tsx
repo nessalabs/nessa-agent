@@ -196,7 +196,8 @@ function ApprovalScript({ command, gist }: { command: string; gist: CommandGist 
   const moreHosts = gist.hosts.length - hosts.length
   const morePrograms = gist.programs.length - programs.length
   const shown = gist.script ?? command
-  const lines = shown.split("\n")
+  // A newline that only ends the script starts no line of its own.
+  const lines = shown.replace(/\n$/, "").split("\n")
   const folds = lines.length > foldAfter
   const folded = folds && !unfolded
   // One program run once, and no site, is the command's first word: the row would only repeat it.

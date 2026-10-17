@@ -35,7 +35,7 @@ export interface CommandGist {
   readonly script?: string
   /** The input's other fields, shown beside the script: `[name, JSON value]`. */
   readonly fields: readonly (readonly [string, string])[]
-  /** The programs, in the order they first run. */
+  /** The programs its words name, in the order they first appear. */
   readonly programs: readonly GistProgram[]
   /**
    * The hosts of the web addresses the script names (`https://…`), in their
@@ -46,8 +46,8 @@ export interface CommandGist {
   readonly hosts: readonly string[]
   /**
    * The sketch followed every quote and operator in the script, so `script`
-   * is set one step per line. When false, `script` is exactly as sent, and
-   * `programs` may leave out a program the sketch could not see.
+   * is set one step per line. When false, `script` is exactly as sent and
+   * `programs` is empty: the sketch cannot tell which words are programs.
    */
   readonly lined: boolean
 }
@@ -90,15 +90,26 @@ interface Word {
   readonly starts: boolean
 }
 
+/** An operator between steps, where `scriptLines` may break the line. */
+interface Break {
+  /** Where the operator starts and ends in the script. */
+  readonly start: number
+  readonly end: number
+  readonly operator: ";" | "&&" | "||" | "|" | "|&"
+}
+
 interface Reading {
   readonly words: readonly Word[]
+  /** The operators it read between steps, in order. */
+  readonly breaks: readonly Break[]
   /** Nothing in the script was outside what the sketch reads. */
   readonly lined: boolean
 }
 
 /** The script's words, unquoted, each marked where a new program starts. */
-function read(script: string): Reading {
+export function read(script: string): Reading {
   const words: Word[] = []
+  const breaks: Break[] = []
   let lined = true
   let text = ""
   let inWord = false
@@ -119,10 +130,13 @@ function read(script: string): Reading {
     // Whether the character just before was an unquoted, unescaped `<` or `>`.
     const wasRedirect = afterRedirect
     afterRedirect = false
-    // A substitution runs a program inside a word, quoted (`"$(…)"`) or not.
+    // A substitution runs a program inside a word, quoted (`"$(…)"`) or not;
+    // inside `${…}` and `$[…]` the quotes and operators are not the ones read here.
     if (
       quote !== "'" &&
-      (char === "`" || (char === "$" && (next === "(" || next === "'" || next === '"')))
+      (char === "`" ||
+        (char === "$" &&
+          (next === "(" || next === "'" || next === '"' || next === "{" || next === "[")))
     )
       lined = false
     if (quote) {
@@ -147,13 +161,23 @@ function read(script: string): Reading {
     if (char === "<" && (next === "<" || next === "(")) lined = false
     if (char === ">" && next === "(") lined = false
     if (char === "(" || char === ")") lined = false
-    // `2>&1` and `&>` redirect; they do not start a program. Only an unquoted,
-    // unescaped `<` or `>` just before makes the `&` a redirect's.
-    const redirect = char === "&" && (wasRedirect || next === ">")
+    // In `[[ … ]]`, `|`, `<` and `>` are not operators.
+    if (char === "[" && next === "[" && !inWord) lined = false
+    // `2>&1`, `&>` and `>|` redirect; they do not start a program. Only an
+    // unquoted, unescaped `<` or `>` just before makes the `&` or `|` a redirect's.
+    const redirect =
+      (char === "&" && (wasRedirect || next === ">")) ||
+      (char === "|" && wasRedirect && script[index - 1] === ">")
     afterRedirect = char === "<" || char === ">"
     if (";&|\n()".includes(char) && !redirect) {
       end()
       starts = true
+      const pair = char + (next ?? "")
+      if (pair === "&&" || pair === "||" || pair === "|&" || pair === ";;") {
+        if (pair !== ";;") breaks.push({ start: index, end: index + 2, operator: pair })
+        index++
+      } else if (char === ";" || char === "|")
+        breaks.push({ start: index, end: index + 1, operator: char })
       continue
     }
     if (char === " " || char === "\t") {
@@ -165,7 +189,7 @@ function read(script: string): Reading {
   }
   if (quote) lined = false
   end()
-  return { words, lined }
+  return { words, breaks, lined }
 }
 
 /** `NAME=value` before a program sets its environment; it is not the program. */
@@ -188,58 +212,44 @@ function hostsIn(word: string): string[] {
   return hosts
 }
 
+/** Spaces, tabs and newlines that end `text`, where no backslash escapes them. */
+function trimEnd(text: string): string {
+  while (/[ \t\n]$/.test(text)) {
+    const slashes = /\\*$/.exec(text.slice(0, -1))?.[0].length ?? 0
+    if (slashes % 2 === 1) break
+    text = text.slice(0, -1)
+  }
+  return text
+}
+
 /**
- * The script with one step per line: a line break after each `;`, `&&` and
- * `||` outside quotes, and before each `|`, which is indented under the
- * step it feeds. Only the unquoted spaces beside those operators change,
- * which a shell does not read, so the lines mean what the script means. For
- * a `lined` script only, whose quotes this reading follows.
+ * The script with one step per line: a line break after each `;`, `&&`,
+ * `||` and `|`, the step a pipe feeds indented under it — at the operators
+ * `read` found, and only there. Only the unquoted spaces
+ * beside those operators change, which a shell does not read, so the lines
+ * mean what the script means. A script `read` cannot follow is returned as
+ * it came.
  */
 export function scriptLines(script: string): string {
+  const reading = read(script)
+  if (!reading.lined) return script
   let out = ""
-  let quote: "'" | '"' | undefined
-  // An escaped space (`a\\ `) is part of a word, and stays.
-  const trimmed = (text: string) => {
-    while (/[ \t]$/.test(text) && !text.endsWith("\\ ") && !text.endsWith("\\\t"))
-      text = text.slice(0, -1)
-    return text
+  let from = 0
+  for (const { start, end, operator } of reading.breaks) {
+    const step = trimEnd(script.slice(from, start))
+    // A pipe ends its line too, as a shell reads it, and the step it feeds is indented.
+    out +=
+      operator === "|" || operator === "|&"
+        ? `${step} ${operator}\n  `
+        : `${step}${operator === ";" ? "" : " "}${operator}\n`
+    // The spaces after an operator are not read; a newline after one is a line already.
+    from = end
+    while (/[ \t]/.test(script[from] ?? "")) from++
+    if (operator !== "|" && operator !== "|&" && script[from] === "\n") from++
   }
-  const skipSpaces = (index: number) => {
-    while (script[index + 1] === " " || script[index + 1] === "\t") index++
-    return index
-  }
-  for (let index = 0; index < script.length; index++) {
-    const char = script[index] ?? ""
-    const next = script[index + 1]
-    if (quote) {
-      out += char
-      if (char === "\\" && quote === '"' && next !== undefined) out += script[++index]
-      else if (char === quote) quote = undefined
-      continue
-    }
-    if (char === "'" || char === '"') quote = char
-    if (char === "\\" && next !== undefined) {
-      out += char + script[++index]
-      continue
-    }
-    if ((char === "&" && next === "&") || (char === "|" && next === "|")) {
-      out = `${trimmed(out)} ${char}${next}\n`
-      index = skipSpaces(index + 1)
-      continue
-    }
-    if (char === ";" && next !== ";") {
-      out = `${trimmed(out)};\n`
-      index = skipSpaces(index)
-      continue
-    }
-    if (char === "|" && next !== "&") {
-      out = `${trimmed(out)}\n  | `
-      index = skipSpaces(index)
-      continue
-    }
-    out += char
-  }
-  return out.trim()
+  out += trimEnd(script.slice(from))
+  // Only unescaped ASCII spaces at the ends: any other is part of a word.
+  return trimEnd(out.replace(/^[ \t\n]+/, ""))
 }
 
 /** What the command runs and names (`CommandGist`). */
@@ -270,7 +280,10 @@ export function commandGist(command: string): CommandGist {
       ? { script: reading.lined ? scriptLines(script) : script }
       : {}),
     fields,
-    programs: [...programs].map(([name, count]) => ({ name, count })),
+    // Where the sketch lost the script's thread, its programs may be stray words.
+    programs: reading.lined
+      ? [...programs].map(([name, count]) => ({ name, count }))
+      : [],
     hosts,
     lined: reading.lined,
   }

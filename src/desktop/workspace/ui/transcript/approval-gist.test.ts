@@ -4,7 +4,7 @@
  * where the reading followed every quote — otherwise exactly as sent.
  */
 import { expect, it } from "vitest"
-import { commandGist, scriptLines } from "./approval-gist"
+import { commandGist, read, scriptLines } from "./approval-gist"
 
 const shell = String.raw`curl -s -A "Mozilla/5.0" "https://tad2026.eventive.org/api/v1/films" | head -c 1000; echo; echo "---"; curl -s -I "https://tad2026.eventive.org/api/v1/films"; curl -s https://tad2026.eventive.org/schedule | grep -oE 'src="[^"]+\.js"' | head -20`
 
@@ -22,9 +22,9 @@ it("reads a shell tool's script: its programs, counted, and its sites", () => {
   expect(gist.fields).toEqual([])
 })
 
-it("puts each step of a script on its own line, a pipe under the step it feeds", () => {
+it("puts each step of a script on its own line, the step a pipe feeds indented", () => {
   expect(scriptLines("a | b -c 'x | y'; echo \"1; 2\" && c || d")).toBe(
-    "a\n  | b -c 'x | y';\necho \"1; 2\" &&\nc ||\nd",
+    "a |\n  b -c 'x | y';\necho \"1; 2\" &&\nc ||\nd",
   )
   // An escaped space is part of its word.
   expect(scriptLines("touch a\\ ; ls")).toBe("touch a\\ ;\nls")
@@ -74,11 +74,44 @@ it.each([
   ["a process substitution", "diff <(curl a) b"],
   ["a subshell", "(cd /; rm -rf x)"],
   ["a quote left open", "echo 'never closed; rm -rf ~"],
+  ["a parameter expansion", "x=; echo ${x:-a|b}"],
+  ["quotes nested in an expansion", 'x=; echo "${x:-"; rm -rf ~; "}"'],
+  ["a test", "[[ ab =~ a|b ]] && echo yes"],
+  ["an old arithmetic", "echo $[1|2]"],
 ])("shows the script exactly as sent where it has %s", (_, script) => {
   const gist = commandGist(script)
   expect(gist.lined).toBe(false)
-  // Not re-lined by a reading that may have lost its quotes.
+  // Not re-lined by a reading that may have lost its quotes, nor its words taken for programs.
   expect(gist.script).toBe(script)
+  expect(scriptLines(script)).toBe(script)
+  expect(gist.programs).toEqual([])
+})
+
+it.each([
+  "curl -s https://a.com/x | head -c 10; echo; echo '---' && ls || pwd",
+  "echo key >| ~/.ssh/authorized_keys; ls",
+  "make 2>&1 |& tee log & wait",
+  "touch a\\ ; ls",
+  "printf 'a;b|c' \"d && e\" ; true",
+  "a ;; b",
+  "echo a\\ ",
+  "echo 'x'\u00a0",
+  "a;\nb",
+])("re-lines %j to the same words, each step starting where it did", (script) => {
+  const words = (text: string) =>
+    commandGist(text).lined ? [...read(text).words] : undefined
+  expect(words(scriptLines(script))).toEqual(words(script))
+})
+
+it("keeps a redirect that ends in `|` with its file", () => {
+  const gist = commandGist("echo key >| ~/.ssh/authorized_keys")
+  expect(gist.script).toBe("echo key >| ~/.ssh/authorized_keys")
+  expect(gist.programs).toEqual([{ name: "echo", count: 1 }])
+})
+
+it("keeps the spaces a word ends with", () => {
+  expect(scriptLines("echo a\\ ")).toBe("echo a\\ ")
+  expect(scriptLines("echo 'x'\u00a0")).toBe("echo 'x'\u00a0")
 })
 
 it("names what the words name, and claims no more", () => {

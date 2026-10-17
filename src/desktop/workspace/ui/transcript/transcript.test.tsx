@@ -1082,7 +1082,7 @@ describe("a transcript", () => {
     expect(deadline?.hasAttribute("data-ending")).toBe(true)
     // The command is always shown, a step per line, with the tool it calls.
     expect(card?.querySelector(".workspace-approval-command")?.textContent).toBe(
-      '$ curl -s "https://tad2026.eventive.org/api"\n  | head -c 1000;\ncurl -I https://tad2026.eventive.org/',
+      '$ curl -s "https://tad2026.eventive.org/api" |\n  head -c 1000;\ncurl -I https://tad2026.eventive.org/',
     )
     expect(card?.querySelector(".workspace-approval-meta dd")?.textContent).toBe(
       "mcp__nessa__shell",
@@ -1116,9 +1116,40 @@ describe("a transcript", () => {
     expect(unfold?.textContent).toBe("Show All 8 Lines")
     expect(unfold?.getAttribute("aria-expanded")).toBe("false")
     expect(command()).toBe("$ echo 0;\necho 1;\necho 2;\necho 3;")
+    // It unfolds the block it names.
+    const block = document.getElementById(unfold?.getAttribute("aria-controls") ?? "")
+    expect(block?.contains(host.querySelector(".workspace-approval-command"))).toBe(true)
+    // Folded or not, Copy Command copies the command as the agent sent it.
+    const writeText = vi.fn(() => Promise.resolve())
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      configurable: true,
+    })
+    await act(async () =>
+      host.querySelector<HTMLButtonElement>(".workspace-approval-copy")?.click(),
+    )
+    expect(writeText).toHaveBeenCalledWith(steps.join("; "))
+    Reflect.deleteProperty(navigator, "clipboard")
     await act(async () => unfold?.click())
     expect(unfold?.getAttribute("aria-expanded")).toBe("true")
     expect(command()).toBe(`$ ${steps.join(";\n")}`)
+  })
+
+  it("folds a script it cannot follow by its own lines, as sent", async () => {
+    const approval = conversation.approval
+    if (!approval) throw new Error("the sample asks for nothing")
+    const lines = Array.from({ length: 6 }, (_, line) => `echo $(date) ${line}`)
+    await shown(fakeSource(), {
+      ...conversation,
+      approval: { ...approval, command: `${lines.join("\n")}\n` },
+    })
+    // Six lines and the newline that ends them: short enough to show whole.
+    expect(host.querySelector(".workspace-approval-disclose")).toBeNull()
+    expect(host.querySelector(".workspace-approval-command")?.textContent).toBe(
+      `$ ${lines.join("\n")}\n`,
+    )
+    // Its words are not read as programs.
+    expect(host.querySelector('[aria-label="Programs named"]')).toBeNull()
   })
 
   it("starts the next approval folded, whatever the last one showed", async () => {
