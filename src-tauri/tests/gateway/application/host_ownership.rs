@@ -17,6 +17,57 @@ impl Drop for PoolLease {
         self.0.store(false, Ordering::SeqCst);
     }
 }
+
+struct FinalOwnershipWaitClock {
+    now: Mutex<Instant>,
+    release_at: Option<Instant>,
+    pool: Arc<AtomicBool>,
+    waits: AtomicUsize,
+}
+impl MonotonicClock for FinalOwnershipWaitClock {
+    fn now(&self) -> Instant {
+        *self.now.lock().unwrap()
+    }
+    fn wait(&self, duration: Duration) {
+        let mut now = self.now.lock().unwrap();
+        *now += duration;
+        self.waits.fetch_add(1, Ordering::SeqCst);
+        if self.release_at.is_some_and(|release_at| *now >= release_at) {
+            self.pool.store(false, Ordering::SeqCst);
+        }
+    }
+}
+
+#[test]
+fn final_ownership_wait_attempts_acquisition_before_refusing_at_deadline() {
+    for releases in [true, false] {
+        let start = Instant::now();
+        let pool = Arc::new(AtomicBool::new(true));
+        let host = OwnedHost::new(pool.clone(), "restart-successor");
+        let clock = FinalOwnershipWaitClock {
+            now: Mutex::new(start),
+            release_at: releases.then(|| start + Duration::from_millis(4980)),
+            pool,
+            waits: AtomicUsize::new(0),
+        };
+        let ownership = DesktopHostOwnership::default();
+        let result = claim_host_ownership(&ownership, host.as_ref(), &clock);
+        if releases {
+            assert!(
+                result.is_ok(),
+                "release during the final interval was missed"
+            );
+            assert!(claim_host_ownership(&ownership, host.as_ref(), &clock).is_ok());
+        } else {
+            assert!(matches!(result, Err(GatewayError::DesktopHostBusy)));
+            assert!(ownership.retained().is_none());
+        }
+        assert_eq!(clock.now().duration_since(start), Duration::from_secs(5));
+        assert_eq!(clock.waits.load(Ordering::SeqCst), 100);
+        assert_eq!(host.claims.load(Ordering::SeqCst), 101);
+    }
+}
+
 struct OwnedHost {
     pool: Arc<AtomicBool>,
     claims: AtomicUsize,

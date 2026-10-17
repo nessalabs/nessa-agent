@@ -1944,7 +1944,9 @@ fn claim_host_ownership(
                     return false;
                 }
                 clock.wait(remaining.min(Duration::from_millis(50)));
-                clock.now() < deadline
+                // Observe a release during this wait before checking the deadline
+                // again. A still-busy final attempt does not wait past the bound.
+                true
             },
         )
     }))

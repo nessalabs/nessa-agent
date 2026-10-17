@@ -99,7 +99,7 @@ No native acceptance or release decision is claimed by the cloud checks.
 | H8 | Stage or instance differs | Independent existing service labels do not contend |
 | H9 | Private lock open/validation fails | Typed error, no fallback acquisition or service effect |
 | H10 | A child inherits a descriptor; normal release or exec occurs | No unintended child-held ownership after normal release/exec |
-| H11 | Restart successor tries before predecessor exits | Bounded acquisition can succeed after original release; persistent owner yields busy at deadline |
+| H11 | Restart successor tries before predecessor exits, including release during the final polling interval | Attempt acquisition once after the final wait; release in that interval can succeed, while a persistent owner yields busy without another wait |
 | H12 | Acquisition fails or the waiter panics, then A retries | No fictitious retained lease; retry can acquire |
 | H13 | Joined caller awaits a journal while ownership is refused | Publish the pre-journal failure to joined waiters; none await a journal that will not open |
 | H14 | The first acquisition clock read panics while a journal waiter joins | Supervise deadline creation too; publish typed acquisition failure and settle that waiter |
