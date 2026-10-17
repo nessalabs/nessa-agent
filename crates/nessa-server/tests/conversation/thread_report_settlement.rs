@@ -209,6 +209,7 @@ async fn a_pending_mcp_report_survives_a_conflicting_target_retry() {
     provider.turn_cancel.store(true, Ordering::SeqCst);
     let (service, storage, metadata) = fixture(&root, provider.clone());
     service.bind_commands(storage.clone());
+    super::super::parent_stop::bind(&service, &storage, &root, true).await;
     let store = Arc::new(LocalThreadReports::open(&root.join("reports.sqlite3")).unwrap());
     service.bind_thread_reports(store.clone());
     service.bind_agent_tool_audit(Arc::new(

@@ -57,7 +57,7 @@ async fn child(
 
 #[tokio::test]
 async fn parent_stop_default_override_grandchildren_and_unrelated_execution() {
-    for cascade in [true, false] {
+    for (cascade, idle_intermediate) in [(true, false), (false, false), (true, true)] {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().join("data");
         let provider = Arc::new(ProviderFactory::default());
@@ -72,6 +72,18 @@ async fn parent_stop_default_override_grandchildren_and_unrelated_execution() {
         let c = hold_turn(&service, &provider, &c_id, "child").await;
         let g_id = child(&service, &c_id, "child", "create-grandchild").await;
         let g = hold_turn(&service, &provider, &g_id, "grandchild").await;
+        if idle_intermediate {
+            service
+                .stop_command(
+                    storage.clone(),
+                    c_id.clone(),
+                    caller("idle-child"),
+                    "child".into(),
+                )
+                .await
+                .unwrap();
+            provider.cancel_turns.lock().unwrap().clear();
+        }
         let unrelated = id();
         opened(&service, &provider, &unrelated).await;
         let u = hold_turn(&service, &provider, &unrelated, "unrelated").await;
@@ -87,7 +99,10 @@ async fn parent_stop_default_override_grandchildren_and_unrelated_execution() {
         assert_eq!(receipt.outcome(), Some(MutationOutcome::Cancelled));
         let cancelled = provider.cancel_turns.lock().unwrap().clone();
         assert!(cancelled.contains(&"parent".to_owned()));
-        assert_eq!(cancelled.contains(&"child".to_owned()), cascade);
+        assert_eq!(
+            cancelled.contains(&"child".to_owned()),
+            cascade && !idle_intermediate
+        );
         assert_eq!(cancelled.contains(&"grandchild".to_owned()), cascade);
         assert!(!cancelled.contains(&"unrelated".to_owned()));
         assert_eq!(provider.close_calls.load(Ordering::SeqCst), 0);
