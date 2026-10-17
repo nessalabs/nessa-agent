@@ -373,12 +373,15 @@ pub fn chosen_files() -> Arc<dyn ChosenFiles> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::mpsc;
+    use std::cell::Cell;
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        mpsc,
+    };
     use std::time::Instant;
 
     #[test]
     fn wide_directory_consumption_stops_at_budget_plus_overflow() {
-        use std::cell::Cell;
         let consumed = Cell::new(0);
         let entries = (0..100_000).map(|index| {
             consumed.set(consumed.get() + 1);
@@ -411,7 +414,6 @@ mod tests {
 
     #[test]
     fn disk_directory_iterator_observes_only_budget_plus_one_entries() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
         let directory = tempfile::tempdir().unwrap();
         for index in 0..4096 {
             std::fs::write(directory.path().join(format!("{index:06}")), []).unwrap();

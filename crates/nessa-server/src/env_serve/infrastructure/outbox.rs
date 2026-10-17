@@ -71,7 +71,7 @@ use std::{
             fs::{DirBuilderExt, FileExt, OpenOptionsExt},
         },
     },
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
     sync::{Arc, Mutex, PoisonError},
     time::Duration,
 };
@@ -276,7 +276,7 @@ impl FileOutbox {
             .try_clone()
             .map_err(|_| PublishRefusal::Unreadable)?;
         while let Some(part) = parts.next() {
-            let std::path::Component::Normal(name) = part else {
+            let Component::Normal(name) = part else {
                 return Err(PublishRefusal::OutsideWorkspace);
             };
             let name = CString::new(name.as_bytes()).map_err(|_| PublishRefusal::Invalid)?;

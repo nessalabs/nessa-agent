@@ -61,7 +61,7 @@ use super::batch::Batch;
 use super::choosing::{describe_each, ChosenFile};
 use super::content_type::ContentTypes;
 use super::dragged::{DragBoard, DraggedContent, DraggedText};
-use super::files::{answered_within, ChosenFiles, Kind, NoAnswer};
+use super::files::{answered_within, ChosenFiles, DirectoryEntries, Kind, NoAnswer};
 use super::readiness::{Announce, Gesture, Readiness, Telling, LONGEST_READY_WAIT};
 use super::refusal::{named, FileNotAttached};
 use super::tickets::AttachmentTickets;
@@ -204,8 +204,8 @@ pub(super) fn expand(
             &path,
             MOST_FOLDER_ENTRIES.saturating_sub(examined + queue.len()),
         ) {
-            Ok(super::files::DirectoryEntries::Within(held)) => held,
-            Ok(super::files::DirectoryEntries::TooMany) => {
+            Ok(DirectoryEntries::Within(held)) => held,
+            Ok(DirectoryEntries::TooMany) => {
                 return Err(FileNotAttached::folder_too_large(&named(&path)));
             }
             Err(error) => return Err(FileNotAttached::folder_unreadable(&named(&path), &error)),
