@@ -1174,9 +1174,9 @@ html:not(.dark) [data-surface] {
  * In the window's corner, with nothing beside it, the band begins after the
  * window's controls, as the pane's header does: nothing of it is drawn
  * beneath them, and its left fade starts where they end — and so where a
- * drag's preview would put it (`data-drag-corner`). While panes travel
- * it waits out of sight (`panes.css`), so a pane leaving the corner does not
- * carry the band under the controls on its way.
+ * drag's preview would put it (`data-drag-corner`). Its measured slide origin
+ * follows the pane's flight, retaining this safe inset at both endpoints
+ * (`flip.test.tsx`, `safe-area.mjs`).
  */
 .workspace[data-panes-alone]
   .workspace-pane:is(

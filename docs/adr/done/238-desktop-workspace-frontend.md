@@ -793,12 +793,13 @@ replaced by nessa_ui's, not kept beside it. The composer's access shield is
 the one exception: nessa_ui's `ComposerAccessMode` has no icon slot, so its
 masked outline stays in `styles.css` until nessa_ui adds one.
 
-Motion animates transform and opacity only. Workspace layout changes apply
-immediately (`--desktop-flight: 0ms`, #914): visible content must not travel
-beneath native window controls or disappear while a column changes. The shared
-`FlipScope` still owns drag-preview retirement and cancellation; its zero-duration
-path skips snapshot/counter-scaling work. Independent popup, carried-card and
-first-message motion retain their own durations. `safe-area.mjs` and
+Motion animates transform and opacity only. Workspace layout flights retain
+their 220ms duration; reduced motion makes them instant. Conversations remain
+visible while a column changes (#914). Measured pane and content origins keep
+headers and picture slivers clear of native window controls; no body hiding or
+header fades. `FlipScope` owns drag-preview retirement and cancellation.
+Independent popup, carried-card and first-message motion retain their own
+durations. `safe-area.mjs` and
 `drag.mjs` cover visible content and protected control areas; `perf-budget.mjs`
 checks the layout cost. A timing budget must be met by simplifying motion or
 reducing work, not by blanking a conversation.
@@ -817,10 +818,10 @@ check of its own.
 
 | pane-motion event | owned response |
 | --- | --- |
-| workspace shape changes | apply the final layout immediately; keep content visible and retire the owned drag preview |
-| nonzero flight requested by a shared-component host | snapshot old boxes; read landing boxes with content visible; cancel previous flights |
+| workspace shape changes | land the final layout and retire the owned drag preview; with nonzero motion, snapshot old and landed pane/content origins and animate visible content from its measured position |
+| a moving pane carries marked content | subtract the nearest measured animated parent movement once; counter-scale inset children about the actual pane centre; use the carrying pane's progress curve and duration (`flip.test.tsx`) |
 | flight completes | release the owned flight marks; keep bodies visible |
-| shape changes during a flight | cancel old transforms and begin from the current boxes; reject late completions |
+| shape changes during a flight | snapshot current painted pane/content origins, including moving inert panes; cancel old transforms and begin from those positions; reject late completions |
 | no new flight or reduced motion interrupts a flight | release the old flight immediately |
 | root replaced or scope unmounts | cancel owned flights; clear that owner's root and markers; reject late completions |
 

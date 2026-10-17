@@ -102,7 +102,7 @@ export const Pane = memo(function Pane({
       {...focusHandlers}
     >
       {pictured && filled && listed && !showHome ? (
-        <HeaderSliver moving={focused} />
+        <HeaderSliver moving={focused} flipId={`pane-sliver:${key}`} />
       ) : null}
       <PaneHeader
         pane={key}

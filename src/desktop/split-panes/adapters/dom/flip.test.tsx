@@ -17,12 +17,21 @@ let host: HTMLDivElement
 let begun: { id: string; shift: number }[]
 /** What a begun slide adds to where each element is drawn, as WebKit draws it at once. */
 const drawnShift = new Map<Element, number>()
+const animations = new Map<
+  string,
+  { frames: Keyframe[]; timing: KeyframeAnimationOptions }
+>()
 
 beforeEach(() => {
   ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
   begun = []
   drawnShift.clear()
-  Element.prototype.animate = function (this: Element, keyframes) {
+  animations.clear()
+  Element.prototype.animate = function (this: Element, keyframes, options) {
+    animations.set((this as HTMLElement).dataset.flipId ?? "", {
+      frames: keyframes as Keyframe[],
+      timing: typeof options === "number" ? { duration: options } : (options ?? {}),
+    })
     const first = (keyframes as Keyframe[])[0]
     const shift = Number(/translateX\((-?[\d.]+)px\)/.exec(String(first.transform))?.[1])
     begun.push({ id: (this as HTMLElement).dataset.flipId ?? "", shift })
@@ -53,11 +62,11 @@ beforeEach(() => {
 
 afterEach(() => host.remove())
 
-function Columns({ open }: { open: boolean }) {
+function Columns({ open, inert = false }: { open: boolean; inert?: boolean }) {
   const root = useRef<HTMLDivElement>(null)
   return (
     <FlipScope shape={String(open)} root={root}>
-      <div ref={root}>
+      <div ref={root} inert={inert}>
         {/* The sidebar folds: the list moves 216px left, its title inside it 23px. */}
         <div data-flip="slide" data-flip-id="list" data-left={open ? 216 : 0}>
           <div
@@ -89,6 +98,17 @@ it("slides a carried element by its own difference, wherever the browser draws a
   await act(async () => root.unmount())
 })
 
+it("leaves inert folding columns to their existing transition owner", async () => {
+  const root = createRoot(host)
+  try {
+    await act(async () => root.render(<Columns open inert />))
+    await act(async () => root.render(<Columns open={false} inert />))
+    expect(begun).toEqual([])
+  } finally {
+    await act(async () => root.unmount())
+  }
+})
+
 it("reads where every pane landed before any flight starts, so the page lays out once", async () => {
   const log: ("read" | "write")[] = []
   const animate = Element.prototype.animate
@@ -101,14 +121,18 @@ it("reads where every pane landed before any flight starts, so the page lays out
     if (this.hasAttribute("data-pane")) log.push("read")
     return rect.call(this)
   }
-  const offsetTop = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetTop")
-  Object.defineProperty(HTMLElement.prototype, "offsetTop", {
-    configurable: true,
-    get(this: HTMLElement) {
-      if (this.parentElement?.hasAttribute("data-pane")) log.push("read")
-      return 0
-    },
-  })
+  const offsets = ["offsetLeft", "offsetTop"] as const
+  const descriptors = offsets.map((name) =>
+    Object.getOwnPropertyDescriptor(HTMLElement.prototype, name),
+  )
+  for (const name of offsets)
+    Object.defineProperty(HTMLElement.prototype, name, {
+      configurable: true,
+      get(this: HTMLElement) {
+        if (this.parentElement?.hasAttribute("data-pane")) log.push("read")
+        return 0
+      },
+    })
   let swap: () => void = () => {}
   function Panes() {
     const root = useRef<HTMLDivElement>(null)
@@ -141,7 +165,10 @@ it("reads where every pane landed before any flight starts, so the page lays out
   expect(log.join(" ")).toMatch(/^(read )+(write ?)+$/)
   Element.prototype.animate = animate
   Element.prototype.getBoundingClientRect = rect
-  if (offsetTop) Object.defineProperty(HTMLElement.prototype, "offsetTop", offsetTop)
+  offsets.forEach((name, index) => {
+    const descriptor = descriptors[index]
+    if (descriptor) Object.defineProperty(HTMLElement.prototype, name, descriptor)
+  })
   await act(async () => root.unmount())
 })
 
@@ -290,7 +317,7 @@ it("resizes a pane and its header by transform without fading its content", () =
     {
       pane,
       to: { left: 0, top: 0, width: 500, height: 400 } as DOMRect,
-      children: [{ element: header, top: 0 }],
+      children: [{ element: header, left: 0, top: 0, slide: 0 }],
     },
     { left: 100, top: 0, width: 800, height: 400 } as DOMRect,
     300,
@@ -299,4 +326,124 @@ it("resizes a pane and its header by transform without fading its content", () =
   expect(
     frames.every((animation) => animation.every((frame) => frame.opacity === undefined)),
   ).toBe(true)
+})
+
+it.each([
+  { inert: false, opening: true },
+  { inert: true, opening: true },
+  { inert: false, opening: false },
+  { inert: true, opening: false },
+])(
+  "keeps a carried content origin between its endpoints ($inert inert, $opening opening)",
+  async ({ inert, opening }) => {
+    const computed = globalThis.getComputedStyle
+    globalThis.getComputedStyle = () =>
+      ({
+        getPropertyValue: (name: string) =>
+          name === "--desktop-flight"
+            ? "220ms"
+            : name === "--desktop-slow"
+              ? "240ms"
+              : "",
+      }) as CSSStyleDeclaration
+    let toggle = () => {}
+    Element.prototype.getBoundingClientRect = function (this: Element) {
+      const element = this as HTMLElement
+      return {
+        left: Number(element.dataset.left ?? 0),
+        top: 0,
+        width: Number(element.dataset.width ?? 100),
+        height: 400,
+      } as DOMRect
+    }
+    function Window() {
+      const scope = useRef<HTMLDivElement>(null)
+      const [open, setOpen] = useState(!opening)
+      toggle = () => setOpen(opening)
+      return (
+        <FlipScope shape={String(open)} root={scope}>
+          <div ref={scope} inert={inert}>
+            <article
+              data-flip="pane"
+              data-flip-id="pane"
+              data-left={open ? 320 : 8}
+              data-width={open ? 1120 : 1432}
+            >
+              <div data-flip="slide" data-flip-id="sliver" data-left={open ? 332 : 205} />
+              <header>
+                <div data-flip="slide" data-flip-id="name" data-left={open ? 332 : 205} />
+              </header>
+            </article>
+          </div>
+        </FlipScope>
+      )
+    }
+    const root = createRoot(host)
+    try {
+      await act(async () => root.render(<Window />))
+      await act(async () => toggle())
+      // Parent centre:724→880 (-156). Name:205→332 (-127), so its own shift is29.
+      expect(begun.find(({ id }) => id === "name")?.shift).toBe(opening ? 29 : -29)
+      const parent = animations.get("pane")
+      const name = animations.get("name")
+      const sliver = animations.get("sliver")
+      expect(begun.filter(({ id }) => id === "sliver")).toHaveLength(1)
+      expect(sliver?.timing).toEqual(parent?.timing)
+      expect(name?.timing).toMatchObject({
+        duration: parent?.timing.duration,
+        easing: "linear",
+      })
+      expect(name?.frames.length).toBe(parent?.frames.length)
+      for (const [index, frame] of parent?.frames.entries() ?? []) {
+        const carried = Number(
+          /translate\(([-\d.]+)px/.exec(String(frame.transform))?.[1],
+        )
+        const own = Number(
+          /translateX\(([-\d.]+)px/.exec(String(name?.frames[index]?.transform))?.[1],
+        )
+        const actualLeft = (opening ? 332 : 205) + carried + own
+        expect(actualLeft).toBeGreaterThanOrEqual(205)
+        expect(actualLeft).toBeLessThanOrEqual(332)
+        const scale = Number(/scale\(([-\d.]+),/.exec(String(frame.transform))?.[1])
+        const sliverShift = Number(
+          /translateX\(([-\d.]+)px\)/.exec(
+            String(sliver?.frames[index]?.transform),
+          )?.[1] ?? 0,
+        )
+        expect((opening ? 332 : 205) + carried + sliverShift * scale).toBeCloseTo(
+          actualLeft,
+        )
+      }
+    } finally {
+      globalThis.getComputedStyle = computed
+      await act(async () => root.unmount())
+    }
+  },
+)
+
+it("counter-scales an inset child's measured slide about the pane centre without fading", () => {
+  const pane = document.createElement("article")
+  const sliver = document.createElement("div")
+  pane.append(sliver)
+  const frames: Keyframe[][] = []
+  Element.prototype.animate = (keyframes) => {
+    frames.push(keyframes as Keyframe[])
+    return { cancel() {}, finished: new Promise(() => {}) } as unknown as Animation
+  }
+  flyPane(
+    {
+      pane,
+      to: { left: 320, top: 0, width: 1120, height: 400 } as DOMRect,
+      children: [{ element: sliver, left: 150, top: 20, slide: 41 }],
+    },
+    { left: 8, top: 0, width: 1432, height: 400 } as DOMRect,
+    220,
+  )
+  expect(sliver.style.transformOrigin).toBe("410px 180px")
+  const shift = Number(
+    /translateX\(([-\d.]+)px\)/.exec(String(frames[1]?.[0]?.transform))?.[1],
+  )
+  expect(shift * (1432 / 1120)).toBeCloseTo(41)
+  expect(String(frames[1]?.at(-1)?.transform)).toContain("translateX(0px)")
+  expect(frames.flat().every((frame) => frame.opacity === undefined)).toBe(true)
 })

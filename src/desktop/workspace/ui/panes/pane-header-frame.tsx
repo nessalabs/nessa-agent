@@ -40,6 +40,8 @@ export function PaneHeaderFrame({
     <header ref={ref} className="workspace-pane-header" {...bar.bar} {...props}>
       <div
         className="workspace-pane-name"
+        data-flip={pane === null ? undefined : "slide"}
+        data-flip-id={pane === null ? undefined : `pane-name:${pane}`}
         data-shown={nameShown || undefined}
         aria-hidden={nameShown ? undefined : true}
       >

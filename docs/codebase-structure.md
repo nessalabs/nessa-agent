@@ -392,7 +392,10 @@ against a private scripted gateway.
   source that reads its layout and carries out every change through its own
   commands, and spreads the grid's `frame` on its own pane root; the
   workspace is that host (`adapters/store/split-panes-source.ts`,
-  `ui/panes/pane-grid.tsx`). Other modules import the barrel, any of the pure
+  `ui/panes/pane-grid.tsx`). The workspace marks pane names and picture slivers
+  with stable slide identities; FLIP measures their origins and subtracts the
+  carrying pane movement on the same progress curve (`flip.test.tsx`,
+  `safe-area.mjs`). Other modules import the barrel, any of the pure
   model's files (a model or use case, which may not import React, must), and
   — from a test — `split-panes/testing`; split panes import no host, only the
   four desktop shared parts the rule names (motion, reduced motion, hold

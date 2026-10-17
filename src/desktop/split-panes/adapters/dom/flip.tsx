@@ -50,8 +50,19 @@ interface Landed {
   readonly pane: HTMLElement
   readonly to: DOMRect
   /** Each child and where it sits in the pane. */
-  readonly children: readonly { element: HTMLElement; top: number }[]
+  readonly children: readonly {
+    element: HTMLElement
+    left: number
+    top: number
+    slide: number
+  }[]
 }
+
+// A pane and the content it carries use one progress curve and duration.
+const flightProgress: readonly number[] = Array.from(
+  { length: 15 },
+  (_, index) => 1 - Math.pow(1 - index / 14, 3.2),
+)
 
 /**
  * FLIP with scale correction: the pane's box travels and resizes from `from`
@@ -67,16 +78,13 @@ export function flyPane(
   from: DOMRect,
   duration: number,
 ): Animation[] {
-  const steps = 14
-  const ease = (t: number) => 1 - Math.pow(1 - t, 3.2)
   const dx = from.left + from.width / 2 - (to.left + to.width / 2)
   const dy = from.top + from.height / 2 - (to.top + to.height / 2)
   const sx = from.width / to.width
   const sy = from.height / to.height
   const box: Keyframe[] = []
   const inner: Keyframe[] = []
-  for (let i = 0; i <= steps; i++) {
-    const e = ease(i / steps)
+  for (const e of flightProgress) {
     const x = sx + (1 - sx) * e
     const y = sy + (1 - sy) * e
     box.push({
@@ -88,10 +96,19 @@ export function flyPane(
   pane.style.transformOrigin = "50% 50%"
   return [
     pane.animate(box, timing),
-    ...children.map(({ element, top }) => {
+    ...children.map(({ element, left, top, slide }) => {
       // The pane's centre, in the child's own box.
-      element.style.transformOrigin = `${to.width / 2}px ${to.height / 2 - top}px`
-      return element.animate(inner, timing)
+      element.style.transformOrigin = `${to.width / 2 - left}px ${to.height / 2 - top}px`
+      const frames =
+        slide === 0
+          ? inner
+          : flightProgress.map((e) => {
+              const scale = sx + (1 - sx) * e
+              return {
+                transform: `translateX(${(slide * (1 - e)) / scale}px) scale(${1 / scale}, ${1 / (sy + (1 - sy) * e)})`,
+              }
+            })
+      return element.animate(frames, timing)
     }),
   ]
 }
@@ -105,6 +122,7 @@ function play(root: HTMLElement, from: Rects) {
   const landed = [
     ...root.querySelectorAll<HTMLElement>('[data-flip="slide"][data-flip-id]'),
   ].map((element) => ({ element, after: element.getBoundingClientRect() }))
+  const afterByElement = new Map(landed.map(({ element, after }) => [element, after]))
   const panes: { landed: Landed; before: DOMRect }[] = []
   for (const pane of root.querySelectorAll<HTMLElement>(
     '[data-flip="pane"][data-flip-id]',
@@ -114,30 +132,49 @@ function play(root: HTMLElement, from: Rects) {
     // A settled drop has already previewed where these panes land. Its
     // stationary contents need no counter-scale offsets (flip.test.tsx).
     if (!before || !moved(before, to)) continue
+    const carried = before.left + before.width / 2 - (to.left + to.width / 2)
+    shifted.set(pane, carried)
     panes.push({
       before,
       landed: {
         pane,
         to,
-        children: Array.from(pane.children, (child) => ({
-          element: child as HTMLElement,
-          top: (child as HTMLElement).offsetTop,
-        })),
+        children: Array.from(pane.children, (child) => {
+          const element = child as HTMLElement
+          const old = from.slides.get(element.dataset.flipId ?? "")
+          const after = afterByElement.get(element)
+          return {
+            element,
+            left: element.offsetLeft,
+            top: element.offsetTop,
+            slide: old && after ? old.left - after.left - carried : 0,
+          }
+        }),
       },
     })
   }
-  const slides: { element: HTMLElement; own: number }[] = []
+  const slides: { element: HTMLElement; own: number; withinPane: boolean }[] = []
   landed.forEach(({ element, after }) => {
     const before = from.slides.get(element.dataset.flipId ?? "")
-    // Only what is on screen slides; a column folding away has its own transition.
-    if (!before || element.closest("[inert]")) return
-    const outer = element.parentElement?.closest<HTMLElement>('[data-flip="slide"]')
+    // Inert panes still paint; their content retains its geometry correction.
+    // Folding columns outside a moving pane keep their existing transition owner.
+    const pane = element.closest<HTMLElement>('[data-flip="pane"]')
+    const withinPane = !!pane && shifted.has(pane)
+    if (!before || (element.closest("[inert]") && !withinPane)) return
+    const outer = element.parentElement?.closest<HTMLElement>("[data-flip]")
     const carried = (outer && shifted.get(outer)) ?? 0
     const dx = before.left - after.left
     shifted.set(element, dx)
+    // Its pane's counter-scale and inset correction share one animation.
+    if (
+      outer?.dataset.flip === "pane" &&
+      shifted.has(outer) &&
+      element.parentElement === outer
+    )
+      return
     const own = dx - carried
     if (Math.abs(own) < 0.5) return
-    slides.push({ element, own })
+    slides.push({ element, own, withinPane })
   })
   // A settled preview can leave nothing to animate. Resolving root styles
   // then does work for no flight (flip.test.tsx holds this no-flight path).
@@ -146,13 +183,18 @@ function play(root: HTMLElement, from: Rects) {
   const ease = motionToken(root, "--desktop-ease") ?? "linear"
   const duration = durationToken(root, "--desktop-slow")
   const flight = durationToken(root, "--desktop-flight")
-  slides.forEach(({ element, own }) => {
+  slides.forEach(({ element, own, withinPane }) => {
     flying.push(
-      element.animate([{ transform: `translateX(${own}px)` }, { transform: "none" }], {
-        duration,
-        easing: ease,
-        id: slideAnimation,
-      }),
+      element.animate(
+        withinPane
+          ? flightProgress.map((e) => ({ transform: `translateX(${own * (1 - e)}px)` }))
+          : [{ transform: `translateX(${own}px)` }, { transform: "none" }],
+        {
+          duration: withinPane ? flight : duration,
+          easing: withinPane ? "linear" : ease,
+          id: slideAnimation,
+        },
+      ),
     )
   })
   panes.forEach(({ landed, before }) => {

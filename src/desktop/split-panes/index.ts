@@ -57,7 +57,8 @@
  *   `data-drag-takes-spare`), and the carried copy and its layer
  *   (`.split-panes-ghost`, `-layer`, `-carrier`, `-placeholder`, `-shield`);
  * - the frame spreads `data-pane-key`, `data-flip` and `data-flip-id`, and a
- *   host marks a column that slides with FLIP's `data-flip="slide"`.
+ *   host marks a column or inset pane content with FLIP's `data-flip="slide"`
+ *   and its stable `data-flip-id`; nested content subtracts its parent's carry.
  */
 export { useSplitPanesDrag, type SplitPanesDragOptions } from "./adapters/dom/drag"
 export { classes, gridOf, marks } from "./adapters/dom/marks"

@@ -213,12 +213,24 @@ const keepAsIs = () => {}
  * and steam are still here, and a GIF moves only in the `moving` — focused —
  * pane; the others show its first frame. Decoration only.
  */
-export const HeaderSliver = memo(function HeaderSliver({ moving }: { moving: boolean }) {
+export const HeaderSliver = memo(function HeaderSliver({
+  moving,
+  flipId,
+}: {
+  moving: boolean
+  flipId: string
+}) {
   const [image] = useHeaderImage()
   const [framing] = useHeaderFraming()
   const url = useHeaderPictureUrl(!moving)
   return (
-    <div className="desktop-header" data-sliver="" aria-hidden="true">
+    <div
+      className="desktop-header"
+      data-sliver=""
+      data-flip="slide"
+      data-flip-id={flipId}
+      aria-hidden="true"
+    >
       {image ? (
         url ? (
           <HeaderPicture
