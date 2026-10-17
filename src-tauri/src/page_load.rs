@@ -201,4 +201,100 @@ mod tests {
         assert!(body.contains("aria-label=\"Quit\""), "{body}");
         assert!(!body.contains("not serving"), "{body}");
     }
+
+    #[test]
+    fn an_app_page_counts_and_a_blank_document_does_not() {
+        let loads = Loads::new();
+        loads.observe("main", "about:blank");
+        assert_eq!(
+            loads.unserved_page("main", "configured").as_deref(),
+            Some("configured")
+        );
+        loads.observe("main", "nessa-status://localhost/load-failure");
+        assert_eq!(loads.unserved_page("main", "configured"), None);
+        loads.observe("main", "http://localhost:1420/index.html");
+        assert_eq!(loads.unserved_page("main", "configured"), None);
+        for page in [
+            "http://127.0.0.1:1420/",
+            "http://[::1]:1420/desktop.html",
+            "tauri://localhost/index.html",
+            "http://tauri.localhost/index.html",
+        ] {
+            let loads = Loads::new();
+            loads.observe("main", page);
+            assert_eq!(loads.unserved_page("main", "configured"), None, "{page}");
+        }
+        let loads = Loads::new();
+        let foreign = "http://localhost:7420/health";
+        loads.observe("main", foreign);
+        assert_eq!(
+            loads.unserved_page("main", "configured").as_deref(),
+            Some(foreign)
+        );
+    }
+
+    #[test]
+    fn the_explanation_is_only_that_page_and_only_for_a_dev_server() {
+        let page = Url::parse("nessa-status://localhost/load-failure?page=x").unwrap();
+        assert!(is_load_failure_page(&page, true));
+        assert!(!is_load_failure_page(&page, false));
+        let other = Url::parse("nessa-status://localhost/other").unwrap();
+        assert!(!is_load_failure_page(&other, true));
+        let port = Url::parse("nessa-status://localhost:9/load-failure").unwrap();
+        assert!(!is_load_failure_page(&port, true));
+    }
+
+    #[test]
+    fn no_page_event_uses_the_configured_origin_including_an_override() {
+        let loads = Loads::new();
+        let configured = "http://127.0.0.1:1498/fixture?surface=desktop";
+        assert_eq!(
+            loads.unserved_page("desktop", configured).as_deref(),
+            Some(configured)
+        );
+        loads.observe("desktop", "about:blank");
+        assert_eq!(
+            loads.unserved_page("desktop", configured).as_deref(),
+            Some(configured)
+        );
+    }
+
+    #[test]
+    fn failure_pages_are_preserved_without_marking_an_app_page_loaded() {
+        for url in [
+            "nessa-status://localhost/load-failure?page=first",
+            "http://nessa-status.localhost/load-failure?page=first",
+        ] {
+            let loads = Loads::new();
+            loads.observe("desktop", url);
+            assert_eq!(loads.unserved_page("desktop", "configured"), None);
+            assert_eq!(
+                loads.unserved_page("main", "configured").as_deref(),
+                Some("configured")
+            );
+            loads.observe("desktop", "about:blank");
+            assert_eq!(
+                loads.unserved_page("desktop", "configured").as_deref(),
+                Some("configured")
+            );
+        }
+    }
+
+    #[test]
+    fn observed_unserved_pages_retain_their_url_and_loaded_windows_stay_loaded() {
+        let loads = Loads::new();
+        let observed = loads.clone();
+        observed.observe("main", "http://localhost:1498/index.html?surface=setup");
+        assert_eq!(
+            loads.unserved_page("main", "configured").as_deref(),
+            Some("http://localhost:1498/index.html?surface=setup")
+        );
+        observed.observe("main", "http://localhost:1420/index.html");
+        observed.observe("main", "about:blank");
+        assert_eq!(loads.unserved_page("main", "configured"), None);
+        assert_eq!(
+            Loads::new().unserved_page("main", "configured").as_deref(),
+            Some("configured")
+        );
+    }
 }

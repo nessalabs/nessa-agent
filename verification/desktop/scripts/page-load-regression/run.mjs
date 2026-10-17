@@ -33,7 +33,8 @@ try {
     "src-tauri/src/page_load.rs",
     diagnostic + readFileSync(join(here, "probe.rs"), "utf8"),
   )
-  if (diagnostic.includes("mod state;")) {
+  const hasState = diagnostic.includes("mod state;")
+  if (hasState) {
     write("src-tauri/src/page_load/state.rs", source("src-tauri/src/page_load/state.rs"))
   }
   for (const file of [
@@ -45,6 +46,15 @@ try {
     write(`src/host/${file}`, source(`src/host/${file}`))
   }
   write("src-tauri/src/main.rs", readFileSync(join(here, "host.rs"), "utf8"))
+  const stateHarness = hasState
+    ? '\n[[test]]\nname = "page_load_state"\npath = "src-tauri/src/state_main.rs"\nharness = false\n'
+    : ""
+  if (hasState) {
+    write(
+      "src-tauri/src/state_main.rs",
+      readFileSync(join(here, "state_main.rs"), "utf8"),
+    )
+  }
   // Seed the temporary harness with the repository's dependency versions.
   const lock = source("Cargo.lock")
   write("Cargo.lock", lock)
@@ -59,7 +69,7 @@ try {
     .join("\n")
   write(
     "Cargo.toml",
-    `[package]\nname = "page-load-synthetic-regression"\nversion = "0.0.0"\nedition = "2021"\n[lib]\npath = "src-tauri/src/main.rs"\n[workspace]\n[dependencies]\n${dependencies}\n[lints.rust]\nunused_imports = "deny"\nunexpected_cfgs = { level = "allow", check-cfg = ['cfg(dev)'] }\n`,
+    `[package]\nname = "page-load-synthetic-regression"\nversion = "0.0.0"\nedition = "2021"\n[lib]\npath = "src-tauri/src/main.rs"\n[workspace]\n[dependencies]\n${dependencies}\n[lints.rust]\nunused_imports = "deny"\nunexpected_cfgs = { level = "allow", check-cfg = ['cfg(dev)'] }\n${stateHarness}`,
   )
   const result = spawnSync(
     "cargo",

@@ -32,6 +32,12 @@ versions are seeded from the source revision's lockfile. The temporary crate is
 removed afterwards. The temporary crate denies unused imports; its fixture marks
 the load-failure predicate consumed by the real links adapter as used. This
 catches an unused re-export that the first fixture version suppressed.
+For revisions with the state module, it also compiles and runs `state_main.rs`
+as a `harness = false` integration target. That reproduces the macOS test
+binary's `cfg(test)` without libtest on Linux. It caught unit-test imports left
+unconsumed when test functions are omitted. The state unit tests now belong to
+the parent page-load test module; the reusable facts file contains production
+code only. This check is about compilation mode, not a native WebKit run.
 This tests the real `explain` orchestration and callback
 state with a synthetic native boundary, not WebKit or Tauri's real adapter.
 
