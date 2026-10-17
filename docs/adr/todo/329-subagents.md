@@ -1132,6 +1132,15 @@ not remove the resource owner's ability to perform required cleanup.
 Each child consumes existing global live-conversation capacity. Count creating,
 starting and physically unconfirmed closing children. Reject a spawn with no
 room instead of waiting while the parent occupies the slots its children need.
+Restart restores those child reservations through the coordinator's existing
+live-room owner before admitting new children. Repeated recovery does not charge
+the same lifetime twice. Validated physical release or absence frees its slot
+even while audit debt remains; uncertain cleanup retains it. If the configured
+room cannot accommodate the retained children, recovery refuses admission and
+attempts to return only reservations whose acquisition was acknowledged in that
+attempt. Unacknowledged capacity effects remain uncertain; an extra release must
+not be invented to compensate them. Refused history cannot authorize a capacity
+release.
 Reserve before startup; two racing spawns cannot spend the same remaining slot.
 
 Publish finite direct-child and depth limits, retained request limits and child

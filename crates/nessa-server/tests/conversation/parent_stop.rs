@@ -2455,3 +2455,47 @@ async fn startup_retains_attempted_child_creation_without_binding_or_replaying_i
         retire(service, storage, metadata).await;
     }
 }
+
+#[tokio::test]
+async fn restart_preserves_child_capacity_without_preventing_its_cold_reopen() {
+    use nessa_sdk::application::agent_execution::subagents::OwnershipStore;
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("data");
+    let provider = Arc::new(ProviderFactory::default());
+    let (service, storage, metadata) = fixture(&root, provider.clone());
+    bind_with_capacity(&service, &storage, &root, true, 1).await;
+    let parent = id();
+    opened(&service, &provider, &parent).await;
+    let parent_release = hold_turn(&service, &provider, &parent, "parent").await;
+    let retained = child(&service, &parent, "parent", "retained-child").await;
+    drop(parent_release);
+    retire(service, storage, metadata).await;
+
+    let provider = Arc::new(ProviderFactory::default());
+    let (service, storage, metadata) = fixture(&root, provider.clone());
+    bind_with_capacity(&service, &storage, &root, true, 1).await;
+    opened(&service, &provider, &parent).await;
+    let parent_release = hold_turn(&service, &provider, &parent, "after-restart").await;
+    let refused = id();
+    assert!(
+        matches!(
+            service
+                .create_owned_thread(
+                    source(&parent, "after-restart", "over-capacity"),
+                    refused.clone(),
+                    RequestedConversation::default(),
+                )
+                .await,
+            Err(CreationFailure::Target(ConversationError::Unavailable))
+        ),
+        "the retained child's lifetime still occupies the single child slot"
+    );
+    assert!(metadata.load(&refused).await.unwrap().is_none());
+    let ownership = SqliteOwnershipStore::open(&root.join("ownership.sqlite3")).unwrap();
+    assert_eq!(ownership.read().await.unwrap().spawns.len(), 1);
+    drop(ownership);
+    opened(&service, &provider, &retained).await;
+    finish_turn(&service, &provider, &retained, "retained-after-restart").await;
+    drop(parent_release);
+    retire(service, storage, metadata).await;
+}

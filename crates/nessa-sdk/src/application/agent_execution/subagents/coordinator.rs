@@ -584,6 +584,14 @@ impl OwnershipCoordinator {
 
     /// Reload the store. Reserved, prepared, and attached spawns become unconfirmed
     /// and are not sent to the factory. A closing root resumes its drain.
+    ///
+    /// Call during quiescent startup, before admitting work or binding restored resources.
+    /// Retained children reserve live room until validated physical release; roots do not.
+    /// Repeating a quiescent reload does not reserve the same child twice. Insufficient
+    /// room returns `NoRoom` after acknowledged rollback, without installing the snapshot.
+    /// A room-adapter panic returns `Startup(Uncertain)`; an unacknowledged reservation
+    /// or release is never compensated by inventing an extra release.
+    /// Refused history is installed sealed and cannot release existing reservations.
     pub async fn resume(&self) -> Result<(), OwnershipFailure> {
         Arc::clone(&self.inner).resume_from_store().await
     }
@@ -2159,9 +2167,51 @@ impl Shared {
             })
             .map(|row| row.child_lifetime.clone())
             .collect();
+        let retained: HashSet<_> = restored_snapshot
+            .spawns
+            .iter()
+            .filter(|row| {
+                // Match the existing resource-transfer and slot-release authorities.
+                // Audit delivery alone never proves physical release.
+                !restored_snapshot.settlements.iter().any(|settlement| {
+                    settlement.target == row.child_lifetime
+                        && settlement.physical == PhysicalFact::Released
+                }) && !(restored.lifetime_state(&row.child_lifetime) == Some(LifetimeState::Open)
+                    && matches!(
+                        row.progress,
+                        SpawnProgress::Ended {
+                            known: KnownMilestone::Reserved
+                        }
+                    ))
+            })
+            .map(|row| row.child_lifetime.clone())
+            .collect();
         let rows = restored_snapshot.lifetimes;
         let weak = Arc::downgrade(self);
         self.with_graph(|graph| {
+            let mut held = self.held.lock().expect("live slots");
+            let mut release_uncertain = false;
+            if !refused {
+                for (acquired, _) in retained.difference(&held).enumerate() {
+                    let reservation = synchronous(|| self.room.try_reserve());
+                    if reservation != Some(true) {
+                        // A panicked call has an unknown outcome. Release only the
+                        // reservations whose successful acquisition was observed.
+                        for _ in 0..acquired {
+                            release_uncertain |= synchronous(|| self.room.release()).is_none();
+                        }
+                        return Err(if reservation == Some(false) && !release_uncertain {
+                            OwnershipFailure::Domain(OwnershipError::NoRoom)
+                        } else {
+                            OwnershipFailure::Startup(PortFailure::Uncertain)
+                        });
+                    }
+                }
+                for _ in held.difference(&retained) {
+                    release_uncertain |= synchronous(|| self.room.release()).is_none();
+                }
+                *held = retained;
+            }
             *graph = restored;
             *self.publication.lock().expect("ownership publication") = publication;
             // A restored identity cannot prove never-bound absence.
@@ -2178,7 +2228,12 @@ impl Shared {
                         || nonrunnable_children.contains(&row.lifetime_id),
                 );
             }
-        });
+            if release_uncertain {
+                Err(OwnershipFailure::Startup(PortFailure::Uncertain))
+            } else {
+                Ok(())
+            }
+        })?;
         if refused {
             return Ok(());
         }
