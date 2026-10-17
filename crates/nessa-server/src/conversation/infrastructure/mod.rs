@@ -20,6 +20,10 @@
 //! runs each SDK source on a tracked non-entered thread, and joins those threads
 //! before storage shutdown.
 //!
+//! `LocalThreadReports` keeps the thread reports waiting for a turn to finish
+//! (`ThreadReportStore`) in their own private SQLite dataset,
+//! `conversations/thread-reports.sqlite3`, so a gateway restart keeps them.
+//!
 //! `catalogue_changes` publishes coalesced payloadless notices after visible
 //! metadata transactions commit; final publisher drop closes remaining handles.
 //! Registration/head recheck belongs to its consuming authorized application.
@@ -105,11 +109,13 @@ mod receiver_authority;
 #[cfg(unix)]
 pub(crate) mod ssh_environment;
 mod store;
+mod thread_reports;
 pub use catalogue_changes::MAX_CATALOGUE_CHANGE_WATCHES;
 pub use receiver_authority::{
     export_receivers, ExportedReceiver, LocalReceiverAuthority, ReceiverChangeError,
     ReceiverSnapshot, ReceiverSnapshotError,
 };
+pub use thread_reports::LocalThreadReports;
 mod record_scope;
 pub use record_scope::{exact_record_scope, record_scope_from_identity};
 mod catalogue_read;

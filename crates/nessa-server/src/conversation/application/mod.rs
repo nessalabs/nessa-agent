@@ -295,9 +295,9 @@ pub use service::{
     ConversationAgent, ConversationAgentFuture, ConversationAgentSource, ConversationAgents,
     ConversationCaller, ConversationDeletionBudgets, ConversationDependencies, ConversationLimits,
     ConversationService, DeletionsLeft, McpAppCall, McpAppContextUpdate, McpAppMessage, McpAppRead,
-    McpAppResource, QuestionChoiceInput, ReadOpening, ReportRegistration, RequestedAgent,
-    RequestedConversation, SubmissionMode, ThreadReport, MAX_APP_CALLS, MAX_LISTED_CONVERSATIONS,
-    MAX_REPORT_REPLY_BYTES, MAX_RESOURCE_META_BYTES, MAX_THREAD_REPORTS,
+    McpAppResource, PendingReport, QuestionChoiceInput, ReadOpening, ReportRegistration,
+    RequestedAgent, RequestedConversation, SubmissionMode, ThreadReport, ThreadReportStore,
+    MAX_APP_CALLS, MAX_LISTED_CONVERSATIONS, MAX_RESOURCE_META_BYTES,
 };
 pub(crate) use service::{ExportAdmission, ExportHoldFailure};
 pub use service::{

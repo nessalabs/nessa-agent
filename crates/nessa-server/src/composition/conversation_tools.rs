@@ -427,8 +427,9 @@ async fn run(
             };
             // Registered before the submit, so a turn that ends at once is
             // not missed; the look after it catches one that already had.
-            let registration =
-                service.report_thread_turn(target.clone(), execution.clone(), answer.clone());
+            let registration = service
+                .report_thread_turn(target.clone(), execution.clone(), answer.clone())
+                .await;
             let submitted = match service
                 .submit_command(
                     storage,
@@ -464,7 +465,9 @@ async fn run(
             };
             // A concurrent retry under this request may have failed and let
             // the report go after this one registered: hold it again.
-            let held = service.report_thread_turn(target.clone(), execution.clone(), answer);
+            let held = service
+                .report_thread_turn(target.clone(), execution.clone(), answer)
+                .await;
             let reports = registration.reports() || held.reports();
             if held.reports() {
                 service.look_for_reports(target.clone(), false).await;

@@ -1187,15 +1187,17 @@ async fn a_thread_turn_reports_its_outcome_and_reply_back_to_the_sender() {
 
     // A thread cannot report to itself.
     assert_eq!(
-        service.report_thread_turn(
-            source.clone(),
-            "own".into(),
-            ThreadReport {
-                parent: source.clone(),
-                caller: caller("own"),
-                execution: "own-report".into(),
-            },
-        ),
+        service
+            .report_thread_turn(
+                source.clone(),
+                "own".into(),
+                ThreadReport {
+                    parent: source.clone(),
+                    caller: caller("own"),
+                    execution: "own-report".into(),
+                },
+            )
+            .await,
         ReportRegistration::Refused
     );
     drop(client);
@@ -1203,4 +1205,92 @@ async fn a_thread_turn_reports_its_outcome_and_reply_back_to_the_sender() {
     serving.await.unwrap();
     drop(release);
     retire(service, storage, metadata).await;
+}
+
+/// Reports saved by one run of the gateway are delivered by the next: a turn
+/// that finished before the restart reports its outcome, and one the earlier
+/// run never finished reports that it was interrupted. Each leaves the store
+/// once its parent has it.
+#[cfg(unix)]
+#[tokio::test]
+async fn saved_thread_reports_are_delivered_after_a_restart() {
+    use crate::conversation::application::ThreadReportStore;
+    use crate::conversation::infrastructure::LocalThreadReports;
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("data");
+    let private = directory.path().join("reports");
+    nessa_local_storage::create_directory(&private).unwrap();
+    let saved = private.join("thread-reports.sqlite3");
+    let source = id();
+    let worker = id();
+    let report = |execution: &str| ThreadReport {
+        parent: source.clone(),
+        caller: caller(&format!("{execution}-action")),
+        execution: format!("{execution}-report"),
+    };
+    {
+        let provider = Arc::new(ProviderFactory::default());
+        let (service, storage, metadata) = fixture(&root, provider.clone());
+        service.bind_commands(storage.clone());
+        service.bind_thread_reports(Arc::new(LocalThreadReports::open(&saved).unwrap()));
+        opened(&service, &provider, &source).await;
+        opened(&service, &provider, &worker).await;
+        finish_turn(&service, &provider, &worker, "done").await;
+        // Registered with no look after it, as a run that stopped before
+        // it could deliver leaves them.
+        for execution in ["done", "never"] {
+            assert_eq!(
+                service
+                    .report_thread_turn(worker.clone(), execution.into(), report(execution))
+                    .await,
+                ReportRegistration::Registered
+            );
+        }
+        retire(service, storage, metadata).await;
+    }
+    let provider = Arc::new(ProviderFactory::default());
+    let (service, storage, metadata) = fixture(&root, provider.clone());
+    service.bind_commands(storage.clone());
+    let store = Arc::new(LocalThreadReports::open(&saved).unwrap());
+    service.bind_thread_reports(store.clone());
+    assert_eq!(service.resume_thread_reports().await.unwrap(), 2);
+    let reports = reports_in(&service, &source, 2).await;
+    assert_eq!(reports.len(), 2, "{reports:?}");
+    let done = reports
+        .iter()
+        .find(|text| text.contains("execution done)"))
+        .unwrap();
+    assert!(done.contains(": completed."), "{done}");
+    let never = reports
+        .iter()
+        .find(|text| text.contains("execution never)"))
+        .unwrap();
+    assert!(never.contains(": interrupted."), "{never}");
+    assert!(
+        never.contains("The gateway restarted before the turn finished."),
+        "{never}"
+    );
+    tokio::time::timeout(TURN_HOLD_HANG, async {
+        while !store.pending().await.unwrap().is_empty() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("delivered reports leave the store");
+    retire(service, storage, metadata).await;
+}
+
+/// A report is whole within the parent's input limit, however long the reply.
+#[test]
+fn a_long_reply_is_cut_so_the_whole_report_fits_the_input_limit() {
+    let limit = ConversationLimits::default().max_input_bytes;
+    let text = crate::conversation::application::service::report_text_for_test(
+        &id(),
+        "turn",
+        "completed",
+        "é".repeat(limit),
+        limit,
+    );
+    assert!(text.len() <= limit, "{} > {limit}", text.len());
+    assert!(text.ends_with("\n[reply cut to fit]"));
 }

@@ -100,9 +100,9 @@ use std::{
     },
     time::Duration,
 };
-pub use thread_reports::{
-    ReportRegistration, ThreadReport, MAX_REPORT_REPLY_BYTES, MAX_THREAD_REPORTS,
-};
+#[cfg(test)]
+pub(crate) use thread_reports::report_text_for_test;
+pub use thread_reports::{PendingReport, ReportRegistration, ThreadReport, ThreadReportStore};
 
 use tokio::{
     sync::{
@@ -3784,7 +3784,8 @@ impl ConversationService {
         caller: ConversationCaller,
     ) -> Result<(), ConversationError> {
         let service = self.clone();
-        supervised(async move {
+        let closing = id.clone();
+        let closed = supervised(async move {
             let _admission = service.admit().await?;
             let _mode = service.inner.mode_changes.lock(&id).await;
             let actor = caller.actor()?;
@@ -3901,7 +3902,12 @@ impl ConversationService {
                 }),
             }
         })
-        .await
+        .await;
+        // Turns it held were cancelled with no invocation to follow.
+        if closed.is_ok() {
+            self.wake_thread_reports(&closing);
+        }
+        closed
     }
     /// Archive the conversation, or unarchive it: whether `list` shows it by
     /// default. Nothing is stopped or removed. Returns whether this changed
@@ -4513,6 +4519,7 @@ impl ConversationService {
                     failures.history = Some(ConversationError::Storage(error));
                 }
             }
+            self.forget_thread_reports_of(&id).await;
             let _writes = self.inner.summary_writes.lock(&id).await;
             if let Err(error) = self.inner.summaries.erase(&id).await {
                 failures.summary = Some(error);

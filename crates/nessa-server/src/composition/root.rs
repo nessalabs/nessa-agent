@@ -390,6 +390,15 @@ impl CompositionRoot {
         // a deletion that cannot finish is reported, never a reason to hold up
         // startup. Asking an agent about its own record of a session does not
         // wait for the warm-up just above; it spends its own launch budget.
+        // Thread reports the last run saved are looked at again: delivered
+        // when their turn finished, reported interrupted when it did not.
+        if let Some(service) = conversations.clone() {
+            tokio::spawn(async move {
+                if let Err(error) = service.resume_thread_reports().await {
+                    tracing::error!(%error, "saved thread reports could not be read to resume them");
+                }
+            });
+        }
         if let Some(service) = conversations.clone() {
             tokio::spawn(async move {
                 match service.finish_deletions().await {

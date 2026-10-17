@@ -40,37 +40,74 @@ A queued or steering `send_message` reports back when its turn ends
 (`reportsBack: true`). The report is a new queued owner turn in the sending
 conversation, admitted under the same caller its send was, that names the
 thread and execution, the outcome, and the thread's final visible reply: the
-text after its last tool step, thinking left out, cut at 8 KB. It queues behind
-whatever the sender is doing, so a sender that ended its turn is woken, and one
-still running reads it next. A passive note starts no turn and reports nothing.
+text after its last tool step, thinking left out, cut so the whole report fits
+the conversation's input limit. It queues behind whatever the sender is doing,
+so a sender that ended its turn is woken, and one still running reads it next.
+A passive note starts no turn and reports nothing.
 
-`service/thread_reports.rs` owns this. The send registers its report before it
-submits, so a turn that ends at once is not missed, and again after a submit
-that succeeded, so a concurrent retry that failed cannot let it go. It then
-looks once, so a retry of a turn that already ended still reports. A refused
-send asks the thread's saved history: with no turn under its execution, the
-report goes; with one, it waits for that turn like any other. Every opened agent carries `ThreadReportHook`;
-after each invocation, once its result is saved, it asks the service to look at
-that thread when a report waits on it. Each look checks that every person with
-a report waiting may still view the thread: a refusal, or a thread gone, lets
-that person's reports go and tells them nothing. It reads the thread's saved
-invocations: a watched execution is finished when it settled, was cancelled, or
-was injected into the turn its scheduling names as `target` and that turn has
-settled, in which case that turn's outcome and reply are its own. A failed
-turn makes the agent cancel the turns queued behind it after its hook, with no
-invocation to follow, so a look after a failure keeps looking for up to five
-seconds while a watched turn is still queued. A queued turn dropped because the
-thread closed reports when the thread next runs, or not at all. The report's
-execution identity derives from the send's source, request and purpose, so a
-second look or a retried send answers from the first receipt. One person's
-commands are taken one at a time without a queue, so a report that meets the
-person's own command retries while the store answers busy, for up to five seconds.
+`service/thread_reports.rs` owns this, and `ThreadReportStore` keeps every
+waiting report durably: `LocalThreadReports`, one row per report in
+`conversations/thread-reports.sqlite3` (version 1; a version this build cannot
+read refuses the gateway, ADR 202). There is no count limit and no lifetime: a
+report waits until its turn finishes, its thread or parent is deleted, or its
+person may no longer view the thread.
 
-Registrations are process-local: at most 256 wait at once, and one waits at
-most a day. A full registry answers `reportsBack: false`; a restart forgets
-them, and the sender can still `subscribe`. A thread cannot report to itself.
-Two agents that keep messaging each other keep reporting to each other: that is
-their own conversation, and the person stops it as they would any turn.
+The send saves and registers its report before it submits, so a turn that ends
+at once is not missed, and again after a submit that succeeded, so a
+concurrent retry that failed cannot let it go. A report that cannot be saved is
+not promised (`reportsBack: false`). The send then looks once, so a retry of a
+turn that already ended still reports. A refused send asks the thread's saved
+history: with no turn under its execution, the report goes; with one, it waits
+for that turn like any other.
+
+A look happens after each invocation of a watched thread (`ThreadReportHook`),
+after a watched queued turn is withdrawn, after a watched thread closes, and at
+start for every thread a saved report waits on. One look runs per thread at a
+time; one asked for meanwhile runs after it. Each look checks that every person
+with a report waiting may still view the thread: a refusal, or a thread gone,
+lets that person's reports go and tells them nothing. It reads the thread's
+saved invocations, from its agent when it is open and from its committed
+history when it is not. A watched execution is finished once its settlement is
+saved: settled, or cancelled, or injected into the turn its scheduling names as
+`target` once that turn has settled, whose outcome and reply are then its own.
+The hook runs before the settlement it follows is saved, and a failed turn
+makes the agent cancel the turns queued behind it after that, so a look keeps
+looking for up to five seconds while a watched turn is settling.
+
+The report's execution identity derives from the send's source, request and
+purpose, so a second look, a retried send, or a redelivery after a restart
+answers from the first receipt. A report leaves the store only once its parent
+has it, or refuses it outright. One person's commands are taken one at a time
+without a queue, so one person's reports are delivered one at a time, and a
+report that meets the person's own command, or storage that does not answer,
+tries again with growing waits (up to 30 seconds) until the gateway retires;
+it then stays saved for the next start.
+
+| When | What happens |
+| --- | --- |
+| The send's submit succeeds | Report saved and held; one look |
+| The send is refused, no turn saved | Report let go |
+| The send is refused, a turn saved | Report waits for that turn |
+| The report cannot be saved | `reportsBack: false`; the send goes on |
+| Turn settles or is cancelled | Report queued into the parent, then let go |
+| Steer injected into a turn | Reported with that turn once it settles |
+| Queued turn withdrawn, or thread closed | Look; reported `cancelled` |
+| Parent busy with the person's command | Retried until it is taken |
+| Gateway retires before delivery | Stays saved; the next start delivers it |
+| Saved by an earlier run, turn finished | Delivered at start |
+| Saved by an earlier run, turn unfinished | Reported `interrupted` at start |
+| Person may no longer view the thread, or it is deleted | Let go, nothing told |
+
+No turn the earlier run left unfinished runs again after a restart, so a saved
+report whose turn has not finished is reported `interrupted`;
+`restored_unfinished` owns that decision, and is what changes once interrupted
+turns resume. A thread cannot report to itself. Two agents that keep messaging
+each other keep reporting to each other: that is their own conversation, and the
+person stops it as they would any turn. Tests:
+`a_thread_turn_reports_its_outcome_and_reply_back_to_the_sender`,
+`saved_thread_reports_are_delivered_after_a_restart`,
+`a_long_reply_is_cut_so_the_whole_report_fits_the_input_limit`,
+`waiting_reports_survive_reopening_until_settled`.
 
 For example, call `send_message({threadId, message: "Review the change"})`, then
 `subscribe({threadId, replay: true})`. Continue with the returned `cursor` as
