@@ -19,7 +19,7 @@ examples.
 
 ## Before you edit
 
-- [Gates](CODING_STANDARDS.md#gates) — the eighteen conditions a change is merged
+- [Gates](CODING_STANDARDS.md#gates) — the nineteen conditions a change is merged
   on. Read them first; most review findings are one of these.
 - [Organization across the repository](CODING_STANDARDS.md#organization-across-the-repository)
   — where a change belongs, and what else moves with it. Applies to source,
@@ -68,6 +68,10 @@ examples.
   — any change to what a person sees or does in a UI, and
   [gate 17](CODING_STANDARDS.md#gates). The `desktop-verification` skill is
   how to run it.
+- [Conversation stress](CODING_STANDARDS.md#conversation-stress) — every new
+  or changed feature a person or an agent reaches through a conversation, and
+  [gate 19](CODING_STANDARDS.md#gates): how to add its step to
+  `pnpm test:e2e:stress`, and how to run it at higher numbers.
 - [Adding a check to CI](CODING_STANDARDS.md#adding-a-check-to-ci) — before you
   add a job.
 

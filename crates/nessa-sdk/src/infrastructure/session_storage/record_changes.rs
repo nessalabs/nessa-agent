@@ -298,6 +298,27 @@ mod tests {
         );
     }
 
+    /// #978: no count per session or for every-session interest either. More
+    /// registrations than the old pool of 64 on one session and on every
+    /// session are all woken by one commit, and all of them leave.
+    #[tokio::test]
+    async fn one_session_and_every_session_hold_more_than_64_registrations() {
+        let producer = RecordChanges::default();
+        let key = target("owner");
+        let mut watches = (0..100)
+            .map(|_| producer.watch(key.clone()).unwrap())
+            .chain((0..100).map(|_| producer.watch_any().unwrap()))
+            .collect::<Vec<_>>();
+        assert_eq!(producer.count(), 200);
+        producer.publish(&key);
+        for watch in &mut watches {
+            assert_eq!(ready(watch), ChangeWatchState::Dirty);
+        }
+        drop(watches);
+        assert_eq!(producer.count(), 0, "every registration leaves");
+        assert!(producer.inner.state.lock().unwrap().by_session.is_empty());
+    }
+
     #[tokio::test]
     async fn cancelled_wait_keeps_the_registration_until_its_handle_drops() {
         let producer = RecordChanges::default();

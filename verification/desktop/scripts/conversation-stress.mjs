@@ -1,0 +1,839 @@
+#!/usr/bin/env node
+/**
+ * The conversation stress check: a person using one conversation for many
+ * rounds through the real gateway and the desktop window, with the scripted
+ * agent standing in for the model. Seeded, so a failing run is replayed by
+ * its numbers.
+ *
+ * Every message on the main conversation is typed into the window's composer
+ * and sent with its Send button, never through the client library, because
+ * the client always makes fresh request ids and so hid the desktop's own
+ * send bugs. Between rounds the plan (`lib/stress-plan.mjs`) mixes in:
+ *
+ *   reply       a plain turn; the window shows its echo
+ *   permission  the agent asks; a card is answered in the window — or, under
+ *               full access, nothing is asked and the tool runs
+ *   reviews     one turn asks `--reviews` reviews in a row, each a card
+ *   large       one review larger than the old 16 KB display limit
+ *   stop        Send turns into Stop while the turn runs; Stop cancels it
+ *   fail        the turn fails; the next message is sent in the same conversation
+ *   switch      the access shield picks another mode, sometimes mid-turn,
+ *               where the change waits for the turn to end
+ *   restart     the gateway is killed (crash) or stopped (shutdown) mid-turn
+ *               and started again; the turn is resumed and the window follows
+ *   delegate    the agent creates a thread and messages it; the thread's
+ *               report comes back as a turn of its own
+ *   aside       another conversation is opened in the window and talked to
+ *
+ * Meanwhile `--parallel` background conversations take turns through the
+ * gateway. At the end every conversation must be at rest, every turn ended as
+ * planned, and nothing denied automatically or hidden behind a display limit.
+ *
+ * Build the gateway first (`cargo build -p nessa-server`). How to add a step
+ * is in CODING_STANDARDS.md, "Conversation stress".
+ *
+ *   pnpm test:e2e:stress                        # the pull request's run
+ *   pnpm test:e2e:stress -- --rounds 60 --parallel 12 --seed 7
+ *   NESSA_STRESS_ROUNDS=60 pnpm test:e2e:stress # the same, from the environment
+ */
+import { randomUUID } from "node:crypto"
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { setTimeout as sleep } from "node:timers/promises"
+
+import { readWithReviews } from "../../../scripts/conversation-smoke/reviews.mjs"
+import { turnEnded } from "../../../scripts/mcp-test-server/evidence.mjs"
+import {
+  SAYS,
+  STRESS,
+  stressScenario,
+} from "../../../scripts/mcp-test-server/scenarios/stress.mjs"
+import { openPage, withEngines } from "./lib/browser.mjs"
+import { CannotRun, log } from "./lib/cli.mjs"
+import { gatewayHost } from "./lib/fake-host.mjs"
+import {
+  connectClient,
+  panelTarget,
+  startGatewayStack,
+  waitFor,
+} from "./lib/gateway-stack.mjs"
+import { main } from "./lib/run.mjs"
+import { writeView } from "./lib/scripted-evidence.mjs"
+import { composerControls, css, offeredLabel } from "./lib/selectors.mjs"
+import { KNOBS, describe, knobsFrom, plan } from "./lib/stress-plan.mjs"
+
+const INSTANCE = "conversation-stress"
+
+const meta = {
+  name: "conversation-stress",
+  summary:
+    "many rounds in one conversation through the gateway and the window, with access switches, stops, failures, restarts, threads and side conversations",
+  defaults: { engine: "chromium", layout: "columns" },
+  options: {
+    agent: { type: "string", default: "claude" },
+    evidence: { type: "string" },
+    ...Object.fromEntries(Object.keys(KNOBS).map((name) => [name, { type: "string" }])),
+  },
+  help: `
+Usage: node verification/desktop/scripts/conversation-stress.mjs [options]
+
+Needs: the gateway built (cargo build -p nessa-server; or MCP_LIVE_NESSA). No
+harness and no sign-in: the gateway runs scripted-agent.mjs with the stress
+scenario (scripts/mcp-test-server/scenarios/stress.mjs). It starts its own
+gateway; --url is not used.
+
+Numbers (a flag, else NESSA_STRESS_<NAME>, else the default):
+${Object.entries(KNOBS)
+  .map(
+    ([name, knob]) =>
+      `  --${name.padEnd(9)} ${String(knob.default).padStart(3)}  ${knob.what}`,
+  )
+  .join("\n")}
+
+Options:
+  --agent claude|codex  the harness profile the scripted agent speaks (default:
+                        claude; Linux offers full access only on Claude's model)
+  --evidence <dir>      write the plan, acp.jsonl, mcp.jsonl, gateway.log and views/`,
+}
+
+const fold = (text) =>
+  String(text ?? "")
+    .replace(/\s+/g, " ")
+    .trim()
+
+/** Everything the run shares: the stack, the page, and the client in use now. */
+class Run {
+  constructor(stack, opened, knobs) {
+    this.stack = stack
+    this.opened = opened
+    this.page = opened.page
+    this.knobs = knobs
+    this.client = stack.client
+    this.mode = "ask"
+    /** Gateway restarts so far: a request in flight across one may lose its answer. */
+    this.restarts = 0
+    this.main = null
+    /** Turns a background conversation has in flight; a restart waits for none. */
+    this.busy = 0
+    this.paused = null
+    this.background = []
+    this.sent = new Map()
+  }
+
+  /** Waits while a restart holds the gateway. */
+  async enter() {
+    while (this.paused) await this.paused
+    this.busy += 1
+  }
+
+  leave() {
+    this.busy -= 1
+  }
+
+  /** Runs `body` with no background turn in flight and none starting. */
+  async exclusive(body) {
+    let release
+    this.paused = new Promise((resolve) => (release = resolve))
+    try {
+      await waitFor(() => this.busy === 0, 120_000)
+      return await body()
+    } finally {
+      this.paused = null
+      release()
+    }
+  }
+}
+
+/** An error with its code and cause, which a client failure keeps apart from its message. */
+const explain = (error) =>
+  [error?.message, error?.code, error?.cause?.message ?? error?.cause?.code]
+    .filter(Boolean)
+    .join(" · ")
+
+const dock = (page) => page.locator(css.conversationDock)
+
+async function pageText(page) {
+  return fold(
+    await page
+      .locator(css.workspace)
+      .innerText()
+      .catch(() => ""),
+  )
+}
+
+/** Waits up to `ms` for the window to show `text`. */
+const shows = (page, text, ms = 30_000) =>
+  waitFor(async () => (await pageText(page)).includes(fold(text)), ms).then(Boolean)
+
+/**
+ * Reads until `ready` holds for the turn `at` names: a message index, or
+ * `{ text }`, the turn the person sent as `text` (every text in a run is its
+ * own). A read keeps only the latest turns and the agent's own turns can land
+ * in between, so a sent turn is found by its text, never its position.
+ */
+async function untilTurn(run, conversationId, at, ready, seconds = 60) {
+  const end = Date.now() + seconds * 1000
+  let view
+  let turn
+  do {
+    try {
+      view = await readWithReviews(run.client, conversationId)
+      turn =
+        typeof at === "number"
+          ? view.messages[at]
+          : view.messages.find((each) => each.userText === at.text)
+      if (turn && ready(turn, view)) return { view, turn }
+    } catch (error) {
+      // A read across a restart fails; the next one is on the new client.
+      log(`read ${conversationId}: ${error.message}`)
+    }
+    await sleep(200)
+  } while (Date.now() < end)
+  return { view, turn }
+}
+
+const ended = (turn) => turnEnded(turn.status)
+
+/** Opens `title`'s conversation in the window, and waits for its composer. */
+async function open(page, title) {
+  await page
+    .locator(css.sessionRow, { hasText: title })
+    .first()
+    .click({ timeout: 15_000 })
+  await dock(page).locator("textarea").waitFor({ timeout: 15_000 })
+}
+
+/**
+ * Types `text` into the open conversation's composer and presses Send.
+ * Resolves with the turns the conversation already had, so a turn after it
+ * is one not among them. A read keeps only the latest turns, so a turn is
+ * never found by its position. A send the window refuses or keeps is a
+ * failure, not a retry.
+ */
+async function send(run, conversationId, text, failures) {
+  const before = await seenTurns(run, conversationId)
+  const box = dock(run.page).locator("textarea")
+  await box.fill(text)
+  const button = dock(run.page).getByRole(...composerControls.send)
+  await button.click({ timeout: 10_000 })
+  const taken = await waitFor(async () => (await box.inputValue()) === "", 10_000)
+  if (!taken) failures.push(`the composer kept ${JSON.stringify(text)} after Send`)
+  run.sent.set(conversationId, (run.sent.get(conversationId) ?? 0) + 1)
+  return before
+}
+
+/** The execution ids of the turns `conversationId` has now. */
+async function seenTurns(run, conversationId) {
+  const view = await run.client.conversation.read(conversationId)
+  return new Set(view.messages.map((each) => each.executionId))
+}
+
+/**
+ * The turn sent as `text`, once it ends, checked: `text` is in the
+ * conversation exactly once, and its turn ended `status`. `seen` are the turns
+ * from before the send, left out of what a failure lists.
+ */
+async function settled(run, conversationId, seen, text, status, failures, seconds = 60) {
+  const end = Date.now() + seconds * 1000
+  let view
+  let turn
+  do {
+    try {
+      view = await readWithReviews(run.client, conversationId)
+      turn = view.messages.find((each) => each.userText === text)
+      if (turn && ended(turn)) break
+    } catch (error) {
+      log(`read ${conversationId}: ${error.message}`)
+    }
+    await sleep(200)
+  } while (Date.now() < end)
+  if (!turn) {
+    failures.push(
+      `${JSON.stringify(text)} is not in the conversation after ${seconds} s: ${JSON.stringify(
+        view?.messages
+          .filter((each) => !seen.has(each.executionId))
+          .map((each) => [each.status, each.userText.slice(0, 60)]),
+      )}`,
+    )
+    return { view }
+  }
+  const copies = view.messages.filter((each) => each.userText === text).length
+  if (copies !== 1) failures.push(`${JSON.stringify(text)} was sent ${copies} times`)
+  if (!ended(turn)) failures.push(`${JSON.stringify(text)} is still ${turn.status}`)
+  else if (turn.status !== status)
+    failures.push(
+      `${JSON.stringify(text)} ended ${turn.status}${turn.error ? ` (${turn.error})` : ""}, not ${status}`,
+    )
+  return { view, turn }
+}
+
+async function expectShown(page, text, failures, ms) {
+  if (!(await shows(page, text, ms)))
+    failures.push(`the window does not show ${JSON.stringify(text)}`)
+}
+
+/** The visible agent card, once there is one; `null` after `ms`. */
+async function card(page, ms = 30_000) {
+  const cards = page.locator(css.agentApproval)
+  const seen = await cards
+    .first()
+    .waitFor({ timeout: ms })
+    .then(() => true)
+    .catch(() => false)
+  return seen ? cards : null
+}
+
+/** Answers the one card shown, by the effect `answer` names, from the review's own options. */
+async function answerCard(run, conversationId, answer, failures, reason) {
+  const cards = await card(run.page)
+  if (!cards) {
+    failures.push(
+      `no approval card${reason ? ` for ${JSON.stringify(reason)}` : ""} within 30 s`,
+    )
+    return false
+  }
+  const shown = await cards.count()
+  if (shown !== 1) failures.push(`${shown} approval cards shown, not 1`)
+  const { view } = await untilTurn(
+    run,
+    conversationId,
+    0,
+    (_turn, current) => current.permissions.length > 0,
+    10,
+  )
+  const permission = view?.permissions?.[0]
+  if (
+    reason &&
+    permission?.title !== reason &&
+    !fold(await cards.first().innerText()).includes(reason)
+  )
+    failures.push(`the card does not ask ${JSON.stringify(reason)}`)
+  const label = offeredLabel(permission?.options, answer === "allow" ? "allow" : "deny")
+  if (!label) {
+    failures.push(`the review offers no ${answer}`)
+    return false
+  }
+  await cards
+    .first()
+    .getByRole("button", { name: label, exact: true })
+    .click({ timeout: 10_000 })
+  const gone = await waitFor(async () => {
+    const current = await readWithReviews(run.client, conversationId)
+    return !current.permissions.some((each) => each.review === permission.review)
+  }, 30_000)
+  if (!gone)
+    failures.push(
+      `the answer to ${JSON.stringify(reason ?? permission.title)} was not taken`,
+    )
+  return true
+}
+
+/** Picks `mode` in the open conversation's access shield. */
+async function pickAccess(page, mode) {
+  await dock(page).locator(composerControls.access).click({ timeout: 10_000 })
+  await page.locator(composerControls.accessMenu).waitFor({ timeout: 10_000 })
+  await page
+    .locator(composerControls.accessMenu)
+    .getByRole(...composerControls.accessItem[mode])
+    .click({ timeout: 10_000 })
+}
+
+/** Waits for the gateway to say the conversation runs at `mode`. */
+const accessIs = (run, conversationId, mode, ms = 20_000) =>
+  waitFor(async () => {
+    try {
+      return (await run.client.conversation.read(conversationId)).approvalMode === mode
+    } catch {
+      return false
+    }
+  }, ms)
+
+/** Waits until Send has turned into Stop. */
+const stopShown = (page, ms = 15_000) =>
+  dock(page)
+    .getByRole(...composerControls.stop)
+    .waitFor({ timeout: ms })
+    .then(() => true)
+    .catch(() => false)
+
+const sendShown = (page, ms = 15_000) =>
+  dock(page)
+    .getByRole(...composerControls.send)
+    .waitFor({ timeout: ms })
+    .then(() => true)
+    .catch(() => false)
+
+/** A text no other turn of the run has: the kind's phrase, the step and the seed. */
+const prompt = (run, phrase, step, extra = "") =>
+  `${phrase} r${step.index}${extra} s${run.knobs.seed}`
+
+const steps = {
+  async reply(run, step, failures) {
+    const text = prompt(run, STRESS.reply, step)
+    const seen = await send(run, run.main.id, text, failures)
+    await settled(run, run.main.id, seen, text, "completed", failures)
+    await expectShown(run.page, `${SAYS.echo}${text}`, failures)
+    if ((await run.page.locator(css.sendFailure).count()) > 0)
+      failures.push("the composer shows a send failure")
+  },
+
+  async permission(run, step, failures) {
+    const text = prompt(run, STRESS.permission, step)
+    const seen = await send(run, run.main.id, text, failures)
+    if (step.mode === "full") {
+      // Full access reaches the agent as its own mode: it asks for nothing.
+      const { view } = await settled(run, run.main.id, seen, text, "completed", failures)
+      if (view?.permissions?.length) failures.push("a review is open under full access")
+      await expectShown(run.page, SAYS.allowed, failures)
+      return
+    }
+    await answerCard(run, run.main.id, step.answer, failures, "Report the rows")
+    await settled(run, run.main.id, seen, text, "completed", failures)
+    await expectShown(
+      run.page,
+      step.answer === "allow" ? SAYS.allowed : SAYS.denied,
+      failures,
+    )
+  },
+
+  async reviews(run, step, failures) {
+    const text = prompt(run, STRESS.reviews, step)
+    const seen = await send(run, run.main.id, text, failures)
+    const count = run.knobs.reviews
+    for (let n = 1; n <= count && failures.length === 0; n += 1)
+      await answerCard(run, run.main.id, "allow", failures, `Review ${n} of ${count}`)
+    await settled(run, run.main.id, seen, text, "completed", failures, 120)
+    await expectShown(run.page, SAYS.reviewed, failures)
+  },
+
+  async large(run, step, failures) {
+    const text = prompt(run, STRESS.large, step)
+    const seen = await send(run, run.main.id, text, failures)
+    await answerCard(run, run.main.id, step.answer, failures, "A large review")
+    await settled(run, run.main.id, seen, text, "completed", failures)
+    await expectShown(
+      run.page,
+      step.answer === "allow" ? SAYS.allowed : SAYS.denied,
+      failures,
+    )
+  },
+
+  async stop(run, step, failures) {
+    const text = prompt(run, STRESS.wait, step)
+    const seen = await send(run, run.main.id, text, failures)
+    await expectShown(run.page, SAYS.waiting, failures)
+    if (!(await stopShown(run.page))) {
+      failures.push("Send did not turn into Stop while the turn ran")
+      return
+    }
+    await dock(run.page)
+      .getByRole(...composerControls.stop)
+      .click({ timeout: 10_000 })
+    await settled(run, run.main.id, seen, text, "cancelled", failures)
+    if (!(await sendShown(run.page))) failures.push("Stop did not turn back into Send")
+  },
+
+  async fail(run, step, failures) {
+    const text = prompt(run, STRESS.fail, step)
+    const seen = await send(run, run.main.id, text, failures)
+    await settled(run, run.main.id, seen, text, "failed", failures)
+    await expectShown(run.page, SAYS.beforeFailure, failures)
+  },
+
+  async switch(run, step, failures) {
+    if (step.during) {
+      const text = prompt(run, STRESS.pause, step)
+      const seen = await send(run, run.main.id, text, failures)
+      if (!(await stopShown(run.page)))
+        failures.push("Send did not turn into Stop while the turn ran")
+      await pickAccess(run.page, step.to)
+      const held = await waitFor(
+        async () =>
+          fold(
+            await dock(run.page)
+              .locator(composerControls.notice)
+              .innerText()
+              .catch(() => ""),
+          ).includes("Access changes when the agent stops"),
+        10_000,
+      )
+      // The turn can end before the notice is read; only a running one owes it.
+      const { turn } = await untilTurn(run, run.main.id, { text }, () => true, 5)
+      if (!held && turn && !ended(turn))
+        failures.push("the composer did not say the change waits for the turn")
+      await settled(run, run.main.id, seen, text, "completed", failures)
+    } else {
+      await pickAccess(run.page, step.to)
+    }
+    if (!(await accessIs(run, run.main.id, step.to)))
+      failures.push(`the gateway does not run the conversation at ${step.to}`)
+    const shield = await dock(run.page)
+      .locator(composerControls.access)
+      .getAttribute("data-access-mode")
+      .catch(() => null)
+    if (shield !== composerControls.accessValue[step.to])
+      failures.push(
+        `the shield shows ${shield}, not ${composerControls.accessValue[step.to]}`,
+      )
+    run.mode = step.to
+  },
+
+  async restart(run, step, failures) {
+    const text = prompt(run, STRESS.pause, step)
+    await run.exclusive(async () => {
+      const seen = await send(run, run.main.id, text, failures)
+      await expectShown(run.page, SAYS.pausing, failures)
+      // It may wait behind a turn of the agent's own, such as a thread's report.
+      const { turn, view } = await untilTurn(
+        run,
+        run.main.id,
+        { text },
+        (current) => current.status === "running",
+        60,
+      )
+      if (turn?.status !== "running") {
+        failures.push(
+          `the turn to cut off is ${turn?.status ?? "missing"}, not running: ${JSON.stringify(
+            {
+              messages: view?.messages
+                .filter((each) => !seen.has(each.executionId))
+                .map((each) => [each.status, each.userText.slice(0, 60)]),
+              pending: view?.pending?.length,
+            },
+          )}`,
+        )
+        return
+      }
+      // The window retries its socket while the gateway is down; each refused
+      // attempt logs a console error that is the restart, not a fault.
+      run.opened.noteHarmless(
+        /WebSocket connection to '.+\/session' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED/,
+      )
+      const old = run.client
+      run.restarts += 1
+      await run.stack.gateway.restart(step.signal)
+      old.close()
+      run.client = await connectClient(run.stack.gateway, INSTANCE, "panel")
+      // The cut-off turn is carried on by a successor: a notice, then the same text.
+      const resumed = await waitFor(async () => {
+        const view = await run.client.conversation.read(run.main.id)
+        return view.messages.find(
+          (each) =>
+            !seen.has(each.executionId) &&
+            each.userText !== text &&
+            each.userText.endsWith(text) &&
+            each.status === "completed",
+        )
+      }, 90_000)
+      if (!resumed) {
+        const view = await run.client.conversation.read(run.main.id).catch(() => null)
+        failures.push(
+          `the cut-off turn was not resumed after ${step.signal}: ${JSON.stringify(
+            view?.messages
+              .filter((each) => !seen.has(each.executionId))
+              .map((each) => [each.status, each.userText.slice(0, 60)]),
+          )}`,
+        )
+        return
+      }
+      if (!/restarted/i.test(resumed.userText))
+        failures.push("the resumed turn does not say Nessa restarted")
+      await expectShown(run.page, SAYS.resumed, failures, 60_000)
+    })
+  },
+
+  async delegate(run, step, failures) {
+    const text = prompt(run, STRESS.delegate, step)
+    const seen = await send(run, run.main.id, text, failures)
+    const { turn } = await settled(run, run.main.id, seen, text, "completed", failures)
+    if (!turn) return
+    await expectShown(run.page, SAYS.delegated, failures)
+    // The thread's turn ends, and its report wakes this conversation.
+    const report = await waitFor(async () => {
+      const view = await run.client.conversation.read(run.main.id)
+      return view.messages.find(
+        (each) =>
+          !seen.has(each.executionId) &&
+          each.userText.startsWith(STRESS.report) &&
+          ended(each),
+      )
+    }, 90_000)
+    if (!report)
+      failures.push("the thread's report never reached the conversation that sent it")
+    else if (report.status !== "completed")
+      failures.push(`the report's turn ended ${report.status}`)
+    else await expectShown(run.page, SAYS.report, failures)
+  },
+
+  async aside(run, step, failures) {
+    const conversationId = randomUUID()
+    const first = prompt(run, STRESS.reply, step, " aside")
+    await run.client.conversation.create({ conversationId, agent: run.stack.agent })
+    await run.client.conversation.submit(
+      run.client.conversation.prepare(conversationId, first),
+    )
+    await settled(run, conversationId, 0, first, "completed", failures)
+    const title = await titleOf(run, conversationId)
+    await open(run.page, title)
+    const second = prompt(run, STRESS.reply, step, " aside again")
+    const seen = await send(run, conversationId, second, failures)
+    await settled(run, conversationId, seen, second, "completed", failures)
+    await expectShown(run.page, `${SAYS.echo}${second}`, failures)
+    await open(run.page, run.main.title)
+  },
+}
+
+async function titleOf(run, conversationId) {
+  const title = await waitFor(async () => {
+    const { conversations } = await run.client.conversation.list({})
+    return conversations.find((each) => each.conversationId === conversationId)?.title
+  }, 15_000)
+  if (!title)
+    throw new CannotRun(`conversation ${conversationId} has no title to find it by`)
+  return title
+}
+
+/**
+ * One background conversation: `turns` turns through the gateway, a reply
+ * then a permission it allows, over and over. Waits while a restart holds
+ * the gateway. Resolves with what went wrong.
+ */
+async function background(run, n) {
+  const failures = []
+  const conversationId = randomUUID()
+  try {
+    await run.enter()
+    try {
+      await run.client.conversation.create({ conversationId, agent: run.stack.agent })
+    } finally {
+      run.leave()
+    }
+    for (let turn = 0; turn < run.knobs.turns; turn += 1) {
+      const permission = turn % 2 === 1
+      const text = `${permission ? STRESS.permission : STRESS.reply} b${n}.${turn} s${run.knobs.seed}`
+      await run.enter()
+      try {
+        await run.client.conversation.submit(
+          run.client.conversation.prepare(conversationId, text),
+        )
+        const { permissionTargets } = await import("@nessa/client")
+        const answered = new Set()
+        const { turn: done } = await untilTurn(
+          run,
+          conversationId,
+          { text },
+          (current, view) => {
+            const waiting = view.permissions[0]
+            if (waiting && !answered.has(waiting.review)) {
+              answered.add(waiting.review)
+              const option = waiting.options.find((each) => each.effect === "allow")
+              const restarts = run.restarts
+              void run.client.conversation
+                .answer(permissionTargets(view)[0], option.id)
+                .catch((error) => {
+                  // A restart can drop the answer's acknowledgement, not the
+                  // answer: the turn must still complete, checked below.
+                  if (run.restarts === restarts)
+                    failures.push(
+                      `background ${n} at ${new Date().toISOString()}: answer: ${explain(error)}`,
+                    )
+                })
+            }
+            return ended(current)
+          },
+          120,
+        )
+        if (done?.status !== "completed")
+          failures.push(
+            `background ${n} turn ${turn} ended ${done?.status ?? "missing"}${done?.error ? ` (${done.error})` : ""}`,
+          )
+      } finally {
+        run.leave()
+      }
+    }
+  } catch (error) {
+    failures.push(`background ${n} at ${new Date().toISOString()}: ${explain(error)}`)
+  }
+  return { conversationId, failures }
+}
+
+/** What must hold once everything has run, in every conversation the run made. */
+async function atRest(run, ids) {
+  const failures = []
+  for (const conversationId of ids) {
+    const { view } = await untilTurn(
+      run,
+      conversationId,
+      0,
+      (_turn, current) => current.messages.every(ended) && current.pending.length === 0,
+      60,
+    )
+    if (!view) {
+      failures.push(`${conversationId} could not be read`)
+      continue
+    }
+    const running = view.messages.filter((each) => !ended(each))
+    if (running.length)
+      failures.push(`${conversationId} still has ${running.length} turns at work`)
+    for (const turn of view.messages) {
+      const said = `${turn.error ?? ""} ${(turn.parts ?? []).map((part) => part.text ?? "").join(" ")}`
+      if (/Denied automatically|No human answered/i.test(said))
+        failures.push(`${conversationId}: a review was denied automatically`)
+      if (/display limit/i.test(said))
+        failures.push(`${conversationId}: a review was hidden`)
+    }
+    if (view.permissions.length) failures.push(`${conversationId} still has open reviews`)
+  }
+  const text = await pageText(run.page)
+  if (/display limit|Denied automatically/i.test(text))
+    failures.push("the window says a review was hidden or denied automatically")
+  return failures
+}
+
+async function startStack(options) {
+  const knobs = knobsFrom(options)
+  const directory = mkdtempSync(join(tmpdir(), "nessa-stress-"))
+  const scenario = join(directory, "stress.json")
+  writeFileSync(scenario, JSON.stringify(stressScenario({ reviews: knobs.reviews })))
+  if (options.evidence) {
+    mkdirSync(options.evidence, { recursive: true })
+    writeFileSync(
+      join(options.evidence, "plan.txt"),
+      `${JSON.stringify(knobs)}\n${describe(plan(knobs))}\n`,
+    )
+  }
+  let stack
+  try {
+    stack = await startGatewayStack(options, INSTANCE, {
+      as: "panel",
+      scenario,
+      evidence: options.evidence,
+    })
+  } catch (error) {
+    rmSync(directory, { recursive: true, force: true })
+    throw error
+  }
+  const close = stack.close
+  stack.close = async () => {
+    try {
+      await close()
+    } finally {
+      rmSync(directory, { recursive: true, force: true })
+    }
+  }
+  return panelTarget(stack, () => ({
+    knobs,
+    agent: options.agent,
+    endpoint: stack.gateway.url.replace(/^http/, "ws"),
+  }))
+}
+
+await main(
+  meta,
+  async ({ options, rep, target: stack }) => {
+    const knobs = stack.knobs
+    const planned = plan(knobs)
+    log(`conversation-stress ${JSON.stringify(knobs)}\n${describe(planned)}`)
+    const origin = new URL(stack.url).origin
+    await withEngines(options, rep, async (engine, browser) => {
+      const layout = options.layouts[0]
+      const opened = await openPage(browser, {
+        url: `${origin}/desktop.html`,
+        layout,
+        lines: { engine, layout },
+        initScripts: [
+          [gatewayHost, { endpoint: stack.endpoint, credential: stack.credential }],
+        ],
+      })
+      const run = new Run(stack, opened, knobs)
+      const base = { engine, layout }
+      try {
+        const id = randomUUID()
+        const first = `${STRESS.reply} main s${knobs.seed} ${engine}`
+        const setup = []
+        await run.client.conversation.create({ conversationId: id, agent: stack.agent })
+        await run.client.conversation.submit(run.client.conversation.prepare(id, first))
+        await settled(run, id, 0, first, "completed", setup)
+        run.main = { id, title: await titleOf(run, id) }
+        await open(run.page, run.main.title)
+        if (setup.length) {
+          rep.add({ name: "setup", ...base, failures: setup })
+          return
+        }
+        run.background = Array.from({ length: knobs.parallel }, (_, n) =>
+          background(run, n),
+        )
+        let stopped = null
+        for (const step of planned) {
+          const name = `${String(step.index).padStart(3, "0")} ${step.kind}`
+          if (stopped) {
+            rep.add({ name, ...base, cannotRun: true, error: `not run: ${stopped}` })
+            continue
+          }
+          const at = Date.now()
+          const failures = []
+          let error
+          try {
+            await steps[step.kind](run, step, failures)
+          } catch (thrown) {
+            error = thrown
+          }
+          const entry = rep.add({
+            name,
+            ...base,
+            ms: Date.now() - at,
+            seen: step,
+            failures,
+            ...(error
+              ? { error: explain(error), cannotRun: error instanceof CannotRun }
+              : {}),
+          })
+          if (!entry.ok) {
+            stopped = `${name} did not hold`
+            if (options.evidence) {
+              const view = await readWithReviews(run.client, run.main.id).catch(
+                () => null,
+              )
+              if (view)
+                writeView(
+                  options.evidence,
+                  `views/${engine}-${name.replace(" ", "-")}.json`,
+                  view,
+                )
+              await run.page
+                .screenshot({
+                  path: join(options.evidence, `${engine}-${name.replace(" ", "-")}.png`),
+                })
+                .catch(() => {})
+            }
+          }
+        }
+        const done = await Promise.all(run.background)
+        rep.add({
+          name: "background",
+          ...base,
+          seen: { conversations: done.length, turns: knobs.turns },
+          failures: done.flatMap((each) => each.failures),
+        })
+        rep.add({
+          name: "at rest",
+          ...base,
+          failures: await atRest(run, [
+            run.main.id,
+            ...done.map((each) => each.conversationId),
+          ]),
+        })
+        if (options.evidence) {
+          const view = await readWithReviews(run.client, run.main.id).catch(() => null)
+          if (view) writeView(options.evidence, `views/${engine}-main.json`, view)
+        }
+      } finally {
+        await Promise.allSettled(run.background)
+        stack.client = run.client
+        await opened.close()
+      }
+    })
+  },
+  startStack,
+)

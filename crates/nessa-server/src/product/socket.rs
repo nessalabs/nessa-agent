@@ -1391,13 +1391,19 @@ async fn forward_review_notices(
     session: AuthenticatedSession,
     mut authority_updates: watch::Receiver<u64>,
 ) -> Result<(), ReviewNoticePublicationFailure> {
+    // Passes spent because access itself moved while selecting: who may see
+    // what, or the authority revision. Those are rare, and each pass writes
+    // audit records, so continuous change closes the socket. Reviews coming
+    // and going on the board are ordinary traffic: under many busy agents the
+    // board can change during every audit, and closing every socket for it
+    // dropped clients mid-command. A pass the board alone outdated is redone
+    // without counting.
     const MAX_SELECTION_PASSES: usize = 3;
     let mut selection_passes = 0;
     'snapshots: loop {
         if selection_passes == MAX_SELECTION_PASSES {
             return Err(ReviewNoticePublicationFailure::Unstable);
         }
-        selection_passes += 1;
         let (generation, reviews) = board.current();
         let visibility = board.visibility();
         // Observe before either await: a later authority update stays pending
@@ -1415,6 +1421,7 @@ async fn forward_review_notices(
                 ReviewNoticeVisibility::Audited(selection) => {
                     let revision = selection.authority_revision();
                     if selected_revision.is_some_and(|earlier| earlier != revision) {
+                        selection_passes += 1;
                         continue 'snapshots;
                     }
                     selected_revision = Some(revision);
@@ -1432,7 +1439,20 @@ async fn forward_review_notices(
             .execute(&session)
             .await
             .map_err(ReviewNoticePublicationFailure::Authority)?;
-            if current.revision != revision || !board.is_current(generation, visibility) {
+            if !board.is_current(generation, visibility) {
+                // Only a newer board, with the same access, is redone freely.
+                // A spent counter never matches, so it counts.
+                let board_moved = current.revision == revision
+                    && board.visibility() == visibility
+                    && generation != u64::MAX
+                    && visibility != u64::MAX;
+                if !board_moved {
+                    selection_passes += 1;
+                }
+                continue 'snapshots;
+            }
+            if current.revision != revision {
+                selection_passes += 1;
                 continue 'snapshots;
             }
         }

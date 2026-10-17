@@ -2989,11 +2989,16 @@ impl ConversationService {
             // An agent that stopped itself and waits for its owner's close
             // takes nothing more (`Agent::awaits_close`): the conversation is
             // stopped, not gone, so a person's message closes it and opens
-            // the conversation again, as a desktop stop would have. An app's
-            // message opens nothing, and is refused below as before.
+            // the conversation again, as a desktop stop would have. So is an
+            // idle one that lost the conversation's approval mode with its
+            // attachment (`resumption::mode_lost`): it would open again at
+            // the mode it was first opened with, and the check below would
+            // refuse every message for as long as it lived. An app's message
+            // opens nothing, and is refused below as before.
             if !writer.is_app()
-                && live.agent.awaits_close()
                 && !owner.stopping.load(Ordering::SeqCst)
+                && (live.agent.awaits_close()
+                    || (resumption::mode_lost(&live).await && live.agent.is_idle().await))
             {
                 // The ended agent holds its history's lease until the last
                 // handle goes, so this one goes before the conversation
@@ -3055,7 +3060,18 @@ impl ConversationService {
                     .await?
             {
                 let _ = live.join_attachment_owner().await;
-                if live.agent.attachment_status().phase() != AttachmentPhase::Attached {
+                // Attached, the mode is the one applied to that attachment.
+                // With none yet, or one still opening, it is the mode the
+                // agent opens its attachment at (`Agent::approval_mode`): a
+                // message sent just after the conversation opened again is
+                // checked against that, not refused for being early.
+                if !matches!(
+                    live.agent.attachment_status().phase(),
+                    AttachmentPhase::Attached
+                        | AttachmentPhase::Absent
+                        | AttachmentPhase::Waiting
+                        | AttachmentPhase::Starting
+                ) {
                     return Err(ConversationError::ApprovalModeNotApplied.into());
                 }
                 let committed = live
