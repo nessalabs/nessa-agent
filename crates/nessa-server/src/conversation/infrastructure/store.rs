@@ -10,13 +10,12 @@ use super::catalogue_changes::CatalogueChanges;
 
 use crate::conversation::application::{
     CatalogueChangeWatch, CatalogueDescriptor, CatalogueHead, CatalogueKey, CataloguePage,
-    CataloguePageRequest, CatalogueValue, CatalogueWatchError, ConversationAccessPolicyEvaluator,
-    ConversationCatalogue, ConversationCreation, ConversationCreationDisposition,
-    ConversationError, ConversationFuture, ConversationListing, ConversationModeApplication,
-    ConversationModeRequest, ConversationModeRequestState, ConversationRepository,
-    ConversationSummaries, ListedConversation, ListedConversations, ObservationCursor,
-    ObservedConversations, Reader, UnfinishedDeletions, UnfinishedMark, UnfinishedTurns,
-    WatchCatalogue,
+    CataloguePageRequest, CatalogueValue, ConversationAccessPolicyEvaluator, ConversationCatalogue,
+    ConversationCreation, ConversationCreationDisposition, ConversationError, ConversationFuture,
+    ConversationListing, ConversationModeApplication, ConversationModeRequest,
+    ConversationModeRequestState, ConversationRepository, ConversationSummaries,
+    ListedConversation, ListedConversations, ObservationCursor, ObservedConversations, Reader,
+    UnfinishedDeletions, UnfinishedMark, UnfinishedTurns, WatchCatalogue,
 };
 use crate::conversation::domain::{
     Conversation, ConversationDeletion, DeletionContradiction, ProviderSessionErasure,
@@ -1869,11 +1868,7 @@ impl ConversationCatalogue for LocalConversationStore {
 }
 
 impl WatchCatalogue for LocalConversationStore {
-    fn watch(
-        &self,
-        organization: &OrganizationId,
-        owner: &PrincipalId,
-    ) -> Result<CatalogueChangeWatch, CatalogueWatchError> {
+    fn watch(&self, organization: &OrganizationId, owner: &PrincipalId) -> CatalogueChangeWatch {
         self.changes.watch((organization.clone(), owner.clone()))
     }
 }

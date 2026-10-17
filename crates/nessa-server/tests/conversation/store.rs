@@ -2,14 +2,13 @@
 //! ownership, tombstones and summaries that cannot stand without their record,
 //! rows refused rather than repaired, and a list that reads only its owner's.
 use super::store::{list_query, LocalConversationStore, UNFINISHED};
-use crate::conversation::infrastructure::MAX_CATALOGUE_CHANGE_WATCHES;
 use crate::conversation::{
     application::{
-        CatalogueChangeWatch, CatalogueKey, CataloguePageRequest, CatalogueWatchError,
-        CatalogueWatchState, ConversationCatalogue, ConversationCreationDisposition,
-        ConversationError, ConversationListing, ConversationModeApplication,
-        ConversationModeRequest, ConversationModeRequestState, ConversationRepository,
-        ConversationSummaries, Reader, WatchCatalogue,
+        CatalogueChangeWatch, CatalogueKey, CataloguePageRequest, CatalogueWatchState,
+        ConversationCatalogue, ConversationCreationDisposition, ConversationError,
+        ConversationListing, ConversationModeApplication, ConversationModeRequest,
+        ConversationModeRequestState, ConversationRepository, ConversationSummaries, Reader,
+        WatchCatalogue,
     },
     domain::{
         Capabilities, Conversation, ConversationDeletion, ProviderSessionErasure,
@@ -2439,11 +2438,10 @@ fn catalogue_watch_pending(watch: &mut CatalogueChangeWatch) {
 async fn catalogue_watch_tracks_only_committed_owner_revisions_and_tombstone_fence() {
     let opened = opened();
     let id = new_id();
-    let mut watch = opened.store.watch(&org(), &alice()).unwrap();
+    let mut watch = opened.store.watch(&org(), &alice());
     let mut other = opened
         .store
-        .watch(&org(), &PrincipalId::new("bob").unwrap())
-        .unwrap();
+        .watch(&org(), &PrincipalId::new("bob").unwrap());
     opened.store.create(owned(&id)).await.unwrap();
     assert_eq!(
         catalogue_watch_ready(&mut watch),
@@ -2453,7 +2451,7 @@ async fn catalogue_watch_tracks_only_committed_owner_revisions_and_tombstone_fen
     // Already-created identity does not advance head or notify.
     opened.store.create(owned(&id)).await.unwrap();
     catalogue_watch_pending(&mut watch);
-    let mut late = opened.store.watch(&org(), &alice()).unwrap();
+    let mut late = opened.store.watch(&org(), &alice());
     assert_eq!(
         opened
             .store
@@ -2529,7 +2527,7 @@ async fn catalogue_watch_tracks_only_committed_owner_revisions_and_tombstone_fen
 async fn catalogue_watch_refuses_to_publish_a_rolled_back_revision() {
     let opened = opened();
     let id = new_id();
-    let mut watch = opened.store.watch(&org(), &alice()).unwrap();
+    let mut watch = opened.store.watch(&org(), &alice());
     {
         let connection = opened.store.hold_mutation();
         // All writes succeed inside the transaction; the deferred foreign key
@@ -2568,7 +2566,7 @@ async fn catalogue_watch_refuses_to_publish_a_rolled_back_revision() {
 async fn cancelled_catalogue_receipt_keeps_commit_publication_alive() {
     let opened = opened();
     let id = new_id();
-    let mut watch = opened.store.watch(&org(), &alice()).unwrap();
+    let mut watch = opened.store.watch(&org(), &alice());
     // Hold the actual connection so the blocking mutation cannot complete
     // during its first poll; drop the receipt, then release physical work.
     {
@@ -2600,7 +2598,7 @@ async fn catalogue_watch_mode_bookkeeping_stays_clean_until_visible_mode_commit(
     let opened = opened();
     let id = new_id();
     opened.store.create(owned(&id)).await.unwrap();
-    let mut watch = opened.store.watch(&org(), &alice()).unwrap();
+    let mut watch = opened.store.watch(&org(), &alice());
     let request = ConversationModeRequest {
         conversation_id: id.clone(),
         organization_id: org(),
@@ -2648,8 +2646,8 @@ impl Wake for PanickingCatalogueWaker {
 async fn catalogue_watch_callback_panic_cannot_replace_a_durable_create_result() {
     let opened = opened();
     let id = new_id();
-    let mut faulty = opened.store.watch(&org(), &alice()).unwrap();
-    let mut healthy = opened.store.watch(&org(), &alice()).unwrap();
+    let mut faulty = opened.store.watch(&org(), &alice());
+    let mut healthy = opened.store.watch(&org(), &alice());
     let waker = Waker::from(Arc::new(PanickingCatalogueWaker));
     let mut wait = Box::pin(faulty.changed());
     assert!(matches!(
@@ -2678,13 +2676,9 @@ async fn catalogue_watch_callback_panic_cannot_replace_a_durable_create_result()
         CatalogueWatchState::NotificationFailed
     );
     drop(healthy);
-    let registrations = (1..MAX_CATALOGUE_CHANGE_WATCHES)
-        .map(|_| opened.store.watch(&org(), &alice()).unwrap())
+    let registrations = (0..100)
+        .map(|_| opened.store.watch(&org(), &alice()))
         .collect::<Vec<_>>();
-    assert!(matches!(
-        opened.store.watch(&org(), &alice()),
-        Err(CatalogueWatchError::Capacity)
-    ));
     drop(registrations);
     drop(opened.store);
     assert_eq!(

@@ -215,9 +215,10 @@ conversation, and a list batch, which is refused to a paired device
 ### Limits
 
 `x-subscriptionLimits` publishes `conversationTargets` (8) and `listTargets`
-(two: active and archived) per connection, and `deliveryTimeoutMs` (10000). The SDK and catalogue
-watch registries keep their own producer bounds (64 each); a full one refuses
-`subscription_capacity`. A list frame larger than the 64 KiB frame bound is
+(two: active and archived) per connection, and `deliveryTimeoutMs` (10000).
+Those per-connection limits are the only count: the SDK and catalogue watch
+registries index interest by conversation and owner and set no gateway-wide
+bound of their own (#978). A list frame larger than the 64 KiB frame bound is
 cut, newest first, and marked `complete: false` (row L3): the client walks
 `conversation.observe` for the rest, as it does for any incomplete list. A
 list the service bounds (`MAX_LISTED_CONVERSATIONS`) is incomplete the same

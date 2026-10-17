@@ -1,16 +1,23 @@
-//! Bounded producer-owned registrations; publication never waits for a reader.
+//! Producer-owned registrations; publication never waits for a reader.
+//!
+//! Interest is indexed by owner, so a commit wakes only that owner's
+//! registrations, however many are open. There is no gateway-wide count:
+//! each registration belongs to a live list subscription, which its socket's
+//! own published limit already bounds.
 
 #![deny(missing_docs)]
 
 use crate::conversation::application::{
     catalogue_watch::{CatalogueChangeSignal, CatalogueWatchRegistration},
-    CatalogueChangeWatch, CatalogueWatchError,
+    CatalogueChangeWatch,
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
-use std::sync::{Arc, Mutex, PoisonError, Weak};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex, PoisonError, Weak},
+};
 
-/// Maximum actual registrations in this producer, separate from gateway policy.
-pub const MAX_CATALOGUE_CHANGE_WATCHES: usize = 64;
+type Owner = (OrganizationId, PrincipalId);
 
 #[derive(Clone, Default)]
 pub(super) struct CatalogueChanges {
@@ -22,57 +29,44 @@ struct Registry {
 }
 #[derive(Default)]
 struct State {
-    entries: Vec<Entry>,
-}
-struct Entry {
-    target: (OrganizationId, PrincipalId),
-    signal: Arc<CatalogueChangeSignal>,
+    by_owner: HashMap<Owner, Vec<Arc<CatalogueChangeSignal>>>,
 }
 struct Registration {
     registry: Weak<Registry>,
+    target: Owner,
     signal: Arc<CatalogueChangeSignal>,
 }
 
 impl CatalogueChanges {
-    pub fn watch(
-        &self,
-        target: (OrganizationId, PrincipalId),
-    ) -> Result<CatalogueChangeWatch, CatalogueWatchError> {
-        let mut state = self
+    pub fn watch(&self, target: Owner) -> CatalogueChangeWatch {
+        let signal = Arc::new(CatalogueChangeSignal::default());
+        self.inner
+            .state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .by_owner
+            .entry(target.clone())
+            .or_default()
+            .push(signal.clone());
+        let registration = Registration {
+            registry: Arc::downgrade(&self.inner),
+            target,
+            signal: signal.clone(),
+        };
+        CatalogueChangeWatch::new(signal, Box::new(registration))
+    }
+    pub fn publish(&self, target: &Owner) {
+        // Only this owner's interest is captured. Waking outside the registry
+        // lock permits a waker to retire/register source interest.
+        let signals = self
             .inner
             .state
             .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        if state.entries.len() == MAX_CATALOGUE_CHANGE_WATCHES {
-            return Err(CatalogueWatchError::Capacity);
-        }
-        let signal = Arc::new(CatalogueChangeSignal::default());
-        state.entries.push(Entry {
-            target,
-            signal: signal.clone(),
-        });
-        let registration = Registration {
-            registry: Arc::downgrade(&self.inner),
-            signal: signal.clone(),
-        };
-        Ok(CatalogueChangeWatch::new(signal, Box::new(registration)))
-    }
-    pub fn publish(&self, target: &(OrganizationId, PrincipalId)) {
-        // At most the published registration limit is captured. Waking outside
-        // the registry lock permits a waker to retire/register source interest.
-        let signals = {
-            let state = self
-                .inner
-                .state
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner);
-            state
-                .entries
-                .iter()
-                .filter(|entry| &entry.target == target)
-                .map(|entry| entry.signal.clone())
-                .collect::<Vec<_>>()
-        };
+            .unwrap_or_else(PoisonError::into_inner)
+            .by_owner
+            .get(target)
+            .cloned()
+            .unwrap_or_default();
         for signal in signals {
             signal.publish();
         }
@@ -82,25 +76,34 @@ impl CatalogueWatchRegistration for Registration {}
 
 impl Drop for Registration {
     fn drop(&mut self) {
-        if let Some(registry) = self.registry.upgrade() {
-            registry
-                .state
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .entries
-                .retain(|entry| !Arc::ptr_eq(&entry.signal, &self.signal));
+        let Some(registry) = self.registry.upgrade() else {
+            return;
+        };
+        let mut state = registry
+            .state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let Some(bucket) = state.by_owner.get_mut(&self.target) else {
+            return;
+        };
+        bucket.retain(|signal| !Arc::ptr_eq(signal, &self.signal));
+        // An emptied owner's entry goes with its last registration.
+        if bucket.is_empty() {
+            state.by_owner.remove(&self.target);
         }
     }
 }
 impl Drop for Registry {
     fn drop(&mut self) {
-        for entry in &self
+        for signal in self
             .state
             .get_mut()
             .unwrap_or_else(PoisonError::into_inner)
-            .entries
+            .by_owner
+            .values()
+            .flatten()
         {
-            entry.signal.close();
+            signal.close();
         }
     }
 }
@@ -160,7 +163,7 @@ mod tests {
     async fn actual_waiter_is_woken_by_commit_and_final_publisher_close() {
         let producer = CatalogueChanges::default();
         let key = target("owner");
-        let mut watched = producer.watch(key.clone()).unwrap();
+        let mut watched = producer.watch(key.clone());
         let observed = Arc::new(WakeObserved {
             registry: Arc::downgrade(&producer.inner),
             ..WakeObserved::default()
@@ -195,38 +198,49 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cancelled_wait_retains_capacity_until_actual_registration_drop() {
+    async fn cancelled_wait_keeps_the_registration_until_its_handle_drops() {
         let producer = CatalogueChanges::default();
         let key = target("owner");
-        let mut watches = (0..MAX_CATALOGUE_CHANGE_WATCHES)
-            .map(|_| producer.watch(key.clone()).unwrap())
+        let mut watches = (0..2)
+            .map(|_| producer.watch(key.clone()))
             .collect::<Vec<_>>();
         pending(&mut watches[0]);
-        assert!(matches!(
-            producer.watch(key.clone()),
-            Err(CatalogueWatchError::Capacity)
-        ));
         producer.publish(&key);
         assert_eq!(ready(&mut watches[0]), CatalogueWatchState::Dirty);
-        assert!(matches!(
-            producer.watch(key.clone()),
-            Err(CatalogueWatchError::Capacity)
-        ));
-        let signal = Arc::downgrade(&producer.inner.state.lock().unwrap().entries[0].signal);
+        let signal = Arc::downgrade(&producer.inner.state.lock().unwrap().by_owner[&key][0]);
         drop(watches.remove(0));
         assert!(
             signal.upgrade().is_none(),
             "retired registration retains no signal owner"
         );
-        assert!(producer.watch(key).is_ok());
+        producer.publish(&key);
+        assert_eq!(ready(&mut watches[0]), CatalogueWatchState::Dirty);
+    }
+
+    /// #978: no fixed gateway-wide count, and a commit wakes only its owner.
+    #[tokio::test]
+    async fn registrations_scale_and_a_commit_wakes_only_its_owner() {
+        let producer = CatalogueChanges::default();
+        let mut watches = (0..10_000)
+            .map(|index| producer.watch(target(&format!("owner-{index}"))))
+            .collect::<Vec<_>>();
+        producer.publish(&target("owner-42"));
+        assert_eq!(ready(&mut watches[42]), CatalogueWatchState::Dirty);
+        pending(&mut watches[41]);
+        pending(&mut watches[43]);
+        drop(watches);
+        assert!(
+            producer.inner.state.lock().unwrap().by_owner.is_empty(),
+            "an owner's entry goes with its last registration"
+        );
     }
 
     #[tokio::test]
     async fn commits_coalesce_and_a_commit_after_consumption_leaves_another_notice() {
         let producer = CatalogueChanges::default();
         let key = target("owner");
-        let mut watched = producer.watch(key.clone()).unwrap();
-        let mut other = producer.watch(target("other")).unwrap();
+        let mut watched = producer.watch(key.clone());
+        let mut other = producer.watch(target("other"));
         pending(&mut watched);
         for _ in 0..100 {
             producer.publish(&key);
@@ -244,7 +258,7 @@ mod tests {
         let producer = CatalogueChanges::default();
         let retained = producer.clone();
         let registry = Arc::downgrade(&producer.inner);
-        let mut watched = producer.watch(target("owner")).unwrap();
+        let mut watched = producer.watch(target("owner"));
         drop(producer);
         pending(&mut watched);
         drop(retained);
