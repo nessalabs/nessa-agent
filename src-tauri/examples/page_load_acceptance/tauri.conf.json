@@ -6,6 +6,13 @@
     "devUrl": "http://localhost:1498/missing.html",
     "frontendDist": "assets"
   },
-  "app": { "windows": [] },
-  "bundle": { "active": false }
+  "app": {
+    "windows": []
+  },
+  "bundle": {
+    "active": false,
+    "icon": [
+      "../../icons/icon.png"
+    ]
+  }
 }

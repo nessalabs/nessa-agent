@@ -75,7 +75,12 @@ shipped composition supplies its existing window labels to the same watcher.
 No gateway, credential, settings, tray or user data startup is invoked. The
 fixture's custom identifier, nonpersistent WK stores and temporary log directory
 isolate its data. A port collision fails instead of selecting a broader origin.
-A bounded watchdog fails a stuck native event loop.
+A bounded watchdog fails a stuck native event loop. The fixture points its icon
+at the existing host asset: Tauri's context macro reads a window icon even with
+bundling disabled. A Linux probe using the pinned `tauri-codegen` 2.6.3 reproduced
+the missing default-icon panic, then generated both dev and packaged contexts
+with the corrected fixture path and a macOS target selector. That is context
+code generation, not native Rust compilation or WKWebView execution.
 
 The existing macOS `local-auth` job lints and runs this example before the shared
 server suite. Other platforms compile its explicit unsupported-platform entry;
