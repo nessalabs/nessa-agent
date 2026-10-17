@@ -88,9 +88,12 @@ where
     /// The caller that committed departure reloads inside the lease and sends
     /// only when that row is still unknown and still inside the foreground
     /// budget (`the_departure_winner_reloads_before_it_sends`). A second send
-    /// waits and reloads (`a_lost_departure_does_not_send_again`). It sends the same
-    /// id only when the stored row is still unknown. If the wait ends without
-    /// the lease, the reloaded row is returned.
+    /// that also read Draft waits and reloads
+    /// (`a_lost_departure_does_not_send_again`). It sends the same id only when
+    /// the stored row is still unknown. If the wait ends without the lease,
+    /// the reloaded row is returned. A caller first reading a departed row
+    /// only reconciles its receipt and may return unknown while a send is
+    /// pending (`a_sender_first_reading_departure_can_return_before_the_send`).
     ///
     /// The audit initiator is [`Initiator::Person`].
     pub fn send(&mut self, id: &PhoneCommandId) -> Result<PhoneView, OutboxError> {
@@ -217,7 +220,8 @@ where
     /// Wait for the writer lease, run `body`, and commit it.
     ///
     /// The wait ending without the lease reloads the row. It does not report
-    /// [`OutboxError::Unavailable`] (`a_lost_departure_does_not_send_again`).
+    /// [`OutboxError::Unavailable`]
+    /// (`a_failed_lease_wait_returns_the_durable_departure`).
     fn with_lease(
         &mut self,
         id: &PhoneCommandId,
