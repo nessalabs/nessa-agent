@@ -6,6 +6,7 @@
     )
 )]
 
+use super::{DesktopHostClaim, DesktopHostLease};
 use crate::gateway::domain::value_objects::{
     AuditDeliveryReceipt, LifecycleCommandResult, LifecycleFailedPhase, LifecycleObservation,
     LifecycleObservationSource, LifecyclePhysicalOutcome, LifecyclePlanStep,
@@ -513,6 +514,7 @@ pub enum ClaudeConfigurationChangeError {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GatewayError {
+    DesktopHostBusy,
     Registration(String),
     Audit {
         audit: String,
@@ -539,6 +541,9 @@ impl fmt::Display for GatewayError {
                 }
                 Ok(())
             }
+            Self::DesktopHostBusy => f.write_str(
+                "Another copy of Nessa is managing this background service. Quit that copy, then Retry.",
+            ),
             Self::NotReconciled => f.write_str("gateway service has not reconciled"),
         }
     }
@@ -1445,6 +1450,14 @@ pub enum ClaudeDirectoryReplacement {
 /// Reconciliation returns the exact native runtime incarnation only after matching readiness. A stop
 /// acknowledges request delivery, not the eventual physical cleanup of each agent.
 pub trait GatewayHost: Send + Sync {
+    /// Try the desktop-lifetime claim before journal recovery or shared writes.
+    /// The default preserves adapters without desktop-host arbitration; macOS
+    /// supplies a private service-label lock. Busy is retried within the
+    /// application's bounded acquisition window, never by replacing its owner.
+    fn claim_desktop_ownership(&self) -> Result<DesktopHostClaim, GatewayError> {
+        Ok(DesktopHostClaim::Acquired(DesktopHostLease::new(())))
+    }
+
     /// Classify the durable definition change that caused host startup work.
     fn startup_cause(&self) -> ReconciliationCause {
         ReconciliationCause::Startup

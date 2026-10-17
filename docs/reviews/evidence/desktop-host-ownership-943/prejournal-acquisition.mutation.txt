@@ -1,0 +1,16 @@
+    if let Err(error) = claim_host_ownership(
+        &executor.host_ownership,
+        executor.host.as_ref(),
+        executor.clock.as_ref(),
+    ) {
+        let _ = receipt.publish_journal(Err(error.clone()));
+        return AttemptExecution {
+            physical: Err(error.clone()),
+            reported: Err(error),
+            cleanup: CleanupUpdate::Keep,
+            ready_gateway: None,
+        };
+    }
+
+BECOMES
+

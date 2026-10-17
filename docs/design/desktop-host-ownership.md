@@ -1,0 +1,66 @@
+# Desktop host ownership
+
+Issue [#943](https://github.com/nessalabs/nessa-agent/issues/943) owns this change.
+This is the implemented source contract; native installed-Mac acceptance remains #562 and
+startup measurement remains #109.
+
+## Boundary
+
+The launchd registration lock serializes transactions, not desktop owners. Two
+live bundles can each classify the other's runtime fingerprint as stale and
+alternate replacements, cancelling admitted turns. One application-owned lease
+must precede journal recovery and service effects, including settings publication
+and automatic quit. It stays with the host and its admitted workers across failed
+attempts, dropped callers, and deferred staging.
+
+On macOS the lease is a private nonblocking file lock in the existing account-home
+`Library/Application Support/Nessa/gateway-locks/<service-label>` directory.
+The filename differs from the transaction lock. Stage and instance select the
+existing service label; bundle path, runtime fingerprint and configurable data
+root do not select another lock. A competing host does not adopt the other host's
+runtime or change shared settings. It reports that another copy is running and
+can explicitly retry after that copy exits.
+
+The busy-acquisition retry window is five seconds, using nonblocking lock attempts
+and injected monotonic waits. This does not bound or cancel filesystem IO. This accommodates Tauri 2.11.5's actual restart order
+(`process::restart_macos_app`: spawn successor, then exit), without releasing the
+old host's authority while work remains active. A surviving owner still causes a
+busy refusal. An acquired lease lasts through its final application/worker owner;
+release does not unlink the stable lock file. The native guard explicitly unlocks
+before closing, so an inherited descriptor in a forked child does not prolong a
+normal release. Abrupt exit and exec inheritance have separate process tests.
+
+The existing registration transaction lock, exact retirement target, durable
+retirement cause/actor, effect plans and audit acknowledgements keep their owners.
+After the prior host exits, a successor acquires the lease and performs ordinary
+recovery/reconciliation; explicit upgrades are not replaced by fingerprint ranking
+or a downgrade heuristic. Linux/unsupported adapters retain their current behavior.
+
+This coordinates participating builds. A binary predating the lease, or another
+same-account program ignoring it, cannot be retroactively excluded by this lock.
+No live service, installed bundle, Login Items setting or user data is changed by
+cloud verification.
+
+## Ordering and evidence
+
+| Row | Ordering | Required result |
+| --- | --- | --- |
+| H1 | A owns; B starts with another bundle/fingerprint/data root but same label | B is busy; no B journal open, recovery, registration or retirement |
+| H2 | A owns; B changes Claude directory | No durable settings or native configuration write |
+| H3 | A registration fails, then retries; B starts | A keeps its lease and retries; B cannot replace it |
+| H4 | Two first operations in A race | One physical acquisition and one retained lease |
+| H5 | A caller disappears/panics while accepted work continues | Ownership remains with the host/worker, not its waiter |
+| H6 | Deferred publication or stop worker outlives the foreground host handle | Lease remains until the admitted worker finishes |
+| H7 | A releases normally, or a separate process exits abruptly; B retries | B acquires the original lock file; ordinary reconciliation remains responsible for upgrades/audit |
+| H8 | Stage or instance differs | Independent existing service labels do not contend |
+| H9 | Private lock open/validation fails | Typed error, no fallback acquisition or service effect |
+| H10 | A child inherits a descriptor; normal release or exec occurs | No unintended child-held ownership after normal release/exec |
+| H11 | Restart successor tries before predecessor exits | Bounded acquisition can succeed after original release; persistent owner yields busy at deadline |
+| H12 | Acquisition fails or the waiter panics, then A retries | No fictitious retained lease; retry can acquire |
+| H13 | Joined caller awaits a journal while ownership is refused | Publish the pre-journal failure to joined waiters; none await a journal that will not open |
+| H14 | The first acquisition clock read panics while a journal waiter joins | Supervise deadline creation too; publish typed acquisition failure and settle that waiter |
+
+Cloud checks establish the portable retained-lease owner and real Unix private-file
+lock/process semantics. Actual two-host macOS registration, explicit updater restart,
+Login Items, signed launch and installed-window behavior still need coordinated
+native acceptance; synthetic tests do not close #562/#109.
