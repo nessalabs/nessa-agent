@@ -45,6 +45,7 @@ verification/
       app-review/           real window over a typed fake gateway whose app's call asks for a review
       clock-snapshots/      public ClockProvider/useNow with injected time crossing a bucket between React reads
     scripts/
+      page-load-regression/ synthetic host diagnostic reproduction; see its README (#916)
       provider-sign-in.mjs compact login recovery geometry, keyboard launch and replacement
       attachments-races.mjs pending image admission and concurrent URL-drop refusals
       onboarding-readiness.mjs readiness deadline and retry in both browser engines

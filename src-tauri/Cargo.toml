@@ -143,3 +143,8 @@ custom-protocol = ["tauri/custom-protocol"]
 [[test]]
 name = "traffic_lights"
 harness = false
+
+# WKWebView must be created on the process main thread, like traffic_lights.
+[[test]]
+name = "page_load"
+harness = false

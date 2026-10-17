@@ -58,6 +58,7 @@ src-tauri/src/
   host_log.rs             desktop startup log (`{data}/logs/host.log`)
   host_refusal.rs         typed startup refusals shared with the page
   page_load.rs            dev-only page when the document never arrives
+  page_load/state.rs      callback-published load facts; no native URL lookup
   <context>/
     domain/               rules, entities, value objects, events
     application/          use cases + ports (traits) the use case needs
