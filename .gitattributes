@@ -7,3 +7,6 @@ scripts/mcp-test-server/capture-http.mjs text eol=lf
 # Golden evidence is compared byte for byte; keep it LF on every host.
 crates/nessa-server/tests/conversation/golden/*.txt text eol=lf
 protocol/product/samples/*.json text eol=lf
+
+# Temporary qualification shell must also execute after Windows checkout.
+scripts/desktop/fresh-native-command.sh text eol=lf
