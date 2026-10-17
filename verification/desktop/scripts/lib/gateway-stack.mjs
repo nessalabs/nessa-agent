@@ -31,6 +31,7 @@ import {
 import { turnEnded } from "../../../../scripts/mcp-test-server/evidence.mjs"
 import { CannotRun, log } from "./cli.mjs"
 import { freePort, startDevServer, startPreview } from "./server.mjs"
+import { readWithReviews } from "../../../../scripts/conversation-smoke/reviews.mjs"
 
 /**
  * The panel's credential as the gateway provisioned it: the one
@@ -263,7 +264,7 @@ export async function agentTurn(
   let turn
   for (let i = 0; i < seconds; i += 1) {
     await sleep(1000)
-    const view = await client.conversation.read(conversationId)
+    const view = await readWithReviews(client, conversationId)
     await onView(view)
     turn = view.messages[before]
     if (turn && (ready(view, turn) || turnEnded(turn.status))) return { view, turn }

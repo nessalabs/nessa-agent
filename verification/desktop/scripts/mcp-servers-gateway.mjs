@@ -58,6 +58,7 @@ import { integrationsFit, openIntegrations } from "./lib/settings.mjs"
 import { css, names, selectorFor } from "./lib/selectors.mjs"
 import { freePort, startDevServer } from "./lib/server.mjs"
 import { settled } from "./lib/workspace.mjs"
+import { readWithReviews } from "../../../scripts/conversation-smoke/reviews.mjs"
 
 /** The tool the Done-when step asks for, whose app is the chart (`server.mjs`). */
 const CHART_TOOL = "show_chart"
@@ -1764,7 +1765,7 @@ async function chartTurn(client, conversationId, agent) {
   const answered = new Set()
   for (let i = 0; i < 300; i += 1) {
     await sleep(1000)
-    const view = await client.conversation.read(conversationId)
+    const view = await readWithReviews(client, conversationId)
     for (;;) {
       const { allow, extra } = admitOnce(view, admitted, answered, SERVER, CHART_TOOL)
       if (extra) throw new CannotRun(`${agent} called ${CHART_TOOL} more than once`)

@@ -61,6 +61,7 @@ import {
   startLocalGateway,
   toolPrompt,
 } from "./local-gateway.mjs"
+import { readWithReviews } from "../conversation-smoke/reviews.mjs"
 
 const here = dirname(fileURLToPath(import.meta.url))
 
@@ -141,7 +142,7 @@ async function main([agent, out = mkdtempSync(join(tmpdir(), "nessa-mcp-live-"))
     const polls = Number(process.env.MCP_LIVE_POLLS ?? 300)
     for (let i = 0; i < polls; i += 1) {
       await sleep(1000)
-      view = await client.conversation.read(id)
+      view = await readWithReviews(client, id)
       // Allow each test-server tool once; say so, once, of anything else.
       const { allow, declined } = permissionDecisions(view, answered, SERVER)
       for (const { key, permission, option } of allow) {
