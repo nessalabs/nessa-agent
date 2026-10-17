@@ -814,3 +814,7 @@ fn open_error(error: OpenError) -> StoreError {
         _ => StoreError::Unavailable,
     }
 }
+
+#[cfg(test)]
+#[path = "../../../tests/outbox/lease_wait.rs"]
+mod lease_wait_tests;
