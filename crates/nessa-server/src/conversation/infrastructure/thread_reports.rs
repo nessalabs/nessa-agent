@@ -247,7 +247,9 @@ mod tests {
     #[tokio::test]
     async fn a_report_identity_refuses_a_different_saved_binding() {
         let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("reports.sqlite3");
+        let private = directory.path().join("reports");
+        nessa_local_storage::create_directory(&private).unwrap();
+        let path = private.join("reports.sqlite3");
         let child = "00000000-0000-4000-8000-000000000001";
         let parent = "00000000-0000-4000-8000-000000000002";
         let other = "00000000-0000-4000-8000-000000000003";

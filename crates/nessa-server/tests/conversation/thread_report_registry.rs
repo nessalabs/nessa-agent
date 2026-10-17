@@ -7,8 +7,9 @@ use crate::conversation_test_support::fixture;
 #[tokio::test]
 async fn thread_report_cleanup_preserves_other_ownership_and_clears_an_absent_row() {
     let directory = tempfile::tempdir().unwrap();
-    let store =
-        Arc::new(LocalThreadReports::open(&directory.path().join("reports.sqlite3")).unwrap());
+    let private = directory.path().join("reports");
+    nessa_local_storage::create_directory(&private).unwrap();
+    let store = Arc::new(LocalThreadReports::open(&private.join("reports.sqlite3")).unwrap());
     let (service, _, _, _) = fixture(ConversationLimits::default());
     service.bind_thread_reports(store.clone());
     let child = ConversationId::new("00000000-0000-4000-8000-000000000001").unwrap();
