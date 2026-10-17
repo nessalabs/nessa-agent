@@ -3,9 +3,9 @@
 use crate::domain::agent_execution::{
     executions::{ExecutionId, ExecutionOutcome},
     permissions::{
-        PendingPermissions, PermissionAuthority, PermissionCancellationReason,
+        OpenQuestions, PendingPermissions, PermissionAuthority, PermissionCancellationReason,
         PermissionCancellationReasonView, PermissionDecision, PermissionId, PermissionOptionId,
-        PermissionRequest, PermissionStateView,
+        PermissionRequest, PermissionStateView, QuestionListing,
     },
     sessions::{ExecutionFinish, ExecutionSessionId, SessionClosure},
     tools::{ToolCall, ToolCallId, ToolCallUpdate, ToolObservationUndo},
@@ -42,6 +42,8 @@ struct ActiveExecution {
     tools: HashMap<ToolCallId, ToolCall>,
     // Resolved reviews leave this map and become application evidence.
     pending_permissions: PendingPermissions,
+    // Questions the adapter lists while the agent waits on them.
+    open_questions: OpenQuestions,
     // Reserves every admitted review ID until finish, preventing replay after resolution.
     seen_permission_ids: HashSet<PermissionId>,
     seen_permission_bytes: usize,
@@ -58,6 +60,7 @@ impl ActiveExecution {
             id,
             tools: HashMap::new(),
             pending_permissions: Arc::new(Mutex::new(HashMap::new())),
+            open_questions: Arc::new(Mutex::new(HashMap::new())),
             seen_permission_ids: HashSet::new(),
             seen_permission_bytes: 0,
         }
@@ -409,8 +412,15 @@ impl ExecutionSession {
                 self.id.clone(),
                 active.id.clone(),
                 &active.pending_permissions,
+                &active.open_questions,
             )
         })
+    }
+    /// The listing the active execution's open questions are held in.
+    pub(crate) fn question_listing(&self) -> Option<QuestionListing> {
+        self.active_execution
+            .as_ref()
+            .map(|active| QuestionListing::new(&active.open_questions))
     }
     /// All requests admitted in the active execution, including resolved requests.
     pub fn permission_count(&self) -> usize {

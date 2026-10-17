@@ -42,6 +42,7 @@ function questionTarget() {
     conversationId: first,
     questions: [
       {
+        question: "0".repeat(32),
         executionId: "original",
         questionId: "question",
         message: "Choose",
@@ -93,6 +94,7 @@ function acceptedView(conversationId: string, executionId: string): Conversation
       },
     ],
     reviewsWaiting: [],
+    questionsWaiting: [],
     permissions: [],
     questions: [],
     tools: [],
@@ -731,7 +733,12 @@ it.each([
   const permission = permissionTargets({
     conversationId: first,
     permissions: [
-      { executionId: "original", permissionId: "review", options: [{ id: "allow" }] },
+      {
+        review: "0".repeat(32),
+        executionId: "original",
+        permissionId: "review",
+        options: [{ id: "allow" }],
+      },
     ],
   })[0]!
   const create = vi.fn(async (id: string) => {

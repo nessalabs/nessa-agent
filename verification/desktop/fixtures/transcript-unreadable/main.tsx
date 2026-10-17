@@ -124,6 +124,8 @@ createRoot(rootElement).render(
 const panelConversation = applyView(newConversation("panel"), {
   ...wireView,
   reviewsWaiting: [],
+  questionsWaiting: [],
+  questions: [],
   permissions: [],
   notes: wireView.notes.map(shownNote),
 })

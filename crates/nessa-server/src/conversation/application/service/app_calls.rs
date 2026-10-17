@@ -38,7 +38,9 @@ use crate::mcp_servers::domain::{
 };
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_protocol::conversation::projection::bound_view;
-use nessa_protocol::conversation::view::{ConversationReviewEntry, ConversationView};
+use nessa_protocol::conversation::view::{
+    ConversationQuestionEntry, ConversationReviewEntry, ConversationView,
+};
 use nessa_sdk::domain::agent_execution::{
     executions::ExecutionId,
     prompts::{AppModelContext, McpAppSource},
@@ -1233,11 +1235,12 @@ impl From<AppRefusal> for McpAppError {
 
 /// The view, bounded, listing every review waiting on a person: the
 /// agent's own (`agent`, as its live invocation holds them), then the open
-/// app reviews (`apps`), each oldest first.
+/// app reviews (`apps`), each oldest first; and every question the agent
+/// waits on (`questions`), listed and read the same way.
 ///
 /// - **Every one is listed.** An entry is small and of fixed size, and room
 ///   for the most a view lists is kept out of its budget
-///   (`MAX_REVIEW_LIST_BYTES`): the view gives up its transcript, tool calls
+///   (`MAX_INTERACTION_LIST_BYTES`): the view gives up its transcript, tool calls
 ///   and queue before any entry, and never gives one up. What each review
 ///   shows is read with `conversation.permissionReview`.
 /// - **The revision.** Replaced by a digest of it and every key listed, so
@@ -1248,15 +1251,23 @@ pub(super) fn with_reviews(
     mut view: ConversationView,
     agent: Vec<ConversationReviewEntry>,
     apps: Vec<ConversationReviewEntry>,
+    questions: Vec<ConversationQuestionEntry>,
 ) -> ConversationView {
     view.permissions = agent;
     view.permissions.extend(apps);
-    if !view.permissions.is_empty() {
+    view.questions = questions;
+    if !view.permissions.is_empty() || !view.questions.is_empty() {
         let mut digest = Sha256::new();
         digest.update((view.revision.len() as u64).to_be_bytes());
         digest.update(view.revision.as_bytes());
         for entry in &view.permissions {
             digest.update(entry.review.as_bytes());
+        }
+        // Apart from the reviews, so moving a key between the lists is a
+        // change too.
+        digest.update(b"/");
+        for entry in &view.questions {
+            digest.update(entry.question.as_bytes());
         }
         let digits = view.revision.len().clamp(16, 64);
         view.revision = hex_of(digest)[..digits].to_owned();

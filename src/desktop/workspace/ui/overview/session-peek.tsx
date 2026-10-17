@@ -209,7 +209,9 @@ export const SessionPeek = memo(function SessionPeek({
         ) : null}
         {(transcript?.questions ?? []).map((question) => (
           <QuestionCard
-            key={JSON.stringify([question.executionId, question.questionId])}
+            key={
+              question.key ?? JSON.stringify([question.executionId, question.questionId])
+            }
             sessionId={sessionId}
             question={question}
           />

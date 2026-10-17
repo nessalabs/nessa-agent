@@ -663,21 +663,29 @@ export function answerQuestion({
   questionId,
   choices,
   initiator,
+  key,
 }: {
   sessionId: string
   executionId: string
   questionId: string
   choices: readonly QuestionChoice[] | null
   initiator: Initiator
+  /** The question's own key, as the source gave it (`TranscriptQuestion.key`). */
+  key?: string
 }): WorkspaceCommand<Promise<QuestionOutcome>> {
   return async (_dispatch, getState, { workspace, questionFlights }) => {
     const state = getState().workspace
+    // Only the question on screen, read whole: one still loading offers no
+    // answer, and one asked again under the same identities has another key.
     const asked = entry(state.transcripts, sessionId)?.questions?.some(
       (question) =>
-        question.executionId === executionId && question.questionId === questionId,
+        question.executionId === executionId &&
+        question.questionId === questionId &&
+        question.key === key &&
+        question.loading === undefined,
     )
     if (!onScreen(state, sessionId) || !asked) return { status: "not-asked" }
-    const flight = JSON.stringify([sessionId, executionId, questionId])
+    const flight = JSON.stringify([sessionId, executionId, questionId, key])
     const stamp = JSON.stringify([choices, initiator])
     const outcome = await questionFlights.join(flight, stamp, async () => {
       try {
@@ -687,6 +695,7 @@ export function answerQuestion({
           questionId,
           choices,
           initiator,
+          key,
         )
         return { status: "sent" as const }
       } catch (error) {

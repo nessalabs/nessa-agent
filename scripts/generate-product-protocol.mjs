@@ -522,6 +522,24 @@ if (
   )
 )
   throw new Error("The product schema lists fewer reviews than the SDK holds open")
+// A view lists every question the agent holds open, each by a small entry
+// the projection keeps room for (`MAX_QUESTION_LIST_BYTES`).
+const questionLimits = readFileSync(
+  resolve(
+    root,
+    "crates/nessa-sdk/src/domain/agent_execution/questions/value_objects/question.rs",
+  ),
+  "utf8",
+)
+const maxOpenQuestions = Number(
+  questionLimits
+    .match(/pub const MAX_OPEN_QUESTIONS: usize = ([0-9_]+);/)?.[1]
+    .replaceAll("_", ""),
+)
+if (schema.$defs.ConversationView.properties.questions.maxItems !== maxOpenQuestions)
+  throw new Error(
+    "The product schema's question list drifted from the SDK's MAX_OPEN_QUESTIONS",
+  )
 for (const [published, constant] of [
   [permission.options.maxItems, "MAX_REVIEW_OPTIONS"],
   [
@@ -665,6 +683,9 @@ const bounds = {
   maxListedReviews: schema.$defs.ConversationView.properties.permissions.maxItems,
   maxReviewEntryToolNameBytes:
     schema.$defs.ConversationReviewEntry.properties.toolName["x-utf8MaxBytes"],
+  maxQuestionEntryMessageBytes:
+    schema.$defs.ConversationQuestionEntry.properties.message["x-utf8MaxBytes"],
+  maxOpenQuestions: maxOpenQuestions,
   maxReviewInputBytes: permission.argumentsJson["x-utf8MaxBytes"],
   maxReviewOptions: permission.options.maxItems,
   maxReviewOptionLabelBytes:
@@ -674,8 +695,10 @@ const bounds = {
     schema.$defs.ConversationPermissionReviewResult.properties.totalBytes.maximum,
     schema.$defs.ConversationPermissionReviewParams.properties.offset.maximum + 1,
   ]),
-  maxReviewRangeBytes:
+  maxReviewRangeBytes: agreeing("review range bytes", [
     schema.$defs.ConversationPermissionReviewParams.properties.maxBytes.maximum,
+    schema.$defs.ConversationQuestionReviewParams.properties.maxBytes.maximum,
+  ]),
   maxMcpResultBytes:
     schema.$defs.McpCallToolResult.properties.resultJson["x-utf8MaxBytes"],
   // An app's message is held to what the person's own may take.
@@ -739,6 +762,8 @@ for (const name of [
   "maxListedReviews",
   // How much of a tool's name a view's review entry carries.
   "maxReviewEntryToolNameBytes",
+  // How much of the agent's message a view's question entry carries.
+  "maxQuestionEntryMessageBytes",
   // Each part of an app's context past it is refused at the wire, before
   // anything is recorded; both together are the gateway's to bound.
   "maxMcpContextBytes",

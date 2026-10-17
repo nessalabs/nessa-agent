@@ -13,7 +13,7 @@
 mod deadline;
 mod identity;
 mod permission;
-mod review_content;
+pub(crate) mod review_content;
 mod review_decline;
 mod review_limits;
 pub(crate) use deadline::checked_deadline_reason;

@@ -826,6 +826,7 @@ impl Fixture {
                 self.caller("answer"),
                 review.execution_id.clone(),
                 review.permission_id.clone(),
+                review.review.clone(),
                 option.into(),
                 PermissionCaller::Owner,
             )

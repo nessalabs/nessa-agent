@@ -86,6 +86,10 @@
       "params": "ConversationPermissionReviewParams",
       "grant": "conversation.write"
     },
+    "conversation.questionReview": {
+      "params": "ConversationQuestionReviewParams",
+      "grant": "conversation.write"
+    },
     "conversation.answerQuestion": {
       "params": "ConversationAnswerQuestionParams",
       "grant": "conversation.write"

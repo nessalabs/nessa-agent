@@ -26,7 +26,15 @@ import {
   summaryFrom,
   transcriptFrom,
 } from "./gateway-views"
-import { GATEWAY_NOW_MS, note, row, view } from "./fake-gateway"
+import {
+  GATEWAY_NOW_MS,
+  note,
+  questionKey,
+  row,
+  shownQuestion,
+  view,
+  type Unkeyed,
+} from "./fake-gateway"
 
 const at = () => 42
 
@@ -89,7 +97,7 @@ const reviewKey = (index: number) => index.toString(16).padStart(32, "0")
  */
 function reviewedTranscript(
   change: Omit<Partial<ConversationView>, "permissions"> & {
-    permissions: ConversationPermission[]
+    permissions: Unkeyed<ConversationPermission>[]
   },
   receivedAtMs = GATEWAY_NOW_MS,
 ) {
@@ -106,7 +114,7 @@ function reviewedTranscript(
     change.permissions.map((permission, index) => ({
       state: "loaded" as const,
       entry: entries[index]!,
-      permission,
+      shown: { ...permission, review: entries[index]!.review },
     })),
   )
 }
@@ -1312,8 +1320,60 @@ describe("questions and a withheld interaction", () => {
     options: [{ value: "here", label: "Here", description: "This machine" }],
   }
 
+  /** A transcript of `listed`, each question it lists read whole. */
+  const asked = (listed: ConversationView) =>
+    transcriptFrom(
+      listed,
+      1,
+      at,
+      GATEWAY_NOW_MS,
+      [],
+      listed.questions.map((entry) => ({
+        state: "loaded" as const,
+        entry,
+        shown: shownQuestion(entry.question)!,
+      })),
+    )
+
+  it("lists a question not read yet as loading, asking nothing, until it has been read", () => {
+    const question = {
+      executionId: "e1",
+      questionId: "q1",
+      message: "Where should this land?",
+      questions: [field],
+    }
+    const listed = view("c", {
+      messages: [turn({ status: "running" })],
+      questions: [question],
+    })
+    const [entry] = listed.questions
+    const waiting = {
+      key: questionKey(question),
+      executionId: "",
+      questionId: "",
+      message: "Where should this land?",
+      questions: [],
+    }
+    expect(transcriptFrom(listed, 1, at, GATEWAY_NOW_MS).questions).toEqual([
+      { ...waiting, loading: "reading" },
+    ])
+    expect(
+      transcriptFrom(
+        listed,
+        1,
+        at,
+        GATEWAY_NOW_MS,
+        [],
+        [{ state: "failed", entry: entry!, error: null }],
+      ).questions,
+    ).toEqual([{ ...waiting, loading: "failed" }])
+    expect(asked(listed).questions).toEqual([
+      expect.objectContaining({ key: questionKey(question), questionId: "q1" }),
+    ])
+  })
+
   it("keeps a question that names an ask, and the gateway's notice in its own words", () => {
-    const transcript = transcriptFrom(
+    const transcript = asked(
       view("c", {
         messages: [turn({ status: "running" })],
         questions: [
@@ -1326,12 +1386,10 @@ describe("questions and a withheld interaction", () => {
         ],
         interactionViewError: "A review was left out of this view.",
       }),
-      1,
-      at,
-      GATEWAY_NOW_MS,
     )
     expect(transcript.questions).toEqual([
       {
+        key: questionKey({ executionId: "e1", questionId: "q1" }),
         executionId: "e1",
         questionId: "q1",
         message: "Where should this land?",
@@ -1351,7 +1409,7 @@ describe("questions and a withheld interaction", () => {
   })
 
   it("skips a question, field, or option that names nothing, and a blank notice", () => {
-    const transcript = transcriptFrom(
+    const transcript = asked(
       view("c", {
         messages: [turn({ status: "running" })],
         questions: [
@@ -1390,12 +1448,10 @@ describe("questions and a withheld interaction", () => {
         ],
         interactionViewError: "  ",
       }),
-      1,
-      at,
-      GATEWAY_NOW_MS,
     )
     expect(transcript.questions).toEqual([
       {
+        key: questionKey({ executionId: "e1", questionId: "q3" }),
         executionId: "e1",
         questionId: "q3",
         message: "Where should this land?",

@@ -162,8 +162,8 @@ pub enum ContextRefusal {
 }
 
 struct Pending {
-    /// Its own key, new for every review opened: what a view lists it by.
-    key: String,
+    /// What it shows, under its own key (`review.review`), new for every
+    /// review opened: what a view lists it by and an answer names.
     review: ConversationPermission,
     bytes: usize,
     app: McpAppRef,
@@ -466,7 +466,15 @@ impl AppReviews {
         arguments_json: &str,
     ) -> Result<Waiting, ReviewRefusal> {
         let (end, ended) = oneshot::channel();
-        let review = review_of(&permission_id, ask, app, server, tool, arguments_json);
+        let review = review_of(
+            &format!("{:032x}", Uuid::new_v4().as_u128()),
+            &permission_id,
+            ask,
+            app,
+            server,
+            tool,
+            arguments_json,
+        );
         let bytes = encoded_len(&review);
         if bytes > MAX_APP_REVIEW_BYTES {
             return Err(ReviewRefusal::TooLarge);
@@ -483,7 +491,6 @@ impl AppReviews {
         state.pending.insert(
             key,
             Pending {
-                key: format!("{:032x}", Uuid::new_v4().as_u128()),
                 review,
                 bytes,
                 app: app.clone(),
@@ -534,7 +541,7 @@ impl AppReviews {
             .values()
             .map(|pending| {
                 review_entry(
-                    &pending.key,
+                    &pending.review.review,
                     ConversationReviewKind::App,
                     &pending.review.tool_name,
                 )
@@ -549,15 +556,18 @@ impl AppReviews {
             .expect("app reviews")
             .pending
             .values()
-            .find(|pending| pending.key == key)
+            .find(|pending| pending.review.review == key)
             .map(|pending| pending.review.clone())
     }
 
-    /// The person's answer to the review `permission` of `execution`.
+    /// The person's answer to the review `permission` of `execution`, which
+    /// they were shown under the key `review`: one open under another key
+    /// is a new review they were not shown, and is not answered.
     pub fn answer(
         &self,
         execution: &str,
         permission: &str,
+        review: &str,
         option: &str,
         by: ReviewAnswerer,
     ) -> ReviewAnswer {
@@ -565,7 +575,8 @@ impl AppReviews {
         let Some(key) = state.key(permission) else {
             return ReviewAnswer::NotAnAppReview;
         };
-        if state.pending[&key].review.execution_id != execution {
+        let open = &state.pending[&key].review;
+        if open.execution_id != execution || open.review != review {
             return ReviewAnswer::Stale;
         }
         let end = match OPTIONS.iter().find(|&&(id, ..)| id == option) {
@@ -581,8 +592,14 @@ impl AppReviews {
     }
 
     /// The person's cancellation of a review: a denial.
-    pub fn cancel(&self, execution: &str, permission: &str, by: ReviewAnswerer) -> ReviewAnswer {
-        self.answer(execution, permission, DENY, by)
+    pub fn cancel(
+        &self,
+        execution: &str,
+        permission: &str,
+        review: &str,
+        by: ReviewAnswerer,
+    ) -> ReviewAnswer {
+        self.answer(execution, permission, review, DENY, by)
     }
 
     /// Withdraw the review `permission` as its app's: its request went.
@@ -784,7 +801,9 @@ pub fn fits(
     tool: &str,
     arguments_json: &str,
 ) -> bool {
+    // Every key is as long as any other.
     encoded_len(&review_of(
+        &"0".repeat(32),
         permission_id,
         ask,
         app,
@@ -795,6 +814,7 @@ pub fn fits(
 }
 
 fn review_of(
+    key: &str,
     permission_id: &str,
     ask: ReviewAsk,
     app: &McpAppRef,
@@ -803,6 +823,7 @@ fn review_of(
     arguments_json: &str,
 ) -> ConversationPermission {
     ConversationPermission {
+        review: key.to_owned(),
         execution_id: app.execution_id.clone(),
         permission_id: permission_id.to_owned(),
         tool_id: app.tool_id.clone(),

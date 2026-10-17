@@ -55,9 +55,9 @@ use crate::domain::agent_execution::executions::{
 use crate::domain::agent_execution::permissions::{
     PermissionCancellationReason, PermissionCancellationReasonView, PermissionDeadlineSettlement,
     PermissionDecision, PermissionEffect, PermissionId, PermissionOfferPolicy, PermissionOptionId,
-    PermissionScope, PermissionStateView, RefusalOutcome, ReviewDecline, ReviewDeclineId,
-    ReviewDeclineObservation, ReviewDeclineReason, ReviewDeclineStage, MAX_OPEN_REVIEWS,
-    MAX_REVIEW_TOOL_NAME_BYTES,
+    PermissionScope, PermissionStateView, QuestionListing, RefusalOutcome, ReviewDecline,
+    ReviewDeclineId, ReviewDeclineObservation, ReviewDeclineReason, ReviewDeclineStage,
+    MAX_OPEN_REVIEWS, MAX_REVIEW_TOOL_NAME_BYTES,
 };
 use crate::domain::agent_execution::prompts::UserMessage;
 use crate::domain::agent_execution::questions::{
@@ -472,7 +472,7 @@ struct Worker<P> {
     /// Held beside the wire request because answering one means writing a
     /// response to it, and beside what was asked because an answer is only an
     /// answer if it chooses what that question offered.
-    questions: HashMap<QuestionId, OpenQuestion>,
+    questions: AskedQuestions,
     /// The review or ask this worker answered without registering one — a
     /// refusal.
     ///
@@ -597,7 +597,7 @@ pub(in crate::infrastructure::acp) async fn run<P: AcpProfile>(
         hold_remembered_allows,
         path_classification: Arc::new(Semaphore::new(1)),
         startup_advisory_session: None,
-        questions: HashMap::new(),
+        questions: AskedQuestions::default(),
         declined: None,
         stopped_prompts: Vec::new(),
         expired_stops: Vec::new(),
@@ -3947,6 +3947,7 @@ impl<P: AcpProfile> Worker<P> {
             .clone();
         let admitted = execution.ask_question(&execution_id, id, question)?;
         let event = admitted.event();
+        let listing = execution.question_listing();
         self.questions.insert(
             admitted.id().clone(),
             OpenQuestion {
@@ -3954,6 +3955,7 @@ impl<P: AcpProfile> Worker<P> {
                 admitted,
                 cancel_delivery: None,
             },
+            listing,
         );
         self.emit(event).map_err(Into::into)
     }
@@ -4282,7 +4284,7 @@ impl<P: AcpProfile> Worker<P> {
         &mut self,
         cause: QuestionCancellation,
     ) -> Result<(), AgentError> {
-        let questions = std::mem::take(&mut self.questions);
+        let questions = self.questions.take();
         let mut failure = None;
         for mut open in questions.into_values() {
             let delivery = open
@@ -4339,6 +4341,57 @@ impl<P: AcpProfile> Worker<P> {
 /// which provider request the agent is waiting on, which execution asked — so
 /// an answer or a cancellation can name it after that execution is no longer
 /// active — and what was asked, which an answer is checked against.
+/// The asks this worker holds open, and the listing each is shown through:
+/// one owner, so a question leaves the listing exactly when it leaves here.
+#[derive(Default)]
+struct AskedQuestions {
+    open: HashMap<QuestionId, OpenQuestion>,
+    listings: HashMap<QuestionId, QuestionListing>,
+}
+impl AskedQuestions {
+    fn insert(&mut self, id: QuestionId, open: OpenQuestion, listing: Option<QuestionListing>) {
+        if let Some(listing) = listing {
+            self.listings.insert(id.clone(), listing);
+        }
+        self.open.insert(id, open);
+    }
+    fn remove(&mut self, id: &QuestionId) -> Option<OpenQuestion> {
+        if let Some(listing) = self.listings.remove(id) {
+            listing.unlist(id);
+        }
+        self.open.remove(id)
+    }
+    fn take(&mut self) -> HashMap<QuestionId, OpenQuestion> {
+        for (id, listing) in self.listings.drain() {
+            listing.unlist(&id);
+        }
+        std::mem::take(&mut self.open)
+    }
+    fn get(&self, id: &QuestionId) -> Option<&OpenQuestion> {
+        self.open.get(id)
+    }
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.open.len()
+    }
+    #[cfg(test)]
+    fn is_empty(&self) -> bool {
+        self.open.is_empty()
+    }
+    fn get_mut(&mut self, id: &QuestionId) -> Option<&mut OpenQuestion> {
+        self.open.get_mut(id)
+    }
+    fn values(&self) -> std::collections::hash_map::Values<'_, QuestionId, OpenQuestion> {
+        self.open.values()
+    }
+    fn keys(&self) -> std::collections::hash_map::Keys<'_, QuestionId, OpenQuestion> {
+        self.open.keys()
+    }
+    fn iter(&self) -> std::collections::hash_map::Iter<'_, QuestionId, OpenQuestion> {
+        self.open.iter()
+    }
+}
+
 #[derive(Clone)]
 struct OpenQuestion {
     wire_id: RpcId,

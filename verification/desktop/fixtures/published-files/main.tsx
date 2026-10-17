@@ -333,6 +333,7 @@ function panelConversation(
       questions: [],
       running: false,
       reviewsWaiting: [],
+      questionsWaiting: [],
       permissions: [],
       tools: [],
       pending: [],

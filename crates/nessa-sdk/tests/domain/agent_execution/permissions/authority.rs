@@ -8,6 +8,7 @@ fn permission_authority_reports_poison_and_drop_without_retaining_owner() {
         ExecutionSessionId::new("session").unwrap(),
         ExecutionId::new("execution").unwrap(),
         &pending,
+        &Arc::new(Mutex::new(HashMap::new())),
     );
     let id = PermissionId::new("permission").unwrap();
     let _ = std::panic::catch_unwind(|| {

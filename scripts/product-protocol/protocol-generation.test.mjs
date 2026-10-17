@@ -78,6 +78,7 @@ function fixture(run) {
       "crates/nessa-sdk/src/infrastructure/acp/sessions/config.rs",
       "crates/nessa-sdk/src/infrastructure/mcp/servers.rs",
       "crates/nessa-sdk/src/domain/agent_execution/permissions/value_objects/review_limits.rs",
+      "crates/nessa-sdk/src/domain/agent_execution/questions/value_objects/question.rs",
       "crates/nessa-protocol/src/protocol/encode.rs",
       "crates/nessa-auth/src/domain/pairing/value_objects/wire-values.json",
     ]) {

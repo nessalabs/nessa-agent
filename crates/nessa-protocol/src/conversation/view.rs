@@ -50,7 +50,7 @@ pub struct ConversationView {
     /// `conversation.permissionReview`.
     pub permissions: Vec<ConversationReviewEntry>,
     /// Questions the agent is waiting on, oldest first.
-    pub questions: Vec<ConversationQuestion>,
+    pub questions: Vec<ConversationQuestionEntry>,
     pub tools: Vec<ConversationTool>,
     pub capabilities: ConversationCapabilities,
     pub lifecycle: ConversationLifecycle,
@@ -314,6 +314,9 @@ pub enum ConversationReviewKind {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConversationPermission {
+    /// The key the view lists it under: an answer names it, so a review
+    /// whose identities are reused is never answered by mistake.
+    pub review: String,
     pub execution_id: String,
     pub permission_id: String,
     pub tool_id: String,
@@ -391,10 +394,25 @@ impl From<PermissionEffect> for ConversationPermissionOptionEffect {
         }
     }
 }
-/// One question an agent is waiting on an answer to.
+/// One question waiting on a person, as a view lists it: its key, and the
+/// start of the agent's message to say what it is while the rest is read.
+/// Its encoding never exceeds `MAX_QUESTION_ENTRY_BYTES`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationQuestionEntry {
+    /// The question's own key, 32 lowercase hex digits: new for every
+    /// question asked, so one whose identities are reused is a new entry.
+    pub question: String,
+    /// The start of the agent's message, clipped so its encoding takes at
+    /// most `MAX_QUESTION_ENTRY_MESSAGE_BYTES`.
+    pub message: String,
+}
+/// One question an agent is waiting on an answer to, with all it asks.
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConversationQuestion {
+    /// The key the view lists it under: an answer names it.
+    pub question: String,
     pub execution_id: String,
     pub question_id: String,
     /// The agent's own framing of why it is asking.

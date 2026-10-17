@@ -44,7 +44,7 @@ use crate::application::agent_execution::tools::ToolReviewInput;
 use crate::application::agent_execution::traces::GenAiSpan;
 use crate::domain::agent_execution::executions::{Initiation, Initiator, ToolChecking};
 use crate::domain::agent_execution::permissions::{
-    CustomPermissionCancellationReason, PendingReview, PermissionAuthorityError,
+    CustomPermissionCancellationReason, PendingQuestion, PendingReview, PermissionAuthorityError,
     PermissionCancellationReason, PermissionEffect, PermissionId, PermissionOptionId,
     PermissionScope, RefusalOutcome,
 };
@@ -566,6 +566,38 @@ impl Agent {
             return Ok(Vec::new());
         }
         reviews
+    }
+    /// Every question the active execution's agent is waiting on, as its
+    /// adapter lists it, oldest first. Empty when nothing runs, when the
+    /// backend exposes no live authority, or when the execution changed while
+    /// this was read.
+    ///
+    /// # Errors
+    /// Reports a dropped or poisoned owner, or a handle for another execution.
+    pub fn pending_questions(&self) -> Result<Vec<PendingQuestion>, PermissionAuthorityError> {
+        let Some(execution) = self.inner.lifecycle.active() else {
+            return Ok(Vec::new());
+        };
+        let Some((origin, attached)) = self.inner.lifecycle.permission_read_context(&execution)
+        else {
+            return Ok(Vec::new());
+        };
+        let Some(authority) = attached.session.permission_authority()? else {
+            return Ok(Vec::new());
+        };
+        if authority.execution_id() != &execution {
+            return Err(PermissionAuthorityError::IdentityMismatch);
+        }
+        let questions = authority.questions();
+        if self
+            .inner
+            .lifecycle
+            .permission_read_context(&execution)
+            .is_none_or(|(current, _)| current != origin)
+        {
+            return Ok(Vec::new());
+        }
+        questions
     }
     /// Whether this Agent currently has no running or queued work. This
     /// snapshot does not reserve admission; a host must serialize subsequent

@@ -7,6 +7,7 @@ import type {
   ConversationSummary,
   ConversationView,
   ConversationPermission,
+  ConversationQuestion,
   ConversationLease,
   ConversationReceipt,
   ConversationMutationResult,
@@ -173,6 +174,7 @@ export const reviewKeyPattern = /^[0-9a-f]{32}$/
 export function conversationPermission(value: unknown): ConversationPermission {
   const permission = record(value)
   exact(permission, [
+    "review",
     "executionId",
     "permissionId",
     "toolId",
@@ -184,6 +186,8 @@ export function conversationPermission(value: unknown): ConversationPermission {
     "ask",
     "deadline",
   ])
+  if (!reviewKeyPattern.test(text(permission, "review", 32)))
+    throw new Error("Invalid conversation review key")
   for (const key of ["executionId", "permissionId", "toolId"]) identity(permission, key)
   // What it asks the person to allow, a closed set: a surface words its
   // review by it, so a value this build does not know refuses the review.
@@ -225,7 +229,57 @@ export function conversationPermission(value: unknown): ConversationPermission {
   return permission as unknown as ConversationPermission
 }
 /**
- * One range of what a waiting review shows, held to the range asked: its
+ * All one waiting question asks, read whole with `questionReview`: the
+ * agent's message and every question, with its options. A question is not a
+ * review: nothing is authorised, and what comes back is the agent's own
+ * input. It is checked as strictly all the same, because the panel renders
+ * whatever survives this.
+ */
+export function conversationQuestion(value: unknown): ConversationQuestion {
+  const question = record(value)
+  exact(question, ["question", "executionId", "questionId", "message", "questions"])
+  if (!reviewKeyPattern.test(text(question, "question", 32)))
+    throw new Error("Invalid conversation question key")
+  for (const key of ["executionId", "questionId"]) identity(question, key)
+  text(question, "message", 1024)
+  const asked = items(question, "questions", 16)
+  if (!asked.length) throw new Error("Question response asks nothing")
+  const keys = new Set<string>()
+  for (const one of asked) {
+    exact(one, [
+      "key",
+      "prompt",
+      "header",
+      "multiSelect",
+      "freeText",
+      "required",
+      "options",
+    ])
+    const key = identity(one, "key")
+    if (keys.has(key)) throw new Error("Question repeats a key")
+    keys.add(key)
+    text(one, "prompt", 1024)
+    if (one.header !== undefined && one.header !== null) text(one, "header", 1024)
+    flag(one, "multiSelect")
+    flag(one, "freeText")
+    flag(one, "required")
+    const options = items(one, "options", 32)
+    if (!options.length) throw new Error("Question offers no answers")
+    const values = new Set<string>()
+    for (const option of options) {
+      exact(option, ["value", "label", "description"])
+      const value = text(option, "value", 1024)
+      if (values.has(value)) throw new Error("Question repeats an answer")
+      values.add(value)
+      text(option, "label", 1024)
+      if (option.description !== undefined && option.description !== null)
+        text(option, "description", 1024)
+    }
+  }
+  return question as unknown as ConversationQuestion
+}
+/**
+ * One range of what a waiting review or question shows, held to the range asked: its
  * offset, the review's whole length, and canonical base64 of exactly the
  * bytes left up to `maxBytes`. `totalBytes`, when known from an earlier
  * range, must not change between ranges.
@@ -572,57 +626,16 @@ export function conversationView(value: unknown, expected: string): Conversation
     )
       throw new Error("Pending execution contradicts its queued message")
   }
-  // A question is not a review: nothing is authorised, and what comes back is
-  // the agent's own input. It is checked as strictly all the same, because the
-  // panel renders whatever survives this.
-  const questionIds = new Set<string>()
-  for (const question of items(item, "questions", 8)) {
-    exact(question, ["executionId", "questionId", "message", "questions"])
-    for (const key of ["executionId", "questionId"]) identity(question, key)
-    const questionKey = JSON.stringify([question.executionId, question.questionId])
-    if (questionIds.has(questionKey))
-      throw new Error("Conversation response repeats a question")
-    questionIds.add(questionKey)
-    const status = messageStatuses.get(question.executionId as string)
-    if (status !== undefined && status !== "running")
-      throw new Error("Question execution is not running")
-    if (status === undefined && !item.truncated)
-      throw new Error("Question execution is missing its message")
-    text(question, "message", 1024)
-    const asked = items(question, "questions", 16)
-    if (!asked.length) throw new Error("Question response asks nothing")
-    const keys = new Set<string>()
-    for (const one of asked) {
-      exact(one, [
-        "key",
-        "prompt",
-        "header",
-        "multiSelect",
-        "freeText",
-        "required",
-        "options",
-      ])
-      const key = identity(one, "key")
-      if (keys.has(key)) throw new Error("Question repeats a key")
-      keys.add(key)
-      text(one, "prompt", 1024)
-      if (one.header !== undefined && one.header !== null) text(one, "header", 1024)
-      flag(one, "multiSelect")
-      flag(one, "freeText")
-      flag(one, "required")
-      const options = items(one, "options", 32)
-      if (!options.length) throw new Error("Question offers no answers")
-      const values = new Set<string>()
-      for (const option of options) {
-        exact(option, ["value", "label", "description"])
-        const value = text(option, "value", 1024)
-        if (values.has(value)) throw new Error("Question repeats an answer")
-        values.add(value)
-        text(option, "label", 1024)
-        if (option.description !== undefined && option.description !== null)
-          text(option, "description", 1024)
-      }
-    }
+  // Each waiting question is listed by a small entry under its key: all it
+  // asks is read with `questionReview` and checked there.
+  const questionKeys = new Set<string>()
+  for (const entry of items(item, "questions", bounds.maxOpenQuestions)) {
+    exact(entry, ["question", "message"])
+    const key = text(entry, "question", 32)
+    if (!reviewKeyPattern.test(key)) throw new Error("Invalid conversation question key")
+    if (questionKeys.has(key)) throw new Error("Conversation response repeats a question")
+    questionKeys.add(key)
+    text(entry, "message", bounds.maxQuestionEntryMessageBytes)
   }
   // Each waiting review is listed by its key alone, small and of one size:
   // what it shows is read with `permissionReview` and checked there.
@@ -768,13 +781,12 @@ export function conversationView(value: unknown, expected: string): Conversation
       capabilities.queue ||
       capabilities.steer ||
       capabilities.permissions ||
-      pendingIds.size ||
-      questionIds.size)
+      pendingIds.size)
   )
     throw new Error("Unconfirmed conversation history offers controls")
   if (
     item.transcriptState === "complete_empty" &&
-    (messages.length || pendingIds.size || questionIds.size || toolIds.size)
+    (messages.length || pendingIds.size || toolIds.size)
   )
     throw new Error("Empty conversation history contains transcript evidence")
   const features = record(capabilities.agentFeatures)

@@ -87,6 +87,8 @@ export type ConversationView = {
   reviewsWaiting: { review: string; toolName: string; failed: boolean }[]
   /** Waiting reviews, each read whole from its live owner. */
   permissions: {
+    /** The key the view lists it under; an answer names it. */
+    review: string
     executionId: string
     permissionId: string
     toolName: string
@@ -109,8 +111,18 @@ export type ConversationView = {
       stopsTurn: boolean
     }
   }[]
-  /** Questions the agent is waiting on. Nothing is authorised by answering. */
+  /**
+   * Questions the view lists whose content has not been read yet: no answer
+   * is offered to one until it has. `failed` while a read is being retried.
+   */
+  questionsWaiting: { question: string; message: string; failed: boolean }[]
+  /**
+   * Questions the agent is waiting on, each read whole from its live owner.
+   * Nothing is authorised by answering.
+   */
   questions: {
+    /** The key the view lists it under; an answer names it. */
+    question: string
     executionId: string
     questionId: string
     message: string

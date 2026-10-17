@@ -68,8 +68,15 @@ function show(
     serverConversationId: conversationId,
     controlPending: false,
     remote: {
+      questionsWaiting: [],
       questions: [
-        { executionId: "execution", questionId: "1", message: "Which?", questions },
+        {
+          question: "0".repeat(32),
+          executionId: "execution",
+          questionId: "1",
+          message: "Which?",
+          questions,
+        },
       ],
     },
   } as unknown as Conversation
@@ -195,7 +202,9 @@ it("QT10: simultaneous asks with equal field keys have independent native radio 
     serverConversationId: "00000000-0000-4000-8000-000000000001",
     controlPending: false,
     remote: {
+      questionsWaiting: [],
       questions: ["first", "second"].map((questionId) => ({
+        question: (questionId === "first" ? "a" : "b").repeat(32),
         executionId: "execution",
         questionId,
         message: questionId,
@@ -218,4 +227,39 @@ it("QT10: simultaneous asks with equal field keys have independent native radio 
   act(() => second.click())
   expect(inputs.map((input) => input.checked)).toEqual([true, true])
   expect(new Set(inputs.map((input) => input.name)).size).toBe(2)
+})
+
+it("offers no answer to a listed question until all it asks has been read", () => {
+  const render = (failed: boolean) => {
+    const conversation = {
+      id: "conversation",
+      serverConversationId: "00000000-0000-4000-8000-000000000001",
+      controlPending: false,
+      remote: {
+        questionsWaiting: [{ question: "0".repeat(32), message: "Which?", failed }],
+        questions: [],
+      },
+    } as unknown as Conversation
+    act(() => {
+      root.render(
+        React.createElement(ConversationQuestions, {
+          conversation,
+          gatewayAvailable: true,
+        }),
+      )
+    })
+  }
+  render(false)
+  expect(host.textContent).toContain("Which?")
+  expect(host.querySelector("[role=status]")?.textContent).toContain(
+    "Loading this question",
+  )
+  const buttons = () =>
+    [...host.querySelectorAll("button")].map((button) => button.textContent)
+  expect(buttons()).toEqual([])
+  render(true)
+  expect(host.querySelector("[role=status]")?.textContent).toContain(
+    "could not be loaded",
+  )
+  expect(buttons()).toEqual(["Try again"])
 })

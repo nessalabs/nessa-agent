@@ -277,6 +277,7 @@ function viewSaying(imageInput: boolean): Read {
     messages: [],
     pending: [],
     reviewsWaiting: [],
+    questionsWaiting: [],
     permissions: [],
     questions: [],
     tools: [],

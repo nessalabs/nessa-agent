@@ -313,6 +313,7 @@ it("lists a 100 KB Write review as loading, reads what it shows from its live ow
     content: "x".repeat(100_000),
   })
   const review = {
+    review: "0".repeat(32),
     executionId: "e1",
     permissionId: "p1",
     toolId: "t1",
@@ -369,6 +370,67 @@ it("lists a 100 KB Write review as loading, reads what it shows from its live ow
   stop()
 })
 
+it("lists a question as loading, reads all it asks from its live owner, and only then offers it", async () => {
+  const gateway = subscribing()
+  const key = "0123456789abcdef0123456789abcdef"
+  const asked = {
+    question: key,
+    executionId: "e1",
+    questionId: "q1",
+    message: "Which environment?",
+    questions: [
+      {
+        key: "environment",
+        prompt: "Where?",
+        header: null,
+        multiSelect: false,
+        freeText: false,
+        required: true,
+        options: [{ value: "staging", label: "Staging", description: null }],
+      },
+    ],
+  }
+  let release = () => {}
+  const loading = new Promise<void>((resolve) => (release = resolve))
+  const questionReview = vi.fn(() => loading.then(() => asked))
+  Object.assign(gateway.client, { conversation: { questionReview } })
+  const effects = gatewayEffects(
+    () => gateway.client,
+    unexpectedWait,
+    () => SERVER_NOW_MS,
+  )
+  const { said, follower } = told()
+  const conversationId = "00000000-0000-4000-8000-000000000001"
+  const stop = effects.follow(conversationId, follower)
+  await settle()
+  const entry = { question: key, message: "Which environment?" }
+  gateway.opens[0]!.handlers.view({
+    cursor: cursor("1"),
+    view: { ...gatewayView(), questions: [entry] },
+  })
+  const shown = (index: number) => (said[index] as { view: ConversationViewOf }).view
+  expect(shown(0).questions).toEqual([])
+  expect(shown(0).questionsWaiting).toEqual([
+    { question: key, message: "Which environment?", failed: false },
+  ])
+  release()
+  await settle()
+  expect(questionReview.mock.calls).toEqual([
+    [conversationId, key, { signal: expect.any(AbortSignal) }],
+  ])
+  expect(shown(1).questionsWaiting).toEqual([])
+  expect(shown(1).questions).toEqual([asked])
+  // Answered, it is no longer listed, and nothing of it is offered.
+  gateway.opens[0]!.handlers.view({
+    cursor: cursor("2"),
+    view: { ...gatewayView(), revision: "2", questions: [] },
+  })
+  expect(shown(2).questions).toEqual([])
+  expect(shown(2).questionsWaiting).toEqual([])
+  expect(questionReview).toHaveBeenCalledOnce()
+  stop()
+})
+
 it("puts a review's deadline on the panel's clock as the view arrives, so skew between the machines does not move the countdown", async () => {
   for (const skewMs of [0, 60_000, -60_000]) {
     const gateway = subscribing()
@@ -383,6 +445,7 @@ it("puts a review's deadline on the panel's clock as the view arrives, so skew b
     const stop = effects.follow("00000000-0000-4000-8000-000000000001", follower)
     await settle()
     const permissionReview = vi.fn(async () => ({
+      review: "0".repeat(32),
       executionId: "e1",
       permissionId: "p1",
       toolId: "t1",
@@ -1750,6 +1813,7 @@ function reviewTarget() {
     conversationId: "00000000-0000-4000-8000-000000000001",
     permissions: [
       {
+        review: "0".repeat(32),
         executionId: "execution",
         permissionId: "permission",
         options: [{ id: "option" }],
@@ -1763,6 +1827,7 @@ function askTarget() {
     conversationId: "00000000-0000-4000-8000-000000000001",
     questions: [
       {
+        question: "0".repeat(32),
         executionId: "turn",
         questionId: "ask",
         message: "Choose",

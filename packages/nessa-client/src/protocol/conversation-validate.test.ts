@@ -11,6 +11,7 @@ import {
   minExpectedPolicyRevision,
   minPolicyRevision,
   conversationPermission,
+  conversationQuestion,
   permissionReviewRange,
 } from "./conversation-validate.js"
 import { bounds } from "../generated/product.js"
@@ -228,7 +229,7 @@ describe("conversation view agreement", () => {
     ).toThrow(/unreadable/)
   })
 
-  it("keeps the product fixture's question attached to a running turn", () => {
+  it("lists the product fixture's question by its entry", () => {
     const fixtures = JSON.parse(
       readFileSync(
         new URL("../../../../protocol/product/fixtures.json", import.meta.url),
@@ -237,7 +238,7 @@ describe("conversation view agreement", () => {
     )
     const sample = fixtures.ConversationView
     const parsed = conversationView(sample, sample.conversationId)
-    expect(parsed.questions[0]?.executionId).toBe(parsed.messages[0]?.executionId)
+    expect(parsed.questions[0]?.question).toMatch(/^[0-9a-f]{32}$/)
     expect(parsed.capabilities.agentFeatures.incomingElicitation).toBe(
       "supported_with_correlated_round_trip",
     )
@@ -468,6 +469,7 @@ describe("conversation view agreement", () => {
   it("reads who asked for a review: the agent, or an app naming the tool it asked for", () => {
     const withOrigin = (origin: unknown) => {
       return {
+        review: "0".repeat(32),
         executionId: "running",
         permissionId: "permission",
         toolId: "tool",
@@ -501,6 +503,7 @@ describe("conversation view agreement", () => {
 
   it("reads a review's whole input, whatever its size, as the agent gave it", () => {
     const withInput = (argumentsJson: string) => ({
+      review: "0".repeat(32),
       executionId: "running",
       permissionId: "permission",
       toolId: "tool",
@@ -524,6 +527,74 @@ describe("conversation view agreement", () => {
     expect(() =>
       conversationPermission({ ...withInput("{}"), argumentsBytes: 2 }),
     ).toThrow("unknown fields")
+  })
+
+  it("lists each waiting question by a small entry under its key, and reads it whole apart", () => {
+    const listing = (questions: unknown[]) => {
+      const value: Record<string, unknown> = view()
+      value.questions = questions
+      return () => conversationView(value, "conversation")
+    }
+    const entry = (index: number) => ({
+      question: index.toString(16).padStart(32, "0"),
+      message: "é".repeat(bounds.maxQuestionEntryMessageBytes / 2),
+    })
+    const most = Array.from({ length: bounds.maxOpenQuestions }, (_, index) =>
+      entry(index),
+    )
+    expect(listing(most)()).toMatchObject({ questions: most })
+    expect(listing([...most, entry(most.length)])).toThrow()
+    expect(listing([entry(1), entry(1)])).toThrow("repeats a question")
+    expect(listing([{ ...entry(1), question: "Q".repeat(32) }])).toThrow("question key")
+    expect(listing([{ ...entry(1), message: "x".repeat(49) }])).toThrow()
+    expect(listing([{ ...entry(1), executionId: "running" }])).toThrow("unknown fields")
+    const asked = {
+      question: "0".repeat(32),
+      executionId: "running",
+      questionId: "ask",
+      message: "Which?",
+      questions: [
+        {
+          key: "environment",
+          prompt: "Where?",
+          header: null,
+          multiSelect: false,
+          freeText: false,
+          required: true,
+          options: [{ value: "staging", label: "Staging", description: null }],
+        },
+      ],
+    }
+    expect(conversationQuestion(asked)).toEqual(asked)
+    expect(() => conversationQuestion({ ...asked, question: "ask" })).toThrow(
+      "question key",
+    )
+    expect(() => conversationQuestion({ ...asked, questions: [] })).toThrow(
+      "asks nothing",
+    )
+    const { question: _key, ...unkeyed } = asked
+    expect(() => conversationQuestion(unkeyed)).toThrow()
+  })
+
+  it("refuses a review shown without the key it is listed under", () => {
+    const shown = {
+      review: "0".repeat(32),
+      executionId: "running",
+      permissionId: "permission",
+      toolId: "tool",
+      title: "Write",
+      toolName: "Write",
+      argumentsJson: "{}",
+      origin: { kind: "harness" },
+      ask: "tool",
+      options: [{ id: "allow", label: "Allow", effect: "allow" }],
+    }
+    expect(conversationPermission(shown).review).toBe(shown.review)
+    const { review: _key, ...unkeyed } = shown
+    expect(() => conversationPermission(unkeyed)).toThrow()
+    expect(() => conversationPermission({ ...shown, review: "permission" })).toThrow(
+      "review key",
+    )
   })
 
   it("reads one range of a review, held to the range asked", () => {
@@ -554,6 +625,7 @@ describe("conversation view agreement", () => {
   it("reads a review's deadline and refuses one it cannot show", () => {
     const withDeadline = (deadline: unknown) => {
       return {
+        review: "0".repeat(32),
         executionId: "running",
         permissionId: "permission",
         toolId: "tool",
@@ -645,6 +717,7 @@ describe("conversation view agreement", () => {
   it("refuses an app's review that names a tool other than the one it reviews", () => {
     const withTools = (tool: string, toolName: string) => {
       return {
+        review: "0".repeat(32),
         executionId: "running",
         permissionId: "permission",
         toolId: "tool",
@@ -671,6 +744,7 @@ describe("conversation view agreement", () => {
   it("D19 (#390): reads what a review asks as a closed set, and refuses a view whose review asks nothing it knows", () => {
     const withAsk = (ask: unknown, keep = true) => {
       return {
+        review: "0".repeat(32),
         executionId: "running",
         permissionId: "permission",
         toolId: "tool",
@@ -692,6 +766,7 @@ describe("conversation view agreement", () => {
   it("D19 (#390): refuses a review the agent asked for that asks to send a message, a contradiction", () => {
     const withOrigin = (ask: string) => {
       return {
+        review: "0".repeat(32),
         executionId: "running",
         permissionId: "permission",
         toolId: "tool",
@@ -712,6 +787,7 @@ describe("conversation view agreement", () => {
   it("reads what each permission option decides, and refuses an option that does not say", () => {
     const withOptions = (options: unknown[]) => {
       return {
+        review: "0".repeat(32),
         executionId: "running",
         permissionId: "permission",
         toolId: "tool",
@@ -761,6 +837,7 @@ describe("conversation view agreement", () => {
     expect(() => conversationView(permission, "conversation")).toThrow("unknown fields")
     expect(() =>
       conversationPermission({
+        review: "0".repeat(32),
         executionId: "running",
         permissionId: "permission",
         toolId: "tool",

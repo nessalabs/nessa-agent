@@ -1,7 +1,7 @@
 import { questionTargets, type QuestionTarget } from "@nessa/client"
 import { useState } from "react"
 import { questionAnswerReady, questionChoices, type Conversation } from "../model"
-import { controlConversation } from "../adapters/store/slice"
+import { controlConversation, refollowConversation } from "../adapters/store/slice"
 import { useConversationDispatch } from "../adapters/store/hooks"
 
 import {
@@ -47,9 +47,20 @@ export function ConversationQuestions({
           questions: conversation.remote.questions,
         })
       : []
-  if (!questions.length) return null
+  const waiting = conversation.remote?.questionsWaiting ?? []
+  if (!questions.length && !waiting.length) return null
   return (
     <div className="flex flex-col gap-3">
+      {waiting.map((one) => (
+        // Listed, but all it asks is still being read: nothing is offered to
+        // a question nobody has seen (`questionDetails`).
+        <WaitingQuestion
+          key={one.question}
+          waiting={one}
+          conversation={conversation}
+          gatewayAvailable={gatewayAvailable}
+        />
+      ))}
       {questions.map((ask) => (
         <ConversationQuestion
           key={JSON.stringify([ask.conversationId, ask.executionId, ask.questionId])}
@@ -59,6 +70,45 @@ export function ConversationQuestions({
         />
       ))}
     </div>
+  )
+}
+
+function WaitingQuestion({
+  waiting,
+  conversation,
+  gatewayAvailable,
+}: {
+  waiting: { question: string; message: string; failed: boolean }
+  conversation: Conversation
+  gatewayAvailable: boolean
+}) {
+  const dispatch = useConversationDispatch()
+  return (
+    <Questionnaire
+      aria-label={waiting.message}
+      aria-busy={!waiting.failed}
+      className="max-w-[85%] self-start"
+    >
+      <QuestionnaireHeader>
+        <QuestionnaireTitle>{waiting.message}</QuestionnaireTitle>
+        <QuestionnaireDescription role="status">
+          {waiting.failed
+            ? "This question could not be loaded. Trying again…"
+            : "Loading this question before you can answer…"}
+        </QuestionnaireDescription>
+      </QuestionnaireHeader>
+      {waiting.failed ? (
+        <QuestionnaireActions>
+          <Button
+            variant="ghost"
+            disabled={!gatewayAvailable}
+            onClick={() => void dispatch(refollowConversation(conversation.id))}
+          >
+            Try again
+          </Button>
+        </QuestionnaireActions>
+      ) : null}
+    </Questionnaire>
   )
 }
 

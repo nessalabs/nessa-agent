@@ -14,8 +14,8 @@ use crate::conversation::application::DeletionFailures;
 use crate::mcp_servers::domain::MAX_APP_ARGUMENTS_BYTES;
 use nessa_auth::domain::PrincipalId;
 use nessa_protocol::conversation::projection::{
-    review_entry, MAX_LISTED_REVIEWS, MAX_REVIEW_ENTRY_BYTES, MAX_REVIEW_ENTRY_TOOL_NAME_BYTES,
-    MAX_VIEW_BYTES,
+    question_entry, review_entry, MAX_LISTED_REVIEWS, MAX_REVIEW_ENTRY_BYTES,
+    MAX_REVIEW_ENTRY_TOOL_NAME_BYTES, MAX_VIEW_BYTES,
 };
 use nessa_protocol::conversation::view::{
     ConversationMessage, ConversationPermissionOrigin, ConversationReviewEntry,
@@ -25,6 +25,7 @@ use nessa_protocol::product_contract::generated::ConversationErrorCode;
 use nessa_sdk::application::agent_execution::agents::AgentError;
 use nessa_sdk::application::agent_execution::permissions::PermissionCaller;
 use nessa_sdk::domain::agent_execution::permissions::MAX_OPEN_REVIEWS;
+use nessa_sdk::domain::agent_execution::questions::MAX_OPEN_QUESTIONS;
 use nessa_sdk::domain::mcp_apps::{ToolHints, ToolUi, UiCsp, UiResource, UiVisibility};
 use serde_json::json;
 use std::sync::atomic::Ordering;
@@ -247,6 +248,7 @@ async fn a_destructive_call_waits_on_the_persons_review_and_is_sent_once_allowed
             caller("again"),
             review.execution_id.clone(),
             review.permission_id.clone(),
+            review.review.clone(),
             DENY.into(),
             PermissionCaller::Owner,
         )
@@ -277,6 +279,7 @@ async fn a_denied_or_cancelled_review_ends_its_call_denied_and_nothing_is_sent()
             caller("cancel"),
             review.execution_id.clone(),
             review.permission_id.clone(),
+            review.review.clone(),
             "no".into(),
         )
         .await
@@ -1655,9 +1658,14 @@ async fn the_most_reviews_a_view_lists_are_all_listed_at_their_largest_however_f
         .map(|index| largest_entry(index, ConversationReviewKind::App))
         .collect();
     assert_eq!(apps.len(), MAX_OPEN_APP_REVIEWS);
-    let listed = with_reviews(view, agent.clone(), apps.clone());
+    // And every question the agent may hold open, each entry as large.
+    let questions: Vec<_> = (0..MAX_OPEN_QUESTIONS)
+        .map(|index| question_entry(&format!("{index:032x}"), &"\u{1}".repeat(1_000)))
+        .collect();
+    let listed = with_reviews(view, agent.clone(), apps.clone(), questions.clone());
     assert!(serde_json::to_vec(&listed).unwrap().len() <= MAX_VIEW_BYTES);
     assert_eq!(listed.permissions, [agent, apps].concat());
+    assert_eq!(listed.questions, questions);
     assert_eq!(listed.interaction_view_error, None);
     assert!(listed.truncated);
 }
@@ -1685,7 +1693,7 @@ async fn reviews_are_listed_whatever_is_confirmed_of_the_transcript() {
             transcript_state: state,
             ..view.clone()
         };
-        let listed = with_reviews(unconfirmed, vec![], entries.clone());
+        let listed = with_reviews(unconfirmed, vec![], entries.clone(), vec![]);
         assert_eq!(listed.permissions, entries, "{state:?}");
     }
 }
@@ -1699,22 +1707,35 @@ async fn the_revision_changes_exactly_with_which_reviews_are_listed() {
         .await
         .unwrap();
     let entry = |index: usize| largest_entry(index, ConversationReviewKind::App);
-    let none = with_reviews(view.clone(), vec![], vec![]);
-    let two = with_reviews(view.clone(), vec![entry(1)], vec![entry(2)]);
+    let none = with_reviews(view.clone(), vec![], vec![], vec![]);
+    let two = with_reviews(view.clone(), vec![entry(1)], vec![entry(2)], vec![]);
     assert_eq!(
-        with_reviews(view.clone(), vec![entry(1)], vec![entry(2)]).revision,
+        with_reviews(view.clone(), vec![entry(1)], vec![entry(2)], vec![]).revision,
         two.revision
     );
     assert_ne!(two.revision, none.revision);
     assert_ne!(
-        with_reviews(view.clone(), vec![entry(1)], vec![]).revision,
+        with_reviews(view.clone(), vec![entry(1)], vec![], vec![]).revision,
         two.revision
     );
     assert_ne!(
-        with_reviews(view.clone(), vec![entry(1)], vec![entry(3)]).revision,
+        with_reviews(view.clone(), vec![entry(1)], vec![entry(3)], vec![]).revision,
         two.revision
     );
     assert!(two.revision.len() <= view.revision.len().max(16));
+    // Which questions wait changes it too, and a key is not the same
+    // listed as a review as listed as a question.
+    let question = |index: usize| question_entry(&format!("{index:032x}"), "Which one?");
+    let asked = with_reviews(view.clone(), vec![], vec![], vec![question(1)]);
+    assert_ne!(asked.revision, none.revision);
+    assert_ne!(
+        with_reviews(view.clone(), vec![], vec![], vec![question(2)]).revision,
+        asked.revision
+    );
+    assert_ne!(
+        with_reviews(view.clone(), vec![entry(1)], vec![], vec![]).revision,
+        asked.revision
+    );
 }
 
 #[tokio::test]

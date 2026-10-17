@@ -292,7 +292,10 @@ export const Transcript = memo(function Transcript({
           {transcript?.activity ? <LiveRow activity={transcript.activity} /> : null}
           {(transcript?.questions ?? []).map((question) => (
             <QuestionCard
-              key={JSON.stringify([question.executionId, question.questionId])}
+              key={
+                question.key ??
+                JSON.stringify([question.executionId, question.questionId])
+              }
               sessionId={sessionId}
               question={question}
             />

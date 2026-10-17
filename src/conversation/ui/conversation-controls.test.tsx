@@ -52,8 +52,10 @@ function waiting(dueAtMs: number): Conversation {
       questions: [],
       running: true,
       reviewsWaiting: [],
+      questionsWaiting: [],
       permissions: [
         {
+          review: "0".repeat(32),
           executionId: "run",
           permissionId: "permission",
           toolId: "tool",
@@ -185,6 +187,7 @@ it("captures the displayed review's conversation for both answer and dismiss", a
   for (const control of controls) {
     expect(permissionTargetConversation(control.target)).toBe("captured")
     expect(control.target).toMatchObject({
+      review: "0".repeat(32),
       executionId: "run",
       permissionId: "permission",
     })

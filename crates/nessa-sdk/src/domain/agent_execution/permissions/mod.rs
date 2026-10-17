@@ -14,8 +14,10 @@
 //! offer. That is a decision too, so its immutable selection and response-write
 //! stages are modelled under one checked identity rather than lost.
 mod authority;
-pub(crate) use authority::PendingPermissions;
-pub use authority::{PendingReview, PermissionAuthority, PermissionAuthorityError};
+pub(crate) use authority::{OpenQuestions, PendingPermissions, QuestionListing};
+pub use authority::{
+    PendingQuestion, PendingReview, PermissionAuthority, PermissionAuthorityError,
+};
 pub mod entities;
 pub mod value_objects;
 pub use entities::{PermissionRequest, PermissionStateView};

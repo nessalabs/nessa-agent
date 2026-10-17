@@ -66,6 +66,7 @@ import { followWorkspace, loadWorkspace } from "../../../../src/desktop/workspac
 import {
   fakeGateway,
   row,
+  type Unkeyed,
   shownReview,
   view,
 } from "../../../../src/desktop/workspace/adapters/gateway/fake-gateway"
@@ -118,7 +119,10 @@ let labelled = { server, tool: appTool }
 let asking = { server, tool: appTool }
 
 /** The conversation's view at `revision`, with the app's review when one is open. */
-function viewWith(revision: number, review?: ConversationPermission): ConversationView {
+function viewWith(
+  revision: number,
+  review?: Unkeyed<ConversationPermission>,
+): ConversationView {
   const value = view(conversation, {
     revision: String(revision),
     messages: [...turns],
@@ -145,7 +149,7 @@ function viewWith(revision: number, review?: ConversationPermission): Conversati
 }
 
 /** The review the gateway opens for a destructive tool an app calls (`app_reviews.rs`). */
-function reviewOf(permissionId: string, tool: string): ConversationPermission {
+function reviewOf(permissionId: string, tool: string): Unkeyed<ConversationPermission> {
   return {
     executionId: app.executionId,
     permissionId,
@@ -167,7 +171,10 @@ function reviewOf(permissionId: string, tool: string): ConversationPermission {
  * (`app_reviews.rs`, `ReviewAsk::SendMessage`): its own tool, and the
  * message exactly as it would be sent.
  */
-function messageReviewOf(permissionId: string, text: string): ConversationPermission {
+function messageReviewOf(
+  permissionId: string,
+  text: string,
+): Unkeyed<ConversationPermission> {
   return {
     executionId: app.executionId,
     permissionId,
@@ -206,7 +213,7 @@ const openingMs = 300
  * does; `landing` changes the conversation the answer's own view shows.
  */
 function onAnswer(
-  review: ConversationPermission,
+  review: Unkeyed<ConversationPermission>,
   done: (allowed: boolean) => void,
   landing: (allowed: boolean) => void = () => {},
 ) {
@@ -230,7 +237,7 @@ function onAnswer(
   })
 }
 
-function denied(review: ConversationPermission) {
+function denied(review: Unkeyed<ConversationPermission>) {
   return new NessaMcpAppError(
     conversation,
     review.permissionId,

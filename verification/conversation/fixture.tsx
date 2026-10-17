@@ -142,7 +142,7 @@ function view(
     published.permissions.map((entry) => ({
       state: "loaded",
       entry,
-      permission: committedReview,
+      shown: committedReview,
     })),
   )
 }

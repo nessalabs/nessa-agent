@@ -25,6 +25,7 @@ import {
   type LinkedFile,
   type ConversationPermission,
   type ConversationReviewEntry,
+  type QuestionDetail,
   type ReviewDetail,
   type ConversationSummary,
   type ConversationTool,
@@ -334,6 +335,8 @@ export function transcriptFrom(
   receivedAtMs: number,
   /** What each review the view lists shows, as read so far (`reviewDetails`). */
   details: readonly ReviewDetail[] = [],
+  /** All each question the view lists asks, as read so far (`questionDetails`). */
+  questionDetails: readonly QuestionDetail[] = [],
 ): Transcript {
   const tools = new Map(
     view.tools.map((tool) => [JSON.stringify([tool.executionId, tool.toolId]), tool]),
@@ -485,7 +488,7 @@ export function transcriptFrom(
   // its live owner, and the card offers no answer until then (`loading`).
   const entry = view.permissions[0]
   const detail = entry && details.find((each) => each.entry.review === entry.review)
-  const asked = detail?.state === "loaded" ? detail.permission : undefined
+  const asked = detail?.state === "loaded" ? detail.shown : undefined
   const approval: Approval | null = !entry
     ? null
     : !asked
@@ -548,7 +551,7 @@ export function transcriptFrom(
     authenticationRefusal: latestTurn?.authenticationRequired
       ? latestTurn.executionId
       : undefined,
-    questions: questionsFrom(view),
+    questions: questionsFrom(view, questionDetails),
     interactionNotice: reportedText(view.interactionViewError),
     latestInputId,
     ...(history ? { history } : {}),
@@ -590,11 +593,30 @@ function reportedText(value: string | undefined): string | undefined {
 
 /**
  * Questions the view lists that name an ask and at least one field. One that
- * does not is left out; the rest of the conversation is still shown.
+ * does not is left out; the rest of the conversation is still shown. The view
+ * lists each by its key; all it asks is read from its live owner, and until
+ * then the card offers no answer (`loading`).
  */
-function questionsFrom(view: ConversationView): readonly TranscriptQuestion[] {
+function questionsFrom(
+  view: ConversationView,
+  details: readonly QuestionDetail[],
+): readonly TranscriptQuestion[] {
   const questions: TranscriptQuestion[] = []
-  for (const ask of view.questions) {
+  const read = new Map(details.map((detail) => [detail.entry.question, detail]))
+  for (const entry of view.questions) {
+    const detail = read.get(entry.question)
+    if (detail?.state !== "loaded") {
+      questions.push({
+        key: entry.question,
+        loading: detail?.state === "failed" ? "failed" : "reading",
+        executionId: "",
+        questionId: "",
+        message: reportedText(entry.message) ?? "The agent has a question",
+        questions: [],
+      })
+      continue
+    }
+    const ask = detail.shown
     if (!ask.executionId || !ask.questionId || !reportedText(ask.message)) continue
     const fields = ask.questions.flatMap((question) => {
       if (!question.key || !reportedText(question.prompt)) return []
@@ -625,6 +647,7 @@ function questionsFrom(view: ConversationView): readonly TranscriptQuestion[] {
     })
     if (fields.length === 0) continue
     questions.push({
+      key: ask.question,
       executionId: ask.executionId,
       questionId: ask.questionId,
       message: ask.message,

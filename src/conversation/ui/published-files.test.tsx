@@ -117,6 +117,7 @@ function conversation(artifacts: PublishedFile[]): Conversation {
       questions: [],
       running: false,
       reviewsWaiting: [],
+      questionsWaiting: [],
       permissions: [],
       tools: [],
       pending: [],

@@ -163,9 +163,10 @@ export interface WorkspaceSource {
     optionId: string,
   ): Promise<void>
   /**
-   * Reads again, now, a review whose content could not be read
-   * (`Approval.loading` "failed"). A source that reads nothing after a view
-   * leaves it out.
+   * Reads again, now, a review or a question whose content could not be read
+   * (`Approval.loading` or `TranscriptQuestion.loading` "failed"), named by
+   * the approval's id or the question's key. A source that reads nothing
+   * after a view leaves it out.
    */
   retryReview?(sessionId: string, approvalId: string): void
   /**
@@ -173,7 +174,10 @@ export interface WorkspaceSource {
    * (`choices` null). Resolves once the source has taken the answer. The
    * question leaves the conversation when a later read no longer lists it.
    * The gateway's source records nothing itself: the gateway records the
-   * answer as this window's authenticated caller.
+   * answer as this window's authenticated caller. `key` is the question's
+   * own (`TranscriptQuestion.key`) where the source gave it one; a source
+   * that keys its questions refuses an answer without it, or naming
+   * another, as `not-waiting`.
    */
   answerQuestion(
     sessionId: string,
@@ -181,6 +185,7 @@ export interface WorkspaceSource {
     questionId: string,
     choices: readonly QuestionChoice[] | null,
     initiator: Initiator,
+    key?: string,
   ): Promise<void>
   /**
    * Stops the turn the session's agent is at work on (`atWork`): cancels it

@@ -8,12 +8,14 @@ import {
   NessaConversationControlError,
   NessaConversationMutationError,
   NessaRpcError,
+  questionDetails,
   reviewDetails,
   type AttachmentBeginRefusal,
   type ConversationErrorCode,
   type ConversationView as GatewayConversationView,
   type ConversationViewCursor,
   type NessaClient,
+  type QuestionDetail,
   type ReviewDetail,
   type StoredAttachment,
 } from "@nessa/client"
@@ -39,20 +41,44 @@ import { shownNote } from "./notes"
  * machines' clocks.
  */
 export function conversationView(
-  { serverNowMs, permissions: listed, ...value }: GatewayConversationView,
+  {
+    serverNowMs,
+    permissions: listed,
+    questions: listedQuestions,
+    ...value
+  }: GatewayConversationView,
   receivedAtMs: number,
   details: readonly ReviewDetail[] = [],
+  questionDetails: readonly QuestionDetail[] = [],
 ): ConversationView {
   const features = value.capabilities.agentFeatures
-  // A listed review is shown once what it shows has been read whole from its
-  // live owner (`reviewDetails`); until then it waits, offering no answer.
+  // A listed review or question is shown once what it shows has been read
+  // whole from its live owner (`reviewDetails`, `questionDetails`); until
+  // then it waits, offering no answer.
   const read = new Map(details.map((detail) => [detail.entry.review, detail]))
   const loaded = listed.flatMap((entry) => {
     const detail = read.get(entry.review)
-    return detail?.state === "loaded" ? [detail.permission] : []
+    return detail?.state === "loaded" ? [detail.shown] : []
   })
+  const asked = new Map(questionDetails.map((detail) => [detail.entry.question, detail]))
   return {
     ...value,
+    questionsWaiting: listedQuestions.flatMap((entry) => {
+      const detail = asked.get(entry.question)
+      return detail?.state === "loaded"
+        ? []
+        : [
+            {
+              question: entry.question,
+              message: entry.message,
+              failed: detail?.state === "failed",
+            },
+          ]
+    }),
+    questions: listedQuestions.flatMap((entry) => {
+      const detail = asked.get(entry.question)
+      return detail?.state === "loaded" ? [detail.shown] : []
+    }),
     reviewsWaiting: listed.flatMap((entry) => {
       const detail = read.get(entry.review)
       return detail?.state === "loaded"
@@ -688,16 +714,29 @@ export function gatewayEffects(
       // The last frame applied, and when it arrived: shown again once a
       // review it lists has been read.
       let last: { view: GatewayConversationView; receivedAtMs: number } | undefined
-      // What each listed review shows, read from its live owner and read
-      // again while a read fails; the view is shown again as each arrives.
+      // What each listed review and question shows, read from its live
+      // owner and read again while a read fails; the view is shown again as
+      // each arrives.
       const reviews = reviewDetails({
         read: (review, signal) =>
           api().permissionReview(conversationId, review, { signal }),
         changed: () => show(),
       })
+      const questions = questionDetails({
+        read: (question, signal) =>
+          api().questionReview(conversationId, question, { signal }),
+        changed: () => show(),
+      })
       const show = () => {
         if (stopped || !last) return
-        follower.view(conversationView(last.view, last.receivedAtMs, reviews.details()))
+        follower.view(
+          conversationView(
+            last.view,
+            last.receivedAtMs,
+            reviews.details(),
+            questions.details(),
+          ),
+        )
       }
       const failed = (error: unknown) => {
         if (stopped) return
@@ -728,6 +767,7 @@ export function gatewayEffects(
                   cursor = frame.cursor
                   last = { view: frame.view, receivedAtMs: now() }
                   reviews.follow(frame.view.permissions)
+                  questions.follow(frame.view.questions)
                   show()
                 },
                 ended: (end) => {
@@ -766,6 +806,7 @@ export function gatewayEffects(
         stopped = true
         giveUp?.abort()
         reviews.dispose()
+        questions.dispose()
       }
       open()
       return stop

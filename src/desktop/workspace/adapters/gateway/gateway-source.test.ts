@@ -31,10 +31,12 @@ import {
   gatewayConversationIds,
   fakeGateway,
   GATEWAY_NOW_MS,
+  questionKey,
   reviewEntry,
   row,
   view,
   type FakeGateway,
+  type Unkeyed,
 } from "./fake-gateway"
 import { gatewaySource, refusalOf, type GatewayClock } from "./gateway-source"
 
@@ -122,7 +124,7 @@ const transcriptsOf = (updates: readonly WorkspaceUpdate[], id: string) =>
 
 const permission = (
   change: Partial<ConversationPermission> = {},
-): ConversationPermission => ({
+): Unkeyed<ConversationPermission> => ({
   executionId: "turn",
   permissionId: "p1",
   toolId: "t1",
@@ -642,6 +644,7 @@ describe("conversations", () => {
     await source.index()
     follow()
     await source.transcript("a")
+    await flush()
     expect(updates).toContainEqual({
       kind: "session",
       session: expect.objectContaining({ id: "a", status: "needs-you", revision: 2 }),
@@ -659,6 +662,7 @@ describe("conversations", () => {
       "q1",
       [{ key: "where", values: ["here"] }],
       "person",
+      questionKey(question),
     )
     const answerCall = gateway.calls.find((call) => call.method === "answerQuestion")
     if (!answerCall) throw new Error("expected the gateway to answer the question")
@@ -681,38 +685,32 @@ describe("conversations", () => {
 
   it("declines a question with a null answer and refuses one the view does not list", async () => {
     const { gateway, source } = started()
-    gateway.views.set(
-      "a",
-      view("a", {
-        messages: [running()],
-        questions: [
-          {
-            executionId: "turn",
-            questionId: "q1",
-            message: "Where should this land?",
-            questions: [
-              {
-                key: "where",
-                prompt: "Pick a place",
-                multiSelect: false,
-                freeText: false,
-                required: false,
-                options: [{ value: "here", label: "Here" }],
-              },
-            ],
-          },
-        ],
-      }),
-    )
+    const asked = {
+      executionId: "turn",
+      questionId: "q1",
+      message: "Where should this land?",
+      questions: [
+        {
+          key: "where",
+          prompt: "Pick a place",
+          multiSelect: false,
+          freeText: false,
+          required: false,
+          options: [{ value: "here", label: "Here" }],
+        },
+      ],
+    }
+    gateway.views.set("a", view("a", { messages: [running()], questions: [asked] }))
     await source.transcript("a")
-    await source.answerQuestion("a", "turn", "q1", null, "agent")
+    await flush()
+    await source.answerQuestion("a", "turn", "q1", null, "agent", questionKey(asked))
     expect(gateway.calls.find((call) => call.method === "answerQuestion")?.args[1]).toBe(
       null,
     )
     gateway.publish("a")
     await flush()
     await expect(
-      source.answerQuestion("a", "turn", "q1", null, "person"),
+      source.answerQuestion("a", "turn", "q1", null, "person", questionKey(asked)),
     ).rejects.toMatchObject({ reason: "not-waiting" })
     expect(gateway.count("answerQuestion")).toBe(1)
   })
@@ -822,7 +820,11 @@ describe("conversations", () => {
     }
     gateway.views.set("a", view("a", { messages: [running()], questions: [question] }))
     await source.transcript("a")
+    await flush()
 
+    // Asked again under the same identities: a question of its own, listed
+    // under its own key.
+    const again = "c".repeat(32)
     gateway.views.set(
       "a",
       view("a", {
@@ -830,6 +832,7 @@ describe("conversations", () => {
         questions: [
           {
             ...question,
+            question: again,
             questions: [
               {
                 ...question.questions[0],
@@ -856,6 +859,7 @@ describe("conversations", () => {
         "q1",
         [{ key: "where", values: ["here"] }],
         "person",
+        again,
       ),
     ).rejects.toMatchObject({ reason: "not-waiting" })
 
@@ -883,6 +887,7 @@ describe("conversations", () => {
         "q1",
         [{ key: "where", values: ["there"] }],
         "person",
+        again,
       ),
     ).rejects.toBeInstanceOf(TypeError)
     expect(gateway.count("answerQuestion")).toBe(1)
@@ -2056,17 +2061,6 @@ describe("a connection that could not be made says why (#419)", () => {
         }),
     ],
     [
-      "an answer",
-      (source: ReturnType<typeof started>["source"]) =>
-        source.approve(
-          conversationA,
-          approvalId(reviewEntry(permission())),
-          "once",
-          "person",
-          "opt-a",
-        ),
-    ],
-    [
       "an archive",
       (source: ReturnType<typeof started>["source"]) =>
         source.archive(conversationA, "person"),
@@ -2322,7 +2316,12 @@ describe("writes", () => {
       "opt-a",
     )
     expect(gateway.calls.find((call) => call.method === "answer")?.args).toEqual([
-      { conversationId: conversationA, executionId: "turn", permissionId: "p1" },
+      {
+        review: reviewEntry(asked).review,
+        conversationId: conversationA,
+        executionId: "turn",
+        permissionId: "p1",
+      },
       "opt-a",
     ])
     expect(gateway.count("subscribe")).toBe(1)
@@ -2381,7 +2380,12 @@ describe("writes", () => {
       "opt-a",
     )
     expect(gateway.calls.find((call) => call.method === "answer")?.args).toEqual([
-      { conversationId: conversationA, executionId: "turn", permissionId: "p1" },
+      {
+        review: reviewEntry(asked).review,
+        conversationId: conversationA,
+        executionId: "turn",
+        permissionId: "p1",
+      },
       "opt-a",
     ])
   })
@@ -2500,6 +2504,8 @@ describe("writes", () => {
       conversationA,
       view(conversationA, { revision: "1", messages: [running()], permissions: [asked] }),
     )
+    await source.transcript(conversationA)
+    await flush()
     await source.deny(conversationA, approvalId(reviewEntry(asked)), "person", "opt-b")
     expect(gateway.calls.find((call) => call.method === "answer")?.args[1]).toBe("opt-b")
     const allowOnly = permission({
@@ -2542,6 +2548,72 @@ describe("writes", () => {
       reason: "not-waiting",
     })
     expect(gateway.count("answer")).toBe(0)
+  })
+
+  it("an approval of a review this window never read is refused, and nothing reads it then", async () => {
+    const { gateway, source } = started()
+    const asked = permission()
+    gateway.views.set(
+      conversationA,
+      view(conversationA, { revision: "1", messages: [running()], permissions: [asked] }),
+    )
+    await expect(
+      source.approve(
+        conversationA,
+        approvalId(reviewEntry(asked)),
+        "once",
+        "person",
+        "opt-a",
+      ),
+    ).rejects.toMatchObject({ reason: "not-waiting" })
+    expect(gateway.count("permissionReview")).toBe(0)
+    expect(gateway.count("answer")).toBe(0)
+  })
+
+  it("a question asked again under the same ids is answered only by its own key, once read", async () => {
+    const { gateway, source } = started()
+    const first = {
+      executionId: "turn",
+      questionId: "q1",
+      message: "Where should this land?",
+      questions: [
+        {
+          key: "where",
+          prompt: "Pick a place",
+          multiSelect: false,
+          freeText: false,
+          required: true,
+          options: [{ value: "here", label: "Here" }],
+        },
+      ],
+    }
+    gateway.views.set("a", view("a", { messages: [running()], questions: [first] }))
+    await source.transcript("a")
+    await flush()
+    // After a restart the agent asks again under the same ids: another question.
+    const again = { ...first, question: "d".repeat(32), message: "Where now?" }
+    let release = () => {}
+    const reading = new Promise<void>((resolve) => (release = resolve))
+    gateway.once("questionReview", (normal) => reading.then(normal))
+    gateway.views.set("a", view("a", { messages: [running()], questions: [again] }))
+    gateway.publish("a")
+    await flush()
+    const choices = [{ key: "where", values: ["here"] }]
+    // The card the person saw names the first: stale, and nothing is answered.
+    await expect(
+      source.answerQuestion("a", "turn", "q1", choices, "person", questionKey(first)),
+    ).rejects.toMatchObject({ reason: "not-waiting" })
+    // The second, not read yet, offers no answer either.
+    await expect(
+      source.answerQuestion("a", "turn", "q1", choices, "person", again.question),
+    ).rejects.toMatchObject({ reason: "not-waiting" })
+    expect(gateway.count("answerQuestion")).toBe(0)
+    release()
+    await flush()
+    await source.answerQuestion("a", "turn", "q1", choices, "person", again.question)
+    expect(
+      gateway.calls.find((call) => call.method === "answerQuestion")?.args[0],
+    ).toMatchObject({ question: again.question, message: "Where now?" })
   })
 
   it("D21: an approval in a conversation let go past the limit follows it again before answering", async () => {
@@ -2791,6 +2863,13 @@ describe("writes", () => {
       conversationA,
       view(conversationA, { revision: "1", messages: [running()], permissions: [asked] }),
     )
+    // Shown, then let go past the limit, so the approval follows it again.
+    await source.transcript(conversationA)
+    await flush()
+    for (let i = 0; i < 8; i++) {
+      gateway.views.set(`o${i}`, view(`o${i}`))
+      await source.transcript(`o${i}`)
+    }
     // The conversation's subscription answers only after the approval's call has settled.
     const held = deferred<void>()
     gateway.once("subscribe", (normal) => held.promise.then(normal))
@@ -3489,7 +3568,12 @@ describe("an app's review is shown after its turn ended (#436)", () => {
       "allow",
     )
     expect(gateway.calls.find((call) => call.method === "answer")?.args).toEqual([
-      { conversationId: conversationA, executionId: "turn", permissionId: "app-1" },
+      {
+        review: reviewEntry(appReview).review,
+        conversationId: conversationA,
+        executionId: "turn",
+        permissionId: "app-1",
+      },
       "allow",
     ])
     gateway.views.set(

@@ -564,6 +564,8 @@ export interface ConversationPermissionDeadline {
 }
 /** A pending review with all it shows, as conversation.permissionReview reads it for one entry of a view. */
 export interface ConversationPermission {
+  /** The key the view lists it under. An answer names it, so a review whose identities are reused is never answered by mistake. */
+  review: string
   /** Stable invocation identifier retained for retries of one logical message, at most 256 UTF-8 bytes. */
   executionId: string
   /** Permission identity within the execution. */
@@ -593,6 +595,13 @@ export interface ConversationReviewEntry {
   origin: "harness" | "app"
   /** The start of the reviewed tool's name, to say what the review is while the rest is read. */
   toolName: string
+}
+/** One question waiting on a person, as a view lists it: its key and the start of the agent's message. A view never leaves one out for its size. Read all it asks with conversation.questionReview, and offer no answer until that has loaded. */
+export interface ConversationQuestionEntry {
+  /** The question's own key: new for every question asked, so a question whose identities are reused is a new entry. */
+  question: string
+  /** The start of the agent's message, to say what the question is while the rest is read. */
+  message: string
 }
 /** Bounded presentation of an observed tool call. */
 export interface ConversationTool {
@@ -682,8 +691,8 @@ export interface ConversationView {
   unreadableTruncated: boolean
   /** Name the gateway derived from the conversation's first message, the same one conversation.list shows; null before anything was said. */
   title: string | null
-  /** Questions the agent is waiting on, oldest first. */
-  questions: ConversationQuestion[]
+  /** Every question the agent is waiting on now, oldest first (the SDK holds at most MAX_OPEN_QUESTIONS open). Each entry is small and of fixed size, and a bounded view gives up everything else before any of them, so none is ever left out. */
+  questions: ConversationQuestionEntry[]
   /** Last durably committed preset. */
   approvalMode: ApprovalMode
   /** Presets supported by this model. */
@@ -922,6 +931,8 @@ export interface ConversationAnswerParams {
   requestId: string
   /** Stable invocation identifier retained for retries of one logical message, at most 256 UTF-8 bytes. */
   executionId: string
+  /** The review's key, as the view lists it. Refused with stale_permission when the review waiting under these identities has another. */
+  review: string
   /** Pending permission identity. */
   permissionId: string
   /** Exact provider-offered option identity. */
@@ -938,6 +949,17 @@ export interface ConversationPermissionReviewParams {
   /** Most bytes to answer with. The answer carries fewer only at the end of the review. */
   maxBytes: number
 }
+/** Read one range of all a waiting question asks: the UTF-8 JSON of its ConversationQuestion, from the agent's live invocation. A surface reads from 0 until totalBytes, checks the whole is that long, and offers no answer until it has. Refused with stale_permission once the view no longer lists the question. */
+export interface ConversationQuestionReviewParams {
+  /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
+  conversationId: string
+  /** The question's key, as the view lists it. */
+  question: string
+  /** First byte of the range: 0, or less than the question's length. */
+  offset: number
+  /** Most bytes to answer with. The answer carries fewer only at the end of the question. */
+  maxBytes: number
+}
 /** One range of what a waiting review shows. Assemble the ranges, check the whole is totalBytes long, is UTF-8 and is the ConversationPermission of the review asked for, then show it. */
 export interface ConversationPermissionReviewResult {
   /** First byte of this range, as asked. */
@@ -945,6 +967,15 @@ export interface ConversationPermissionReviewResult {
   /** Length of the whole review, in UTF-8 bytes. */
   totalBytes: number
   /** The range's bytes, standard base64 with padding: at most maxBytes, and fewer only when the review ends first. */
+  data: string
+}
+/** One range of all a waiting question asks. Assemble the ranges, check the whole is totalBytes long, is UTF-8 and is the ConversationQuestion of the question asked for, then show it. */
+export interface ConversationQuestionReviewResult {
+  /** First byte of this range, as asked. */
+  offset: number
+  /** Length of the whole question, in UTF-8 bytes. */
+  totalBytes: number
+  /** The range's bytes, standard base64 with padding: at most maxBytes, and fewer only when the question ends first. */
   data: string
 }
 /** Cancel one permission review with a caller reason. */
@@ -955,6 +986,8 @@ export interface ConversationCancelParams {
   requestId: string
   /** Stable invocation identifier retained for retries of one logical message, at most 256 UTF-8 bytes. */
   executionId: string
+  /** The review's key, as the view lists it. Refused with stale_permission when the review waiting under these identities has another. */
+  review: string
   /** Pending permission identity. */
   permissionId: string
   /** Reason recorded with authenticated caller attribution. */
@@ -1716,8 +1749,10 @@ export interface ConversationAsked {
   /** What may be chosen, in the order the agent offered it. */
   options: ConversationAnswerOption[]
 }
-/** A question the agent is waiting on an answer to. Nothing is authorised by answering; the agent simply cannot continue that path until it hears back. */
+/** A question the agent is waiting on an answer to, with all it asks, as conversation.questionReview reads it for one entry of a view. Nothing is authorised by answering; the agent simply cannot continue that path until it hears back. */
 export interface ConversationQuestion {
+  /** The key the view lists it under. An answer names it, so a question whose identities are reused is never answered by mistake. */
+  question: string
   /** Stable invocation identifier retained for retries of one logical message, at most 256 UTF-8 bytes. */
   executionId: string
   /** Identity the answer names. */
@@ -1744,6 +1779,8 @@ export interface ConversationAnswerQuestionParams {
   requestId: string
   /** Stable invocation identifier retained for retries of one logical message, at most 256 UTF-8 bytes. */
   executionId: string
+  /** The question's key, as the view lists it. Refused with stale_permission when the question waiting under these identities has another. */
+  question: string
   /** The ask being answered. */
   questionId: string
   /** What was chosen. Null declines the question, which is an answer the agent is told. */
@@ -2828,7 +2865,7 @@ export const mcpServerRules = {
 export const bounds = {
   maxOrdinaryResponseBytes: 65536,
   maxRequestFrameBytes: 65536,
-  maxReadyMethods: 76,
+  maxReadyMethods: 77,
   maxAuthCredentialCharacters: 16384,
   maxProductClientIdCharacters: 256,
   maxProductSurfaceInstanceCharacters: 256,
@@ -2880,6 +2917,8 @@ export const bounds = {
   maxOpenReviews: 128,
   maxListedReviews: 144,
   maxReviewEntryToolNameBytes: 64,
+  maxQuestionEntryMessageBytes: 48,
+  maxOpenQuestions: 8,
   maxReviewInputBytes: 33554432,
   maxReviewOptions: 64,
   maxReviewOptionLabelBytes: 2048,
@@ -3063,6 +3102,7 @@ export const ProductMethod = {
   ConversationMessageStatus: "conversation.messageStatus",
   ConversationAnswer: "conversation.answer",
   ConversationPermissionReview: "conversation.permissionReview",
+  ConversationQuestionReview: "conversation.questionReview",
   ConversationAnswerQuestion: "conversation.answerQuestion",
   ConversationCancel: "conversation.cancel",
   ConversationClose: "conversation.close",
@@ -3154,6 +3194,7 @@ export const productReadyMethods = [
   "conversation.messageStatus",
   "conversation.answer",
   "conversation.permissionReview",
+  "conversation.questionReview",
   "conversation.answerQuestion",
   "conversation.cancel",
   "conversation.close",
@@ -3234,6 +3275,7 @@ export const productMethodGrants = {
   "conversation.messageStatus": "conversation.write",
   "conversation.answer": "conversation.write",
   "conversation.permissionReview": "conversation.write",
+  "conversation.questionReview": "conversation.write",
   "conversation.answerQuestion": "conversation.write",
   "conversation.cancel": "conversation.write",
   "conversation.close": "conversation.write",

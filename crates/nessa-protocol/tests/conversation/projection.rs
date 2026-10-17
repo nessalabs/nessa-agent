@@ -4,8 +4,10 @@
 use crate::agents::AgentId;
 use crate::conversation::domain::{ConversationApprovalMode, ConversationId};
 use crate::conversation::projection::{
-    agent_review, bound_view, bound_view_within, clipped, review_entry, Projection,
-    MAX_REVIEW_ENTRY_BYTES, MAX_REVIEW_ENTRY_TOOL_NAME_BYTES, MAX_TEXT, MAX_VIEW_BYTES,
+    agent_question, agent_review, bound_view, bound_view_within, clipped, question_entry,
+    review_entry, Projection, MAX_LISTED_REVIEWS, MAX_QUESTION_ENTRY_BYTES,
+    MAX_QUESTION_ENTRY_MESSAGE_BYTES, MAX_REVIEW_ENTRY_BYTES, MAX_REVIEW_ENTRY_TOOL_NAME_BYTES,
+    MAX_TEXT, MAX_VIEW_BYTES,
 };
 use crate::conversation::view::{
     ConversationPermissionAsk, ConversationPermissionOptionEffect, ConversationReviewKind,
@@ -40,16 +42,16 @@ use nessa_sdk::domain::agent_execution::executions::{
     MessageId, QueueMutation, SchedulingCause,
 };
 use nessa_sdk::domain::agent_execution::permissions::{
-    PendingReview, PermissionApplicationId, PermissionCancellationReason, PermissionDecision,
-    PermissionEffect, PermissionId, PermissionOfferPolicy, PermissionOption, PermissionOptionId,
-    PermissionOptions, PermissionReviewDeadline, PermissionScope, PermissionSessionId,
-    PermissionToolClass, ReviewContent, ReviewDecline, ReviewDeclineId, ReviewDeclineObservation,
-    ReviewDeclineReason, ReviewDeclineStage, MAX_OPEN_REVIEWS, STANDARD_DENY_REASON,
-    STANDARD_STOP_REASON,
+    PendingQuestion, PendingReview, PermissionApplicationId, PermissionCancellationReason,
+    PermissionDecision, PermissionEffect, PermissionId, PermissionOfferPolicy, PermissionOption,
+    PermissionOptionId, PermissionOptions, PermissionReviewDeadline, PermissionScope,
+    PermissionSessionId, PermissionToolClass, ReviewContent, ReviewDecline, ReviewDeclineId,
+    ReviewDeclineObservation, ReviewDeclineReason, ReviewDeclineStage, MAX_OPEN_REVIEWS,
+    STANDARD_DENY_REASON, STANDARD_STOP_REASON,
 };
 use nessa_sdk::domain::agent_execution::prompts::{PromptText, UserMessage};
 use nessa_sdk::domain::agent_execution::questions::{
-    AgentQuestion, AnswerOption, AnswerShape, Question, QuestionId, MAX_OPEN_ASK_COST,
+    AgentQuestion, AnswerOption, AnswerShape, Question, QuestionId, MAX_OPEN_QUESTIONS,
 };
 use nessa_sdk::domain::agent_execution::sessions::{
     ExecutionSessionId, ProviderContext, SessionId,
@@ -1019,7 +1021,9 @@ fn a_turn_admitted_after_open_stays_running_until_its_result() {
     ));
     let live = projection.read();
     assert_eq!(live.messages[0].status, ConversationMessageStatus::Running);
-    assert_eq!(live.questions.len(), 1);
+    // What waits is the live owner's to list (`agent_question`): the fold
+    // lists no question.
+    assert!(live.questions.is_empty());
 
     assert!(projection.replace_committed(
         &committed("incarnation", 3, 3, 3, Some(&admitted)),
@@ -1276,8 +1280,9 @@ fn running_one_restored_turn_leaves_the_other_unresolved() {
         status_of(&live, "other"),
         ConversationMessageStatus::Unresolved
     );
-    assert_eq!(live.questions.len(), 1);
-    assert_eq!(live.questions[0].execution_id, "kept");
+    // What waits is the live owner's to list (`agent_question`): the fold
+    // lists no question.
+    assert!(live.questions.is_empty());
 
     assert!(projection.replace_committed(
         &committed("incarnation", 2, 2, 2, Some(&snapshot)),
@@ -1396,7 +1401,9 @@ fn a_turn_this_process_runs_stays_running_after_it_stops_being_active() {
     ));
     let live = projection.read();
     assert_eq!(live.messages[0].status, ConversationMessageStatus::Running);
-    assert_eq!(live.questions.len(), 1);
+    // What waits is the live owner's to list (`agent_question`): the fold
+    // lists no question.
+    assert!(live.questions.is_empty());
 
     assert!(projection.replace_committed(
         &committed("incarnation", 3, 3, 3, Some(&snapshot)),
@@ -1651,7 +1658,9 @@ fn only_the_exact_live_execution_can_offer_a_committed_interaction() {
         Some(&exact),
     );
     projection.transcript_state(ConversationTranscriptState::Complete);
-    assert_eq!(projection.read().questions.len(), 1);
+    // What waits is the live owner's to list (`agent_question`): the fold
+    // lists no question.
+    assert!(projection.read().questions.is_empty());
     assert!(!projection.replace_committed(
         &committed("replacement-incarnation", 2, 2, 2, Some(&snapshot)),
         &[],
@@ -1793,96 +1802,16 @@ fn active_interactions_survive_recent_message_window_without_copying_the_message
         .iter()
         .all(|message| message.execution_id != "execution"));
     assert!(view.messages.len() <= 24);
-    assert_eq!(view.questions.len(), 1);
-    assert_eq!(view.questions[0].questions.len(), 3);
+    // What waits is the live owner's to list (`agent_question`): the fold
+    // lists no question.
+    assert!(view.questions.is_empty());
     let view = bound_view(view);
     assert!(serde_json::to_vec(&view).unwrap().len() <= 60_000);
-    assert!(projection.replace_committed(&current, &order, Some(&active)));
-    assert_eq!(projection.read().questions.len(), 1);
     assert!(projection.replace_committed(&current, &order, None));
     assert!(projection.read().questions.is_empty());
     assert!(projection.read().permissions.is_empty());
-    assert!(projection.replace_committed(&current, &order, Some(&active)));
-    assert_eq!(projection.read().questions.len(), 1);
-    // The extra record uses the same encoded-byte owner as recent records.
-    // Open ask cost is below the admission owner's40KiB bound; complete
-    // reviews give way before any actual question or answer option is cut.
-    let mut costly = snapshot.clone();
-    costly.invocations[0].events.clear();
-    let mut ask_cost = 0;
-    for index in 0..2 {
-        let question = AgentQuestion::new(
-            "\"".repeat(1024),
-            (0..3)
-                .map(|sibling| {
-                    Question::new(
-                        format!("large_{index}_{sibling}"),
-                        "\"".repeat(1024),
-                        Some("\\".repeat(256)),
-                        AnswerShape::One,
-                        vec![AnswerOption::new(
-                            "staging",
-                            "\"".repeat(1024),
-                            Some("\\".repeat(256)),
-                        )
-                        .unwrap()],
-                        None,
-                        false,
-                    )
-                    .unwrap()
-                })
-                .collect(),
-        )
-        .unwrap();
-        ask_cost += question.carrying_cost();
-        costly.invocations[0]
-            .events
-            .push(event(ExecutionUpdate::QuestionAsked {
-                id: QuestionId::new(format!("large-{index}")).unwrap(),
-                question,
-            }));
-    }
-    assert!(ask_cost <= MAX_OPEN_ASK_COST);
-    for index in 0..8 {
-        let ExecutionUpdate::PermissionRequested {
-            observation,
-            input,
-            options,
-            ..
-        } = review(serde_json::to_string(&"\"".repeat(3000)).unwrap())
-            .update()
-            .clone()
-        else {
-            unreachable!()
-        };
-        costly.invocations[0]
-            .events
-            .push(event(ExecutionUpdate::PermissionRequested {
-                id: PermissionId::new(format!("costly-{index}")).unwrap(),
-                tool_id: ToolCallId::new(format!("costly-tool-{index}")).unwrap(),
-                observation,
-                input,
-                options,
-                deadline: None,
-            }));
-    }
-    let large = committed("incarnation", 27, 27, 27, Some(&costly));
-    let mut bounded = self::projection();
-    assert!(bounded.replace_committed(&large, &order, Some(&active)));
-    bounded.transcript_state(ConversationTranscriptState::Complete);
-    let view = bounded.read();
-    let view = bound_view(view);
-    assert!(serde_json::to_vec(&view).unwrap().len() <= 60_000);
-    assert_eq!(view.questions.len(), 2);
-    for (index, question) in view.questions.iter().enumerate() {
-        assert_eq!(question.questions.len(), 3);
-        for (sibling, asked) in question.questions.iter().enumerate() {
-            assert_eq!(asked.key, format!("large_{index}_{sibling}"));
-            assert_eq!(asked.prompt.len(), 1024);
-            assert_eq!(asked.options[0].label.len(), 1024);
-        }
-    }
     // Reviews are not part of the folded view; their live owner lists them.
+    let view = projection.read();
     assert!(view.permissions.is_empty());
     let mut owner = ExecutionController::new(ExecutionSessionId::new("provider-session").unwrap());
     owner.begin_execution(active.clone()).unwrap();
@@ -1933,119 +1862,129 @@ fn active_interactions_survive_recent_message_window_without_copying_the_message
     assert!(projection.replace_committed(&closed, &order, Some(&active)));
     assert!(projection.read().questions.is_empty());
     assert!(projection.read().permissions.is_empty());
-    let mut reset = self::projection();
-    assert!(reset.replace_committed(&current, &order, Some(&active)));
-    reset.transcript_state(ConversationTranscriptState::Complete);
-    assert_eq!(reset.read().questions[0].questions.len(), 3);
+}
+
+/// A question as large as the SDK admits one: its message, and every
+/// question, header and option as long as each may be, in characters that
+/// take the most an encoding can make of them.
+fn largest_question(index: usize) -> AgentQuestion {
+    AgentQuestion::new(
+        "\"".repeat(1024),
+        (0..3)
+            .map(|sibling| {
+                Question::new(
+                    format!("custom_{index}_{sibling}"),
+                    "\"".repeat(1024),
+                    Some("\\".repeat(256)),
+                    AnswerShape::One,
+                    vec![
+                        AnswerOption::new("yes", "\"".repeat(1024), Some("\\".repeat(256)))
+                            .unwrap(),
+                    ],
+                    None,
+                    false,
+                )
+                .unwrap()
+            })
+            .collect(),
+    )
+    .unwrap()
+}
+
+// All a question asks is read from its live owner, never cut: however
+// large, its entry is small and of one size, and what it shows is whole.
+#[test]
+fn the_largest_question_is_listed_by_a_small_entry_and_shown_whole() {
+    let execution = ExecutionId::new("execution").unwrap();
+    let mut keys = std::collections::HashSet::new();
+    for index in 0..MAX_OPEN_QUESTIONS {
+        let question = largest_question(index);
+        let pending = PendingQuestion::new(
+            execution.clone(),
+            QuestionId::new(format!("custom-{index}")).unwrap(),
+            question.clone(),
+        );
+        let key = pending.key();
+        assert!(keys.insert(key.clone()));
+        let shown = agent_question(&pending);
+        assert_eq!(shown.question, key);
+        assert_eq!(shown.question_id, format!("custom-{index}"));
+        assert_eq!(shown.message, question.message());
+        assert_eq!(shown.questions.len(), 3);
+        for (sibling, asked) in shown.questions.iter().enumerate() {
+            assert_eq!(asked.key, format!("custom_{index}_{sibling}"));
+            assert_eq!(asked.prompt, "\"".repeat(1024));
+            assert_eq!(asked.header.as_deref(), Some(&*"\\".repeat(256)));
+            assert_eq!(asked.options[0].label, "\"".repeat(1024));
+        }
+        let entry = question_entry(&key, question.message());
+        assert_eq!(entry.question, key);
+        assert!(question.message().starts_with(&entry.message));
+        let encoded = serde_json::to_string(&entry.message).unwrap();
+        assert!(encoded.len() - 2 <= MAX_QUESTION_ENTRY_MESSAGE_BYTES);
+        assert!(serde_json::to_vec(&entry).unwrap().len() < MAX_QUESTION_ENTRY_BYTES);
+    }
 }
 
 #[test]
-fn custom_backend_questions_over_display_budget_remain_semantic_and_atomic() {
-    let execution = ExecutionId::new("execution").unwrap();
-    let mut controller =
-        ExecutionController::new(ExecutionSessionId::new("provider-session").unwrap());
-    controller.begin_execution(execution.clone()).unwrap();
-    let mut events = Vec::new();
-    let mut carry = 0;
-    for index in 0..4 {
-        let question = AgentQuestion::new(
-            "\"".repeat(1024),
-            (0..3)
-                .map(|sibling| {
-                    Question::new(
-                        format!("custom_{index}_{sibling}"),
-                        "\"".repeat(1024),
-                        Some("\\".repeat(256)),
-                        AnswerShape::One,
-                        vec![
-                            AnswerOption::new("yes", "\"".repeat(1024), Some("\\".repeat(256)))
-                                .unwrap(),
-                        ],
-                        None,
-                        false,
-                    )
-                    .unwrap()
-                })
-                .collect(),
-        )
-        .unwrap();
-        carry += question.carrying_cost();
-        events.push(
-            controller
-                .ask_question(
-                    &execution,
-                    QuestionId::new(format!("custom-{index}")).unwrap(),
-                    question,
-                )
-                .unwrap()
-                .event(),
-        );
+fn a_question_entry_clips_its_message_to_a_fixed_encoded_size() {
+    for message in [
+        "\"".repeat(500),
+        "\u{1}".repeat(500),
+        "é".repeat(500),
+        "x".to_owned(),
+    ] {
+        let entry = question_entry("0123456789abcdef0123456789abcdef", &message);
+        let encoded = serde_json::to_string(&entry.message).unwrap();
+        assert!(encoded.len() - 2 <= MAX_QUESTION_ENTRY_MESSAGE_BYTES);
+        assert!(!entry.message.is_empty());
+        assert!(message.starts_with(&entry.message));
+        assert!(serde_json::to_vec(&entry).unwrap().len() < MAX_QUESTION_ENTRY_BYTES);
     }
-    assert!(carry > MAX_OPEN_ASK_COST);
-    for index in 0..8 {
-        let ExecutionUpdate::PermissionRequested { input, options, .. } =
-            review(serde_json::to_string(&"\"".repeat(3000)).unwrap())
-                .update()
-                .clone()
-        else {
-            unreachable!()
-        };
-        events.push(
-            controller
-                .request_permission(
-                    &execution,
-                    PermissionId::new(format!("mixed-review-{index}")).unwrap(),
-                    ToolCallUpdate::new(
-                        ToolCallId::new(format!("mixed-tool-{index}")).unwrap(),
-                        None,
-                        None,
-                        None,
-                        None,
-                        None,
-                    ),
-                    input,
-                    options,
-                    None,
-                )
-                .unwrap(),
-        );
-    }
-    let snapshot = review_snapshot(events);
-    let complete = committed("incarnation", 5, 5, 5, Some(&snapshot));
-    assert_eq!(complete.snapshot().unwrap().invocations[0].events.len(), 12);
-    let mut projection = self::projection();
-    assert!(projection.replace_committed(&complete, &[], Some(&execution)));
+}
+
+// The questions and reviews a view lists keep their room however full the
+// rest of it is: every one of the most it lists, each at its largest.
+#[test]
+fn a_bounded_view_keeps_every_question_and_review_it_lists() {
+    let mut projection = projection();
+    let snapshot = review_snapshot(Vec::new());
+    projection.replace_committed(
+        &committed("incarnation", 1, 1, 1, Some(&snapshot)),
+        &[],
+        Some(&ExecutionId::new("execution").unwrap()),
+    );
     projection.transcript_state(ConversationTranscriptState::Complete);
-    let view = projection.read();
+    let mut view = projection.read();
+    let message = view.messages[0].clone();
+    view.messages = (0..40)
+        .map(|_| crate::conversation::view::ConversationMessage {
+            user_text: "y".repeat(8_000),
+            ..message.clone()
+        })
+        .collect();
+    view.messages.push(message);
+    view.title = Some("t".repeat(512));
+    view.permissions = (0..MAX_LISTED_REVIEWS)
+        .map(|index| {
+            review_entry(
+                &format!("{index:032x}"),
+                ConversationReviewKind::App,
+                &"\u{1}".repeat(1_000),
+            )
+        })
+        .collect();
+    view.questions = (0..MAX_OPEN_QUESTIONS)
+        .map(|index| question_entry(&format!("{index:032x}"), &"\u{1}".repeat(1_000)))
+        .collect();
+    let (permissions, questions) = (view.permissions.clone(), view.questions.clone());
+    assert!(serde_json::to_vec(&view).unwrap().len() > MAX_VIEW_BYTES);
     let view = bound_view(view);
+    assert!(serde_json::to_vec(&view).unwrap().len() <= MAX_VIEW_BYTES);
+    assert_eq!(view.permissions, permissions);
+    assert_eq!(view.questions, questions);
+    assert_eq!(view.interaction_view_error, None);
     assert!(view.truncated);
-    assert!(serde_json::to_vec(&view).unwrap().len() <= 60_000);
-    assert!(!view.questions.is_empty());
-    assert!(view.questions.len() < 4);
-    assert!(view.permissions.len() < 8);
-    assert_eq!(view.transcript_state, ConversationTranscriptState::Complete);
-    assert!(view
-        .interaction_view_error
-        .as_deref()
-        .unwrap()
-        .contains("Use Stop"));
-    assert!(view
-        .interaction_view_error
-        .as_deref()
-        .unwrap()
-        .contains("pending interactions"));
-    for (index, ask) in view.questions.iter().enumerate() {
-        assert_eq!(ask.question_id, format!("custom-{index}"));
-        assert_eq!(ask.questions.len(), 3);
-        for (sibling, question) in ask.questions.iter().enumerate() {
-            assert_eq!(question.key, format!("custom_{index}_{sibling}"));
-            assert_eq!(question.prompt, "\"".repeat(1024));
-            assert_eq!(question.options.len(), 1);
-            assert_eq!(question.options[0].label, "\"".repeat(1024));
-        }
-    }
-    // Renderer omission does not mutate the full committed continuation.
-    assert_eq!(complete.snapshot().unwrap().invocations[0].events.len(), 12);
 }
 
 #[test]

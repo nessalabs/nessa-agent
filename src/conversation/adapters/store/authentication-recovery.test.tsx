@@ -50,6 +50,7 @@ function wireView(
     messages: [],
     pending: [],
     reviewsWaiting: [],
+    questionsWaiting: [],
     permissions: [],
     questions: [],
     tools: [],

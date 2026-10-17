@@ -81,6 +81,7 @@ function conversation(notes: Note[], turns: Turn[]): Conversation {
       questions: [],
       running: false,
       reviewsWaiting: [],
+      questionsWaiting: [],
       permissions: [],
       tools: [],
       pending: [],

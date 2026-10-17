@@ -70,6 +70,7 @@ function view(
       mode: "queued" as const,
     })),
     reviewsWaiting: [],
+    questionsWaiting: [],
     permissions: [],
     tools: [],
     capabilities: {

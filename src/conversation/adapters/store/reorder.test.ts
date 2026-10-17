@@ -31,6 +31,7 @@ function view(ids: string[]): ConversationView {
     transcriptState: "complete",
     messages: [],
     reviewsWaiting: [],
+    questionsWaiting: [],
     permissions: [],
     questions: [],
     tools: [],

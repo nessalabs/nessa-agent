@@ -187,6 +187,7 @@ it("known-unsent follow-up does not settle the earlier running invocation before
           truncated: false,
           pending: [],
           reviewsWaiting: [],
+          questionsWaiting: [],
           permissions: [],
           questions: [],
           tools: [],

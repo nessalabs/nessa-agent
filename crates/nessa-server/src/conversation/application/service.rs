@@ -37,7 +37,8 @@ use nessa_protocol::conversation::domain::{
 };
 use nessa_protocol::conversation::{
     projection::{
-        agent_review, bound_view, clipped, review_entry, CommittedCursor, Projection, MAX_TEXT,
+        agent_question, agent_review, bound_view, clipped, question_entry, review_entry,
+        CommittedCursor, Projection, MAX_TEXT,
     },
     tool_uis::{McpToolUis, NoMcpToolUis},
     view::{
@@ -46,9 +47,10 @@ use nessa_protocol::conversation::{
         ConversationCapabilities, ConversationDisposition, ConversationLifecycle,
         ConversationLifecyclePhase, ConversationList, ConversationListEntry,
         ConversationObservation, ConversationObservationCursor, ConversationPermission,
-        ConversationReorderOutcome, ConversationReviewEntry, ConversationReviewKind,
-        ConversationRuntime, ConversationSelectionView, ConversationStartupFailure,
-        ConversationStartupFailureCode, ConversationView, SubmissionReceipt,
+        ConversationQuestion, ConversationQuestionEntry, ConversationReorderOutcome,
+        ConversationReviewEntry, ConversationReviewKind, ConversationRuntime,
+        ConversationSelectionView, ConversationStartupFailure, ConversationStartupFailureCode,
+        ConversationView, SubmissionReceipt,
     },
 };
 use nessa_protocol::product_contract::generated::MAX_MCP_MESSAGE_BYTES;
@@ -65,7 +67,8 @@ use nessa_sdk::application::agent_execution::{
     },
     permissions::{
         is_remember_option, ActionContext, ApprovalAttribution, ApprovalBasis, PermissionAnswer,
-        PermissionCaller, PermissionCancellationRequest, PermissionRules, QuestionAnswer,
+        PermissionCaller, PermissionCancellationRequest, PermissionRules, PermissionSelectionState,
+        QuestionAnswer,
     },
     providers::{
         AgentProvider, ApprovalMode as ProviderApprovalMode, CloseOutcome, OperationCapabilities,
@@ -1028,6 +1031,75 @@ fn agent_review_entries(
             )
         })
         .collect()
+}
+
+/// The questions `agent`'s live invocation waits on, oldest first, as a view
+/// lists them. The live owner says which wait and what each asks; one is
+/// listed once its ask is on record in `snapshot` exactly as it waits (the
+/// SDK admits an answer only to a recorded ask). An unreadable owner lists
+/// none.
+fn agent_question_entries(
+    agent: &Agent,
+    snapshot: Option<&SessionSnapshot>,
+) -> Vec<ConversationQuestionEntry> {
+    let questions = agent.pending_questions().unwrap_or_default();
+    if questions.is_empty() {
+        return Vec::new();
+    }
+    let mut recorded = HashMap::new();
+    for record in snapshot.map_or(&[][..], |snapshot| &snapshot.invocations[..]) {
+        for event in &record.events {
+            if let ExecutionUpdate::QuestionAsked { id, question } = event.update() {
+                recorded.insert((&record.request.execution_id, id), question);
+            }
+        }
+    }
+    questions
+        .iter()
+        .filter(|pending| {
+            recorded
+                .get(&(&pending.execution_id, &pending.id))
+                .is_some_and(|asked| **asked == *pending.question)
+        })
+        .map(|pending| question_entry(&pending.key(), pending.question.message()))
+        .collect()
+}
+
+/// Whether the agent's review `permission` of `execution` waits as the one
+/// a view listed under `review`: one asked again under the same identities
+/// has a key of its own, and an answer to the first is stale for it.
+fn shown_review(
+    agent: &Agent,
+    execution: &ExecutionId,
+    permission: &PermissionId,
+    review: &str,
+) -> bool {
+    agent
+        .pending_reviews()
+        .unwrap_or_default()
+        .iter()
+        .any(|pending| {
+            &pending.execution_id == execution
+                && &pending.id == permission
+                && pending.content.key() == review
+        })
+}
+
+/// The range of `shown`'s UTF-8 JSON from `offset`, at most `max_bytes`,
+/// and its whole length. `InvalidInput` for an offset past its end.
+fn range_of(
+    shown: &impl serde::Serialize,
+    offset: u64,
+    max_bytes: usize,
+) -> Result<(Vec<u8>, u64), ConversationError> {
+    let bytes = serde_json::to_vec(shown).map_err(|_| ConversationError::InvalidInput)?;
+    let total = bytes.len() as u64;
+    if offset > total || (offset == total && total != 0) {
+        return Err(ConversationError::InvalidInput);
+    }
+    let start = offset as usize;
+    let end = start.saturating_add(max_bytes).min(bytes.len());
+    Ok((bytes[start..end].to_vec(), total))
 }
 
 /// The export cut's hold on admission. Dropping it lets the next command in.
@@ -2416,6 +2488,7 @@ impl ConversationService {
             view,
             agent_review_entries(&live.agent, committed.snapshot()),
             live.app_reviews.entries(),
+            agent_question_entries(&live.agent, committed.snapshot()),
         );
         self.check_view_access(&id, &caller).await?;
         let slot = self
@@ -3637,6 +3710,7 @@ impl ConversationService {
         caller: ConversationCaller,
         execution: String,
         question: String,
+        key: String,
         choices: Option<Vec<QuestionChoiceInput>>,
     ) -> Result<(), ConversationError> {
         let service = self.clone();
@@ -3661,6 +3735,16 @@ impl ConversationService {
                 })
                 .transpose()?;
             let live = service.resolve(&id, &caller).await?;
+            // Only the question the person was shown: one asked again under
+            // the same identities has a key of its own.
+            let shown = live.agent.pending_questions().unwrap_or_default();
+            if !shown.iter().any(|pending| {
+                pending.execution_id == execution_id
+                    && pending.id == question_id
+                    && pending.key() == key
+            }) {
+                return Err(AgentError::StalePermission.into());
+            }
             live.agent
                 .answer_question(QuestionAnswer {
                     actor,
@@ -3673,12 +3757,16 @@ impl ConversationService {
         })
         .await
     }
+    // The review is named three ways, each checked: its execution, its id,
+    // and the key it was shown under.
+    #[allow(clippy::too_many_arguments)]
     pub async fn answer(
         &self,
         id: ConversationId,
         caller: ConversationCaller,
         execution: String,
         permission: String,
+        review: String,
         option: String,
         permission_caller: PermissionCaller,
     ) -> Result<(), ConversationError> {
@@ -3706,13 +3794,24 @@ impl ConversationService {
             }
             let live = service.resolve(&id, &caller).await?;
             // An app's review first: it is the gateway's own, not the agent's.
-            match live
-                .app_reviews
-                .answer(&execution, &permission, &option, answerer(&caller))
-            {
+            match live.app_reviews.answer(
+                &execution,
+                &permission,
+                &review,
+                &option,
+                answerer(&caller),
+            ) {
                 ReviewAnswer::Ended => return Ok(()),
                 ReviewAnswer::Stale => return Err(AgentError::StalePermission.into()),
                 ReviewAnswer::NotAnAppReview => {}
+            }
+            // Nothing is selected: whatever waits under these identities
+            // waits on.
+            if !shown_review(&live.agent, &execution_id, &permission_id, &review) {
+                return Err(ConversationError::PermissionAnswer {
+                    error: AgentError::StalePermission,
+                    selection: PermissionSelectionState::Pending,
+                });
             }
             let answer = live
                 .agent
@@ -3733,14 +3832,6 @@ impl ConversationService {
         })
         .await
     }
-    /// One range of what the waiting review a view lists under `review`
-    /// shows: the UTF-8 JSON of its [`ConversationPermission`], from the
-    /// review's live owner — the app review store, or the agent's live
-    /// invocation — never from history, and the review's total length.
-    ///
-    /// # Errors
-    /// `StalePermission` once nothing live holds a review under that key;
-    /// `InvalidInput` for an offset past its end.
     /// The waiting review a view lists under `review`, with all it shows,
     /// from its live owner: the app review store, or the agent's live
     /// invocation. `StalePermission` once nothing live holds it.
@@ -3766,6 +3857,14 @@ impl ConversationService {
             .and_then(agent_review)
             .ok_or_else(stale)
     }
+    /// One range of what the waiting review a view lists under `review`
+    /// shows: the UTF-8 JSON of its [`ConversationPermission`], from the
+    /// review's live owner — the app review store, or the agent's live
+    /// invocation — never from history, and the review's total length.
+    ///
+    /// # Errors
+    /// `StalePermission` once nothing live holds a review under that key;
+    /// `InvalidInput` for an offset past its end.
     pub async fn permission_review(
         &self,
         id: ConversationId,
@@ -3775,14 +3874,47 @@ impl ConversationService {
         max_bytes: usize,
     ) -> Result<(Vec<u8>, u64), ConversationError> {
         let shown = self.waiting_review(id, caller, &review).await?;
-        let bytes = serde_json::to_vec(&shown).map_err(|_| ConversationError::InvalidInput)?;
-        let total = bytes.len() as u64;
-        if offset > total || (offset == total && total != 0) {
-            return Err(ConversationError::InvalidInput);
-        }
-        let start = offset as usize;
-        let end = start.saturating_add(max_bytes).min(bytes.len());
-        Ok((bytes[start..end].to_vec(), total))
+        range_of(&shown, offset, max_bytes)
+    }
+    /// The waiting question a view lists under `question`, with all it
+    /// asks, from the agent's live invocation. `StalePermission` once
+    /// nothing live holds it.
+    pub(crate) async fn waiting_question(
+        &self,
+        id: ConversationId,
+        caller: ConversationCaller,
+        question: &str,
+    ) -> Result<ConversationQuestion, ConversationError> {
+        let _admission = self.admit().await?;
+        let stale = || ConversationError::from(AgentError::StalePermission);
+        let Some(live) = self.live_now(&id, &caller).await? else {
+            return Err(stale());
+        };
+        live.agent
+            .pending_questions()
+            .unwrap_or_default()
+            .iter()
+            .find(|pending| pending.key() == question)
+            .map(agent_question)
+            .ok_or_else(stale)
+    }
+    /// One range of all the waiting question a view lists under `question`
+    /// asks: the UTF-8 JSON of its [`ConversationQuestion`], from the
+    /// agent's live invocation, never from history, and its total length.
+    ///
+    /// # Errors
+    /// `StalePermission` once nothing live holds a question under that key;
+    /// `InvalidInput` for an offset past its end.
+    pub async fn question_review(
+        &self,
+        id: ConversationId,
+        caller: ConversationCaller,
+        question: String,
+        offset: u64,
+        max_bytes: usize,
+    ) -> Result<(Vec<u8>, u64), ConversationError> {
+        let shown = self.waiting_question(id, caller, &question).await?;
+        range_of(&shown, offset, max_bytes)
     }
     pub async fn cancel_permission(
         &self,
@@ -3790,6 +3922,7 @@ impl ConversationService {
         caller: ConversationCaller,
         execution: String,
         permission: String,
+        review: String,
         reason: String,
     ) -> Result<(), ConversationError> {
         let service = self.clone();
@@ -3808,11 +3941,14 @@ impl ConversationService {
             let live = service.resolve(&id, &caller).await?;
             match live
                 .app_reviews
-                .cancel(&execution, &permission, answerer(&caller))
+                .cancel(&execution, &permission, &review, answerer(&caller))
             {
                 ReviewAnswer::Ended => return Ok(()),
                 ReviewAnswer::Stale => return Err(AgentError::StalePermission.into()),
                 ReviewAnswer::NotAnAppReview => {}
+            }
+            if !shown_review(&live.agent, &execution_id, &permission_id, &review) {
+                return Err(AgentError::StalePermission.into());
             }
             let _cancellation = live
                 .agent

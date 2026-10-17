@@ -44,6 +44,7 @@ const view = (conversationId: string): ConversationView => ({
   messages: [],
   pending: [],
   reviewsWaiting: [],
+  questionsWaiting: [],
   permissions: [],
   questions: [],
   tools: [],

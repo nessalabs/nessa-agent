@@ -93,6 +93,7 @@ it("draws an input waiting that the view lists apart from its turns after every 
     ],
     pending: [waiting("p0", "Unlisted waiting"), waiting("q1", "Listed waiting")],
     reviewsWaiting: [],
+    questionsWaiting: [],
     permissions: [],
     questions: [],
     tools: [],

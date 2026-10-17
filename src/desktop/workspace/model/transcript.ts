@@ -123,6 +123,18 @@ export interface TranscriptAsked {
 
 /** A question the agent is waiting on. Identity is the execution and the ask. */
 export interface TranscriptQuestion {
+  /**
+   * The source's own key for this question, when it has one: an answer names
+   * it, so a question asked again under the same identities is never
+   * answered by mistake.
+   */
+  readonly key?: string
+  /**
+   * Present while all it asks is still being read (`reading`), or could not
+   * be (`failed`): it offers no answer, and its identities and fields are
+   * not known yet.
+   */
+  readonly loading?: "reading" | "failed"
   readonly executionId: string
   readonly questionId: string
   readonly message: string

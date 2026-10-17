@@ -2,9 +2,19 @@
 use super::PermissionReviewDeadline;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-/// Orders reviews by when they were opened, across every session of this
-/// process: a key alone says nothing of order.
+/// Orders reviews and questions by when they were opened, across every
+/// session of this process: a key alone says nothing of order.
 static OPENED: AtomicU64 = AtomicU64::new(0);
+
+/// A key of its own for something opened now, and when it was opened: new
+/// for every review or question, so one whose identities are reused after a
+/// restart is never mistaken for the one before it.
+pub(crate) fn fresh_key() -> (u128, u64) {
+    (
+        uuid::Uuid::new_v4().as_u128(),
+        OPENED.fetch_add(1, Ordering::Relaxed),
+    )
+}
 
 /// What a person is shown of one pending review: its own key, the tool's
 /// title and name, the exact input, and the deadline it was published with.
@@ -28,9 +38,10 @@ impl ReviewContent {
         arguments_json: String,
         deadline: Option<PermissionReviewDeadline>,
     ) -> Self {
+        let (key, opened) = fresh_key();
         Self {
-            key: uuid::Uuid::new_v4().as_u128(),
-            opened: OPENED.fetch_add(1, Ordering::Relaxed),
+            key,
+            opened,
             title,
             tool_name,
             arguments_json,

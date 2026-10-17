@@ -20,6 +20,7 @@ function captured(conversationId: string) {
     conversationId,
     permissions: [
       {
+        review: "0".repeat(32),
         executionId: "captured-turn",
         permissionId: "captured-review",
         options: [{ id: "allow" }],

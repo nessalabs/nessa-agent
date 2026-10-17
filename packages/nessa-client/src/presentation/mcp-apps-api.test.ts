@@ -245,6 +245,7 @@ it("calls a tool at exactly every bound", async () => {
 /** The review the gateway would read back for an app's call with `argumentsJson`. */
 function appReview(argumentsJson: string) {
   return {
+    review: "0".repeat(32),
     executionId: app.executionId,
     permissionId: "review",
     toolId: app.toolId,

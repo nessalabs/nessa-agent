@@ -6,7 +6,12 @@ const conversationId = "00000000-0000-4000-8000-000000000001"
 const target = permissionTargets({
   conversationId,
   permissions: [
-    { executionId: "turn", permissionId: "review", options: [{ id: "allow" }] },
+    {
+      review: "a".repeat(32),
+      executionId: "turn",
+      permissionId: "review",
+      options: [{ id: "allow" }],
+    },
   ],
 })[0]!
 
@@ -16,6 +21,7 @@ it("AR5: answer callbacks retain their SDK arguments when later calls arrive", a
     conversationId,
     permissions: [
       {
+        review: "b".repeat(32),
         executionId: "other-turn",
         permissionId: "other-review",
         options: [{ id: "deny" }],

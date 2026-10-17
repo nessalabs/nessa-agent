@@ -1,9 +1,11 @@
 import { expect, it, vi } from "vitest"
 import type {
   ConversationPermission,
+  ConversationQuestion,
   ConversationReviewEntry,
 } from "../generated/product.js"
 import {
+  questionDetails,
   reviewDetails,
   REVIEW_RETRY_FIRST_MS,
   REVIEW_RETRY_MOST_MS,
@@ -19,6 +21,7 @@ function entry(index: number): ConversationReviewEntry {
 }
 function permission(id: string): ConversationPermission {
   return {
+    review: "0".repeat(32),
     executionId: "execution",
     permissionId: id,
     toolId: "tool",
@@ -81,9 +84,7 @@ it("reads a review that failed again with a doubling wait while it is listed, an
   await settled()
   const loaded = details.details()[0]!
   expect(loaded.state).toBe("loaded")
-  expect(loaded.state === "loaded" && loaded.permission.permissionId).toBe(
-    entry(1).review,
-  )
+  expect(loaded.state === "loaded" && loaded.shown.permissionId).toBe(entry(1).review)
   expect(read).toHaveBeenCalledTimes(7)
   expect(clock.waits.size).toBe(0)
   details.dispose()
@@ -141,4 +142,35 @@ it("reads every listed review, the most a view lists, each once, and leaves noth
   expect(signals[0]!.aborted).toBe(true)
   expect(clock.waits.size).toBe(0)
   expect(details.details()).toEqual([])
+})
+
+it("reads each listed question by its own key, as reviews are read, and lets one go once answered", async () => {
+  const clock = manualTimer()
+  const key = (index: number) => index.toString(16).padStart(32, "0")
+  const question = (asked: string): ConversationQuestion => ({
+    question: asked,
+    executionId: "execution",
+    questionId: `ask-${asked}`,
+    message: "Which?",
+    questions: [],
+  })
+  const read = vi.fn(async (asked: string) => question(asked))
+  const details = questionDetails({ read, changed: () => {}, timer: clock.timer })
+  const listed = Array.from({ length: 8 }, (_, index) => ({
+    question: key(index),
+    message: "Which?",
+  }))
+  details.follow(listed)
+  expect(details.details().every((detail) => detail.state === "loading")).toBe(true)
+  await settled()
+  expect(read.mock.calls.map((call) => call[0])).toEqual(
+    listed.map((entry) => entry.question),
+  )
+  const loaded = details.get(key(3))
+  expect(loaded?.state === "loaded" && loaded.shown.question).toBe(key(3))
+  details.follow(listed.slice(1))
+  expect(details.get(key(0))).toBeUndefined()
+  expect(details.details()).toHaveLength(7)
+  details.dispose()
+  expect(clock.waits.size).toBe(0)
 })

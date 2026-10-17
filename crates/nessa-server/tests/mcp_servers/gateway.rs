@@ -286,6 +286,7 @@ mod mcp_app_lane {
                 "requestId": "answer",
                 "executionId": review.execution_id,
                 "permissionId": review.permission_id,
+                "review": review.review,
                 "optionId": "allow",
             }),
         );
@@ -489,6 +490,7 @@ mod mcp_app_lane {
                 "requestId": request,
                 "executionId": review["executionId"],
                 "permissionId": review["permissionId"],
+                "review": review["review"],
                 "optionId": option,
             })
         };
@@ -777,6 +779,7 @@ mod mcp_app_lane {
                     "requestId": request,
                     "executionId": review.execution_id,
                     "permissionId": review.permission_id,
+                    "review": review.review,
                     "optionId": "deny",
                 }),
             );

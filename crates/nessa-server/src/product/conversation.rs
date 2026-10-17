@@ -28,7 +28,8 @@ use nessa_protocol::product::generated::{
     ConversationObserveResult, ConversationPermissionAnswerErrorDetails,
     ConversationPermissionReviewParams, ConversationPermissionReviewResult,
     ConversationPermissionRulesParams, ConversationPermissionRulesResult,
-    ConversationPermissionSelectionState, ConversationReadParams, ConversationReceiptParams,
+    ConversationPermissionSelectionState, ConversationQuestionReviewParams,
+    ConversationQuestionReviewResult, ConversationReadParams, ConversationReceiptParams,
     ConversationReceiptResult, ConversationRemoveParams, ConversationReorderParams,
     ConversationRevokePermissionRuleParams, ConversationRevokePermissionRuleResult,
     ConversationSendParams, ConversationSetApprovalModeParams, ConversationSetApprovalModeResult,
@@ -440,12 +441,14 @@ pub(crate) async fn dispatch(
             }
             "conversation.answerQuestion" => {
                 let params = target_params!(ConversationAnswerQuestionParams);
+                interaction_key(&params.question)?;
                 service
                     .answer_question(
                         conversation_id(&params.conversation_id)?,
                         caller(params.request_id.clone()),
                         params.execution_id,
                         params.question_id,
+                        params.question,
                         params.choices.map(|choices| {
                             choices
                                 .into_iter()
@@ -468,6 +471,7 @@ pub(crate) async fn dispatch(
             }
             "conversation.answer" => {
                 let params = target_params!(ConversationAnswerParams);
+                interaction_key(&params.review)?;
                 // A remember choice is its own purpose decision, asked before
                 // the permission-rule catalog. An ordinary once answer does
                 // not ask it, so a failed membership read still answers once.
@@ -506,6 +510,7 @@ pub(crate) async fn dispatch(
                         caller(params.request_id.clone()),
                         params.execution_id,
                         params.permission_id,
+                        params.review,
                         params.option_id,
                         permission_caller,
                     )
@@ -524,14 +529,7 @@ pub(crate) async fn dispatch(
                     .ok()
                     .filter(|bytes| (1..=MAX_REVIEW_RANGE_BYTES).contains(bytes))
                     .ok_or(ConversationError::InvalidInput)?;
-                if params.review.len() != 32
-                    || !params
-                        .review
-                        .bytes()
-                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-                {
-                    return Err(ConversationError::InvalidInput);
-                }
+                interaction_key(&params.review)?;
                 let (data, total_bytes) = service
                     .permission_review(
                         conversation_id(&params.conversation_id)?,
@@ -550,14 +548,41 @@ pub(crate) async fn dispatch(
                     },
                 ))
             }
+            "conversation.questionReview" => {
+                let params = target_params!(ConversationQuestionReviewParams);
+                let max_bytes = usize::try_from(params.max_bytes)
+                    .ok()
+                    .filter(|bytes| (1..=MAX_REVIEW_RANGE_BYTES).contains(bytes))
+                    .ok_or(ConversationError::InvalidInput)?;
+                interaction_key(&params.question)?;
+                let (data, total_bytes) = service
+                    .question_review(
+                        conversation_id(&params.conversation_id)?,
+                        caller(frame.id.clone()),
+                        params.question,
+                        params.offset,
+                        max_bytes,
+                    )
+                    .await?;
+                Ok(success(
+                    &frame.id,
+                    &ConversationQuestionReviewResult {
+                        offset: params.offset,
+                        total_bytes,
+                        data: base64::engine::general_purpose::STANDARD.encode(data),
+                    },
+                ))
+            }
             "conversation.cancel" => {
                 let params = target_params!(ConversationCancelParams);
+                interaction_key(&params.review)?;
                 service
                     .cancel_permission(
                         conversation_id(&params.conversation_id)?,
                         caller(params.request_id.clone()),
                         params.execution_id,
                         params.permission_id,
+                        params.review,
                         params.reason,
                     )
                     .await?;
@@ -634,6 +659,20 @@ pub(crate) async fn dispatch(
             permission_answer_failure(&frame.id, error, selection)
         }
         Err(error) => failure(&frame.id, error_code(&error).as_str()),
+    }
+}
+
+/// Refuse a review's or a question's key that is not 32 lowercase hex
+/// digits, as the view lists it.
+fn interaction_key(key: &str) -> Result<(), ConversationError> {
+    if key.len() == 32
+        && key
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        Ok(())
+    } else {
+        Err(ConversationError::InvalidInput)
     }
 }
 

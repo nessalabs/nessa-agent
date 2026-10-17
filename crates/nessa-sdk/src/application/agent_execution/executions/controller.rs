@@ -216,7 +216,33 @@ impl ExecutionController {
         let admitted = AdmittedQuestion::new(self.id().clone(), execution.clone(), id, question);
         admitted.event().validate_payload_size()?;
         self.admitted_question_ids.insert(admitted.id().clone());
+        // Listed as one the agent waits on, under a key of its own, until
+        // the adapter closes it or the execution ends.
+        if let Some(listing) = self.session.question_listing() {
+            listing.list(
+                crate::domain::agent_execution::permissions::PendingQuestion::new(
+                    admitted.execution_id().clone(),
+                    admitted.id().clone(),
+                    admitted.question().clone(),
+                ),
+            );
+        }
         Ok(admitted)
+    }
+    /// The handle through which the adapter takes the questions it admitted
+    /// out of the list once each ends. `None` when no execution is active.
+    pub(crate) fn question_listing(
+        &self,
+    ) -> Option<crate::domain::agent_execution::permissions::QuestionListing> {
+        self.session.question_listing()
+    }
+    /// Stop listing the admitted question `id` as one the agent waits on:
+    /// it was answered, withdrawn or ended. An adapter calls this as its
+    /// question closes; the end of the execution takes out any left.
+    pub fn close_question(&self, id: &QuestionId) {
+        if let Some(listing) = self.session.question_listing() {
+            listing.unlist(id);
+        }
     }
     /// Capture a refusal for this controller's active execution before delivery
     /// or settlement. This records no audit, changes no lifecycle state and does
@@ -1556,6 +1582,65 @@ mod tests {
         assert_eq!(again.execution_id, first.execution_id);
         assert_eq!(again.content.title(), Some("Write other.txt"));
         assert_ne!(again.content.key(), first.content.key());
+    }
+
+    #[test]
+    fn a_waiting_question_is_listed_under_a_key_of_its_own_until_it_ends() {
+        use crate::domain::agent_execution::questions::{
+            AgentQuestion, AnswerOption, AnswerShape, Question, QuestionId,
+        };
+        let ask = |value: &str| {
+            AgentQuestion::new(
+                format!("Choose {value}"),
+                vec![Question::new(
+                    "environment",
+                    "Environment?",
+                    None,
+                    AnswerShape::One,
+                    vec![AnswerOption::new(value, value, None).unwrap()],
+                    None,
+                    true,
+                )
+                .unwrap()],
+            )
+            .unwrap()
+        };
+        let execution = ExecutionId::new("execution").unwrap();
+        let mut first_owner = controller();
+        let authority = first_owner
+            .permission_authority_source()
+            .read()
+            .unwrap()
+            .unwrap();
+        assert!(authority.questions().unwrap().is_empty());
+        let admitted = first_owner
+            .ask_question(&execution, QuestionId::new("ask").unwrap(), ask("staging"))
+            .unwrap();
+        let listed = authority.questions().unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id.as_str(), "ask");
+        assert_eq!(listed[0].question.message(), "Choose staging");
+        assert_eq!(listed[0].key().len(), 32);
+        first_owner.close_question(admitted.id());
+        assert!(authority.questions().unwrap().is_empty());
+        // The same identities asked again after a restart: a new key.
+        let mut restarted = controller();
+        let after = restarted
+            .permission_authority_source()
+            .read()
+            .unwrap()
+            .unwrap();
+        restarted
+            .ask_question(
+                &execution,
+                QuestionId::new("ask").unwrap(),
+                ask("production"),
+            )
+            .unwrap();
+        let again = &after.questions().unwrap()[0];
+        assert_eq!(again.id.as_str(), "ask");
+        assert_eq!(again.question.message(), "Choose production");
+        assert_ne!(again.key(), listed[0].key());
     }
 
     #[test]
