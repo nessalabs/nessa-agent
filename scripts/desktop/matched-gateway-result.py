@@ -56,7 +56,7 @@ def result(root, case, candidate, base):
         failures = row.get("failures")
         if not isinstance(failures, list):
             raise ValueError("Invalid result failures")
-        seen = row.get("seen") or {}
+        seen = row.get("seen")
         safe["rows"].append({
             "name": checked(row.get("name"), NAMES),
             "engine": checked(row.get("engine"), {None, "chromium", "webkit"}),
@@ -65,7 +65,7 @@ def result(root, case, candidate, base):
             "failureCount": len(failures),
             "error": bool(row.get("error")),
             "cannotRun": bool(row.get("cannotRun")),
-            "liveMount": seen.get("state") == "live",
+            "liveMount": isinstance(seen, dict) and seen.get("state") == "live",
         })
     observed = json.loads((root / "matched-requests.json").read_text())
     if observed.get("setup") is not True or not isinstance(observed.get("requests"), list):

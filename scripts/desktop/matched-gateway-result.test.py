@@ -31,6 +31,19 @@ class MatchedResult(unittest.TestCase):
             self.assertFalse(value["requests"][0]["sameOrigin"])
             self.assertEqual(value["requests"][0]["bodySize"], 42)
             self.assertEqual(value["observerCoverage"], dict(chromium=True, webkit=True))
+            reporter = Path(__file__).resolve().parents[2] / "verification/desktop/scripts/lib/cli.mjs"
+            produced = subprocess.run(["node", "--input-type=module", "-e", f"import {{report}} from {json.dumps(reporter.as_uri())}; const rep=report('gateway-window',{{}}); rep.add({{name:'handshakes',engine:'chromium',layout:'columns',seen:[{{private:'PRIVATE_MARKER'}}]}}); rep.add({{name:'apps',engine:'webkit',layout:'columns',seen:{{state:'live',private:'PRIVATE_MARKER'}}}}); rep.finish();"], capture_output=True, text=True, check=True)
+            (root / "gateway-window/result.json").write_text(produced.stdout)
+            produced_value = matched.result(root, "candidate", "a" * 40, "d" * 40)
+            self.assertEqual([entry["liveMount"] for entry in produced_value["rows"]], [False, True])
+            self.assertNotIn("PRIVATE_MARKER", json.dumps(produced_value))
+            # Handshake rows carry arrays, while other producers use objects.
+            # Observation payloads are private and are not a publication schema.
+            for seen in [[{"state": "live", "private": "PRIVATE_MARKER"}], "PRIVATE_MARKER", 1, True, None]:
+                (root / "gateway-window/result.json").write_text(json.dumps(dict(check="gateway-window", results=[{**row, "name": "handshakes", "seen": seen}])))
+                shaped = matched.result(root, "candidate", "a" * 40, "d" * 40)
+                self.assertFalse(shaped["rows"][0]["liveMount"])
+                self.assertNotIn("PRIVATE_MARKER", json.dumps(shaped))
             partial = [request, requests[1]]
             launch = dict(name="launch", engine="webkit", ok=False, failures=[], cannotRun=True)
             (root / "gateway-window/result.json").write_text(json.dumps(dict(check="gateway-window", results=[row, launch])))
