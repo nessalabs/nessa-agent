@@ -4,7 +4,10 @@
 mod deletion_inventory;
 mod export;
 mod ports;
+mod restore_planning;
 mod verification;
+
+pub use restore_planning::{plan_offline_restore, OfflineRestorePlan};
 
 pub use verification::{
     verify_bundle, InventoryVerification, ManifestMacVerifier, VerificationFailure,
