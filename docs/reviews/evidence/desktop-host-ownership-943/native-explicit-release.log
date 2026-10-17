@@ -1,0 +1,22 @@
+
+running 1 test
+test gateway::infrastructure::host_ownership::tests::explicit_unlock_releases_an_inherited_fork_description ... FAILED
+
+failures:
+
+---- gateway::infrastructure::host_ownership::tests::explicit_unlock_releases_an_inherited_fork_description stdout ----
+
+thread 'gateway::infrastructure::host_ownership::tests::explicit_unlock_releases_an_inherited_fork_description' (11837) panicked at /workspace/nessa-943-desktop-owner/src-tauri/src/gateway/infrastructure/../../../tests/gateway/infrastructure/host_ownership.rs:11:35:
+expected acquired lease
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    gateway::infrastructure::host_ownership::tests::explicit_unlock_releases_an_inherited_fork_description
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 156 filtered out; finished in 0.00s
+
+   Compiling nessa-desktop-host-ownership-proof v0.0.0 (/tmp/nessa-943-headless)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.06s
+     Running unittests src/lib.rs (/tmp/nessa-943-headless/target/debug/deps/nessa_desktop_host_ownership_proof-65b5a97976207635)
+error: test failed, to rerun pass `--lib`
