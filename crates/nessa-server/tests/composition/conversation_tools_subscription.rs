@@ -54,7 +54,7 @@ async fn source_admission_cancel_and_deadline_release_the_tool_reader_slot() {
         );
         let work = tokio::spawn(work);
         read_entered.await.unwrap();
-        assert_eq!(tools.readers.available_permits(), MAX_EVENT_READERS - 1);
+        assert_eq!(tools.readers.held(&id()), 1);
         if cancel {
             stop.send_replace(true);
         } else {
@@ -72,7 +72,7 @@ async fn source_admission_cancel_and_deadline_release_the_tool_reader_slot() {
                 "event_source_preparing"
             }
         );
-        assert_eq!(tools.readers.available_permits(), MAX_EVENT_READERS);
+        assert_eq!(tools.readers.held(&id()), 0);
         // Existing supervised source admission retains its physical/audit owner;
         // release that owner independently before shutting the fixture down.
         let _ = release.send(());
@@ -276,8 +276,8 @@ async fn repeated_cancelled_observers_cannot_exceed_detached_source_capacity() {
             .unwrap();
         assert_eq!(result["structuredContent"]["error"], "cancelled");
         assert_eq!(
-            tools.readers.available_permits(),
-            MAX_EVENT_READERS,
+            tools.readers.held(&id()),
+            0,
             "the observation cap must not mask retained source owners"
         );
         releases.push(release);

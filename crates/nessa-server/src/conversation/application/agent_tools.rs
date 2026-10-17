@@ -2,8 +2,9 @@
 use super::{ConversationCaller, ConversationFuture};
 use nessa_protocol::conversation::domain::ConversationId;
 
-/// Detached source admissions retained at once across every tool and caller of
-/// one conversation service. A cancelled response does not free this capacity.
+/// Detached admissions one source conversation retains at once, across all its
+/// tools. A cancelled response does not free this place; other sources are not
+/// bounded by it, so the gateway's total grows with its agents.
 pub const MAX_AGENT_TOOL_ADMISSIONS: usize = 8;
 
 /// One gateway-verified source turn. Tool arguments cannot construct this value.

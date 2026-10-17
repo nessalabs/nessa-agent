@@ -186,6 +186,8 @@ mod review_notice_selection;
 pub(crate) use review_notice_selection::{AuditedReviewSelection, SelectReviewNotice};
 mod service;
 mod session_key;
+mod source_permits;
+pub use source_permits::{SourcePermit, SourcePermits};
 mod share_grants;
 mod tool_policy;
 pub use crate::conversation::domain::ReceiverBinding;

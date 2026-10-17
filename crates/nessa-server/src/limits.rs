@@ -6,6 +6,8 @@
 //! schema publishes. `docs/limits.md` is that catalogue rendered, and the
 //! test beside this module refuses a copy that has drifted.
 use crate::attachments::application::{AttachmentLimits, HeldReads};
+use crate::composition::conversation_tools::MAX_EVENT_READERS;
+use crate::conversation::application::MAX_AGENT_TOOL_ADMISSIONS;
 use crate::conversation::application::{
     ArtifactBudget, ARTIFACT_READ_RESUMES, FETCH_BUSY_BACKOFF, FETCH_CALL_WAIT, FETCH_READS,
     MAX_ADMITTED_POLICIES, MAX_DRIVE_GRANTS_PER_CONVERSATION, MAX_SHARE_GRANTS_PER_CONVERSATION,
@@ -494,6 +496,18 @@ fn catalogue() -> &'static [Limit] {
             meaning: "a tool call past this many running on one stand-in's connection is answered with an error",
         },
         Limit {
+            id: "agent_tools.waiting_reads",
+            tier: "fixed",
+            owner: "MAX_EVENT_READERS in crates/nessa-server/src/composition/conversation_tools.rs",
+            meaning: "a `subscribe` past this many running for one source conversation is refused subscription_capacity; other sources are not counted against it",
+        },
+        Limit {
+            id: "agent_tools.source_admissions",
+            tier: "fixed",
+            owner: "MAX_AGENT_TOOL_ADMISSIONS in crates/nessa-server/src/conversation/application/agent_tools.rs",
+            meaning: "an agent tool call past this many detached admissions retained by one source conversation is refused unavailable; other sources are not counted against it",
+        },
+        Limit {
             id: "mcp.built_in_line_bytes",
             tier: "fixed",
             owner: "built-in MCP server MAX_BUILT_IN_LINE_BYTES",
@@ -672,6 +686,11 @@ pub(crate) fn effective_json(
     put("command.max_cwd_bytes", count(CommandWork::MAX_CWD_BYTES));
     put("mcp.built_in_calls", count(MAX_BUILT_IN_CALLS));
     put("mcp.built_in_line_bytes", count(MAX_BUILT_IN_LINE_BYTES));
+    put("agent_tools.waiting_reads", count(MAX_EVENT_READERS));
+    put(
+        "agent_tools.source_admissions",
+        count(MAX_AGENT_TOOL_ADMISSIONS),
+    );
     serde_json::Value::Object(values.into_iter().collect())
 }
 
