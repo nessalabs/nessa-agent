@@ -54,7 +54,11 @@ person may no longer view the thread.
 
 The send saves and registers its report before it submits, so a turn that ends
 at once is not missed, and again after a submit that succeeded, so a
-concurrent retry that failed cannot let it go. A report that cannot be saved is
+concurrent retry that failed cannot let it go. A saved report identity is bound
+to its child, watched execution, parent and caller. `LocalThreadReports::save` refuses a conflicting binding rather than
+installing another watch, and cleanup deletes only a row for the named child.
+The storage conflict and child-scoped cleanup regressions enforce these rules.
+A report that cannot be saved is
 not promised (`reportsBack: false`). The send then looks once, so a retry of a
 turn that already ended still reports. A refused send asks the thread's saved
 history: with no turn under its execution, the report goes; with one, it waits
@@ -71,8 +75,11 @@ history when it is not. A watched execution is finished once its settlement is
 saved: settled, or cancelled, or injected into the turn its scheduling names as
 `target` once that turn has settled, whose outcome and reply are then its own.
 The hook runs before the settlement it follows is saved, and a failed turn
-makes the agent cancel the turns queued behind it after that, so a look keeps
-looking for up to five seconds while a watched turn is settling.
+makes the agent cancel the turns queued behind it after that. The gateway's
+existing queued-receipt watcher also asks for a look after its SDK receipt
+settles, including receipts already settled when first watched. That final
+wake does not depend on how long hooks or final storage take. Early looks
+keep looking for up to five seconds while a watched turn is settling.
 
 The report's execution identity derives from the send's source, request and
 purpose. The parent's own history is what says it has the report: each
@@ -91,6 +98,10 @@ not taken for an earlier run's.
 
 | When | What happens |
 | --- | --- |
+| Exact report binding saved again | Existing row retained; no replacement |
+| Report identity reused for another child, execution, parent or caller | Store refuses registration; original row and watch remain |
+| Failed-send cleanup names another child | Original child's saved row retained |
+| SDK receipt settles after the hook's early look ends | Receipt watcher wakes a new look after final settlement |
 | The send's submit succeeds | Report saved and held; one look |
 | The send is refused, no turn saved | Report let go |
 | The send is refused, a turn saved | Report waits for that turn |
