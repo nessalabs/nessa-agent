@@ -450,6 +450,7 @@ async fn caller_disconnect_and_late_creation_cannot_escape_a_selected_stop() {
 async fn queued_child_report_is_retained_across_stop_restart_and_only_person_work_releases_it() {
     use crate::conversation::application::{ThreadReport, ThreadReportStore};
     use crate::conversation::infrastructure::LocalThreadReports;
+    use nessa_sdk::application::agent_execution::sessions::StorageError;
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("data");
     let provider = Arc::new(ProviderFactory::default());
@@ -517,15 +518,29 @@ async fn queued_child_report_is_retained_across_stop_restart_and_only_person_wor
         )
         .await
         .unwrap();
-    service
-        .stop_command(
-            storage.clone(),
-            parent.clone(),
-            caller("stop-parent"),
-            "parent".into(),
-        )
-        .await
-        .unwrap();
+    // Report polling may hold the exclusive principal stream. Retry only
+    // typed contention, retaining the original command and exact selection.
+    tokio::time::timeout(TURN_HOLD_HANG, async {
+        loop {
+            match service
+                .stop_command(
+                    storage.clone(),
+                    parent.clone(),
+                    caller("stop-parent"),
+                    "parent".into(),
+                )
+                .await
+            {
+                Ok(_) => break,
+                Err(commands::MutationFailure::Storage(
+                    commands::CreationStorageError::Storage(StorageError::Busy),
+                )) => tokio::task::yield_now().await,
+                Err(error) => panic!("same-identity Stop retry failed: {error:?}"),
+            }
+        }
+    })
+    .await
+    .expect("Stop settles after transient principal-stream contention");
     assert!(!provider
         .executions
         .lock()

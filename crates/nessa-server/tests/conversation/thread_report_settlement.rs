@@ -328,13 +328,21 @@ async fn a_pending_mcp_report_survives_a_conflicting_target_retry() {
     })
     .await
     .expect("settled parent report releases its durable row");
-    // Recreate the durable state of a crash after parent delivery but before row cleanup.
-    assert!(store.save(&before[0]).await.unwrap());
     drop(client);
     drop(grant);
     serving.await.unwrap();
     drop(release_child);
     retire(service, storage, metadata).await;
+    // Detached report observers retain the service's store handle until they
+    // finish. Seed the crash image only when the test is its sole owner.
+    tokio::time::timeout(TURN_HOLD_HANG, async {
+        while Arc::strong_count(&store) != 1 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("all old report observers release the store before crash reconstruction");
+    assert!(store.save(&before[0]).await.unwrap());
     drop(store);
     let provider = Arc::new(ProviderFactory::default());
     let (service, storage, metadata) = fixture(&root, provider);
