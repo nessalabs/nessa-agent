@@ -221,15 +221,15 @@ pub trait ChosenFiles: Send + Sync {
     /// said instead.
     fn look(&self, path: &Path) -> io::Result<OnDisk>;
 
-    /// What a directory holds, one level down, in whatever order the
-    /// filesystem gives them.
+    /// What a directory holds, one level down, sorted when admitted.
     ///
     /// Here because a dropped folder is the same filesystem answering about
     /// the same path at the same moment as the `stat` that said it was a
     /// directory. A browser answers this one through `webkitGetAsEntry`, which
     /// a webview that no longer receives the drop cannot call; see
     /// [`super::dropping`].
-    fn entries(&self, path: &Path) -> io::Result<Vec<PathBuf>>;
+    /// Consume at most `remaining + 1` entries, returning overflow before sorting.
+    fn entries(&self, path: &Path, remaining: usize) -> io::Result<DirectoryEntries>;
 
     /// The file's bytes, reading no more than `most` of them.
     ///
@@ -301,10 +301,40 @@ pub async fn answered_within<T: Send + 'static>(
     }
 }
 
-/// The real filesystem: a `stat` and an open of the path the picker gave.
-struct FilesOnDisk;
+/// A directory admitted within the walk's remaining budget, or overflow evidence.
+#[derive(Debug, PartialEq, Eq)]
+pub enum DirectoryEntries {
+    /// All entries fit, sorted by their paths.
+    Within(Vec<PathBuf>),
+    /// One entry beyond the remaining budget was observed.
+    TooMany,
+}
 
-impl ChosenFiles for FilesOnDisk {
+/// Bound consumption before collecting or sorting; the extra entry proves overflow.
+fn bounded_entries(
+    entries: impl IntoIterator<Item = io::Result<PathBuf>>,
+    remaining: usize,
+) -> io::Result<DirectoryEntries> {
+    let mut held = Vec::new();
+    for entry in entries {
+        let path = entry?;
+        if held.len() == remaining {
+            return Ok(DirectoryEntries::TooMany);
+        }
+        held.push(path);
+    }
+    held.sort();
+    Ok(DirectoryEntries::Within(held))
+}
+
+/// The real filesystem: a `stat` and an open of the path the picker gave.
+struct FilesOnDisk<F>(F);
+
+impl<F, I> ChosenFiles for FilesOnDisk<F>
+where
+    F: Fn(&Path) -> io::Result<I> + Send + Sync,
+    I: Iterator<Item = io::Result<PathBuf>>,
+{
     fn look(&self, path: &Path) -> io::Result<OnDisk> {
         let found = std::fs::metadata(path)?;
         Ok(OnDisk {
@@ -314,15 +344,8 @@ impl ChosenFiles for FilesOnDisk {
         })
     }
 
-    fn entries(&self, path: &Path) -> io::Result<Vec<PathBuf>> {
-        // Sorted, so a folder attaches in the same order twice. `read_dir`
-        // hands back whatever order the filesystem keeps, which on some of
-        // them is insertion order and on others is a hash.
-        let mut held: Vec<PathBuf> = std::fs::read_dir(path)?
-            .map(|entry| entry.map(|entry| entry.path()))
-            .collect::<io::Result<_>>()?;
-        held.sort();
-        Ok(held)
+    fn entries(&self, path: &Path, remaining: usize) -> io::Result<DirectoryEntries> {
+        bounded_entries((self.0)(path)?, remaining)
     }
 
     fn bytes(&self, path: &Path, most: u64) -> io::Result<Vec<u8>> {
@@ -336,16 +359,87 @@ impl ChosenFiles for FilesOnDisk {
     }
 }
 
+/// Iterator construction is injected into the disk adapter so its consumption
+/// can be measured on a real directory by the adapter regression test.
+fn read_directory(path: &Path) -> io::Result<impl Iterator<Item = io::Result<PathBuf>>> {
+    Ok(std::fs::read_dir(path)?.map(|entry| entry.map(|entry| entry.path())))
+}
+
 /// Where a chosen file is read from. Called from composition.
 pub fn chosen_files() -> Arc<dyn ChosenFiles> {
-    Arc::new(FilesOnDisk)
+    Arc::new(FilesOnDisk(read_directory))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::mpsc;
+    use std::cell::Cell;
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        mpsc,
+    };
     use std::time::Instant;
+
+    #[test]
+    fn wide_directory_consumption_stops_at_budget_plus_overflow() {
+        let consumed = Cell::new(0);
+        let entries = (0..100_000).map(|index| {
+            consumed.set(consumed.get() + 1);
+            Ok(PathBuf::from(format!("{index:06}")))
+        });
+        assert_eq!(
+            bounded_entries(entries, 17).unwrap(),
+            DirectoryEntries::TooMany
+        );
+        assert_eq!(consumed.get(), 18);
+    }
+
+    #[test]
+    fn bounded_directory_sorts_exact_limit_and_preserves_read_errors() {
+        let entries = [Ok(PathBuf::from("z")), Ok(PathBuf::from("a"))];
+        assert_eq!(
+            bounded_entries(entries, 2).unwrap(),
+            DirectoryEntries::Within(vec![PathBuf::from("a"), PathBuf::from("z")])
+        );
+        let entries = [Err(io::Error::from(io::ErrorKind::PermissionDenied))];
+        assert_eq!(
+            bounded_entries(entries, 0).unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        assert_eq!(
+            bounded_entries([Ok(PathBuf::from("a"))], 0).unwrap(),
+            DirectoryEntries::TooMany
+        );
+    }
+
+    #[test]
+    fn disk_directory_iterator_observes_only_budget_plus_one_entries() {
+        let directory = tempfile::tempdir().unwrap();
+        for index in 0..4096 {
+            std::fs::write(directory.path().join(format!("{index:06}")), []).unwrap();
+        }
+        let consumed = Arc::new(AtomicUsize::new(0));
+        let count = Arc::clone(&consumed);
+        let adapter = FilesOnDisk(move |path: &Path| {
+            let count = Arc::clone(&count);
+            Ok(read_directory(path)?.inspect(move |_| {
+                count.fetch_add(1, Ordering::Relaxed);
+            }))
+        });
+        assert_eq!(
+            adapter.entries(directory.path(), 31).unwrap(),
+            DirectoryEntries::TooMany
+        );
+        assert_eq!(consumed.load(Ordering::Relaxed), 32);
+        consumed.store(0, Ordering::Relaxed);
+        let DirectoryEntries::Within(paths) = adapter.entries(directory.path(), 4096).unwrap()
+        else {
+            panic!("exact limit is admitted");
+        };
+        assert_eq!(consumed.load(Ordering::Relaxed), 4096);
+        assert_eq!(paths.len(), 4096);
+        assert!(paths.windows(2).all(|pair| pair[0] < pair[1]));
+    }
 
     /// The ordinary case: an answer that arrives well inside the wait is the
     /// answer, and the helper adds nothing to it.

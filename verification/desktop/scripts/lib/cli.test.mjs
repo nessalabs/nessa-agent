@@ -30,7 +30,7 @@ import {
   UsageError,
   verdictOf,
 } from "./cli.mjs"
-import { argsForCheck } from "./run-all-args.mjs"
+import { argsForCheck, ownsPreview } from "./run-all-args.mjs"
 
 const require = createRequire(import.meta.url)
 
@@ -244,6 +244,83 @@ describe("resultOfThrown", () => {
 })
 
 describe("run-all's sum", () => {
+  it("routes production Settings to its fixture preview owner", () => {
+    assert.equal(ownsPreview("settings-page", "prod"), true)
+    assert.equal(ownsPreview("settings-page", "dev"), false)
+    assert.equal(ownsPreview("smoke", "prod"), false)
+    assert.deepEqual(
+      argsForCheck(
+        "settings-page",
+        {},
+        {
+          out: "settings.json",
+          page: undefined,
+          sharesPage: false,
+        },
+      ),
+      ["--out", "settings.json", "--mode", "prod"],
+    )
+  })
+  it("keeps explicit Settings URLs externally owned and perf runs out of functional arguments", () => {
+    const url = "http://127.0.0.1:9000/desktop.html"
+    for (const check of ["settings-page", "committed-transcript"])
+      assert.deepEqual(
+        argsForCheck(
+          check,
+          { url, runs: "3" },
+          { out: "check.json", page: undefined, sharesPage: false },
+        ),
+        ["--out", "check.json", "--url", url, "--mode", "prod"],
+      )
+    assert.deepEqual(
+      argsForCheck(
+        "perf-budget",
+        { url, runs: "3" },
+        { out: "perf.json", page: undefined, sharesPage: false },
+      ),
+      ["--out", "perf.json", "--url", url, "--runs", "3"],
+    )
+    assert.deepEqual(
+      argsForCheck(
+        "message-sync",
+        { url, runs: "3" },
+        { out: "sync.json", page: undefined, sharesPage: false },
+      ),
+      ["--out", "sync.json", "--mode", "prod"],
+    )
+  })
+
+  it("preserves the shared functional page mode and existing preview owners", () => {
+    for (const mode of ["dev", "prod"]) {
+      assert.equal(ownsPreview("message-sync", mode), true)
+      assert.equal(ownsPreview("perf-budget", mode), true)
+      assert.equal(ownsPreview("committed-transcript", mode), mode === "prod")
+      assert.equal(ownsPreview("smoke", mode), false)
+      assert.deepEqual(
+        argsForCheck(
+          "smoke",
+          { runs: "3" },
+          {
+            base: ["--engine", "webkit"],
+            out: "smoke.json",
+            page: { url: "http://127.0.0.1:9000/desktop.html", mode },
+            sharesPage: true,
+          },
+        ),
+        [
+          "--engine",
+          "webkit",
+          "--out",
+          "smoke.json",
+          "--url",
+          "http://127.0.0.1:9000/desktop.html",
+          "--mode",
+          mode,
+        ],
+      )
+    }
+  })
+
   it("recognizes the clock check by --only name and leaves it out of production previews", () => {
     const source = readFileSync(new URL("../run-all.mjs", import.meta.url), "utf8")
     const match = source.match(/const functional = \[([\s\S]*?)\n\]/)
@@ -419,5 +496,67 @@ describe("report", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
+  })
+})
+
+describe("optional scenario assertions", () => {
+  for (const [name, supplied, ok, status] of [
+    ["omitted", {}, true, 0],
+    ["derived success", { ok: false, failures: undefined }, true, 0],
+    ["undefined", { failures: undefined }, true, 0],
+    ["null", { failures: null }, true, 0],
+    ["error", { error: "temporarily_unavailable", failures: undefined }, false, 1],
+    ["assertion", { ok: true, failures: ["contract broke"] }, false, 1],
+    [
+      "error and assertion",
+      { error: "original fault", failures: ["contract broke"] },
+      false,
+      1,
+    ],
+    [
+      "cannot run",
+      { cannotRun: true, error: "browser absent", failures: undefined },
+      false,
+      2,
+    ],
+    ["cannot run without diagnostic", { cannotRun: true, failures: undefined }, false, 2],
+    ["skipped", { skipped: DEV_SERVER_ONLY, failures: undefined }, false, 2],
+  ])
+    it(`preserves the ${name} verdict and original diagnostics`, async () => {
+      const rep = report("scenario", {})
+      let entry
+      const lines = await stderrOf(() => {
+        entry = rep.add({ name, ...supplied })
+      })
+      assert.equal(entry.ok, ok)
+      assert.deepEqual(entry.failures, supplied.failures ?? [])
+      assert.equal(entry.error, supplied.error)
+      assert.equal(entry.skipped, supplied.skipped)
+      assert.equal(statusOf(rep.results), status)
+      if (supplied.cannotRun) assert.match(lines, /^ERROR/)
+      if (supplied.error) assert.ok(lines.includes(supplied.error))
+      for (const failure of supplied.failures ?? []) assert.ok(lines.includes(failure))
+    })
+
+  it("keeps the scenario error in JSON and stderr with a failing process status", () => {
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "--eval",
+        `import { report } from ${JSON.stringify(new URL("./cli.mjs", import.meta.url).href)};
+const rep = report("scenario", {});
+rep.add({ name: "original", error: "temporarily_unavailable", failures: undefined });
+process.exit(rep.finish());`,
+      ],
+      { encoding: "utf8" },
+    )
+    assert.equal(result.status, 1, result.stderr)
+    const document = JSON.parse(result.stdout)
+    assert.equal(document.ok, false)
+    assert.equal(document.results[0].error, "temporarily_unavailable")
+    assert.deepEqual(document.results[0].failures, [])
+    assert.match(result.stderr, /temporarily_unavailable/)
+    assert.doesNotMatch(result.stderr, /TypeError/)
   })
 })
