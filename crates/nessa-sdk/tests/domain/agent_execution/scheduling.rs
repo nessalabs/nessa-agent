@@ -687,3 +687,24 @@ fn queue_mutation_replay_accepts_and_rejects_each_membership_transition() {
         .apply_mutation(&QueueMutation::Reordered(change))
         .is_err());
 }
+
+#[test]
+fn only_a_shutdown_or_a_restart_leaves_work_owed_and_only_failures_stop_by_failure() {
+    for (cause, owed, failed) in [
+        (SchedulingCause::Submitted, false, false),
+        (SchedulingCause::Dispatched, false, false),
+        (SchedulingCause::DispatchFailed, false, true),
+        (SchedulingCause::SteeringInjected, false, false),
+        (SchedulingCause::ExecutionSettled, false, false),
+        (SchedulingCause::ExecutionFailed, false, true),
+        (SchedulingCause::SessionClosed, false, false),
+        (SchedulingCause::RunnerStopped, false, true),
+        (SchedulingCause::Withdrawn, false, false),
+        (SchedulingCause::Suspended, true, false),
+        (SchedulingCause::Interrupted, true, false),
+        (SchedulingCause::NotResumed, false, false),
+    ] {
+        assert_eq!(cause.leaves_work_owed(), owed, "{cause:?}");
+        assert_eq!(cause.stopped_by_failure(), failed, "{cause:?}");
+    }
+}
