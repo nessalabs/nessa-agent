@@ -1421,6 +1421,51 @@ async fn a_second_creation_request_cannot_reinitialize_the_original_target() {
 }
 
 #[tokio::test]
+async fn two_requests_creating_one_conversation_both_open_it() {
+    let directory = tempfile::tempdir().unwrap();
+    let provider = Arc::new(ProviderFactory::default());
+    let (release, gate) = oneshot::channel();
+    *provider.open_gate.lock().unwrap() = Some(gate);
+    let (service, storage, metadata) = fixture(&directory.path().join("data"), provider.clone());
+    let target = id();
+    let start = |request: &'static str| {
+        let service = service.clone();
+        let storage = storage.clone();
+        let target = target.clone();
+        tokio::spawn(async move {
+            service
+                .create_command(
+                    storage,
+                    target,
+                    caller(request),
+                    RequestedConversation::default(),
+                )
+                .await
+        })
+    };
+    let original = start("original");
+    tokio::time::timeout(CREATION_HANG, provider.opening.notified())
+        .await
+        .unwrap();
+    // Sent while the first is still opening the agent: it waits, then
+    // reopens what the first created rather than refusing as a conflict.
+    let another = start("another");
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(!another.is_finished());
+    release.send(()).unwrap();
+    for task in [original, another] {
+        let ready = tokio::time::timeout(CREATION_HANG, task)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(ready.stage(), CreationStage::Ready);
+    }
+    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 1);
+    retire(service, storage, metadata).await;
+}
+
+#[tokio::test]
 async fn a_new_request_reopens_an_owned_conversation_and_attaches_after_restart() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("data");

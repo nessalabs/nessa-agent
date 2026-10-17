@@ -382,33 +382,35 @@ async fn review_notice_reselects_after_shared_changes_during_audit() {
             );
             next_acknowledgement.send(Ok(())).unwrap();
         }
-        let queued = timeout(Duration::from_secs(2), frames.recv())
-            .await
-            .unwrap()
-            .unwrap();
-        let WireResponse::ReviewWaiting {
-            payload,
-            generation,
-        } = queued.message
-        else {
-            panic!("review snapshot expected")
-        };
-        assert_eq!(
-            payload.reviews.len(),
-            usize::from(!clear_board),
-            "a settled review must not be disclosed after a delayed audit"
-        );
-        assert_eq!(
-            generation,
-            fixture.board.current().0,
-            "the admitted candidate must retain the current board generation"
-        );
+        // A board that only moved is published at the generation the
+        // selection was taken at, and the next frame catches up to the board.
+        loop {
+            let queued = timeout(Duration::from_secs(2), frames.recv())
+                .await
+                .unwrap()
+                .unwrap();
+            let WireResponse::ReviewWaiting {
+                payload,
+                generation,
+            } = queued.message
+            else {
+                panic!("review snapshot expected")
+            };
+            assert_eq!(
+                payload.reviews.len(),
+                usize::from(!clear_board),
+                "a settled review must not be disclosed after a delayed audit"
+            );
+            drop(queued._slot);
+            if generation == fixture.board.current().0 {
+                break;
+            }
+        }
         assert_eq!(
             audit.records.lock().unwrap().len(),
             if clear_board { 1 } else { 2 },
             "shared changes during audit require reselection"
         );
-        drop(queued._slot);
         drop(authority);
         timeout(Duration::from_secs(2), task)
             .await
@@ -550,7 +552,7 @@ impl ReviewNoticeAudit for BoardChurnAudit {
 }
 
 #[tokio::test]
-async fn review_notice_board_traffic_during_audit_is_reselected_without_closing() {
+async fn review_notice_board_traffic_during_audit_is_published_without_closing() {
     let mut fixture = ReviewFixture::new(
         Arc::new(RecordingReviewNoticeAudit::default()),
         Arc::new(MonotonicReviewNoticeClock::new()),
@@ -568,21 +570,41 @@ async fn review_notice_board_traffic_during_audit_is_reselected_without_closing(
             Arc::new(MonotonicReviewNoticeClock::new()),
         )));
     let (task, mut frames, authority) = fixture.publish(Arc::new(Semaphore::new(1))).await;
-    let queued = timeout(Duration::from_secs(2), frames.recv())
+    let first = timeout(Duration::from_secs(2), frames.recv())
         .await
         .unwrap()
-        .expect("a busy board is published once it holds still, not closed");
-    let WireResponse::ReviewWaiting {
-        payload,
-        generation,
-    } = queued.message
-    else {
+        .expect("a busy board is published, not closed");
+    let WireResponse::ReviewWaiting { payload, .. } = first.message else {
         panic!("review snapshot expected")
     };
     assert_eq!(payload.reviews.len(), 1, "only the visible review is shown");
-    assert_eq!(generation, fixture.board.current().0);
-    assert_eq!(audit.records.lock().unwrap().len(), 7);
-    drop(queued._slot);
+    // The next pass may already be auditing while this frame is held.
+    assert!(
+        audit.records.lock().unwrap().len() <= 2,
+        "the review is shown after its first audit, though the board moved during it"
+    );
+    drop(first._slot);
+    // Each later change is published in turn until the board holds still.
+    loop {
+        let queued = timeout(Duration::from_secs(2), frames.recv())
+            .await
+            .unwrap()
+            .expect("a busy board is published, not closed");
+        let WireResponse::ReviewWaiting {
+            payload,
+            generation,
+        } = queued.message
+        else {
+            panic!("review snapshot expected")
+        };
+        assert_eq!(payload.reviews.len(), 1);
+        drop(queued._slot);
+        if generation == fixture.board.current().0
+            && audit.churns.load(std::sync::atomic::Ordering::SeqCst) == 0
+        {
+            break;
+        }
+    }
     drop(authority);
     timeout(Duration::from_secs(2), task)
         .await

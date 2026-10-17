@@ -727,6 +727,12 @@ struct Inner {
     // tombstone it left (`concurrent_deletes_of_one_conversation_run_one_after_the_other`).
     deletions: ConversationLocks,
     mode_changes: ConversationLocks,
+    // One create command of a conversation at a time, from its reopen check
+    // to its saved readiness. Each request keeps its own command history, so
+    // without it two requests for one new conversation could both find it
+    // missing and the second open it as a conflict
+    // (`two_requests_creating_one_conversation_both_open_it`).
+    creations: ConversationLocks,
     /// Who is asked to delete an agent's own record of a provider session.
     provider_sessions: ProviderSessionErasers,
     deletion_budgets: ConversationDeletionBudgets,
@@ -1212,6 +1218,7 @@ impl ConversationService {
                 summary_writes: ConversationLocks::default(),
                 deletions: ConversationLocks::default(),
                 mode_changes: ConversationLocks::default(),
+                creations: ConversationLocks::default(),
                 provider_sessions,
                 deletion_budgets,
                 environment,

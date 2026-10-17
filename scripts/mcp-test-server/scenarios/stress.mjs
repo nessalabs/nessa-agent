@@ -18,9 +18,17 @@ export const STRESS = {
   large: "stress large review",
   wait: "stress wait",
   pause: "stress pause",
+  cut: "stress cut",
   fail: "stress fail",
   delegate: "stress delegate",
 }
+
+/**
+ * How the gateway opens a turn it carries on after a restart. A turn the
+ * check cuts off never ends on its own, so a restart can never come too late;
+ * its successor is told apart by this notice and finishes.
+ */
+const CUT_OFF = "[Nessa restarted while you were working"
 
 /** What a turn says, by kind. A check looks for these, so they are owned here. */
 export const SAYS = {
@@ -73,6 +81,11 @@ export function stressScenario({
         when: STRESS.report,
         steps: [{ do: "text", chunks: [SAYS.report] }, { do: "end" }],
       },
+      // Before the cut turn: the successor quotes the cut prompt after it.
+      {
+        when: CUT_OFF,
+        steps: [{ do: "text", chunks: [SAYS.resumed] }, { do: "end" }],
+      },
       {
         when: STRESS.reply,
         steps: [{ do: "text", chunks: [SAYS.echo, "${prompt.text}"] }, { do: "end" }],
@@ -108,6 +121,10 @@ export function stressScenario({
           { do: "text", chunks: [SAYS.resumed] },
           { do: "end" },
         ],
+      },
+      {
+        when: STRESS.cut,
+        steps: [{ do: "text", chunks: [SAYS.pausing] }, { do: "wait-cancel" }],
       },
       {
         when: STRESS.fail,

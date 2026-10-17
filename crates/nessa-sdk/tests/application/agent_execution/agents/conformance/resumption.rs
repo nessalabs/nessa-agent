@@ -567,6 +567,47 @@ async fn a_failed_turn_a_later_message_moved_past_is_not_sent_again() {
 }
 
 #[tokio::test]
+async fn a_message_sent_while_a_retry_waits_moves_past_the_retry_that_failed() {
+    let error = AgentError::Transport("pipe".into());
+    let (agent, backend, _storage) = failed_with(error.clone()).await;
+    *backend.execution_fault.lock().unwrap() = Some(ProviderOperationFailure::new(
+        error.clone(),
+        ProviderSessionState::CleanupReported(CleanupReport::confirmed(CloseOutcome {
+            forced: false,
+        })),
+    ));
+    let (release, gate) = oneshot::channel();
+    *backend.execution_gate.lock().unwrap() = Some(gate);
+    let mut successors = Vec::new();
+    for turn in &agent.owed_turns().await {
+        let Resumed::Continued(admission) =
+            bounded(agent.resume_turn(turn, resumer())).await.unwrap()
+        else {
+            panic!("a failed turn is continued")
+        };
+        successors.push(admission);
+    }
+    bounded(backend.dispatched.notified()).await;
+    // The person saw the failure and wrote again; it waits behind the retry.
+    let next = agent
+        .enqueue(request("next"), Submitter::owner(actor()))
+        .await
+        .unwrap();
+    release.send(()).unwrap();
+    for admission in successors {
+        let _ = bounded(admission.wait()).await;
+    }
+    let _ = bounded(next.wait()).await;
+    *backend.execution_fault.lock().unwrap() = None;
+    assert_eq!(
+        owed_ids(&agent.owed_turns().await),
+        ["next"],
+        "the retries the person wrote past are not sent again, so the next message is not held behind them"
+    );
+    bounded(agent.close(actor())).await.unwrap();
+}
+
+#[tokio::test]
 async fn a_retry_of_a_failed_turn_answers_as_its_successor() {
     let (agent, _backend, _storage) = failed_with(AgentError::Transport("pipe".into())).await;
     let owed = agent.owed_turns().await;

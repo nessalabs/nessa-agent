@@ -1396,8 +1396,8 @@ async fn forward_review_notices(
     // audit records, so continuous change closes the socket. Reviews coming
     // and going on the board are ordinary traffic: under many busy agents the
     // board can change during every audit, and closing every socket for it
-    // dropped clients mid-command. A pass the board alone outdated is redone
-    // without counting.
+    // dropped clients mid-command. A pass the board alone outdated is
+    // published, less what settled meanwhile.
     const MAX_SELECTION_PASSES: usize = 3;
     let mut selection_passes = 0;
     'snapshots: loop {
@@ -1440,16 +1440,25 @@ async fn forward_review_notices(
             .await
             .map_err(ReviewNoticePublicationFailure::Authority)?;
             if !board.is_current(generation, visibility) {
-                // Only a newer board, with the same access, is redone freely.
-                // A spent counter never matches, so it counts.
+                // A spent counter never matches, so it counts as access moving.
                 let board_moved = current.revision == revision
                     && board.visibility() == visibility
                     && generation != u64::MAX
                     && visibility != u64::MAX;
                 if !board_moved {
                     selection_passes += 1;
+                    continue 'snapshots;
                 }
-                continue 'snapshots;
+                // Only the board moved, with the same access: this selection
+                // still holds for every review it kept that is still waiting,
+                // so it is published without those that settled, under the
+                // generation it was taken at. The board is past that
+                // generation, so the next pass starts at once and adds what
+                // came since. Redoing it instead never finished while busy
+                // agents changed the board during every audit, and no card
+                // was shown until its review was denied for want of an answer.
+                let (_, waiting) = board.current();
+                visible.retain(|review| waiting.contains(review));
             }
             if current.revision != revision {
                 selection_passes += 1;

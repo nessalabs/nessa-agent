@@ -230,9 +230,24 @@ async function seenTurns(run, conversationId) {
 }
 
 /**
+ * The newest turn the gateway sent again on behalf of the one sent as `text`:
+ * a message held behind a failure is stopped with it and sent again, as a
+ * notice and then the original text.
+ */
+function carried(view, seen, text) {
+  return view.messages.findLast(
+    (each) =>
+      !seen.has(each.executionId) &&
+      each.userText !== text &&
+      each.userText.endsWith(text),
+  )
+}
+
+/**
  * The turn sent as `text`, once it ends, checked: `text` is in the
- * conversation exactly once, and its turn ended `status`. `seen` are the turns
- * from before the send, left out of what a failure lists.
+ * conversation exactly once, and its turn ended `status`. A turn stopped
+ * behind a failure is followed to the turn that carries it on. `seen` are the
+ * turns from before the send, left out of what a failure lists.
  */
 async function settled(run, conversationId, seen, text, status, failures, seconds = 60) {
   const end = Date.now() + seconds * 1000
@@ -242,7 +257,10 @@ async function settled(run, conversationId, seen, text, status, failures, second
     try {
       view = await readWithReviews(run.client, conversationId)
       turn = view.messages.find((each) => each.userText === text)
-      if (turn && ended(turn)) break
+      if (turn?.status === "cancelled" && status !== "cancelled")
+        turn = carried(view, seen, text) ?? turn
+      if (turn && ended(turn) && !(turn.status === "cancelled" && status !== "cancelled"))
+        break
     } catch (error) {
       log(`read ${conversationId}: ${error.message}`)
     }
@@ -293,28 +311,37 @@ async function answerCard(run, conversationId, answer, failures, reason) {
     )
     return false
   }
-  const shown = await cards.count()
-  if (shown !== 1) failures.push(`${shown} approval cards shown, not 1`)
+  // The card just answered can still be leaving: the one to answer is the
+  // card that asks `reason`, and the review is the one with that title.
+  const asking = reason ? cards.filter({ hasText: reason }) : cards
+  const showsIt = await asking
+    .first()
+    .waitFor({ timeout: 30_000 })
+    .then(() => true)
+    .catch(() => false)
+  if (!showsIt) {
+    failures.push(`the card does not ask ${JSON.stringify(reason)}`)
+    return false
+  }
+  if (!(await waitFor(async () => (await cards.count()) === 1, 5_000)))
+    failures.push(`${await cards.count()} approval cards shown, not 1`)
   const { view } = await untilTurn(
     run,
     conversationId,
     0,
-    (_turn, current) => current.permissions.length > 0,
+    (_turn, current) =>
+      current.permissions.some((each) => !reason || each.title === reason),
     10,
   )
-  const permission = view?.permissions?.[0]
-  if (
-    reason &&
-    permission?.title !== reason &&
-    !fold(await cards.first().innerText()).includes(reason)
-  )
-    failures.push(`the card does not ask ${JSON.stringify(reason)}`)
+  const permission =
+    view?.permissions?.find((each) => !reason || each.title === reason) ??
+    view?.permissions?.[0]
   const label = offeredLabel(permission?.options, answer === "allow" ? "allow" : "deny")
   if (!label) {
     failures.push(`the review offers no ${answer}`)
     return false
   }
-  await cards
+  await asking
     .first()
     .getByRole("button", { name: label, exact: true })
     .click({ timeout: 10_000 })
@@ -372,8 +399,10 @@ const steps = {
   async reply(run, step, failures) {
     const text = prompt(run, STRESS.reply, step)
     const seen = await send(run, run.main.id, text, failures)
-    await settled(run, run.main.id, seen, text, "completed", failures)
-    await expectShown(run.page, `${SAYS.echo}${text}`, failures)
+    const { turn } = await settled(run, run.main.id, seen, text, "completed", failures)
+    // A reply carried on behind a failure echoes its notice first.
+    const echoed = turn && turn.userText !== text ? turn.userText.slice(0, 40) : text
+    await expectShown(run.page, `${SAYS.echo}${echoed}`, failures)
     if ((await run.page.locator(css.sendFailure).count()) > 0)
       failures.push("the composer shows a send failure")
   },
@@ -480,7 +509,7 @@ const steps = {
   },
 
   async restart(run, step, failures) {
-    const text = prompt(run, STRESS.pause, step)
+    const text = prompt(run, STRESS.cut, step)
     await run.exclusive(async () => {
       const seen = await send(run, run.main.id, text, failures)
       await expectShown(run.page, SAYS.pausing, failures)
@@ -573,7 +602,7 @@ const steps = {
     await run.client.conversation.submit(
       run.client.conversation.prepare(conversationId, first),
     )
-    await settled(run, conversationId, 0, first, "completed", failures)
+    await settled(run, conversationId, new Set(), first, "completed", failures)
     const title = await titleOf(run, conversationId)
     await open(run.page, title)
     const second = prompt(run, STRESS.reply, step, " aside again")
@@ -632,6 +661,12 @@ async function background(run, n) {
               void run.client.conversation
                 .answer(permissionTargets(view)[0], option.id)
                 .catch((error) => {
+                  // The socket's control lanes were full, so nothing was
+                  // applied; the code says to send it again, as a client must.
+                  if (error?.code === "temporarily_unavailable") {
+                    answered.delete(waiting.review)
+                    return
+                  }
                   // A restart can drop the answer's acknowledgement, not the
                   // answer: the turn must still complete, checked below.
                   if (run.restarts === restarts)
@@ -754,7 +789,7 @@ await main(
         const setup = []
         await run.client.conversation.create({ conversationId: id, agent: stack.agent })
         await run.client.conversation.submit(run.client.conversation.prepare(id, first))
-        await settled(run, id, 0, first, "completed", setup)
+        await settled(run, id, new Set(), first, "completed", setup)
         run.main = { id, title: await titleOf(run, id) }
         await open(run.page, run.main.title)
         if (setup.length) {
