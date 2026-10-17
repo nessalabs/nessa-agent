@@ -1,7 +1,9 @@
 //! A gateway that shuts down mid-turn carries the turn on when it starts
 //! again; a person's stop does not (#970).
 use super::*;
-use crate::conversation::application::{ConversationFuture, SubmittedMessage, UnfinishedTurns};
+use crate::conversation::application::{
+    ConversationFuture, FailureBackoff, SubmittedMessage, UnfinishedMark, UnfinishedTurns,
+};
 use crate::conversation_test_support::{
     access_policy, claude_erasers, only, AcceptingCreationAudit, AcceptingDeletionAudit,
     MemoryListing, MemoryRepository, MemorySummaries, Provider, ProviderFactory,
@@ -9,7 +11,8 @@ use crate::conversation_test_support::{
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_sdk::application::agent_execution::providers::{
-    CleanupReport, ExecutionReport, ProviderExecutionReply,
+    CleanupReport, ExecutionReport, ObservationFailure, ObservationFailureCause,
+    ProviderExecutionReply, ProviderSessionState,
 };
 use nessa_sdk::infrastructure::session_storage::InMemoryStorage;
 use std::sync::atomic::AtomicBool;
@@ -20,27 +23,59 @@ use tokio::sync::oneshot;
 const BOUND: Duration = Duration::from_secs(5);
 
 #[derive(Default)]
-struct MemoryMarks(StdMutex<HashSet<ConversationId>>, AtomicBool);
+struct MemoryMarks(
+    StdMutex<HashMap<ConversationId, (u32, Option<u64>)>>,
+    AtomicBool,
+);
 impl UnfinishedTurns for MemoryMarks {
     fn mark(&self, id: &ConversationId) -> ConversationFuture<'_, ()> {
         if self.1.load(Ordering::SeqCst) {
             return Box::pin(async { Err(ConversationError::Metadata) });
         }
-        self.0.lock().unwrap().insert(id.clone());
+        self.0.lock().unwrap().entry(id.clone()).or_default();
         Box::pin(async { Ok(()) })
     }
     fn clear(&self, id: &ConversationId) -> ConversationFuture<'_, ()> {
         self.0.lock().unwrap().remove(id);
         Box::pin(async { Ok(()) })
     }
-    fn marked(&self) -> ConversationFuture<'_, Vec<ConversationId>> {
-        let marked = self.0.lock().unwrap().iter().cloned().collect();
+    fn defer(
+        &self,
+        id: &ConversationId,
+        failures: u32,
+        retry_at_ms: u64,
+    ) -> ConversationFuture<'_, ()> {
+        self.0
+            .lock()
+            .unwrap()
+            .insert(id.clone(), (failures, Some(retry_at_ms)));
+        Box::pin(async { Ok(()) })
+    }
+    fn marked(&self) -> ConversationFuture<'_, Vec<UnfinishedMark>> {
+        let marked = self
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(id, (failures, retry_at_ms))| UnfinishedMark {
+                conversation_id: id.clone(),
+                failures: *failures,
+                retry_at_ms: *retry_at_ms,
+            })
+            .collect();
         Box::pin(async move { Ok(marked) })
     }
 }
 impl MemoryMarks {
     fn holds(&self, id: &ConversationId) -> bool {
-        self.0.lock().unwrap().contains(id)
+        self.0.lock().unwrap().contains_key(id)
+    }
+    fn failures(&self, id: &ConversationId) -> Option<u32> {
+        self.0
+            .lock()
+            .unwrap()
+            .get(id)
+            .map(|(failures, _)| *failures)
     }
 }
 
@@ -91,7 +126,13 @@ impl Durable {
             None,
         )
         .unwrap();
-        service.bind_unfinished_turns(self.marks.clone());
+        service.bind_unfinished_turns(
+            self.marks.clone(),
+            FailureBackoff {
+                first: Duration::ZERO,
+                most: Duration::ZERO,
+            },
+        );
         service
     }
     fn texts(&self) -> Vec<String> {
@@ -293,7 +334,12 @@ async fn a_turn_that_cannot_be_marked_is_never_given_to_the_agent() {
 async fn a_mark_for_a_conversation_with_no_record_is_cleared_at_start() {
     let durable = Durable::new();
     let gone = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
-    durable.marks.0.lock().unwrap().insert(gone.clone());
+    durable
+        .marks
+        .0
+        .lock()
+        .unwrap()
+        .insert(gone.clone(), (0, None));
     let service = durable.start();
     assert_eq!(service.resume_unfinished().await.unwrap(), 1);
     assert!(!durable.marks.holds(&gone));
@@ -356,4 +402,169 @@ async fn a_turn_owed_behind_a_pending_mode_change_is_resumed_once_it_settles() {
     assert!(durable.texts()[1].ends_with("Refactor the parser"));
     until(|| !durable.marks.holds(&id)).await;
     second.shutdown().await.unwrap();
+}
+
+/// A conversation on `service` whose first turn the provider fails with
+/// `error`, leaving its session in `state`.
+async fn failed_turn(
+    service: &ConversationService,
+    durable: &Durable,
+    error: AgentError,
+    state: ProviderSessionState,
+) -> ConversationId {
+    let id = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
+    service
+        .create(
+            id.clone(),
+            caller("create"),
+            crate::conversation::application::RequestedConversation::default(),
+        )
+        .await
+        .unwrap();
+    *durable.provider.execution_reply.lock().unwrap() = Some(ProviderExecutionReply::Finished(
+        ExecutionReport::new(Some(Err(error.clone())), None, state),
+    ));
+    // The provider's event stream ends with the same failure.
+    *durable
+        .provider
+        .execution_observation_failure
+        .lock()
+        .unwrap() = Some(ObservationFailure::new(
+        error,
+        ObservationFailureCause::ExecutionFailed,
+    ));
+    service
+        .submit(
+            id.clone(),
+            caller("work"),
+            "work".into(),
+            SubmittedMessage {
+                text: "Refactor the parser".into(),
+                ..SubmittedMessage::default()
+            },
+            SubmissionMode::Queue,
+        )
+        .await
+        .unwrap();
+    id
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_turn_the_provider_failed_is_sent_again_after_its_backoff() {
+    for state in [
+        // The agent recovers by itself when its next turn is queued.
+        ProviderSessionState::CleanupReported(CleanupReport::confirmed(CloseOutcome {
+            forced: false,
+        })),
+        // The agent waits for its close: it is closed and opened again.
+        ProviderSessionState::CleanupRequired,
+    ] {
+        let durable = Durable::new();
+        let service = durable.start();
+        let retries = {
+            let service = service.clone();
+            tokio::spawn(async move { service.run_failure_retries().await })
+        };
+        let id = failed_turn(
+            &service,
+            &durable,
+            AgentError::Transport("pipe closed".into()),
+            state.clone(),
+        )
+        .await;
+        until(|| durable.texts().len() == 2).await;
+        let resumed = &durable.texts()[1];
+        assert!(
+            resumed.starts_with("[Your last turn on this request ended early"),
+            "{state:?}: {resumed}"
+        );
+        assert!(resumed.ends_with("Refactor the parser"), "{resumed}");
+        until(|| !durable.marks.holds(&id)).await;
+        service.shutdown().await.unwrap();
+        tokio::time::timeout(BOUND, retries).await.unwrap().unwrap();
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_failure_a_retry_cannot_fix_is_not_retried() {
+    let durable = Durable::new();
+    let service = durable.start();
+    let retries = {
+        let service = service.clone();
+        tokio::spawn(async move { service.run_failure_retries().await })
+    };
+    let id = failed_turn(
+        &service,
+        &durable,
+        AgentError::AuthenticationRequired { diagnostic: None },
+        ProviderSessionState::CleanupReported(CleanupReport::confirmed(CloseOutcome {
+            forced: false,
+        })),
+    )
+    .await;
+    until(|| !durable.marks.holds(&id)).await;
+    assert_eq!(durable.texts().len(), 1, "nothing was sent again");
+    service.shutdown().await.unwrap();
+    tokio::time::timeout(BOUND, retries).await.unwrap().unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_retry_still_waiting_at_shutdown_runs_after_the_next_start() {
+    let durable = Durable::new();
+    let first = durable.start();
+    // No retry loop runs here: the retry is saved, then the gateway stops.
+    let id = failed_turn(
+        &first,
+        &durable,
+        AgentError::Deadline,
+        ProviderSessionState::CleanupReported(CleanupReport::confirmed(CloseOutcome {
+            forced: false,
+        })),
+    )
+    .await;
+    until(|| durable.marks.failures(&id) == Some(1)).await;
+    first.shutdown().await.unwrap();
+    assert!(durable.marks.holds(&id));
+
+    let second = durable.start();
+    assert_eq!(second.resume_unfinished().await.unwrap(), 1);
+    until(|| durable.texts().len() == 2).await;
+    assert!(durable.texts()[1].starts_with("[Your last turn on this request ended early"));
+    until(|| !durable.marks.holds(&id)).await;
+    second.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_retry_whose_agent_cannot_attach_yet_is_tried_again() {
+    let durable = Durable::new();
+    let service = durable.start();
+    let retries = {
+        let service = service.clone();
+        tokio::spawn(async move { service.run_failure_retries().await })
+    };
+    let (release, gate) = tokio::sync::oneshot::channel();
+    *durable.provider.execution_gate.lock().unwrap() = Some(gate);
+    let id = failed_turn(
+        &service,
+        &durable,
+        AgentError::Transport("pipe closed".into()),
+        ProviderSessionState::CleanupRequired,
+    )
+    .await;
+    // The provider is still down when the retry opens the conversation.
+    *durable.provider.open_failure.lock().unwrap() =
+        Some(AgentError::Transport("still down".into()));
+    release.send(()).unwrap();
+    until(|| durable.texts().len() == 2).await;
+    assert!(
+        durable.provider.open_failure.lock().unwrap().is_none(),
+        "the retry met the failed attachment"
+    );
+    assert_eq!(
+        durable.texts()[1],
+        format!("[Your last turn on this request ended early because the agent failed, so it is sent again now. Some of it may already be done: check the current state before repeating any step, then carry on. If the work is already finished, say so and stop.]\n\nThe request was:\n\nRefactor the parser")
+    );
+    until(|| !durable.marks.holds(&id)).await;
+    service.shutdown().await.unwrap();
+    tokio::time::timeout(BOUND, retries).await.unwrap().unwrap();
 }

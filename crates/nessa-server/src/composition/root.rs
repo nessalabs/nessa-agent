@@ -411,8 +411,11 @@ impl CompositionRoot {
         // Turns the last run left unfinished — cut off by a crash, or
         // suspended by its shutdown — are carried on now, in the background,
         // each conversation opened as its owner's and its agent told what was
-        // cut off (#970).
+        // cut off (#970). Turns a failure left owed are retried after their
+        // backoff, by the retry loop, for as long as the gateway runs.
         if let Some(service) = conversations.clone() {
+            let retries = service.clone();
+            tokio::spawn(async move { retries.run_failure_retries().await });
             tokio::spawn(async move {
                 match service.resume_unfinished().await {
                     Ok(0) => {}

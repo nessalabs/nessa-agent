@@ -2,7 +2,7 @@
 //! continued by a successor turn; a person's stop stays final.
 use super::*;
 use nessa_sdk::application::agent_execution::{
-    agents::{OwedTurn, Resumed},
+    agents::{AttachmentFailureCode, AttachmentPhase, OwedTurn, Resumed},
     executions::TurnResumption,
 };
 
@@ -400,9 +400,226 @@ async fn a_successor_whose_audit_record_fails_still_runs_and_says_so() {
     backend.audit.reject.store(false, Ordering::SeqCst);
     // The host still has the receipt to watch. What the turn then comes to
     // is the agent's own audit rule (the same sink also refused the
-    // successor's admission record); the original is not owed again.
+    // successor's admission record); the original is not owed again, and
+    // a successor that failed this way is owed in its place.
+    let successor = admission.id().clone();
     let _ = hold.send(());
     let _ = bounded(admission.wait()).await;
+    let owed = agent.owed_turns().await;
+    assert!(
+        owed.iter().all(|turn| turn.execution_id() == &successor),
+        "{:?}",
+        owed_ids(&owed)
+    );
+    bounded(agent.close(actor())).await.unwrap();
+}
+
+/// Run `failed` until the provider fails it with `error`, with `behind`
+/// queued after it, and wait for both receipts.
+async fn failed_with(error: AgentError) -> (Agent, Arc<WorkflowBackend>, MemoryStorage) {
+    let (agent, backend, storage) = workflow().await;
+    *backend.execution_fault.lock().unwrap() = Some(ProviderOperationFailure::new(
+        error.clone(),
+        ProviderSessionState::CleanupReported(CleanupReport::confirmed(CloseOutcome {
+            forced: false,
+        })),
+    ));
+    let (release, gate) = oneshot::channel();
+    *backend.execution_gate.lock().unwrap() = Some(gate);
+    let failed = Mode::Queued.start(agent.clone(), request("failed"));
+    bounded(backend.dispatched.notified()).await;
+    let behind = agent
+        .enqueue(request("behind"), Submitter::owner(actor()))
+        .await
+        .unwrap();
+    release.send(()).unwrap();
+    assert_eq!(bounded(failed).await.unwrap(), Err(error));
+    let _ = bounded(behind.wait()).await;
+    *backend.execution_fault.lock().unwrap() = None;
+    (agent, backend, storage)
+}
+
+fn owed_ids(owed: &[OwedTurn]) -> Vec<&str> {
+    owed.iter()
+        .map(|turn| turn.execution_id().as_str())
+        .collect()
+}
+
+#[tokio::test]
+async fn a_turn_the_provider_failed_and_the_turn_behind_it_are_sent_again() {
+    let (agent, backend, storage) = failed_with(AgentError::Provider {
+        code: -32077,
+        diagnostic: None,
+    })
+    .await;
+    let owed = agent.owed_turns().await;
+    assert_eq!(owed_ids(&owed), ["failed", "behind"]);
+    assert!(owed[0].dispatched());
+    assert!(!owed[1].dispatched());
+    let mut successors = Vec::new();
+    for turn in &owed {
+        let Resumed::Continued(admission) =
+            bounded(agent.resume_turn(turn, resumer())).await.unwrap()
+        else {
+            panic!("a failed turn is continued")
+        };
+        successors.push(admission);
+    }
+    let texts: Vec<_> = successors
+        .iter()
+        .map(|admission| successor_text(&storage, admission.id()))
+        .collect();
+    assert!(
+        texts[0].starts_with("[Your last turn on this request ended early"),
+        "{}",
+        texts[0]
+    );
+    assert!(texts[0].ends_with("message failed"), "{}", texts[0]);
+    assert!(
+        texts[1].starts_with("[This message did not reach you"),
+        "{}",
+        texts[1]
+    );
+    for admission in successors {
+        assert_eq!(
+            bounded(admission.wait()).await,
+            Ok(ExecutionOutcome::Completed)
+        );
+    }
+    assert!(agent.owed_turns().await.is_empty());
+    assert_eq!(resumptions(&backend).len(), 2);
+    bounded(agent.close(actor())).await.unwrap();
+}
+
+#[tokio::test]
+async fn a_failed_turn_is_owed_after_a_restart_too() {
+    let (agent, _backend, storage) = failed_with(AgentError::Transport("pipe".into())).await;
+    bounded(agent.close(actor())).await.unwrap();
+    let saved = MemoryStorage::default();
+    saved.0.lock().unwrap().snapshot = Some(storage.snapshot());
+    let (agent, _backend, _storage, _hold) = restore_holding(saved).await;
+    assert_eq!(owed_ids(&agent.owed_turns().await), ["failed", "behind"]);
+    bounded(agent.close(actor())).await.unwrap();
+}
+
+#[tokio::test]
+async fn a_failure_a_retry_cannot_fix_ends_the_turn() {
+    let (agent, _backend, _storage) =
+        failed_with(AgentError::AuthenticationRequired { diagnostic: None }).await;
+    assert_eq!(
+        owed_ids(&agent.owed_turns().await),
+        ["behind"],
+        "only the turn the failure kept from the provider is owed"
+    );
+    bounded(agent.close(actor())).await.unwrap();
+}
+
+#[tokio::test]
+async fn a_declined_failed_turn_is_recorded_ended() {
+    let (agent, backend, storage) = failed_with(AgentError::Deadline).await;
+    let owed = agent.owed_turns().await;
+    for turn in &owed {
+        bounded(agent.decline_turn(turn, resumer())).await.unwrap();
+    }
+    let snapshot = storage.snapshot();
+    assert_eq!(
+        last_causes(&snapshot.invocations[0]),
+        [
+            SchedulingCause::ExecutionFailed,
+            SchedulingCause::NotResumed
+        ]
+    );
+    assert_eq!(
+        last_causes(&snapshot.invocations[1]),
+        [SchedulingCause::RunnerStopped, SchedulingCause::NotResumed]
+    );
+    assert_eq!(
+        resumptions(&backend),
+        [TurnResumption::Declined, TurnResumption::Declined]
+    );
     assert!(agent.owed_turns().await.is_empty());
     bounded(agent.close(actor())).await.unwrap();
+    assert_ends_after_restore(&storage).await;
+}
+
+#[tokio::test]
+async fn a_failed_turn_a_later_message_moved_past_is_not_sent_again() {
+    let (agent, _backend, storage) = failed_with(AgentError::Provider {
+        code: -32077,
+        diagnostic: None,
+    })
+    .await;
+    let next = agent
+        .enqueue(request("next"), Submitter::owner(actor()))
+        .await
+        .unwrap();
+    assert_eq!(bounded(next.wait()).await, Ok(ExecutionOutcome::Completed));
+    assert!(
+        agent.owed_turns().await.is_empty(),
+        "the person moved on: neither the failed turn nor the one behind it is sent again"
+    );
+    bounded(agent.close(actor())).await.unwrap();
+    let saved = MemoryStorage::default();
+    saved.0.lock().unwrap().snapshot = Some(storage.snapshot());
+    let (agent, _backend, _storage, _hold) = restore_holding(saved).await;
+    assert!(agent.owed_turns().await.is_empty(), "nor after a restart");
+    bounded(agent.close(actor())).await.unwrap();
+}
+
+#[tokio::test]
+async fn a_retry_of_a_failed_turn_answers_as_its_successor() {
+    let (agent, _backend, _storage) = failed_with(AgentError::Transport("pipe".into())).await;
+    let owed = agent.owed_turns().await;
+    let Resumed::Continued(successor) = bounded(agent.resume_turn(&owed[0], resumer()))
+        .await
+        .unwrap()
+    else {
+        panic!("a failed turn is continued")
+    };
+    let retry = bounded(agent.enqueue(request("failed"), Submitter::owner(actor())))
+        .await
+        .unwrap();
+    assert_eq!(retry.id().as_str(), "failed");
+    assert_eq!(
+        bounded(retry.wait()).await,
+        Ok(ExecutionOutcome::Completed),
+        "not the original's failure"
+    );
+    assert_eq!(
+        bounded(successor.wait()).await,
+        Ok(ExecutionOutcome::Completed)
+    );
+    bounded(agent.close(actor())).await.unwrap();
+}
+
+#[test]
+fn a_failure_that_lost_its_evidence_is_not_retried() {
+    let provider = || AgentError::Provider {
+        code: -32077,
+        diagnostic: None,
+    };
+    assert!(AgentError::AttachmentUnavailable(AttachmentPhase::Failed(
+        AttachmentFailureCode::Provider
+    ))
+    .leaves_work_owed());
+    for code in [AttachmentFailureCode::Audit, AttachmentFailureCode::Cleanup] {
+        assert!(
+            !AgentError::AttachmentUnavailable(AttachmentPhase::Failed(code)).leaves_work_owed()
+        );
+    }
+    assert!(AgentError::MultipleOperationFailures {
+        first_error: Box::new(provider()),
+        subsequent_error: Box::new(AgentError::Deadline),
+    }
+    .leaves_work_owed());
+    assert!(!AgentError::MultipleOperationFailures {
+        first_error: Box::new(provider()),
+        subsequent_error: Box::new(AgentError::AuditFailure),
+    }
+    .leaves_work_owed());
+    assert!(!AgentError::OperationAndCleanupFailure {
+        operation_error: Box::new(provider()),
+        cleanup_error: Box::new(AgentError::CleanupUncertain),
+    }
+    .leaves_work_owed());
 }

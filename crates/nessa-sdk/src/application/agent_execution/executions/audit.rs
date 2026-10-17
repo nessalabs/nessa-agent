@@ -674,8 +674,9 @@ pub struct TurnResumptionRecord {
     resumption: TurnResumption,
 }
 impl TurnResumptionRecord {
-    /// `cause` is the owed cancellation the turn ended with
-    /// ([`SchedulingCause::leaves_work_owed`]); `dispatched` whether it had
+    /// `cause` is the owed ending the turn stopped with: a cancellation that
+    /// leaves work owed ([`SchedulingCause::leaves_work_owed`]) or a failure
+    /// a retry can fix ([`SchedulingCause::stopped_by_failure`]); `dispatched` whether it had
     /// reached the provider; `submitted_by` its original caller and
     /// `resumed_by` the host's verified actor for this resume.
     pub(crate) fn new(
@@ -705,7 +706,8 @@ impl TurnResumptionRecord {
     pub fn execution_id(&self) -> &ExecutionId {
         &self.execution_id
     }
-    /// How it had stopped: suspended by the host's shutdown, or interrupted.
+    /// How it had stopped: suspended by the host's shutdown, interrupted, or ended
+    /// by a failure a retry can fix.
     pub fn cause(&self) -> SchedulingCause {
         self.cause
     }

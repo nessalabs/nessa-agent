@@ -8,7 +8,7 @@ use super::{
 };
 use crate::application::agent_execution::{
     executions::{ExecutionRequest, SubmissionMode, Submitter},
-    sessions::{SessionManager, SubmissionAcknowledgement},
+    sessions::{InvocationSchedulingEvent, SessionManager, SubmissionAcknowledgement},
 };
 use crate::domain::agent_execution::executions::{
     ExecutionId, ExecutionOutcome, InvocationStage, Resumption,
@@ -49,6 +49,16 @@ fn steering_evidence(
     })
 }
 
+/// Whether a turn that ended this way may have been continued by a
+/// successor: one a shutdown, a restart or a failure stopped. Whether one
+/// was is what saved history says.
+fn continued(last: &InvocationSchedulingEvent) -> bool {
+    matches!(
+        last.stage,
+        InvocationStage::Cancelled | InvocationStage::Settled
+    ) && (last.cause.leaves_work_owed() || last.cause.stopped_by_failure())
+}
+
 /// The receipt of the turn that last continued `input`'s owed turn, through
 /// its chain of successors ([`Resumption`]); `None` while none is saved.
 async fn successor_receipt(
@@ -70,7 +80,7 @@ async fn successor_receipt(
         }
         let record = manager.submission(&next).await?;
         let last = record.scheduling.last()?;
-        if last.stage == InvocationStage::Cancelled && last.cause.leaves_work_owed() {
+        if continued(last) {
             id = next;
             continue;
         }
@@ -111,6 +121,14 @@ pub(super) async fn recover(
             evidence,
         )))
     };
+    // Owed work continues in a successor: a retry answers as that turn
+    // does, even while the original's own receipt is still held
+    // (`a_retry_of_a_resumed_turn_answers_as_its_successor`).
+    if record.scheduling.last().is_some_and(continued) {
+        if let Some(answer) = successor_receipt(manager, receipts, input).await {
+            return Some(answer);
+        }
+    }
     if let Some(receipt) = receipts.get(&input.execution_id) {
         return Some(match receipt {
             SubmissionReceipt::Queued { result, evidence } => {
@@ -136,14 +154,7 @@ pub(super) async fn recover(
                 },
             ));
         }
-        // Owed work continues in a successor: a retry answers as that turn
-        // does (`a_retry_of_a_resumed_turn_answers_as_its_successor`).
         Some(event) if event.stage == InvocationStage::Cancelled => {
-            if event.cause.leaves_work_owed() {
-                if let Some(answer) = successor_receipt(manager, receipts, input).await {
-                    return Some(answer);
-                }
-            }
             record.result.unwrap_or(Err(AgentError::Closed))
         }
         Some(event)

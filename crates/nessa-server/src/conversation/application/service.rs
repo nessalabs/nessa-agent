@@ -785,7 +785,12 @@ struct Inner {
     /// turns write one mark, not one each. Set under the conversation's
     /// submission lock, and cleared under it too, except where nothing can
     /// still run there: an agent closed for good, a conversation deleted.
-    unfinished_marked: std::sync::Mutex<HashSet<ConversationId>>,
+    unfinished_marked: std::sync::Mutex<HashMap<ConversationId, resumption::Retry>>,
+    /// How long a failure's retry waits (`resumption`), bound with the marks.
+    failure_backoff: OnceLock<resumption::FailureBackoff>,
+    /// Woken when a failure retry is scheduled, so the retry loop waits for
+    /// the new earliest one.
+    retry_scheduled: tokio::sync::Notify,
     /// What checks a Drive grant's tools. Composition binds it; until then
     /// no Drive turn is admitted (`drive_policy_unenforceable`).
     drive: Arc<OnceLock<DriveTools>>,
@@ -1144,6 +1149,8 @@ impl ConversationService {
                 note_authors: Arc::new(OnceLock::new()),
                 unfinished_turns: OnceLock::new(),
                 unfinished_marked: std::sync::Mutex::default(),
+                failure_backoff: OnceLock::new(),
+                retry_scheduled: tokio::sync::Notify::new(),
                 drive: Arc::new(OnceLock::new()),
                 permission_rules: Arc::new(OnceLock::new()),
                 fence_capture: Arc::new(OnceLock::new()),
@@ -3332,6 +3339,11 @@ impl ConversationService {
         if let Some(_result) = completion.as_mut().now_or_never() {
             let snapshot = live.agent.session_manager().snapshot().await;
             let reply = completed_reply(snapshot.as_ref(), &id).filter(|_| new_submission);
+            // Decided once whoever submitted it lets the conversation go.
+            let service = self.clone();
+            let settled_in = conversation.clone();
+            let settled = live.clone();
+            tokio::spawn(async move { service.after_settle(&settled_in, settled).await });
             // Let go of the agent before waiting for the summary lock: a
             // summary is not a reason to keep a stopped agent's history
             // leased (`a_reply_waiting_to_be_summarized_does_not_keep_a_deleted_history_leased`).
@@ -3351,11 +3363,10 @@ impl ConversationService {
             let snapshot = live.agent.session_manager().snapshot().await;
             let reply = completed_reply(snapshot.as_ref(), &id);
             live.watched.lock().await.remove(&id);
-            service.clear_when_finished(&conversation, &live).await;
             // As above: the agent is let go of before the summary lock is
             // waited for, so a watcher cannot hold a stopped agent's history
             // leased past a delete's wait for it.
-            drop(live);
+            service.after_settle(&conversation, live).await;
             if let Some(reply) = reply {
                 service.summarize_reply(&conversation, &reply).await;
             }
@@ -5428,6 +5439,7 @@ impl ConversationService {
             return;
         };
         tracing::warn!(conversation_id = %id, "the agent stopped itself; closing it to open the conversation again");
+        // What it owed stays owed: the agent opened next resumes it.
         if let Err(stop) = self
             .stop_and_release(
                 id,
@@ -5435,7 +5447,7 @@ impl ConversationService {
                 &actor,
                 &McpAppInitiator::System,
                 LeaseEndCause::Stopped,
-                AgentEnd::Close,
+                AgentEnd::Suspend,
             )
             .await
         {
@@ -6053,6 +6065,7 @@ pub use event_read::{
     event_error_code, project_events, validate_event_cursor, ConversationEventError, EventProgress,
     ThreadEvent,
 };
+pub use resumption::FailureBackoff;
 
 mod app_calls;
 pub use app_calls::{

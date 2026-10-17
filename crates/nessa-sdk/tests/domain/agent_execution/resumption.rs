@@ -30,9 +30,23 @@ fn an_id_that_only_looks_like_a_successor_is_an_original() {
         "resume-4-0000000000000000000000000000000000000000000000000000000000000000",
         "resume-01-0000000000000000000000000000000000000000000000000000000000000000",
         "resume-1-000000000000000000000000000000000000000000000000000000000000000G",
+        "resume-x-0000000000000000000000000000000000000000000000000000000000000000",
+        "resume-0-0000000000000000000000000000000000000000000000000000000000000000",
+        "resume-1",
     ] {
         assert_eq!(Resumption::of(&id(value)).attempt(), 0, "{value}");
     }
+}
+
+#[test]
+fn a_successor_written_in_lowercase_hex_is_read_back_as_one() {
+    let value = format!("resume-2-{}", "0123456789abcdef".repeat(4));
+    let read = Resumption::of(&id(&value));
+    assert_eq!(read.attempt(), 2);
+    assert_eq!(
+        read.successor().unwrap().as_str(),
+        format!("resume-3-{}", "0123456789abcdef".repeat(4))
+    );
 }
 
 #[test]

@@ -61,7 +61,8 @@ pub enum SchedulingCause {
     /// The host decided not to resume an owed input: the share grant that
     /// started it no longer admits it, or it was resumed as many times as a
     /// chain may be. Final, like a person's stop. The one edge that may
-    /// follow a cancellation, and only one that left the input owed.
+    /// follow a cancellation or a settlement, and only one that left the
+    /// input owed or ended it with a failure.
     NotResumed,
 }
 impl SchedulingCause {
@@ -70,5 +71,16 @@ impl SchedulingCause {
     /// ended it, not a person, a failure or the model.
     pub fn leaves_work_owed(self) -> bool {
         matches!(self, Self::Suspended | Self::Interrupted)
+    }
+    /// Whether the input ended because something failed: its own attempt
+    /// ([`Self::ExecutionFailed`], [`Self::DispatchFailed`]) or the runner
+    /// that would have run it ([`Self::RunnerStopped`]). Such an input is
+    /// owed when the failure is one a retry can fix, which only its retained
+    /// error says; the host may then resume it or decide not to.
+    pub fn stopped_by_failure(self) -> bool {
+        matches!(
+            self,
+            Self::ExecutionFailed | Self::DispatchFailed | Self::RunnerStopped
+        )
     }
 }

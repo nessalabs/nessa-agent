@@ -1440,3 +1440,85 @@ fn local_stop_and_scheduling_cancellation_agree_in_both_recording_orders() {
         }
     }
 }
+
+#[test]
+fn the_hosts_decision_follows_only_an_ending_that_left_work_owed_or_a_failure() {
+    let decide = |before| {
+        SchedulingTransition::new(
+            InvocationKind::Queued,
+            None,
+            Some(before),
+            InvocationStage::Cancelled,
+            SchedulingCause::NotResumed,
+            SchedulingInitiator::Caller,
+        )
+        .unwrap()
+    };
+    let ended = |stage, cause, initiator| {
+        SchedulingTransition::new(
+            InvocationKind::Queued,
+            None,
+            Some(InvocationStage::Running),
+            stage,
+            cause,
+            initiator,
+        )
+        .unwrap()
+    };
+    let caller = SchedulingInitiator::Caller;
+    let automatic = SchedulingInitiator::Automatic;
+    for (stage, cause, initiator, result, decided) in [
+        (
+            InvocationStage::Settled,
+            SchedulingCause::ExecutionFailed,
+            automatic,
+            Some(Err(())),
+            true,
+        ),
+        (
+            InvocationStage::Settled,
+            SchedulingCause::ExecutionSettled,
+            automatic,
+            Some(Ok(ExecutionOutcome::Completed)),
+            false,
+        ),
+        (
+            InvocationStage::Cancelled,
+            SchedulingCause::RunnerStopped,
+            automatic,
+            None,
+            true,
+        ),
+        (
+            InvocationStage::Cancelled,
+            SchedulingCause::Suspended,
+            caller,
+            None,
+            true,
+        ),
+        (
+            InvocationStage::Cancelled,
+            SchedulingCause::SessionClosed,
+            caller,
+            None,
+            false,
+        ),
+    ] {
+        let mut history = scheduled(SubmissionMode::Queued);
+        if let Some(result) = result {
+            history.record_local_result(result).unwrap();
+        }
+        history.schedule(ended(stage, cause, initiator)).unwrap();
+        assert_eq!(
+            history.schedule(decide(stage)).is_ok(),
+            decided,
+            "{cause:?}"
+        );
+        // A decision is itself final.
+        if decided {
+            assert!(history
+                .schedule(decide(InvocationStage::Cancelled))
+                .is_err());
+        }
+    }
+}

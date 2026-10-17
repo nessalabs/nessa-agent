@@ -143,16 +143,17 @@ impl InvocationHistory {
                 "invalid scheduling transition evidence",
             ));
         }
-        // Only the host's decision follows a cancellation, and only one that
-        // left the input owed: every other cancellation is final.
-        if transition.before() == Some(InvocationStage::Cancelled)
-            && !self
-                .last
-                .as_ref()
-                .is_some_and(|last| last.cause().leaves_work_owed())
-        {
+        // Only the host's decision follows a cancellation or a settlement,
+        // and only one that left the input owed or ended it with a failure:
+        // every other ending is final.
+        if matches!(
+            transition.before(),
+            Some(InvocationStage::Cancelled | InvocationStage::Settled)
+        ) && !self.last.as_ref().is_some_and(|last| {
+            last.cause().leaves_work_owed() || last.cause().stopped_by_failure()
+        }) {
             return Err(InvocationHistoryError(
-                "a final cancellation cannot be decided again",
+                "a final ending cannot be decided again",
             ));
         }
         if matches!(
@@ -493,10 +494,13 @@ impl InvocationHistory {
         cancellation: Option<InvocationCancellation>,
     ) -> Result<(), InvocationHistoryError> {
         if let (Some(last), Some(cancellation)) = (last, cancellation) {
-            // The host's decision follows the cancellation the stop was
-            // checked against when it was recorded.
+            // The host's decision follows the ending the stop was checked
+            // against when it was recorded.
             if last.stage() == InvocationStage::Cancelled
-                && last.before() != Some(InvocationStage::Cancelled)
+                && !matches!(
+                    last.before(),
+                    Some(InvocationStage::Cancelled | InvocationStage::Settled)
+                )
                 && (last.cause() != cancellation.cause()
                     || last.initiator() != cancellation.initiator())
             {

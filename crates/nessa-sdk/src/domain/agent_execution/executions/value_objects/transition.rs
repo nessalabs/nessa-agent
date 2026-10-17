@@ -116,11 +116,15 @@ impl SchedulingTransition {
                 SchedulingInitiator::Automatic,
             ) => true,
             // The host's decision on owed work: from a turn still Queued or
-            // Running, or after the cancellation that left it owed (which
-            // `InvocationHistory::schedule` checks it follows).
+            // Running, or after the cancellation or failed settlement that
+            // left it owed (which `InvocationHistory::schedule` checks it
+            // follows).
             (
                 Some(
-                    InvocationStage::Queued | InvocationStage::Running | InvocationStage::Cancelled,
+                    InvocationStage::Queued
+                    | InvocationStage::Running
+                    | InvocationStage::Cancelled
+                    | InvocationStage::Settled,
                 ),
                 InvocationStage::Cancelled,
                 SchedulingCause::NotResumed,

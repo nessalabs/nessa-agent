@@ -320,32 +320,45 @@ be recovered, not an error response that never reached storage. No manual snapsh
 inspection is required before retrying. This contract covers scheduled admission and steering; immediate `invoke` remains a
 supervised operation without receipt recovery.
 
-## Resuming turns a restart cut off
+## Resuming turns a restart or a failure cut off
 
 The SDK never replays a turn by itself; the host decides what to continue.
-`owed_turns()` lists every turn whose work is owed: one still Queued or Running
-with no result and nothing in this process running it (a crash cut it off), or
-one cancelled with a cause that leaves work owed. `suspend(actor)` is the host's
-own shutdown: it stops the Agent like `close`, but records the stopped turns as
-`Cancelled(Suspended)` instead of `SessionClosed`, so they are owed. A person's
-close, a provider failure (`RunnerStopped`), and a withdrawal stay final; a
-suspend after a close keeps the close's cause.
+`owed_turns()` lists every turn whose work is owed:
+
+- one still Queued or Running with no result and nothing in this process
+  running it (a crash cut it off);
+- one cancelled with a cause that leaves work owed (`Suspended`, `Interrupted`);
+- one a failure ended (`ExecutionFailed`, `DispatchFailed`, or `RunnerStopped`
+  behind another turn's failure) whose retained error is one a retry can fix
+  (`AgentError::leaves_work_owed`: the provider, its transport, a deadline, a
+  passing storage failure). A refusal, invalid input, a sign-in the provider
+  needs, or a known result stays final. A failure is owed only while no later
+  turn moved past it: once a person's next message runs, or they stop it, the
+  failed turn is not sent again. A successor and a steering message do not
+  count as moving past it.
+
+`suspend(actor)` is the host's own shutdown: it stops the Agent like `close`,
+but records the stopped turns as `Cancelled(Suspended)` instead of
+`SessionClosed`, so they are owed. A person's close and a withdrawal stay final;
+a suspend after a close keeps the close's cause.
 
 `resume_turn(turn, actor)` first records a cut-off turn `Cancelled(Interrupted)`,
-then queues a successor turn: a notice that the turn was cut off, then the
-original request, under the original caller and initiation. Nessa never re-runs
-a tool call; the model checks what is already done, carries on, or says it is
+then queues a successor turn: a notice that says why the turn stopped (a
+restart or a failure, and whether the provider had it), then the original
+request (a successor's own notice is replaced, never stacked), under the
+original caller and initiation. Nessa never re-runs a tool
+call; the model checks what is already done, carries on, or says it is
 finished. The successor's identity is derived from the original
 (`Resumption`), so resuming twice queues one successor, a retry of the original
 answers as the successor, and a chain is resumed at most three times, counting
-shutdowns and crashes alike. A turn that is not resumed is ended by one more
-edge, `Cancelled(NotResumed)`, recorded after its owed stop: the host's final
-decision, and the only edge that may follow a cancellation, and only one that
-left work owed. A spent chain gets it and is audited `Exhausted`. The host checks
-who may resume a turn (a share grant still in force, say) before calling it;
-`decline_turn` gives one it will not resume the same edge and audits `Declined`,
-so each turn is decided once. Each decision records one `TurnResumed` audit
-record. `is_idle()` says when every
+shutdowns, crashes and failures alike. A turn that is not resumed is ended by
+one more edge, `Cancelled(NotResumed)`, recorded after its owed ending: the
+host's final decision, and the only edge that may follow a cancellation or a
+settlement, and only one that left work owed or ended with a failure. A spent
+chain gets it and is audited `Exhausted`. The host checks who may resume a turn
+(a share grant still in force, say) before calling it; `decline_turn` gives one
+it will not resume the same edge and audits `Declined`, so each turn is decided
+once. Each decision records one `TurnResumed` audit record. `is_idle()` says when every
 admitted turn has settled, so a host can tell when nothing is left to resume.
 
 ## Native steering

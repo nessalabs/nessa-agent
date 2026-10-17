@@ -9,6 +9,12 @@
 //! start ──▶ resume_unfinished: every marked conversation, a few at a time
 //!   ──▶ opened as its owner ──▶ attached ──▶ resume_owed
 //! any opening of a marked conversation ──▶ resume_owed
+//! a turn settles, agent idle, history owes work (a failure a retry can fix)
+//!   ──▶ defer the mark: failures + 1, retry due after FailureBackoff
+//!   ──▶ an agent that awaits its close is closed (its work stays owed)
+//!   ──▶ run_failure_retries, at the due time ──▶ opened ──▶ resume_owed
+//! a resume that cannot run now (not opened, its attachment failed)
+//!   ──▶ retried after the backoff; an agent stuck that way is closed first
 //! resume_owed, under the submission lock:
 //!   for each Agent::owed_turns
 //!     a share grant's turn whose grant no longer admits it
@@ -33,7 +39,52 @@ use nessa_sdk::application::agent_execution::{
 };
 use nessa_sdk::domain::agent_execution::executions::Initiator;
 use std::sync::Arc;
+use std::time::Duration;
 use uuid::Uuid;
+
+/// How long a failure's retry waits: `first` after the first failure in a
+/// row, twice as long after each next one, never longer than `most`. The
+/// number of retries is not bounded here: a turn gets at most
+/// `Resumption::MAX_RESUMES` successors, so a failure that repeats ends.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FailureBackoff {
+    /// The wait after the first failure in a row.
+    pub first: Duration,
+    /// The longest wait.
+    pub most: Duration,
+}
+impl Default for FailureBackoff {
+    fn default() -> Self {
+        Self {
+            first: Duration::from_secs(5),
+            most: Duration::from_secs(300),
+        }
+    }
+}
+impl FailureBackoff {
+    /// The wait before the `failures`th retry in a row (counting from one).
+    pub fn delay(&self, failures: u32) -> Duration {
+        let doublings = failures.saturating_sub(1).min(31);
+        self.first.saturating_mul(1 << doublings).min(self.most)
+    }
+}
+
+/// What this run knows of one marked conversation's failure retries.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct Retry {
+    /// Failure retries in a row so far.
+    failures: u32,
+    /// When the next is due, in Unix milliseconds; `None` when none waits.
+    at_ms: Option<u64>,
+}
+
+/// What [`ConversationService::resume_conversation`] could do.
+enum Resuming {
+    /// Every owed turn was decided, or there was nothing to decide.
+    Decided,
+    /// Nothing could be decided now, for the agent this opening holds.
+    Blocked(std::sync::Weak<LiveConversation>),
+}
 
 /// What [`ConversationService::resume_decision`] made of one owed turn.
 enum Decision {
@@ -62,10 +113,13 @@ async fn non_default_mode(live: &LiveConversation) -> bool {
 const RESUME_CONCURRENCY: usize = 32;
 
 impl ConversationService {
-    /// Bind where conversations with unfinished turns are marked. A second
-    /// bind is ignored. Unbound, nothing is marked and nothing is resumed.
-    pub fn bind_unfinished_turns(&self, marks: Arc<dyn UnfinishedTurns>) {
-        let _ = self.inner.unfinished_turns.set(marks);
+    /// Bind where conversations with unfinished turns are marked, and how
+    /// long a failure's retry waits. A second bind is ignored. Unbound,
+    /// nothing is marked and nothing is resumed.
+    pub fn bind_unfinished_turns(&self, marks: Arc<dyn UnfinishedTurns>, backoff: FailureBackoff) {
+        if self.inner.unfinished_turns.set(marks).is_ok() {
+            let _ = self.inner.failure_backoff.set(backoff);
+        }
     }
 
     /// Open every conversation marked as having unfinished turns, and carry
@@ -83,79 +137,143 @@ impl ConversationService {
             return Ok(0);
         };
         let marked = marks.marked().await?;
-        self.unfinished_marked().extend(marked.iter().cloned());
         let count = marked.len();
-        stream::iter(marked)
+        let now = self.inner.clock.unix_milliseconds();
+        let mut due = Vec::with_capacity(count);
+        {
+            let mut known = self.unfinished_marked();
+            for mark in marked {
+                // A retry still waiting is the retry loop's to run.
+                let waiting = mark.retry_at_ms.filter(|at| *at > now);
+                known.insert(
+                    mark.conversation_id.clone(),
+                    Retry {
+                        failures: mark.failures,
+                        at_ms: waiting,
+                    },
+                );
+                if waiting.is_none() {
+                    due.push(mark.conversation_id);
+                }
+            }
+        }
+        self.inner.retry_scheduled.notify_one();
+        stream::iter(due)
             .for_each_concurrent(RESUME_CONCURRENCY, |id| async move {
                 if self.inner.retirement.get().is_some() {
                     return;
                 }
-                if let Err(error) = self.resume_conversation(&id).await {
-                    tracing::warn!(
-                        conversation_id = %id,
-                        %error,
-                        "unfinished turns could not be resumed; the next opening tries again"
-                    );
-                }
+                self.resume_or_retry(&id).await;
             })
             .await;
         Ok(count)
     }
 
-    async fn resume_conversation(&self, id: &ConversationId) -> Result<(), ConversationError> {
+    /// Open `id` and resume what it owes. When that cannot be done now (it
+    /// cannot be opened, or its agent cannot take a turn: the provider is
+    /// still down), its retry is scheduled after a backoff, and an agent
+    /// that cannot recover in place is closed so the retry opens a new one.
+    async fn resume_or_retry(&self, id: &ConversationId) {
+        let blocked = match self.resume_conversation(id).await {
+            Ok(Resuming::Decided) => return,
+            Ok(Resuming::Blocked(live)) => Some(live),
+            Err(error) => {
+                tracing::warn!(conversation_id = %id, %error, "unfinished turns could not be resumed; retrying after a backoff");
+                None
+            }
+        };
+        if self.inner.retirement.get().is_some()
+            || !self.unfinished_marked().contains_key(id)
+            || !self.schedule_retry(id).await
+        {
+            return;
+        }
+        if let Some(live) = blocked.and_then(|live| live.upgrade()) {
+            let stuck = live.agent.awaits_close()
+                || matches!(
+                    live.agent.attachment_status().phase(),
+                    AttachmentPhase::Failed(_)
+                );
+            if stuck {
+                self.release_for_reopen(id, live).await;
+            }
+        }
+    }
+
+    async fn resume_conversation(
+        &self,
+        id: &ConversationId,
+    ) -> Result<Resuming, ConversationError> {
         let Some(record) = load_conversation(self.inner.metadata.as_ref(), id).await? else {
-            return self.clear_mark(id).await;
+            return self.clear_mark(id).await.map(|()| Resuming::Decided);
         };
         // A deleted conversation has nothing to resume, and its deletion
         // stops whatever it had.
         if record.deletion().is_some() {
-            return self.clear_mark(id).await;
+            return self.clear_mark(id).await.map(|()| Resuming::Decided);
         }
         let caller = ConversationCaller {
             organization_id: record.organization().clone(),
             principal_id: record.owner().clone(),
             surface_id: "gateway".into(),
-            action_id: format!("resume_after_restart:{}", Uuid::new_v4()),
+            action_id: format!("resume_owed:{}", Uuid::new_v4()),
         };
         let live = self.resolve(id, &caller).await?;
-        self.resume_owed(id, live).await;
-        Ok(())
+        let opened = Arc::downgrade(&live);
+        Ok(if self.resume_owed(id, live).await {
+            Resuming::Decided
+        } else {
+            Resuming::Blocked(opened)
+        })
     }
 
     /// Carry on every turn `live`'s history says is owed, when `id` is
     /// marked. Each is resumed by the gateway, under the submission lock, so
     /// it is ordered with every person's message; a share grant's turn only
     /// while that grant still admits it, as a fresh turn of its would be.
-    pub(super) async fn resume_owed(&self, id: &ConversationId, live: Arc<LiveConversation>) {
-        if self.inner.unfinished_turns.get().is_none() || !self.unfinished_marked().contains(id) {
-            return;
+    /// False when nothing could be decided now: `id` is not marked, its
+    /// agent cannot take a turn, it is retiring, or its approval mode is
+    /// not settled.
+    pub(super) async fn resume_owed(
+        &self,
+        id: &ConversationId,
+        live: Arc<LiveConversation>,
+    ) -> bool {
+        if self.inner.unfinished_turns.get().is_none() || !self.unfinished_marked().contains_key(id)
+        {
+            return false;
         }
         let _ = live.join_attachment_owner().await;
-        if live.agent.attachment_status().phase() != AttachmentPhase::Attached {
-            return;
+        // An agent whose attachment failed, or that awaits its close, takes
+        // no turn: its retry closes it and opens a new one
+        // (`resume_or_retry`, `after_settle`).
+        if live.agent.awaits_close()
+            || !matches!(
+                live.agent.attachment_status().phase(),
+                AttachmentPhase::Attached | AttachmentPhase::Absent
+            )
+        {
+            return false;
         }
         // Not held across the wait for the lock: a delete holds it while it
         // waits for this agent's history to be let go.
         let waiting = Arc::downgrade(&live);
         drop(live);
         let Ok(_admission) = self.admit().await else {
-            return;
+            return false;
         };
         let _submissions = self.inner.mode_changes.lock(id).await;
         let Some(live) = waiting.upgrade() else {
-            return;
+            return false;
         };
         // Its approval mode is not settled: nothing runs until it is, and
         // the next opening resumes it.
         if !matches!(self.inner.metadata.pending_mode_change(id).await, Ok(None)) {
-            return;
+            return false;
         }
-        let Ok(actor) = ActionContext::new(
-            "gateway",
-            "resume_after_restart",
-            Uuid::new_v4().to_string(),
-        ) else {
-            return;
+        let Ok(actor) = ActionContext::new("gateway", "resume_owed", Uuid::new_v4().to_string())
+        else {
+            return false;
         };
         let non_default_mode = non_default_mode(&live).await;
         let mut resumed = Vec::new();
@@ -208,6 +326,7 @@ impl ConversationService {
         for admission in resumed {
             self.watch_receipt(id, live.clone(), admission, true).await;
         }
+        true
     }
 
     /// Whether `turn` is resumed, left ended, or cannot be decided now. The
@@ -276,40 +395,154 @@ impl ConversationService {
         let Some(marks) = self.inner.unfinished_turns.get() else {
             return Ok(());
         };
-        if self.unfinished_marked().contains(id) {
+        if self.unfinished_marked().contains_key(id) {
             return Ok(());
         }
         marks.mark(id).await?;
-        self.unfinished_marked().insert(id.clone());
+        self.unfinished_marked()
+            .insert(id.clone(), Retry::default());
         Ok(())
     }
 
-    /// Clear `id`'s mark once a turn of its settles and its agent has
-    /// nothing left to do. Never while retiring: retirement suspends the
-    /// agent, and what it stopped is owed to the next start. A submission,
-    /// mode change or deletion holding the conversation's lock is left to
-    /// it: the next turn to settle asks again, and a mark left behind costs
-    /// only an opening that finds nothing.
-    pub(super) async fn clear_when_finished(&self, id: &ConversationId, live: &LiveConversation) {
+    /// After one of `id`'s turns settles: once its agent is idle, clear the
+    /// mark if its history owes nothing, or schedule a retry when a failure
+    /// left work owed. Never while retiring: retirement suspends the agent,
+    /// and what it stopped is owed to the next start. Under the
+    /// conversation's submission lock, so a submission that settled at once
+    /// is decided after it returns, and an agent another holder of the lock
+    /// closed or replaced meanwhile is left to it.
+    pub(super) async fn after_settle(&self, id: &ConversationId, live: Arc<LiveConversation>) {
         if self.inner.unfinished_turns.get().is_none()
             || self.inner.retirement.get().is_some()
-            || !self.unfinished_marked().contains(id)
+            || !self.unfinished_marked().contains_key(id)
         {
             return;
         }
-        let Some(_submissions) = self.inner.mode_changes.try_lock(id) else {
+        // Not held across the wait for the lock: a delete holds it while it
+        // waits for this agent's history to be let go.
+        let waiting = Arc::downgrade(&live);
+        drop(live);
+        let _submissions = self.inner.mode_changes.lock(id).await;
+        let Some(live) = waiting.upgrade() else {
             return;
         };
-        // Turns a resume could not settle (its mode change pending, a
-        // grant's policy unreadable) are still owed, and keep the mark.
-        self.clear_if_nothing_owed(id, live).await;
+        if self.inner.retirement.get().is_some() || !live.agent.is_idle().await {
+            return;
+        }
+        // Anything still owed is retried after a backoff: a failure a retry
+        // can fix, and a turn a resume could not decide (a grant's policy
+        // unreadable).
+        if live.agent.owed_turns().await.is_empty() {
+            self.clear_if_nothing_owed(id, &live).await;
+            return;
+        }
+        if self.schedule_retry(id).await && live.agent.awaits_close() {
+            self.release_for_reopen(id, live).await;
+        }
+    }
+
+    /// Close `live`, an agent that cannot take its retry, and let its slot go
+    /// so the retry opens the conversation again; what it owed stays owed.
+    /// The agent holds its history's lease while any handle to it is kept,
+    /// so the retry's opening needs it closed first. Nothing is done when
+    /// another opening holds the slot now, or it is already stopping.
+    async fn release_for_reopen(&self, id: &ConversationId, live: Arc<LiveConversation>) {
+        let slot = self.inner.conversations.lock().await.get(id).cloned();
+        let ours = slot.as_ref().is_some_and(
+            |slot| matches!(slot.value.get(), Some(Ok(open)) if Arc::ptr_eq(open, &live)),
+        );
+        drop(live);
+        if let (true, Some(slot)) = (ours, slot) {
+            if !slot.stopping.load(std::sync::atomic::Ordering::SeqCst) {
+                self.reopen_ended(id, slot).await;
+            }
+        }
+    }
+
+    /// Record that `id`'s next failure retry is due after its backoff, and
+    /// wake the retry loop. A retry already waiting is kept as it is, so a
+    /// later settle neither puts it off nor counts as another failure. False
+    /// when `id` is not marked, or the deferral could not be saved: the mark
+    /// stays, and the next start resumes it.
+    async fn schedule_retry(&self, id: &ConversationId) -> bool {
+        let (Some(marks), Some(backoff)) = (
+            self.inner.unfinished_turns.get(),
+            self.inner.failure_backoff.get(),
+        ) else {
+            return false;
+        };
+        let failures = match self.unfinished_marked().get(id) {
+            None => return false,
+            Some(Retry { at_ms: Some(_), .. }) => return true,
+            Some(retry) => retry.failures.saturating_add(1),
+        };
+        let delay = u64::try_from(backoff.delay(failures).as_millis()).unwrap_or(u64::MAX);
+        let at_ms = self.inner.clock.unix_milliseconds().saturating_add(delay);
+        if let Err(error) = marks.defer(id, failures, at_ms).await {
+            tracing::warn!(conversation_id = %id, %error, "a failed turn's retry could not be saved; the next start resumes it");
+            return false;
+        }
+        tracing::info!(conversation_id = %id, failures, delay_ms = delay, "a failure left work owed; retrying after a backoff");
+        self.unfinished_marked().insert(
+            id.clone(),
+            Retry {
+                failures,
+                at_ms: Some(at_ms),
+            },
+        );
+        self.inner.retry_scheduled.notify_one();
+        true
+    }
+
+    /// Run each failure retry when it is due, until the gateway retires:
+    /// the conversation is opened, as its owner, and what its history owes
+    /// is resumed. Started once, beside [`Self::resume_unfinished`]. Due
+    /// retries are taken a few at a time, as the startup sweep takes marks.
+    pub async fn run_failure_retries(&self) {
+        loop {
+            let scheduled = self.inner.retry_scheduled.notified();
+            tokio::pin!(scheduled);
+            scheduled.as_mut().enable();
+            if self.inner.retirement.get().is_some() {
+                return;
+            }
+            let now = self.inner.clock.unix_milliseconds();
+            let mut due = Vec::new();
+            let mut next = None::<u64>;
+            for (id, retry) in self.unfinished_marked().iter_mut() {
+                match retry.at_ms {
+                    Some(at) if at <= now => {
+                        retry.at_ms = None;
+                        due.push(id.clone());
+                    }
+                    Some(at) => next = Some(next.map_or(at, |next| next.min(at))),
+                    None => {}
+                }
+            }
+            stream::iter(due)
+                .for_each_concurrent(RESUME_CONCURRENCY, |id| async move {
+                    self.resume_or_retry(&id).await;
+                })
+                .await;
+            let wait = next.map(|at| Duration::from_millis(at.saturating_sub(now)));
+            tokio::select! {
+                () = &mut scheduled => {}
+                () = async {
+                    match wait {
+                        Some(wait) => tokio::time::sleep(wait).await,
+                        None => std::future::pending().await,
+                    }
+                } => {}
+                () = self.retired() => return,
+            }
+        }
     }
 
     /// Clear `id`'s mark once its agent is closed for good, logging a mark
     /// that could not be cleared: the next start opens it, finds nothing
     /// owed, and clears it then.
     pub(super) async fn forget_unfinished(&self, id: &ConversationId) {
-        if !self.unfinished_marked().contains(id) {
+        if !self.unfinished_marked().contains_key(id) {
             return;
         }
         if let Err(error) = self.clear_mark(id).await {
@@ -328,7 +561,7 @@ impl ConversationService {
 
     fn unfinished_marked(
         &self,
-    ) -> std::sync::MutexGuard<'_, std::collections::HashSet<ConversationId>> {
+    ) -> std::sync::MutexGuard<'_, std::collections::HashMap<ConversationId, Retry>> {
         self.inner
             .unfinished_marked
             .lock()

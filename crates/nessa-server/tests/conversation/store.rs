@@ -1231,24 +1231,43 @@ async fn the_list_query_reads_only_its_owners_rows_however_many_others_there_are
 
 #[tokio::test]
 async fn unfinished_turn_marks_are_kept_until_cleared_and_outlive_reopening() {
-    use crate::conversation::application::UnfinishedTurns;
+    use crate::conversation::application::{UnfinishedMark, UnfinishedTurns};
     let Opened {
         _directory,
         path,
         store,
     } = opened();
-    let (busy, idle) = (new_id(), new_id());
-    for id in [&busy, &idle] {
+    let (busy, idle, failed) = (new_id(), new_id(), new_id());
+    for id in [&busy, &idle, &failed] {
         store.create(owned(id)).await.unwrap();
         store.mark(id).await.unwrap();
     }
-    // Marking a marked conversation again is not an error.
+    // Marking a marked conversation again is not an error, and keeps a
+    // retry it waits for.
     store.mark(&busy).await.unwrap();
+    store.defer(&failed, 1, 5_000).await.unwrap();
+    store.defer(&failed, 2, 1_700_000_010_000).await.unwrap();
+    store.mark(&failed).await.unwrap();
     store.clear(&idle).await.unwrap();
     store.clear(&idle).await.unwrap();
     drop(store);
     let reopened = LocalConversationStore::open(&path).unwrap();
-    assert_eq!(reopened.marked().await.unwrap(), vec![busy]);
+    let mut expected = vec![
+        UnfinishedMark {
+            conversation_id: busy,
+            failures: 0,
+            retry_at_ms: None,
+        },
+        UnfinishedMark {
+            conversation_id: failed,
+            failures: 2,
+            retry_at_ms: Some(1_700_000_010_000),
+        },
+    ];
+    expected.sort_by_key(|mark| mark.conversation_id.to_string());
+    assert_eq!(reopened.marked().await.unwrap(), expected);
+    // A retry time past what the table keeps is refused, not wrapped.
+    assert!(reopened.defer(&new_id(), 1, u64::MAX).await.is_err());
 }
 
 #[tokio::test]

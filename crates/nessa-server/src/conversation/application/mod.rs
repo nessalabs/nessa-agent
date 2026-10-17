@@ -278,7 +278,7 @@ pub use ports::{
     ConversationRepository, ConversationSummaries, HeldRange, HeldRangeError, ListedConversation,
     ListedConversations, ObservationCursor, ObservedConversations, PublishedArtifact,
     RuntimeReadiness, SubmittedFile, SubmittedImage, SubmittedMessage, UnfinishedDeletions,
-    UnfinishedTurns,
+    UnfinishedMark, UnfinishedTurns,
 };
 pub use provider_sessions::{
     ProviderSessionEraser, ProviderSessionErasers, ProviderSessionHandler,
@@ -295,9 +295,10 @@ pub use service::{CommandAnswer, CommandCall, CommandCallError, EnvironmentListi
 pub use service::{
     ConversationAgent, ConversationAgentFuture, ConversationAgentSource, ConversationAgents,
     ConversationCaller, ConversationDeletionBudgets, ConversationDependencies, ConversationLimits,
-    ConversationService, DeletionsLeft, McpAppCall, McpAppContextUpdate, McpAppMessage, McpAppRead,
-    McpAppResource, QuestionChoiceInput, ReadOpening, RequestedAgent, RequestedConversation,
-    SubmissionMode, MAX_APP_CALLS, MAX_LISTED_CONVERSATIONS, MAX_RESOURCE_META_BYTES,
+    ConversationService, DeletionsLeft, FailureBackoff, McpAppCall, McpAppContextUpdate,
+    McpAppMessage, McpAppRead, McpAppResource, QuestionChoiceInput, ReadOpening, RequestedAgent,
+    RequestedConversation, SubmissionMode, MAX_APP_CALLS, MAX_LISTED_CONVERSATIONS,
+    MAX_RESOURCE_META_BYTES,
 };
 pub(crate) use service::{ExportAdmission, ExportHoldFailure};
 pub use service::{

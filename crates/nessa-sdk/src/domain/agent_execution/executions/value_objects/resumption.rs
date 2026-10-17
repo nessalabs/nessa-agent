@@ -49,7 +49,7 @@ impl Resumption {
     /// The identity of the turn that continues this one, or `None` once the
     /// chain has had its [`Self::MAX_RESUMES`] successors.
     pub fn successor(&self) -> Option<ExecutionId> {
-        let attempt = self.attempt.checked_add(1)?;
+        let attempt = self.attempt.saturating_add(1);
         (attempt <= Self::MAX_RESUMES).then(|| {
             ExecutionId::new(format!("{}{attempt}-{}", Self::PREFIX, self.root))
                 .expect("a derived successor identity is short and nonblank")

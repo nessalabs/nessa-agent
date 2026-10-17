@@ -1,4 +1,5 @@
-//! Continues turns that a restart, or the host's own shutdown, cut off.
+//! Continues turns that a restart, the host's own shutdown, or a failure a
+//! retry can fix cut off.
 //!
 //! ```text
 //! host opens the Agent again -> owed_turns -> OwedTurn per cut-off turn
@@ -10,9 +11,11 @@
 //!
 //! The saved history alone decides what is owed. A turn is owed when its last
 //! scheduling edge is a cancellation whose cause leaves work owed
-//! ([`SchedulingCause::leaves_work_owed`]), or when it has no result and is
-//! still Queued or Running with nothing in this process running it, and no
-//! successor has been saved for it. Nessa never re-runs a tool: the
+//! ([`SchedulingCause::leaves_work_owed`]); when a failure ended it and its
+//! retained error is one a retry can fix ([`AgentError::leaves_work_owed`]),
+//! its own failure or the runner's that stopped behind another's; or when it
+//! has no result and is still Queued or Running with nothing in this process
+//! running it. In each case no successor has been saved for it yet. Nessa never re-runs a tool: the
 //! successor gives the model a notice and the original request, and the model
 //! checks what is done and carries on, or says it is finished.
 #![deny(missing_docs)]
@@ -27,8 +30,8 @@ use crate::application::agent_execution::{
 };
 use crate::domain::agent_execution::{
     executions::{
-        ExecutionId, Initiation, InvocationKind, InvocationStage, Resumption, SchedulingCause,
-        SchedulingInitiator, SchedulingTransition, SubmissionMode,
+        ExecutionId, ExecutionOutcome, Initiation, InvocationKind, InvocationStage, Resumption,
+        SchedulingCause, SchedulingInitiator, SchedulingTransition, SubmissionMode,
     },
     prompts::{PromptText, UserMessage},
 };
@@ -42,6 +45,15 @@ stop.]\n\nThe request was:\n\n";
 /// Opens the successor of a turn that never reached the provider.
 const UNSENT_NOTICE: &str = "[Nessa restarted before this message reached you, so it is sent \
 again now. Check the current state first: earlier work may have changed it.]\n\n";
+/// Opens the successor of a turn the provider failed while working on it.
+const FAILED_NOTICE: &str = "[Your last turn on this request ended early because the agent \
+failed, so it is sent again now. Some of it may already be done: check the current state before \
+repeating any step, then carry on. If the work is already finished, say so and stop.]\n\nThe \
+request was:\n\n";
+/// Opens the successor of a turn a failure kept from reaching the provider.
+const HELD_NOTICE: &str = "[This message did not reach you because the agent failed before it \
+could, so it is sent again now. Check the current state first: earlier work may have changed \
+it.]\n\n";
 
 /// One turn whose work is owed, as [`Agent::owed_turns`] found it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -94,29 +106,34 @@ pub enum Resumed {
 
 /// How an owed turn stands in saved history.
 enum Stop {
-    /// Its last edge is this owed cancellation.
+    /// Its last edge is this owed cancellation, or this failure.
     Recorded(InvocationSchedulingEvent),
     /// No result and still Queued or Running: the process that ran it ended.
     /// Resuming records the cancellation first, with this cause and caller.
     CutOff { edge: InvocationSchedulingEvent },
 }
 
+/// Whether `record` was resumed already: its successor carries the work now.
+fn resumed(record: &InvocationRecord, saved: &HashSet<&ExecutionId>) -> bool {
+    Resumption::of(&record.request.execution_id)
+        .successor()
+        .is_some_and(|successor| saved.contains(&successor))
+}
+
 /// Whether `record` is owed, and how it stopped. `saved` is every identity in
-/// the session; `live` whether this process admitted or is running `id`.
+/// the session; `superseded` whether a later turn ended for good or is this
+/// process's own work ([`newest_final`]); `live` whether this process
+/// admitted or is running `id`. A failure is owed only while nothing came
+/// after it: a person who sent the next message moved on, and so did one who
+/// stopped it.
 fn owed(
     record: &InvocationRecord,
     saved: &HashSet<&ExecutionId>,
+    superseded: bool,
     live: impl Fn(&ExecutionId) -> bool,
 ) -> Option<Stop> {
     let id = &record.request.execution_id;
-    if record.submission == SubmissionMode::Immediate || live(id) {
-        return None;
-    }
-    // Resumed already: its successor carries the work now.
-    if Resumption::of(id)
-        .successor()
-        .is_some_and(|successor| saved.contains(&successor))
-    {
+    if record.submission == SubmissionMode::Immediate || resumed(record, saved) {
         return None;
     }
     let last = record.scheduling.last()?;
@@ -125,12 +142,29 @@ fn owed(
         InvocationStage::Cancelled if last.cause.leaves_work_owed() => {
             Some(Stop::Recorded(last.clone()))
         }
-        InvocationStage::Queued | InvocationStage::Running if record.result.is_none() => {
+        // Ended by a failure a retry can fix: the attempt's own, or the
+        // runner's when it stopped behind another turn's failure.
+        InvocationStage::Cancelled | InvocationStage::Settled
+            if last.cause.stopped_by_failure() && !superseded && failure_owed(record) =>
+        {
+            Some(Stop::Recorded(last.clone()))
+        }
+        // Queued or Running here is this process's own work, not owed.
+        InvocationStage::Queued | InvocationStage::Running
+            if record.result.is_none() && !live(id) =>
+        {
             // A stop already captured keeps its own cause: one the host's
             // shutdown started is owed, and is recorded as that; anyone
             // else's leaves the turn as it is.
             let (cause, actor) = match &record.local_cancellation {
-                Some(stop) if stop.cause.leaves_work_owed() => (stop.cause, stop.actor.clone()),
+                Some(stop)
+                    if stop.cause.leaves_work_owed()
+                        || (stop.cause == SchedulingCause::RunnerStopped
+                            && !superseded
+                            && failure_owed(record)) =>
+                {
+                    (stop.cause, stop.actor.clone())
+                }
                 Some(_) => return None,
                 None => (SchedulingCause::Interrupted, None),
             };
@@ -162,8 +196,40 @@ fn owed(
     }
 }
 
+/// Whether `record` is a turn that ended for good, or that this process
+/// admitted: one that is not owed and was not resumed. A steering message
+/// belongs to the turn it steered, and a successor carries on the host's
+/// resume rather than a person's next step, so neither counts.
+fn ended_for_good(
+    record: &InvocationRecord,
+    saved: &HashSet<&ExecutionId>,
+    live: impl Fn(&ExecutionId) -> bool,
+) -> bool {
+    record.submission != SubmissionMode::Immediate
+        && Resumption::of(&record.request.execution_id).attempt() == 0
+        && !resumed(record, saved)
+        && owed(record, saved, false, live).is_none()
+}
+
+/// Whether a turn that a failure ended still owes its work: no stop but the
+/// runner's was asked for it, and it has no result, or a cancelled one, or
+/// an error a retry can fix ([`AgentError::leaves_work_owed`]). A turn the
+/// provider finished or refused, and one a person stopped, is not owed.
+fn failure_owed(record: &InvocationRecord) -> bool {
+    let stopped_by_others = record
+        .local_cancellation
+        .as_ref()
+        .is_some_and(|stop| stop.cause != SchedulingCause::RunnerStopped);
+    !stopped_by_others
+        && match &record.result {
+            None | Some(Ok(ExecutionOutcome::Cancelled)) => true,
+            Some(Ok(_)) => false,
+            Some(Err(error)) => error.leaves_work_owed(),
+        }
+}
+
 /// The host's decision not to resume a turn whose last edge is `owed`, an
-/// owed cancellation, made by `actor`.
+/// owed cancellation or a failure a retry can fix, made by `actor`.
 fn not_resumed(
     owed: &InvocationSchedulingEvent,
     actor: ActionContext,
@@ -199,21 +265,39 @@ fn dispatched(record: &InvocationRecord) -> bool {
 /// them; a turn it never had is sent whole.
 fn successor_request(
     record: &InvocationRecord,
+    cause: SchedulingCause,
     successor: ExecutionId,
 ) -> Result<ExecutionRequest, AgentError> {
     let original = &record.request.user_message;
-    let dispatched = dispatched(record);
-    let notice = if dispatched {
-        CUT_OFF_NOTICE
-    } else {
-        UNSENT_NOTICE
+    // A successor's own text opens with its notice: the next one replaces
+    // it rather than stacking on it, and says the provider had the request
+    // when an earlier turn in the chain reached it.
+    let mut request = original.text_str();
+    let mut dispatched = dispatched(record);
+    while let Some((rest, reached)) = [
+        (CUT_OFF_NOTICE, true),
+        (FAILED_NOTICE, true),
+        (UNSENT_NOTICE, false),
+        (HELD_NOTICE, false),
+    ]
+    .into_iter()
+    .find_map(|(notice, reached)| request.strip_prefix(notice).map(|rest| (rest, reached)))
+    {
+        request = rest;
+        dispatched |= reached;
+    }
+    let notice = match (dispatched, cause.stopped_by_failure()) {
+        (true, false) => CUT_OFF_NOTICE,
+        (false, false) => UNSENT_NOTICE,
+        (true, true) => FAILED_NOTICE,
+        (false, true) => HELD_NOTICE,
     };
     let room = ExecutionRequest::MAX_MESSAGE_BYTES - notice.len();
-    let mut end = original.text_str().len().min(room);
-    while !original.text_str().is_char_boundary(end) {
+    let mut end = request.len().min(room);
+    while !request.is_char_boundary(end) {
         end -= 1;
     }
-    let text = PromptText::new(format!("{notice}{}", &original.text_str()[..end]))
+    let text = PromptText::new(format!("{notice}{}", &request[..end]))
         .map_err(|error| AgentError::InvalidInput(error.to_string()))?;
     let images = if dispatched {
         Vec::new()
@@ -233,20 +317,20 @@ fn successor_request(
 
 impl Agent {
     /// Every turn in this conversation's saved history whose work is owed —
-    /// cut off by a restart or stopped by the host's own shutdown
-    /// ([`Self::suspend`]) — and not yet resumed, in saved order. Turns this
-    /// Agent admitted or is running are never owed. Read-only: nothing is
-    /// recorded until [`Self::resume_turn`].
+    /// cut off by a restart, stopped by the host's own shutdown
+    /// ([`Self::suspend`]), or ended by a failure a retry can fix — and not
+    /// yet resumed, in saved order. Turns this Agent has queued or is running
+    /// are never owed; one it ended with such a failure is. Read-only:
+    /// nothing is recorded until [`Self::resume_turn`].
     pub async fn owed_turns(&self) -> Vec<OwedTurn> {
         let scheduler = self.inner.scheduler.lock().await;
         let active = self.inner.lifecycle.active();
+        let live = |id: &ExecutionId| scheduler.has_receipt(id) || active.as_ref() == Some(id);
+        let newest_final = self.newest_final(live).await;
         self.inner
             .manager
             .pick_invocations(|index, record, saved| {
-                owed(record, saved, |id| {
-                    scheduler.has_receipt(id) || active.as_ref() == Some(id)
-                })
-                .map(|_| OwedTurn {
+                owed(record, saved, newest_final > Some(index), live).map(|_| OwedTurn {
                     index,
                     execution_id: record.request.execution_id.clone(),
                     submitted_by: record.actor.clone(),
@@ -317,7 +401,7 @@ impl Agent {
                 .await?;
             return Ok(Resumed::Exhausted);
         };
-        let request = successor_request(&record, successor.clone())?;
+        let request = successor_request(&record, cause, successor.clone())?;
         let admission = self
             .accept_work(
                 request,
@@ -368,6 +452,18 @@ impl Agent {
         .await
     }
 
+    /// The index of the newest turn that ended for good or that this process
+    /// admitted ([`ended_for_good`]): a failure before it is not owed.
+    async fn newest_final(&self, live: impl Fn(&ExecutionId) -> bool) -> Option<usize> {
+        self.inner
+            .manager
+            .pick_invocations(|index, record, saved| {
+                ended_for_good(record, saved, &live).then_some(index)
+            })
+            .await
+            .pop()
+    }
+
     /// Find `turn` if it is still owed and record its owed stop if it was
     /// cut off; with `end`, also record that `end` decided not to resume it.
     /// All under the scheduler lock, so two callers never both decide one
@@ -379,16 +475,16 @@ impl Agent {
     ) -> Result<Option<(InvocationRecord, SchedulingCause)>, AgentError> {
         let scheduler = self.inner.scheduler.lock().await;
         let active = self.inner.lifecycle.active();
+        let live = |id: &ExecutionId| scheduler.has_receipt(id) || active.as_ref() == Some(id);
+        let newest_final = self.newest_final(live).await;
         let found = self
             .inner
             .manager
             .pick_invocations(|index, record, saved| {
                 (index == turn.index && record.request.execution_id == turn.execution_id)
                     .then(|| {
-                        owed(record, saved, |id| {
-                            scheduler.has_receipt(id) || active.as_ref() == Some(id)
-                        })
-                        .map(|stop| (record.clone(), stop))
+                        owed(record, saved, newest_final > Some(index), live)
+                            .map(|stop| (record.clone(), stop))
                     })
                     .flatten()
             })

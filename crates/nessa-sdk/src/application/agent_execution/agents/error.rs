@@ -1,7 +1,7 @@
 //! Typed SDK failures preserve execution, observation, storage, and cleanup outcomes.
 #![deny(missing_docs)]
 
-use crate::application::agent_execution::agents::AttachmentPhase;
+use crate::application::agent_execution::agents::{AttachmentFailureCode, AttachmentPhase};
 use crate::application::agent_execution::hooks::HookFailure;
 use crate::application::agent_execution::{
     providers::{CloseOutcome, ImageInputRefusal, UserImageError},
@@ -354,6 +354,92 @@ impl fmt::Display for AgentError {
 impl Error for AgentError {}
 
 impl AgentError {
+    /// Whether a turn that ended with this error still owes its work: the
+    /// provider or the transport to it failed, or a passing host failure
+    /// stopped it, so sending the turn again can succeed. A refusal, invalid
+    /// input, a sign-in the provider needs, or a result already known would
+    /// fail or repeat the same way, and stays final. A host resumes an owed
+    /// turn at most [`Resumption::MAX_RESUMES`] times running, so even a
+    /// failure that does repeat ends.
+    ///
+    /// [`Resumption::MAX_RESUMES`]: crate::domain::agent_execution::executions::Resumption::MAX_RESUMES
+    pub fn leaves_work_owed(&self) -> bool {
+        match self {
+            // An attachment whose audit or cleanup failed lost its
+            // evidence, which a retry cannot bring back.
+            Self::AttachmentUnavailable(phase) => !matches!(
+                phase,
+                AttachmentPhase::Failed(
+                    AttachmentFailureCode::Audit | AttachmentFailureCode::Cleanup
+                )
+            ),
+            Self::AttachmentAuthorizationStale
+            | Self::Closed
+            | Self::Protocol(_)
+            | Self::Provider { .. }
+            | Self::Transport(_)
+            | Self::Deadline
+            | Self::StartupDeadline(_)
+            | Self::Backpressure => true,
+            Self::Storage(error) => matches!(
+                error,
+                StorageError::Io(_)
+                    | StorageError::Store(_)
+                    | StorageError::Busy
+                    | StorageError::ReadCapacity
+            ),
+            // What the provider finished is known: nothing more is owed.
+            Self::ExecutionObservation {
+                error,
+                execution_result,
+            } => match execution_result.as_deref() {
+                Some(Ok(_)) => false,
+                Some(Err(failed)) => failed.leaves_work_owed(),
+                None => error.leaves_work_owed(),
+            },
+            Self::StorageAfterExecution {
+                execution_result, ..
+            } => execution_result
+                .as_ref()
+                .as_ref()
+                .is_err_and(Self::leaves_work_owed),
+            // Owed only when every failure in it is one a retry can fix.
+            Self::MultipleOperationFailures {
+                first_error,
+                subsequent_error,
+            } => first_error.leaves_work_owed() && subsequent_error.leaves_work_owed(),
+            Self::OperationAndCleanupFailure {
+                operation_error,
+                cleanup_error,
+            } => operation_error.leaves_work_owed() && cleanup_error.leaves_work_owed(),
+            Self::OutputRetentionLimit
+            | Self::DiagnosticLimit
+            | Self::Configuration(_)
+            | Self::SubmissionConflict
+            | Self::SubmissionUnresolved
+            | Self::Scheduling(_)
+            | Self::StorageDuringClose { .. }
+            | Self::StorageInitialization { .. }
+            | Self::Unsupported(_)
+            | Self::InvalidInput(_)
+            | Self::RefusedAfterSave
+            | Self::AfterSaveUnavailable
+            | Self::UnknownApp(_)
+            | Self::UserImage(_)
+            | Self::ImageInputRefused(_)
+            | Self::MessageTooLarge { .. }
+            | Self::Busy
+            | Self::StalePermission
+            | Self::AuthenticationRequired { .. }
+            | Self::CleanupUncertain
+            | Self::AuditFailure
+            | Self::AuditAndCleanupFailure
+            | Self::PermissionAnswerDeliveryAndAuditFailure { .. }
+            | Self::BeforeInvocationHook(_)
+            | Self::AfterInvocationHooks { .. } => false,
+        }
+    }
+
     /// Whether the adapter published an explicit authentication refusal.
     /// Generic provider codes and diagnostic text do not establish this fact.
     pub fn authentication_required(&self) -> bool {
