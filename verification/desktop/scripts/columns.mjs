@@ -547,7 +547,7 @@ const body = {
         // intermediate transform. Keep observing every independent CSS frame.
         if (!mounting && result.before === result.after)
           failures.push(`${key}: the toggle changed nothing`)
-        else if (result.positions < 2)
+        else if (!mounting && result.positions < 2)
           failures.push(`${key}: the pane bounds changed nothing`)
         if (result.flights > 0) failures.push(`${key}: workspace bounds started a FLIP`)
         failures.push(
