@@ -57,8 +57,13 @@ src-tauri/src/
   diagnostics.rs          debug-only page-to-terminal diagnostic bridge
   host_log.rs             desktop startup log (`{data}/logs/host.log`)
   host_refusal.rs         typed startup refusals shared with the page
+  host_refusal/copy.rs    startup copy consumed by refusals and the load document
+  links/policy.rs         navigation decisions; links.rs owns the opener/plugin
+  app_sandbox/origin.rs   sandbox origin constants consumed by navigation
   page_load.rs            dev-only page when the document never arrives
   page_load/state.rs      callback-published load facts; no native URL lookup
+src-tauri/examples/
+  page_load_acceptance/   disposable macOS Tauri lifecycle, deadline and origin controls
   <context>/
     domain/               rules, entities, value objects, events
     application/          use cases + ports (traits) the use case needs

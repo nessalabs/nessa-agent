@@ -157,3 +157,9 @@ harness = false
 [[test]]
 name = "page_load"
 harness = false
+
+# A real Tauri event loop on the process main thread. An example compiles in
+# normal mode, so importing production modules does not pull in libtest cases.
+[[example]]
+name = "page_load_acceptance"
+path = "examples/page_load_acceptance/main.rs"

@@ -21,6 +21,7 @@ use tauri::{AppHandle, Manager, Url};
 
 use crate::host_refusal;
 
+#[path = "page_load/state.rs"]
 mod state;
 use state::FAILURE_PATH;
 pub use state::{is_load_failure_page, Loads, SCHEME};
@@ -35,14 +36,14 @@ pub fn load_failure_url(page: &str) -> Url {
 /// After a few seconds, any dev window that has not started loading its page
 /// is sent to the explanation. A packaged build returns immediately: its
 /// pages come from the app, and a missing asset is not a dev server.
-pub fn watch(app: AppHandle, loads: Loads) {
+pub fn watch(app: AppHandle, loads: Loads, windows: &'static [&'static str]) {
     if !cfg!(dev) {
         return;
     }
     std::thread::spawn(move || {
         std::thread::sleep(Duration::from_secs(4));
         let handle = app.clone();
-        if let Err(error) = app.run_on_main_thread(move || explain(&handle, &loads)) {
+        if let Err(error) = app.run_on_main_thread(move || explain(&handle, &loads, windows)) {
             crate::host_log::warn(format!(
                 "could not report a page that never loaded: {error}"
             ));
@@ -50,7 +51,7 @@ pub fn watch(app: AppHandle, loads: Loads) {
     });
 }
 
-fn explain(app: &AppHandle, loads: &Loads) {
+fn explain(app: &AppHandle, loads: &Loads, windows: &[&str]) {
     let configured_page = app
         .config()
         .build
@@ -58,11 +59,7 @@ fn explain(app: &AppHandle, loads: &Loads) {
         .as_ref()
         .map(Url::as_str)
         .unwrap_or("unavailable (no configured development URL)");
-    for label in [
-        crate::panel::MAIN_WINDOW,
-        crate::panel::SETUP_WINDOW,
-        crate::desktop_window::DESKTOP_WINDOW,
-    ] {
+    for &label in windows {
         let Some(page) = loads.unserved_page(label, configured_page) else {
             continue;
         };

@@ -31,7 +31,11 @@ try {
   const diagnostic = source("src-tauri/src/page_load.rs")
   write(
     "src-tauri/src/page_load.rs",
-    diagnostic + readFileSync(join(here, "probe.rs"), "utf8"),
+    diagnostic +
+      readFileSync(join(here, "probe.rs"), "utf8").replace(
+        "/* WINDOW_ARGUMENT */",
+        diagnostic.includes("windows: &[&str]") ? ', &["main", "setup", "desktop"]' : "",
+      ),
   )
   const hasState = diagnostic.includes("mod state;")
   if (hasState) {

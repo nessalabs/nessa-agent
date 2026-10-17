@@ -27,7 +27,9 @@ The first command reproduces two nil-URL panics on the original implementation
 source and its embedded assets to a temporary crate and appends `probe.rs` in
 that module's private scope. `host.rs` substitutes the Tauri boundary: its URL
 accessor panics on `None`, like the reported Wry behavior; navigation is recorded
-or explicitly refused. The source implementation is not rewritten. Dependency
+or explicitly refused. The source implementation is not rewritten. The appended test adapter supplies
+fixture window labels to the current three-argument diagnostic; historical
+revisions retain their original two-argument call. Dependency
 versions are seeded from the source revision's lockfile. The temporary crate is
 removed afterwards. The temporary crate denies unused imports; its fixture marks
 the load-failure predicate consumed by the real links adapter as used. This
@@ -52,8 +54,33 @@ That regression explicitly links WebKit through its typed `objc2-web-kit`
 bindings, creates a real empty WKWebView, asserts its native `URL` is nil,
 and checks the diagnostic state decision plus failure-page and normal-origin
 fact controls. It does not drive the complete Tauri application, wait for the
-four-second deadline, or load the normal origin from a real server. Those native
-bootstrap acceptance checks remain separate from the portable evidence.
+four-second deadline, or load the normal origin from a real server. The assembled native check runs separately:
+
+```sh
+cargo clippy -p nessa-app --no-default-features --example page_load_acceptance -- -D warnings
+cargo run -p nessa-app --no-default-features --example page_load_acceptance
+```
+
+On macOS this example runs the real Tauri/Wry event loop and the production
+navigation decision, page-load callbacks, four-second watcher, failure protocol,
+startup copy and log writer. Its three incognito WKWebViews use an isolated
+fixture configuration: a refused initial `localhost:1498` URL whose native getter
+must return nil before the deadline; an allowed `127.0.0.1:1420` HTTP page served
+by the owned loopback thread; and an existing failure page with a retained query.
+The check waits for the real diagnostic callback after the deadline, then checks
+all three native URLs and the configured URL in the temporary host log. It counts
+normal and existing-failure starts to catch unwanted replacement. Only external
+browser launching is replaced with a recorded production policy decision. The
+shipped composition supplies its existing window labels to the same watcher.
+No gateway, credential, settings, tray or user data startup is invoked. The
+fixture's custom identifier, nonpersistent WK stores and temporary log directory
+isolate its data. A port collision fails instead of selecting a broader origin.
+A bounded watchdog fails a stuck native event loop.
+
+The existing macOS `local-auth` job lints and runs this example before the shared
+server suite. Other platforms compile its explicit unsupported-platform entry;
+they do not qualify WKWebView. This is assembled diagnostic acceptance, separate
+from installed/signed-app or physical-device qualification (#562).
 
 Cloud validation (Linux, 2026-10-17): architecture check passed;
 `node scripts/check-desktop.mjs` passed formatting and 304 Node tests (3 skipped),

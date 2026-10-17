@@ -20,10 +20,13 @@ mod synthetic_native_boundary {
         };
         (app, navigated)
     }
+    fn diagnose(app: &AppHandle, loads: &Loads) {
+        explain(app, loads/* WINDOW_ARGUMENT */);
+    }
     #[test]
     fn nil_native_url_produces_an_explanation_with_the_configured_page() {
         let (app, navigated) = app(None, false);
-        explain(&app, &Loads::new());
+        diagnose(&app, &Loads::new());
         let urls = navigated.lock().unwrap();
         assert_eq!(urls.len(), 1);
         assert!(is_load_failure_page(&urls[0], true));
@@ -45,14 +48,14 @@ mod synthetic_native_boundary {
             let (app, navigated) = app(Some(page), false);
             let loads = Loads::new();
             loads.observe("desktop", page);
-            explain(&app, &loads);
+            diagnose(&app, &loads);
             assert!(navigated.lock().unwrap().is_empty());
         }
     }
     #[test]
     fn navigation_failure_remains_survivable_when_native_url_is_nil() {
         let (app, navigated) = app(None, true);
-        explain(&app, &Loads::new());
+        diagnose(&app, &Loads::new());
         assert!(navigated.lock().unwrap().is_empty());
     }
 }

@@ -1,0 +1,11 @@
+{
+  "productName": "Nessa load diagnostic fixture",
+  "version": "0.1.0",
+  "identifier": "so.nessa.tests.page-load",
+  "build": {
+    "devUrl": "http://localhost:1498/missing.html",
+    "frontendDist": "assets"
+  },
+  "app": { "windows": [] },
+  "bundle": { "active": false }
+}
