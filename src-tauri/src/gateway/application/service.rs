@@ -6,6 +6,7 @@
     )
 )]
 
+use super::host_ownership::DesktopHostOwnership;
 #[cfg(test)]
 use super::SystemMonotonicClock;
 use super::{
@@ -21,6 +22,7 @@ use super::{
 };
 #[cfg(any(target_os = "macos", test))]
 use super::{DeferredStageLaunch, DeferredStageReporter};
+use super::{DesktopHostClaim, DesktopHostLease};
 use crate::gateway::domain::value_objects::{
     AuditDeliveryReceipt, BundledSurface, LifecycleCommandResult, LifecycleEffect,
     LifecycleEffectPredicate, LifecycleFailedPhase, LifecycleObservation,
@@ -30,14 +32,12 @@ use crate::gateway::domain::value_objects::{
 };
 #[cfg(test)]
 use std::sync::atomic::{AtomicUsize, Ordering};
-#[cfg(test)]
-use std::time::Duration;
 use std::{
     panic::{catch_unwind, AssertUnwindSafe},
     path::PathBuf,
     sync::{mpsc, Arc, Condvar, Mutex, OnceLock},
     thread,
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 struct Lifecycle {
@@ -986,6 +986,7 @@ fn deliver_stop_outcome(
 }
 
 pub struct Gateway {
+    host_ownership: Arc<DesktopHostOwnership>,
     host: Arc<dyn GatewayHost>,
     login_shell: Arc<dyn LoginShellPath>,
     startup_events: Arc<dyn GatewayStartupEvents>,
@@ -1054,6 +1055,8 @@ impl GatewayRuntimeDependencies {
 
 #[derive(Clone)]
 struct ReconciliationExecutor {
+    host_ownership: Arc<DesktopHostOwnership>,
+    clock: Arc<dyn MonotonicClock>,
     host: Arc<dyn GatewayHost>,
     login_shell: Arc<dyn LoginShellPath>,
     startup_events: Arc<dyn GatewayStartupEvents>,
@@ -1117,6 +1120,7 @@ impl Gateway {
             clock,
         } = dependencies;
         Self {
+            host_ownership: Arc::new(DesktopHostOwnership::default()),
             host,
             login_shell,
             startup_events,
@@ -1319,6 +1323,8 @@ impl Gateway {
         let lifecycle = self.lifecycle.clone();
         let startup_events = self.startup_events.clone();
         let executor = ReconciliationExecutor {
+            host_ownership: self.host_ownership.clone(),
+            clock: self.clock.clone(),
             host: self.host.clone(),
             login_shell: self.login_shell.clone(),
             startup_events: self.startup_events.clone(),
@@ -1402,6 +1408,10 @@ impl Gateway {
             drop(lifecycle);
             attempt.wait_physical_until(deadline, self.clock.as_ref())?;
         };
+        let lease = self
+            .host_ownership
+            .retained()
+            .ok_or(GatewayError::NotReconciled)?;
         let origin = GatewayReconciliationRequest::new(
             allocate_id(self.reconciliation_ids.as_ref())?,
             evidence(
@@ -1418,6 +1428,7 @@ impl Gateway {
         let session = Arc::new(GatewayStopSession::new(request, self.clock.clone()));
         let (receiver, _worker) = spawn_stop_request(
             self.host.clone(),
+            lease,
             self.reconciliation_audit.clone(),
             session.clone(),
             attempt,
@@ -1463,6 +1474,7 @@ impl Gateway {
 
 fn spawn_stop_request(
     host: Arc<dyn GatewayHost>,
+    lease: DesktopHostLease,
     audit: Arc<dyn GatewayReconciliationAudit>,
     session: Arc<GatewayStopSession>,
     attempt: GatewayReconciliationAttempt,
@@ -1473,6 +1485,7 @@ fn spawn_stop_request(
 ) {
     let (answer, receiver) = mpsc::sync_channel(1);
     let worker = thread::spawn(move || {
+        let _lease = lease;
         let result = execute_stop_request(host, audit, session, attempt, intended);
         let _ = answer.send(result);
     });
@@ -1726,6 +1739,12 @@ struct ClaudePublicationFinish {
 
 impl ClaudePublicationFinish {
     fn publish(&mut self, surface: BundledSurface) -> Result<(), ClaudeConfigurationChangeError> {
+        let _lease = claim_host_ownership(
+            &self.gateway.host_ownership,
+            self.gateway.host.as_ref(),
+            self.gateway.clock.as_ref(),
+        )
+        .map_err(ClaudeConfigurationChangeError::Gateway)?;
         let published = catch_unwind(AssertUnwindSafe(|| {
             self.settings.publish(self.directory.clone())
         }))
@@ -1906,6 +1925,40 @@ fn intent_delivery_report(
     })
 }
 
+/// The application owns the bounded restart-overlap wait and the retained lease.
+/// A physical busy observation does not authorize journal recovery or effects.
+fn claim_host_ownership(
+    ownership: &DesktopHostOwnership,
+    host: &dyn GatewayHost,
+    clock: &dyn MonotonicClock,
+) -> Result<DesktopHostLease, GatewayError> {
+    let claim = catch_unwind(AssertUnwindSafe(|| {
+        let deadline = clock.now() + Duration::from_secs(5);
+        ownership.claim(
+            || host.claim_desktop_ownership(),
+            || {
+                let Some(remaining) = deadline.checked_duration_since(clock.now()) else {
+                    return false;
+                };
+                if remaining.is_zero() {
+                    return false;
+                }
+                clock.wait(remaining.min(Duration::from_millis(50)));
+                clock.now() < deadline
+            },
+        )
+    }))
+    .unwrap_or_else(|_| {
+        Err(GatewayError::Registration(
+            "Desktop host ownership acquisition panicked".into(),
+        ))
+    })?;
+    match claim {
+        DesktopHostClaim::Acquired(lease) => Ok(lease),
+        DesktopHostClaim::Busy => Err(GatewayError::DesktopHostBusy),
+    }
+}
+
 fn state_unavailable() -> GatewayError {
     GatewayError::Registration("gateway startup state is unavailable".into())
 }
@@ -1947,6 +2000,19 @@ fn execute_attempt(
     executor: &ReconciliationExecutor,
     receipt: &Arc<AttemptReceipt>,
 ) -> AttemptExecution {
+    if let Err(error) = claim_host_ownership(
+        &executor.host_ownership,
+        executor.host.as_ref(),
+        executor.clock.as_ref(),
+    ) {
+        let _ = receipt.publish_journal(Err(error.clone()));
+        return AttemptExecution {
+            physical: Err(error.clone()),
+            reported: Err(error),
+            cleanup: CleanupUpdate::Keep,
+            ready_gateway: None,
+        };
+    }
     let open_journal = || match catch_unwind(AssertUnwindSafe(|| {
         executor
             .reconciliation_audit

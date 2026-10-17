@@ -1,0 +1,31 @@
+
+running 1 test
+test gateway::application::service::tests::host_ownership_tests::timed_out_stop_worker_retains_ownership_after_the_gateway_is_dropped ... FAILED
+
+failures:
+
+---- gateway::application::service::tests::host_ownership_tests::timed_out_stop_worker_retains_ownership_after_the_gateway_is_dropped stdout ----
+
+thread 'gateway::application::service::tests::host_ownership_tests::timed_out_stop_worker_retains_ownership_after_the_gateway_is_dropped' (13768) panicked at /workspace/nessa-943-desktop-owner/src-tauri/src/gateway/application/../../../tests/gateway/application/host_ownership.rs:295:5:
+pending physical stop lost host ownership
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    gateway::application::service::tests::host_ownership_tests::timed_out_stop_worker_retains_ownership_after_the_gateway_is_dropped
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 156 filtered out; finished in 0.10s
+
+   Compiling nessa-desktop-host-ownership-proof v0.0.0 (/tmp/nessa-943-headless)
+warning: unused variable: `lease`
+    --> /workspace/nessa-943-desktop-owner/src-tauri/src/gateway/application/service.rs:1477:5
+     |
+1477 |     lease: DesktopHostLease,
+     |     ^^^^^ help: if this is intentional, prefix it with an underscore: `_lease`
+     |
+     = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: `nessa-desktop-host-ownership-proof` (lib test) generated 1 warning (run `cargo fix --lib -p nessa-desktop-host-ownership-proof --tests` to apply 1 suggestion)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.11s
+     Running unittests src/lib.rs (/tmp/nessa-943-headless/target/debug/deps/nessa_desktop_host_ownership_proof-65b5a97976207635)
+error: test failed, to rerun pass `--lib`

@@ -1,8 +1,8 @@
 //! launchd registration and loopback readiness. Service lifetime belongs to launchd.
 use crate::gateway::application::{
-    ClaudeDirectoryReplacement, DeferredStageLaunch, DeferredStageReporter, GatewayError,
-    GatewayHost, GatewayLifecycleRecovery, GatewayPhysicalResult, GatewayReconciliationAttempt,
-    GatewayReconciliationIntent, GatewayReconciliationJournalSession,
+    ClaudeDirectoryReplacement, DeferredStageLaunch, DeferredStageReporter, DesktopHostClaim,
+    GatewayError, GatewayHost, GatewayLifecycleRecovery, GatewayPhysicalResult,
+    GatewayReconciliationAttempt, GatewayReconciliationIntent, GatewayReconciliationJournalSession,
     GatewayReconciliationProgress, GatewayStopSession, ReconciledGateway,
     ReconciliationHistoryFact, StartupStep,
 };
@@ -293,6 +293,17 @@ impl Launchd {
     }
 }
 impl GatewayHost for Launchd {
+    fn claim_desktop_ownership(&self) -> Result<DesktopHostClaim, GatewayError> {
+        let configuration = self.service_configuration();
+        let label = service_label(configuration.stage(), configuration.instance());
+        let directory = service_lock_directory(&self.home, &label);
+        super::host_ownership::try_claim(&directory).map_err(|error| {
+            GatewayError::Registration(format!(
+                "Desktop host ownership could not be established: {error}"
+            ))
+        })
+    }
+
     fn startup_cause(&self) -> ReconciliationCause {
         let configuration = self.service_configuration();
         if provider_configuration_changed(&configuration, &self.home) {
@@ -1563,9 +1574,7 @@ fn register(
     let data = data_directory_path(base, stage, instance)?;
     let log = data.join("logs/gateway.log");
     let label = service_label(stage, instance);
-    let lock_directory = home
-        .join("Library/Application Support/Nessa/gateway-locks")
-        .join(&label);
+    let lock_directory = service_lock_directory(home, &label);
     nessa_local_storage::create_directory(&lock_directory).map_err(|e| e.to_string())?;
     // Held through registration. An unpublished generation moves the lock into
     // the deferred launch, which keeps it until the accepted plan starts the
@@ -2070,6 +2079,12 @@ fn service_environment(
         );
     }
     environment
+}
+
+/// Shared directory for lifetime ownership and transaction reconciliation.
+fn service_lock_directory(home: &Path, label: &str) -> PathBuf {
+    home.join("Library/Application Support/Nessa/gateway-locks")
+        .join(label)
 }
 
 fn service_label(stage: &str, instance: Option<&str>) -> String {
@@ -3533,6 +3548,56 @@ mod recovery_tests {
 
     fn indeterminate(reason: &str) -> LifecycleCommandResult {
         LifecycleCommandResult::Indeterminate(reason.into())
+    }
+
+    #[test]
+    fn desktop_host_claim_uses_the_service_label_across_different_data_roots() {
+        let home = tempfile::tempdir().unwrap();
+        let target = ReconciliationTarget::new(
+            "gui/501/so.nessa.gateway.prod".into(),
+            "a".repeat(64),
+            "b".repeat(64),
+        )
+        .unwrap();
+        let manager = Arc::new(FakeLaunchctl::new(&target, FakeState::default()));
+        let host = |stage: &str, instance: Option<&str>, data: &str| {
+            Launchd::new(
+                Arc::new(NeverDisabled),
+                manager.clone(),
+                ServiceConfiguration::new(
+                    stage.into(),
+                    home.path().join(data),
+                    instance.map(str::to_owned),
+                    7420,
+                    None,
+                )
+                .unwrap(),
+                home.path().to_path_buf(),
+            )
+        };
+        let first = host("prod", None, "first-data");
+        let second = host("prod", None, "second-data");
+        let first_claim = first.claim_desktop_ownership().unwrap();
+        assert!(matches!(first_claim, DesktopHostClaim::Acquired(_)));
+        assert!(matches!(
+            second.claim_desktop_ownership().unwrap(),
+            DesktopHostClaim::Busy
+        ));
+        let ci_claim = host("ci", None, "first-data")
+            .claim_desktop_ownership()
+            .unwrap();
+        let instance_claim = host("prod", Some("other"), "first-data")
+            .claim_desktop_ownership()
+            .unwrap();
+        assert!(matches!(ci_claim, DesktopHostClaim::Acquired(_)));
+        assert!(matches!(instance_claim, DesktopHostClaim::Acquired(_)));
+        assert_eq!(*manager.bootouts.lock().unwrap(), 0);
+        assert!(manager.signals.lock().unwrap().is_empty());
+        drop(first_claim);
+        assert!(matches!(
+            second.claim_desktop_ownership().unwrap(),
+            DesktopHostClaim::Acquired(_)
+        ));
     }
 
     struct Scenario {
