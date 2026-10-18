@@ -592,7 +592,9 @@ impl AgentProvider for LeaseFence {
                 });
             }
             FencePhase::Closed => {
-                return Box::pin(async { Err(ProviderOpenError::no_resources(AgentError::Closed)) });
+                return Box::pin(async {
+                    Err(ProviderOpenError::no_resources(AgentError::Closed))
+                });
             }
         }
         let state = self.state.clone();

@@ -5,14 +5,18 @@ use nessa_local_storage::{
     PrivateDirectory, PrivateFileType, PrivatePublicationStage,
 };
 #[cfg(windows)]
-use std::os::windows::ffi::OsStrExt;
+use std::os::windows::{ffi::OsStrExt, fs::symlink_dir as symlink_directory};
 use std::{
     ffi::{OsStr, OsString},
     io::{Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
 };
 #[cfg(unix)]
-use std::{io::ErrorKind, os::unix::fs::PermissionsExt};
+use std::{
+    fs::Permissions,
+    io::ErrorKind,
+    os::unix::fs::{symlink as symlink_directory, PermissionsExt},
+};
 
 fn fixture() -> (tempfile::TempDir, PathBuf, PrivateDirectory) {
     let temporary = tempfile::tempdir().unwrap();
@@ -42,6 +46,245 @@ fn names(directory: &PrivateDirectory) -> Vec<(OsString, PrivateFileType)> {
         .collect::<Vec<_>>();
     entries.sort_by(|left, right| left.0.cmp(&right.0));
     entries
+}
+
+#[test]
+fn retained_root_reads_an_empty_directory_without_creating_files() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path().join("root");
+    create_directory(&root).unwrap();
+    let retained = PrivateDirectory::open_root(&root).unwrap();
+    assert!(names(&retained).is_empty());
+    retained.verify_binding().unwrap();
+    assert!(retained.open_directory(OsStr::new("missing")).is_err());
+    assert!(names(&retained).is_empty());
+    let absent = temporary.path().join("absent");
+    assert!(PrivateDirectory::open_root(&absent).is_err());
+    assert!(!absent.exists());
+}
+
+#[test]
+fn retained_child_reads_existing_storage_after_parent_handle_drop() {
+    let (_temporary, root, original) = fixture();
+    write_named(&original, "record", b"synthetic body");
+    drop(original);
+    let parent = PrivateDirectory::open_root(&root).unwrap();
+    let child = parent.open_directory(OsStr::new("records")).unwrap();
+    drop(parent);
+    assert_eq!(
+        names(&child),
+        vec![(OsString::from("record"), PrivateFileType::RegularFile)]
+    );
+    let mut bytes = Vec::new();
+    child
+        .open_file(OsStr::new("record"), OpenMode::Read)
+        .unwrap()
+        .read_to_end(&mut bytes)
+        .unwrap();
+    assert_eq!(bytes, b"synthetic body");
+    child.verify_binding().unwrap();
+    assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1);
+}
+
+#[test]
+fn retained_root_and_child_refuse_invalid_names_and_file_objects() {
+    let (_temporary, root, original) = fixture();
+    write_named(&original, "file", b"synthetic");
+    let parent = PrivateDirectory::open_root(&root).unwrap();
+    for name in ["", ".", "..", "records/file", "records/../records"] {
+        assert!(
+            parent.open_directory(OsStr::new(name)).is_err(),
+            "accepted {name}"
+        );
+    }
+    assert!(original.open_directory(OsStr::new("file")).is_err());
+    assert!(PrivateDirectory::open_root(&root.join("records/file")).is_err());
+    assert!(PrivateDirectory::open_root(Path::new("relative-root")).is_err());
+    assert!(PrivateDirectory::open_beneath(&root, Path::new("")).is_err());
+    assert_eq!(
+        std::fs::read(root.join("records/file")).unwrap(),
+        b"synthetic"
+    );
+}
+
+#[test]
+fn retained_root_rejects_symlinks_with_trailing_root_spellings() {
+    let (_temporary, root, original) = fixture();
+    drop(original);
+    let linked_root = root.with_file_name("root-link");
+    symlink_directory(&root, &linked_root).unwrap();
+    for path in [root.clone(), root.join(""), root.join(".")] {
+        assert!(
+            PrivateDirectory::open_root(&path).is_ok(),
+            "refused real root {path:?}"
+        );
+        assert!(
+            PrivateDirectory::open_beneath(&path, Path::new("records")).is_ok(),
+            "refused real root for beneath acquisition {path:?}"
+        );
+    }
+    let mut accepted = Vec::new();
+    for path in [
+        linked_root.clone(),
+        linked_root.join(""),
+        linked_root.join("."),
+    ] {
+        if PrivateDirectory::open_root(&path).is_ok() {
+            accepted.push(("open_root", path.clone()));
+        }
+        if PrivateDirectory::open_beneath(&path, Path::new("records")).is_ok() {
+            accepted.push(("open_beneath", path));
+        }
+    }
+    assert!(accepted.is_empty(), "accepted symlink roots: {accepted:?}");
+}
+
+#[cfg(unix)]
+#[test]
+fn retained_root_keeps_caller_trust_under_a_publicly_writable_parent() {
+    let temporary = tempfile::tempdir().unwrap();
+    let public = temporary.path().join("public");
+    std::fs::create_dir(&public).unwrap();
+    std::fs::set_permissions(&public, Permissions::from_mode(0o777)).unwrap();
+    let root = public.join("private");
+    create_directory(&root).unwrap();
+    create_directory(&root.join("child")).unwrap();
+    let parent = PrivateDirectory::open_root(&root).unwrap();
+    let child = parent.open_directory(OsStr::new("child")).unwrap();
+    drop(parent);
+    assert!(names(&child).is_empty());
+    child.verify_binding().unwrap();
+    assert_eq!(
+        std::fs::metadata(&public).unwrap().permissions().mode() & 0o777,
+        0o777
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn retained_root_and_child_refuse_links_and_unsafe_permissions_without_repair() {
+    let (_temporary, root, original) = fixture();
+    let root_link = root.with_file_name("root-link");
+    symlink_directory(&root, &root_link).unwrap();
+    assert!(PrivateDirectory::open_root(&root_link).is_err());
+    let parent = PrivateDirectory::open_root(&root).unwrap();
+    symlink_directory("records", root.join("child-link")).unwrap();
+    assert!(parent.open_directory(OsStr::new("child-link")).is_err());
+    assert!(parent.open_directory(OsStr::new("child-link/")).is_err());
+    std::fs::set_permissions(root.join("records"), Permissions::from_mode(0o755)).unwrap();
+    assert!(parent.open_directory(OsStr::new("records")).is_err());
+    assert!(original.verify_binding().is_err());
+    assert_eq!(
+        std::fs::metadata(root.join("records"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o755
+    );
+    std::fs::set_permissions(&root, Permissions::from_mode(0o755)).unwrap();
+    assert!(PrivateDirectory::open_root(&root).is_err());
+    assert!(parent.verify_binding().is_err());
+    assert_eq!(
+        std::fs::metadata(&root).unwrap().permissions().mode() & 0o777,
+        0o755
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn retained_empty_root_refuses_reads_after_rename_and_private_replacement() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path().join("root");
+    create_directory(&root).unwrap();
+    let retained = PrivateDirectory::open_root(&root).unwrap();
+    let held = temporary.path().join("held");
+    std::fs::rename(&root, &held).unwrap();
+    create_directory(&root).unwrap();
+    assert!(retained.verify_binding().is_err());
+    assert!(retained.entries().is_err());
+    assert!(retained.open_directory(OsStr::new("missing")).is_err());
+    assert_eq!(std::fs::read_dir(&root).unwrap().count(), 0);
+    assert_eq!(std::fs::read_dir(&held).unwrap().count(), 0);
+}
+
+#[cfg(unix)]
+#[test]
+fn retained_child_keeps_original_root_and_child_bindings_after_parent_drop() {
+    for replace_root in [true, false] {
+        let (temporary, root, original) = fixture();
+        write_named(&original, "record", b"original");
+        drop(original);
+        let parent = PrivateDirectory::open_root(&root).unwrap();
+        let child = parent.open_directory(OsStr::new("records")).unwrap();
+        drop(parent);
+        let path = if replace_root {
+            root.clone()
+        } else {
+            root.join("records")
+        };
+        let held = temporary.path().join("held");
+        std::fs::rename(&path, &held).unwrap();
+        create_directory(&path).unwrap();
+        assert!(child.verify_binding().is_err());
+        assert!(child.entries().is_err());
+        assert!(child
+            .open_file(OsStr::new("record"), OpenMode::Read)
+            .is_err());
+        assert!(child.open_directory(OsStr::new("missing")).is_err());
+        assert_eq!(std::fs::read_dir(&path).unwrap().count(), 0);
+        let original_body = if replace_root {
+            held.join("records/record")
+        } else {
+            held.join("record")
+        };
+        assert_eq!(std::fs::read(original_body).unwrap(), b"original");
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn retained_root_pins_its_name_until_drop() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path().join("root");
+    create_directory(&root).unwrap();
+    let retained = PrivateDirectory::open_root(&root).unwrap();
+    let moved = temporary.path().join("moved");
+    assert!(std::fs::rename(&root, &moved).is_err());
+    assert!(names(&retained).is_empty());
+    drop(retained);
+    std::fs::rename(&root, &moved).unwrap();
+}
+
+#[cfg(windows)]
+#[test]
+fn retained_child_pins_root_and_child_names_after_parent_drop() {
+    let (temporary, root, original) = fixture();
+    drop(original);
+    let parent = PrivateDirectory::open_root(&root).unwrap();
+    let child = parent.open_directory(OsStr::new("records")).unwrap();
+    drop(parent);
+    let moved_child = root.join("moved-child");
+    let moved_root = temporary.path().join("moved-root");
+    assert!(std::fs::rename(root.join("records"), &moved_child).is_err());
+    assert!(std::fs::rename(&root, &moved_root).is_err());
+    child.verify_binding().unwrap();
+    drop(child);
+    std::fs::rename(root.join("records"), &moved_child).unwrap();
+    std::fs::rename(&root, &moved_root).unwrap();
+}
+
+#[cfg(windows)]
+#[test]
+fn retained_root_and_child_refuse_reparse_points() {
+    let (_temporary, root, original) = fixture();
+    drop(original);
+    let linked_root = root.with_file_name("root-link");
+    symlink_directory(&root, &linked_root).unwrap();
+    assert!(PrivateDirectory::open_root(&linked_root).is_err());
+    symlink_directory("records", root.join("child-link")).unwrap();
+    let retained = PrivateDirectory::open_root(&root).unwrap();
+    assert!(retained.open_directory(OsStr::new("child-link")).is_err());
 }
 
 #[cfg(unix)]

@@ -64,6 +64,7 @@
     "test:e2e:scripted": "node verification/desktop/scripts/scripted-e2e.mjs",
     "test:e2e:stress": "node verification/desktop/scripts/conversation-stress.mjs",
     "test:e2e:chaos": "node verification/desktop/scripts/conversation-chaos.mjs",
+    "test:scale": "node scripts/scale/gateway-scale.mjs",
     "verify:desktop": "node verification/desktop/scripts/run-all.mjs",
     "verify:desktop:test": "node --test verification/desktop/scripts/lib/*.test.mjs",
     "verify:desktop:smoke": "node verification/desktop/scripts/smoke.mjs",

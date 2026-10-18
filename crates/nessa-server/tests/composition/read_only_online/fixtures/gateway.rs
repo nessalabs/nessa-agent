@@ -47,7 +47,7 @@ use nessa_sync::replication::domain::Id;
 use serde_json::json;
 use std::io::{self, Write};
 use std::net::{SocketAddr, TcpStream};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
@@ -72,6 +72,7 @@ struct GatedRead {
     mode: String,
     pages: AtomicUsize,
     heads: Arc<HeadHold>,
+    budget_head: PathBuf,
 }
 /// Live mode's held head read: the head reads counted so far, the one
 /// `hold` named (zero for none), and the `release` that lets it answer.
@@ -120,6 +121,10 @@ impl RecordReadSource for GatedRead {
                     self.heads.release.notified().await
                 }
                 ("timeout-head", Some(1)) => std::future::pending::<()>().await,
+                ("budget-head", Some(1)) => {
+                    super::private_write(&self.budget_head, b"");
+                    std::future::pending::<()>().await;
+                }
                 // A cold first head read, as a loaded gateway answers it
                 // (row W17); the next head read succeeds.
                 ("preparing-head", Some(1)) => {
@@ -384,6 +389,7 @@ async fn gateway_child() {
         mode: mode.clone(),
         pages: AtomicUsize::new(0),
         heads: heads.clone(),
+        budget_head: root.join("budget-head-entered"),
     }))
     .with_catalogue_source(Arc::new(NessaCatalogueReadSource::new(
         metadata.clone(),

@@ -23,6 +23,7 @@ pub(crate) struct ConfiguredLimits {
     pub ordinary_slots: u64,
     pub control_slots: u64,
     pub app_calls_per_socket: u64,
+    pub live_conversations: u64,
     pub read_work_budget: Duration,
 }
 
@@ -38,6 +39,7 @@ pub struct OperationalLimits {
     ordinary_slots: usize,
     control_slots: usize,
     app_calls_per_socket: usize,
+    live_conversations: usize,
     read_work_budget: Duration,
 }
 
@@ -56,6 +58,7 @@ pub enum InvalidOperationalLimits {
     ControlSlots,
     /// App calls must leave one slot another mount can take.
     AppCalls,
+    LiveConversations,
     ReadWorkBudget,
 }
 
@@ -71,6 +74,7 @@ impl InvalidOperationalLimits {
             Self::OrdinarySlots => "ordinary_slots",
             Self::ControlSlots => "control_slots",
             Self::AppCalls => "app_calls_per_socket",
+            Self::LiveConversations => "live_conversations",
             Self::ReadWorkBudget => "read_work_budget",
         }
     }
@@ -101,20 +105,42 @@ impl std::error::Error for InvalidOperationalLimits {}
 impl Default for OperationalLimits {
     fn default() -> Self {
         Self {
-            requests: 128,
-            controls: 32,
-            record_reads: 4,
+            // Sized so ten thousand sockets each with a request, a control and
+            // a read in flight are admitted, not refused: what holds them
+            // back is the work, which waits its turn behind these.
+            requests: 16_384,
+            controls: 16_384,
+            record_reads: 1_024,
             upload_begins: 16,
             deletions: 8,
             ordinary_slots: 16,
             control_slots: 4,
             app_calls_per_socket: 4,
+            // Each live conversation holds an agent process and its pipes, so
+            // a machine's open-file limit can run out first; nothing lowers
+            // this to fit it yet (#994).
+            live_conversations: 65_536,
             read_work_budget: READ_WORK_BUDGET,
         }
     }
 }
 
 impl OperationalLimits {
+    /// A gateway of a few sockets: the limits a product state starts with
+    /// before composition gives it the configured ones
+    /// (`ProductState::with_limits`), small enough that a test fills them.
+    /// The gateway never runs on these; it runs on [`Self::default`] or what
+    /// `config.json` says.
+    pub(crate) fn small() -> Self {
+        Self {
+            requests: 128,
+            controls: 32,
+            record_reads: 4,
+            live_conversations: 32,
+            ..Self::default()
+        }
+    }
+
     /// Check `input`. A count outside 1..=65536, fewer than two app calls, or
     /// a budget that cannot be a deadline is refused. Nothing here is mutated
     /// afterward.
@@ -131,6 +157,10 @@ impl OperationalLimits {
             )?,
             control_slots: admit(input.control_slots, InvalidOperationalLimits::ControlSlots)?,
             app_calls_per_socket: app_calls(input.app_calls_per_socket)?,
+            live_conversations: admit(
+                input.live_conversations,
+                InvalidOperationalLimits::LiveConversations,
+            )?,
             read_work_budget: budget(input.read_work_budget)?,
         })
     }
@@ -173,6 +203,10 @@ impl OperationalLimits {
     pub(crate) fn control_lane(self) -> usize {
         self.control_slots
     }
+    /// The most conversations that may be open, each with its agent, at once.
+    pub(crate) fn live_conversations(self) -> usize {
+        self.live_conversations
+    }
     pub(crate) fn read_work_budget(self) -> Duration {
         self.read_work_budget
     }
@@ -208,9 +242,9 @@ mod tests {
     #[test]
     fn defaults_are_the_counts_the_socket_was_built_with() {
         let limits = OperationalLimits::default();
-        assert_eq!(limits.requests(), 128);
-        assert_eq!(limits.controls(), 32);
-        assert_eq!(limits.record_reads(), 4);
+        assert_eq!(limits.requests(), 16_384);
+        assert_eq!(limits.controls(), 16_384);
+        assert_eq!(limits.record_reads(), 1_024);
         assert_eq!(limits.upload_begins(), 16);
         assert_eq!(limits.deletions(), 8);
         assert_eq!(limits.ordinary_slots(), 16);
@@ -219,6 +253,7 @@ mod tests {
         assert_eq!(limits.app_calls_per_mount(), 3);
         assert_eq!(limits.ordinary_lane(), 20);
         assert_eq!(limits.control_lane(), 4);
+        assert_eq!(limits.live_conversations(), 65_536);
         assert_eq!(limits.read_work_budget(), READ_WORK_BUDGET);
     }
 
@@ -234,6 +269,7 @@ mod tests {
             ordinary_slots: defaults.ordinary_slots() as u64,
             control_slots: defaults.control_slots() as u64,
             app_calls_per_socket: defaults.app_calls_per_socket() as u64,
+            live_conversations: defaults.live_conversations() as u64,
             read_work_budget: defaults.read_work_budget(),
         };
         input.requests = 0;

@@ -13,6 +13,7 @@
 //! them: the set as [`Capabilities::as_str`], and a drive grant's tool
 //! policy as JSON ([`policy_text`]), read back through the domain's
 //! constructors.
+use super::cached::CachedSql;
 use super::{
     cells, failed, next_revision, read, stored_time, time, unreadable, LocalConversationStore,
 };
@@ -374,7 +375,7 @@ fn revision_after(
     at: i64,
 ) -> Result<u64, ConversationError> {
     let stamped: Option<i64> = transaction
-        .query_row(
+        .cached_row(
             &format!(
                 "SELECT MAX(sequence) FROM share_grant_changes
                  WHERE resource_kind = '{kind}' AND resource_id = ?1
@@ -393,7 +394,7 @@ fn revision_after(
 
 fn count(transaction: &Transaction<'_>, sql: &str, id: &str) -> Result<i64, ConversationError> {
     transaction
-        .query_row(sql, params![id], |row| row.get(0))
+        .cached_row(sql, params![id], |row| row.get(0))
         .map_err(failed)
 }
 
@@ -406,7 +407,7 @@ impl ShareGrants for LocalConversationStore {
         let (id, receiver_id) = (id.to_string(), receiver_id.to_owned());
         self.run(move |connection| {
             let held = connection
-                .query_row(
+                .cached_row(
                     &format!(
                         "SELECT g.capabilities, g.policy_revision FROM conversations AS c, {} AND c.id = ?1",
                         grant_row("c.id", "?2")
@@ -494,7 +495,7 @@ impl ShareGrants for LocalConversationStore {
             // different catalogue than the grants.
             let transaction = connection.transaction().map_err(failed)?;
             let revision: i64 = transaction
-                .query_row(
+                .cached_row(
                     "SELECT change_revision FROM conversations WHERE id = ?1",
                     [id.to_string()],
                     |row| row.get(0),
@@ -583,7 +584,7 @@ impl ShareGrants for LocalConversationStore {
                 return Ok(None);
             };
             let entry: Option<(String, Option<String>)> = connection
-                .query_row(
+                .cached_row(
                     &format!(
                         "SELECT j.after, {policy} FROM share_grant_changes AS j
                          WHERE j.sequence = ?1 AND j.resource_kind = '{kind}'
@@ -627,7 +628,7 @@ impl LocalConversationStore {
         let (id, receiver_id) = (id.to_string(), receiver_id.to_owned());
         self.run(move |connection| {
             connection
-                .query_row(
+                .cached_row(
                     &format!(
                         "SELECT principal_id FROM share_grants
                          WHERE resource_kind = '{kind}' AND resource_id = ?1
@@ -658,7 +659,7 @@ impl LocalConversationStore {
         let credential = change.credential_id.as_str().to_owned();
         self.run(move |connection| {
             let found: Option<String> = connection
-                .query_row(
+                .cached_row(
                     &format!(
                         "SELECT principal_id FROM share_grants
                          WHERE resource_kind = '{kind}' AND resource_id = ?1
@@ -756,7 +757,7 @@ impl LocalConversationStore {
                 // be what moved the grant past it (row J29).
                 let replayed: Option<(String, Option<String>, Held, Held, String, i64)> =
                     transaction
-                        .query_row(
+                        .cached_row(
                             &format!(
                                 "SELECT credential_id, receiver_id, before, policy_before, after,
                                 policy_after, principal_id, sequence
@@ -814,7 +815,7 @@ impl LocalConversationStore {
                     // or credential applies even when the capability set does
                     // not change, so the receipt is not that comparison alone.
                     let replaced: Option<(Option<String>, String)> = transaction
-                        .query_row(
+                        .cached_row(
                             &format!(
                                 "SELECT receiver_id, credential_id FROM share_grant_changes
                                  WHERE resource_kind = '{CONVERSATION}' AND resource_id = ?1
@@ -847,7 +848,7 @@ impl LocalConversationStore {
                 // receiver match when the change names no principal, which is
                 // how a revoke finds the grant.
                 let existing: Option<(String, Option<String>, String, Held, i64)> = transaction
-                    .query_row(
+                    .cached_row(
                         &format!(
                             "SELECT principal_id, receiver_id, credential_id, capabilities, policy,
                                     policy_revision
@@ -991,7 +992,7 @@ impl LocalConversationStore {
                 let revision = if reads_change {
                     let revision = next_revision(&transaction, &conversation, false)?;
                     transaction
-                        .execute(
+                        .cached_execute(
                             "UPDATE conversations SET change_revision = ?1 WHERE id = ?2",
                             params![revision, id],
                         )
@@ -999,7 +1000,7 @@ impl LocalConversationStore {
                     revision
                 } else {
                     transaction
-                        .query_row(
+                        .cached_row(
                             "SELECT change_revision FROM conversations WHERE id = ?1",
                             params![id],
                             |row| row.get(0),
@@ -1008,7 +1009,7 @@ impl LocalConversationStore {
                 };
                 let at = stored_time(change.at_ms)?;
                 transaction
-                    .execute(
+                    .cached_execute(
                         "INSERT INTO share_grant_changes
                          (resource_kind, resource_id, principal_id, receiver_id, credential_id,
                           before, after, policy_before, policy_after, initiator, surface, request,
@@ -1059,12 +1060,12 @@ impl LocalConversationStore {
                 };
                 if applied {
                     match (before.0.as_str(), after.0.as_str()) {
-                        (_, NONE) => transaction.execute(
+                        (_, NONE) => transaction.cached_execute(
                             "DELETE FROM share_grants
                          WHERE resource_kind = ?1 AND resource_id = ?2 AND principal_id = ?3",
                             params![CONVERSATION, id, principal],
                         ),
-                        (NONE, _) => transaction.execute(
+                        (NONE, _) => transaction.cached_execute(
                             "INSERT INTO share_grants
                              (principal_id, resource_kind, resource_id, receiver_id, credential_id,
                               capabilities, policy, policy_revision, granted_at_ms)
@@ -1081,7 +1082,7 @@ impl LocalConversationStore {
                                 at
                             ],
                         ),
-                        _ => transaction.execute(
+                        _ => transaction.cached_execute(
                             "UPDATE share_grants
                          SET receiver_id = ?4, credential_id = ?5, capabilities = ?6, policy = ?7,
                              policy_revision = ?8
@@ -1147,7 +1148,7 @@ impl LocalConversationStore {
         let (id, receiver_id) = (id.to_string(), receiver_id.to_owned());
         self.run(move |connection| {
             match connection
-                .query_row(
+                .cached_row(
                     &format!(
                         "SELECT policy_revision FROM share_grants
                          WHERE resource_kind = '{CONVERSATION}' AND resource_id = ?1

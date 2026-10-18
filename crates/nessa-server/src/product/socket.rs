@@ -7527,8 +7527,14 @@ mod tests {
         }
         // The first two past the slots are refused; later ones may find a
         // slot the writer gave back by then.
-        assert!(refused.starts_with(&["over-0".to_owned(), "over-1".to_owned()]), "{refused:?}");
-        assert!(refused.iter().all(|id| id.starts_with("over-")), "{refused:?}");
+        assert!(
+            refused.starts_with(&["over-0".to_owned(), "over-1".to_owned()]),
+            "{refused:?}"
+        );
+        assert!(
+            refused.iter().all(|id| id.starts_with("over-")),
+            "{refused:?}"
+        );
         assert!(!task.is_finished(), "the socket stays open");
         task.abort();
     }

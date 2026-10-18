@@ -3909,6 +3909,48 @@ async fn rejected_capacity_does_not_write_metadata_even_with_concurrent_creates(
     service.shutdown().await.unwrap();
 }
 #[tokio::test]
+async fn a_creation_saving_at_the_last_place_holds_it_from_another() {
+    // The first creation has passed its capacity check and is saving its row;
+    // a second, of another conversation, finds the place taken and saves
+    // nothing, rather than taking it and leaving the first refused after its
+    // row was written.
+    let (service, provider, repository, _) = fixture(ConversationLimits {
+        max_conversations: 1,
+        ..ConversationLimits::default()
+    });
+    let (entered, saving) = tokio::sync::oneshot::channel();
+    let (release, released) = tokio::sync::oneshot::channel();
+    *repository.creation_gate.lock().unwrap() = Some((entered, released));
+    let first = {
+        let service = service.clone();
+        tokio::spawn(async move {
+            service
+                .create(
+                    id(),
+                    caller("panel", "a"),
+                    crate::conversation::application::RequestedConversation::default(),
+                )
+                .await
+        })
+    };
+    saving.await.unwrap();
+    assert!(matches!(
+        service
+            .create(
+                id(),
+                caller("phone", "b"),
+                crate::conversation::application::RequestedConversation::default()
+            )
+            .await,
+        Err(ConversationError::Capacity)
+    ));
+    assert_eq!(repository.records.lock().unwrap().len(), 1);
+    release.send(()).unwrap();
+    first.await.unwrap().unwrap();
+    opened(&provider, 1).await;
+    service.shutdown().await.unwrap();
+}
+#[tokio::test]
 async fn restart_restores_saved_messages_without_replaying_input() {
     let (service, provider, repository, storage) = fixture(ConversationLimits::default());
     let id = id();

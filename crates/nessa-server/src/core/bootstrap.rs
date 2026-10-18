@@ -12,6 +12,13 @@ pub fn run() -> std::process::ExitCode {
     logging::init();
     #[cfg(unix)]
     bound_log();
+    // Before the runtime starts its threads, so every one of them, and every
+    // agent started later, has the raised limit.
+    #[cfg(unix)]
+    match crate::core::open_files::raise(&crate::core::open_files::ProcessLimits) {
+        Some(files) => tracing::info!(files, "open-file limit"),
+        None => tracing::warn!("could not read the open-file limit"),
+    }
     // What started this process is resolved once, here, and handed down. It
     // decides whether a failure may exit zero to stop launchd relaunching this
     // service, and whether the record that failure leaves behind may be written

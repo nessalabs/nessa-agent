@@ -8,11 +8,12 @@ Each row is a limit the gateway names when a refusal or a silent close hits it. 
 | product.max_record_response_bytes | fixed | 131072 | protocol/product/v1.json RecordPageResult bounds | a record page past this is refused rather than written to the socket |
 | product.max_client_id_characters | fixed | 256 | protocol/product/v1.json ProductClientMetadata.id maxLength | a client id longer than this is refused at the handshake |
 | product.max_surface_instance_characters | fixed | 256 | protocol/product/v1.json ProductSurface.instance maxLength | a surface instance longer than this is refused at the handshake |
-| server.requests | configured | 128 | config.json limits.requests | an ordinary request past the gateway's admission is refused |
-| server.controls | configured | 32 | config.json limits.controls | a control past the gateway's admission is refused |
-| server.record_reads | configured | 4 | config.json limits.recordReads | a record read past the gateway's admission is refused |
+| server.requests | configured | 16384 | config.json limits.requests | an ordinary request past the gateway's admission is refused |
+| server.controls | configured | 16384 | config.json limits.controls | a control past the gateway's admission is refused |
+| server.record_reads | configured | 1024 | config.json limits.recordReads | a record read past the gateway's admission is refused |
 | server.deletions | configured | 8 | config.json limits.deletions | a deletion past the gateway's admission is refused |
 | server.upload_begins | configured | 16 | config.json limits.uploadBegins | an upload past the gateway's admission is refused |
+| server.live_conversations | configured | 65536 | config.json limits.liveConversations | opening a conversation past this many open at once, each with its agent running, is refused capacity |
 | socket.ordinary_slots | configured | 16 | config.json limits.ordinarySlots | an ordinary frame past this socket's slots is refused |
 | socket.control_slots | configured | 4 | config.json limits.controlSlots | a control frame past this socket's slots is refused |
 | socket.record_slot | fixed | 1 | product socket RECORD_SLOT | a second record frame while one is in flight is refused |

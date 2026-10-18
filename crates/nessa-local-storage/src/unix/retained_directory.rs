@@ -67,29 +67,65 @@ fn absolute_components(path: &Path) -> io::Result<Vec<CString>> {
 }
 
 impl RetainedDirectory {
-    pub fn open_beneath(root: &Path, directory: &Path) -> io::Result<Self> {
+    pub fn open_root(root: &Path) -> io::Result<Self> {
+        let root = root.components().collect::<PathBuf>();
         if !root.is_absolute() {
             return Err(unsafe_file());
         }
+        let root_file = open_root(&root)?;
+        let retained = Self {
+            root_path: root,
+            chain: vec![DirectoryBinding {
+                identity: directory_identity(&root_file)?,
+                file: root_file,
+                name_in_parent: None,
+                permissions: DirectoryPermissions::Private,
+            }],
+        };
+        retained.verify_binding()?;
+        Ok(retained)
+    }
+
+    pub fn open_beneath(root: &Path, directory: &Path) -> io::Result<Self> {
         let components = relative_components(directory)?;
-        let root_file = open_root(root)?;
-        let mut chain = vec![DirectoryBinding {
-            identity: directory_identity(&root_file)?,
-            file: root_file,
-            name_in_parent: None,
-            permissions: DirectoryPermissions::Private,
-        }];
+        let mut retained = Self::open_root(root)?;
         for component in components {
-            let child = open_child_directory(&chain.last().expect("root exists").file, &component)?;
-            chain.push(DirectoryBinding {
+            let child = open_child_directory(retained.directory(), &component)?;
+            retained.chain.push(DirectoryBinding {
                 identity: directory_identity(&child)?,
                 file: child,
                 name_in_parent: Some(component),
                 permissions: DirectoryPermissions::Private,
             });
         }
+        retained.verify_binding()?;
+        Ok(retained)
+    }
+
+    pub fn open_directory(&self, name: &OsStr) -> io::Result<Self> {
+        self.verify_binding()?;
+        let name = component(name)?;
+        let child = open_child_directory(self.directory(), &name)?;
+        let mut chain = self
+            .chain
+            .iter()
+            .map(|binding| {
+                Ok(DirectoryBinding {
+                    file: binding.file.try_clone()?,
+                    identity: binding.identity,
+                    name_in_parent: binding.name_in_parent.clone(),
+                    permissions: binding.permissions,
+                })
+            })
+            .collect::<io::Result<Vec<_>>>()?;
+        chain.push(DirectoryBinding {
+            identity: directory_identity(&child)?,
+            file: child,
+            name_in_parent: Some(name),
+            permissions: DirectoryPermissions::Private,
+        });
         let retained = Self {
-            root_path: root.to_path_buf(),
+            root_path: self.root_path.clone(),
             chain,
         };
         retained.verify_binding()?;
