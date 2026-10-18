@@ -312,6 +312,7 @@ pub(super) async fn product_state(
                             .subagents
                             .stop_children_on_parent_stop,
                         read_work_budget: limits.read_work_budget(),
+                        live_conversations: limits.live_conversations(),
                         ssh_hosts: settings.ssh_hosts()?,
                         command_policy: settings.command_policy()?,
                         serving,
@@ -586,6 +587,8 @@ struct ConversationSettings {
     stop_children_on_parent_stop: bool,
     /// How much work one passive read may do.
     read_work_budget: std::time::Duration,
+    /// The most conversations open, each with its agent, at once.
+    live_conversations: usize,
     /// The SSH hosts a conversation may be created on.
     ssh_hosts: Vec<SshDestination>,
     /// Where the agent may run commands; `None` grants it no environment
@@ -926,6 +929,7 @@ async fn conversations(
     let ConversationSettings {
         stop_children_on_parent_stop,
         read_work_budget,
+        live_conversations,
         ssh_hosts,
         command_policy,
         serving,
@@ -1269,7 +1273,10 @@ async fn conversations(
         Some(mcp) => {
             let service = ConversationService::with_mcp_apps(
                 dependencies,
-                ConversationLimits::default(),
+                ConversationLimits {
+                    max_conversations: live_conversations,
+                    ..ConversationLimits::default()
+                },
                 workspace,
                 tool_uis,
                 mcp_app_ports(mcp, mcp_app_audit.clone()),
@@ -1279,7 +1286,10 @@ async fn conversations(
         None => (
             ConversationService::with_tool_uis(
                 dependencies,
-                ConversationLimits::default(),
+                ConversationLimits {
+                    max_conversations: live_conversations,
+                    ..ConversationLimits::default()
+                },
                 workspace,
                 tool_uis,
             ),
@@ -1316,9 +1326,7 @@ async fn conversations(
                 .map_err(|error| RunError::Agent(error.to_string()))?,
         ),
         factory: service.owned_thread_factory(),
-        room: Arc::new(LiveCapacity::new(
-            ConversationLimits::default().max_conversations,
-        )),
+        room: Arc::new(LiveCapacity::new(live_conversations)),
     });
     ownership
         .resume()

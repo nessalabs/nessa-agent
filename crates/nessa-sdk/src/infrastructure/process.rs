@@ -16,7 +16,7 @@ use std::{
     time::Duration,
 };
 use tokio::{
-    io::{AsyncRead, AsyncReadExt, AsyncWrite, ReadBuf},
+    io::{AsyncRead, AsyncWrite, ReadBuf},
     process::{Child, ChildStdin, ChildStdout, Command},
     task::JoinHandle,
     time::{sleep, timeout, Instant},
@@ -52,7 +52,6 @@ enum Process {
 struct LocalProcess {
     child: Child,
     group: u32,
-    stderr: Option<JoinHandle<()>>,
 }
 
 /// The harness's standard input: this process's pipe to its child, or the
@@ -311,7 +310,10 @@ impl ProcessScope {
         command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
+            // Provider output may hold secrets and nothing reads it, so it
+            // goes nowhere: a pipe would hold a descriptor and a task per
+            // conversation only to throw the bytes away.
+            .stderr(Stdio::null())
             .kill_on_drop(true);
         #[cfg(unix)]
         command.process_group(0);
@@ -323,22 +325,8 @@ impl ProcessScope {
         let group = child.id().expect("newly spawned, unpolled child has an ID");
         let stdin = child.stdin.take();
         let stdout = child.stdout.take().expect("piped stdout");
-        let mut stderr = child.stderr.take().expect("piped stderr");
-        let stderr = tokio::spawn(async move {
-            // Drain without retaining provider output, which may contain secrets.
-            let mut bytes = [0; 8192];
-            while let Ok(count) = stderr.read(&mut bytes).await {
-                if count == 0 {
-                    break;
-                }
-            }
-        });
         Ok(Self {
-            process: Process::Local(Box::new(LocalProcess {
-                child,
-                group,
-                stderr: Some(stderr),
-            })),
+            process: Process::Local(Box::new(LocalProcess { child, group })),
             stdin: stdin.map(ProcessInput::Local),
             stdout: Some(ProcessOutput::Local(stdout)),
             forced: false,
@@ -482,11 +470,7 @@ impl ProcessScope {
         let Process::Local(local) = &mut self.process else {
             unreachable!("only a local scope is waited on here")
         };
-        let LocalProcess { child, stderr, .. } = &mut **local;
-        if let Some(mut stderr) = stderr.take() {
-            stderr.abort();
-            let _ = (&mut stderr).await;
-        }
+        let LocalProcess { child, .. } = &mut **local;
         if !gone {
             return Err(AgentError::CleanupUncertain);
         }
@@ -542,9 +526,6 @@ impl Drop for ProcessScope {
         if let Process::Local(local) = &self.process {
             if self.outcome.is_none() {
                 let _ = signal_group(local.group, true);
-            }
-            if let Some(stderr) = &local.stderr {
-                stderr.abort();
             }
         }
     }

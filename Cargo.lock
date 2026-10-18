@@ -1527,7 +1527,7 @@ dependencies = [
 [[package]]
 name = "event-stream"
 version = "0.1.0"
-source = "git+https://github.com/nessalabs/event-stream?rev=59624a2#59624a2d00dbb3bbc4be51732d5019ca3ca847a1"
+source = "git+https://github.com/nessalabs/event-stream?rev=e16580f#e16580f3d3602a1ff9966e89d4915be4e752aea0"
 dependencies = [
  "async-trait",
  "fs2",

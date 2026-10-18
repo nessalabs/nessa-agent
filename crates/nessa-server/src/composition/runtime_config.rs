@@ -143,6 +143,7 @@ pub(super) struct LimitsConfig {
     ordinary_slots: u64,
     control_slots: u64,
     app_calls_per_socket: u64,
+    live_conversations: u64,
     read_work_budget_ms: u64,
 }
 
@@ -158,6 +159,7 @@ impl Default for LimitsConfig {
             ordinary_slots: limits.ordinary_slots() as u64,
             control_slots: limits.control_slots() as u64,
             app_calls_per_socket: limits.app_calls_per_socket() as u64,
+            live_conversations: limits.live_conversations() as u64,
             read_work_budget_ms: u64::try_from(limits.read_work_budget().as_millis())
                 .unwrap_or(u64::MAX),
         }
@@ -323,6 +325,7 @@ impl RuntimeConfig {
             ordinary_slots: self.limits.ordinary_slots,
             control_slots: self.limits.control_slots,
             app_calls_per_socket: self.limits.app_calls_per_socket,
+            live_conversations: self.limits.live_conversations,
             read_work_budget: Duration::from_millis(self.limits.read_work_budget_ms),
         })
         .map_err(refused)

@@ -32,7 +32,7 @@ use nessa_sdk::{
 use serde_json::{json, Value};
 use std::sync::{atomic::AtomicBool, Mutex};
 #[cfg(unix)]
-use tokio::io::{BufReader, DuplexStream, ReadHalf, WriteHalf};
+use tokio::io::{AsyncBufReadExt, BufReader, DuplexStream, ReadHalf, WriteHalf};
 
 #[derive(Default)]
 struct Audit {
@@ -383,11 +383,15 @@ impl McpClient {
     async fn call(&mut self, tool: &str, arguments: Value) -> Value {
         self.next += 1;
         write_line(&mut self.output, &json!({"jsonrpc":"2.0","id":self.next,"method":"tools/call","params":{"name":tool,"arguments":arguments}})).await.unwrap();
-        let answer =
-            tokio::time::timeout(Duration::from_secs(30), read_line::<Value>(&mut self.input))
-                .await
-                .unwrap()
-                .unwrap();
+        let answer = tokio::time::timeout(Duration::from_secs(30), async {
+            // An answer is not a hello: `read_line` takes at most a hello's
+            // bytes, and a page of events is longer than that.
+            let mut line = Vec::new();
+            self.input.read_until(b'\n', &mut line).await.unwrap();
+            serde_json::from_slice::<Value>(&line).unwrap()
+        })
+        .await
+        .unwrap();
         assert_eq!(answer["id"], self.next);
         answer["result"].clone()
     }

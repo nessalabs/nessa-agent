@@ -11,7 +11,12 @@ use tokio::sync::{oneshot, Notify, OwnedSemaphorePermit, Semaphore};
 
 /// Physical read workers at once; each runs one bounded read step. Further
 /// reads wait for one to finish rather than being refused.
-const MAX_READS: usize = 4;
+///
+/// A step spends most of its time waiting on the store's one SQLite thread,
+/// not on its own CPU, so the workers are many enough to keep that thread's
+/// queue full while thousands of followers read: with four, a step waited on
+/// three others' round trips before sending its own.
+const MAX_READS: usize = 32;
 type ReadTask = thread::JoinHandle<Result<(), StorageError>>;
 
 #[derive(Default)]
