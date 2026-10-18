@@ -1706,3 +1706,97 @@ async fn an_agent_that_recovers_by_itself_keeps_the_mode_chosen_live() {
     release_behind.send(()).unwrap();
     service.shutdown().await.unwrap();
 }
+
+/// A review lives on the attachment that asked it. Once the agent let its own
+/// process go, nothing holds a review, so an answer or a withdrawal is told it
+/// is stale, as a read of the review is, not that the agent failed. Found by
+/// the conversation chaos check.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_answer_to_an_agent_that_let_its_process_go_is_stale() {
+    use nessa_sdk::application::agent_execution::executions::ExecutionUpdate;
+    use nessa_sdk::application::agent_execution::providers::{
+        CleanupReport, CloseOutcome, ExecutionReport, ProviderExecutionReply, ProviderSessionState,
+    };
+    use nessa_sdk::domain::agent_execution::executions::ExecutionOutcome;
+    let (service, provider, _repository, _, _) = mode_fixture();
+    provider.session_resume.store(true, Ordering::SeqCst);
+    let id = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
+    service
+        .create(id.clone(), caller(), RequestedConversation::default())
+        .await
+        .unwrap();
+    *provider.execution_updates.lock().unwrap() =
+        vec![ExecutionUpdate::Finished(ExecutionOutcome::Completed)];
+    *provider.execution_reply.lock().unwrap() =
+        Some(ProviderExecutionReply::Finished(ExecutionReport::new(
+            Some(Ok(ExecutionOutcome::Completed)),
+            None,
+            ProviderSessionState::CleanupReported(CleanupReport::confirmed(CloseOutcome {
+                forced: false,
+            })),
+        )));
+    service
+        .submit(
+            id.clone(),
+            caller(),
+            "only".into(),
+            SubmittedMessage {
+                text: "The only turn".into(),
+                ..SubmittedMessage::default()
+            },
+            SubmissionMode::Queue,
+        )
+        .await
+        .unwrap();
+    let live = service.resolve(&id, &caller()).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !matches!(
+            live.agent.attachment_status().phase(),
+            nessa_sdk::application::agent_execution::agents::AttachmentPhase::Absent
+        ) {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the agent lets its process go after its turn");
+    drop(live);
+    let answered = service
+        .answer(
+            id.clone(),
+            caller(),
+            "only".into(),
+            "permission".into(),
+            "0".repeat(32),
+            "allow".into(),
+            PermissionCaller::Owner,
+        )
+        .await;
+    assert!(
+        matches!(
+            answered,
+            Err(ConversationError::PermissionAnswer {
+                error: AgentError::StalePermission,
+                ..
+            })
+        ),
+        "{answered:?}"
+    );
+    let withdrawn = service
+        .cancel_permission(
+            id.clone(),
+            caller(),
+            "only".into(),
+            "permission".into(),
+            "0".repeat(32),
+            "no".into(),
+        )
+        .await;
+    assert!(
+        matches!(
+            withdrawn,
+            Err(ConversationError::Agent(AgentError::StalePermission))
+        ),
+        "{withdrawn:?}"
+    );
+    service.shutdown().await.unwrap();
+}

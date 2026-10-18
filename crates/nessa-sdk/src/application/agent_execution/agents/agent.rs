@@ -2731,14 +2731,20 @@ impl Agent {
         let agent = self.clone();
         Box::pin(async move {
             let admission = agent.accept_control().map_err(|error| {
-                PermissionAnswerFailure::new(error, PermissionSelectionState::Pending)
+                PermissionAnswerFailure::new(
+                    without_review(error),
+                    PermissionSelectionState::Pending,
+                )
             })?;
             let attached = agent
                 .inner
                 .lifecycle
                 .attached_provider(&admission)
                 .map_err(|error| {
-                    PermissionAnswerFailure::new(error, PermissionSelectionState::Pending)
+                    PermissionAnswerFailure::new(
+                        without_review(error),
+                        PermissionSelectionState::Pending,
+                    )
                 })?;
             let supervisor = agent.clone();
             let control_origin = admission.control_origin();
@@ -2807,8 +2813,12 @@ impl Agent {
     ) -> AgentFuture<'_, PermissionCancellation> {
         let agent = self.clone();
         Box::pin(async move {
-            let admission = agent.accept_control()?;
-            let attached = agent.inner.lifecycle.attached_provider(&admission)?;
+            let admission = agent.accept_control().map_err(without_review)?;
+            let attached = agent
+                .inner
+                .lifecycle
+                .attached_provider(&admission)
+                .map_err(without_review)?;
             let supervisor = agent.clone();
             let control_origin = admission.control_origin();
             let waiter = CallerWaiter::PermissionCancellation(agent.inner.manager.id().clone());
@@ -2962,6 +2972,19 @@ impl AgentEvents {
             Err(broadcast::error::RecvError::Closed) => Ok(None),
             Err(broadcast::error::RecvError::Lagged(_)) => Err(AgentError::Backpressure),
         }
+    }
+}
+
+/// A review lives on the attachment that asked it: with none usable (absent,
+/// or failed), no review is live, so an answer or a withdrawal names one that
+/// is gone, as a read of it already says. One still opening keeps its own
+/// answer, which says to try again.
+fn without_review(error: AgentError) -> AgentError {
+    match error {
+        AgentError::AttachmentUnavailable(AttachmentPhase::Absent | AttachmentPhase::Failed(_)) => {
+            AgentError::StalePermission
+        }
+        other => other,
     }
 }
 
