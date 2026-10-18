@@ -114,7 +114,10 @@ Options:
  */
 const PARK_IDLE_SECONDS = 3
 
-/** How many 2 KB chunks each answer of the `long` step streams. */
+/**
+ * How many 1 KB chunks each answer of the `long` step streams: one answer
+ * stays within the gateway's 60 KB view, which clips a longer one.
+ */
 const LONG_CHUNKS = 40
 
 const fold = (text) =>
@@ -692,7 +695,7 @@ const steps = {
     const conversationId = randomUUID()
     await run.client.conversation.create({ conversationId, agent: run.stack.agent })
     // Each answer streams LONG_CHUNKS chunks, so the history grows by about
-    // 80 KB a turn and every save comes after a long one.
+    // 40 KB a turn and every save comes after a long one.
     const took = []
     let text
     for (let turn = 0; turn < step.turns; turn += 1) {
@@ -720,7 +723,7 @@ const steps = {
     const view = await run.client.conversation.read(conversationId)
     const answer = view.messages.find((each) => each.userText === text)
     const said = (answer?.parts ?? []).map((part) => part.text ?? "").join("")
-    const chunks = [...said.matchAll(/ (\d+) x{2000}/g)].map((match) => Number(match[1]))
+    const chunks = [...said.matchAll(/ (\d+) x{1000}/g)].map((match) => Number(match[1]))
     if (
       !said.startsWith(`${SAYS.long}${text}`) ||
       chunks.length !== LONG_CHUNKS ||

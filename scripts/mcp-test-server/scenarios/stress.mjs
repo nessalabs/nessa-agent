@@ -67,7 +67,7 @@ const review = (title, args, allowedText) => ({
 /**
  * The scenario for `reviews` reviews in one turn, one review of about
  * `largeBytes` bytes, turns that pause for `pauseMs`, and long answers
- * streamed as `longChunks` chunks of about 2 KB, so a conversation's history
+ * streamed as `longChunks` chunks of about 1 KB, so a conversation's history
  * grows fast.
  */
 export function stressScenario({
@@ -105,7 +105,7 @@ export function stressScenario({
               "${prompt.text}",
               ...Array.from(
                 { length: longChunks },
-                (_, index) => ` ${index} ${"x".repeat(2_000)}`,
+                (_, index) => ` ${index} ${"x".repeat(1_000)}`,
               ),
             ],
           },
