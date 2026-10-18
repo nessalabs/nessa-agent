@@ -732,7 +732,9 @@ async function runOnce(list, knobs, { evidence, label }) {
     })
   } catch (error) {
     rmSync(directory, { recursive: true, force: true })
-    throw new Error(`the gateway did not start: ${error.message.split("\n")[0]}`)
+    throw new Error(`the gateway did not start: ${error.message.split("\n")[0]}`, {
+      cause: error,
+    })
   }
   const run = new Run(gateway, knobs)
   // The log and journal so far, written after every wave as well as at the

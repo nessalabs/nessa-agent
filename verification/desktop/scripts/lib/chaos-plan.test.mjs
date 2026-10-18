@@ -41,7 +41,8 @@ test("a bad number is refused, from a flag or the environment", () => {
 test("shrinking keeps the fewest actions that still fail, in their order", async () => {
   const list = actions(knobsFrom({ waves: "10", width: "4" }, {}))
   const needed = [list[3].index, list[17].index]
-  const fails = async (each) => needed.every((index) => each.some((a) => a.index === index))
+  const fails = async (each) =>
+    needed.every((index) => each.some((a) => a.index === index))
   const { list: small, tried } = await shrink(list, fails, 200)
   assert.deepEqual(
     small.map((action) => action.index),
