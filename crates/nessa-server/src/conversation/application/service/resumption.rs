@@ -130,14 +130,15 @@ pub(super) async fn stuck(live: &LiveConversation) -> bool {
 
 /// Whether `live`'s agent would open its next attachment at an approval
 /// mode other than the conversation's. A mode changed live is held by the
-/// attachment it was applied on; once that attachment is gone (a failed
-/// turn, a lost process), the next one opens at the mode the agent was
-/// opened with (`Agent::approval_mode`). A turn must never run so: the
-/// agent is closed and the conversation opened again, at its record's mode.
+/// attachment it was applied on, and by one the agent recovers by itself;
+/// once a failure leaves the agent for its owner to attach again, the next
+/// attachment opens at the mode the agent was opened with
+/// (`Agent::approval_mode`). A turn must never run so: the agent is closed
+/// and the conversation opened again, at its record's mode.
 ///
 /// Asked under the conversation's submission lock, which a mode change holds
 /// until both the agent and the record have it: a diverged mode in any
-/// phase, an attachment the agent recovered at its first mode among them,
+/// phase, an attachment opened again at the agent's first mode among them,
 /// is then a lost one.
 pub(super) async fn mode_lost(live: &LiveConversation) -> bool {
     committed_mode(live)

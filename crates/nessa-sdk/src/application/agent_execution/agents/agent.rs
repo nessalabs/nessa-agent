@@ -53,7 +53,7 @@ use crate::domain::model_metadata::value_objects::{EffortLevel, EffortLevels};
 use crate::domain::{
     agent_execution::{
         executions::{ExecutionId, ExecutionOutcome},
-        sessions::{ExecutionSessionId, SessionId},
+        sessions::{AttachmentCause, ExecutionSessionId, SessionId},
     },
     effective_capabilities::value_objects::EffectiveCapabilities,
 };
@@ -617,21 +617,39 @@ impl Agent {
     }
     /// The approval preset in force: the one last verified by a live change
     /// on the current attachment, or else the provider's own
-    /// ([`AgentProvider::approval_mode`]), which every new attachment opens
-    /// at — including while none is attached, so work admitted then names
-    /// the mode the next attachment will run at. `None` means this provider
+    /// ([`AgentProvider::approval_mode`]), which every new attachment a
+    /// caller opens starts at. An attachment the agent recovers by itself
+    /// keeps the live change of the one it replaces. Either way it is also
+    /// the answer while none is attached, so work admitted then names the
+    /// mode the next attachment will run at. `None` means this provider
     /// makes no claim.
     pub fn approval_mode(&self) -> Option<ApprovalMode> {
         self.approval_mode_at(self.inner.lifecycle.attached_generation())
     }
     /// The preset of `generation` when that attachment accepted the work.
-    /// `None` means nothing was attached, so the binding's preset is the one
-    /// a later attachment opens at. Close can detach the current attachment
+    /// `None` means nothing was attached, so the preset is the one a later
+    /// attachment runs at: the binding's, or the live change an automatic
+    /// recovery keeps. Close can detach the current attachment
     /// before the admission record is written; the generation captured when
     /// the work was accepted still names its own preset.
     pub(super) fn approval_mode_at(&self, generation: Option<u64>) -> Option<ApprovalMode> {
         let Some(generation) = generation else {
-            return self.inner.provider.approval_mode();
+            // The agent's own recovery keeps the mode in force on the
+            // attachment it lost (`carried_approval_mode`).
+            return self
+                .inner
+                .lifecycle
+                .recovering()
+                .and_then(|recovery| {
+                    let live = *self
+                        .inner
+                        .live_approval_mode
+                        .read()
+                        .expect("approval mode lock");
+                    live.filter(|(generation, _)| recovery.carries(*generation))
+                        .map(|(_, mode)| mode)
+                })
+                .or_else(|| self.inner.provider.approval_mode());
         };
         let live = *self
             .inner
@@ -653,9 +671,10 @@ impl Agent {
     ///
     /// A verified change is recorded against this attachment's provider
     /// generation. [`Self::approval_mode`] reports it only while that
-    /// attachment is the one in use. A later attachment opens at
-    /// [`AgentProvider::approval_mode`], and every admission after that
-    /// records that mode
+    /// attachment is the one in use. A later attachment a caller opens
+    /// starts at [`AgentProvider::approval_mode`], and every admission after
+    /// that records that mode; one the agent recovers by itself is put at
+    /// this change before any work runs on it
     /// ([`QueueAdmissionRecord::approval_mode`](crate::application::agent_execution::executions::QueueAdmissionRecord::approval_mode)).
     ///
     /// The caller's `Waker` is woken by the operation's owned task. Its panic
@@ -717,6 +736,35 @@ impl Agent {
         drop(permit);
         drop(scheduler);
         result
+    }
+    /// The preset an attachment that recovers by itself is put at before it
+    /// is published: a live change verified on the attachment it replaces,
+    /// where that is not the preset every attachment opens at. A recovery is the agent's own
+    /// doing, so nothing it was running under may change with it; a caller's
+    /// attachment opens at the binding's preset, as documented on
+    /// [`Self::set_approval_mode`].
+    fn carried_approval_mode(
+        &self,
+        cause: AttachmentCause,
+        provider_generation: u64,
+    ) -> Option<ApprovalMode> {
+        if cause != AttachmentCause::AutomaticRecovery {
+            return None;
+        }
+        provider_generation
+            .checked_sub(1)
+            .and_then(|last| self.live_approval_mode_of(last))
+            .filter(|mode| Some(*mode) != self.inner.provider.approval_mode())
+    }
+    /// The live change verified on provider generation `generation`, if any.
+    fn live_approval_mode_of(&self, generation: u64) -> Option<ApprovalMode> {
+        let live = *self
+            .inner
+            .live_approval_mode
+            .read()
+            .expect("approval mode lock");
+        live.filter(|(live_generation, _)| *live_generation == generation)
+            .map(|(_, mode)| mode)
     }
     /// The reasoning effort level in force: the one last verified by a live
     /// change on the current attachment, or else the provider's own
@@ -1133,6 +1181,7 @@ impl Agent {
             AgentError::Protocol("attachment start requires a Tokio runtime".into())
         })?;
         let (start, wait) = self.inner.lifecycle.start_attachment(authorization)?;
+        let carried = self.carried_approval_mode(start.cause, start.provider_generation);
         let agent = self.clone();
         runtime.spawn(async move {
             let started = agent
@@ -1165,6 +1214,31 @@ impl Agent {
                                     };
                                     AttachmentAttemptFailure::new(failure.cause, source)
                                 })?;
+                            // The agent's own recovery is put at the mode in
+                            // force before it is published, so nothing (a
+                            // queued turn, a direct invocation, a control)
+                            // reaches it at another one. A failure still
+                            // publishes it, then fails it below, so its
+                            // cleanup closes what was opened.
+                            let carry = match carried {
+                                Some(mode) => {
+                                    let applied = attached
+                                        .session
+                                        .set_approval_mode(mode)
+                                        .await
+                                        .map_err(ProviderOperationFailure::into_error);
+                                    if applied.is_ok() {
+                                        *agent
+                                            .inner
+                                            .live_approval_mode
+                                            .write()
+                                            .expect("approval mode lock") =
+                                            Some((start.provider_generation, mode));
+                                    }
+                                    applied
+                                }
+                                None => Ok(()),
+                            };
                             let (published, published_evidence) = lifecycle
                                 .publish_attachment(start.generation, attached)
                                 .map_err(|_| AttachmentAttemptFailure::from(AgentError::Closed))?;
@@ -1185,6 +1259,7 @@ impl Agent {
                                     ),
                                 ));
                             }
+                            carry.map_err(AttachmentAttemptFailure::from)?;
                             if !lifecycle.acknowledge_attachment_publication(start.generation) {
                                 return Err(AgentError::Closed.into());
                             }

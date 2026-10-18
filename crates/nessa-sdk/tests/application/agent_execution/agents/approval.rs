@@ -1,6 +1,7 @@
 //! A live approval change belongs to the attachment it was verified on.
-//! A later attachment opens at the binding's preset, and the mode the agent
-//! reports is the mode its admissions record.
+//! A later attachment a caller opens starts at the binding's preset; one the
+//! agent recovers by itself keeps the change. The mode the agent reports is
+//! the mode its admissions record.
 
 use super::MemoryStorage;
 use crate::application::agent_execution::support::*;
@@ -18,6 +19,8 @@ struct Backend {
     started: Notify,
     closes: AtomicUsize,
     panic_before_future: AtomicBool,
+    /// When set, the next turn ends this way instead of as the inner one.
+    next_reply: Mutex<Option<ProviderExecutionReply>>,
 }
 impl ProviderSessionBackend for Backend {
     fn set_approval_mode(&self, mode: ApprovalMode) -> ProviderOperationFuture<'_, ()> {
@@ -39,7 +42,10 @@ impl ProviderSessionBackend for Backend {
         self.inner.prepare_invocation()
     }
     fn execute(&self, input: ExecutionRequest) -> ProviderExecutionFuture<'_> {
-        self.inner.execute(input)
+        match self.next_reply.lock().unwrap().take() {
+            Some(reply) => Box::pin(async move { reply }),
+            None => self.inner.execute(input),
+        }
     }
     fn answer_question(&self, answer: QuestionAnswer) -> ProviderOperationFuture<'_, ()> {
         self.inner.answer_question(answer)
@@ -134,6 +140,7 @@ async fn prepared() -> Prepared {
         started: Notify::new(),
         closes: AtomicUsize::new(0),
         panic_before_future: AtomicBool::new(false),
+        next_reply: Mutex::new(None),
         inner: RecordingSession {
             prompts: AtomicUsize::new(0),
         },
@@ -253,6 +260,47 @@ async fn a_live_approval_change_is_what_its_attachment_admits_and_a_new_attachme
         [ApprovalMode::Ask, ApprovalMode::Ask]
     );
     assert_eq!(*backend.applied.lock().unwrap(), [ApprovalMode::Auto]);
+    agent.close(close_action()).await.unwrap();
+}
+
+/// An attachment the agent opens by itself, after its provider let the last
+/// one go, is the agent's own doing: a mode changed live on the attachment it
+/// replaces is applied to it before the next turn runs, where a caller's new
+/// attachment opens at the binding's preset (above).
+#[tokio::test]
+async fn an_attachment_the_agent_recovers_by_itself_keeps_the_live_mode() {
+    let Prepared {
+        agent,
+        provider,
+        backend,
+        audit,
+        ..
+    } = prepared().await;
+    agent.set_approval_mode(ApprovalMode::Auto).await.unwrap();
+    *backend.next_reply.lock().unwrap() =
+        Some(ProviderExecutionReply::Finished(ExecutionReport::new(
+            Some(Ok(ExecutionOutcome::Completed)),
+            None,
+            ProviderSessionState::CleanupReported(CleanupReport::confirmed(CloseOutcome {
+                forced: false,
+            })),
+        )));
+    finish(&agent, "lets-go").await;
+    finish(&agent, "recovered").await;
+    assert_eq!(
+        *provider.opened.lock().unwrap(),
+        [ApprovalMode::Ask, ApprovalMode::Ask],
+        "the agent opened a second attachment by itself"
+    );
+    assert_eq!(
+        *backend.applied.lock().unwrap(),
+        [ApprovalMode::Auto, ApprovalMode::Auto]
+    );
+    assert_eq!(agent.approval_mode(), Some(ApprovalMode::Auto));
+    assert_eq!(
+        *audit.0.lock().unwrap(),
+        [Some(ApprovalMode::Auto), Some(ApprovalMode::Auto)]
+    );
     agent.close(close_action()).await.unwrap();
 }
 

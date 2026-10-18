@@ -271,11 +271,29 @@ pub(super) struct WorkPermit {
 }
 pub(super) struct AttachmentStart {
     pub(super) generation: u64,
+    /// The provider generation this attachment opens: one past the
+    /// attachment it replaces.
+    pub(super) provider_generation: u64,
     pub(super) cause: AttachmentCause,
     pub(super) record: AttachmentAuditRecord,
     pub(super) result: watch::Sender<Option<Result<(), AgentError>>>,
     pub(super) open_control: ProviderOpenControl,
     pub(super) started_evidence: watch::Sender<Option<Result<(), AgentError>>>,
+}
+/// An automatic recovery that is due or under way ([`SessionLifecycle::recovering`]).
+pub(super) struct Recovery {
+    /// The provider generation now: the lost attachment's while the
+    /// recovery is due, the recovery's own once it opens.
+    current: u64,
+    opening: bool,
+}
+impl Recovery {
+    /// Whether a live change verified on `generation` is the one this
+    /// recovery runs at: the lost attachment's, or, once it opens, the
+    /// recovery's own, which the change is carried to.
+    pub(super) fn carries(&self, generation: u64) -> bool {
+        generation == self.current || (self.opening && generation + 1 == self.current)
+    }
 }
 impl WorkPermit {
     pub(super) fn provider_generation(&self) -> u64 {
@@ -522,6 +540,49 @@ impl SessionLifecycle {
             AttachmentState::Failed { failure, .. } => AttachmentPhase::Failed(failure.code()),
         }
     }
+    /// Whether the agent's own automatic recovery, not a caller's
+    /// attachment, is the next one to run work: due, authorized, opening, or
+    /// published and not yet ready. A caller that attaches first opens at
+    /// the binding's preset instead; nothing in the gateway does while the
+    /// agent recovers.
+    pub(super) fn recovering(&self) -> Option<Recovery> {
+        let state = self.state.lock().expect("session lifecycle");
+        if !matches!(state.work_status, WorkStatus::Open) {
+            return None;
+        }
+        let current = state.provider_generation.0;
+        match &state.attachment {
+            AttachmentState::Absent { recorded: true } if state.automatic_recovery_ready => {
+                Some(Recovery {
+                    current,
+                    opening: false,
+                })
+            }
+            AttachmentState::Authorized(authority)
+                if authority.cause == AttachmentCause::AutomaticRecovery =>
+            {
+                Some(Recovery {
+                    current,
+                    opening: false,
+                })
+            }
+            AttachmentState::Starting {
+                cause: AttachmentCause::AutomaticRecovery,
+                ..
+            } => Some(Recovery {
+                current,
+                opening: true,
+            }),
+            AttachmentState::Attached {
+                cause: AttachmentCause::AutomaticRecovery,
+                ..
+            } if !state.provider_ready => Some(Recovery {
+                current,
+                opening: true,
+            }),
+            _ => None,
+        }
+    }
     /// The provider generation of the usable attachment, if there is one. A
     /// replacement attachment always has a later one.
     pub(super) fn attached_generation(&self) -> Option<u64> {
@@ -653,6 +714,7 @@ impl SessionLifecycle {
         });
         let start = AttachmentStart {
             generation: attachment_generation,
+            provider_generation: state.provider_generation.0 + 1,
             cause: authorization.cause,
             record: AttachmentAuditRecord {
                 session_id: self.session_id.clone(),
