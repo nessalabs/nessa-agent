@@ -1776,6 +1776,9 @@ fn the_running_turn_stays_listed_past_the_recent_message_window() {
         let id = ExecutionId::new(format!("queued-{index}")).unwrap();
         let mut record = review_snapshot(Vec::new()).invocations.remove(0);
         record.request.execution_id = id.clone();
+        // Each as long as a queued message may be, so the bound below has to
+        // give messages up.
+        record.request.user_message = said(&"q".repeat(ExecutionRequest::MAX_MESSAGE_BYTES));
         record.submission = InvocationSubmissionMode::Queued;
         record.scheduling = vec![InvocationSchedulingEvent {
             kind: InvocationKind::Queued,
@@ -1821,6 +1824,11 @@ fn the_running_turn_stays_listed_past_the_recent_message_window() {
     assert!(view.questions.is_empty());
     let view = bound_view(view);
     assert!(serde_json::to_vec(&view).unwrap().len() <= 60_000);
+    assert!(view.truncated);
+    assert_eq!(
+        status_of(&view, "execution"),
+        ConversationMessageStatus::Running
+    );
     assert!(projection.replace_committed(&current, &order, None));
     assert!(projection.read().questions.is_empty());
     assert!(projection.read().permissions.is_empty());

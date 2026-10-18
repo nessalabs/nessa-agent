@@ -1640,7 +1640,15 @@ pub fn bound_view_within(
         }
         view.truncated = true;
         if view.messages.len() > 1 {
-            view.messages.remove(0);
+            // The oldest gives way, unless it is the turn running: that one is
+            // what a person stops by its id, so it stays while any other can
+            // go (`the_running_turn_stays_listed_past_the_recent_message_window`).
+            let oldest = view
+                .messages
+                .iter()
+                .position(|message| message.status != ConversationMessageStatus::Running)
+                .unwrap_or(0);
+            view.messages.remove(oldest);
         } else if view
             .messages
             .first()
