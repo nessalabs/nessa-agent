@@ -15,7 +15,7 @@ pub fn run() -> std::process::ExitCode {
     // Before the runtime starts its threads, so every one of them, and every
     // agent started later, has the raised limit.
     #[cfg(unix)]
-    match crate::core::open_files::raise() {
+    match crate::core::open_files::raise(&crate::core::open_files::ProcessLimits) {
         Some(files) => tracing::info!(files, "open-file limit"),
         None => tracing::warn!("could not read the open-file limit"),
     }

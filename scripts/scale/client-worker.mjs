@@ -161,19 +161,24 @@ const phases = {
     let listed = Infinity
     const result = await pool(live.length, setup.parallel, async (i) => {
       const api = live[i].conversation
+      // Distinct ids, so a page that repeats one conversation and leaves
+      // out another does not add up to the right count.
+      const seen = new Set()
+      const take = (conversations) => {
+        for (const conversation of conversations) seen.add(conversation.conversationId)
+      }
       const first = await api.list()
-      let seen = first.conversations.length
-      if (!first.complete) {
-        seen = 0
+      if (first.complete) take(first.conversations)
+      else {
         let cursor
         for (;;) {
           const page = await api.observe(cursor ? { cursor } : {})
-          seen += page.conversations.length
+          take(page.conversations)
           if (page.complete || !page.cursor) break
           cursor = page.cursor
         }
       }
-      listed = Math.min(listed, seen)
+      listed = Math.min(listed, seen.size)
     })
     return { ...result, listed: Number.isFinite(listed) ? listed : 0 }
   },
