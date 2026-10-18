@@ -12,6 +12,12 @@ import { chromium, webkit } from "playwright"
 import { CannotRun, log } from "./cli.mjs"
 import { attachLines, reportDetached, reporterBound, watchLines } from "./page-lines.mjs"
 import { harmlessConsole, css, storage } from "./selectors.mjs"
+import {
+  resourceReadState,
+  resourceEndpoint,
+  resourceCandidate,
+} from "./resource-read-evidence.mjs"
+import { installResourceObservation } from "./resource-read-modules.mjs"
 
 const engines = { chromium, webkit }
 
@@ -103,6 +109,7 @@ export async function waitUntilSettled(page, timeout = 30_000) {
  * @param {"reduce"|"no-preference"} [o.reducedMotion]
  * @param {Record<string,string>} [o.prefs] extra localStorage entries
  * @param {Array<Function|[Function, unknown]>} [o.initScripts] extra init scripts
+ * @param {boolean} [o.resourceReads] observe factories to browser cutoff; retain Requests through final reporting
  * @param {(page: import("playwright").Page, context: import("playwright").BrowserContext) => Promise<void>} [o.preparePage]
  *        Runs after the page exists and before navigation, so a CDP session
  *        can disable the cache or enable performance metrics for that load.
@@ -128,6 +135,7 @@ export async function openPage(browser, o) {
     ...(o.prefs ?? {}),
   }
   let page
+  let resource
   try {
     await context.addInitScript(seed, [prefs, o.mac !== false, css.surface])
     for (const script of o.initScripts ?? []) {
@@ -138,6 +146,7 @@ export async function openPage(browser, o) {
     // answers or the clock it holds.
     await o.beforeLoad?.(context)
     page = await context.newPage()
+    if (o.resourceReads) resource = await installResourceObservation(page)
     if (o.preparePage) await o.preparePage(page, context)
   } catch (error) {
     await withCleanup(
@@ -148,10 +157,10 @@ export async function openPage(browser, o) {
     )
   }
   const lines = watchLines()
-  page.on("pageerror", (error) => {
+  const onPageError = (error) => {
     lines.keep(`pageerror: ${error.message.split("\n")[0]}`, false)
-  })
-  page.on("console", (message) => {
+  }
+  const onConsole = (message) => {
     if (message.type() !== "error") return
     const text = message.text()
     const url = message.location()?.url ?? ""
@@ -160,10 +169,24 @@ export async function openPage(browser, o) {
       entry,
       harmlessConsole.some((h) => h.text.test(text) && h.url.test(url)),
     )
-  })
+  }
+  page.on("pageerror", onPageError)
+  page.on("console", onConsole)
   const sizeReports = []
-  page.on("requestfailed", (request) => {
+  const deferredResources = new Set()
+  const onRequestFailed = (request) => {
     const pageUrl = page.url()
+    // Hold endpoint Requests before any string, pattern or size exemption,
+    // including when their browser observer report has not arrived yet.
+    if (resource && resourceCandidate(request)) {
+      if (deferredResources.size >= 512) {
+        resource.collector.invalidate()
+        lines.errors.push("resource-read evidence: retained request limit exceeded")
+        return
+      }
+      deferredResources.add(request)
+      return
+    }
     const bucket = { errors: [], harmless: [] }
     recordFailedRequest(request, pageUrl, bucket)
     for (const line of bucket.harmless) lines.keep(line, true)
@@ -183,11 +206,54 @@ export async function openPage(browser, o) {
         }),
       ),
     )
-  })
+  }
+  page.on("requestfailed", onRequestFailed)
+  let finalizing
+  const settleBeforeClose = () => {
+    if (finalizing) return finalizing
+    finalizing = (async () => {
+      if (resource) sizeReports.push(enqueueSizeReport(resource.finalize(), () => {}))
+      // Evidence and size reports share this existing bounded budget.
+      await settleSizeReports(sizeReports)
+      if (!resource) return
+      const summary = resource.collector.summary()
+      if (!summary.cutoff) resource.collector.invalidate()
+    })()
+    return finalizing
+  }
+  let collectionFinished = false
+  // The line owner calls this synchronously immediately before its final drain.
+  // Binding ACKs do not flush the independent network event channel (#996 R1).
+  const finishLineCollection = () => {
+    if (collectionFinished) return
+    collectionFinished = true
+    resource?.finish()
+    page.off?.("pageerror", onPageError)
+    page.off?.("console", onConsole)
+    page.off?.("requestfailed", onRequestFailed)
+    if (!resource) return
+    for (const request of deferredResources)
+      classifyResourceFailure(request, resource.collector, lines)
+    deferredResources.clear()
+    const final = resource.collector.summary()
+    if (!final.cutoff || final.failed || final.verified === 0)
+      lines.errors.push(
+        "resource-read evidence: no complete verified live read at the acknowledged cutoff",
+      )
+    else
+      lines.harmless.push(
+        `resource-read evidence: ${final.verified} verified consumed live read(s); three factory decorators active`,
+      )
+    resource.collector.dispose()
+  }
+  const closeLines = async () => {
+    await settleBeforeClose()
+    finishLineCollection()
+  }
   const abandon = async (message, includeErrors) => {
     // A size report can still move a full-body abort before the lines are
     // reported. Closing first would drop that report.
-    await settleSizeReports(sizeReports)
+    await closeLines()
     await withCleanup(
       async () => {
         if (reporterBound()) {
@@ -224,18 +290,20 @@ export async function openPage(browser, o) {
       false,
     )
   }
+  let retiring
   const opened = {
     context,
     page,
     get heldErrorCount() {
-      return lines.errors.length
+      return lines.errors.length + deferredResources.size
     },
     noteHarmless: (pattern) => lines.noteHarmless(pattern),
     reclassifyHeld: (keep, asHarmless) => lines.reclassifyHeld(keep, asHarmless),
-    close: () => context.close(),
+    settleBeforeClose,
+    close: () => (retiring ??= withCleanup(closeLines, () => context.close())),
     settleRequests: () => settleSizeReports(sizeReports),
   }
-  attachLines(opened, lineBase, lines)
+  attachLines(opened, lineBase, lines, finishLineCollection)
   return opened
 }
 
@@ -345,6 +413,22 @@ export function recordFailedRequest(request, pageUrl, { errors, harmless }) {
     harmless.push(`${line} (aborted after a 200 response, full body, #473)`)
   else if (kind === "empty") harmless.push(`${line} (aborted after a 204 response, #485)`)
   else errors.push(line)
+}
+
+/** Final request-specific classification bypasses every generic line pattern. */
+export function classifyResourceFailure(request, evidence, { errors, harmless }) {
+  const readState = resourceReadState(evidence, request)
+  const line = `requestfailed: ${request.url()} ${request.failure()?.errorText ?? ""}`
+  if (
+    readState === "verified" &&
+    resourceEndpoint(request) &&
+    request.failure()?.errorText === "net::ERR_ABORTED" &&
+    request.existingResponse()?.status() === 200
+  ) {
+    harmless.push(
+      `${line} (consumed EOF, verified length/SHA256, same uncanceled live mount at browser observer cutoff, #996)`,
+    )
+  } else errors.push(line)
 }
 
 /**
