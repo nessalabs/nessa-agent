@@ -1738,8 +1738,14 @@ fn older_observed_head_cannot_reenable_committed_controls() {
     );
 }
 
+/// The turn running here is listed however many turns are queued after it:
+/// it is the one a person stops, by its id, and a queue longer than the window
+/// would otherwise hide it, so nothing could stop it (found by the conversation
+/// chaos check). The window's oldest other turn gives way instead, and the
+/// view stays within its size bound with that turn's message as large as one
+/// may be.
 #[test]
-fn active_interactions_survive_recent_message_window_without_copying_the_message() {
+fn the_running_turn_stays_listed_past_the_recent_message_window() {
     let sibling_ask = event(ExecutionUpdate::QuestionAsked {
         id: QuestionId::new("question").unwrap(),
         question: AgentQuestion::new(
@@ -1797,11 +1803,19 @@ fn active_interactions_survive_recent_message_window_without_copying_the_message
     projection.transcript_state(ConversationTranscriptState::Complete);
     let view = projection.read();
     assert!(view.truncated);
+    assert_eq!(
+        status_of(&view, "execution"),
+        ConversationMessageStatus::Running
+    );
+    assert!(view.messages.len() <= 24);
     assert!(view
         .messages
         .iter()
-        .all(|message| message.execution_id != "execution"));
-    assert!(view.messages.len() <= 24);
+        .all(|message| message.execution_id != "queued-1"));
+    assert_eq!(
+        status_of(&view, "queued-24"),
+        ConversationMessageStatus::Queued
+    );
     // What waits is the live owner's to list (`agent_question`): the fold
     // lists no question.
     assert!(view.questions.is_empty());

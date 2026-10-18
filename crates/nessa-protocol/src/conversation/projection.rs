@@ -574,11 +574,19 @@ impl Projection {
         };
         if let Some(snapshot) = snapshot {
             projection.view.truncated = snapshot.invocations.len() > MAX_MESSAGES;
+            // The turn running here is listed however many turns came after
+            // it: it is the one a person stops, and a queue longer than the
+            // window would otherwise hide it (`ensure_message` never drops it).
             for record in
                 &snapshot.invocations[..snapshot.invocations.len().saturating_sub(MAX_MESSAGES)]
             {
                 if live_here.contains(record.request.execution_id.as_str()) {
-                    projection.active_interactions(record);
+                    let restarted = projection
+                        .unfinished_at_fold
+                        .contains(record.request.execution_id.as_str());
+                    if record_status(record, restarted) == ConversationMessageStatus::Running {
+                        projection.record(record, restarted);
+                    }
                 }
             }
             for record in snapshot
@@ -851,7 +859,14 @@ impl Projection {
             return index;
         }
         if self.view.messages.len() == MAX_MESSAGES {
-            let evicted = self.view.messages.remove(0);
+            // The oldest, unless it is the turn running here, which stays.
+            let oldest = self
+                .view
+                .messages
+                .iter()
+                .position(|message| !self.live_here.contains(&message.execution_id))
+                .unwrap_or(0);
+            let evicted = self.view.messages.remove(oldest);
             self.tool_parts.remove(&evicted.execution_id);
             self.execution_hooks.remove(&evicted.execution_id);
             self.view.truncated = true;
@@ -935,19 +950,6 @@ impl Projection {
         }
     }
 
-    // The exact active record can precede the recent message window. Read only
-    // its interactions; its prompt, attachments and output are never copied.
-    fn active_interactions(&mut self, record: &InvocationRecord) {
-        let restarted = self
-            .unfinished_at_fold
-            .contains(record.request.execution_id.as_str());
-        if record_status(record, restarted) != ConversationMessageStatus::Running {
-            return;
-        }
-        for event in &record.events {
-            self.observe_interaction(event);
-        }
-    }
     fn observe_interaction(&mut self, event: &ExecutionEvent) {
         let execution = event.execution_id().as_str();
         match event.update() {
