@@ -1,10 +1,11 @@
 //! Logical read budgets and an independent failing wall-time watchdog (#997).
 use nessa_client_core::retained::ReadStop;
+use nessa_device_client::NativeSession;
 use nessa_protocol::clock::Clock;
 use std::path::Path;
 use std::sync::{
     atomic::{AtomicU64, Ordering},
-    mpsc, Arc,
+    mpsc,
 };
 use std::thread;
 use std::time::{Duration, Instant};
@@ -35,14 +36,14 @@ impl ManualClock {
 }
 
 /// A logical clock must never allow a stalled integration test to pass or hang.
-pub(super) fn watched<T>(stop: Arc<ReadStop>, operation: impl FnOnce() -> T) -> T {
+pub(super) fn watched<T>(native: &NativeSession, operation: impl FnOnce() -> T) -> T {
     thread::scope(|scope| {
         let (finished, completion) = mpsc::channel();
         let watchdog = scope.spawn(move || {
             if completion.recv_timeout(Duration::from_secs(30))
                 == Err(mpsc::RecvTimeoutError::Timeout)
             {
-                stop.stop();
+                let _ = native.request_close();
                 true
             } else {
                 false

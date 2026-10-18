@@ -104,7 +104,7 @@ fn native_refusal_rechecks_pinned_status_without_purging_confirmed_partial_histo
     )
     .unwrap();
     let stop = ReadStop::new();
-    let refresh = watched(stop.clone(), || native.refresh(stop)).unwrap();
+    let refresh = watched(&native, || native.refresh(stop)).unwrap();
     let initial = refresh.initial();
     assert!(matches!(
         initial.observation(),
@@ -169,7 +169,7 @@ fn native_budget_after_catalogue_progress_is_incomplete_without_a_refusal_rechec
     let phase = root.join("budget-head-entered");
     let (refresh, advanced) = std::thread::scope(|scope| {
         let advance = scope.spawn(|| clock.expire_at_head(&phase, &stop));
-        let refresh = watched(stop.clone(), || native.refresh(stop.clone()));
+        let refresh = watched(&native, || native.refresh(stop.clone()));
         if refresh.is_err() {
             stop.stop();
         }
