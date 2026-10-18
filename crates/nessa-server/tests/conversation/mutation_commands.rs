@@ -1635,6 +1635,73 @@ async fn a_stop_whose_cancel_meets_the_turn_not_yet_in_the_provider_stops_it() {
     retire(service, storage, metadata).await;
 }
 
+/// A stop that meets a close of its conversation, the turn still listed
+/// running while the close takes its attachment away, is answered by how the
+/// turn ends rather than refused as a provider that cannot cancel one turn.
+/// Found by the conversation chaos check.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_stop_that_meets_a_close_is_answered_by_the_turns_end() {
+    use nessa_sdk::application::agent_execution::agents::AttachmentPhase;
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("data");
+    let provider = Arc::new(ProviderFactory::default());
+    provider.turn_cancel.store(true, Ordering::SeqCst);
+    let (service, storage, metadata) = fixture(&root, provider.clone());
+    let target = id();
+    opened(&service, &provider, &target).await;
+    let release = hold_turn(&service, &provider, &target, "closing").await;
+    let live = service.resolve(&target, &caller("create")).await.unwrap();
+    let closing = {
+        let service = service.clone();
+        let target = target.clone();
+        tokio::spawn(async move { service.close(target, caller("close")).await })
+    };
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while matches!(
+            live.agent.attachment_status().phase(),
+            AttachmentPhase::Attached
+        ) || live.agent.active_execution_id().is_none()
+        {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .expect("the close takes the attachment while the turn is listed running");
+    let stopping = {
+        let service = service.clone();
+        let storage = storage.clone();
+        let target = target.clone();
+        tokio::spawn(async move {
+            service
+                .stop_command(storage, target, caller("stop"), "closing".into())
+                .await
+        })
+    };
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    drop(release);
+    let receipt = tokio::time::timeout(Duration::from_secs(5), stopping)
+        .await
+        .unwrap()
+        .unwrap();
+    let outcome = receipt.as_ref().ok().and_then(|receipt| receipt.outcome());
+    assert!(
+        matches!(
+            outcome,
+            Some(MutationOutcome::Cancelled | MutationOutcome::AlreadyFinal)
+        ) || matches!(
+            receipt,
+            Err(MutationFailure::Target(ConversationError::Agent(
+                AgentError::Closed
+            )))
+        ),
+        "{:?}",
+        receipt.map(|receipt| receipt.outcome())
+    );
+    let _ = tokio::time::timeout(Duration::from_secs(5), closing).await;
+    drop(live);
+    retire(service, storage, metadata).await;
+}
+
 /// A stop whose cancel reaches the turn as it ends is answered by how the
 /// turn ended, not by the cancel's refusal of a turn no longer running.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

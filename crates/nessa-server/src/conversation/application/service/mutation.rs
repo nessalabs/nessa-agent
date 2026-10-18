@@ -5,7 +5,7 @@ use super::{
     SubmitFailure, SubmittedMessage, Writer,
 };
 use crate::conversation::domain::ConversationRefusal;
-use nessa_sdk::application::agent_execution::agents::{AgentError, QueueRemoval};
+use nessa_sdk::application::agent_execution::agents::{AgentError, AttachmentPhase, QueueRemoval};
 use nessa_sdk::application::agent_execution::commands::{
     CreationFuture, CreationInitializationFailure, CreationStorage, CreationTaskFault,
     MutationBinding, MutationCoordinator, MutationFailure, MutationOperation, MutationOutcome,
@@ -381,9 +381,19 @@ impl MutationTarget for StopTarget {
                     if live.agent.supports_turn_cancel() {
                         return Ok(MutationPlan::Effect);
                     }
-                    return Err(ConversationError::Agent(AgentError::Unsupported(
-                        "turn cancel".into(),
-                    )));
+                    // Only a provider that cannot cancel one turn is refused
+                    // here. One whose attachment is ending (a close, or a
+                    // failure stopping it) with its turn still listed is
+                    // answered by how the turn ends, below
+                    // (`a_stop_that_meets_a_close_is_answered_by_the_turns_end`).
+                    if matches!(
+                        live.agent.attachment_status().phase(),
+                        AttachmentPhase::Attached
+                    ) {
+                        return Err(ConversationError::Agent(AgentError::Unsupported(
+                            "turn cancel".into(),
+                        )));
+                    }
                 }
                 match turn_is_final(&live, &turn).await {
                     Some(true) => return Ok(MutationPlan::AlreadyFinal),
