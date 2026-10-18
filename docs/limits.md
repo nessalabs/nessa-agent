@@ -14,6 +14,7 @@ Each row is a limit the gateway names when a refusal or a silent close hits it. 
 | server.deletions | configured | 8 | config.json limits.deletions | a deletion past the gateway's admission is refused |
 | server.upload_begins | configured | 16 | config.json limits.uploadBegins | an upload past the gateway's admission is refused |
 | server.live_conversations | configured | 65536 | config.json limits.liveConversations | opening a conversation past this many open at once, each with its agent running, is refused capacity |
+| server.agent_idle_seconds | configured | 120 | config.json limits.agentIdleSeconds | an agent idle this many seconds, nothing queued or waiting and nobody following its conversation, is stopped; the conversation stays open and the next message starts the agent again, resuming its session. 0 never stops one |
 | socket.ordinary_slots | configured | 16 | config.json limits.ordinarySlots | an ordinary frame past this socket's slots is refused |
 | socket.control_slots | configured | 4 | config.json limits.controlSlots | a control frame past this socket's slots is refused |
 | socket.record_slot | fixed | 1 | product socket RECORD_SLOT | a second record frame while one is in flight is refused |
