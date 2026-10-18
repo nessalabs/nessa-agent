@@ -27,6 +27,7 @@ use nessa_sdk::application::agent_execution::{
     },
     sessions::{SessionSnapshot, SessionStorage, StorageError},
 };
+use nessa_sdk::domain::agent_execution::subagents::TaskDigest;
 use nessa_sdk::infrastructure::session_storage::{RecordStorage, RuntimeMessageCommitClock};
 use std::io::ErrorKind;
 use std::path::PathBuf;
@@ -1548,8 +1549,7 @@ async fn child_creation_refuses_an_ordinary_create_between_check_and_initialize(
                     target,
                     caller("child-request"),
                     RequestedConversation::default(),
-                    nessa_sdk::domain::agent_execution::subagents::TaskDigest::new("a".repeat(64))
-                        .unwrap(),
+                    TaskDigest::new("a".repeat(64)).unwrap(),
                 )
                 .await
         }
@@ -1589,8 +1589,7 @@ async fn child_creation_refuses_an_ordinary_create_between_check_and_initialize(
                     storage.clone(),
                     &target,
                     &caller("child-request"),
-                    &nessa_sdk::domain::agent_execution::subagents::TaskDigest::new("a".repeat(64))
-                        .unwrap()
+                    &TaskDigest::new("a".repeat(64)).unwrap()
                 )
                 .await,
             Err(ConversationError::Unavailable)
@@ -1605,7 +1604,7 @@ async fn child_creation_refuses_an_ordinary_create_between_check_and_initialize(
             fresh.clone(),
             caller("fresh-child"),
             RequestedConversation::default(),
-            nessa_sdk::domain::agent_execution::subagents::TaskDigest::new("a".repeat(64)).unwrap(),
+            TaskDigest::new("a".repeat(64)).unwrap(),
         )
         .await
         .unwrap();
@@ -1616,8 +1615,7 @@ async fn child_creation_refuses_an_ordinary_create_between_check_and_initialize(
                 fresh,
                 caller("fresh-child"),
                 RequestedConversation::default(),
-                nessa_sdk::domain::agent_execution::subagents::TaskDigest::new("a".repeat(64))
-                    .unwrap(),
+                TaskDigest::new("a".repeat(64)).unwrap(),
             )
             .await
             .unwrap(),
@@ -1642,8 +1640,7 @@ async fn child_creation_refuses_an_ordinary_create_between_check_and_initialize(
                     ordinary,
                     caller("ordinary-ready"),
                     RequestedConversation::default(),
-                    nessa_sdk::domain::agent_execution::subagents::TaskDigest::new("a".repeat(64))
-                        .unwrap()
+                    TaskDigest::new("a".repeat(64)).unwrap()
                 )
                 .await,
             Err(CreationFailure::Conflict)

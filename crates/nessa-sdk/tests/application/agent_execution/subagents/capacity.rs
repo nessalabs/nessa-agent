@@ -1,6 +1,7 @@
 //! Recovery reserves retained physical ownership against the same live-room port as admission.
 use super::*;
-use nessa_sdk::application::agent_execution::subagents::LiveRoom;
+use nessa_sdk::application::agent_execution::subagents::{BindResourcesRefusal, LiveRoom};
+use nessa_sdk::domain::agent_execution::subagents::KnownMilestone;
 use std::sync::atomic::AtomicBool;
 
 struct CountedRoom {
@@ -377,8 +378,6 @@ async fn preparation_absence_is_free_but_uncertain_preparation_retains_capacity(
 
 #[tokio::test]
 async fn ended_before_preparation_is_not_restored_as_a_live_reservation() {
-    use nessa_sdk::application::agent_execution::subagents::BindResourcesRefusal;
-    use nessa_sdk::domain::agent_execution::subagents::KnownMilestone;
     // Exercise the existing domain's terminal pre-effect admission, with no
     // factory handoff or resource claim. Open lifetime identity is retained.
     let original = World::new(1);

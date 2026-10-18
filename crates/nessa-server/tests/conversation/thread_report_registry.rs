@@ -1,8 +1,23 @@
 //! Registry ownership when cleanup overtakes a report already taken for delivery.
 use super::*;
-use crate::conversation::application::ConversationLimits;
-use crate::conversation::infrastructure::LocalThreadReports;
-use crate::conversation_test_support::fixture;
+use crate::conversation::application::{ConversationLimits, RequestedConversation};
+use crate::conversation::infrastructure::{DurableOwnershipAudit, LocalThreadReports};
+use crate::conversation_test_support::{fixture, TestClock};
+use nessa_sdk::application::agent_execution::{
+    agents::{AgentError, AttachmentRequest, Resumed},
+    commands::{
+        CreationFuture, CreationStorage, CreationStorageError, CreationStorageLease,
+        MutationReceipt,
+    },
+    permissions::ActionContext,
+    providers::{ExecutionReport, ProviderExecutionReply, ProviderSessionState},
+    sessions::StorageError,
+    subagents::{LiveCapacity, MemoryOwnershipStore, OwnershipCoordinator, OwnershipDependencies},
+};
+use nessa_sdk::domain::agent_execution::executions::{ExecutionOutcome, MessageChunk};
+use std::future::{poll_fn, Future};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::task::Poll;
 
 #[tokio::test]
 async fn thread_report_cleanup_preserves_other_ownership_and_clears_an_absent_row() {
@@ -61,14 +76,6 @@ async fn thread_report_cleanup_preserves_other_ownership_and_clears_an_absent_ro
 
 #[tokio::test]
 async fn an_injected_report_waits_for_its_suspended_hosts_exact_successor() {
-    use crate::conversation::application::RequestedConversation;
-    use nessa_sdk::application::agent_execution::{
-        agents::{AttachmentRequest, Resumed},
-        permissions::ActionContext,
-        providers::{ExecutionReport, ProviderExecutionReply, ProviderSessionState},
-    };
-    use nessa_sdk::domain::agent_execution::executions::{ExecutionOutcome, MessageChunk};
-    use std::sync::atomic::Ordering;
     let (service, provider, _, _) = fixture(ConversationLimits::default());
     provider.native_steering.store(true, Ordering::SeqCst);
     provider.inject_steers.store(true, Ordering::SeqCst);
@@ -209,5 +216,211 @@ async fn an_injected_report_waits_for_its_suspended_hosts_exact_successor() {
         Found::Finished("completed", Some(reply)) => assert_eq!(reply, "Successor answer."),
         _ => panic!("the report must follow its injected host's exact successful successor"),
     }
+    service.shutdown().await.unwrap();
+}
+
+struct UnavailableReportCommands {
+    observing: AtomicBool,
+    observed: AtomicBool,
+}
+impl CreationStorage for UnavailableReportCommands {
+    fn open_creation(
+        &self,
+        _: String,
+        _: String,
+        _: bool,
+    ) -> CreationFuture<'_, Option<Arc<dyn CreationStorageLease>>> {
+        Box::pin(async { Err(CreationStorageError::Storage(StorageError::Busy)) })
+    }
+    fn mutations(&self, _: String) -> CreationFuture<'_, Vec<MutationReceipt>> {
+        Box::pin(async {
+            if self.observing.load(Ordering::SeqCst) {
+                self.observed.store(true, Ordering::SeqCst);
+            }
+            Err(CreationStorageError::Storage(StorageError::Busy))
+        })
+    }
+}
+
+struct ObservedReportSettlement {
+    inner: Arc<LocalThreadReports>,
+    calls: AtomicUsize,
+}
+impl ThreadReportStore for ObservedReportSettlement {
+    fn save(&self, row: &PendingReport) -> ConversationFuture<'_, bool> {
+        self.inner.save(row)
+    }
+    fn settle(&self, child: &ConversationId, report: &str) -> ConversationFuture<'_, ()> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        self.inner.settle(child, report)
+    }
+    fn forget_conversation(&self, id: &ConversationId) -> ConversationFuture<'_, ()> {
+        self.inner.forget_conversation(id)
+    }
+    fn pending(&self) -> ConversationFuture<'_, Vec<PendingReport>> {
+        self.inner.pending()
+    }
+}
+
+#[tokio::test]
+async fn unavailable_stop_receipts_cannot_acknowledge_a_declined_failed_report() {
+    let directory = tempfile::tempdir().unwrap();
+    let (service, provider, _, _) = fixture(ConversationLimits::default());
+    let coordinator = OwnershipCoordinator::new(OwnershipDependencies {
+        store: Arc::new(MemoryOwnershipStore::new()),
+        audit: Arc::new(
+            DurableOwnershipAudit::new(directory.path().join("audit"), Arc::new(TestClock))
+                .unwrap(),
+        ),
+        factory: service.owned_thread_factory(),
+        room: Arc::new(LiveCapacity::new(1)),
+    });
+    coordinator.resume().await.unwrap();
+    service.bind_owned_threads(coordinator, true).unwrap();
+    let store = Arc::new(ObservedReportSettlement {
+        inner: Arc::new(
+            LocalThreadReports::open(&directory.path().join("reports.sqlite3")).unwrap(),
+        ),
+        calls: AtomicUsize::new(0),
+    });
+    service.bind_thread_reports(store.clone());
+    let child = ConversationId::new(&uuid::Uuid::new_v4().to_string()).unwrap();
+    let parent = ConversationId::new(&uuid::Uuid::new_v4().to_string()).unwrap();
+    let caller = ConversationCaller {
+        organization_id: OrganizationId::new("org").unwrap(),
+        principal_id: PrincipalId::new("person").unwrap(),
+        surface_id: "panel".into(),
+        action_id: "report-action".into(),
+    };
+    for id in [&child, &parent] {
+        service
+            .create(id.clone(), caller.clone(), RequestedConversation::default())
+            .await
+            .unwrap();
+    }
+    let input = |text: String| SubmittedMessage {
+        text,
+        ..Default::default()
+    };
+    let (release_child, gate) = tokio::sync::oneshot::channel();
+    *provider.execution_gate.lock().unwrap() = Some(gate);
+    let started = provider.execution_started.notified();
+    service
+        .submit(
+            child.clone(),
+            caller.clone(),
+            "child-work".into(),
+            input("child work".into()),
+            SubmissionMode::Queue,
+        )
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(60), started)
+        .await
+        .unwrap();
+    let report = ThreadReport {
+        parent: parent.clone(),
+        caller: caller.clone(),
+        execution: "failed-report".into(),
+    };
+    service
+        .report_thread_turn(child.clone(), "child-work".into(), report)
+        .await;
+    let text = report_text(&child, "child-work", "completed", None, 1000);
+    // The real registry transfers delivery ownership before the child's hook
+    // runs, so this test owns/polls that future instead of a background task.
+    let taken = service
+        .inner
+        .thread_reports
+        .take(&child, std::slice::from_ref(&caller), |_, _| {
+            Some(text.clone())
+        })
+        .pop()
+        .unwrap();
+    release_child.send(()).unwrap();
+    let child_live = service.resolve(&child, &caller).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(60), async {
+        loop {
+            let saved = child_live.agent.session_manager().snapshot().await.unwrap();
+            if invocation(&saved.invocations, "child-work").is_some_and(settled) {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    *provider.prepare_failure.lock().unwrap() =
+        Some(AgentError::Transport("report preparation failed".into()));
+    let admission = Arc::new(service.inner.thread_admission.clone().lock_owned().await);
+    service
+        .submit_as(
+            parent.clone(),
+            caller.clone(),
+            "failed-report".into(),
+            input(text),
+            SubmissionMode::Queue,
+            Writer::ThreadReport {
+                _admission: admission,
+            },
+        )
+        .await
+        .unwrap();
+    let live = service.resolve(&parent, &caller).await.unwrap();
+    let owed = tokio::time::timeout(Duration::from_secs(60), async {
+        loop {
+            if let Some(owed) = live
+                .agent
+                .owed_turns()
+                .await
+                .into_iter()
+                .find(|turn| turn.execution_id().as_str() == "failed-report")
+            {
+                break owed;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    live.agent
+        .decline_turn(&owed, caller.actor().unwrap())
+        .await
+        .unwrap();
+    let commands = Arc::new(UnavailableReportCommands {
+        observing: AtomicBool::new(false),
+        observed: AtomicBool::new(false),
+    });
+    service.bind_commands(commands.clone());
+    let mut delivery = Box::pin(service.deliver_report(taken));
+    // Current-thread execution records only this future's reads. Once its
+    // unavailable fact is ready, one poll reaches either retry sleep or the
+    // settlement call. The adapter observes that call before any SQLite await.
+    tokio::time::timeout(
+        Duration::from_secs(60),
+        poll_fn(|cx| {
+            commands.observing.store(true, Ordering::SeqCst);
+            let outcome = delivery.as_mut().poll(cx);
+            commands.observing.store(false, Ordering::SeqCst);
+            assert!(
+                outcome.is_pending(),
+                "unavailable receipt evidence cannot finish delivery"
+            );
+            if commands.observed.load(Ordering::SeqCst) {
+                assert_eq!(
+                    store.calls.load(Ordering::SeqCst),
+                    0,
+                    "unknown Stop receipts cannot pay a failed report obligation"
+                );
+                Poll::Ready(())
+            } else {
+                Poll::Pending
+            }
+        }),
+    )
+    .await
+    .unwrap();
+    drop(delivery);
+    assert_eq!(store.pending().await.unwrap().len(), 1);
     service.shutdown().await.unwrap();
 }

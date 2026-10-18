@@ -717,6 +717,19 @@ impl ConversationService {
             }
             let admission = Arc::new(self.inner.thread_admission.clone().lock_owned().await);
             let history = self.report_history(&report.parent, &report.caller).await;
+            let stopped = self
+                .stopped_report_executions(&report.parent, &report.caller)
+                .await
+                .ok();
+            // Pause guards settlement as well as dispatch. A retained provider
+            // failure cannot let delivery bypass the person's durable Stop.
+            let paused = match &history {
+                Some(history) if stopped.is_some() => self
+                    .reports_paused(&report.parent, &report.caller, history)
+                    .await
+                    .unwrap_or(true),
+                _ => true,
+            };
             let mut delivered = false;
             let mut waiting = false;
             let mut previously_cancelled = false;
@@ -724,19 +737,28 @@ impl ConversationService {
                 let ids = super::thread_report_admission::report_execution_ids(
                     &report.execution,
                     history,
+                    |record| {
+                        let matches = report
+                            .caller
+                            .actor()
+                            .is_ok_and(|actor| actor == record.actor)
+                            && record.request.user_message.text_str() == text
+                            && record.request.user_message.images().is_empty()
+                            && record.request.user_message.files().is_empty();
+                        if !matches {
+                            previously_cancelled = true;
+                        }
+                        matches
+                    },
                 );
                 for record in history
                     .iter()
                     .filter(|record| ids.contains(record.request.execution_id.as_str()))
                 {
-                    let matches = report
-                        .caller
-                        .actor()
-                        .is_ok_and(|actor| actor == record.actor)
-                        && record.request.user_message.text_str() == text
-                        && record.request.user_message.images().is_empty()
-                        && record.request.user_message.files().is_empty();
-                    if !matches {
+                    if stopped
+                        .as_ref()
+                        .is_some_and(|ids| ids.contains(record.request.execution_id.as_str()))
+                    {
                         previously_cancelled = true;
                         continue;
                     }
@@ -751,16 +773,11 @@ impl ConversationService {
                     }
                 }
             }
-            if delivered || (waiting && self.inner.thread_reports.store.get().is_none()) {
+            if !paused
+                && (delivered || (waiting && self.inner.thread_reports.store.get().is_none()))
+            {
                 break;
             }
-            let paused = match &history {
-                Some(history) => self
-                    .reports_paused(&report.parent, &report.caller, history)
-                    .await
-                    .unwrap_or(true),
-                None => true,
-            };
             let execution = if previously_cancelled {
                 match &history {
                     Some(history) => self

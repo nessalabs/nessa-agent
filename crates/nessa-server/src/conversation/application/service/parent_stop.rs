@@ -25,8 +25,9 @@ use nessa_sdk::application::agent_execution::commands::{
 };
 use nessa_sdk::application::agent_execution::permissions::ActionContext;
 use nessa_sdk::application::agent_execution::sessions::StorageError;
-use nessa_sdk::domain::agent_execution::subagents::{
-    LifetimeState, OwnershipSnapshot, MAX_READ_PAGE,
+use nessa_sdk::domain::agent_execution::{
+    executions::ExecutionId,
+    subagents::{LifetimeState, OwnershipSnapshot, MAX_READ_PAGE},
 };
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
@@ -344,24 +345,23 @@ impl ConversationService {
                     .await
                     .map_err(MutationFailure::Storage)?;
                 for report in pending.into_iter().filter(|row| row.report.parent == *id) {
-                    let report_ids = super::thread_report_admission::report_execution_ids(
-                        &report.report.execution,
-                        &history.invocations,
-                    );
-                    for turn in &unfinished {
-                        let is_report = history
-                            .invocations
-                            .iter()
-                            .find(|record| &record.request.execution_id == turn)
-                            .is_some_and(|record| {
-                                super::thread_report_admission::is_report_record(&report, record)
-                            });
-                        let is_command = commands.iter().any(|receipt| {
+                    let is_command = |turn: &ExecutionId| {
+                        commands.iter().any(|receipt| {
                             receipt.binding().operation() == MutationOperation::Submit
                                 && receipt.binding().target() == &conversation_session(id)
                                 && receipt.binding().turn_id() == turn
-                        });
-                        if report_ids.contains(turn.as_str()) && is_report && !is_command {
+                        })
+                    };
+                    let report_ids = super::thread_report_admission::report_execution_ids(
+                        &report.report.execution,
+                        &history.invocations,
+                        |record| {
+                            super::thread_report_admission::is_report_record(&report, record)
+                                && !is_command(&record.request.execution_id)
+                        },
+                    );
+                    for turn in &unfinished {
+                        if report_ids.contains(turn.as_str()) && !is_command(turn) {
                             targets.insert((id.to_string(), turn.as_str().to_owned()));
                         }
                     }

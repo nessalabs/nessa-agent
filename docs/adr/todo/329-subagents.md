@@ -128,6 +128,37 @@ a draft implementation is not evidence that those gates passed.
 
 ### Focused correction orderings — 18 October 2026
 
+#### Report provenance and Stop receipt boundary
+
+The report owner identifies a delivery by its durable row and validated original
+request, then follows only the SDK's canonical saved successor relationship.
+The SDK owns live, queued, owed and resumed execution facts; the mutation owner
+owns whether an exact Stop withdrew/cancelled work or found it already final.
+An acknowledged provider failure remains a failure after host decline: that
+result alone cannot prove the report's delivery obligation was paid. Neither
+report ID prefixes nor continuation notice text create provenance.
+
+| Report state at Stop/delivery | Authoritative facts | Required report-owner behavior |
+| --- | --- | --- |
+| Queued original or later delivery | Durable row, validated request/actor, SDK queue | Capture exact ID and withdraw before root cancellation |
+| Dequeue handoff or active | Same provenance, SDK unfinished IDs | Capture exact ID through handoff; cancel that identity |
+| Canonical resumed successor, queued/active | Validated original plus SDK saved successor links | Carry provenance through the chain; preserve unrelated commands |
+| Failed result still owed | SDK owed work, retained provider result | Capture and decline through mutation owner; preserve result and row |
+| Declined report with retained failed result | Exact Stop receipt Withdrawn/Cancelled; provider result remains distinct | Retain obligation; do not treat failed result as paid delivery |
+| Accepted/Attempted Stop before acknowledgement | Existing captured binding and unresolved receipt | Retain uncertainty and row; do not infer delivery from result |
+| Command receipt evidence is unavailable | Existing command read refuses; provider result remains known | Retain and retry; never acknowledge delivery from missing Stop facts |
+| Parent reports paused | Durable Stop marker, no later person admission | Do not settle or enqueue report work |
+| Later person admitted | Existing person command ordering | Redeliver withdrawn report under that person turn's delivery ID |
+| Restarted pending row | Same durable row, transcript, canonical links and receipts | Reconcile original identities without replay or recapture |
+| Completed report with no effective Stop | SDK final result and no withdrawal/cancellation receipt | Settle existing obligation without duplicate delivery |
+
+Regressions exercise canonical successor capture through the real gateway Stop,
+and an explicit delivery poll after owed-report decline. The latter must retain
+the row before and after reopening and deliver only after later person input.
+An explicit person command excludes its original delivery and canonical chain
+from report-only cancellation. A controlled delivery poll also proves that
+unavailable receipt evidence cannot call the SQLite report settlement port.
+
 The SDK owns three distinct facts: exact locally unfinished executions, canonical
 saved successor links, and work eligible for another resume. Stop consumes the
 first and the shared historical owed-work decision; report following consumes

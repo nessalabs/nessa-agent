@@ -9,7 +9,9 @@ use crate::conversation::application::{
 use crate::conversation::infrastructure::{DurableOwnershipAudit, LocalThreadReports};
 use nessa_sdk::application::agent_execution::agents::{owed_turn_ids, Resumed};
 use nessa_sdk::application::agent_execution::commands;
-use nessa_sdk::application::agent_execution::executions::ExecutionUpdate;
+use nessa_sdk::application::agent_execution::executions::{
+    ExecutionRequest, ExecutionUpdate, Submitter,
+};
 use nessa_sdk::application::agent_execution::providers::{
     AgentProvider, CleanupReport, CloseOutcome, ExecutionReport, ObservationFailure,
     ObservationFailureCause, ProviderExecutionReply, ProviderSessionState,
@@ -21,6 +23,7 @@ use nessa_sdk::application::agent_execution::subagents::{
 };
 use nessa_sdk::domain::agent_execution::executions::{ExecutionOutcome, Resumption};
 use nessa_sdk::domain::agent_execution::leases::{LeaseCleanup, LeaseId, LeaseRefusal, LeaseTerms};
+use nessa_sdk::domain::agent_execution::prompts::{PromptText, UserMessage};
 use nessa_sdk::domain::agent_execution::subagents::{
     HostActor, Initiator, LifetimeCause, LifetimeState, OwnershipEvidence, OwnershipMeaning,
     OwnershipSnapshot, SpawnProgress,
@@ -2580,6 +2583,7 @@ async fn suspend_child_turn(
 
 struct PausedPendingReports {
     inner: Arc<dyn ThreadReportStore>,
+    settled: Notify,
     gate: Mutex<Option<(oneshot::Sender<()>, oneshot::Receiver<()>)>>,
 }
 impl ThreadReportStore for PausedPendingReports {
@@ -2587,7 +2591,13 @@ impl ThreadReportStore for PausedPendingReports {
         self.inner.save(report)
     }
     fn settle(&self, child: &ConversationId, report: &str) -> ConversationFuture<'_, ()> {
-        self.inner.settle(child, report)
+        let child = child.clone();
+        let report = report.to_owned();
+        Box::pin(async move {
+            self.inner.settle(&child, &report).await?;
+            self.settled.notify_one();
+            Ok(())
+        })
     }
     fn forget_conversation(&self, id: &ConversationId) -> ConversationFuture<'_, ()> {
         self.inner.forget_conversation(id)
@@ -2628,10 +2638,16 @@ async fn correlated_report_after_dequeue(phase: ReportPhase) {
     let provider = Arc::new(ProviderFactory::default());
     provider.turn_cancel.store(true, Ordering::SeqCst);
     let (service, storage, metadata) = fixture(&root, provider.clone());
+    let observed = Arc::new(PausedMutationObservation {
+        inner: storage.clone(),
+        gate: Default::default(),
+    });
+    service.bind_commands(observed.clone());
     bind(&service, &storage, &root, true).await;
     let retained = Arc::new(LocalThreadReports::open(&root.join("reports.sqlite3")).unwrap());
     let reports = Arc::new(PausedPendingReports {
         inner: retained.clone(),
+        settled: Notify::new(),
         gate: Default::default(),
     });
     service.bind_thread_reports(reports.clone());
@@ -2665,10 +2681,6 @@ async fn correlated_report_after_dequeue(phase: ReportPhase) {
     let (entered, waiting) = oneshot::channel();
     let (continue_selection, gate) = oneshot::channel();
     *reports.gate.lock().unwrap() = Some((entered, gate));
-    let observed = Arc::new(PausedMutationObservation {
-        inner: storage.clone(),
-        gate: Default::default(),
-    });
     let stopping = {
         let service = service.clone();
         let storage = observed.clone();
@@ -2783,6 +2795,9 @@ async fn correlated_report_after_dequeue(phase: ReportPhase) {
             "dequeued report escaped Stop ({phase:?}): {cancelled:?}"
         );
     }
+    if phase == ReportPhase::Owed {
+        assert_report_poll_retains(&service, &observed, &reports, &retained).await;
+    }
     assert_eq!(
         retained.pending().await.unwrap().len(),
         1,
@@ -2791,11 +2806,421 @@ async fn correlated_report_after_dequeue(phase: ReportPhase) {
     drop(finish_report);
     drop(live);
     retire(service, storage, metadata).await;
+    if phase == ReportPhase::Owed {
+        let provider = Arc::new(ProviderFactory::default());
+        let (service, storage, metadata) = fixture(&root, provider.clone());
+        let observed = Arc::new(PausedMutationObservation {
+            inner: storage.clone(),
+            gate: Default::default(),
+        });
+        service.bind_commands(observed.clone());
+        bind(&service, &storage, &root, true).await;
+        let retained = Arc::new(LocalThreadReports::open(&root.join("reports.sqlite3")).unwrap());
+        let reports = Arc::new(PausedPendingReports {
+            inner: retained.clone(),
+            settled: Notify::new(),
+            gate: Default::default(),
+        });
+        service.bind_thread_reports(reports.clone());
+        assert_eq!(service.resume_thread_reports().await.unwrap(), 1);
+        assert_report_poll_retains(&service, &observed, &reports, &retained).await;
+        assert!(
+            provider.executions.lock().unwrap().is_empty(),
+            "restart does not dispatch the stopped report"
+        );
+        service
+            .submit_command(
+                storage.clone(),
+                parent.clone(),
+                caller("later-person"),
+                Initiation::owner(),
+                false,
+                "later-person".into(),
+                message("explicit later person input"),
+                SubmissionMode::Queue,
+            )
+            .await
+            .unwrap();
+        tokio::time::timeout(TURN_HOLD_HANG, reports.settled.notified())
+            .await
+            .unwrap();
+        assert!(retained.pending().await.unwrap().is_empty());
+        let live = service
+            .resolve(&parent, &caller("inspect-preserved-result"))
+            .await
+            .unwrap();
+        let history = live.agent.session_manager().snapshot().await.unwrap();
+        let original = history
+            .invocations
+            .iter()
+            .find(|record| record.request.execution_id.as_str() == "correlated-report")
+            .unwrap();
+        assert!(
+            original.result.as_ref().unwrap().is_err(),
+            "host decline preserves the acknowledged provider failure"
+        );
+        assert!(
+            provider
+                .executions
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|id| id.starts_with("thread-report-")),
+            "later person input receives a fresh report delivery"
+        );
+        assert!(
+            !provider
+                .executions
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|id| id == "correlated-report"),
+            "the stopped report identity is never replayed"
+        );
+        drop(live);
+        retire(service, storage, metadata).await;
+    }
+}
+
+async fn assert_report_poll_retains(
+    service: &ConversationService,
+    observed: &PausedMutationObservation,
+    reports: &PausedPendingReports,
+    retained: &LocalThreadReports,
+) {
+    // Force a real delivery poll after decline, rather than checking the
+    // row before its retry timer fires (the Windows CI failure ordering).
+    let (polled, poll) = oneshot::channel();
+    let (continue_poll, poll_gate) = oneshot::channel();
+    *observed.gate.lock().unwrap() = Some((polled, poll_gate));
+    tokio::time::timeout(TURN_HOLD_HANG, async {
+        tokio::select! {
+            _ = reports.settled.notified() => panic!("declined failed report was settled before its pause fence"),
+            result = poll => result.unwrap(),
+        }
+    }).await.unwrap();
+    continue_poll.send(()).unwrap();
+    // Delivery owns admission through its decision; join the next owner.
+    let admission = service.inner.thread_admission.lock().await;
+    assert_eq!(
+        retained.pending().await.unwrap().len(),
+        1,
+        "cancelled report remains durable after a delivery poll"
+    );
+    drop(admission);
 }
 
 struct PausedMutationObservation {
     inner: Arc<dyn commands::CreationStorage>,
     gate: Mutex<Option<(oneshot::Sender<()>, oneshot::Receiver<()>)>>,
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn parent_stop_captures_a_restored_reports_queued_canonical_successor() {
+    restored_report_successor(false, false).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn parent_stop_captures_a_restored_reports_active_canonical_successor() {
+    restored_report_successor(true, false).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn parent_stop_preserves_a_canonical_successor_with_an_explicit_person_command() {
+    restored_report_successor(false, true).await;
+}
+
+async fn restored_report_successor(active: bool, command_collision: bool) {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("data");
+    let parent = id();
+    {
+        let provider = Arc::new(ProviderFactory::default());
+        provider.turn_cancel.store(true, Ordering::SeqCst);
+        let (service, storage, metadata) = fixture(&root, provider.clone());
+        bind(&service, &storage, &root, true).await;
+        let reports = Arc::new(LocalThreadReports::open(&root.join("reports.sqlite3")).unwrap());
+        service.bind_thread_reports(reports);
+        opened(&service, &provider, &parent).await;
+        let p = hold_turn(&service, &provider, &parent, "before-restart").await;
+        let child_id = child(&service, &parent, "before-restart", "create-reporter").await;
+        let c = hold_turn(&service, &provider, &child_id, "child").await;
+        service
+            .report_thread_turn(
+                child_id.clone(),
+                "child".into(),
+                ThreadReport {
+                    parent: parent.clone(),
+                    caller: caller("report-action"),
+                    execution: "restored-report".into(),
+                },
+            )
+            .await;
+        c.send(()).unwrap();
+        service.look_for_reports(child_id, false).await;
+        let live = service.resolve(&parent, &caller("read")).await.unwrap();
+        tokio::time::timeout(TURN_HOLD_HANG, async {
+            while !live
+                .agent
+                .queued_ids()
+                .await
+                .iter()
+                .any(|id| id.as_str() == "restored-report")
+            {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        if command_collision {
+            // A real explicit Submit can acknowledge an already queued input
+            // under the same actor/request. Its receipt excludes that lineage
+            // from report-only cancellation, including after canonical resume.
+            let history = live.agent.session_manager().snapshot().await.unwrap();
+            let original = history
+                .invocations
+                .iter()
+                .find(|record| record.request.execution_id.as_str() == "restored-report")
+                .unwrap();
+            service
+                .submit_command(
+                    storage.clone(),
+                    parent.clone(),
+                    caller("report-action"),
+                    Initiation::owner(),
+                    false,
+                    "restored-report".into(),
+                    message(original.request.user_message.text_str()),
+                    SubmissionMode::Queue,
+                )
+                .await
+                .unwrap();
+        }
+        let (release, gate) = oneshot::channel();
+        *provider.execution_gate.lock().unwrap() = Some(gate);
+        let started = provider.execution_started.notified();
+        p.send(()).unwrap();
+        tokio::time::timeout(TURN_HOLD_HANG, started).await.unwrap();
+        suspend_child_turn(&service, &provider, &parent, release).await;
+        drop(live);
+        retire(service, storage, metadata).await;
+    }
+    let provider = Arc::new(ProviderFactory::default());
+    provider.turn_cancel.store(true, Ordering::SeqCst);
+    let (service, storage, metadata) = fixture(&root, provider.clone());
+    bind(&service, &storage, &root, true).await;
+    let retained = Arc::new(LocalThreadReports::open(&root.join("reports.sqlite3")).unwrap());
+    let reports = Arc::new(PausedPendingReports {
+        inner: retained.clone(),
+        settled: Notify::new(),
+        gate: Default::default(),
+    });
+    service.bind_thread_reports(reports.clone());
+    // The ordinary SDK owns both admissions. Hold gateway admission to make
+    // the valid person-before-auto-resume order deterministic after reopening.
+    let admission = service.inner.thread_admission.lock().await;
+    let live = service.resolve(&parent, &caller("reopen")).await.unwrap();
+    let (release_parent, gate) = oneshot::channel();
+    *provider.execution_gate.lock().unwrap() = Some(gate);
+    let started = provider.execution_started.notified();
+    let person = live
+        .agent
+        .enqueue(
+            ExecutionRequest {
+                execution_id: ExecutionId::new("person-current").unwrap(),
+                user_message: UserMessage::text_only(PromptText::new("new person input").unwrap()),
+                estimated_input_tokens: 1,
+                reserved_output_tokens: 100,
+            },
+            Submitter::owner(caller("person-current").actor().unwrap()),
+        )
+        .await
+        .unwrap();
+    tokio::time::timeout(TURN_HOLD_HANG, started).await.unwrap();
+    let owed = live
+        .agent
+        .owed_turns()
+        .await
+        .into_iter()
+        .find(|turn| turn.execution_id().as_str() == "restored-report")
+        .unwrap();
+    let Resumed::Continued(successor) = live
+        .agent
+        .resume_turn(&owed, caller("resume-report").actor().unwrap())
+        .await
+        .unwrap()
+    else {
+        panic!("the real suspended report must resume")
+    };
+    let next = successor.id().clone();
+    assert!(live.agent.queued_ids().await.contains(&next));
+    let unrelated = live
+        .agent
+        .enqueue(
+            ExecutionRequest {
+                execution_id: ExecutionId::new("unrelated-person").unwrap(),
+                user_message: UserMessage::text_only(
+                    PromptText::new("unrelated queued person").unwrap(),
+                ),
+                estimated_input_tokens: 1,
+                reserved_output_tokens: 100,
+            },
+            Submitter::owner(caller("unrelated-person").actor().unwrap()),
+        )
+        .await
+        .unwrap();
+    let mut release_parent = Some(release_parent);
+    let mut release_report = None;
+    let mut pending = None;
+    if active {
+        let (entered, waiting) = oneshot::channel();
+        let (resume_capture, gate) = oneshot::channel();
+        *reports.gate.lock().unwrap() = Some((entered, gate));
+        pending = Some((waiting, resume_capture));
+    }
+    drop(admission);
+    // The provider's cancellation acknowledgement and terminal result are
+    // separate: hold the real result until after gateway Stop has selected.
+    *provider.execution_updates.lock().unwrap() =
+        vec![ExecutionUpdate::Finished(ExecutionOutcome::Cancelled)];
+    *provider.execution_reply.lock().unwrap() =
+        Some(ProviderExecutionReply::Finished(ExecutionReport::new(
+            Some(Ok(ExecutionOutcome::Cancelled)),
+            None,
+            ProviderSessionState::Usable,
+        )));
+    let stopping = tokio::spawn({
+        let service = service.clone();
+        let storage = storage.clone();
+        let parent = parent.clone();
+        async move {
+            service
+                .stop_command(
+                    storage,
+                    parent,
+                    caller("stop-current"),
+                    "person-current".into(),
+                )
+                .await
+        }
+    });
+    if let Some((waiting, resume_capture)) = pending {
+        tokio::time::timeout(TURN_HOLD_HANG, waiting)
+            .await
+            .unwrap()
+            .unwrap();
+        let (release, gate) = oneshot::channel();
+        *provider.execution_gate.lock().unwrap() = Some(gate);
+        let started = provider.execution_started.notified();
+        *provider.execution_updates.lock().unwrap() = Vec::new();
+        *provider.execution_reply.lock().unwrap() = None;
+        release_parent.take().unwrap().send(()).unwrap();
+        tokio::time::timeout(TURN_HOLD_HANG, started).await.unwrap();
+        assert_eq!(live.agent.active_execution_id(), Some(next.clone()));
+        *provider.execution_updates.lock().unwrap() =
+            vec![ExecutionUpdate::Finished(ExecutionOutcome::Cancelled)];
+        *provider.execution_reply.lock().unwrap() =
+            Some(ProviderExecutionReply::Finished(ExecutionReport::new(
+                Some(Ok(ExecutionOutcome::Cancelled)),
+                None,
+                ProviderSessionState::Usable,
+            )));
+        release_report = Some(release);
+        resume_capture.send(()).unwrap();
+    }
+    tokio::time::timeout(TURN_HOLD_HANG, stopping)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    if active {
+        assert!(
+            provider
+                .cancel_turns
+                .lock()
+                .unwrap()
+                .contains(&next.as_str().to_owned()),
+            "active canonical report was not selected for cancellation"
+        );
+        release_report.take().unwrap().send(()).unwrap();
+    } else {
+        release_parent.take().unwrap().send(()).unwrap();
+    }
+    let saved = commands::CreationStorage::mutations(storage.as_ref(), "person".into())
+        .await
+        .unwrap();
+    let selected = saved.iter().find(|receipt| {
+        receipt.binding().target() == &conversation_session(&parent)
+            && receipt.binding().turn_id() == &next
+            && receipt.binding().operation() == MutationOperation::Stop
+    });
+    if command_collision {
+        assert!(
+            selected.is_none(),
+            "an explicit person command cannot become owned report work through resumption"
+        );
+    } else {
+        assert_eq!(
+            selected.expect("exact successor Stop receipt").outcome(),
+            Some(if active {
+                MutationOutcome::Cancelled
+            } else {
+                MutationOutcome::Withdrawn
+            })
+        );
+    }
+    assert_eq!(
+        tokio::time::timeout(TURN_HOLD_HANG, successor.wait())
+            .await
+            .unwrap(),
+        if command_collision {
+            Ok(ExecutionOutcome::Completed)
+        } else if active {
+            Ok(ExecutionOutcome::Cancelled)
+        } else {
+            Err(AgentError::Closed)
+        },
+        "canonical successor follows report provenance and explicit command authority"
+    );
+    assert!(
+        live.agent.owed_turns().await.is_empty(),
+        "person Stop must not become owed report work"
+    );
+    assert_eq!(
+        provider.close_calls.load(Ordering::SeqCst),
+        0,
+        "ordinary Stop keeps the provider lifetime reusable"
+    );
+    assert_eq!(
+        tokio::time::timeout(TURN_HOLD_HANG, unrelated.wait())
+            .await
+            .unwrap()
+            .unwrap(),
+        ExecutionOutcome::Completed
+    );
+    assert_eq!(
+        retained.pending().await.unwrap().len(),
+        1,
+        "stopped successor keeps its report obligation"
+    );
+    if active {
+        assert!(provider
+            .cancel_turns
+            .lock()
+            .unwrap()
+            .contains(&next.as_str().to_owned()));
+    } else {
+        assert_eq!(
+            provider
+                .executions
+                .lock()
+                .unwrap()
+                .contains(&next.as_str().to_owned()),
+            command_collision
+        );
+    }
+    drop((person, release_parent, release_report, live));
+    retire(service, storage, metadata).await;
 }
 impl commands::CreationStorage for PausedMutationObservation {
     fn open_creation(

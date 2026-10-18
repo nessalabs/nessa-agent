@@ -1,11 +1,21 @@
-//! Person admission releases a Stop's report fence. Automated work cannot.
+//! Report provenance, exact Stop receipts, and person admission delivery fences.
+//!
+//! ```text
+//! durable row + validated delivery -> SDK canonical successor -> capture/delivery
+//! captured Stop receipt -> withdrawal or uncertainty -> retained obligation
+//! later person command -> release report pause -> new delivery identity
+//! ```
+//!
+//! Arrows mean facts consumed here, not another execution-state authority.
+//! Provider results remain distinct from withdrawal and report acknowledgement.
 use super::super::{SubmittedFile, SubmittedImage, SubmittedMessage};
 use super::{
     conversation_session, ConversationCaller, ConversationError, ConversationId,
     ConversationService, SubmissionMode,
 };
 use nessa_sdk::application::agent_execution::{
-    commands::{MutationOperation, MutationOutcome},
+    agents::resumed_turn_id,
+    commands::{MutationOperation, MutationOutcome, MutationStage},
     sessions::InvocationRecord,
 };
 use nessa_sdk::domain::agent_execution::{
@@ -22,17 +32,33 @@ fn delivery_id(original: &str, person: &str) -> String {
     let bytes = serde_json::to_vec(&(original, person)).expect("strings serialize");
     format!("thread-report-{:x}", Sha256::digest(bytes))
 }
+/// Exact current executions descended from validated report deliveries.
+/// The SDK alone validates each canonical successor; continuation notice text
+/// and caller-chosen ID prefixes cannot confer report provenance.
 pub(super) fn report_execution_ids(
     original: &str,
     history: &[InvocationRecord],
+    mut is_delivery: impl FnMut(&InvocationRecord) -> bool,
 ) -> HashSet<String> {
-    std::iter::once(original.to_owned())
+    let candidates: HashSet<_> = std::iter::once(original.to_owned())
         .chain(
             history
                 .iter()
                 .map(|record| delivery_id(original, record.request.execution_id.as_str())),
         )
-        .collect()
+        .collect();
+    let mut current = HashSet::new();
+    for record in history {
+        if !candidates.contains(record.request.execution_id.as_str()) || !is_delivery(record) {
+            continue;
+        }
+        let mut execution = record.request.execution_id.clone();
+        while let Some(next) = resumed_turn_id(history, &execution) {
+            execution = next;
+        }
+        current.insert(execution.as_str().to_owned());
+    }
+    current
 }
 /// Both durable source binding and saved submission identify a report. A
 /// caller-chosen execution ID alone cannot confer ownership over queued work.
@@ -56,6 +82,50 @@ pub(super) fn is_report_record(
 }
 
 impl ConversationService {
+    /// Consume exact mutation receipts, not a provider result's spelling.
+    /// Declining owed work preserves its known failed result. That result
+    /// does not pay the report obligation. Unconfirmed effects retain it too.
+    pub(super) async fn stopped_report_executions(
+        &self,
+        id: &ConversationId,
+        caller: &ConversationCaller,
+    ) -> Result<HashSet<String>, ConversationError> {
+        if self.inner.ownership.get().is_none() {
+            return Ok(HashSet::new());
+        }
+        let selected: Vec<_> = self
+            .captured_stops(caller)
+            .await?
+            .into_iter()
+            .map(|(_, target)| target)
+            .filter(|target| target.target() == &conversation_session(id))
+            .collect();
+        if selected.is_empty() {
+            return Ok(HashSet::new());
+        }
+        let storage = self.commands().ok_or(ConversationError::Unavailable)?;
+        let receipts = storage
+            .mutations(caller.principal_id.as_str().into())
+            .await
+            .map_err(|_| ConversationError::Unavailable)?;
+        let mut stopped = HashSet::new();
+        for binding in selected {
+            let receipt = receipts
+                .iter()
+                .find(|receipt| receipt.binding() == &binding)
+                .ok_or(ConversationError::Unavailable)?;
+            if receipt.stage() != MutationStage::Settled
+                || matches!(
+                    receipt.outcome(),
+                    Some(MutationOutcome::Withdrawn | MutationOutcome::Cancelled)
+                )
+            {
+                stopped.insert(binding.turn_id().as_str().to_owned());
+            }
+        }
+        Ok(stopped)
+    }
+
     async fn person_turns(
         &self,
         id: &ConversationId,

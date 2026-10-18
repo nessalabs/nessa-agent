@@ -2409,7 +2409,8 @@ contract](design/agent-thread-tools.md).
 Gateway parent/child Stop orchestration lives in
 `conversation/application/service/owned_threads.rs` (ordinary empty-child
 preparation), `parent_stop.rs` (durable exact target selection and supervision),
-and `thread_report_admission.rs` (person admission and report delivery fences).
+and `thread_report_admission.rs` (validated delivery provenance through SDK
+canonical successors, exact Stop receipt facts, and person admission delivery fences).
 They reuse the SDK ownership graph and existing command receipts.
 `conversation/infrastructure/ownership_audit.rs` persists coordinator transition
 evidence through the ordinary durable audit owner. Namespace
