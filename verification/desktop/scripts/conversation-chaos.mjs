@@ -843,7 +843,10 @@ async function runOnce(list, knobs, { evidence, label }) {
   }
 }
 
+// `pnpm test:e2e:chaos -- --seed 7` passes the `--` on.
+const args = process.argv.slice(2).filter((arg, i) => !(i === 0 && arg === "--"))
 const options = parseArgs({
+  args,
   options: {
     runs: { type: "string" },
     replay: { type: "string" },
