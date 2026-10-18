@@ -82,6 +82,8 @@ verification/
       lib/
         selectors.mjs       cloneable CSS selectors, selector builders, key chords, storage keys and known-harmless messages
         selectors.test.mjs   the CSS table crosses browser evaluation as plain data (#441)
+        stress-conversation.mjs open the exact stress conversation's list row, even when titles repeat across engines (#329)
+        stress-conversation.test.mjs duplicate titles in either order and missing identities cannot redirect selection
         cli.mjs             options, stderr diagnostics, JSON result, exit status
         server.mjs          reuse/start the dev server (warmed before the first page, a reused one too), or build + preview production
         browser.mjs         launch Chromium/WebKit, seed preferences, keep page diagnostic queues private

@@ -73,6 +73,7 @@ import { main } from "./lib/run.mjs"
 import { writeView } from "./lib/scripted-evidence.mjs"
 import { composerControls, css, offeredLabel } from "./lib/selectors.mjs"
 import { KNOBS, describe, knobsFrom, plan } from "./lib/stress-plan.mjs"
+import { openStressConversation } from "./lib/stress-conversation.mjs"
 
 const INSTANCE = "conversation-stress"
 
@@ -224,15 +225,6 @@ async function untilTurn(run, conversationId, at, ready, seconds = 60) {
 }
 
 const ended = (turn) => turnEnded(turn.status)
-
-/** Opens `title`'s conversation in the window, and waits for its composer. */
-async function open(page, title) {
-  await page
-    .locator(css.sessionRow, { hasText: title })
-    .first()
-    .click({ timeout: 15_000 })
-  await dock(page).locator("textarea").waitFor({ timeout: 15_000 })
-}
 
 /**
  * Types `text` into the open conversation's composer and presses Send.
@@ -740,12 +732,12 @@ const steps = {
     )
     await settled(run, conversationId, new Set(), first, "completed", failures)
     const title = await titleOf(run, conversationId)
-    await open(run.page, title)
+    await openStressConversation(run.page, conversationId, title)
     const second = prompt(run, STRESS.reply, step, " aside again")
     const seen = await send(run, conversationId, second, failures)
     await settled(run, conversationId, seen, second, "completed", failures)
     await expectShown(run.page, `${SAYS.echo}${second}`, failures)
-    await open(run.page, run.main.title)
+    await openStressConversation(run.page, run.main.id, run.main.title)
   },
 
   async park(run, step, failures) {
@@ -778,7 +770,11 @@ const steps = {
     }
     // A person opens the parked conversation and writes in it: the window
     // shows it with no agent running, and Send starts one.
-    await open(run.page, await titleOf(run, conversationId))
+    await openStressConversation(
+      run.page,
+      conversationId,
+      await titleOf(run, conversationId),
+    )
     const second = prompt(run, STRESS.reply, step, " after parking")
     const seen = await send(
       run,
@@ -800,7 +796,7 @@ const steps = {
       failures.push(`the next message left the lease ${after?.lease?.state ?? "missing"}`)
     else if (!(after.lease.revision > (before.lease?.revision ?? 0)))
       failures.push("the next message ran on the parked agent's lease, not a new one")
-    await open(run.page, run.main.title)
+    await openStressConversation(run.page, run.main.id, run.main.title)
   },
 
   async long(run, step, failures) {
@@ -848,12 +844,16 @@ const steps = {
         `the last long answer came back with ${chunks.length} of ${LONG_CHUNKS} chunks: ${JSON.stringify(said.slice(0, 80))}`,
       )
     // A person opens the long conversation and writes in it.
-    await open(run.page, await titleOf(run, conversationId))
+    await openStressConversation(
+      run.page,
+      conversationId,
+      await titleOf(run, conversationId),
+    )
     const last = prompt(run, STRESS.reply, step, " after the long answers")
     const seen = await send(run, conversationId, last, failures)
     await settled(run, conversationId, seen, last, "completed", failures)
     await expectShown(run.page, `${SAYS.echo}${last}`, failures)
-    await open(run.page, run.main.title)
+    await openStressConversation(run.page, run.main.id, run.main.title)
   },
 }
 
@@ -1074,7 +1074,7 @@ await main(
         await run.client.conversation.submit(run.client.conversation.prepare(id, first))
         await settled(run, id, new Set(), first, "completed", setup)
         run.main = { id, title: await titleOf(run, id) }
-        await open(run.page, run.main.title)
+        await openStressConversation(run.page, run.main.id, run.main.title)
         if (setup.length) {
           rep.add({ name: "setup", ...base, failures: setup })
           return
