@@ -8,7 +8,7 @@ use crate::conversation::{
         ConversationCatalogue, ConversationCreationDisposition, ConversationError,
         ConversationListing, ConversationModeApplication, ConversationModeRequest,
         ConversationModeRequestState, ConversationRepository, ConversationSummaries, Reader,
-        WatchCatalogue,
+        ShareGrantTransition, ShareGrants, WatchCatalogue,
     },
     domain::{
         Capabilities, Conversation, ConversationDeletion, ProviderSessionErasure,
@@ -3898,6 +3898,150 @@ async fn a_receiver_switch_is_applied_and_moves_the_catalogue() {
     assert_eq!(journal.len(), 2);
     assert_eq!(journal[1].0, "read");
     assert_eq!(journal[1].1, "read");
+}
+
+/// Once a receiver loses a grant, subsequent replacements for that principal
+/// do not reveal later catalogue activity to it (row J35).
+#[tokio::test]
+async fn a_replaced_receivers_head_stops_at_its_own_replacement() {
+    let opened = opened();
+    let store = &opened.store;
+    let id = new_id();
+    store.create(owned(&id)).await.unwrap();
+    let principal = PrincipalId::new("grantee-shared").unwrap();
+    let share = |receiver: &str, request: &str| {
+        let mut change = grant_change(
+            ShareGrantTransition::Grant(ShareAccess::read()),
+            &id,
+            Some(receiver),
+            &format!("{receiver}-credential"),
+            request,
+        );
+        change.principal_id = Some(principal.clone());
+        change
+    };
+    assert!(store.change(share("phone", "first")).await.unwrap().applied);
+    assert!(
+        store
+            .change(share("tablet", "second"))
+            .await
+            .unwrap()
+            .applied
+    );
+    let lost = store
+        .head(&org(), &alice(), &device("phone"))
+        .await
+        .unwrap()
+        .revision;
+    // An intervening request with no effects is still a journal row for tablet.
+    assert!(
+        !store
+            .change(share("tablet", "unchanged"))
+            .await
+            .unwrap()
+            .applied
+    );
+    assert!(
+        store
+            .change(share("laptop", "third"))
+            .await
+            .unwrap()
+            .applied
+    );
+    assert_eq!(
+        store
+            .head(&org(), &alice(), &device("phone"))
+            .await
+            .unwrap()
+            .revision,
+        lost,
+        "phone must not learn about tablet's later replacement"
+    );
+    let latest = owner_head(store).await;
+    assert!(latest > lost);
+    for receiver in ["tablet", "laptop"] {
+        assert_eq!(
+            store
+                .head(&org(), &alice(), &device(receiver))
+                .await
+                .unwrap()
+                .revision,
+            latest,
+            "the departing and arriving receivers see their replacement"
+        );
+    }
+    assert!(device_pass(store, device("phone"), lost).await.is_empty());
+    assert!(device_pass(store, device("tablet"), lost).await.is_empty());
+    assert_eq!(
+        device_pass(store, device("laptop"), lost).await,
+        vec![(id, latest)]
+    );
+}
+
+/// A revoke terminates the receiver's visibility even if the same principal is
+/// granted the resource again through another receiver (row J35).
+#[tokio::test]
+async fn a_revoked_receivers_head_does_not_follow_a_later_grant() {
+    let opened = opened();
+    let store = &opened.store;
+    let id = new_id();
+    store.create(owned(&id)).await.unwrap();
+    let principal = PrincipalId::new("grantee-shared").unwrap();
+    let share = |receiver: &str, request: &str| {
+        let mut change = grant_change(
+            ShareGrantTransition::Grant(ShareAccess::read()),
+            &id,
+            Some(receiver),
+            &format!("{receiver}-credential"),
+            request,
+        );
+        change.principal_id = Some(principal.clone());
+        change
+    };
+    assert!(store.change(share("phone", "first")).await.unwrap().applied);
+    assert!(revoke(store, &id, "phone").await);
+    let revoked = store
+        .head(&org(), &alice(), &device("phone"))
+        .await
+        .unwrap()
+        .revision;
+    assert!(
+        store
+            .change(share("tablet", "second"))
+            .await
+            .unwrap()
+            .applied
+    );
+    assert!(owner_head(store).await > revoked);
+    assert_eq!(
+        store
+            .head(&org(), &alice(), &device("phone"))
+            .await
+            .unwrap()
+            .revision,
+        revoked
+    );
+    assert!(device_pass(store, device("phone"), revoked)
+        .await
+        .is_empty());
+    // Returning to phone is new visibility and must move its head again.
+    assert!(
+        store
+            .change(share("phone", "return"))
+            .await
+            .unwrap()
+            .applied
+    );
+    let returned = store
+        .head(&org(), &alice(), &device("phone"))
+        .await
+        .unwrap()
+        .revision;
+    assert!(returned > revoked);
+    assert_eq!(
+        device_pass(store, device("phone"), revoked).await,
+        vec![(id, returned)]
+    );
 }
 
 /// A change that names a principal resolves that principal's row only. Naming

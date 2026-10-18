@@ -320,7 +320,10 @@ fn admit_catalogue_target(
 
 /// A paired reader's head: the latest revision among the owner's rows granted
 /// to `receiver`, among `receiver`'s grants and revokes, and among later
-/// journal rows that replaced this receiver or its credential. A change of
+/// journal rows immediately replacing a grant this receiver held, or its
+/// credential. Later replacements after it lost the grant do not move its head
+/// (`a_replaced_receivers_head_stops_at_its_own_replacement`,
+/// `a_revoked_receivers_head_does_not_follow_a_later_grant`). A change of
 /// capabilities or constraints, with the same receiver and credential, is
 /// none of those: it leaves what the receiver reads as it was, and takes no
 /// revision of its own (`docs/design/read-grants.md`, row J4). A revoke, and
@@ -351,8 +354,15 @@ fn granted_head(
                                  ON j.resource_kind = later.resource_kind
                                 AND j.resource_id = later.resource_id
                                 AND j.principal_id = later.principal_id
-                                AND j.sequence < later.sequence
+                                AND j.sequence = (
+                                    SELECT MAX(previous.sequence)
+                                    FROM share_grant_changes AS previous
+                                    WHERE previous.resource_kind = later.resource_kind
+                                      AND previous.resource_id = later.resource_id
+                                      AND previous.principal_id = later.principal_id
+                                      AND previous.sequence < later.sequence)
                                 AND j.receiver_id = ?3
+                                AND j.after <> 'none'
                                 AND (later.receiver_id IS NOT j.receiver_id
                                      OR later.credential_id <> j.credential_id)
                                JOIN conversations AS c ON c.id = later.resource_id
