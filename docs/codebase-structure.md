@@ -1641,6 +1641,16 @@ under `tests/backup/verification*.rs`; `tests/backup_verifier.rs` exercises the
 actual binary. [Standalone verification](design/backup-verification.md) defines
 the limits and the remaining restore contracts (#270).
 
+`backup_plan_main.rs` and `composition/restore_planning.rs` expose the separate
+`nessa-backup-plan` inspection command. `application/restore_planning.rs` forwards
+the application's format port to the verifier; composition supplies the shared
+`ExportFormat`. It reports omissions, unresolved prerequisites and unimplemented
+quarantine/import ordering; it acquires no activation or destination capability.
+`composition/backup_output.rs` owns JSON output for both offline commands.
+`tests/backup/restore_planning.rs` and `tests/backup_restore_plan.rs` cover the
+application decoder refusals and actual process. [Offline restore planning](design/offline-restore-planning.md)
+defines the boundary; #324 storage changes remain separately owned.
+
 ## Attachments
 
 `crates/nessa-server/src/attachments/` owns the files a conversation uploads so
