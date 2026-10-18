@@ -98,6 +98,10 @@ impl std::fmt::Display for InvalidOperationalLimits {
                 formatter,
                 "read_work_budget must be positive and representable as a deadline"
             ),
+            Self::AgentIdle => write!(
+                formatter,
+                "agent_idle_seconds must be 0 (never park) or from 1 to {MAX_AGENT_IDLE_SECONDS}"
+            ),
             other => write!(
                 formatter,
                 "{} must be from 1 to {MAX_ADMISSION}",

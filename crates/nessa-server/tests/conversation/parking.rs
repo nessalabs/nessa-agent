@@ -1,20 +1,21 @@
 //! Idle agents nobody watches are parked, and the next message resumes their
 //! provider session (#998). Each test is a row of the table in
 //! docs/design/agent-parking.md, "Orderings". A sweep is run by hand
-//! (`park_idle`) so each test decides when one looks; a short real limit
-//! stands in for the configured one.
+//! (`park_idle`) so each test decides when one looks, and the service's clock
+//! is moved by hand so each test decides how long the agent sat idle.
 use super::*;
 use crate::conversation::application::SubmittedMessage;
 use crate::conversation_test_support::{
     access_policy, claude_erasers, only, AcceptingCreationAudit, AcceptingDeletionAudit,
     MemoryAttachments, MemoryListing, MemoryRepository, MemorySummaries, Provider, ProviderFactory,
-    RecordingFileLinkAudit, TestClock, DELETION_BUDGETS,
+    RecordingFileLinkAudit, DELETION_BUDGETS,
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_protocol::conversation::view::{
     ConversationLeaseCause, ConversationLeaseState, ConversationMessageStatus,
 };
 use nessa_sdk::infrastructure::session_storage::InMemoryStorage;
+use std::sync::atomic::AtomicU64;
 use std::time::Duration;
 use tokio::sync::oneshot;
 
@@ -24,14 +25,30 @@ const BOUND: Duration = Duration::from_secs(5);
 /// The idle limit most tests park under.
 const LIMIT: Duration = Duration::from_millis(100);
 
-/// A limit nothing here reaches: a sweep under it shows what it touched,
-/// without a slow machine parking what the test keeps.
+/// A limit nothing here reaches: a sweep under it shows what it touched.
 const NEVER: Duration = Duration::from_secs(600);
+
+/// The service's clock, moved only by the test.
+struct ManualClock(AtomicU64);
+impl ManualClock {
+    fn now(&self) -> u64 {
+        self.0.load(Ordering::SeqCst)
+    }
+    fn advance(&self, by: Duration) {
+        self.0.fetch_add(by.as_millis() as u64, Ordering::SeqCst);
+    }
+}
+impl nessa_auth::application::ports::Clock for ManualClock {
+    fn unix_milliseconds(&self) -> u64 {
+        self.now()
+    }
+}
 
 struct Fixture {
     service: ConversationService,
     provider: Arc<ProviderFactory>,
     storage: Arc<InMemoryStorage>,
+    clock: Arc<ManualClock>,
     id: ConversationId,
 }
 
@@ -48,11 +65,13 @@ impl Fixture {
 
     async fn build(park_after: Option<Duration>, images: bool) -> Self {
         let provider = Arc::new(ProviderFactory::default());
+        provider.session_resume.store(true, Ordering::SeqCst);
         provider.image_input.store(images, Ordering::SeqCst);
         provider.model_images.store(images, Ordering::SeqCst);
         let repository = Arc::new(MemoryRepository::default());
         let summaries = Arc::new(MemorySummaries::default());
         let storage = Arc::new(InMemoryStorage::new());
+        let clock = Arc::new(ManualClock(AtomicU64::new(1_700_000_000_000)));
         let service = ConversationService::new(
             ConversationDependencies {
                 access_policy: access_policy(),
@@ -74,7 +93,7 @@ impl Fixture {
                 message_commit_clock: Arc::new(
                     nessa_sdk::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
                 ),
-                clock: Arc::new(TestClock),
+                clock: clock.clone(),
                 environment: crate::conversation::infrastructure::in_process_environment().into(),
             },
             ConversationLimits {
@@ -97,6 +116,7 @@ impl Fixture {
             service,
             provider,
             storage,
+            clock,
             id,
         };
         fixture.attached().await;
@@ -110,10 +130,25 @@ impl Fixture {
         let _ = live.join_attachment_owner().await;
     }
 
-    /// The conversation was touched at or after `since`.
-    async fn touched_since(&self, since: tokio::time::Instant) -> bool {
+    /// The conversation was touched at the clock's current time.
+    async fn touched_now(&self) -> bool {
         let slot = self.slot().await.expect("a live conversation");
-        slot.untouched_for() <= since.elapsed()
+        slot.untouched_for(self.clock.now()).is_zero()
+    }
+
+    /// Let `by` pass on the service's clock.
+    fn wait(&self, by: Duration) {
+        self.clock.advance(by);
+    }
+
+    /// The view a window following the conversation gets, which opens nothing.
+    async fn followed_view(&self) -> nessa_protocol::conversation::view::ConversationView {
+        let (view, _) = self
+            .service
+            .read_at(self.id.clone(), caller("follow"), ReadOpening::LiveOnly)
+            .await
+            .unwrap();
+        view
     }
 
     async fn slot(&self) -> Option<Arc<Slot>> {
@@ -247,7 +282,7 @@ async fn an_agent_idle_for_less_than_the_limit_is_not_parked() {
 async fn an_idle_unwatched_agent_is_parked_and_its_lease_ends_idle() {
     let fixture = Fixture::new(Some(LIMIT)).await;
     fixture.turn("first").await;
-    tokio::time::sleep(LIMIT * 2).await;
+    fixture.wait(LIMIT * 2);
     assert_eq!(fixture.service.park_idle(LIMIT).await, 1);
     assert!(fixture.slot().await.is_none(), "the slot was released");
     assert_eq!(fixture.provider.close_calls.load(Ordering::SeqCst), 1);
@@ -272,15 +307,14 @@ async fn a_running_turn_is_not_parked() {
     tokio::time::timeout(BOUND, fixture.provider.execution_started.notified())
         .await
         .expect("the turn reaches the provider");
-    tokio::time::sleep(LIMIT * 2).await;
-    let swept = tokio::time::Instant::now();
+    fixture.wait(LIMIT * 2);
     assert_eq!(fixture.service.park_idle(LIMIT).await, 0, "busy");
-    assert!(fixture.touched_since(swept).await, "seen busy, so touched");
+    assert!(fixture.touched_now().await, "seen busy, so touched");
     release.send(()).unwrap();
     sent.await.unwrap().unwrap();
     fixture.completed("long").await;
     assert!(fixture.slot().await.is_some());
-    tokio::time::sleep(LIMIT * 2).await;
+    fixture.wait(LIMIT * 2);
     assert_eq!(fixture.service.park_idle(LIMIT).await, 1);
     fixture.service.shutdown().await.unwrap();
 }
@@ -291,15 +325,11 @@ async fn a_running_turn_is_not_parked() {
 async fn a_followed_conversation_is_not_parked() {
     let fixture = Fixture::new(Some(LIMIT)).await;
     let follower = fixture.service.live_changes(&fixture.id);
-    tokio::time::sleep(LIMIT * 2).await;
-    let swept = tokio::time::Instant::now();
+    fixture.wait(LIMIT * 2);
     assert_eq!(fixture.service.park_idle(LIMIT).await, 0, "followed");
-    assert!(
-        fixture.touched_since(swept).await,
-        "seen followed, so touched"
-    );
+    assert!(fixture.touched_now().await, "seen followed, so touched");
     drop(follower);
-    tokio::time::sleep(LIMIT * 2).await;
+    fixture.wait(LIMIT * 2);
     assert_eq!(fixture.service.park_idle(LIMIT).await, 1);
     fixture.service.shutdown().await.unwrap();
 }
@@ -322,7 +352,7 @@ async fn a_message_during_parking_waits_and_opens_the_conversation_again() {
     fixture.turn("first").await;
     let (release_close, close_gate) = oneshot::channel();
     *fixture.provider.close_gate.lock().unwrap() = Some(close_gate);
-    tokio::time::sleep(LIMIT * 2).await;
+    fixture.wait(LIMIT * 2);
     let parking = {
         let service = fixture.service.clone();
         tokio::spawn(async move { service.park_idle(LIMIT).await })
@@ -350,7 +380,7 @@ async fn a_message_during_parking_waits_and_opens_the_conversation_again() {
 async fn a_message_after_parking_resumes_the_provider_session() {
     let fixture = Fixture::new(Some(LIMIT)).await;
     fixture.turn("first").await;
-    tokio::time::sleep(LIMIT * 2).await;
+    fixture.wait(LIMIT * 2);
     assert_eq!(fixture.service.park_idle(LIMIT).await, 1);
     fixture.turn("after").await;
     fixture.resumed_the_first_session();
@@ -360,11 +390,10 @@ async fn a_message_after_parking_resumes_the_provider_session() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_message_just_sent_keeps_the_agent() {
     let fixture = Fixture::new(Some(LIMIT)).await;
-    tokio::time::sleep(LIMIT * 2).await;
-    let sent = tokio::time::Instant::now();
+    fixture.wait(LIMIT * 2);
     fixture.turn("just-now").await;
-    assert!(fixture.touched_since(sent).await, "the send touched it");
-    assert_eq!(fixture.service.park_idle(NEVER).await, 0);
+    assert!(fixture.touched_now().await, "the send touched it");
+    assert_eq!(fixture.service.park_idle(LIMIT).await, 0);
     assert!(fixture.slot().await.is_some());
     fixture.service.shutdown().await.unwrap();
 }
@@ -385,31 +414,19 @@ async fn parking_stops_when_the_gateway_retires() {
         .unwrap();
 }
 
-/// A window opened on a parked conversation is told what its agent last said
-/// about images, not no: a send starts an agent that takes them. The next
-/// agent's view starts from the same answer until it says its own.
+/// A window opened on a parked conversation may send images when this
+/// gateway takes them: a send starts an agent again, and one that does not
+/// take them is refused at submission. The answer comes from what the
+/// gateway offers, so it holds after a restart too.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_parked_conversations_view_keeps_its_image_answer() {
+async fn a_parked_conversations_view_takes_images_when_the_gateway_does() {
     let fixture = Fixture::with_images(Some(LIMIT)).await;
     fixture.turn("first").await;
-    let view = fixture
-        .service
-        .read(fixture.id.clone(), caller("read"))
-        .await
-        .unwrap();
-    assert!(view.capabilities.image_input, "the agent takes images");
-    tokio::time::sleep(LIMIT * 2).await;
+    fixture.wait(LIMIT * 2);
     assert_eq!(fixture.service.park_idle(LIMIT).await, 1);
-    let (parked, _) = fixture
-        .service
-        .read_at(fixture.id.clone(), caller("follow"), ReadOpening::LiveOnly)
-        .await
-        .unwrap();
+    let parked = fixture.followed_view().await;
     assert!(fixture.slot().await.is_none(), "a follower opened nothing");
-    assert!(
-        parked.capabilities.image_input,
-        "the parked agent's answer stands"
-    );
+    assert!(parked.capabilities.image_input, "images may be sent");
     assert!(!parked.capabilities.queue, "nothing runs to queue behind");
     fixture.turn("after").await;
     let view = fixture
@@ -417,11 +434,33 @@ async fn a_parked_conversations_view_keeps_its_image_answer() {
         .read(fixture.id.clone(), caller("read"))
         .await
         .unwrap();
-    assert!(view.capabilities.image_input);
-    assert_eq!(
-        fixture.service.parked_image_input(&fixture.id),
-        None,
-        "the next agent gave its own answer"
-    );
+    assert!(view.capabilities.image_input, "the next agent takes them");
+    fixture.service.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_parked_conversations_view_refuses_images_the_gateway_does_not_take() {
+    let fixture = Fixture::new(Some(LIMIT)).await;
+    fixture.turn("first").await;
+    fixture.wait(LIMIT * 2);
+    assert_eq!(fixture.service.park_idle(LIMIT).await, 1);
+    assert!(!fixture.followed_view().await.capabilities.image_input);
+    fixture.service.shutdown().await.unwrap();
+}
+
+/// An agent that cannot resume its provider session would lose what it was
+/// told, so it is kept however long it sits idle.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_agent_that_cannot_resume_is_not_parked() {
+    let fixture = Fixture::new(Some(LIMIT)).await;
+    fixture
+        .provider
+        .session_resume
+        .store(false, Ordering::SeqCst);
+    fixture.turn("first").await;
+    fixture.wait(LIMIT * 2);
+    assert_eq!(fixture.service.park_idle(LIMIT).await, 0);
+    assert!(fixture.slot().await.is_some());
+    assert_eq!(fixture.provider.close_calls.load(Ordering::SeqCst), 0);
     fixture.service.shutdown().await.unwrap();
 }

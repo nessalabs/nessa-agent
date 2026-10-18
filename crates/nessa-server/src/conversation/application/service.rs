@@ -103,7 +103,7 @@ use std::{
     panic::AssertUnwindSafe,
     pin::Pin,
     sync::{
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         Arc, OnceLock, Weak,
     },
     time::Duration,
@@ -738,32 +738,28 @@ struct Slot {
     /// When the conversation last showed it was in use: opened, sent a
     /// message, or seen busy, followed or with an app call waiting by the
     /// parking sweep. An agent is parked only once this is
-    /// `ConversationLimits::park_after` old (`service/parking.rs`).
-    touched: std::sync::Mutex<tokio::time::Instant>,
+    /// `ConversationLimits::park_after` old (`service/parking.rs`). Unix
+    /// milliseconds from the service's clock.
+    touched: AtomicU64,
 }
 impl Slot {
-    fn new() -> Self {
+    fn new(now_ms: u64) -> Self {
         Self {
             value: OnceCell::new(),
             ready: Notify::new(),
             started: AtomicBool::new(false),
             stopping: AtomicBool::new(false),
-            touched: std::sync::Mutex::new(tokio::time::Instant::now()),
+            touched: AtomicU64::new(now_ms),
         }
     }
-    /// The conversation is in use now.
-    fn touch(&self) {
-        *self
-            .touched
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = tokio::time::Instant::now();
+    /// The conversation is in use at `now_ms`.
+    fn touch(&self, now_ms: u64) {
+        self.touched.fetch_max(now_ms, Ordering::SeqCst);
     }
-    /// How long since the conversation was last in use.
-    fn untouched_for(&self) -> Duration {
-        self.touched
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .elapsed()
+    /// How long before `now_ms` the conversation was last in use. A clock
+    /// that went back reads as just now.
+    fn untouched_for(&self, now_ms: u64) -> Duration {
+        Duration::from_millis(now_ms.saturating_sub(self.touched.load(Ordering::SeqCst)))
     }
 }
 struct Inner {
@@ -882,13 +878,6 @@ struct Inner {
     /// submission lock, and cleared under it too, except where nothing can
     /// still run there: an agent closed for good, a conversation deleted.
     unfinished_marked: std::sync::Mutex<HashMap<ConversationId, resumption::Retry>>,
-    /// Whether each parked conversation's agent took images, as its view
-    /// last said. The last known answer stands while no agent runs, as it
-    /// does while one is being restored: a view of a parked conversation
-    /// never says no to images its next agent would take
-    /// (`service/parking.rs`). Let go of once a later agent gives its own
-    /// answer, or the conversation is deleted; a failed opening keeps it.
-    parked_image_input: std::sync::Mutex<HashMap<ConversationId, bool>>,
     /// How long a failure's retry waits (`resumption`), bound with the marks.
     failure_backoff: OnceLock<resumption::FailureBackoff>,
     /// Woken when a failure retry is scheduled, so the retry loop waits for
@@ -1334,7 +1323,6 @@ impl ConversationService {
                 note_authors: Arc::new(OnceLock::new()),
                 unfinished_turns: OnceLock::new(),
                 unfinished_marked: std::sync::Mutex::default(),
-                parked_image_input: std::sync::Mutex::default(),
                 failure_backoff: OnceLock::new(),
                 retry_scheduled: tokio::sync::Notify::new(),
                 drive: Arc::new(OnceLock::new()),
@@ -1561,7 +1549,7 @@ impl ConversationService {
             let slot = match owners.entry(id.clone()) {
                 std::collections::hash_map::Entry::Occupied(entry) => entry.get().clone(),
                 std::collections::hash_map::Entry::Vacant(entry) => {
-                    let slot = Arc::new(Slot::new());
+                    let slot = Arc::new(Slot::new(self.inner.clock.unix_milliseconds()));
                     entry.insert(slot.clone());
                     service.start_slot(id.clone(), slot.clone(), actor.clone());
                     slot
@@ -1664,7 +1652,7 @@ impl ConversationService {
                 {
                     return Err(ConversationError::Capacity.into());
                 }
-                let slot = Arc::new(Slot::new());
+                let slot = Arc::new(Slot::new(self.inner.clock.unix_milliseconds()));
                 owners.insert(id.clone(), slot.clone());
                 self.start_slot(id.clone(), slot.clone(), actor);
                 slot
@@ -1949,19 +1937,16 @@ impl ConversationService {
                                 })?;
                             let snapshot = agent.session_manager().snapshot().await;
                             let operation_capabilities = agent.operation_capabilities();
-                            // Until the agent answers, a parked agent's last
-                            // answer stands.
-                            let answer = service.takes_images(&agent, operation_capabilities);
-                            let parked_image_input = match answer {
-                                Some(_) => service.take_parked_image_input(&id),
-                                None => service.parked_image_input(&id),
-                            };
                             let capabilities = ConversationCapabilities {
                                 queue: true,
                                 steer: true,
                                 resume: operation_capabilities.session_resume(),
                                 permissions: agent.capabilities().features().tool_use(),
-                                image_input: answer.or(parked_image_input).unwrap_or(false),
+                                // Until the agent answers, the view admits what a
+                                // send admits: unknown is not no.
+                                image_input: service
+                                    .takes_images(&agent, operation_capabilities)
+                                    != Some(false),
                                 agent_features: operation_capabilities.into(),
                             };
                             let mut projection =
@@ -2604,12 +2589,9 @@ impl ConversationService {
         let operation_capabilities = live.agent.operation_capabilities();
         // The last known answer stands while the agent is being restored, so the
         // view never says no to what a send at the same moment would admit.
-        let answer = self.takes_images(&live.agent, operation_capabilities);
-        if answer.is_some() {
-            // The agent said its own: a parked agent's answer is done with.
-            self.take_parked_image_input(&id);
-        }
-        let image_input = answer.unwrap_or(projection.view().capabilities.image_input);
+        let image_input = self
+            .takes_images(&live.agent, operation_capabilities)
+            .unwrap_or(projection.view().capabilities.image_input);
         projection.capabilities(ConversationCapabilities {
             queue: true,
             steer: true,
@@ -2696,9 +2678,13 @@ impl ConversationService {
         let projection = self.detached(id, &committed, &order);
         let read = (projection.read(), projection.committed_cursor());
         let (mut view, cursor) = self.read_only(read, &record, id, caller).await?;
-        if let Some(image_input) = self.parked_image_input(id) {
-            view.capabilities.image_input = image_input;
-        }
+        // A message opens it again, so images may be sent if this gateway
+        // takes them; an agent that does not is refused at submission.
+        view.capabilities.image_input = self
+            .inner
+            .attachments
+            .as_ref()
+            .is_some_and(|attachments| attachments.offers_images());
         Ok((view, cursor))
     }
     /// The committed history of `id`, and its pending order.
@@ -3103,7 +3089,7 @@ impl ConversationService {
                 .resolve_opening(&id, &caller, !writer.is_app())
                 .await?;
             // A message is use: an agent is not parked from under it.
-            owner.touch();
+            owner.touch(service.inner.clock.unix_milliseconds());
             // An agent that stopped itself and waits for its owner's close
             // takes nothing more (`Agent::awaits_close`): the conversation is
             // stopped, not gone, so a person's message closes it and opens
@@ -4892,7 +4878,6 @@ impl ConversationService {
                 }
             }
             self.forget_thread_reports_of(&id).await;
-            self.take_parked_image_input(&id);
             let _writes = self.inner.summary_writes.lock(&id).await;
             if let Err(error) = self.inner.summaries.erase(&id).await {
                 failures.summary = Some(error);

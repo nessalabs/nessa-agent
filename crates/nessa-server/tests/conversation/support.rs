@@ -994,6 +994,8 @@ pub(crate) struct ProviderFactory {
     pub(crate) image_input: AtomicBool,
     /// Whether the attached agent can inject a steer into the active turn.
     pub(crate) native_steering: AtomicBool,
+    /// Whether the agent can resume a recorded provider session.
+    pub(crate) session_resume: AtomicBool,
     /// Whether a steer is taken into the running turn; otherwise steering
     /// is refused as unsupported.
     pub(crate) inject_steers: AtomicBool,
@@ -1612,6 +1614,7 @@ impl ProviderSessionBackend for Backend {
             negotiated: !self.factory.answer_unknown.load(Ordering::SeqCst),
             native_hooks_allowed: self.factory.native_hooks.load(Ordering::SeqCst),
             native_steering: self.factory.native_steering.load(Ordering::SeqCst),
+            session_resume: self.factory.session_resume.load(Ordering::SeqCst),
             ..ProviderOperationCapabilities::default()
         }
     }

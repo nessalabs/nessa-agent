@@ -16,7 +16,10 @@ The gateway looks at every live conversation every few seconds
 
 - `limits.agentIdleSeconds` is not 0, and that long has passed since the
   conversation was last touched: opened, sent a message, or seen busy, watched
-  or with an app call waiting.
+  or with an app call waiting. Time is read from the service's clock port, so
+  tests move it by hand.
+- Its agent can resume a provider session (`session_resume`). One that cannot
+  would lose its context on the next start, so it is never parked.
 - Its agent is attached and idle (`Agent::is_idle`): nothing queued, nothing
   running. A permission review or a question belongs to a running turn, so a
   conversation waiting on one is never idle.
@@ -56,8 +59,7 @@ The parking sweep takes the conversation's submission lock, the one a
 submission, a read, a mode change and the resumption of owed turns take, and
 keeps it until the slot is released. A failed turn's retry and the start-up
 sweep open a conversation without that lock; one that lands as the slot is
-released opens it again like any message, and finds the parked image answer,
-which is kept before the slot goes. Anything that arrives meanwhile waits and then opens the
+released opens it again like any message. Anything that arrives meanwhile waits and then opens the
 conversation again, instead of being refused as a desktop stop refuses it.
 
 | When | Parking | What arrives | Test |
@@ -70,8 +72,9 @@ conversation again, instead of being refused as a desktop stop refuses it.
 | `agentIdleSeconds` is 0 | Never parked | | `a_zero_limit_parks_nothing` |
 | A message arrives while parking holds the lock | Finishes the park | Waits, then opens the conversation again and resumes its provider session; the turn runs | `a_message_during_parking_waits_and_opens_the_conversation_again` |
 | A message arrives after the park | | Opens again with `session/resume` of the recorded session | `a_message_after_parking_resumes_the_provider_session` |
+| The agent cannot resume a provider session | Never parked | | `an_agent_that_cannot_resume_is_not_parked` |
 | A message is sent just before the sweep checks | Not parked: the send touched the conversation | Runs | `a_message_just_sent_keeps_the_agent` |
-| A window opens the parked conversation | | Its view says what the agent last said about images, so a pasted image is not refused; the next agent's view starts from the same answer | `a_parked_conversations_view_keeps_its_image_answer` |
+| A window opens the parked conversation | | Its view says images may be sent when the gateway takes them, so a pasted image is not refused; a send to an agent that takes none is refused at submission | `a_parked_conversations_view_takes_images_when_the_gateway_does`, `a_parked_conversations_view_refuses_images_the_gateway_does_not_take` |
 | A delete wrote its tombstone and let the lock go | Not parked: the record says deleted, and the delete stops the agent under its own cause | | the check in `park` (the window between the tombstone and the delete's stop is not reachable from a test) |
 | The suspend's close fails or runs past its budget | The slot stays, marked stopping, as after any failed stop; parking goes through the same `stop_and_release` | Refused as closed until the close confirms | covered by `a_stop_that_runs_past_its_budget_carries_on_and_lets_the_agent_go` |
 | The gateway starts retiring | The sweep ends; retirement suspends what is left | | `parking_stops_when_the_gateway_retires` |
@@ -81,10 +84,13 @@ conversation again, instead of being refused as a desktop stop refuses it.
 - A follower's read (a view subscription, as a window or phone holds) of a
   conversation with no live agent folds its committed history, as it did
   after a restart, and opens nothing. Its view says nothing can be queued,
-  steered or reviewed, since nothing runs; what the agent last said about
-  images stands (`parked_image_input`), as it does while an agent is being
-  restored, so a window opened on a parked conversation takes a pasted image.
-  After a restart there is no last answer, as before.
+  steered or reviewed, since nothing runs. It says images may be sent when the
+  gateway takes them (`offers_images`), because a send starts an agent again;
+  an agent whose model takes none refuses them at submission
+  (`image_input_unsupported`). This comes from the gateway, not from memory of
+  the last agent, so it holds after a restart and keeps nothing per
+  conversation. An opening agent's view does the same until it negotiates:
+  unknown is not no, as submission already admits.
 - `conversation.read` opens the conversation's agent, as it always did, so a
   client that polls with it slower than `agentIdleSeconds` starts the agent
   on each poll. Surfaces follow with a view subscription instead.

@@ -20,7 +20,7 @@ use nessa_sdk::application::agent_execution::{
     agents::AttachmentPhase, permissions::ActionContext,
 };
 use nessa_sdk::domain::agent_execution::leases::LeaseEndCause;
-use std::sync::{atomic::Ordering, Arc, PoisonError};
+use std::sync::{atomic::Ordering, Arc};
 use std::time::Duration;
 use uuid::Uuid;
 
@@ -67,14 +67,15 @@ impl ConversationService {
             .iter()
             .map(|(id, slot)| (id.clone(), slot.clone()))
             .collect();
+        let now = self.inner.clock.unix_milliseconds();
         let mut due = Vec::new();
         for (id, slot) in owners {
             let Some(live) = settled(&slot) else {
                 continue;
             };
             if !self.parkable(&id, &live).await {
-                slot.touch();
-            } else if slot.untouched_for() >= park_after {
+                slot.touch(now);
+            } else if slot.untouched_for(now) >= park_after {
                 due.push((id, slot));
             }
         }
@@ -86,11 +87,14 @@ impl ConversationService {
             .await
     }
 
-    /// Whether `live` could be parked now: attached, idle, nobody following
-    /// it, and no app call of it waiting on a review. A permission review or
-    /// a question belongs to a running turn, so its agent is not idle.
+    /// Whether `live` could be parked now: attached, able to resume its
+    /// provider session, idle, nobody following it, and no app call of it
+    /// waiting on a review. An agent that cannot resume would lose its
+    /// session's context, so it is never parked. A permission review or a
+    /// question belongs to a running turn, so its agent is not idle.
     async fn parkable(&self, id: &ConversationId, live: &LiveConversation) -> bool {
         live.agent.attachment_status().phase() == AttachmentPhase::Attached
+            && live.agent.operation_capabilities().session_resume()
             && !self.inner.live_changes.followed(id)
             && live.app_reviews.entries().is_empty()
             && live.agent.is_idle().await
@@ -114,7 +118,8 @@ impl ConversationService {
         let Some(live) = settled(&slot) else {
             return false;
         };
-        if slot.untouched_for() < park_after || !self.parkable(id, &live).await {
+        let now = self.inner.clock.unix_milliseconds();
+        if slot.untouched_for(now) < park_after || !self.parkable(id, &live).await {
             return false;
         }
         // A delete lets go of the lock once its tombstone is written, and
@@ -123,15 +128,6 @@ impl ConversationService {
             Ok(Some(record)) if record.deletion().is_none() => {}
             _ => return false,
         }
-        // Kept before the slot goes, so a read or an opening right after the
-        // release finds it; a stop that fails keeps it for the release that
-        // follows.
-        let image_input = live.projection.lock().await.view().capabilities.image_input;
-        self.inner
-            .parked_image_input
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .insert(id.clone(), image_input);
         drop(live);
         let Ok(actor) =
             ActionContext::new("gateway", "agent_idle", format!("idle-{}", Uuid::new_v4()))
@@ -156,25 +152,6 @@ impl ConversationService {
                 false
             }
         }
-    }
-
-    /// What `id`'s parked agent last said about images, if it was parked.
-    pub(super) fn parked_image_input(&self, id: &ConversationId) -> Option<bool> {
-        self.inner
-            .parked_image_input
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .get(id)
-            .copied()
-    }
-
-    /// Take `id`'s parked answer: a later agent gave its own, or it is gone.
-    pub(super) fn take_parked_image_input(&self, id: &ConversationId) -> Option<bool> {
-        self.inner
-            .parked_image_input
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .remove(id)
     }
 }
 
