@@ -622,6 +622,11 @@ acknowledgement checkpoints rather than continuous attachment. Windows `sync` on
 revalidates binding and does not claim directory durability or arbitrary power-loss
 survival. See the [local-storage module map](../crates/nessa-local-storage/README.md#module-map)
 and [retained publication design](design/retained-directory-publication.md).
+`PrivateDirectory::open_root` retains an existing caller-trusted private root;
+`open_directory` carries that captured ancestry into an existing child. Backup
+verification uses these read/search acquisitions for manifest reads, enumeration
+and body access, including cuts without a records directory. Neither acquisition
+creates storage or repairs permissions.
 
 On Unix, `create_private_directory_path` and `PrivateDirectory::open_path` retain an
 absolute private store through ordinary locator ancestry. System and account
@@ -1615,6 +1620,19 @@ snapshots. `infrastructure/` reads the namespace, including `device/outbox/` and
 mac key stays beside the deletion inventory and is not part of the bundle.
 Restore and quarantine are not in this module.
 
+The separate `nessa-backup-verify` binary enters through `backup_verify_main.rs`
+and `composition/backup_verification.rs`, without gateway bootstrap.
+`backup/entrypoint/arguments.rs` parses explicit input paths; `application/verification.rs`
+authenticates and streams the supplied cut through read-only ports;
+`domain/verification.rs` owns validated cut metadata; `application/verification_format.rs`
+owns the typed decoding port and authentication offsets. `infrastructure/manifest_decode.rs`
+and `deletion_decode.rs` own persisted grammars, shared by live storage and the injected
+`ExportFormat` verification adapter. The directory and
+key readers live in `infrastructure/verification.rs`. Tests follow these owners
+under `tests/backup/verification*.rs`; `tests/backup_verifier.rs` exercises the
+actual binary. [Standalone verification](design/backup-verification.md) defines
+the limits and the remaining restore contracts (#270).
+
 ## Attachments
 
 `crates/nessa-server/src/attachments/` owns the files a conversation uploads so
@@ -2372,6 +2390,10 @@ reopen/retry and private admission/drain; Auth's TLS adapter owns the shared key
 representation conversion. The server's
 `tests/composition/read_only_online/native_session.rs` drives the actual paired
 gateway and the optional generated Swift probe under `verification/native-device`.
+Its `native_session/clock.rs` holds controlled elapsed time and a failing wall-time
+watchdog for refusal and budget ordering; the contract is in
+`docs/design/native-session-verification-997.md`. `NativeSession::open_with_clock`
+accepts the protocol clock at composition; `open` keeps the production default.
 Core's `retained/active.rs` validates fresh status against the current immutable
 issued record before product selection. Release Apple packaging is verified;
 the actual phone repository remains unfinished under issue 782. This module does not supply native

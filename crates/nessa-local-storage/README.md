@@ -25,11 +25,11 @@ owns the #324 ordering table and platform evidence boundaries.
 | `src/physical_operation.rs` | Default-off `physical-operation` capability: one-slot Worker admission, synchronous Admission submission and private Job captured cleanup; adapter-owned typed mappings remain with consumers. |
 | `src/physical_operation/tests.rs` | Central admission, executor, cancellation and ordinary call/capture fault contracts. |
 | `tests/support/physical_operation.rs` | Source-included cfg(test)-only actual adapter capture observations and OS watchdog fixtures; no execution/admission policy. |
-| `src/retained_directory.rs` | `PrivateDirectory`, native entry snapshots, origin-bound temporary files, and typed publication evidence. |
-| `src/unix/retained_directory.rs` | Retained directory descriptors through private roots or safe absolute locator ancestry, independent `openat(".")` enumeration cursors, identity checks, exclusive publication, atomic replacement, cleanup, and directory sync. |
+| `src/retained_directory.rs` | `PrivateDirectory`, retained root/child acquisition, native entry snapshots, origin-bound temporary files, and typed publication evidence. |
+| `src/unix/retained_directory.rs` | Retained root and child directory descriptors with cloned captured ancestry, safe absolute locator ancestry, independent `openat(".")` enumeration cursors, identity checks, exclusive publication, atomic replacement, cleanup, and directory sync. |
 | `src/windows.rs` | Path-based private Win32 storage and the shared handle rename encoder: exclusive publication or POSIX replacement that retains delete-sharing readers. |
-| `src/windows/retained_directory.rs` | Top-down non-delete-sharing directory handles, transient identity probes, handle enumeration, delegation to the shared rename encoder, and handle disposition cleanup. |
-| `tests/retained_directory.rs` | Cross-platform authority, enumeration, publication, cleanup, replacement, and native Windows handle-lifetime coverage. |
+| `src/windows/retained_directory.rs` | Top-down non-delete-sharing root/child directory handles, retained ancestry clones, transient identity probes, handle enumeration, delegation to the shared rename encoder, and handle disposition cleanup. |
+| `tests/retained_directory.rs` | Cross-platform root/child acquisition, authority, enumeration, publication, cleanup, replacement, and native Windows handle-lifetime coverage. |
 | `tests/windows_replacement.rs` | Native Windows path-based replacement with retained readers, denied delete sharing, and read-only destinations (#874). |
 
 `PrivateDirectory` is acquired once beneath a trusted absolute root. Every file
@@ -39,6 +39,24 @@ and each iterator owns an independent native cursor. Consumers that coordinate
 records with a stable lock open a fresh lock handle for each lock attempt and use
 `named_file_is` against both the originally acquired lock and the current handle.
 They never recreate a missing or replaced lock through this API.
+
+`PrivateDirectory::open_root` retains an existing private absolute root, including
+an empty directory. `open_directory` acquires one existing private child through
+that retained authority and keeps its captured ancestry alive after the parent
+handle is dropped. Neither acquisition creates files or directories, repairs
+permissions, nor requests directory write access. The existing `open_beneath`
+contract still requires a nonempty relative path and retains its Windows final
+directory publication access. Ancestry above a caller-trusted root remains the
+caller's responsibility; `open_root` accepts a private root beneath a publicly
+writable parent under the same trust assumption as `open_beneath`.
+Root acquisition normalizes lexical separators and `.` components before its
+no-follow open, so a trailing separator or `/.` cannot turn a root symlink into
+an accepted directory (`retained_root_rejects_symlinks_with_trailing_root_spellings`).
+This normalization does not resolve parent components or change ancestor trust.
+`retained_empty_root_refuses_reads_after_rename_and_private_replacement` and
+`retained_child_keeps_original_root_and_child_bindings_after_parent_drop` check
+Unix replacement refusal; the Windows root/child lifetime tests check name
+pinning until the final retained handle drops.
 
 Unix callers that receive an OS-resolved application directory may instead use
 `create_private_directory_path` and `PrivateDirectory::open_path`. Those APIs walk
