@@ -327,7 +327,7 @@ fn ended_for_good(
     live: impl Fn(&ExecutionId) -> bool,
 ) -> bool {
     record.submission != SubmissionMode::Immediate
-        && Resumption::of(&record.request.execution_id).attempt() == 0
+        && record.resumed_from.is_none()
         && (dispatched(record)
             || (!resumed.contains(&record.request.execution_id)
                 && owed(record, false, false, live).is_none()))

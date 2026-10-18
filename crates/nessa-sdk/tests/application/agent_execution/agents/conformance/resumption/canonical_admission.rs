@@ -251,3 +251,52 @@ async fn a_real_resume_retains_its_admission_relationship_after_restore() {
         .any(|owed| owed.execution_id() == turn.execution_id()));
     bounded(restored.close(actor())).await.unwrap();
 }
+
+/// Park is reached only after the current-thread runtime has drained runnable
+/// tasks, so the supervised ordinary admission has registered its scheduler
+/// waiter before the paused resume save is released. No sleep or production hook.
+#[test]
+fn ordinary_enqueue_winning_after_resume_settlement_keeps_its_origin() {
+    let release_at_idle = Arc::new(Mutex::new(None::<oneshot::Sender<()>>));
+    let checkpoint = release_at_idle.clone();
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .on_thread_park(move || {
+            if let Some(release) = checkpoint.lock().unwrap().take() {
+                release.send(()).expect("resume is waiting on its save");
+            }
+        })
+        .build()
+        .unwrap()
+        .block_on(async {
+            let (_, successor) = canonical_requests("racing-source").await;
+            let saved = cut_off_while_running("racing-source").await;
+            let (agent, backend, storage, _hold) = restore_holding(saved).await;
+            let owed = agent.owed_turns().await.remove(0);
+            let (entered, release) = storage.pause_next_save();
+            let resuming = tokio::spawn({
+                let agent = agent.clone();
+                let owed = owed.clone();
+                async move { agent.resume_turn(&owed, resumer()).await }
+            });
+            bounded(entered).await.unwrap();
+            let enqueuing = tokio::spawn({
+                let agent = agent.clone();
+                async move { agent.enqueue(successor, Submitter::owner(actor())).await }
+            });
+            *release_at_idle.lock().unwrap() = Some(release);
+            let (resumed, queued) = bounded(async { tokio::join!(resuming, enqueuing) }).await;
+            assert!(matches!(
+                resumed.unwrap(),
+                Err(AgentError::SubmissionConflict)
+            ));
+            let queued = queued.unwrap().unwrap();
+            bounded(backend.dispatched.notified()).await;
+            let history = storage.snapshot().invocations;
+            assert!(history[1].resumed_from.is_none());
+            assert_eq!(resumed_turn_id(&history, owed.execution_id()), None);
+            assert!(owed_turn_ids(&history).contains(owed.execution_id()));
+            bounded(agent.close(actor())).await.unwrap();
+            drop(queued);
+        });
+}

@@ -7,6 +7,7 @@ use nessa_sdk::application::agent_execution::{
     },
     executions::TurnResumption,
 };
+use nessa_sdk::domain::agent_execution::executions::Resumption;
 
 mod canonical_admission;
 
@@ -427,6 +428,10 @@ async fn a_successor_whose_audit_record_fails_still_runs_and_says_so() {
 /// Run `failed` until the provider fails it with `error`, with `behind`
 /// queued after it, and wait for both receipts.
 async fn failed_with(error: AgentError) -> (Agent, Arc<WorkflowBackend>, MemoryStorage) {
+    failed_named(error, "failed").await
+}
+
+async fn failed_named(error: AgentError, id: &str) -> (Agent, Arc<WorkflowBackend>, MemoryStorage) {
     let (agent, backend, storage) = workflow().await;
     *backend.execution_fault.lock().unwrap() = Some(ProviderOperationFailure::new(
         error.clone(),
@@ -436,7 +441,7 @@ async fn failed_with(error: AgentError) -> (Agent, Arc<WorkflowBackend>, MemoryS
     ));
     let (release, gate) = oneshot::channel();
     *backend.execution_gate.lock().unwrap() = Some(gate);
-    let failed = Mode::Queued.start(agent.clone(), request("failed"));
+    let failed = Mode::Queued.start(agent.clone(), request(id));
     bounded(backend.dispatched.notified()).await;
     let behind = agent
         .enqueue(request("behind"), Submitter::owner(actor()))
@@ -554,13 +559,17 @@ async fn a_declined_failed_turn_is_recorded_ended() {
 
 #[tokio::test]
 async fn a_failed_turn_a_later_message_moved_past_is_not_sent_again() {
+    later_person_message("next").await;
+}
+
+async fn later_person_message(next_id: &str) {
     let (agent, _backend, storage) = failed_with(AgentError::Provider {
         code: -32077,
         diagnostic: None,
     })
     .await;
     let next = agent
-        .enqueue(request("next"), Submitter::owner(actor()))
+        .enqueue(request(next_id), Submitter::owner(actor()))
         .await
         .unwrap();
     assert_eq!(bounded(next.wait()).await, Ok(ExecutionOutcome::Completed));
@@ -578,6 +587,10 @@ async fn a_failed_turn_a_later_message_moved_past_is_not_sent_again() {
 
 #[tokio::test]
 async fn a_message_sent_while_a_retry_waits_moves_past_the_retry_that_failed() {
+    person_message_while_retry_waits("next").await;
+}
+
+async fn person_message_while_retry_waits(next_id: &str) {
     let error = AgentError::Transport("pipe".into());
     let (agent, backend, _storage) = failed_with(error.clone()).await;
     *backend.execution_fault.lock().unwrap() = Some(ProviderOperationFailure::new(
@@ -600,7 +613,7 @@ async fn a_message_sent_while_a_retry_waits_moves_past_the_retry_that_failed() {
     bounded(backend.dispatched.notified()).await;
     // The person saw the failure and wrote again; it waits behind the retry.
     let next = agent
-        .enqueue(request("next"), Submitter::owner(actor()))
+        .enqueue(request(next_id), Submitter::owner(actor()))
         .await
         .unwrap();
     release.send(()).unwrap();
@@ -611,7 +624,7 @@ async fn a_message_sent_while_a_retry_waits_moves_past_the_retry_that_failed() {
     *backend.execution_fault.lock().unwrap() = None;
     assert_eq!(
         owed_ids(&agent.owed_turns().await),
-        ["next"],
+        [next_id],
         "the retries the person wrote past are not sent again, so the next message is not held behind them"
     );
     bounded(agent.close(actor())).await.unwrap();
@@ -887,4 +900,28 @@ async fn historical_continuation_agrees_when_a_person_message_supersedes_a_faile
         assert_eq!(resumed_turn_id(&history, &id), None);
     }
     bounded(agent.close(actor())).await.unwrap();
+}
+
+fn ordinary_resume_shaped_id() -> ExecutionId {
+    Resumption::of(&ExecutionId::new("ordinary").unwrap())
+        .successor()
+        .unwrap()
+}
+
+#[tokio::test]
+async fn a_failed_ordinary_resume_shaped_id_is_not_a_retry() {
+    let id = ordinary_resume_shaped_id();
+    let (agent, _, _) = failed_named(AgentError::Transport("pipe".into()), id.as_str()).await;
+    assert_eq!(owed_ids(&agent.owed_turns().await), [id.as_str(), "behind"]);
+    bounded(agent.close(actor())).await.unwrap();
+}
+
+#[tokio::test]
+async fn a_completed_ordinary_resume_shaped_id_is_a_person_intervention() {
+    later_person_message(ordinary_resume_shaped_id().as_str()).await;
+}
+
+#[tokio::test]
+async fn an_ordinary_resume_shaped_id_moves_past_a_failed_retry() {
+    person_message_while_retry_waits(ordinary_resume_shaped_id().as_str()).await;
 }
