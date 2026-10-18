@@ -7,6 +7,9 @@
 //! service.submit ─▶ start_slot ─▶ open_lease ─▶ Agent::prepare ─▶ issue (Issued | Refused)
 //! service.close / stop ─▶ LiveLease::close ─▶ Ending ─▶ Agent::close ─▶ Ended | Interrupted
 //! ```
+//! `fetch_clock` owns test-only logical time for fetch orderings across real I/O.
+#[path = "leases/fetch_clock.rs"]
+mod fetch_clock;
 use super::{
     ArtifactAnswer, ArtifactAnswering, ArtifactBytes, ArtifactChunk, ArtifactOffer,
     ConversationAgent, ConversationAgents, ConversationAttachments, ConversationCaller,
@@ -33,6 +36,7 @@ use crate::conversation_test_support::{
     claude_erasers, AcceptingModeAudit, MemoryAttachments, Provider, ProviderFactory, TestClock,
     DELETION_BUDGETS,
 };
+use fetch_clock::{FrozenFetchTime, FETCH_TEST_WATCHDOG};
 use nessa_auth::application::ports::Clock;
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_protocol::conversation::view::{
@@ -174,16 +178,18 @@ pub(super) type FailingRecords = Arc<Mutex<Option<fn(&LeaseRecord) -> bool>>>;
 /// and every save holding a record `failing` names while it is set, as a disk
 /// that stays away would; and stalling, never to return, the next save
 /// holding a record `stall_once` names, as a disk that hangs would.
-/// A save of accepted input, paused after it is entered and before it is
-/// written, until the second notify.
-type InputStall = Arc<Mutex<Option<(Arc<Notify>, Arc<Notify>)>>>;
+/// A save paused after it is entered and before physical I/O, until the
+/// second notify. Input admission and fetch admission select their own saves.
+type SaveGate = Arc<Mutex<Option<(Arc<Notify>, Arc<Notify>)>>>;
 
 struct Records {
     inner: RecordStorage,
     fail_issue: Arc<AtomicBool>,
     failing: FailingRecords,
     stall_once: FailingRecords,
-    stall_input: InputStall,
+    stall_input: SaveGate,
+    /// One FetchAsked save, held before physical I/O for the #1010 ordering probe.
+    hold_fetch: SaveGate,
     /// Every lease record handed to a save, in order.
     saved: SavedRecords,
     saved_changed: Arc<Notify>,
@@ -203,6 +209,7 @@ impl SessionStorage for Records {
         let failing = self.failing.clone();
         let stall_once = self.stall_once.clone();
         let stall_input = self.stall_input.clone();
+        let hold_fetch = self.hold_fetch.clone();
         let saved = self.saved.clone();
         let saved_changed = self.saved_changed.clone();
         Box::pin(async move {
@@ -213,6 +220,7 @@ impl SessionStorage for Records {
                 failing,
                 stall_once,
                 stall_input,
+                hold_fetch,
                 saved,
                 saved_changed,
             }) as Box<dyn SessionStorageLease>)
@@ -226,6 +234,7 @@ impl SessionStorage for Records {
         let failing = self.failing.clone();
         let stall_once = self.stall_once.clone();
         let stall_input = self.stall_input.clone();
+        let hold_fetch = self.hold_fetch.clone();
         let saved = self.saved.clone();
         let saved_changed = self.saved_changed.clone();
         Box::pin(async move {
@@ -236,6 +245,7 @@ impl SessionStorage for Records {
                     failing,
                     stall_once,
                     stall_input,
+                    hold_fetch,
                     saved,
                     saved_changed,
                 }) as Box<dyn SessionStorageLease>
@@ -248,7 +258,8 @@ pub(super) struct RecordsLease {
     fail_issue: Arc<AtomicBool>,
     failing: FailingRecords,
     stall_once: FailingRecords,
-    stall_input: InputStall,
+    stall_input: SaveGate,
+    hold_fetch: SaveGate,
     saved: SavedRecords,
     saved_changed: Arc<Notify>,
 }
@@ -261,7 +272,8 @@ impl RecordsLease {
             fail_issue: Arc::new(AtomicBool::new(false)),
             failing,
             stall_once: FailingRecords::default(),
-            stall_input: InputStall::default(),
+            stall_input: SaveGate::default(),
+            hold_fetch: SaveGate::default(),
             saved: SavedRecords::default(),
             saved_changed: Arc::default(),
         }
@@ -321,6 +333,21 @@ impl SessionStorageLease for RecordsLease {
                 }),
         );
         self.saved_changed.notify_one();
+        let fetch_stall = {
+            let mut hold = self.hold_fetch.lock().unwrap();
+            if hold.is_some()
+                && units
+                    .iter()
+                    .flat_map(SessionSaveUnit::changes)
+                    .any(|change| {
+                        matches!(change, SessionChange::Lease(LeaseRecord::FetchAsked { .. }))
+                    })
+            {
+                hold.take()
+            } else {
+                None
+            }
+        };
         let input_stall = {
             let mut stall = self.stall_input.lock().unwrap();
             let matched = stall.is_some()
@@ -338,10 +365,12 @@ impl SessionStorageLease for RecordsLease {
         // release, so a grant change can be shown waiting on the admission
         // hold while this save has not committed.
         let save = self.inner.save_changes(binding, units);
-        if let Some((entered, release)) = input_stall {
+        if fetch_stall.is_some() || input_stall.is_some() {
             Box::pin(async move {
-                entered.notify_one();
-                release.notified().await;
+                for (entered, release) in [fetch_stall, input_stall].into_iter().flatten() {
+                    entered.notify_one();
+                    release.notified().await;
+                }
                 save.await
             })
         } else {
@@ -420,7 +449,8 @@ fn harness_working_in(
         fail_issue: Arc::new(AtomicBool::new(false)),
         failing: Arc::new(Mutex::new(None)),
         stall_once: Arc::new(Mutex::new(None)),
-        stall_input: InputStall::default(),
+        stall_input: SaveGate::default(),
+        hold_fetch: SaveGate::default(),
         saved: SavedRecords::default(),
         saved_changed: Arc::default(),
     });
@@ -1545,6 +1575,28 @@ struct Fetching {
     /// For each fetch asked while `saved` is set, its request and whether
     /// its asking was saved first.
     saved_first: Mutex<Vec<(String, bool)>>,
+}
+
+impl Fetching {
+    async fn wait_for_call(&self, request: &str) {
+        tokio::time::timeout(FETCH_TEST_WATCHDOG, async {
+            loop {
+                let noted = self.noted.notified();
+                if self
+                    .asks
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|(id, _)| id == request)
+                {
+                    return;
+                }
+                noted.await;
+            }
+        })
+        .await
+        .expect("the exact host arrival precedes the real-time test watchdog");
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -4182,7 +4234,7 @@ impl Harness {
     async fn fetch_file(&self, call: FetchCall) -> FetchAnswer {
         let (_caller, stop) = tokio::sync::watch::channel(false);
         tokio::time::timeout(
-            Duration::from_secs(30),
+            FETCH_TEST_WATCHDOG,
             self.service.fetch_artifact(&self.id, call, stop),
         )
         .await
@@ -4190,13 +4242,92 @@ impl Harness {
     }
 }
 
-/// A fetch wait short enough to time out quickly, and long enough for a
-/// call that is answered to save its asking and reach the host first, under
-/// a loaded machine. One second was not enough for a max-size file on a
-/// loaded Windows runner (local-auth run 38503431790). Five seconds reached
-/// the host on the next Windows run (38508448020); that job then died on
-/// the 45-minute step bound while other server tests were still finishing.
+/// The unchanged logical fetch wait used by the save/budget orderings. These
+/// tests advance it only at an observed boundary; it promises no I/O throughput.
 const FETCH_SAVE_WAIT: Duration = Duration::from_secs(5);
+
+impl Harness {
+    /// Expire the actual fetch only after its exact original host arrival.
+    /// Original delivery, outcome and durable end remain service-owned.
+    async fn timeout_fetch_at_host(&self, host: &Host, call: FetchCall) -> FetchAnswer {
+        let request = call.call.clone();
+        let clock = FrozenFetchTime::freeze(FETCH_TEST_WATCHDOG).await;
+        let (_caller, stop) = tokio::sync::watch::channel(false);
+        let mut fetching = {
+            let service = self.service.clone();
+            let id = self.id.clone();
+            tokio::spawn(async move { service.fetch_artifact(&id, call, stop).await })
+        };
+        tokio::select! {
+            biased;
+            result = &mut fetching => panic!("fetch settled before its intended timeout boundary: {result:?}"),
+            () = host.fetching.wait_for_call(&request) => {},
+        }
+        tokio::time::advance(FETCH_SAVE_WAIT).await;
+        let remaining = clock
+            .finish(FETCH_SAVE_WAIT)
+            .await
+            .expect("only the explicit fetch wait elapsed");
+        tokio::time::timeout(remaining, fetching)
+            .await
+            .unwrap()
+            .unwrap()
+    }
+}
+
+/// A finite external admission delay does not imply the host delivered bytes.
+/// The exact save-entry handshake distinguishes this from a scheduled sleep.
+#[tokio::test]
+async fn a_fetch_budget_fixture_controls_time_while_admission_io_is_pending() {
+    let root = tempfile::tempdir().unwrap();
+    let bytes = b"synthetic fetch budget admission".to_vec();
+    let (harness, host, _attachments, go) =
+        fetching_turn(root.path(), &bytes, FETCH_SAVE_WAIT).await;
+    *host.fetching.script.lock().unwrap() = FetchScript::Lost;
+    let entered = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    *harness.storage.hold_fetch.lock().unwrap() = Some((entered.clone(), release.clone()));
+    let (at_save, wait_for_save) = std::sync::mpsc::channel();
+    let external = std::thread::spawn(move || {
+        wait_for_save.recv_timeout(FETCH_TEST_WATCHDOG).unwrap();
+        std::thread::sleep(FETCH_SAVE_WAIT + Duration::from_secs(1));
+        release.notify_one();
+    });
+    let call = fetch_call("devbox", &bytes, "a.bin", "held-admission");
+    let clock = FrozenFetchTime::freeze(FETCH_TEST_WATCHDOG).await;
+    let fetching = {
+        let service = harness.service.clone();
+        let id = harness.id.clone();
+        tokio::spawn(async move {
+            let (_caller, stop) = tokio::sync::watch::channel(false);
+            service.fetch_artifact(&id, call, stop).await
+        })
+    };
+    tokio::time::timeout(FETCH_TEST_WATCHDOG, entered.notified())
+        .await
+        .unwrap();
+    at_save.send(()).unwrap();
+    let answer = tokio::time::timeout(FETCH_TEST_WATCHDOG, fetching)
+        .await
+        .unwrap()
+        .unwrap();
+    let clock_result = clock.finish(Duration::ZERO).await;
+    // Join the finite external work even when the assertion below will fail.
+    external.join().unwrap();
+    go.send(()).unwrap();
+    assert_eq!(
+        answer,
+        FetchAnswer::Refused(FetchCallRefusal::Unanswered { delivered: true }),
+        "original host arrivals: {}",
+        host.fetching.asks.lock().unwrap().len()
+    );
+    let remaining = clock_result.expect("real admission I/O did not advance the logical deadline");
+    assert!(
+        remaining <= FETCH_TEST_WATCHDOG - (FETCH_SAVE_WAIT + Duration::from_secs(1)),
+        "the real admission hold consumed the original watchdog rather than restarting it"
+    );
+    assert_eq!(host.fetching.asks.lock().unwrap().len(), 1);
+}
 
 /// A host's harness with its conversation created there, a turn running
 /// that `go` lets finish, and `bytes` held by the conversation.
@@ -4717,64 +4848,63 @@ async fn a_fetch_stopped_before_delivery_gives_its_size_back_and_one_after_does_
     let script = |script| *host.fetching.script.lock().unwrap() = script;
     script(FetchScript::Lost);
     for n in 0..fits - 1 {
+        let clock = FrozenFetchTime::freeze(FETCH_TEST_WATCHDOG).await;
         assert_eq!(
             harness
                 .fetch_file(fetch_call("devbox", &bytes, "a.bin", &format!("lost-{n}")))
                 .await,
             FetchAnswer::Refused(FetchCallRefusal::Unanswered { delivered: true })
         );
+        clock.finish(Duration::ZERO).await.unwrap();
     }
     // Timed out and cancelled with nothing delivered: given back.
     script(FetchScript::Silent);
     for n in 0..2 {
         assert_eq!(
             harness
-                .fetch_file(fetch_call("devbox", &bytes, "a.bin", &format!("late-{n}")))
+                .timeout_fetch_at_host(
+                    &host,
+                    fetch_call("devbox", &bytes, "a.bin", &format!("late-{n}"))
+                )
                 .await,
             FetchAnswer::Refused(FetchCallRefusal::TimedOut { delivered: false })
         );
     }
     let (caller_gone, stop) = tokio::sync::watch::channel(false);
+    let clock = FrozenFetchTime::freeze(FETCH_TEST_WATCHDOG).await;
     let cancelled = {
         let service = harness.service.clone();
         let id = harness.id.clone();
         let call = fetch_call("devbox", &bytes, "a.bin", "cancelled");
         tokio::spawn(async move { service.fetch_artifact(&id, call, stop).await })
     };
-    tokio::time::timeout(Duration::from_secs(20), async {
-        while !host
-            .fetching
-            .asks
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|(request, _)| request == "cancelled")
-        {
-            tokio::time::sleep(Duration::from_millis(5)).await;
-        }
-    })
-    .await
-    .expect("the host was asked");
+    host.fetching.wait_for_call("cancelled").await;
     caller_gone.send(true).unwrap();
+    let remaining = clock.finish(Duration::ZERO).await.unwrap();
     assert_eq!(
-        cancelled.await.unwrap(),
+        tokio::time::timeout(remaining, cancelled)
+            .await
+            .unwrap()
+            .unwrap(),
         FetchAnswer::Refused(FetchCallRefusal::Cancelled { delivered: false })
     );
     // Timed out once every byte was delivered: counted, and now full.
     script(FetchScript::DeliveredSilent);
     assert_eq!(
         harness
-            .fetch_file(fetch_call("devbox", &bytes, "a.bin", "delivered"))
+            .timeout_fetch_at_host(&host, fetch_call("devbox", &bytes, "a.bin", "delivered"))
             .await,
         FetchAnswer::Refused(FetchCallRefusal::TimedOut { delivered: true })
     );
     script(FetchScript::Place);
+    let clock = FrozenFetchTime::freeze(FETCH_TEST_WATCHDOG).await;
     assert_eq!(
         harness
             .fetch_file(fetch_call("devbox", &bytes, "a.bin", "over"))
             .await,
         FetchAnswer::Refused(FetchCallRefusal::BudgetExceeded)
     );
+    clock.finish(Duration::ZERO).await.unwrap();
     go.send(()).unwrap();
 }
 
@@ -5063,27 +5193,23 @@ async fn a_fetch_timed_out_or_cancelled_is_recorded_ended_timed_out_or_cancelled
     *host.fetching.script.lock().unwrap() = FetchScript::Silent;
     assert_eq!(
         harness
-            .fetch_file(fetch_call("devbox", &bytes, "a.bin", "call-1"))
+            .timeout_fetch_at_host(&host, fetch_call("devbox", &bytes, "a.bin", "call-1"))
             .await,
         FetchAnswer::Refused(FetchCallRefusal::TimedOut { delivered: false })
     );
     let (caller_gone, stop) = tokio::sync::watch::channel(false);
+    let clock = FrozenFetchTime::freeze(FETCH_TEST_WATCHDOG).await;
     let cancelled = {
         let service = harness.service.clone();
         let id = harness.id.clone();
         let call = fetch_call("devbox", &bytes, "a.bin", "call-2");
         tokio::spawn(async move { service.fetch_artifact(&id, call, stop).await })
     };
-    tokio::time::timeout(Duration::from_secs(5), async {
-        while host.fetching.asks.lock().unwrap().len() < 2 {
-            tokio::time::sleep(Duration::from_millis(5)).await;
-        }
-    })
-    .await
-    .expect("the host was asked");
+    host.fetching.wait_for_call("call-2").await;
     caller_gone.send(true).unwrap();
+    let remaining = clock.finish(Duration::ZERO).await.unwrap();
     assert_eq!(
-        tokio::time::timeout(Duration::from_secs(5), cancelled)
+        tokio::time::timeout(remaining.min(Duration::from_secs(5)), cancelled)
             .await
             .unwrap()
             .unwrap(),
@@ -5250,12 +5376,29 @@ async fn a_fetch_timed_out_while_its_asking_is_saved_ends_undelivered_and_never_
     let (harness, host, _attachments, go) =
         fetching_turn(root.path(), &bytes, FETCH_SAVE_WAIT).await;
     let fits = (ArtifactBudget::LEASE.fetch_bytes / PublishedFile::MAX_BYTES) as usize;
-    *harness.storage.stall_once.lock().unwrap() =
-        Some(|record| matches!(record, LeaseRecord::FetchAsked { .. }));
+    let entered = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    *harness.storage.hold_fetch.lock().unwrap() = Some((entered.clone(), release));
+    let clock = FrozenFetchTime::freeze(FETCH_TEST_WATCHDOG).await;
+    let fetching = {
+        let service = harness.service.clone();
+        let id = harness.id.clone();
+        let call = fetch_call("devbox", &bytes, "a.bin", "stalled");
+        tokio::spawn(async move {
+            let (_caller, stop) = tokio::sync::watch::channel(false);
+            service.fetch_artifact(&id, call, stop).await
+        })
+    };
+    tokio::time::timeout(FETCH_TEST_WATCHDOG, entered.notified())
+        .await
+        .unwrap();
+    tokio::time::advance(FETCH_SAVE_WAIT).await;
+    let remaining = clock.finish(FETCH_SAVE_WAIT).await.unwrap();
     assert_eq!(
-        harness
-            .fetch_file(fetch_call("devbox", &bytes, "a.bin", "stalled"))
-            .await,
+        tokio::time::timeout(remaining, fetching)
+            .await
+            .unwrap()
+            .unwrap(),
         FetchAnswer::Refused(FetchCallRefusal::TimedOut { delivered: false })
     );
     assert!(host.fetching.asks.lock().unwrap().is_empty());
@@ -5275,12 +5418,14 @@ async fn a_fetch_timed_out_while_its_asking_is_saved_ends_undelivered_and_never_
     // Its size was given back: the whole budget can still be fetched.
     *host.fetching.script.lock().unwrap() = FetchScript::Lost;
     for n in 0..fits {
+        let clock = FrozenFetchTime::freeze(FETCH_TEST_WATCHDOG).await;
         assert_eq!(
             harness
                 .fetch_file(fetch_call("devbox", &bytes, "a.bin", &format!("lost-{n}")))
                 .await,
             FetchAnswer::Refused(FetchCallRefusal::Unanswered { delivered: true })
         );
+        clock.finish(Duration::ZERO).await.unwrap();
     }
     go.send(()).unwrap();
 }
