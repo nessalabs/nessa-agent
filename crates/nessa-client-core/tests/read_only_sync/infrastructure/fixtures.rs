@@ -7,8 +7,8 @@ use nessa_sdk::{
         permissions::ActionContext,
         providers::ProviderIdentity,
         sessions::{
-            ArtifactName, ArtifactRecord, CurrentLease, LeaseRecord, PublishedFile, SessionChange,
-            SessionSaveUnit, SessionSnapshot, SessionStorage,
+            ArtifactName, ArtifactRecord, LeaseRecord, PublishedFile, SessionChange,
+            SessionSaveUnit, SessionStorage,
         },
     },
     domain::agent_execution::leases::{
@@ -119,16 +119,6 @@ async fn record_fixture(root: &Path, separate_open: bool, count: usize) -> (Scop
         lease
             .save_changes(
                 lease.load().await.unwrap().binding().clone(),
-                SessionSnapshot {
-                    id: session.clone(),
-                    provider: provider.clone(),
-                    provider_context: context.clone(),
-                    invocations: vec![],
-                    queue_history: vec![],
-                    lease: None,
-                    artifacts: Vec::new(),
-                    notes: Vec::new(),
-                },
                 vec![SessionSaveUnit::new(std::mem::take(&mut changes)).unwrap()],
             )
             .await
@@ -148,16 +138,6 @@ async fn record_fixture(root: &Path, separate_open: bool, count: usize) -> (Scop
     lease
         .save_changes(
             lease.load().await.unwrap().binding().clone(),
-            SessionSnapshot {
-                id: session.clone(),
-                provider,
-                provider_context: context,
-                invocations: vec![],
-                queue_history: vec![],
-                lease: None,
-                artifacts: Vec::new(),
-                notes: Vec::new(),
-            },
             vec![SessionSaveUnit::new(changes).unwrap()],
         )
         .await
@@ -215,16 +195,6 @@ pub(super) async fn source_records_with_artifact(root: &Path) -> (Scope, Vec<Rec
     lease
         .save_changes(
             lease.load().await.unwrap().binding().clone(),
-            SessionSnapshot {
-                id: session.clone(),
-                provider,
-                provider_context: ProviderContext::Absent,
-                invocations: vec![],
-                queue_history: vec![],
-                lease: Some(CurrentLease::apply(None, &issued).unwrap()),
-                artifacts: vec![artifact],
-                notes: Vec::new(),
-            },
             vec![SessionSaveUnit::new(changes).unwrap()],
         )
         .await

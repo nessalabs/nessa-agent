@@ -87,11 +87,10 @@ pub(super) async fn opening_completion_offset(id: &SessionId) -> u64 {
     let directory = tempfile::tempdir().unwrap();
     let storage = RecordStorage::new(directory.path().join("records")).unwrap();
     let lease = storage.open(id.clone()).await.unwrap();
-    let (change, snapshot) = opened(id);
+    let (change, _) = opened(id);
     let receipt = lease
         .save_changes(
             lease.load().await.unwrap().binding().clone(),
-            snapshot,
             vec![SessionSaveUnit::new(vec![change]).unwrap()],
         )
         .await

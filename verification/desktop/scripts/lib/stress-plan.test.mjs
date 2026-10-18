@@ -23,6 +23,8 @@ test("every required step appears as often as its number says", () => {
   assert.equal(count("large"), knobs.large)
   assert.equal(count("park"), knobs.parks)
   assert.equal(count("reviews"), 1)
+  assert.equal(count("long"), 1)
+  assert.equal(steps.find((step) => step.kind === "long").turns, knobs.long)
   assert.ok(count("switch") >= knobs.switches)
   assert.ok(steps.length >= 40)
   assert.deepEqual(
@@ -45,6 +47,11 @@ test("a failure is always followed by a reply, and a switch never picks the mode
         assert.notEqual(step.mode, "full")
     })
   }
+})
+
+test("no long conversation is planned when its number is 0", () => {
+  const steps = plan(knobsFrom({ long: "0" }, {}))
+  assert.ok(!steps.some((step) => step.kind === "long"))
 })
 
 test("numbers come from flags, then NESSA_STRESS_*, then defaults, and a bad one throws", () => {

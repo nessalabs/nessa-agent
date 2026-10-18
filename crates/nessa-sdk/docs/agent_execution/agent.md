@@ -322,12 +322,12 @@ before successful acknowledgement. Mandatory permission audit remains separate.
 The record adapter saves typed SDK decisions in one SQLite stream per session.
 The caller supplies immutable `SessionSaveUnit` boundaries. Before reconciling
 pending writes or appending, the adapter validates every unit's complete
-lifecycle/queue checkpoint, the final observed snapshot, and each encoded body
-bound. A save can span several bounded units; its private continuation becomes
+lifecycle/queue checkpoint and each encoded body bound; no snapshot is supplied
+or compared, so a save costs its units, not the conversation's history. A save can span several bounded units; its private continuation becomes
 public only at the original save's durable completion. Unit seals and physical
 aborts do not publish a partially acknowledged save or authorize provider work.
 The adapter preflights one encoded unit at a time, then re-encodes units during
-persistence; the caller's complete typed plan and snapshot remain retained.
+persistence; the caller's complete typed plan remains retained.
 
 `SessionStorageLease::load` returns `SessionLoad`: the prior published snapshot,
 the backend-issued save binding, and `Published` or `Unfinished` state. The record

@@ -18,8 +18,8 @@ use nessa_protocol::conversation::domain::ConversationId;
 use nessa_protocol::conversation::view::ConversationMessageStatus;
 use nessa_sdk::{
     application::agent_execution::sessions::{
-        CommittedSession, SessionLoad, SessionSaveGeneration, SessionSaveReceipt, SessionSaveUnit,
-        SessionSnapshot, SessionStorage, SessionStorageLease, StorageError, StorageFuture,
+        CommittedSession, SessionChange, SessionLoad, SessionSaveGeneration, SessionSaveReceipt,
+        SessionSaveUnit, SessionStorage, SessionStorageLease, StorageError, StorageFuture,
     },
     domain::agent_execution::sessions::SessionId,
     infrastructure::session_storage::InMemoryStorage,
@@ -436,15 +436,18 @@ impl SessionStorageLease for RefuseFirstInputLease {
     fn save_changes(
         &self,
         binding: SessionSaveGeneration,
-        snapshot: SessionSnapshot,
         units: Vec<SessionSaveUnit>,
     ) -> StorageFuture<'_, SessionSaveReceipt> {
-        // Opening the session saves a snapshot with nothing in it; the first
-        // one carrying an input is the admission to refuse.
-        if !snapshot.invocations.is_empty() && !self.refused.swap(true, Ordering::SeqCst) {
+        // Opening the session saves no input; the first save that accepts
+        // one is the admission to refuse.
+        let admits_input = units
+            .iter()
+            .flat_map(SessionSaveUnit::changes)
+            .any(|change| matches!(change, SessionChange::InputAccepted(_)));
+        if admits_input && !self.refused.swap(true, Ordering::SeqCst) {
             return Box::pin(async { Err(StorageError::Io("the disk went away".into())) });
         }
-        self.inner.save_changes(binding, snapshot, units)
+        self.inner.save_changes(binding, units)
     }
     fn erase(&self) -> StorageFuture<'_, ()> {
         self.inner.erase()

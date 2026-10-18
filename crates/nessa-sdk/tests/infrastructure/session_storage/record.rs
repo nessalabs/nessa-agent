@@ -63,11 +63,10 @@ async fn sqlite_refuses_invalid_resume_origin_before_publishing_input() {
     let storage = RecordStorage::new(directory.path().join("sessions")).unwrap();
     let id = SessionId::new("invalid-resume-origin").unwrap();
     let lease = storage.open(id.clone()).await.unwrap();
-    let (opening, prior) = opened(&id);
+    let (opening, _) = opened(&id);
     lease
         .save_changes(
             lease.load().await.unwrap().binding().clone(),
-            prior.clone(),
             vec![SessionSaveUnit::new(vec![opening]).unwrap()],
         )
         .await
@@ -79,7 +78,6 @@ async fn sqlite_refuses_invalid_resume_origin_before_publishing_input() {
     let result = lease
         .save_changes(
             lease.load().await.unwrap().binding().clone(),
-            with_input(&prior, &change),
             vec![SessionSaveUnit::new(vec![change]).unwrap()],
         )
         .await;
@@ -110,9 +108,7 @@ async fn record_watch_stays_clean_after_unit_seal_until_original_completion_retr
         original.base() + completion,
     );
     assert!(matches!(
-        lease
-            .save_changes(original.clone(), observed.clone(), units.clone())
-            .await,
+        lease.save_changes(original.clone(), units.clone()).await,
         Err(StorageError::Io(_))
     ));
     assert_eq!(rows(&root), 1, "Unit is durable but no completion exists");
@@ -130,15 +126,10 @@ async fn record_watch_stays_clean_after_unit_seal_until_original_completion_retr
         provider: ProviderIdentity::new("changed-provider", "model", "workspace").unwrap(),
         context: ProviderContext::Absent,
     };
-    let changed_candidate = SessionSnapshot {
-        provider: ProviderIdentity::new("changed-provider", "model", "workspace").unwrap(),
-        ..observed.clone()
-    };
     assert!(matches!(
         lease
             .save_changes(
                 original.clone(),
-                changed_candidate,
                 vec![SessionSaveUnit::new(vec![changed_opening]).unwrap()],
             )
             .await,
@@ -155,7 +146,7 @@ async fn record_watch_stays_clean_after_unit_seal_until_original_completion_retr
     assert!(unfinished.snapshot().is_none());
     watch_pending(&mut watch);
     let receipt = lease
-        .save_changes(original.clone(), observed.clone(), units.clone())
+        .save_changes(original.clone(), units.clone())
         .await
         .unwrap();
     assert_eq!(rows(&root), 2);
@@ -169,10 +160,7 @@ async fn record_watch_stays_clean_after_unit_seal_until_original_completion_retr
             .snapshot(),
         Some(&observed)
     );
-    assert_eq!(
-        lease.save_changes(original, observed, units).await.unwrap(),
-        receipt
-    );
+    assert_eq!(lease.save_changes(original, units).await.unwrap(), receipt);
     assert_eq!(rows(&root), 2);
     watch_pending(&mut watch);
     drop(lease);
@@ -201,7 +189,6 @@ async fn load_binds_fresh_reopened_and_reset_writers_to_actual_stream_progress()
         lease
             .save_changes(
                 skipped,
-                initial.clone(),
                 vec![SessionSaveUnit::new(vec![opened.clone()]).unwrap()]
             )
             .await,
@@ -212,7 +199,6 @@ async fn load_binds_fresh_reopened_and_reset_writers_to_actual_stream_progress()
     let first_receipt = lease
         .save_changes(
             original.clone(),
-            initial.clone(),
             vec![SessionSaveUnit::new(vec![opened.clone()]).unwrap()],
         )
         .await
@@ -227,10 +213,6 @@ async fn load_binds_fresh_reopened_and_reset_writers_to_actual_stream_progress()
     let context = SessionChange::ProviderContext {
         before: ProviderContext::Absent,
         after: ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap()),
-    };
-    let restored = SessionSnapshot {
-        provider_context: ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap()),
-        ..initial.clone()
     };
     let SessionSaveBackend::Record {
         stream,
@@ -249,7 +231,6 @@ async fn load_binds_fresh_reopened_and_reset_writers_to_actual_stream_progress()
         lease
             .save_changes(
                 skipped,
-                restored.clone(),
                 vec![SessionSaveUnit::new(vec![context.clone()]).unwrap()]
             )
             .await,
@@ -259,7 +240,6 @@ async fn load_binds_fresh_reopened_and_reset_writers_to_actual_stream_progress()
         lease
             .save_changes(
                 original,
-                restored.clone(),
                 vec![SessionSaveUnit::new(vec![context.clone()]).unwrap()]
             )
             .await,
@@ -269,7 +249,6 @@ async fn load_binds_fresh_reopened_and_reset_writers_to_actual_stream_progress()
     let receipt = lease
         .save_changes(
             restored_binding,
-            restored,
             vec![SessionSaveUnit::new(vec![context]).unwrap()],
         )
         .await
@@ -287,7 +266,6 @@ async fn load_binds_fresh_reopened_and_reset_writers_to_actual_stream_progress()
         lease
             .save_changes(
                 receipt.next().clone(),
-                initial.clone(),
                 vec![SessionSaveUnit::new(vec![opened.clone()]).unwrap()]
             )
             .await,
@@ -297,7 +275,6 @@ async fn load_binds_fresh_reopened_and_reset_writers_to_actual_stream_progress()
     lease
         .save_changes(
             reset.binding().clone(),
-            initial.clone(),
             vec![SessionSaveUnit::new(vec![opened]).unwrap()],
         )
         .await
@@ -320,7 +297,6 @@ async fn empty_erase_invalidates_unpolled_original_save_before_new_work() {
     watch_pending(&mut watch);
     let queued = lease.save_changes(
         original.clone(),
-        initial.clone(),
         vec![SessionSaveUnit::new(vec![opened.clone()]).unwrap()],
     );
 
@@ -339,7 +315,6 @@ async fn empty_erase_invalidates_unpolled_original_save_before_new_work() {
     let new_receipt = lease
         .save_changes(
             reset.binding().clone(),
-            initial.clone(),
             vec![SessionSaveUnit::new(vec![opened]).unwrap()],
         )
         .await
@@ -415,7 +390,7 @@ async fn explicit_units_publish_one_direct_save_beyond_one_body_bound() {
     )
     .unwrap();
     let refused = lease
-        .save_changes(original.clone(), observed.clone(), vec![indivisible])
+        .save_changes(original.clone(), vec![indivisible])
         .await;
     assert!(
         matches!(refused, Err(StorageError::TooLarge)),
@@ -427,7 +402,7 @@ async fn explicit_units_publish_one_direct_save_beyond_one_body_bound() {
     assert!(prior.snapshot().is_none());
     assert_eq!(prior.binding(), &original);
     let receipt = lease
-        .save_changes(original.clone(), observed.clone(), units.clone())
+        .save_changes(original.clone(), units.clone())
         .await
         .unwrap();
     let loaded = lease.load().await.unwrap();
@@ -451,49 +426,10 @@ async fn explicit_units_publish_one_direct_save_beyond_one_body_bound() {
         restored.binding(),
         &receipt.next_for(&original, units.len()).unwrap()
     );
-    assert_eq!(
-        lease.save_changes(original, observed, units).await.unwrap(),
-        receipt
-    );
+    assert_eq!(lease.save_changes(original, units).await.unwrap(), receipt);
     assert_eq!(rows(&root), committed_rows);
     drop(lease);
     reopened.shutdown().await.unwrap();
-}
-
-#[tokio::test]
-async fn valid_unit_plan_with_wrong_candidate_never_appends() {
-    let directory = tempfile::tempdir().unwrap();
-    let root = directory.path().join("sessions");
-    let storage = RecordStorage::new(&root).unwrap();
-    let id = SessionId::new("whole-plan-preflight").unwrap();
-    let lease = storage.open(id.clone()).await.unwrap();
-    let original = lease.load().await.unwrap().binding().clone();
-    let (opened, initial) = opened(&id);
-    let units = vec![SessionSaveUnit::new(vec![opened.clone()]).unwrap()];
-    let contradictory = SessionSnapshot {
-        provider: ProviderIdentity::new("other-provider", "model", "workspace").unwrap(),
-        ..initial.clone()
-    };
-    assert!(matches!(
-        lease
-            .save_changes(original.clone(), contradictory, units.clone())
-            .await,
-        Err(StorageError::Corrupt(_))
-    ));
-    assert_eq!(
-        rows(&root),
-        0,
-        "valid unit with wrong candidate must refuse before append"
-    );
-    assert!(lease.load().await.unwrap().snapshot().is_none());
-    let initial_receipt = lease
-        .save_changes(original, initial.clone(), units)
-        .await
-        .unwrap();
-    assert_eq!(initial_receipt.units(), 1);
-    assert_eq!(lease.load().await.unwrap().snapshot(), Some(&initial));
-    drop(lease);
-    storage.shutdown().await.unwrap();
 }
 
 #[tokio::test]
@@ -508,7 +444,6 @@ async fn late_invalid_unit_never_appends_valid_prefix() {
     let initial_receipt = lease
         .save_changes(
             original,
-            initial.clone(),
             vec![SessionSaveUnit::new(vec![opened.clone()]).unwrap()],
         )
         .await
@@ -529,11 +464,7 @@ async fn late_invalid_unit_never_appends_valid_prefix() {
     let before = rows(&root);
     assert!(matches!(
         lease
-            .save_changes(
-                binding.clone(),
-                candidate.clone(),
-                vec![prefix.clone(), late]
-            )
+            .save_changes(binding.clone(), vec![prefix.clone(), late])
             .await,
         Err(StorageError::Corrupt(_))
     ));
@@ -543,10 +474,7 @@ async fn late_invalid_unit_never_appends_valid_prefix() {
         "late invalid unit cannot append valid prefix"
     );
     assert_eq!(lease.load().await.unwrap().snapshot(), Some(&initial));
-    let receipt = lease
-        .save_changes(binding, candidate.clone(), vec![prefix])
-        .await
-        .unwrap();
+    let receipt = lease.save_changes(binding, vec![prefix]).await.unwrap();
     assert_eq!(receipt.units(), 1);
     assert_eq!(lease.load().await.unwrap().snapshot(), Some(&candidate));
     drop(lease);
@@ -564,7 +492,6 @@ async fn killed_child_retains_original_unpublished_unit_retry() {
     lease
         .save_changes(
             lease.load().await.unwrap().binding().clone(),
-            prior.clone(),
             vec![SessionSaveUnit::new(vec![opened]).unwrap()],
         )
         .await
@@ -664,13 +591,11 @@ async fn killed_child_retains_original_unpublished_unit_retry() {
         Err(StorageError::Unresolved)
     ));
     let changed = partial_input(4 * 1024 * 1024 - 1);
-    let changed_snapshot = with_input(&prior, &changed);
     let retained = rows(&root);
     assert!(matches!(
         lease
             .save_changes(
                 original.clone(),
-                changed_snapshot,
                 vec![SessionSaveUnit::new(vec![changed]).unwrap()]
             )
             .await,
@@ -682,7 +607,6 @@ async fn killed_child_retains_original_unpublished_unit_retry() {
     let receipt = lease
         .save_changes(
             original.clone(),
-            complete.clone(),
             vec![SessionSaveUnit::new(vec![change.clone()]).unwrap()],
         )
         .await
@@ -697,11 +621,7 @@ async fn killed_child_retains_original_unpublished_unit_retry() {
     let committed = rows(&root);
     assert_eq!(
         lease
-            .save_changes(
-                original,
-                complete,
-                vec![SessionSaveUnit::new(vec![change]).unwrap()]
-            )
+            .save_changes(original, vec![SessionSaveUnit::new(vec![change]).unwrap()])
             .await
             .unwrap(),
         receipt
@@ -723,13 +643,11 @@ async fn child_unpublished_unit_crash_probe() {
     let original = loaded.binding().clone();
     let prior = loaded.snapshot().unwrap();
     let change = partial_input(4 * 1024 * 1024);
-    let candidate = with_input(prior, &change);
     let before = rows(&root);
     refuse_offset(&root, "refuse_third_physical_row", original.base() + 3);
     let result = lease
         .save_changes(
             original.clone(),
-            candidate,
             vec![SessionSaveUnit::new(vec![change]).unwrap()],
         )
         .await;
@@ -784,7 +702,6 @@ async fn predecessor_semantic_sqlite_record_refuses_without_mutation() {
     let receipt = lease
         .save_changes(
             lease.load().await.unwrap().binding().clone(),
-            snapshot.clone(),
             vec![SessionSaveUnit::new(vec![change]).unwrap()],
         )
         .await
@@ -871,23 +788,19 @@ async fn time_saves(root: &Path, label: &str) -> (Duration, Duration, i64) {
     let mut samples = Vec::with_capacity(31);
     let mut versions = Vec::with_capacity(31);
     for index in 0..31 {
-        let (change, snapshot) = if index == 0 {
-            opened(&id)
+        let change = if index == 0 {
+            opened(&id).0
         } else {
-            let input = SessionChange::InputAccepted(Box::new(super::fixtures::input_record(
+            SessionChange::InputAccepted(Box::new(super::fixtures::input_record(
                 &format!("{label}-{index}"),
                 32,
-            )));
-            let prior = lease.load().await.unwrap();
-            let snapshot = with_input(prior.snapshot().unwrap(), &input);
-            (input, snapshot)
+            )))
         };
         let before = change_counter(root);
         let started = Instant::now();
         lease
             .save_changes(
                 lease.load().await.unwrap().binding().clone(),
-                snapshot,
                 vec![SessionSaveUnit::new(vec![change]).unwrap()],
             )
             .await
@@ -919,13 +832,12 @@ async fn save_commits_its_physical_events_in_one_transaction() {
     let storage = RecordStorage::new(&root).unwrap();
     let id = SessionId::new("one-commit").unwrap();
     let lease = storage.open(id.clone()).await.unwrap();
-    let (opened_change, snapshot) = opened(&id);
+    let (opened_change, _) = opened(&id);
     let before = change_counter(&root);
     let before_rows = rows(&root);
     lease
         .save_changes(
             lease.load().await.unwrap().binding().clone(),
-            snapshot.clone(),
             vec![SessionSaveUnit::new(vec![opened_change]).unwrap()],
         )
         .await
@@ -936,13 +848,11 @@ async fn save_commits_its_physical_events_in_one_transaction() {
         "framed-unit",
         70_000,
     )));
-    let framed = with_input(&snapshot, &large);
     let before = change_counter(&root);
     let before_rows = rows(&root);
     lease
         .save_changes(
             lease.load().await.unwrap().binding().clone(),
-            framed.clone(),
             vec![SessionSaveUnit::new(vec![large]).unwrap()],
         )
         .await
@@ -957,13 +867,11 @@ async fn save_commits_its_physical_events_in_one_transaction() {
         "chunked-unit",
         4 * 1024 * 1024,
     )));
-    let wide = with_input(&framed, &chunked);
     let before = change_counter(&root);
     let before_rows = rows(&root);
     lease
         .save_changes(
             lease.load().await.unwrap().binding().clone(),
-            wide,
             vec![SessionSaveUnit::new(vec![chunked]).unwrap()],
         )
         .await
@@ -990,17 +898,15 @@ async fn concurrent_opening_saves_on_two_sessions_both_publish() {
     let right_id = SessionId::new("right").unwrap();
     let left = storage.open(left_id.clone()).await.unwrap();
     let right = storage.open(right_id.clone()).await.unwrap();
-    let (left_change, left_snapshot) = opened(&left_id);
-    let (right_change, right_snapshot) = opened(&right_id);
+    let (left_change, _) = opened(&left_id);
+    let (right_change, _) = opened(&right_id);
     let (left_saved, right_saved) = tokio::join!(
         left.save_changes(
             left.load().await.unwrap().binding().clone(),
-            left_snapshot.clone(),
             vec![SessionSaveUnit::new(vec![left_change]).unwrap()],
         ),
         right.save_changes(
             right.load().await.unwrap().binding().clone(),
-            right_snapshot.clone(),
             vec![SessionSaveUnit::new(vec![right_change]).unwrap()],
         ),
     );
@@ -1018,7 +924,6 @@ async fn concurrent_opening_saves_on_two_sessions_both_publish() {
     let right_follow = SessionChange::InputAccepted(Box::new(input_record("right-follow", 16)));
     left.save_changes(
         left.load().await.unwrap().binding().clone(),
-        with_input(&left_snapshot, &left_follow),
         vec![SessionSaveUnit::new(vec![left_follow]).unwrap()],
     )
     .await
@@ -1026,7 +931,6 @@ async fn concurrent_opening_saves_on_two_sessions_both_publish() {
     right
         .save_changes(
             right.load().await.unwrap().binding().clone(),
-            with_input(&right_snapshot, &right_follow),
             vec![SessionSaveUnit::new(vec![right_follow]).unwrap()],
         )
         .await

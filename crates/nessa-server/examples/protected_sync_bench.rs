@@ -1092,7 +1092,7 @@ fn seed(
             seeded.push((user, assistant));
             if units.len() >= 25 {
                 binding = lease
-                    .save_changes(binding, snapshot.clone(), std::mem::take(&mut units))
+                    .save_changes(binding, std::mem::take(&mut units))
                     .await
                     .unwrap()
                     .next()
@@ -1100,7 +1100,7 @@ fn seed(
             }
         }
         if !units.is_empty() {
-            lease.save_changes(binding, snapshot, units).await.unwrap();
+            lease.save_changes(binding, units).await.unwrap();
         }
         drop(lease);
         storage.shutdown().await.unwrap();
@@ -1130,10 +1130,7 @@ fn append_turn(
         let (record, user, assistant) = turn_record(seeded.len());
         let unit = turn_unit(&record);
         snapshot.invocations.push(record);
-        lease
-            .save_changes(binding, snapshot, vec![unit])
-            .await
-            .unwrap();
+        lease.save_changes(binding, vec![unit]).await.unwrap();
         drop(lease);
         storage.shutdown().await.unwrap();
         seeded.push((user, assistant));

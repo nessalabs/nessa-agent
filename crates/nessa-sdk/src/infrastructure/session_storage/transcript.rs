@@ -1315,10 +1315,7 @@ mod tests {
                     .map(|change| SessionSaveUnit::new(vec![change]).unwrap())
                     .collect();
                 let binding = lease.load().await.unwrap().binding().clone();
-                lease
-                    .save_changes(binding, state.clone(), units)
-                    .await
-                    .unwrap();
+                lease.save_changes(binding, units).await.unwrap();
                 let source = storage
                     .record_source(&session, id("origin"))
                     .await

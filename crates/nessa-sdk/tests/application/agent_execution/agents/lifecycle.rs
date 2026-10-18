@@ -98,11 +98,10 @@ impl SessionStorageLease for CommitThenPauseLease {
     fn save_changes(
         &self,
         binding: SessionSaveGeneration,
-        value: SessionSnapshot,
         units: Vec<SessionSaveUnit>,
     ) -> StorageFuture<'_, SessionSaveReceipt> {
         Box::pin(async move {
-            let receipt = self.backing.save_changes(binding, value, units).await?;
+            let receipt = self.backing.save_changes(binding, units).await?;
             let pause = self.pause.lock().unwrap().take();
             if let Some(SavePause { committed, release }) = pause {
                 let _ = committed.send(());

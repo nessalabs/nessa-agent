@@ -258,9 +258,11 @@ persisted explicitly; `AgentError` is a diagnostic projection, not a lifecycle
 state machine.
 
 This does not turn snapshots into a complete permission audit log or durable job
-queue. The storage port receives a complete observed snapshot and the semantic
-changes that produced it. Record storage validates that fold and appends one
-fact at the save boundary. Streaming text does not trigger a save for every
+queue. The storage port receives only the semantic changes since the last save:
+they are the one account of what changed. The session applies each change to its
+own state the same way storage does, so neither keeps or compares a copy of the
+other's. Record storage checks the changes and appends one fact at the save
+boundary. Streaming text does not trigger a save for every
 chunk. Per-invocation output limits and transport queue bounds protect different
 retained data; neither is a total conversation-size limit.
 

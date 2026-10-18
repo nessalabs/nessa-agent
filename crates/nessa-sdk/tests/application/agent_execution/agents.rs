@@ -101,6 +101,35 @@ impl SavedState {
         Ok(receipt)
     }
 }
+/// Every decision in a save, in order. A fault-injecting test storage finds
+/// the save it targets here: the units are the only account of what changed.
+fn decisions(units: &[SessionSaveUnit]) -> impl Iterator<Item = &SessionChange> {
+    units.iter().flat_map(SessionSaveUnit::changes)
+}
+
+/// Whether this save moves invocation `id` to `stage`, including an input
+/// accepted already at that stage.
+fn moves_to(
+    units: &[SessionSaveUnit],
+    id: &str,
+    stage: nessa_sdk::domain::agent_execution::executions::InvocationStage,
+) -> bool {
+    decisions(units).any(|change| match change {
+        SessionChange::SchedulingTransition {
+            execution_id,
+            event,
+        } => execution_id.as_str() == id && event.stage == stage,
+        SessionChange::InputAccepted(record) => {
+            record.request.execution_id.as_str() == id
+                && record
+                    .scheduling
+                    .last()
+                    .is_some_and(|event| event.stage == stage)
+        }
+        _ => false,
+    })
+}
+
 #[derive(Clone, Default)]
 pub(super) struct MemoryStorage(Arc<Mutex<SavedState>>);
 impl MemoryStorage {
@@ -140,32 +169,35 @@ impl SessionStorageLease for MemoryStore {
     fn save_changes(
         &self,
         binding: SessionSaveGeneration,
-        snapshot: SessionSnapshot,
         units: Vec<SessionSaveUnit>,
     ) -> StorageFuture<'_, SessionSaveReceipt> {
         Box::pin(async move {
-            {
+            let snapshot = {
                 let state = self.0.lock().unwrap();
                 let retry = state
                     .save
                     .receipt
                     .as_ref()
                     .is_some_and(|receipt| receipt.binding() == &binding);
-                if snapshot.id != self.1 || (!retry && binding != state.save.binding(&self.1)) {
+                if !retry && binding != state.save.binding(&self.1) {
                     return Err(StorageError::IdentityMismatch);
                 }
                 let base = if retry {
-                    state.save.original.as_ref()
+                    state.save.original.clone()
                 } else {
-                    state.snapshot.as_ref()
+                    state.snapshot.clone()
                 };
-                SessionSaveUnit::validate_plan(base, &units, &snapshot)?;
+                let snapshot = SessionSaveUnit::fold(base, &units)?;
+                if snapshot.id != self.1 {
+                    return Err(StorageError::IdentityMismatch);
+                }
                 if retry && !units.starts_with(&state.save.units) {
                     return Err(StorageError::Corrupt(
                         "fixture snapshot retry prefix changed".into(),
                     ));
                 }
-            }
+                snapshot
+            };
             // This private fixture fingerprint is not a wire encoding. Exact
             // typed equality above owns retry refusal, not digest-only matching.
             let mut hash = Sha256::new();
@@ -306,28 +338,18 @@ async fn snapshot_fixture_keeps_exact_receipt_prefix_and_reset_capability() {
     let original = lease.load().await.unwrap().binding().clone();
     let provider = TestProvider::new().identity();
     let opened = SessionChange::Opened {
-        id: id.clone(),
-        provider: provider.clone(),
-        context: ProviderContext::Absent,
-    };
-    let snapshot = SessionSnapshot {
         id,
         provider,
-        provider_context: ProviderContext::Absent,
-        invocations: Vec::new(),
-        queue_history: Vec::new(),
-        lease: None,
-        artifacts: Vec::new(),
-        notes: Vec::new(),
+        context: ProviderContext::Absent,
     };
     let first = SessionSaveUnit::new(vec![opened.clone()]).unwrap();
     let receipt = lease
-        .save_changes(original.clone(), snapshot.clone(), vec![first.clone()])
+        .save_changes(original.clone(), vec![first.clone()])
         .await
         .unwrap();
     assert_eq!(
         lease
-            .save_changes(original.clone(), snapshot.clone(), vec![first.clone()])
+            .save_changes(original.clone(), vec![first.clone()])
             .await
             .unwrap(),
         receipt
@@ -335,20 +357,12 @@ async fn snapshot_fixture_keeps_exact_receipt_prefix_and_reset_capability() {
     let context = ProviderContext::Recorded(ExecutionSessionId::new("extended-context").unwrap());
     let changed_context = SessionChange::ProviderContext {
         before: ProviderContext::Absent,
-        after: context.clone(),
-    };
-    let extended_snapshot = SessionSnapshot {
-        provider_context: context,
-        ..snapshot.clone()
+        after: context,
     };
     let repartitioned = SessionSaveUnit::new(vec![opened, changed_context.clone()]).unwrap();
     assert!(matches!(
         lease
-            .save_changes(
-                original.clone(),
-                extended_snapshot.clone(),
-                vec![repartitioned]
-            )
+            .save_changes(original.clone(), vec![repartitioned])
             .await,
         Err(StorageError::Corrupt(_))
     ));
@@ -356,7 +370,6 @@ async fn snapshot_fixture_keeps_exact_receipt_prefix_and_reset_capability() {
     let extension = lease
         .save_changes(
             original.clone(),
-            extended_snapshot,
             vec![
                 first.clone(),
                 SessionSaveUnit::new(vec![changed_context]).unwrap(),
@@ -368,11 +381,7 @@ async fn snapshot_fixture_keeps_exact_receipt_prefix_and_reset_capability() {
     assert_ne!(extension.next(), receipt.next());
     assert_eq!(
         lease
-            .save_changes(
-                receipt.next().clone(),
-                snapshot.clone(),
-                vec![first.clone()]
-            )
+            .save_changes(receipt.next().clone(), vec![first.clone()])
             .await,
         Err(StorageError::IdentityMismatch)
     );
@@ -381,13 +390,11 @@ async fn snapshot_fixture_keeps_exact_receipt_prefix_and_reset_capability() {
     assert!(reset.snapshot().is_none());
     assert_ne!(reset.binding().backend(), original.backend());
     assert_eq!(
-        lease
-            .save_changes(original, snapshot.clone(), vec![first.clone()])
-            .await,
+        lease.save_changes(original, vec![first.clone()]).await,
         Err(StorageError::IdentityMismatch)
     );
     lease
-        .save_changes(reset.binding().clone(), snapshot, vec![first])
+        .save_changes(reset.binding().clone(), vec![first])
         .await
         .unwrap();
 }

@@ -18,8 +18,7 @@ use crate::{
     application::agent_execution::sessions::{
         storage::{
             CommittedSession, SessionLoad, SessionSaveGeneration, SessionSaveReceipt,
-            SessionSaveUnit, SessionSnapshot, SessionStorage, SessionStorageLease, StorageError,
-            StorageFuture,
+            SessionSaveUnit, SessionStorage, SessionStorageLease, StorageError, StorageFuture,
         },
         ChangeWatchError, CommittedChangeWatch, CommittedEventReader, EventFuture, EventStart,
     },
@@ -617,7 +616,6 @@ impl SessionStorageLease for RecordLease {
     fn save_changes(
         &self,
         generation: SessionSaveGeneration,
-        snapshot: SessionSnapshot,
         units: Vec<SessionSaveUnit>,
     ) -> StorageFuture<'_, SessionSaveReceipt> {
         let inner = self.inner.clone();
@@ -627,13 +625,7 @@ impl SessionStorageLease for RecordLease {
                 state.reconcile_erasure(&inner).await?;
                 state
                     .writer
-                    .save(
-                        &inner.runtime,
-                        inner.batch.as_ref(),
-                        generation,
-                        &snapshot,
-                        &units,
-                    )
+                    .save(&inner.runtime, inner.batch.as_ref(), generation, &units)
                     .await
             })
             .await
@@ -702,7 +694,7 @@ mod tests {
                 records::{self, FactKey, FactKind},
                 ChangeWatchState, InvocationRecord, InvocationSchedulingEvent, ProviderContext,
                 QueueHistoryRecord, SessionChange, SessionLoadState, SessionSaveBackend,
-                SubmissionAcknowledgement,
+                SessionSnapshot, SubmissionAcknowledgement,
             },
             tools::ToolReviewInput,
         },
@@ -921,7 +913,6 @@ mod tests {
         let result = lease
             .save_changes(
                 original.clone(),
-                snapshot.clone(),
                 vec![SessionSaveUnit::new(vec![change.clone()]).unwrap()],
             )
             .await;
@@ -947,7 +938,6 @@ mod tests {
         lease
             .save_changes(
                 original.clone(),
-                snapshot,
                 vec![SessionSaveUnit::new(vec![change]).unwrap()],
             )
             .await
@@ -997,7 +987,6 @@ mod tests {
         lease
             .save_changes(
                 original.clone(),
-                snapshot.clone(),
                 vec![SessionSaveUnit::new(vec![change]).unwrap()],
             )
             .await
@@ -1040,7 +1029,6 @@ mod tests {
         let (change, snapshot) = opening(&id);
         let mut save = lease.save_changes(
             original.clone(),
-            snapshot.clone(),
             vec![SessionSaveUnit::new(vec![change]).unwrap()],
         );
         assert!(matches!(
@@ -1083,7 +1071,6 @@ mod tests {
         lease
             .save_changes(
                 original.clone(),
-                snapshot.clone(),
                 vec![SessionSaveUnit::new(vec![change.clone()]).unwrap()],
             )
             .await
@@ -1101,7 +1088,6 @@ mod tests {
         lease
             .save_changes(
                 original.clone(),
-                snapshot,
                 vec![SessionSaveUnit::new(vec![change]).unwrap()],
             )
             .await
@@ -1120,12 +1106,11 @@ mod tests {
         let mut watch = storage.watch_committed(&id).unwrap();
         let lease = storage.open(id.clone()).await.unwrap();
         let original = lease.load().await.unwrap().binding().clone();
-        let (change, snapshot) = opening(&id);
+        let (change, _) = opening(&id);
         assert!(matches!(
             lease
                 .save_changes(
                     original.clone(),
-                    snapshot.clone(),
                     vec![SessionSaveUnit::new(vec![change.clone()]).unwrap()]
                 )
                 .await,
@@ -1135,7 +1120,6 @@ mod tests {
         lease
             .save_changes(
                 original.clone(),
-                snapshot,
                 vec![SessionSaveUnit::new(vec![change]).unwrap()],
             )
             .await
@@ -1154,11 +1138,10 @@ mod tests {
         let id = SessionId::new("erase-private").unwrap();
         let mut watch = storage.watch_committed(&id).unwrap();
         let lease = storage.open(id.clone()).await.unwrap();
-        let (opened, mut snapshot) = opening(&id);
+        let (opened, _) = opening(&id);
         lease
             .save_changes(
                 lease.load().await.unwrap().binding().clone(),
-                snapshot.clone(),
                 vec![SessionSaveUnit::new(vec![opened]).unwrap()],
             )
             .await
@@ -1187,11 +1170,9 @@ mod tests {
             result: None,
         };
         let change = SessionChange::InputAccepted(Box::new(input));
-        snapshot = records::fold_changes(Some(&snapshot), std::slice::from_ref(&change)).unwrap();
         lease
             .save_changes(
                 lease.load().await.unwrap().binding().clone(),
-                snapshot,
                 vec![SessionSaveUnit::new(vec![change]).unwrap()],
             )
             .await
@@ -1226,7 +1207,6 @@ mod tests {
         let opened_receipt = lease
             .save_changes(
                 lease.load().await.unwrap().binding().clone(),
-                prior.clone(),
                 vec![SessionSaveUnit::new(vec![opened]).unwrap()],
             )
             .await
@@ -1242,7 +1222,6 @@ mod tests {
             before: a_context,
             after: b_context.clone(),
         };
-        let first = records::fold_changes(Some(&prior), std::slice::from_ref(&a)).unwrap();
         let both = records::fold_changes(Some(&prior), &[a.clone(), b.clone()]).unwrap();
         let a = SessionSaveUnit::new(vec![a]).unwrap();
         let b = SessionSaveUnit::new(vec![b]).unwrap();
@@ -1251,9 +1230,7 @@ mod tests {
             "CREATE TRIGGER reject_test BEFORE INSERT ON event_records BEGIN SELECT RAISE(ABORT, 'injected failure A'); END",
         );
         assert!(matches!(
-            lease
-                .save_changes(original.clone(), first, vec![a.clone()])
-                .await,
+            lease.save_changes(original.clone(), vec![a.clone()]).await,
             Err(StorageError::Io(_))
         ));
         sql(
@@ -1262,7 +1239,7 @@ mod tests {
         );
         assert!(matches!(
             lease
-                .save_changes(original.clone(), both.clone(), vec![a.clone(), b.clone()])
+                .save_changes(original.clone(), vec![a.clone(), b.clone()])
                 .await,
             Err(StorageError::Io(_))
         ));
@@ -1286,7 +1263,7 @@ mod tests {
         );
         assert!(matches!(
             lease
-                .save_changes(skipped, both.clone(), vec![a.clone(), b.clone()])
+                .save_changes(skipped, vec![a.clone(), b.clone()])
                 .await,
             Err(StorageError::Corrupt(_))
         ));
@@ -1297,16 +1274,10 @@ mod tests {
             before: a_snapshot.provider_context.clone(),
             after: ProviderContext::Recorded(ExecutionSessionId::new("ctx-changed-B").unwrap()),
         };
-        let changed_candidate =
-            records::fold_changes(Some(&a_snapshot), std::slice::from_ref(&changed_b)).unwrap();
         let changed_b = SessionSaveUnit::new(vec![changed_b]).unwrap();
         assert!(matches!(
             lease
-                .save_changes(
-                    original.clone(),
-                    changed_candidate,
-                    vec![a.clone(), changed_b]
-                )
+                .save_changes(original.clone(), vec![a.clone(), changed_b])
                 .await,
             Err(StorageError::Corrupt(_))
         ));
@@ -1317,7 +1288,7 @@ mod tests {
         );
         assert_eq!(lease.load().await.unwrap().snapshot(), Some(&prior));
         let completed = lease
-            .save_changes(original.clone(), both.clone(), vec![a.clone(), b.clone()])
+            .save_changes(original.clone(), vec![a.clone(), b.clone()])
             .await
             .unwrap();
         assert_eq!(lease.load().await.unwrap().snapshot(), Some(&both));
@@ -1328,7 +1299,7 @@ mod tests {
         );
         for binding in [original.clone(), completed.next().clone()] {
             assert!(matches!(
-                lease.save_changes(binding, both.clone(), Vec::new()).await,
+                lease.save_changes(binding, Vec::new()).await,
                 Err(StorageError::Corrupt(_))
             ));
         }
@@ -1337,17 +1308,15 @@ mod tests {
             before: b_context,
             after: ProviderContext::Recorded(ExecutionSessionId::new("ctx-C").unwrap()),
         };
-        let third = records::fold_changes(Some(&both), std::slice::from_ref(&c)).unwrap();
         lease
             .save_changes(
                 completed.next().clone(),
-                third,
                 vec![SessionSaveUnit::new(vec![c]).unwrap()],
             )
             .await
             .unwrap();
         assert!(matches!(
-            lease.save_changes(original, both, vec![a, b]).await,
+            lease.save_changes(original, vec![a, b]).await,
             Err(StorageError::Corrupt(_))
         ));
         drop(lease);
@@ -1365,7 +1334,6 @@ mod tests {
         let opened_receipt = lease
             .save_changes(
                 lease.load().await.unwrap().binding().clone(),
-                prior.clone(),
                 vec![SessionSaveUnit::new(vec![opened]).unwrap()],
             )
             .await
@@ -1387,14 +1355,14 @@ mod tests {
         let a = SessionSaveUnit::new(vec![a_change]).unwrap();
         let b = SessionSaveUnit::new(vec![b_change]).unwrap();
         let p = lease
-            .save_changes(original.clone(), first.clone(), vec![a.clone()])
+            .save_changes(original.clone(), vec![a.clone()])
             .await
             .unwrap();
         assert_eq!(lease.load().await.unwrap().snapshot(), Some(&first));
         assert_eq!(rows(&root), 4);
         assert_eq!(
             lease
-                .save_changes(original.clone(), first.clone(), vec![a.clone()])
+                .save_changes(original.clone(), vec![a.clone()])
                 .await
                 .unwrap(),
             p
@@ -1404,13 +1372,10 @@ mod tests {
             before: ProviderContext::Absent,
             after: b_context,
         };
-        let changed_candidate =
-            records::fold_changes(Some(&prior), std::slice::from_ref(&changed)).unwrap();
         assert!(matches!(
             lease
                 .save_changes(
                     original.clone(),
-                    changed_candidate,
                     vec![SessionSaveUnit::new(vec![changed]).unwrap()]
                 )
                 .await,
@@ -1423,7 +1388,7 @@ mod tests {
         );
         assert!(matches!(
             lease
-                .save_changes(original.clone(), both.clone(), vec![a.clone(), b.clone()])
+                .save_changes(original.clone(), vec![a.clone(), b.clone()])
                 .await,
             Err(StorageError::Io(_))
         ));
@@ -1437,23 +1402,15 @@ mod tests {
         assert_eq!(rows(&root), 4);
         sql(&root, "DROP TRIGGER reject_test");
         let q = lease
-            .save_changes(original.clone(), both.clone(), vec![a.clone(), b.clone()])
+            .save_changes(original.clone(), vec![a.clone(), b.clone()])
             .await
             .unwrap();
         assert_eq!(rows(&root), 6);
         assert!(matches!(
-            lease
-                .save_changes(original.clone(), first, vec![a.clone()])
-                .await,
+            lease.save_changes(original.clone(), vec![a.clone()]).await,
             Err(StorageError::Corrupt(_))
         ));
-        assert_eq!(
-            lease
-                .save_changes(original, both.clone(), vec![a, b])
-                .await
-                .unwrap(),
-            q
-        );
+        assert_eq!(lease.save_changes(original, vec![a, b]).await.unwrap(), q);
         assert_eq!(rows(&root), 6);
         assert_eq!(lease.load().await.unwrap().snapshot(), Some(&both));
         lease.erase().await.unwrap();
@@ -1471,13 +1428,12 @@ mod tests {
         storage.options.failure_injection = Some(SqliteFailureInjection::BeforeCommit);
         let id = SessionId::new("erase-unresolved").unwrap();
         let lease = storage.open(id.clone()).await.unwrap();
-        let (opened, snapshot) = opening(&id);
+        let (opened, _) = opening(&id);
         let original = lease.load().await.unwrap().binding().clone();
         assert!(matches!(
             lease
                 .save_changes(
                     original.clone(),
-                    snapshot,
                     vec![SessionSaveUnit::new(vec![opened]).unwrap()]
                 )
                 .await,
@@ -1508,7 +1464,6 @@ mod tests {
         lease
             .save_changes(
                 lease.load().await.unwrap().binding().clone(),
-                observed.clone(),
                 vec![SessionSaveUnit::new(vec![opened]).unwrap()],
             )
             .await
@@ -1521,7 +1476,6 @@ mod tests {
         lease
             .save_changes(
                 lease.load().await.unwrap().binding().clone(),
-                observed.clone(),
                 vec![SessionSaveUnit::new(vec![context]).unwrap()],
             )
             .await
@@ -1553,7 +1507,6 @@ mod tests {
         lease
             .save_changes(
                 lease.load().await.unwrap().binding().clone(),
-                observed.clone(),
                 vec![SessionSaveUnit::new(vec![input]).unwrap()],
             )
             .await
@@ -1567,7 +1520,6 @@ mod tests {
         lease
             .save_changes(
                 lease.load().await.unwrap().binding().clone(),
-                observed.clone(),
                 vec![SessionSaveUnit::new(vec![receipt]).unwrap()],
             )
             .await
@@ -1585,7 +1537,6 @@ mod tests {
         lease
             .save_changes(
                 lease.load().await.unwrap().binding().clone(),
-                observed.clone(),
                 vec![SessionSaveUnit::new(vec![report]).unwrap()],
             )
             .await
@@ -1601,7 +1552,6 @@ mod tests {
         lease
             .save_changes(
                 lease.load().await.unwrap().binding().clone(),
-                observed.clone(),
                 vec![SessionSaveUnit::new(vec![settlement]).unwrap()],
             )
             .await
@@ -1628,7 +1578,6 @@ mod tests {
         lease
             .save_changes(
                 lease.load().await.unwrap().binding().clone(),
-                snapshot.clone(),
                 vec![SessionSaveUnit::new(vec![opened]).unwrap()],
             )
             .await
@@ -1657,7 +1606,6 @@ mod tests {
             lease
                 .save_changes(
                     lease.load().await.unwrap().binding().clone(),
-                    pending.clone(),
                     vec![SessionSaveUnit::new(vec![invalid_input, repair]).unwrap()]
                 )
                 .await,
@@ -1668,7 +1616,6 @@ mod tests {
         lease
             .save_changes(
                 lease.load().await.unwrap().binding().clone(),
-                pending.clone(),
                 vec![SessionSaveUnit::new(vec![valid_input]).unwrap()],
             )
             .await
@@ -1707,7 +1654,6 @@ mod tests {
                 lease
                     .save_changes(
                         lease.load().await.unwrap().binding().clone(),
-                        final_snapshot.clone(),
                         vec![SessionSaveUnit::new(vec![bad, repair]).unwrap()]
                     )
                     .await,
@@ -1719,7 +1665,6 @@ mod tests {
         lease
             .save_changes(
                 lease.load().await.unwrap().binding().clone(),
-                final_snapshot.clone(),
                 vec![SessionSaveUnit::new(vec![acknowledged]).unwrap()],
             )
             .await
@@ -1748,7 +1693,6 @@ mod tests {
         lease
             .save_changes(
                 lease.load().await.unwrap().binding().clone(),
-                snapshot.clone(),
                 vec![SessionSaveUnit::new(vec![opened]).unwrap()],
             )
             .await
@@ -1762,7 +1706,6 @@ mod tests {
         lease
             .save_changes(
                 lease.load().await.unwrap().binding().clone(),
-                snapshot.clone(),
                 vec![SessionSaveUnit::new(vec![context]).unwrap()],
             )
             .await
@@ -1844,81 +1787,41 @@ mod tests {
             scheduling_length: Some(2),
         });
         let queue_cases = [
-            (
-                vec![admissions[1].clone(), admissions[0].clone()],
-                vec![admissions[0].clone(), admissions[1].clone()],
-            ),
-            (
-                vec![
-                    admissions[0].clone(),
-                    admissions[1].clone(),
-                    running.clone(),
-                    admissions[2].clone(),
-                ],
-                vec![
-                    admissions[0].clone(),
-                    admissions[1].clone(),
-                    admissions[2].clone(),
-                    running.clone(),
-                ],
-            ),
-            (
-                vec![
-                    admissions[0].clone(),
-                    admissions[1].clone(),
-                    failure.clone(),
-                    removed.clone(),
-                    terminal.clone(),
-                ],
-                vec![
-                    admissions[0].clone(),
-                    admissions[1].clone(),
-                    failure.clone(),
-                    terminal.clone(),
-                    removed.clone(),
-                ],
-            ),
-            (
-                vec![
-                    admissions[0].clone(),
-                    admissions[1].clone(),
-                    failure.clone(),
-                    terminal.clone(),
-                    admissions[2].clone(),
-                ],
-                vec![
-                    admissions[0].clone(),
-                    admissions[1].clone(),
-                    admissions[2].clone(),
-                    failure.clone(),
-                    terminal.clone(),
-                ],
-            ),
-            (
-                vec![
-                    admissions[0].clone(),
-                    failure.clone(),
-                    terminal.clone(),
-                    admissions[1].clone(),
-                    removed.clone(),
-                ],
-                vec![
-                    admissions[0].clone(),
-                    admissions[1].clone(),
-                    failure.clone(),
-                    terminal.clone(),
-                    removed.clone(),
-                ],
-            ),
+            vec![admissions[1].clone(), admissions[0].clone()],
+            vec![
+                admissions[0].clone(),
+                admissions[1].clone(),
+                running.clone(),
+                admissions[2].clone(),
+            ],
+            vec![
+                admissions[0].clone(),
+                admissions[1].clone(),
+                failure.clone(),
+                removed.clone(),
+                terminal.clone(),
+            ],
+            vec![
+                admissions[0].clone(),
+                admissions[1].clone(),
+                failure.clone(),
+                terminal.clone(),
+                admissions[2].clone(),
+            ],
+            vec![
+                admissions[0].clone(),
+                failure.clone(),
+                terminal.clone(),
+                admissions[1].clone(),
+                removed.clone(),
+            ],
         ];
-        for (invalid, valid) in queue_cases {
-            let observed = records::fold_changes(Some(&snapshot), &valid).unwrap();
+        for invalid in queue_cases {
             let retained = rows(&root);
             assert!(matches!(
                 lease
                     .save_changes(
                         lease.load().await.unwrap().binding().clone(),
-                        observed,
                         vec![SessionSaveUnit::new(invalid).unwrap()]
                     )
                     .await,
@@ -1928,9 +1831,6 @@ mod tests {
             assert_eq!(lease.load().await.unwrap().snapshot(), Some(&snapshot));
         }
         for later in [&output, &report, &failure] {
-            let mut valid_changes = admissions.clone();
-            valid_changes.extend([running.clone(), later.clone()]);
-            let valid = records::fold_changes(Some(&snapshot), &valid_changes).unwrap();
             let mut invalid_changes = admissions.clone();
             invalid_changes.extend([later.clone(), running.clone()]);
             let retained = rows(&root);
@@ -1938,7 +1838,6 @@ mod tests {
                 lease
                     .save_changes(
                         lease.load().await.unwrap().binding().clone(),
-                        valid,
                         vec![SessionSaveUnit::new(invalid_changes).unwrap()]
                     )
                     .await,
@@ -1951,20 +1850,16 @@ mod tests {
         lease
             .save_changes(
                 lease.load().await.unwrap().binding().clone(),
-                snapshot.clone(),
                 vec![SessionSaveUnit::new(admissions).unwrap()],
             )
             .await
             .unwrap();
         for later in [&output, &report, &failure] {
-            let valid =
-                records::fold_changes(Some(&snapshot), &[running.clone(), later.clone()]).unwrap();
             let retained = rows(&root);
             assert!(matches!(
                 lease
                     .save_changes(
                         lease.load().await.unwrap().binding().clone(),
-                        valid,
                         vec![SessionSaveUnit::new(vec![later.clone(), running.clone()]).unwrap()]
                     )
                     .await,
@@ -1978,7 +1873,6 @@ mod tests {
         lease
             .save_changes(
                 lease.load().await.unwrap().binding().clone(),
-                with_running.clone(),
                 vec![SessionSaveUnit::new(vec![running]).unwrap()],
             )
             .await
@@ -1989,7 +1883,6 @@ mod tests {
         lease
             .save_changes(
                 lease.load().await.unwrap().binding().clone(),
-                with_output.clone(),
                 vec![SessionSaveUnit::new(vec![output]).unwrap()],
             )
             .await
@@ -2008,7 +1901,6 @@ mod tests {
             lease
                 .save_changes(
                     lease.load().await.unwrap().binding().clone(),
-                    snapshot.clone(),
                     vec![SessionSaveUnit::new(vec![absent, restored]).unwrap()]
                 )
                 .await,
@@ -2038,7 +1930,6 @@ mod tests {
         lease
             .save_changes(
                 lease.load().await.unwrap().binding().clone(),
-                snapshot.clone(),
                 vec![SessionSaveUnit::new(grouped).unwrap()],
             )
             .await
@@ -2064,7 +1955,6 @@ mod tests {
         lease
             .save_changes(
                 lease.load().await.unwrap().binding().clone(),
-                snapshot.clone(),
                 vec![SessionSaveUnit::new(vec![opened]).unwrap()],
             )
             .await
@@ -2080,7 +1970,6 @@ mod tests {
         lease
             .save_changes(
                 lease.load().await.unwrap().binding().clone(),
-                snapshot.clone(),
                 vec![SessionSaveUnit::new(setup).unwrap()],
             )
             .await
@@ -2095,7 +1984,6 @@ mod tests {
         lease
             .save_changes(
                 lease.load().await.unwrap().binding().clone(),
-                snapshot.clone(),
                 vec![SessionSaveUnit::new(vec![success]).unwrap()],
             )
             .await
@@ -2127,7 +2015,6 @@ mod tests {
             lease
                 .save_changes(
                     lease.load().await.unwrap().binding().clone(),
-                    forged,
                     vec![SessionSaveUnit::new(bad).unwrap()]
                 )
                 .await,
@@ -2156,7 +2043,6 @@ mod tests {
         lease
             .save_changes(
                 lease.load().await.unwrap().binding().clone(),
-                snapshot.clone(),
                 vec![SessionSaveUnit::new(vec![opened]).unwrap()],
             )
             .await
@@ -2185,7 +2071,6 @@ mod tests {
         lease
             .save_changes(
                 lease.load().await.unwrap().binding().clone(),
-                snapshot.clone(),
                 vec![SessionSaveUnit::new(admission).unwrap()],
             )
             .await
@@ -2221,7 +2106,6 @@ mod tests {
         lease
             .save_changes(
                 lease.load().await.unwrap().binding().clone(),
-                snapshot.clone(),
                 vec![SessionSaveUnit::new(settlement).unwrap()],
             )
             .await
@@ -2254,7 +2138,6 @@ mod tests {
             lease
                 .save_changes(
                     lease.load().await.unwrap().binding().clone(),
-                    initial.clone(),
                     vec![SessionSaveUnit::new(vec![opened]).unwrap()],
                 )
                 .await
@@ -2362,7 +2245,6 @@ mod tests {
                 lease
                     .save_changes(
                         lease.load().await.unwrap().binding().clone(),
-                        observed.clone(),
                         vec![SessionSaveUnit::new(invalid).unwrap()]
                     )
                     .await,
@@ -2373,7 +2255,6 @@ mod tests {
             lease
                 .save_changes(
                     lease.load().await.unwrap().binding().clone(),
-                    observed.clone(),
                     vec![SessionSaveUnit::new(valid).unwrap()],
                 )
                 .await
@@ -2405,7 +2286,6 @@ mod tests {
         lease
             .save_changes(
                 lease.load().await.unwrap().binding().clone(),
-                snapshot.clone(),
                 vec![SessionSaveUnit::new(vec![opened]).unwrap()],
             )
             .await
@@ -2416,7 +2296,6 @@ mod tests {
         lease
             .save_changes(
                 lease.load().await.unwrap().binding().clone(),
-                snapshot.clone(),
                 vec![SessionSaveUnit::new(vec![accepted]).unwrap()],
             )
             .await
@@ -2453,7 +2332,6 @@ mod tests {
         lease
             .save_changes(
                 lease.load().await.unwrap().binding().clone(),
-                snapshot.clone(),
                 vec![SessionSaveUnit::new(vec![requested]).unwrap()],
             )
             .await
@@ -2515,7 +2393,6 @@ mod tests {
             lease
                 .save_changes(
                     lease.load().await.unwrap().binding().clone(),
-                    observed.clone(),
                     vec![SessionSaveUnit::new(bad).unwrap()]
                 )
                 .await,
@@ -2526,7 +2403,6 @@ mod tests {
         lease
             .save_changes(
                 lease.load().await.unwrap().binding().clone(),
-                observed.clone(),
                 vec![SessionSaveUnit::new(vec![cancelled]).unwrap()],
             )
             .await
@@ -2583,7 +2459,6 @@ mod tests {
         lease
             .save_changes(
                 lease.load().await.unwrap().binding().clone(),
-                failed.clone(),
                 vec![SessionSaveUnit::new(vec![opened]).unwrap()],
             )
             .await
@@ -2594,7 +2469,6 @@ mod tests {
         lease
             .save_changes(
                 lease.load().await.unwrap().binding().clone(),
-                failed.clone(),
                 vec![SessionSaveUnit::new(vec![accepted]).unwrap()],
             )
             .await
@@ -2610,7 +2484,6 @@ mod tests {
         lease
             .save_changes(
                 lease.load().await.unwrap().binding().clone(),
-                failed.clone(),
                 vec![SessionSaveUnit::new(vec![first]).unwrap()],
             )
             .await
@@ -2629,7 +2502,6 @@ mod tests {
             lease
                 .save_changes(
                     lease.load().await.unwrap().binding().clone(),
-                    forged_success,
                     vec![SessionSaveUnit::new(vec![failure_to_success]).unwrap()]
                 )
                 .await,
@@ -2658,7 +2530,6 @@ mod tests {
             lease
                 .save_changes(
                     lease.load().await.unwrap().binding().clone(),
-                    forged_failure,
                     vec![
                         SessionSaveUnit::new(vec![oversized_intermediate, masked_oversized])
                             .unwrap()
@@ -2680,7 +2551,6 @@ mod tests {
         lease
             .save_changes(
                 lease.load().await.unwrap().binding().clone(),
-                failed.clone(),
                 vec![SessionSaveUnit::new(vec![valid_failure]).unwrap()],
             )
             .await
@@ -2696,7 +2566,6 @@ mod tests {
         lease
             .save_changes(
                 lease.load().await.unwrap().binding().clone(),
-                successful.clone(),
                 vec![SessionSaveUnit::new(vec![opened]).unwrap()],
             )
             .await
@@ -2710,7 +2579,6 @@ mod tests {
         lease
             .save_changes(
                 lease.load().await.unwrap().binding().clone(),
-                successful.clone(),
                 vec![SessionSaveUnit::new(vec![context]).unwrap()],
             )
             .await
@@ -2722,7 +2590,6 @@ mod tests {
         lease
             .save_changes(
                 lease.load().await.unwrap().binding().clone(),
-                successful.clone(),
                 vec![SessionSaveUnit::new(vec![accepted]).unwrap()],
             )
             .await
@@ -2741,7 +2608,6 @@ mod tests {
         lease
             .save_changes(
                 lease.load().await.unwrap().binding().clone(),
-                successful.clone(),
                 vec![SessionSaveUnit::new(vec![report]).unwrap()],
             )
             .await
@@ -2757,7 +2623,6 @@ mod tests {
         lease
             .save_changes(
                 lease.load().await.unwrap().binding().clone(),
-                successful.clone(),
                 vec![SessionSaveUnit::new(vec![settled]).unwrap()],
             )
             .await
@@ -2779,7 +2644,6 @@ mod tests {
             lease
                 .save_changes(
                     lease.load().await.unwrap().binding().clone(),
-                    successful.clone(),
                     vec![
                         SessionSaveUnit::new(vec![changed_success, masked_by_final_success])
                             .unwrap()
@@ -2803,7 +2667,6 @@ mod tests {
         lease
             .save_changes(
                 lease.load().await.unwrap().binding().clone(),
-                successful.clone(),
                 vec![SessionSaveUnit::new(vec![success_to_failure]).unwrap()],
             )
             .await
@@ -2820,7 +2683,6 @@ mod tests {
             lease
                 .save_changes(
                     lease.load().await.unwrap().binding().clone(),
-                    forged_success,
                     vec![SessionSaveUnit::new(vec![failure_to_success]).unwrap()]
                 )
                 .await,
@@ -2842,7 +2704,6 @@ mod tests {
         lease
             .save_changes(
                 lease.load().await.unwrap().binding().clone(),
-                snapshot.clone(),
                 vec![SessionSaveUnit::new(vec![change]).unwrap()],
             )
             .await
@@ -2873,7 +2734,6 @@ mod tests {
             lease
                 .save_changes(
                     old_binding,
-                    reopened_snapshot.clone(),
                     vec![SessionSaveUnit::new(vec![reopen_change.clone()]).unwrap()],
                 )
                 .await,
@@ -2883,7 +2743,6 @@ mod tests {
         lease
             .save_changes(
                 lease.load().await.unwrap().binding().clone(),
-                reopened_snapshot.clone(),
                 vec![SessionSaveUnit::new(vec![reopen_change]).unwrap()],
             )
             .await
@@ -2929,11 +2788,10 @@ mod tests {
             Some(SqliteFailureInjection::AfterLifecycleCommitAcknowledgementLost);
         let id = SessionId::new("conversation").unwrap();
         let lease = storage.open(id.clone()).await.unwrap();
-        let (change, snapshot) = opening(&id);
+        let (change, _) = opening(&id);
         lease
             .save_changes(
                 lease.load().await.unwrap().binding().clone(),
-                snapshot.clone(),
                 vec![SessionSaveUnit::new(vec![change]).unwrap()],
             )
             .await
@@ -2964,7 +2822,6 @@ mod tests {
         let first = lease
             .save_changes(
                 original.clone(),
-                snapshot.clone(),
                 vec![SessionSaveUnit::new(vec![change.clone()]).unwrap()],
             )
             .await;
@@ -2986,7 +2843,6 @@ mod tests {
         lease
             .save_changes(
                 original.clone(),
-                snapshot.clone(),
                 vec![SessionSaveUnit::new(vec![change]).unwrap()],
             )
             .await
@@ -3040,11 +2896,10 @@ mod tests {
         storage.initialize().await.unwrap();
         let id = SessionId::new("child-replay").unwrap();
         let lease = storage.open(id.clone()).await.unwrap();
-        let (change, snapshot) = opening(&id);
+        let (change, _) = opening(&id);
         lease
             .save_changes(
                 lease.load().await.unwrap().binding().clone(),
-                snapshot,
                 vec![SessionSaveUnit::new(vec![change]).unwrap()],
             )
             .await
@@ -3078,11 +2933,10 @@ mod tests {
         for (index, count) in counts.into_iter().enumerate() {
             let id = SessionId::new(format!("partial-child-{index}")).unwrap();
             let lease = storage.open(id.clone()).await.unwrap();
-            let (change, snapshot) = opening(&id);
+            let (change, _) = opening(&id);
             lease
                 .save_changes(
                     lease.load().await.unwrap().binding().clone(),
-                    snapshot,
                     vec![SessionSaveUnit::new(vec![change]).unwrap()],
                 )
                 .await
@@ -3130,7 +2984,6 @@ mod tests {
         lease
             .save_changes(
                 lease.load().await.unwrap().binding().clone(),
-                snapshot.clone(),
                 vec![SessionSaveUnit::new(vec![change]).unwrap()],
             )
             .await
@@ -3200,7 +3053,6 @@ mod tests {
         lease
             .save_changes(
                 lease.load().await.unwrap().binding().clone(),
-                snapshot.clone(),
                 vec![SessionSaveUnit::new(vec![change]).unwrap()],
             )
             .await
@@ -3269,11 +3121,10 @@ mod tests {
         let storage = RecordStorage::new(&root).unwrap();
         let id = SessionId::new("aborted-output").unwrap();
         let lease = storage.open(id.clone()).await.unwrap();
-        let (opened, mut observed) = opening(&id);
+        let (opened, _) = opening(&id);
         lease
             .save_changes(
                 lease.load().await.unwrap().binding().clone(),
-                observed.clone(),
                 vec![SessionSaveUnit::new(vec![opened]).unwrap()],
             )
             .await
@@ -3282,11 +3133,9 @@ mod tests {
             before: ProviderContext::Absent,
             after: ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap()),
         };
-        observed = records::fold_changes(Some(&observed), std::slice::from_ref(&context)).unwrap();
         lease
             .save_changes(
                 lease.load().await.unwrap().binding().clone(),
-                observed.clone(),
                 vec![SessionSaveUnit::new(vec![context]).unwrap()],
             )
             .await
@@ -3314,11 +3163,9 @@ mod tests {
             local_outcome: None,
             result: None,
         }));
-        observed = records::fold_changes(Some(&observed), std::slice::from_ref(&input)).unwrap();
         lease
             .save_changes(
                 lease.load().await.unwrap().binding().clone(),
-                observed,
                 vec![SessionSaveUnit::new(vec![input]).unwrap()],
             )
             .await
@@ -3394,7 +3241,6 @@ mod tests {
             lease
                 .save_changes(
                     loaded.binding().clone(),
-                    published.clone(),
                     vec![SessionSaveUnit::new(vec![change]).unwrap()],
                 )
                 .await
@@ -3431,11 +3277,10 @@ mod tests {
             async move {
                 let id = SessionId::new(id).unwrap();
                 let lease = storage.open(id.clone()).await.unwrap();
-                let (change, snapshot) = opening(&id);
+                let (change, _) = opening(&id);
                 lease
                     .save_changes(
                         lease.load().await.unwrap().binding().clone(),
-                        snapshot,
                         vec![SessionSaveUnit::new(vec![change]).unwrap()],
                     )
                     .await
@@ -3469,7 +3314,6 @@ mod tests {
         lease
             .save_changes(
                 lease.load().await.unwrap().binding().clone(),
-                expected.clone(),
                 vec![
                     SessionSaveUnit::new(vec![change]).unwrap(),
                     SessionSaveUnit::new(vec![input.clone()]).unwrap(),
@@ -3525,11 +3369,10 @@ mod tests {
         let storage = RecordStorage::new(&root).unwrap();
         let readable = SessionId::new("readable").unwrap();
         let lease = storage.open(readable.clone()).await.unwrap();
-        let (change, snapshot) = opening(&readable);
+        let (change, _) = opening(&readable);
         lease
             .save_changes(
                 lease.load().await.unwrap().binding().clone(),
-                snapshot,
                 vec![SessionSaveUnit::new(vec![change]).unwrap()],
             )
             .await
@@ -3635,7 +3478,7 @@ mod tests {
         let root = directory.path().join("sessions");
         let storage = RecordStorage::new(&root).unwrap();
         let sibling = SessionId::new("sibling").unwrap();
-        let (opened, opened_snapshot) = opening(&sibling);
+        let (opened, _) = opening(&sibling);
         let issued = LeaseRecord::Issued {
             lease: LeaseId::new("lease-1").unwrap(),
             revision: LeaseRevision::FIRST,
@@ -3648,16 +3491,10 @@ mod tests {
             },
             actor: ActionContext::new("person", "desktop", "send").unwrap(),
         };
-        let with_lease = records::fold_changes(
-            Some(&opened_snapshot),
-            &[SessionChange::Lease(issued.clone())],
-        )
-        .unwrap();
         let lease = storage.open(sibling.clone()).await.unwrap();
         lease
             .save_changes(
                 lease.load().await.unwrap().binding().clone(),
-                with_lease,
                 vec![
                     SessionSaveUnit::new(vec![opened]).unwrap(),
                     SessionSaveUnit::new(vec![SessionChange::Lease(issued)]).unwrap(),

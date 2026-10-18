@@ -146,7 +146,6 @@ async fn observations_before_rejection_preserve_evidence_and_require_protocol_cl
             lease
                 .save_changes(
                     lease.load().await.unwrap().binding().clone(),
-                    saved.clone(),
                     vec![SessionSaveUnit::new(changes).unwrap()],
                 )
                 .await
