@@ -221,10 +221,11 @@ class Run {
     const code = error?.code ?? "no code"
     this.codes.set(code, (this.codes.get(code) ?? 0) + 1)
     if (restarted || EXPECTED.has(code) || EXPECTED_FOR[action.kind]?.has(code)) return
-    // A read that meets a close of its conversation is refused as closed
-    // rather than held up by the close; the next read opens it again.
+    // A read or a reorder that meets a close of its conversation is refused
+    // as closed rather than held up by the close: the close declines the
+    // queue a reorder would change, and the next read opens it again.
     if (
-      action.kind === "read" &&
+      (action.kind === "read" || action.kind === "reorder") &&
       code === "conversation_closed" &&
       this.closing?.has(action.slot)
     )
@@ -650,7 +651,13 @@ async function check(run, { views, quiet }) {
       // a restart cut off just after it was dispatched settles failed
       // (`Closed`) and is then recorded cancelled, and resumed, so the view
       // and every follower end on cancelled.
-      const failed = turn ? turn.status === "failed" : end.includes("failed")
+      // A turn past the view's window is judged from its events as the view
+      // judges one (`record_status`): a failed settlement followed by a
+      // cancellation, a turn a restart cut off and then resumed, ended
+      // cancelled.
+      const failed = turn
+        ? turn.status === "failed"
+        : end.includes("failed") && !cancelled.has(executionId)
       // A thread tool answered "temporarily_unavailable", which tells the
       // model to try again (a restart, or a thread still opening), or
       // "conversation_capacity" (every live agent at work); the scripted
