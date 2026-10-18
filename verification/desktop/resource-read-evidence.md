@@ -31,11 +31,11 @@ reach the successful client method unchanged.
 | reading / chunk | bounded actual bytes; keep reading |
 | reading / EOF | exact expected length and SHA256; otherwise failed |
 | EOF / original client method resolves | matching byte-array/read identity; wrapper and integrity accepted |
-| verified / original bridge view live | exact original mount, still uncanceled; eligible |
-| any / cancel, replacement, rejection, duplicate or impossible ordering | permanently failed; later success cannot repair it |
+| verified / original bridge view live | exact original mount, still uncanceled at the original browser observer cutoff; eligible |
+| before browser observer cutoff / cancel, replacement, rejection, duplicate or impossible ordering | permanently failed; later success cannot repair it |
 | event / Request binding arrives in either order | join exactly once by private single-use identity; ambiguous candidates fail |
 | failed request before or after eligibility | retain its exact Request and line until final page reporting |
-| eligibility revoked before reporting | final line is an error, including cancellation after live |
+| eligibility revoked before the original browser observer cutoff | final line is an error, including cancellation after live but before that cutoff |
 | observer cutoff acknowledged | observer messages are ordered; await actual terminal events for every admitted candidate Request |
 | admitted actual Request / requestfinished or requestfailed | record its terminal state synchronously; failed-line listener runs in the same event dispatch before settlement resumes |
 | final report / any admitted Request still pending | permanently invalidate positive evidence, including another verified read; cleanup cannot repair it |
@@ -44,15 +44,19 @@ reach the successful client method unchanged.
 
 The new exception requires the same Request, HTTP200, exact `/mcp-resources`,
 `net::ERR_ABORTED`, complete consumed bytes/EOF, verified length/digest and the
-same uncanceled live mount. Other errors and unobserved cross-origin failures
-remain failures. In this opt-in check, unobserved endpoint failures also fail;
+same mount uncanceled and live at the original browser observer cutoff. Other
+errors and unobserved cross-origin failures remain failures. In this opt-in
+check, unobserved endpoint failures also fail;
 no endpoint failure can be rescued by an old pattern or full-size hint. Other
 checks keep their existing origin rules.
 
 The request-specific lines are deferred until close rather than drained into an
 earlier result that could not be revoked. Other page lines retain their current
-step attribution. Measurement ends before the context's own disposal; it is not
-an assertion that a successful app can never subsequently close.
+step attribution. Original mount liveness and cancellation are sampled at the
+browser observer cutoff; later cancellation cannot revoke that frozen observation.
+Request identities and lines remain retained until the later Node final collection
+cutoff, before context disposal. This does not assert that a successful app can
+never subsequently close.
 
 The observer acknowledgement does not flush Playwright's independent network
 event channel. `resource-read-modules.mjs` owns a bounded lifecycle map keyed by
@@ -63,7 +67,7 @@ After the browser cutoff ACK, finalization awaits those actual terminal events
 within the same existing 2000ms budget shared with size reports. No sleep or
 response-body hint establishes terminal delivery.
 
-`page-lines.mjs` invokes the final synchronous collection cutoff immediately
+`page-lines.mjs` invokes the Node final synchronous collection cutoff immediately
 before taking its arrays. The resource owner first invalidates any still-pending
 candidate, detaches its lifecycle listeners and releases waiters. Only then do
 browser line listeners stop, retained failures receive their exact classification,
@@ -76,7 +80,7 @@ aborts cannot settle pending proof successfully.
 Admission means receiving the actual page Request event. These checks do not
 claim that a binding ACK or an empty pending set flushes arbitrary future network
 starts. A candidate admitted after finalization begins invalidates evidence; a
-start and terminal both delivered after the synchronous measurement cutoff are
+start and terminal both delivered after the Node final collection cutoff are
 outside this observed interval. The later-task regression holds terminal delivery
 for an already admitted Request, rather than simulating it in the ACK microtask.
 

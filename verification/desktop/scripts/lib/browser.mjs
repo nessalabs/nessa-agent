@@ -109,7 +109,7 @@ export async function waitUntilSettled(page, timeout = 30_000) {
  * @param {"reduce"|"no-preference"} [o.reducedMotion]
  * @param {Record<string,string>} [o.prefs] extra localStorage entries
  * @param {Array<Function|[Function, unknown]>} [o.initScripts] extra init scripts
- * @param {boolean} [o.resourceReads] observe Vite resource factories through final page reporting
+ * @param {boolean} [o.resourceReads] observe factories to browser cutoff; retain Requests through final reporting
  * @param {(page: import("playwright").Page, context: import("playwright").BrowserContext) => Promise<void>} [o.preparePage]
  *        Runs after the page exists and before navigation, so a CDP session
  *        can disable the cache or enable performance metrics for that load.
@@ -426,7 +426,7 @@ export function classifyResourceFailure(request, evidence, { errors, harmless })
     request.existingResponse()?.status() === 200
   ) {
     harmless.push(
-      `${line} (consumed EOF, verified length/SHA256, same uncanceled live mount, #996)`,
+      `${line} (consumed EOF, verified length/SHA256, same uncanceled live mount at browser observer cutoff, #996)`,
     )
   } else errors.push(line)
 }

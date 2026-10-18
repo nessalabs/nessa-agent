@@ -35,16 +35,18 @@ line metadata, so a late console failure also fails that engine's summary cell
 | the apps step proves its mount is live, with a same-origin `/mcp-resources` `net::ERR_ABORTED` held (#647) | `browser.mjs` publishes the exact endpoint pattern; `noteHarmless` moves the held match |
 | that same abort arrives after the live proof, before the next result or close (#647) | the installed pattern classifies it as harmless; the existing result/close owner reports it once |
 | no live proof, or an abort with another origin, path or error (#647) | no exemption applies; the existing result/close owner reports the failure |
-| the dev gateway app check observes resource factories (#996) | retain exact endpoint Requests outside generic string queues until the final browser cutoff acknowledgement; step drains and harmless patterns cannot take them |
-| that exact observed Request has consumed EOF, matching length/SHA256, original client acceptance and its same uncanceled live bridge | `browser.mjs` classifies only its HTTP200 `net::ERR_ABORTED` as harmless, including cross-origin; close reports it once |
-| known proof is canceled, corrupt, truncated, ambiguous, missing or timed out | final direct reporting keeps the failure even with a same-origin size hint or live pattern; no older result needs revocation |
+| the dev gateway app check observes resource factories (#996) | retain exact endpoint Requests outside generic string queues through browser cutoff acknowledgement and actual Request terminal settlement until the Node final collection cutoff; step drains and harmless patterns cannot take them |
+| that exact observed Request has consumed EOF, matching length/SHA256, original client acceptance and its same bridge uncanceled and live at the original browser observer cutoff | `browser.mjs` classifies only its HTTP200 `net::ERR_ABORTED` as harmless, including cross-origin; close reports it once |
+| original proof is canceled before browser observer cutoff, corrupt, truncated, ambiguous, missing or timed out | final direct reporting keeps the failure even with a same-origin size hint or live pattern; no older result needs revocation |
 | an admitted resource Request has no terminal event after observer ACK (#996) | the installer waits for its actual requestfinished/requestfailed within the existing shared settlement budget; an unresolved candidate invalidates positive evidence at final reporting |
 | that Request fails in a later event-loop task (#996 R2) | its terminal and failed-line listeners run synchronously before settlement resumes; the line owner then checks for remaining pending candidates, stops collection, classifies retained Requests and drains without an intervening await |
 
 The opt-in observer contract and bounds are in
 [resource-read evidence](resource-read-evidence.md). Its finalizer runs even
 without a reporter and on opening failure; ordinary lines arriving while the
-barrier is pending are taken afterward. The measurement cutoff precedes context
+barrier is pending are taken afterward. Original mount state is sampled at the
+browser observer cutoff; Request admission and line retention end at the later
+Node final collection cutoff, before context
 disposal. Other checks retain their existing origin rules.
 
 For #647, the #473 live-mount exemption now matches the exact

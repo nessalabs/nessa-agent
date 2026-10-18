@@ -1360,12 +1360,14 @@ says why where the conversations would be.
 
 ## Console errors
 
-- [ ] **Observed resource failures keep exact read and mount ownership through
+- [ ] **Observed resource failures retain exact read and mount identity through
   final reporting (#996).** The dev `gateway-window` apps check requires all
   three factory decorators and a real accepted live read. Only the same Request's
   HTTP200 `net::ERR_ABORTED`, complete consumed EOF, matching length/SHA256,
-  original client acceptance and uncanceled owning bridge qualifies. Pending,
-  invalid, canceled and duplicate proof bypasses all older size/live patterns.
+  original client acceptance and its owning bridge uncanceled and live at the
+  original browser observer cutoff qualifies. Request completion is checked
+  through the later Node final collection cutoff. Pending, invalid, canceled
+  before browser cutoff and duplicate proof bypasses all older size/live patterns.
   _Check:_ `resource-read-regression.mjs` exercises real factories in Chromium
   and WebKit with synthetic HTTP/ports; simulated aborts are explicitly labelled.
 - [ ] **Opening failure evidence precedes page disposal (#981).** A failed
