@@ -80,7 +80,10 @@ import { parseArgs } from "node:util"
 import { readWithReviews } from "../../../scripts/conversation-smoke/reviews.mjs"
 import { startLocalGateway } from "../../../scripts/mcp-test-server/local-gateway.mjs"
 import { turnEnded } from "../../../scripts/mcp-test-server/evidence.mjs"
-import { STRESS, stressScenario } from "../../../scripts/mcp-test-server/scenarios/stress.mjs"
+import {
+  STRESS,
+  stressScenario,
+} from "../../../scripts/mcp-test-server/scenarios/stress.mjs"
 import { KNOBS, actions, describe, knobsFrom, random, shrink } from "./lib/chaos-plan.mjs"
 import { connectClient, scriptedLaunch, waitFor } from "./lib/gateway-stack.mjs"
 import { freePort } from "./lib/server.mjs"
@@ -213,6 +216,14 @@ class Run {
     const code = error?.code ?? "no code"
     this.codes.set(code, (this.codes.get(code) ?? 0) + 1)
     if (restarted || EXPECTED.has(code) || EXPECTED_FOR[action.kind]?.has(code)) return
+    // A read that meets a close of its conversation is refused as closed
+    // rather than held up by the close; the next read opens it again.
+    if (
+      action.kind === "read" &&
+      code === "conversation_closed" &&
+      this.closing?.has(action.slot)
+    )
+      return
     this.fail(`action ${action.index} (${action.kind}) failed: ${explain(error)}`)
   }
 }
@@ -404,7 +415,8 @@ async function between(run, wave) {
       return false
     }
   }, 30_000)
-  if (!healthy) run.fail(`after wave ${wave} the gateway does not answer its health check`)
+  if (!healthy)
+    run.fail(`after wave ${wave} the gateway does not answer its health check`)
   if (PANIC.test(run.gateway.log())) run.fail(`by wave ${wave} the gateway panicked`)
 }
 
@@ -497,7 +509,15 @@ async function allEvents(client, conversationId, quietMs = 1_500) {
     { replay: true },
   )
   const deadline = Date.now() + 60_000
-  while (!end && Date.now() - last < quietMs && Date.now() < deadline) await sleep(100)
+  // Quiet counts from the first batch: a replay of a long history can
+  // take longer than the quiet window to start, and nothing read then is
+  // not the same as nothing there.
+  while (
+    !end &&
+    (events.length === 0 ? Date.now() - last < 15_000 : Date.now() - last < quietMs) &&
+    Date.now() < deadline
+  )
+    await sleep(100)
   await subscription.close().catch(() => {})
   if (end) throw new Error(`a replay of ${conversationId} ended ${end.reason}`)
   return events
@@ -565,7 +585,8 @@ async function check(run, { views, quiet }) {
     for (const [executionId, entry] of run.sent) {
       if (entry.slot !== slot) continue
       const end = settled.get(executionId) ?? []
-      const outcome = end[0] ?? (cancelled.has(executionId) ? "cancelled before settling" : "none")
+      const outcome =
+        end[0] ?? (cancelled.has(executionId) ? "cancelled before settling" : "none")
       const key = `${entry.kind} ${entry.ask}: ${entry.taken ? (entry.removed ? "removed" : "taken") : entry.error ? "errored" : "unanswered"} → ${outcome}`
       outcomes.set(key, (outcomes.get(key) ?? 0) + 1)
       const turn = view?.messages.find((each) => each.executionId === executionId)
@@ -590,10 +611,24 @@ async function check(run, { views, quiet }) {
       // model to try again (a restart, or a thread still opening); the
       // scripted agent gives up on any tool error instead. Counted, not
       // failed.
+      // A turn the bounded view no longer lists has no error to read: its
+      // failed tool is all its events say, and it is counted apart.
+      const threadTool = entry.ask === "watch" || entry.ask === "delegate"
+      const unread =
+        threadTool &&
+        !turn &&
+        events.some(
+          (event) =>
+            event.executionId === executionId &&
+            event.kind === "tool.updated" &&
+            event.status === "failed",
+        )
       const toldToRetry =
-        (entry.ask === "watch" || entry.ask === "delegate") &&
-        /failed: \{"error":"temporarily_unavailable"\}/.test(turn?.error ?? "")
+        unread ||
+        (threadTool &&
+          /failed: \{"error":"temporarily_unavailable"\}/.test(turn?.error ?? ""))
       if (failed && toldToRetry) run.toolRetries = (run.toolRetries ?? 0) + 1
+      if (failed && unread) run.toolFailuresUnread = (run.toolFailuresUnread ?? 0) + 1
       if (failed && entry.ask !== "fail" && !toldToRetry)
         run.fail(
           `${said} ended failed (events ${events
@@ -610,7 +645,8 @@ async function check(run, { views, quiet }) {
         run.slots[note.slot],
         note.requestId,
       )
-      if (!status.found) run.fail(`a note the gateway took cannot be found: ${note.requestId}`)
+      if (!status.found)
+        run.fail(`a note the gateway took cannot be found: ${note.requestId}`)
     } catch (error) {
       run.fail(`a note's status could not be read: ${explain(error)}`)
     }
@@ -663,9 +699,11 @@ async function runOnce(list, knobs, { evidence, label }) {
     await Promise.all(
       run.slots.flatMap((conversationId) =>
         run.clients.map(({ client }) =>
-          client.conversation.create({ conversationId, agent }).catch((error) =>
-            run.fail(`creating ${conversationId} failed: ${explain(error)}`),
-          ),
+          client.conversation
+            .create({ conversationId, agent })
+            .catch((error) =>
+              run.fail(`creating ${conversationId} failed: ${explain(error)}`),
+            ),
         ),
       ),
     )
@@ -684,9 +722,11 @@ async function runOnce(list, knobs, { evidence, label }) {
     await Promise.all(run.followers.map((each) => each.start()))
     const waves = [...new Set(list.map((action) => action.wave))].sort((a, b) => a - b)
     for (const wave of waves) {
-      await Promise.all(
-        list.filter((action) => action.wave === wave).map((action) => act(run, action)),
+      const actions = list.filter((action) => action.wave === wave)
+      run.closing = new Set(
+        actions.filter((action) => action.kind === "close").map((action) => action.slot),
       )
+      await Promise.all(actions.map((action) => act(run, action)))
       await between(run, wave)
     }
     await check(run, await settle(run))
@@ -725,6 +765,7 @@ async function runOnce(list, knobs, { evidence, label }) {
       restarts: run.restarts,
       outcomes: run.outcomes,
       toolRetries: run.toolRetries ?? 0,
+      toolFailuresUnread: run.toolFailuresUnread ?? 0,
       events: Object.fromEntries(run.eventKinds),
       notes: run.notes.filter((each) => each.taken).length,
       followers: run.followers.map((each) => ({
@@ -746,13 +787,17 @@ const options = parseArgs({
 }).values
 
 if (options.help) {
-  process.stdout.write(`Usage: node verification/desktop/scripts/conversation-chaos.mjs [options]
+  process.stdout
+    .write(`Usage: node verification/desktop/scripts/conversation-chaos.mjs [options]
 
 Needs the gateway built (cargo build -p nessa-server; or MCP_LIVE_NESSA).
 
 Numbers (a flag, else NESSA_CHAOS_<NAME>, else the default):
 ${Object.entries(KNOBS)
-  .map(([name, knob]) => `  --${name.padEnd(13)} ${String(knob.default).padStart(3)}  ${knob.what}`)
+  .map(
+    ([name, knob]) =>
+      `  --${name.padEnd(13)} ${String(knob.default).padStart(3)}  ${knob.what}`,
+  )
   .join("\n")}
   --runs          2  runs, each on a gateway of its own, seeds counting up from --seed
                      (or NESSA_CHAOS_RUNS)
@@ -783,7 +828,9 @@ const failsWith = (knobs, wanted) => async (list) => {
   const { failures } = await runOnce(list, knobs, { label: "shrinking" })
   const kinds = new Set(failures.map(signature))
   const same = [...wanted].some((kind) => kinds.has(kind))
-  log(`  ${list.length} actions: ${same ? "fails the same way" : failures.length ? "fails another way" : "holds"}`)
+  log(
+    `  ${list.length} actions: ${same ? "fails the same way" : failures.length ? "fails another way" : "holds"}`,
+  )
   return same
 }
 
@@ -792,8 +839,13 @@ let failed = false
 if (options.replay) {
   const saved = JSON.parse(readFileSync(options.replay, "utf8"))
   const knobs = saved.knobs
-  log(`replaying ${saved.actions.length} actions of seed ${knobs.seed}\n${describe(saved.actions)}`)
-  const result = await runOnce(saved.actions, knobs, { evidence, label: `replay-seed-${knobs.seed}` })
+  log(
+    `replaying ${saved.actions.length} actions of seed ${knobs.seed}\n${describe(saved.actions)}`,
+  )
+  const result = await runOnce(saved.actions, knobs, {
+    evidence,
+    label: `replay-seed-${knobs.seed}`,
+  })
   report.push({ seed: knobs.seed, replay: options.replay, ...result })
   failed = result.failures.length > 0
 } else {
@@ -812,9 +864,13 @@ if (options.replay) {
     )
     if (!result.failures.length) continue
     failed = true
-    log(`seed ${knobs.seed} failed:\n  ${result.failures.join("\n  ")}\nactions:\n${describe(list)}`)
+    log(
+      `seed ${knobs.seed} failed:\n  ${result.failures.join("\n  ")}\nactions:\n${describe(list)}`,
+    )
     if (knobs.shrink > 0) {
-      log(`cutting seed ${knobs.seed}'s ${list.length} actions down, ${knobs.shrink} runs at most…`)
+      log(
+        `cutting seed ${knobs.seed}'s ${list.length} actions down, ${knobs.shrink} runs at most…`,
+      )
       const wanted = new Set(result.failures.map(signature))
       const file = evidence && join(evidence, `shrunk-seed-${knobs.seed}.json`)
       const save = (actions) => {
@@ -828,7 +884,9 @@ if (options.replay) {
         save,
       )
       entry.shrunk = { actions: small.length, tried }
-      log(`seed ${knobs.seed} still fails with ${small.length} actions (${tried} runs):\n${describe(small)}`)
+      log(
+        `seed ${knobs.seed} still fails with ${small.length} actions (${tried} runs):\n${describe(small)}`,
+      )
       if (file) {
         log(`replay it: pnpm test:e2e:chaos -- --replay ${file}`)
       } else {

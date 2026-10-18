@@ -561,3 +561,51 @@ async fn a_granted_duration_is_recorded_as_the_deadline() {
     assert_eq!(clock.unix_milliseconds(), 1_005_000);
     assert_eq!(opening.terms.deadline, LeaseDeadline::At(1_060_000));
 }
+
+/// An opening asked after the lease began ending, but before its Agent was
+/// told to close (a recovery for queued work), waits for that close, rather
+/// than failing on its own: work waiting on it then ends as closed by the
+/// close, not as failed by a refusal the Agent could not place.
+#[tokio::test]
+async fn an_opening_while_the_lease_ends_waits_for_the_agents_close() {
+    use crate::conversation_test_support::AcceptingAudit;
+    use nessa_sdk::application::agent_execution::agents::{Agent, AttachmentRequest};
+    use nessa_sdk::application::agent_execution::sessions::SessionManager;
+    use nessa_sdk::infrastructure::session_storage::{InMemoryStorage, RuntimeMessageCommitClock};
+
+    let opening = open_lease(
+        in_process_environment().as_ref(),
+        request(SandboxProfiles::HARNESS_DEFAULT),
+        binding(),
+        &At(0),
+    )
+    .await;
+    let manager = SessionManager::open(
+        None,
+        Arc::new(InMemoryStorage::new()),
+        Arc::new(RuntimeMessageCommitClock::new()),
+    )
+    .await
+    .unwrap();
+    let agent = Agent::prepare(opening.fence.clone(), manager, Arc::new(AcceptingAudit))
+        .await
+        .unwrap();
+    let actor = ActionContext::new("caller", "surface", "close").unwrap();
+    opening.fence.ending();
+    let authorization = agent
+        .authorize_attachment(AttachmentRequest::CallerRequested(actor.clone()))
+        .unwrap();
+    let attached = agent.start_attachment(authorization).unwrap();
+    let mut attached = std::pin::pin!(attached.wait());
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), attached.as_mut())
+            .await
+            .is_err(),
+        "the opening failed before the close asked"
+    );
+    agent.close(actor).await.unwrap();
+    assert!(tokio::time::timeout(Duration::from_secs(5), attached)
+        .await
+        .expect("the close ends the opening")
+        .is_err());
+}

@@ -5689,6 +5689,22 @@ impl ConversationService {
                         // ended, and is M10
                         // (`m10_a_message_after_a_desktop_stops_mark_is_refused_and_opens_nothing`).
                         drop(submissions.take());
+                        // Closed for good, it owes nothing: a turn a restart
+                        // cut off, or a failure left to retry, ends with it
+                        // rather than waiting unresolved for a resume that
+                        // will not come
+                        // (`a_close_ends_the_turns_a_restart_cut_off`).
+                        let mut owes_nothing = true;
+                        if end == AgentEnd::Close {
+                            for turn in live.agent.owed_turns().await {
+                                if let Err(error) =
+                                    live.agent.decline_turn(&turn, actor.clone()).await
+                                {
+                                    owes_nothing = false;
+                                    tracing::warn!(conversation_id = %id, execution_id = %turn.execution_id().as_str(), %error, "a turn the close ends could not be recorded ended; it stays marked, and the next start resumes it");
+                                }
+                            }
+                        }
                         let closed = self
                             .close_leased(live, cause, actor.clone(), end)
                             .await
@@ -5701,7 +5717,7 @@ impl ConversationService {
                         if let_go(&closed) {
                             // Closed for good: whatever it was doing ended
                             // with it, so a restart has nothing to resume.
-                            if end == AgentEnd::Close {
+                            if end == AgentEnd::Close && owes_nothing {
                                 self.forget_unfinished(id).await;
                             }
                             let _ = live.join_attachment_owner().await;

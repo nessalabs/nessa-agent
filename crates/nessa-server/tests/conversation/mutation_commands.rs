@@ -1477,3 +1477,125 @@ async fn active_execution_ignores_truncated_display_and_opens_no_provider() {
     let _ = release.send(());
     service.shutdown().await.unwrap();
 }
+
+/// A turn leaving the queue is for a moment neither queued nor running: it
+/// was selected and is being prepared. A stop that meets it then waits for it
+/// to start, and stops it, instead of answering that the conversation was
+/// not found. Found by the conversation chaos check.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_stop_that_meets_a_turn_leaving_the_queue_stops_it() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("data");
+    let provider = Arc::new(ProviderFactory::default());
+    provider.turn_cancel.store(true, Ordering::SeqCst);
+    let (service, storage, metadata) = fixture(&root, provider.clone());
+    let target = id();
+    opened(&service, &provider, &target).await;
+    let began = Arc::new(tokio::sync::Notify::new());
+    let (prepare, prepare_gate) = oneshot::channel();
+    *provider.prepare_gate.lock().unwrap() = Some((began.clone(), prepare_gate));
+    let (release, execution_gate) = oneshot::channel::<()>();
+    *provider.execution_gate.lock().unwrap() = Some(execution_gate);
+    let preparing = began.notified();
+    send(&service, &target, "moving", "now").await;
+    tokio::time::timeout(Duration::from_secs(5), preparing)
+        .await
+        .expect("the turn is being prepared");
+    let live = service.resolve(&target, &caller("create")).await.unwrap();
+    assert!(live
+        .agent
+        .queued_ids()
+        .await
+        .iter()
+        .all(|queued| queued.as_str() != "moving"));
+    let stopping = {
+        let service = service.clone();
+        let storage = storage.clone();
+        let target = target.clone();
+        tokio::spawn(async move {
+            service
+                .stop_command(storage, target, caller("stop"), "moving".into())
+                .await
+        })
+    };
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    prepare.send(()).unwrap();
+    let receipt = tokio::time::timeout(Duration::from_secs(5), stopping)
+        .await
+        .unwrap()
+        .unwrap();
+    let outcome = receipt.as_ref().ok().and_then(|receipt| receipt.outcome());
+    assert!(
+        matches!(
+            outcome,
+            Some(MutationOutcome::Cancelled | MutationOutcome::AlreadyFinal)
+        ),
+        "{:?}",
+        receipt.map(|receipt| receipt.outcome())
+    );
+    drop(release);
+    drop(live);
+    retire(service, storage, metadata).await;
+}
+
+/// A stop whose cancel reaches the turn as it ends is answered by how the
+/// turn ended, not by the cancel's refusal of a turn no longer running.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_stop_whose_cancel_meets_the_turn_ending_is_answered_by_its_end() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("data");
+    let provider = Arc::new(ProviderFactory::default());
+    provider.turn_cancel.store(true, Ordering::SeqCst);
+    let (service, storage, metadata) = fixture(&root, provider.clone());
+    let target = id();
+    opened(&service, &provider, &target).await;
+    let (release, execution_gate) = oneshot::channel::<()>();
+    *provider.execution_gate.lock().unwrap() = Some(execution_gate);
+    let (let_cancel, cancel_gate) = oneshot::channel::<()>();
+    *provider.cancel_gate.lock().unwrap() = Some(cancel_gate);
+    *provider.cancel_failure.lock().unwrap() = Some(AgentError::Closed);
+    let started = provider.execution_started.notified();
+    send(&service, &target, "ending", "now").await;
+    tokio::time::timeout(Duration::from_secs(5), started)
+        .await
+        .expect("the turn runs");
+    let cancelling = provider.cancel_started.notified();
+    let stopping = {
+        let service = service.clone();
+        let storage = storage.clone();
+        let target = target.clone();
+        tokio::spawn(async move {
+            service
+                .stop_command(storage, target, caller("stop"), "ending".into())
+                .await
+        })
+    };
+    tokio::time::timeout(Duration::from_secs(5), cancelling)
+        .await
+        .expect("the cancel reaches the agent");
+    release.send(()).unwrap();
+    let live = service.resolve(&target, &caller("create")).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while live.agent.active_execution_id().is_some() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the turn ends");
+    let_cancel.send(()).unwrap();
+    let receipt = tokio::time::timeout(Duration::from_secs(5), stopping)
+        .await
+        .unwrap()
+        .unwrap();
+    let outcome = receipt.as_ref().ok().and_then(|receipt| receipt.outcome());
+    assert!(
+        matches!(
+            outcome,
+            Some(MutationOutcome::Cancelled | MutationOutcome::AlreadyFinal)
+        ),
+        "{:?}",
+        receipt.map(|receipt| receipt.outcome())
+    );
+    drop(live);
+    retire(service, storage, metadata).await;
+}

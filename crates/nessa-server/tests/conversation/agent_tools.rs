@@ -1129,7 +1129,7 @@ async fn a_thread_turn_reports_its_outcome_and_reply_back_to_the_sender() {
         providers::ExecutionReport::new(
             Some(Err(AgentError::Unsupported("worker failed".into()))),
             None,
-            ProviderSessionState::Usable,
+            providers::ProviderSessionState::Usable,
         ),
     ));
     *provider.execution_observation_failure.lock().unwrap() =

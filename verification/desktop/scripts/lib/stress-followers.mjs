@@ -19,6 +19,11 @@ const RESUMED = new Set(["disconnected", "lagging"])
 /** Refusals that say this follower asked for something it should not have. */
 const REFUSED = new Set(["subscription_capacity", "subscription_duplicate"])
 
+/** Whether `error` is the gateway's answer, not a dropped connection. */
+const isRefusal = (error) =>
+  typeof error?.code === "string" &&
+  !["disconnected", "connection_closed", "session_closed"].includes(error.code)
+
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 /** Each event of `conversationId` from the start, read until nothing comes for `quietMs`. */
@@ -40,7 +45,15 @@ export async function replayEvents(client, conversationId, quietMs = 1_500) {
     { replay: true },
   )
   const deadline = Date.now() + 60_000
-  while (!ended && Date.now() - last < quietMs && Date.now() < deadline) await sleep(100)
+  // Quiet counts from the first batch: a replay of a long history can
+  // take longer than the quiet window to start, and nothing read then is
+  // not the same as nothing there.
+  while (
+    !ended &&
+    (ids.length === 0 ? Date.now() - last < 15_000 : Date.now() - last < quietMs) &&
+    Date.now() < deadline
+  )
+    await sleep(100)
   await subscription.close().catch(() => {})
   if (ended) throw new Error(`a replay of ${conversationId} ended ${ended.reason}`)
   return ids
@@ -205,7 +218,8 @@ export class Follower {
   async probe() {
     // Only with every stream it keeps room for held, so the room it asks
     // past is the connection's real one.
-    if (this.view.lost || [...this.events.values()].some((each) => !each.subscription)) return
+    if (this.view.lost || [...this.events.values()].some((each) => !each.subscription))
+      return
     const others = this.list.conversations.filter((id) => id !== this.mainId)
     const room = this.limits.conversationTargets - this.held()
     if (room < 0 || others.length < room + 1) return
@@ -217,9 +231,13 @@ export class Follower {
             await this.client.subscriptions.view(others[n], { view() {}, ended() {} }),
           )
           if (n === room)
-            this.fail(`a subscription past ${this.limits.conversationTargets} was accepted`)
+            this.fail(
+              `a subscription past ${this.limits.conversationTargets} was accepted`,
+            )
         } catch (error) {
-          if (error?.code === "temporarily_unavailable") return
+          // The gateway restarting, or this connection dropping, ends the
+          // probe: it asks again on a later round.
+          if (error?.code === "temporarily_unavailable" || !isRefusal(error)) return
           if (n === room && error?.code === "subscription_capacity")
             this.counts.refusedAsExpected += 1
           else
@@ -315,8 +333,22 @@ export class Follower {
     } while (Date.now() < deadline)
     if (turns(read) !== turns(this.view.frame?.view))
       this.fail("its view of the main conversation is not the one a read gives")
-    if (!this.list.conversations.includes(this.mainId))
-      this.fail("its list does not hold the main conversation")
+    // The list is judged against a list read now, not against the main
+    // conversation being in it: the run may have archived that one.
+    const ids = (conversations) => JSON.stringify([...conversations].sort())
+    const listed = async () =>
+      (await reader.conversation.list().catch(() => null))?.conversations.map(
+        (each) => each.conversationId,
+      )
+    const listDeadline = Date.now() + 30_000
+    let current
+    do {
+      current = await listed()
+      if (current && ids(current) === ids(this.list.conversations)) break
+      await sleep(250)
+    } while (Date.now() < listDeadline)
+    if (!current || ids(current) !== ids(this.list.conversations))
+      this.fail("its list is not the one a list read gives")
     return this.failures
   }
 
