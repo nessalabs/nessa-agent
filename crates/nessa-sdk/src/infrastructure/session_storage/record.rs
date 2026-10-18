@@ -483,16 +483,6 @@ pub(super) struct Reservation {
     owner: Arc<StorageOwner>,
 }
 impl Reservation {
-    pub(super) fn acquire_creation(
-        owner: Arc<StorageOwner>,
-        id: &str,
-    ) -> Result<Self, StorageError> {
-        owner.reserve_creation(id)?;
-        Ok(Self {
-            id: id.into(),
-            owner,
-        })
-    }
     pub(super) fn acquire(owner: Arc<StorageOwner>, id: &str) -> Result<Self, StorageError> {
         owner.reserve(id)?;
         Ok(Self {

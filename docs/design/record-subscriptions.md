@@ -98,8 +98,9 @@ One task per subscription, owned by the connection
    read, read again at once. Otherwise wait for a wake. Not `partial`: that
    is an unfinished fact at a confirmed head, which reading again does not
    change, so it would read in a loop.
-5. A read refused for want of a storage read slot (`Busy`, `ReadCapacity`) is
-   tried again a few times with a doubling wait before the subscription is
+5. A storage read waits for a free read thread rather than failing. A read
+   still refused for want of room (`Busy`, or `ReadCapacity` when the view
+   cache holds only pinned entries) is tried again a few times with a doubling wait before the subscription is
    refused (row S23): one commit wakes every subscription at once, and the
    SDK runs a few reads at a time. A list waits `LIST_REREAD_FLOOR` (250 ms)
    after a wake before it reads, so a reply saved every 100 ms costs a few
