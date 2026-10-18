@@ -103,7 +103,7 @@ use std::{
     panic::AssertUnwindSafe,
     pin::Pin,
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc, OnceLock, Weak,
     },
     time::Duration,
@@ -173,6 +173,28 @@ const RETIRING_AT_ONCE: usize = 64;
 /// (`agents_that_will_not_stop_do_not_hold_back_the_other_stops`).
 const RETIRING_PLACE_HELD: Duration = Duration::from_secs(1);
 const DELETION_RETRY_DELAY: Duration = Duration::from_secs(1);
+
+/// One creation's place among the live conversations, held from its capacity
+/// check until its slot is in the map (`Inner::creating`).
+struct CreationPlace<'a>(&'a AtomicUsize);
+
+impl<'a> CreationPlace<'a> {
+    /// Take a place, or refuse when the live conversations and the other
+    /// creations' places fill `max`. Called under the `conversations` lock.
+    fn take(creating: &'a AtomicUsize, live: usize, max: usize) -> Result<Self, ConversationError> {
+        if live + creating.load(Ordering::SeqCst) >= max {
+            return Err(ConversationError::Capacity);
+        }
+        creating.fetch_add(1, Ordering::SeqCst);
+        Ok(Self(creating))
+    }
+}
+
+impl Drop for CreationPlace<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
 
 /// Most agents asked at once, across every delete on this gateway, about their
 /// own record of a session. Each ask may launch an agent process; a delete
@@ -762,6 +784,12 @@ struct Inner {
     access_policy: Arc<dyn ConversationAccessPolicyEvaluator>,
     limits: ConversationLimits,
     conversations: Mutex<HashMap<ConversationId, Arc<Slot>>>,
+    /// Places held by creations between their capacity check and their slot:
+    /// a creation writes its metadata and audit in between, so two creations
+    /// of different conversations at the last place must not both pass the
+    /// check and one then be refused after it was saved. Taken only under the
+    /// `conversations` lock, and counted by every capacity check there.
+    creating: AtomicUsize,
     /// One conversation's create, reopen and deletion decisions, in turn.
     /// Per conversation, so creating one never waits behind another's
     /// metadata and audit writes.
@@ -1247,6 +1275,7 @@ impl ConversationService {
                 access_policy,
                 limits,
                 conversations: Mutex::new(HashMap::new()),
+                creating: AtomicUsize::new(0),
                 creation: ConversationLocks::default(),
                 retirement: OnceLock::new(),
                 admission: Arc::new(RwLock::new(())),
@@ -1413,15 +1442,21 @@ impl ConversationService {
             approval_mode,
         )
         .map_err(|_| ConversationError::InvalidInput)?;
-        {
+        let place = {
             let owners = service.inner.conversations.lock().await;
             if service.inner.retirement.get().is_some() {
                 return Err(ConversationError::Unavailable);
             }
-            if !owners.contains_key(&id) && owners.len() >= service.inner.limits.max_conversations {
-                return Err(ConversationError::Capacity);
+            if owners.contains_key(&id) {
+                None
+            } else {
+                Some(CreationPlace::take(
+                    &service.inner.creating,
+                    owners.len(),
+                    service.inner.limits.max_conversations,
+                )?)
             }
-        }
+        };
         // Where it runs is recorded before the conversation exists, under the
         // creation lock, so it never exists without knowing; a host the
         // configuration does not name creates nothing.
@@ -1471,10 +1506,17 @@ impl ConversationService {
             if service.inner.retirement.get().is_some() {
                 return Err(ConversationError::Unavailable);
             }
-            if !owners.contains_key(&id) && owners.len() >= service.inner.limits.max_conversations {
+            // This creation's own place, taken above, is the one its slot
+            // fills; without one (its owner was live then and has gone since)
+            // it is checked as any other.
+            if place.is_none()
+                && !owners.contains_key(&id)
+                && owners.len() + service.inner.creating.load(Ordering::SeqCst)
+                    >= service.inner.limits.max_conversations
+            {
                 return Err(ConversationError::Capacity);
             }
-            match owners.entry(id.clone()) {
+            let slot = match owners.entry(id.clone()) {
                 std::collections::hash_map::Entry::Occupied(entry) => entry.get().clone(),
                 std::collections::hash_map::Entry::Vacant(entry) => {
                     let slot = Arc::new(Slot {
@@ -1487,7 +1529,9 @@ impl ConversationService {
                     service.start_slot(id.clone(), slot.clone(), actor.clone());
                     slot
                 }
-            }
+            };
+            drop(place);
+            slot
         };
         drop(creation_guard);
         service.wait_for_slot(&id, slot).await
@@ -1578,7 +1622,9 @@ impl ConversationService {
             } else if !open {
                 return Err(ConversationError::McpApp(McpAppError::Cancelled).into());
             } else {
-                if owners.len() >= self.inner.limits.max_conversations {
+                if owners.len() + self.inner.creating.load(Ordering::SeqCst)
+                    >= self.inner.limits.max_conversations
+                {
                     return Err(ConversationError::Capacity.into());
                 }
                 let slot = Arc::new(Slot {
