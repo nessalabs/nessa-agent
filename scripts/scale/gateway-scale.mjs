@@ -117,6 +117,8 @@ const conversations = number("conversations")
 const sockets =
   knob("sockets") === "" ? Math.max(1, Math.ceil(conversations / 4)) : number("sockets")
 const workers = Math.min(number("workers"), sockets)
+if (workers < 1 || sockets < 1)
+  throw new Error("--workers and --sockets must each be at least 1")
 // A socket admits four controls at once (`limits.controlSlots`), and a client
 // past that is the client's fault, not the gateway's: each worker keeps its
 // sockets within it.
@@ -363,8 +365,13 @@ try {
     (_, i) => Math.floor(sockets / workers) + (i < sockets % workers ? 1 : 0),
   )
   // Conversations per socket, as even as the counts allow: the first
-  // `conversations % sockets` sockets take one more.
-  const perSocket = Math.ceil(conversations / sockets)
+  // `conversations % sockets` sockets take one more. A worker takes its own
+  // sockets' shares, so every socket gets its share whatever the layout.
+  const socketShare = (socket) =>
+    Math.floor(conversations / sockets) + (socket < conversations % sockets ? 1 : 0)
+  const firstSocket = perWorker.map((_, worker) =>
+    perWorker.slice(0, worker).reduce((sum, count) => sum + count, 0),
+  )
   children = perWorker.map((count, worker) =>
     fork(join(root, "scripts/scale/client-worker.mjs"), [], {
       cwd: root,
@@ -388,15 +395,11 @@ try {
       child.once("exit", (code) => fail(new Error(`a client worker exited (${code})`)))
       child.send(message)
     })
-  // The last worker's sockets take the remainder, so the total is exact.
-  let assigned = 0
   await Promise.all(
     children.map((child, worker) => {
       const count = perWorker[worker]
-      const remaining = conversations - assigned
-      const mine =
-        worker === workers - 1 ? remaining : Math.min(remaining, count * perSocket)
-      assigned += mine
+      let mine = 0
+      for (let n = 0; n < count; n++) mine += socketShare(firstSocket[worker] + n)
       return ask(child, {
         type: "setup",
         setup: {
