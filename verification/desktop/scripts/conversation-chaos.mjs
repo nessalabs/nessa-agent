@@ -663,7 +663,9 @@ async function check(run, { views, quiet }) {
       // "conversation_capacity" (every live agent at work); the scripted
       // agent gives up on any tool error instead. Counted, not failed.
       // A turn the bounded view no longer lists has no error to read: its
-      // failed tool is all its events say, and it is counted apart.
+      // thread tool is all its events say (failed, or still pending when the
+      // scripted agent gave up on its error before reporting it), and it is
+      // counted apart.
       const threadTool = entry.ask === "watch" || entry.ask === "delegate"
       const unread =
         threadTool &&
@@ -672,7 +674,7 @@ async function check(run, { views, quiet }) {
           (event) =>
             event.executionId === executionId &&
             event.kind === "tool.updated" &&
-            event.status === "failed",
+            (event.status === "failed" || event.status === "pending"),
         )
       const toldToRetry =
         unread ||
