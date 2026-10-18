@@ -80,7 +80,10 @@ const knobs = {
   evidence: { default: "", help: "a directory to keep samples and the gateway log in" },
 }
 
+// `pnpm test:scale -- --flag` passes the `--` through.
+const argv = process.argv.slice(2)
 const { values } = parseArgs({
+  args: argv[0] === "--" ? argv.slice(1) : argv,
   options: {
     ...Object.fromEntries(Object.keys(knobs).map((name) => [name, { type: "string" }])),
     help: { type: "boolean" },

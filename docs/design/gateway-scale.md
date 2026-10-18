@@ -85,6 +85,11 @@ limit, not the gateway's.
 - **Agent stderr kept a task and a pipe per agent.** It is discarded.
 - **Creates queued behind each other.** A create, reopen or delete now waits
   only on the same conversation.
+- **Shutdown stopped every agent at once.** Each stop saves its end through
+  the one store, so 4,000 at once all ran out of their 10 s budget. At most
+  64 now start at a time, each budget starts with its own stop, and a stop
+  still running after a second (waiting on its agent, not the store) gives
+  its place to the next, so agents that will not stop hold no one else back.
 
 ## What stops 100,000
 

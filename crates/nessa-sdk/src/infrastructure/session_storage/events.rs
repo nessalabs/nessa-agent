@@ -1,6 +1,7 @@
 //! Two-pass event observation. Certification reaches a fixed outer publication;
-//! emission reuses the same semantic fold through that immutable prefix. Only
-//! one completed unit is retained as pending output, never an entire save.
+//! emission reuses the same semantic fold through that immutable prefix.
+//! Pending output holds at most the completed units of one page of frames
+//! (`PAGE_FRAMES`), never an entire save.
 
 use super::{
     physical_record_schema,

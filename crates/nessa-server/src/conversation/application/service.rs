@@ -32,7 +32,7 @@ use super::{
 use crate::conversation::domain::{
     Conversation, ConversationDeletion, ProviderSessionErasure, ProviderSessionLink, ToolSource,
 };
-use futures_util::{FutureExt, StreamExt};
+use futures_util::{future::join_all, FutureExt};
 use nessa_auth::application::ports::Clock;
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_protocol::agents::AgentId;
@@ -161,11 +161,17 @@ pub struct ConversationDeletionBudgets {
 /// cannot finish — its agent will not answer, its history is damaged — is
 /// reported and left for the next start rather than retried forever.
 const DELETION_ATTEMPTS: u32 = 3;
-/// Most owners retirement stops at once. Each stop's own writes take a few
-/// milliseconds of the record store's one writer, so this many keep it busy
-/// without leaving a stop waiting behind thousands of others' writes for
+/// Most owners retirement starts stopping at once. Each stop's own writes take
+/// a few milliseconds of the record store's one writer, so this many keep it
+/// busy without leaving a stop waiting behind thousands of others' writes for
 /// longer than its budget (`retirement_stops_a_bounded_number_of_owners_at_once`).
 const RETIRING_AT_ONCE: usize = 64;
+/// How long a stop keeps its place among [`RETIRING_AT_ONCE`]. One still
+/// running after this is waiting on its agent, not the store, so it gives its
+/// place to the next owner and carries on within its own budget: a crowd of
+/// agents that will not stop cannot hold every other owner's stop back
+/// (`agents_that_will_not_stop_do_not_hold_back_the_other_stops`).
+const RETIRING_PLACE_HELD: Duration = Duration::from_secs(1);
 const DELETION_RETRY_DELAY: Duration = Duration::from_secs(1);
 
 /// Most agents asked at once, across every delete on this gateway, about their
@@ -5277,50 +5283,70 @@ impl ConversationService {
         // cannot consume another owner's cleanup opportunity, and neither can
         // a crowd: every stop saves its end through the one record store, so
         // thousands started at once all share it and all run out of budget
-        // together. At most `RETIRING_AT_ONCE` run at a time, and an owner's
-        // budget starts when its stop does.
-        let attempts = slots.into_iter().map(|(id, slot)| async move {
-            let stopped = match submissions {
-                Submissions::Drained => {
-                    self.stop_slot(
-                        &id,
-                        slot,
-                        StopBy {
-                            actor,
-                            ended_by: &McpAppInitiator::System,
-                            cause: LeaseEndCause::Stopped,
-                            // The gateway is going away, not the work: what
-                            // its agents were doing is resumed at the next
-                            // start (`resume_unfinished`).
-                            end: AgentEnd::Suspend,
-                        },
-                    )
-                    .await
-                }
+        // together. At most `RETIRING_AT_ONCE` start at a time, an owner's
+        // budget starts when its stop does, and a stop still running after
+        // `RETIRING_PLACE_HELD` gives its place to the next.
+        let places = tokio::sync::Semaphore::new(RETIRING_AT_ONCE);
+        let places = &places;
+        let attempts = slots.into_iter().map(|(id, slot)| {
+            // Not held while this owner waits for a place, or through the
+            // wait for submissions: an agent that a command ahead of this
+            // stop lets go of must not keep its history leased here, or the
+            // conversation opened again after it answers `Busy`
+            // (`a_desktop_stop_stops_the_owner_live_when_it_takes_the_lock`).
+            let slot = match submissions {
+                Submissions::Drained => Some(slot),
                 Submissions::Admitted => {
-                    // Not held through the wait: an agent that a command ahead
-                    // of this stop lets go of must not keep its history leased
-                    // here, or the conversation opened again after it answers
-                    // `Busy` (`a_desktop_stop_stops_the_owner_live_when_it_takes_the_lock`).
                     drop(slot);
-                    self.stop_after_submissions(&id, actor).await
+                    None
                 }
             };
-            // Retirement reports every stop as the agent's error: over its
-            // budget is a deadline there.
-            stopped.err().map(|stop| {
-                let error = match stop {
-                    StopFailure::OverBudget => AgentError::Deadline,
-                    StopFailure::Failed(error) => error,
+            async move {
+                let place = places
+                    .acquire()
+                    .await
+                    .expect("retirement's places are never closed");
+                let stop = async {
+                    match slot {
+                        Some(slot) => {
+                            self.stop_slot(
+                                &id,
+                                slot,
+                                StopBy {
+                                    actor,
+                                    ended_by: &McpAppInitiator::System,
+                                    cause: LeaseEndCause::Stopped,
+                                    // The gateway is going away, not the work:
+                                    // what its agents were doing is resumed at
+                                    // the next start (`resume_unfinished`).
+                                    end: AgentEnd::Suspend,
+                                },
+                            )
+                            .await
+                        }
+                        None => self.stop_after_submissions(&id, actor).await,
+                    }
                 };
-                (id.to_string(), error)
-            })
+                tokio::pin!(stop);
+                let stopped = tokio::select! {
+                    stopped = &mut stop => stopped,
+                    () = tokio::time::sleep(RETIRING_PLACE_HELD) => {
+                        drop(place);
+                        stop.await
+                    }
+                };
+                // Retirement reports every stop as the agent's error: over its
+                // budget is a deadline there.
+                stopped.err().map(|stop| {
+                    let error = match stop {
+                        StopFailure::OverBudget => AgentError::Deadline,
+                        StopFailure::Failed(error) => error,
+                    };
+                    (id.to_string(), error)
+                })
+            }
         });
-        let failures: Vec<_> = futures_util::stream::iter(attempts)
-            .buffer_unordered(RETIRING_AT_ONCE)
-            .filter_map(std::future::ready)
-            .collect()
-            .await;
+        let failures: Vec<_> = join_all(attempts).await.into_iter().flatten().collect();
         if failures.is_empty() {
             Ok(())
         } else {

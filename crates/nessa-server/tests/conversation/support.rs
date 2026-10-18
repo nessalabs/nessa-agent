@@ -973,6 +973,11 @@ pub(crate) struct ProviderFactory {
     /// When set, a close yields a few times before it answers, so closes
     /// started together run beside each other.
     pub(crate) slow_close: AtomicBool,
+    /// This many closes, the first to start, wait for `closes_released`
+    /// before they answer, as an agent that will not stop does.
+    pub(crate) stalled_closes: AtomicUsize,
+    pub(crate) closes_released: AtomicBool,
+    pub(crate) close_release: Notify,
     /// Whether the agent agreed to take images, and its model can see them.
     pub(crate) image_input: AtomicBool,
     /// Whether the attached agent can inject a steer into the active turn.
@@ -1942,6 +1947,22 @@ impl ProviderSessionBackend for Backend {
             let gate = self.factory.close_gate.lock().unwrap().take();
             if let Some(gate) = gate {
                 let _ = gate.await;
+            }
+            let stalled = self
+                .factory
+                .stalled_closes
+                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
+                    left.checked_sub(1)
+                })
+                .is_ok();
+            while stalled && !self.factory.closes_released.load(Ordering::SeqCst) {
+                let released = self.factory.close_release.notified();
+                tokio::pin!(released);
+                released.as_mut().enable();
+                if self.factory.closes_released.load(Ordering::SeqCst) {
+                    break;
+                }
+                released.await;
             }
             if self.factory.slow_close.load(Ordering::SeqCst) {
                 for _ in 0..8 {

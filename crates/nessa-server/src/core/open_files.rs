@@ -68,7 +68,7 @@ fn ceiling(hard: libc::rlim_t) -> libc::rlim_t {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn the_soft_limit_ends_at_the_hard_one_and_raising_twice_changes_nothing() {
+    fn the_soft_limit_reaches_the_ceiling_and_raising_twice_changes_nothing() {
         let first = super::raise().expect("the open-file limit is readable");
         let mut limit = libc::rlimit {
             rlim_cur: 0,
@@ -80,7 +80,9 @@ mod tests {
             0
         );
         assert_eq!(limit.rlim_cur, first);
-        assert_eq!(limit.rlim_cur, super::ceiling(limit.rlim_max));
+        // A soft limit the process started with above the ceiling (a CI
+        // runner's, say) is kept, never lowered.
+        assert!(limit.rlim_cur >= super::ceiling(limit.rlim_max));
         assert_eq!(super::raise(), Some(first));
     }
 }

@@ -116,8 +116,9 @@ impl Default for OperationalLimits {
             ordinary_slots: 16,
             control_slots: 4,
             app_calls_per_socket: 4,
-            // Each live conversation holds an agent process and its pipes; the
-            // open-file limit can lower this (`live_conversation_capacity`).
+            // Each live conversation holds an agent process and its pipes, so
+            // a machine's open-file limit can run out first; nothing lowers
+            // this to fit it yet (#994).
             live_conversations: 65_536,
             read_work_budget: READ_WORK_BUDGET,
         }
