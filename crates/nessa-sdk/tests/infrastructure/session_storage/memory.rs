@@ -56,39 +56,35 @@ async fn actual_memory_binding_prefix_receipt_and_reset_keep_original_ownership(
     let (first, snapshot) = opening(&id, "provider");
     assert!(matches!(
         lease
-            .save_changes(
-                foreign.binding().clone(),
-                snapshot.clone(),
-                vec![first.clone()]
-            )
+            .save_changes(foreign.binding().clone(), vec![first.clone()])
             .await,
         Err(StorageError::IdentityMismatch)
     ));
     assert!(lease.load().await.unwrap().snapshot().is_none());
-    let (wrong_session, wrong_snapshot) = opening(&SessionId::new("another").unwrap(), "provider");
+    let (wrong_session, _) = opening(&SessionId::new("another").unwrap(), "provider");
     assert!(matches!(
         lease
-            .save_changes(original.clone(), wrong_snapshot, vec![wrong_session])
+            .save_changes(original.clone(), vec![wrong_session])
             .await,
         Err(StorageError::IdentityMismatch)
     ));
     assert!(lease.load().await.unwrap().snapshot().is_none());
     let receipt = lease
-        .save_changes(original.clone(), snapshot.clone(), vec![first.clone()])
+        .save_changes(original.clone(), vec![first.clone()])
         .await
         .unwrap();
     assert_eq!(
         lease
-            .save_changes(original.clone(), snapshot.clone(), vec![first.clone()])
+            .save_changes(original.clone(), vec![first.clone()])
             .await
             .unwrap(),
         receipt
     );
     assert_eq!(lease.load().await.unwrap().binding(), receipt.next());
-    let (changed_first, changed_snapshot) = opening(&id, "changed-provider");
+    let (changed_first, _) = opening(&id, "changed-provider");
     assert!(matches!(
         lease
-            .save_changes(original.clone(), changed_snapshot, vec![changed_first])
+            .save_changes(original.clone(), vec![changed_first])
             .await,
         Err(StorageError::Corrupt(_))
     ));
@@ -105,40 +101,32 @@ async fn actual_memory_binding_prefix_receipt_and_reset_keep_original_ownership(
     .unwrap();
     assert!(matches!(
         lease
-            .save_changes(original.clone(), extended.clone(), vec![repartitioned])
+            .save_changes(original.clone(), vec![repartitioned])
             .await,
         Err(StorageError::Corrupt(_))
     ));
     assert_eq!(lease.load().await.unwrap().binding(), receipt.next());
     let extension = lease
-        .save_changes(
-            original.clone(),
-            extended.clone(),
-            vec![first.clone(), suffix],
-        )
+        .save_changes(original.clone(), vec![first.clone(), suffix])
         .await
         .unwrap();
     assert_eq!(extension.units(), 2);
     assert_eq!(lease.load().await.unwrap().snapshot(), Some(&extended));
-    let (later, latest) = context(&extended, "later-context");
+    let (later, _) = context(&extended, "later-context");
     assert!(matches!(
         lease
-            .save_changes(receipt.next().clone(), latest.clone(), vec![later.clone()])
+            .save_changes(receipt.next().clone(), vec![later.clone()])
             .await,
         Err(StorageError::IdentityMismatch)
     ));
     assert_eq!(lease.load().await.unwrap().snapshot(), Some(&extended));
     let next_receipt = lease
-        .save_changes(
-            extension.next().clone(),
-            latest.clone(),
-            vec![later.clone()],
-        )
+        .save_changes(extension.next().clone(), vec![later.clone()])
         .await
         .unwrap();
     assert_eq!(
         lease
-            .save_changes(extension.next().clone(), latest, vec![later])
+            .save_changes(extension.next().clone(), vec![later])
             .await
             .unwrap(),
         next_receipt
@@ -147,16 +135,14 @@ async fn actual_memory_binding_prefix_receipt_and_reset_keep_original_ownership(
     let reset = lease.load().await.unwrap();
     assert!(reset.snapshot().is_none());
     assert_ne!(reset.binding().backend(), original.backend());
-    let result = lease
-        .save_changes(original, snapshot.clone(), vec![first.clone()])
-        .await;
+    let result = lease.save_changes(original, vec![first.clone()]).await;
     assert!(
         lease.load().await.unwrap().snapshot().is_none(),
         "old retry cannot replace reset state"
     );
     assert!(matches!(result, Err(StorageError::IdentityMismatch)));
     lease
-        .save_changes(reset.binding().clone(), snapshot.clone(), vec![first])
+        .save_changes(reset.binding().clone(), vec![first])
         .await
         .unwrap();
     assert_eq!(lease.load().await.unwrap().snapshot(), Some(&snapshot));
@@ -171,33 +157,15 @@ async fn actual_memory_plan_preflight_refuses_before_replacing_published_evidenc
     let (first, snapshot) = opening(&id, "provider");
     let (duplicate, _) = opening(&id, "provider");
     let result = lease
-        .save_changes(
-            original.clone(),
-            snapshot.clone(),
-            vec![first.clone(), duplicate],
-        )
+        .save_changes(original.clone(), vec![first.clone(), duplicate])
         .await;
     assert!(
         lease.load().await.unwrap().snapshot().is_none(),
         "invalid later unit cannot publish valid prefix"
     );
     assert!(matches!(result, Err(StorageError::Corrupt(_))));
-    let (_, changed_candidate) = opening(&id, "changed-provider");
-    let result = lease
-        .save_changes(original.clone(), changed_candidate, vec![first.clone()])
-        .await;
-    assert!(
-        lease.load().await.unwrap().snapshot().is_none(),
-        "contradictory candidate cannot publish"
-    );
-    assert!(matches!(result, Err(StorageError::Corrupt(_))));
-    let receipt = lease
-        .save_changes(original, snapshot.clone(), vec![first])
-        .await
-        .unwrap();
-    let result = lease
-        .save_changes(receipt.next().clone(), snapshot.clone(), Vec::new())
-        .await;
+    let receipt = lease.save_changes(original, vec![first]).await.unwrap();
+    let result = lease.save_changes(receipt.next().clone(), Vec::new()).await;
     assert_eq!(
         lease.load().await.unwrap().binding(),
         receipt.next(),
@@ -206,7 +174,7 @@ async fn actual_memory_plan_preflight_refuses_before_replacing_published_evidenc
     assert!(matches!(result, Err(StorageError::Corrupt(_))));
     let (suffix, extended) = context(&snapshot, "valid-context");
     lease
-        .save_changes(receipt.next().clone(), extended.clone(), vec![suffix])
+        .save_changes(receipt.next().clone(), vec![suffix])
         .await
         .unwrap();
     assert_eq!(lease.load().await.unwrap().snapshot(), Some(&extended));
@@ -222,13 +190,9 @@ async fn reloaded_snapshot_refuses_a_save_binding_from_another_conversation() {
         let lease_b = storage.open(b.clone()).await.unwrap();
         if populated {
             for (id, lease) in [(&a, &lease_a), (&b, &lease_b)] {
-                let (unit, snapshot) = opening(id, "provider");
+                let (unit, _) = opening(id, "provider");
                 lease
-                    .save_changes(
-                        lease.load().await.unwrap().binding().clone(),
-                        snapshot,
-                        vec![unit],
-                    )
+                    .save_changes(lease.load().await.unwrap().binding().clone(), vec![unit])
                     .await
                     .unwrap();
             }

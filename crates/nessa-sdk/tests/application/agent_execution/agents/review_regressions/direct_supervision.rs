@@ -218,19 +218,20 @@ impl SessionStorageLease for PanicOnSettlementLease {
     fn save_changes(
         &self,
         binding: SessionSaveGeneration,
-        snapshot: SessionSnapshot,
         units: Vec<SessionSaveUnit>,
     ) -> StorageFuture<'_, SessionSaveReceipt> {
         Box::pin(async move {
-            if snapshot
-                .invocations
-                .iter()
-                .any(|record| record.result.is_some())
-                && !self.panicked.swap(true, Ordering::SeqCst)
-            {
+            let settles = decisions(&units).any(|change| match change {
+                SessionChange::ProviderReport { .. } | SessionChange::LocalSettlement { .. } => {
+                    true
+                }
+                SessionChange::InputAccepted(record) => record.result.is_some(),
+                _ => false,
+            });
+            if settles && !self.panicked.swap(true, Ordering::SeqCst) {
                 panic!("one-shot storage panic after result was observed");
             }
-            self.backing.save_changes(binding, snapshot, units).await
+            self.backing.save_changes(binding, units).await
         })
     }
     fn erase(&self) -> StorageFuture<'_, ()> {

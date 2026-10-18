@@ -49,6 +49,10 @@ export const KNOBS = {
     default: 1,
     what: "conversations left idle until the gateway parks their agent, then talked to again",
   },
+  long: {
+    default: 30,
+    what: "turns of long streamed answers one conversation takes before it is talked to in the window",
+  },
 }
 
 /** The numbers, from flags, then `NESSA_STRESS_*`, then the defaults. A bad one throws. */
@@ -104,6 +108,7 @@ export function plan(knobs) {
   add(knobs.asides, () => ({ kind: "aside" }))
   add(knobs.large, () => ({ kind: "large" }))
   add(knobs.parks, () => ({ kind: "park" }))
+  if (knobs.long > 0) steps.push({ kind: "long", turns: knobs.long })
   if (knobs.reviews > 0) steps.push({ kind: "reviews" })
   while (steps.length < knobs.rounds)
     steps.push({ kind: next() < 0.5 ? "reply" : "permission" })
@@ -155,11 +160,13 @@ export function describe(steps) {
           ? ` ${step.from}→${step.to}${step.during ? " during a turn" : ""}`
           : step.kind === "restart"
             ? ` ${step.signal}`
-            : step.answer
-              ? ` ${step.answer} (${step.mode})`
-              : step.after
-                ? ` after ${step.after}`
-                : ""
+            : step.kind === "long"
+              ? ` ${step.turns} turns`
+              : step.answer
+                ? ` ${step.answer} (${step.mode})`
+                : step.after
+                  ? ` after ${step.after}`
+                  : ""
       return `${step.index}. ${step.kind}${extra}`
     })
     .join("\n")

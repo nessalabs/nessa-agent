@@ -136,36 +136,32 @@ pub struct SessionSaveUnit {
     changes: Box<[SessionChange]>,
 }
 impl SessionSaveUnit {
-    /// Validate all unit checkpoints and the final candidate before persistence.
-    /// `prior` must be the adapter's actual original published base, including
-    /// on an extended retry. One canonical continuation validates the sequence;
-    /// it does not clone the growing history at every unit boundary.
+    /// The snapshot that results from applying `units`, in order, to `prior`.
     ///
-    /// This performs no I/O, mints no binding and authorizes no provider effect.
-    /// Custom snapshot adapters use this same owner rather than reimplementing
+    /// An adapter that stores whole snapshots instead of records publishes
+    /// this. `prior` must be the adapter's actual original published base,
+    /// including on an extended retry. Every unit is checked by the same rules
+    /// a record writer applies, so a snapshot adapter does not reimplement
     /// lifecycle or queue validation.
     ///
+    /// This performs no I/O, mints no binding and authorizes no provider effect.
+    ///
     /// # Errors
-    /// Refuses an empty plan, an invalid intermediate unit or a final candidate
-    /// that disagrees with the exact ordered decisions.
-    pub fn validate_plan(
-        prior: Option<&SessionSnapshot>,
+    /// Refuses an empty plan and a unit that does not apply.
+    pub fn fold(
+        prior: Option<SessionSnapshot>,
         units: &[Self],
-        observed: &SessionSnapshot,
-    ) -> Result<(), StorageError> {
+    ) -> Result<SessionSnapshot, StorageError> {
         if units.is_empty() {
             return Err(StorageError::Corrupt("semantic save plan is empty".into()));
         }
-        let mut continuation = Continuation::restore(prior.cloned())?;
+        let mut continuation = Continuation::restore(prior)?;
         for unit in units {
             continuation.apply_unit(unit.changes())?;
         }
-        if continuation.snapshot.as_ref() != Some(observed) {
-            return Err(StorageError::Corrupt(
-                "semantic decisions disagree with observed session".into(),
-            ));
-        }
-        Ok(())
+        continuation
+            .snapshot
+            .ok_or_else(|| StorageError::Corrupt("semantic save plan opened nothing".into()))
     }
     /// Retain an explicit nonempty decision boundary in supplied order.
     ///

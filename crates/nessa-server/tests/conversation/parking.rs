@@ -16,7 +16,7 @@ use nessa_protocol::conversation::view::{
 };
 use nessa_sdk::application::agent_execution::sessions::{
     CommittedSession, SessionChange, SessionLoad, SessionSaveGeneration, SessionSaveReceipt,
-    SessionSaveUnit, SessionSnapshot, SessionStorage, SessionStorageLease, StorageFuture,
+    SessionSaveUnit, SessionStorage, SessionStorageLease, StorageFuture,
 };
 use nessa_sdk::domain::agent_execution::{executions::ExecutionOutcome, sessions::SessionId};
 use nessa_sdk::infrastructure::session_storage::InMemoryStorage;
@@ -111,7 +111,6 @@ impl SessionStorageLease for HeldCompletionLease {
     fn save_changes(
         &self,
         binding: SessionSaveGeneration,
-        snapshot: SessionSnapshot,
         units: Vec<SessionSaveUnit>,
     ) -> StorageFuture<'_, SessionSaveReceipt> {
         Box::pin(async move {
@@ -126,7 +125,7 @@ impl SessionStorageLease for HeldCompletionLease {
                     )
                 })
             });
-            let receipt = self.inner.save_changes(binding, snapshot, units).await?;
+            let receipt = self.inner.save_changes(binding, units).await?;
             if completed {
                 let held = self.gate.held.lock().unwrap().take();
                 if let Some(HeldSave { entered, release }) = held {

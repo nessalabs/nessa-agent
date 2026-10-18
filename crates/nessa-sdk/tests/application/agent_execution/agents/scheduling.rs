@@ -7,9 +7,9 @@ use crate::application::agent_execution::{
         AgentProvider, ProviderIdentity, ProviderOpenError, ProviderOpenFuture, ProviderOpenRequest,
     },
     sessions::{
-        MessageCommitClock, MessageCommitSleep, SessionLoad, SessionManager, SessionSaveGeneration,
-        SessionSaveReceipt, SessionSaveUnit, SessionSnapshot, SessionStorage, SessionStorageLease,
-        StorageFuture,
+        MessageCommitClock, MessageCommitSleep, SessionChange, SessionLoad, SessionManager,
+        SessionSaveGeneration, SessionSaveReceipt, SessionSaveUnit, SessionStorage,
+        SessionStorageLease, StorageFuture,
     },
 };
 use crate::application::dto::{ModalitiesDto, ModelMetadataDto};
@@ -377,7 +377,6 @@ impl SessionStorageLease for PanickingQueueLease {
     fn save_changes(
         &self,
         binding: SessionSaveGeneration,
-        snapshot: SessionSnapshot,
         units: Vec<SessionSaveUnit>,
     ) -> StorageFuture<'_, SessionSaveReceipt> {
         let should_panic = self
@@ -386,16 +385,15 @@ impl SessionStorageLease for PanickingQueueLease {
             .unwrap()
             .as_ref()
             .is_some_and(|mutation| {
-                snapshot
-                    .queue_history
-                    .last()
-                    .is_some_and(|entry| &entry.mutation == mutation)
+                units.iter().flat_map(SessionSaveUnit::changes).any(|change| {
+                    matches!(change, SessionChange::QueueDecision(entry) if &entry.mutation == mutation)
+                })
             });
         if should_panic {
             self.mutation.lock().unwrap().take();
             return Box::pin(async { panic!("queue membership persistence panic") });
         }
-        self.inner.save_changes(binding, snapshot, units)
+        self.inner.save_changes(binding, units)
     }
     fn erase(&self) -> StorageFuture<'_, ()> {
         self.inner.erase()
