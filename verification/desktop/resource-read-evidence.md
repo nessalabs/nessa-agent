@@ -86,7 +86,13 @@ obsolete owner and cancellation after live. Browser controls run the real app in
 Chromium and WebKit, with deliberate faults reported as expected negative
 results, never reclassified as successful delivery. A synthetic complete-read
 abort checks the classifier deterministically; naturally occurring aborts are
-reported separately. Old failed receipts remain historical failures.
+reported separately. The standalone large-read control retains its original
+observer-acknowledgement wait; it proves integrity and ownership, not delivery
+within the gateway's 2000ms reporting budget. A synthetic 3 MB Chromium diagnostic
+observed its cutoff acknowledgement about 11.6 seconds after the original app
+read and Request terminal event. Actual gateway reporting keeps its existing
+budget and fails closed when proof has not arrived. Old failed receipts remain
+historical failures.
 
 The separate #981 animation timeout receives failure-only diagnostics before
 page close: animation state, bounded RAF samples, pending request metadata and a

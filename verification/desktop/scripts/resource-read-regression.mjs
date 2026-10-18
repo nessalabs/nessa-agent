@@ -8,13 +8,7 @@ import { createHash } from "node:crypto"
 import { createServer } from "node:http"
 import { mkdir } from "node:fs/promises"
 import { join } from "node:path"
-import {
-  launch,
-  classifyResourceFailure,
-  withCleanup,
-  enqueueSizeReport,
-  settleSizeReports,
-} from "./lib/browser.mjs"
+import { launch, classifyResourceFailure, withCleanup } from "./lib/browser.mjs"
 import { installResourceObservation } from "./lib/resource-read-modules.mjs"
 import { resourceEndpoint } from "./lib/resource-read-evidence.mjs"
 import { captureOpenFailure, watchOpenRequests } from "./lib/open-failure-evidence.mjs"
@@ -253,7 +247,9 @@ async function resourceControl(browser, origin, control) {
         },
         url: `http://127.0.0.1:${server.address().port}/mcp-resources`,
       })
-      await settleSizeReports([enqueueSizeReport(observed.finalize(), () => {})])
+      // This standalone integrity fixture retains its original observer-ACK
+      // wait. It does not claim delivery within openPage's reporting budget.
+      await observed.finalize()
       observed.finish()
       assert.equal(observed.collector.summary().cutoff, true)
       const positive = ["complete", "large-complete", "unrelated-request"].includes(
