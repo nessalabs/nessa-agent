@@ -719,6 +719,16 @@ async function runOnce(list, knobs, { evidence, label }) {
     throw new Error(`the gateway did not start: ${error.message.split("\n")[0]}`)
   }
   const run = new Run(gateway, knobs)
+  // The log and journal so far, written after every wave as well as at the
+  // end: a run the machine kills partway leaves what it saw up to then.
+  const keep = () => {
+    if (!evidence) return
+    writeFileSync(join(evidence, `${label}.gateway.log`), gateway.log())
+    writeFileSync(
+      join(evidence, `${label}.journal.jsonl`),
+      run.journal.map((each) => JSON.stringify(each)).join("\n"),
+    )
+  }
   try {
     for (let n = 0; n < knobs.clients; n += 1) {
       // One person's windows: each its own connection with the same credential.
@@ -771,6 +781,7 @@ async function runOnce(list, knobs, { evidence, label }) {
       )
       await Promise.all(actions.map((action) => act(run, action)))
       await between(run, wave)
+      keep()
     }
     await check(run, await settle(run))
   } catch (error) {
@@ -790,13 +801,7 @@ async function runOnce(list, knobs, { evidence, label }) {
     await Promise.allSettled(run.followers.map((each) => each.close()))
     for (const { client } of run.clients) client.close()
     await gateway.stop().catch(() => {})
-    if (evidence) {
-      writeFileSync(join(evidence, `${label}.gateway.log`), gateway.log())
-      writeFileSync(
-        join(evidence, `${label}.journal.jsonl`),
-        run.journal.map((each) => JSON.stringify(each)).join("\n"),
-      )
-    }
+    keep()
     rmSync(directory, { recursive: true, force: true })
   }
   return {
