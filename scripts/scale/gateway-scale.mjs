@@ -19,14 +19,21 @@
  *      `--rounds` times (the first round's agents are just open; the later
  *      rounds' have history)
  *   4. holds every conversation idle for `--hold-seconds`, to see what an
- *      idle conversation costs
- *   5. lists conversations once per socket
+ *      idle conversation costs with its agent running
+ *   5. waits for the gateway to park every idle agent (`limits.agentIdleSeconds`
+ *      is `--idle-seconds`; 0 skips this and the next step), then sends every
+ *      conversation one more message, which starts its agent again on its
+ *      session: what parking saves and what a resumed turn costs
+ *   6. lists conversations once per socket
  *
- * while it samples the gateway once a second: resident memory, threads, open
- * descriptors, CPU time, child processes and their memory, and the size of
- * its data directory. stdout is one JSON verdict line; `--evidence <dir>`
- * also keeps the samples and the gateway's log. The verdict fails on any
- * failed operation, and on a p99 over `--p99-ms` in a phase that has one.
+ * while it samples once a second: the gateway's resident memory, threads,
+ * open descriptors and CPU time; its agent processes' count, memory and CPU
+ * time; the machine's busy cores and used memory; and the size of the data
+ * directory. Every phase reports what it cost in those terms (`resources`).
+ * stdout is one JSON verdict line; `--evidence <dir>` also keeps the samples
+ * and the gateway's log. The verdict fails on any failed operation, on a p99
+ * over `--p99-ms` in a phase that has one, and on agents left running after
+ * the park wait.
  *
  * Every knob is also an environment variable, `NESSA_SCALE_<NAME>`
  * (`NESSA_SCALE_CONVERSATIONS=10000`).
@@ -68,7 +75,11 @@ const knobs = {
   },
   "hold-seconds": {
     default: "5",
-    help: "how long every conversation sits idle, sampled, before the list",
+    help: "how long every conversation sits idle with its agent, sampled",
+  },
+  "idle-seconds": {
+    default: "20",
+    help: "limits.agentIdleSeconds: idle agents are parked after this (0: never, and no park phase); keep it above a round's time, or later rounds include starts (verdict.park.parkedEarly)",
   },
   "agent-delay-ms": { default: "0", help: "how long the agent takes per prompt" },
   "request-timeout-ms": { default: "60000", help: "client request timeout" },
@@ -175,14 +186,31 @@ function sample(pid, directory) {
   const kib = (value) => Number.parseInt(value ?? "0", 10)
   const stat = readFileSync(`/proc/${pid}/stat`, "utf8").split(") ")[1].split(" ")
   const ticks = 100
-  let children = 0
-  let childRssKib = 0
+  // Every process under the gateway, however deep (an adapter's own agent
+  // too): its agents.
+  const parents = new Map()
+  const stats = new Map()
   for (const entry of readdirSync("/proc")) {
     if (!/^\d+$/.test(entry)) continue
     try {
       const fields = readFileSync(`/proc/${entry}/stat`, "utf8").split(") ")[1].split(" ")
-      if (Number(fields[1]) !== pid) continue
-      children += 1
+      parents.set(Number(entry), Number(fields[1]))
+      stats.set(Number(entry), fields)
+    } catch {}
+  }
+  const under = (child) => {
+    for (let at = parents.get(child); at !== undefined; at = parents.get(at))
+      if (at === pid) return true
+    return false
+  }
+  let children = 0
+  let childRssKib = 0
+  let childTicks = 0
+  for (const [entry, fields] of stats) {
+    if (!under(entry)) continue
+    children += 1
+    childTicks += Number(fields[11]) + Number(fields[12])
+    try {
       childRssKib +=
         Number(readFileSync(`/proc/${entry}/statm`, "utf8").split(" ")[1]) * 4
     } catch {}
@@ -199,7 +227,70 @@ function sample(pid, directory) {
     cpuSeconds: (Number(stat[11]) + Number(stat[12])) / ticks,
     children,
     childRssMib: Math.round(childRssKib / 1024),
+    // The live agents' CPU, and what the gateway's agents that already
+    // exited used (reaped into the gateway's own count of its children).
+    childCpuSeconds: childTicks / ticks,
+    reapedCpuSeconds: (Number(stat[13]) + Number(stat[14])) / ticks,
+    ...machine(),
     dataMib: Math.round(directorySize(directory) / 1024 / 1024),
+  }
+}
+
+/** The whole machine: CPU time spent busy, and memory in use. */
+function machine() {
+  const [, ...times] = readFileSync("/proc/stat", "utf8")
+    .split("\n")[0]
+    .trim()
+    .split(/\s+/)
+  const [user, nice, system, idle, iowait, irq, softirq, steal] = times.map(Number)
+  const memory = Object.fromEntries(
+    readFileSync("/proc/meminfo", "utf8")
+      .split("\n")
+      .map((line) => line.split(/:\s+/))
+      .filter((pair) => pair.length === 2)
+      .map(([key, value]) => [key, Number.parseInt(value, 10)]),
+  )
+  return {
+    machineBusySeconds: (user + nice + system + irq + softirq + steal) / 100,
+    machineIdleSeconds: (idle + iowait) / 100,
+    machineUsedMib: Math.round((memory.MemTotal - memory.MemAvailable) / 1024),
+    machineTotalMib: Math.round(memory.MemTotal / 1024),
+  }
+}
+
+/**
+ * What the samples from `from` on cost: cores kept busy by the gateway, by
+ * its agents and by the whole machine, and the most memory each held.
+ */
+function resources(from) {
+  const during = samples.slice(from)
+  if (during.length < 2) return null
+  const first = during[0]
+  const last = during.at(-1)
+  const seconds = (last.at - first.at) / 1000
+  if (seconds <= 0) return null
+  const cores = (value) => Number((value / seconds).toFixed(3))
+  const agentCpu =
+    last.childCpuSeconds +
+    last.reapedCpuSeconds -
+    first.childCpuSeconds -
+    first.reapedCpuSeconds
+  const busy = last.machineBusySeconds - first.machineBusySeconds
+  const idle = last.machineIdleSeconds - first.machineIdleSeconds
+  const most = (key) => Math.max(...during.map((s) => s[key]))
+  return {
+    seconds,
+    gatewayCores: cores(last.cpuSeconds - first.cpuSeconds),
+    // Can dip below zero when an agent exits between samples: its live
+    // count goes before the gateway reaps it.
+    agentCores: cores(Math.max(0, agentCpu)),
+    machineCores: cores(busy),
+    machineBusyPercent: busy + idle > 0 ? Math.round((100 * busy) / (busy + idle)) : null,
+    gatewayRssMib: most("rssMib"),
+    agents: { most: most("children"), least: Math.min(...during.map((s) => s.children)) },
+    agentRssMib: most("childRssMib"),
+    machineUsedMib: most("machineUsedMib"),
+    machineTotalMib: last.machineTotalMib,
   }
 }
 
@@ -327,7 +418,10 @@ try {
           },
         },
       },
-      ...(knob("limits") ? { limits: JSON.parse(knob("limits")) } : {}),
+      limits: {
+        agentIdleSeconds: number("idle-seconds"),
+        ...(knob("limits") ? JSON.parse(knob("limits")) : {}),
+      },
     }),
   )
   chmodSync(configPath, 0o600)
@@ -422,6 +516,7 @@ try {
     phase = name
     log(`${name}...`)
     const began = Date.now()
+    const from = samples.length
     const results = await Promise.all(
       children.map((child) => ask(child, { type: name, ...message })),
     )
@@ -436,6 +531,7 @@ try {
     }
     record()
     summary.after = samples.at(-1)
+    summary.resources = resources(from)
     verdict.phases[`${name}${message.label ?? ""}`] = summary
     log(`${name}: ${JSON.stringify({ ...summary, failureSamples: undefined })}`)
     return summary
@@ -460,8 +556,46 @@ try {
       rssMib: during.at(-1).rssMib,
       threads: during.at(-1).threads,
       fds: during.at(-1).fds,
+      resources: resources(held),
     }
     log(`hold: ${JSON.stringify(verdict.hold)}`)
+  }
+  // Nothing asked of any conversation and nobody following one: the gateway
+  // parks every agent once it has been idle for `--idle-seconds`. Then one
+  // more message each starts every agent again, on its session.
+  const idleSeconds = number("idle-seconds")
+  if (idleSeconds > 0 && number("rounds") > 0) {
+    phase = "park"
+    const parkFrom = samples.length
+    const agentsBefore = samples.at(-1)?.children ?? 0
+    const began = Date.now()
+    // A sweep every quarter of the limit, at most 15 s apart, and the stops
+    // themselves: twice the limit plus a minute is ample.
+    const deadline = began + (2 * idleSeconds + 60) * 1000
+    let left = agentsBefore
+    while (Date.now() < deadline) {
+      await sleep(1000)
+      record()
+      left = samples.at(-1)?.children ?? left
+      if (left === 0) break
+    }
+    verdict.park = {
+      seconds: (Date.now() - began) / 1000,
+      agentsBefore,
+      // Agents already parked as the phase began: a round or the hold took
+      // longer than --idle-seconds, so a later round's turns include starts.
+      parkedEarly: Math.max(0, number("conversations") - agentsBefore),
+      agentsLeft: left,
+      resources: resources(parkFrom),
+    }
+    log(`park: ${JSON.stringify(verdict.park)}`)
+    // Parked and quiet: what the same conversations cost with no agents.
+    const quietFrom = samples.length
+    await sleep(number("hold-seconds") * 1000)
+    record()
+    verdict.parkedHold = { resources: resources(quietFrom) }
+    log(`parked hold: ${JSON.stringify(verdict.parkedHold)}`)
+    await run("turn", { text: "after parking", label: "-resumed" })
   }
   await run("list")
   await run("close")
@@ -488,6 +622,10 @@ try {
       failures.push(`${name}: p99 ${summary.p99} ms is over ${p99Bound} ms`)
   }
   if (!verdict.gatewayAlive) failures.push("the gateway exited during the run")
+  if (verdict.park && verdict.park.agentsLeft > 0)
+    failures.push(
+      `${verdict.park.agentsLeft} of ${verdict.park.agentsBefore} agents were still running ${verdict.park.seconds} s into the park wait`,
+    )
   // A conversation is listed once a turn in it ended, so the count is only
   // owed when every turn did; a failed turn is already reported above.
   const listed = verdict.phases.list?.listed

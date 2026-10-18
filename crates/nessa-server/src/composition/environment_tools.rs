@@ -614,6 +614,7 @@ fn cause_code(cause: LeaseEndCause) -> &'static str {
         LeaseEndCause::Revoked => "revoked",
         LeaseEndCause::Expired => "expired",
         LeaseEndCause::Lost => "lost",
+        LeaseEndCause::Idle => "idle",
     }
 }
 

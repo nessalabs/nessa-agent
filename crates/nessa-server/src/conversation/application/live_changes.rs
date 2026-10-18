@@ -45,6 +45,16 @@ impl LiveChanges {
         }
     }
 
+    /// Whether anybody follows `id`'s view now: a window or phone showing
+    /// it. The parking sweep keeps such a conversation's agent running.
+    pub fn followed(&self, id: &ConversationId) -> bool {
+        self.senders
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(id)
+            .is_some_and(|sender| sender.receiver_count() > 0)
+    }
+
     /// A publisher bound to one conversation, for an owner that knows only
     /// its own conversation's changes (an MCP App's reviews).
     pub fn publisher(self: &Arc<Self>, id: &ConversationId) -> LiveChangePublisher {
@@ -101,5 +111,19 @@ mod tests {
         changes.publish(&id(1));
         let _again = changes.subscribe(&id(3));
         assert_eq!(changes.entries(), 1);
+    }
+
+    #[test]
+    fn a_conversation_is_followed_while_a_receiver_lives() {
+        let changes = LiveChanges::default();
+        assert!(!changes.followed(&id(1)));
+        let first = changes.subscribe(&id(1));
+        let second = changes.subscribe(&id(1));
+        assert!(changes.followed(&id(1)));
+        assert!(!changes.followed(&id(2)));
+        drop(first);
+        assert!(changes.followed(&id(1)), "one follower is left");
+        drop(second);
+        assert!(!changes.followed(&id(1)));
     }
 }

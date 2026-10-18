@@ -128,6 +128,7 @@ pub(super) struct LimitsConfig {
     control_slots: u64,
     app_calls_per_socket: u64,
     live_conversations: u64,
+    agent_idle_seconds: u64,
     read_work_budget_ms: u64,
 }
 
@@ -144,6 +145,7 @@ impl Default for LimitsConfig {
             control_slots: limits.control_slots() as u64,
             app_calls_per_socket: limits.app_calls_per_socket() as u64,
             live_conversations: limits.live_conversations() as u64,
+            agent_idle_seconds: limits.agent_idle().map_or(0, |idle| idle.as_secs()),
             read_work_budget_ms: u64::try_from(limits.read_work_budget().as_millis())
                 .unwrap_or(u64::MAX),
         }
@@ -310,6 +312,7 @@ impl RuntimeConfig {
             control_slots: self.limits.control_slots,
             app_calls_per_socket: self.limits.app_calls_per_socket,
             live_conversations: self.limits.live_conversations,
+            agent_idle_seconds: self.limits.agent_idle_seconds,
             read_work_budget: Duration::from_millis(self.limits.read_work_budget_ms),
         })
         .map_err(refused)

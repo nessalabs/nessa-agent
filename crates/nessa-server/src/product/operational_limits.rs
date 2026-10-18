@@ -24,6 +24,9 @@ pub(crate) struct ConfiguredLimits {
     pub control_slots: u64,
     pub app_calls_per_socket: u64,
     pub live_conversations: u64,
+    /// Seconds an idle agent nobody watches runs before it is parked; 0
+    /// never parks one.
+    pub agent_idle_seconds: u64,
     pub read_work_budget: Duration,
 }
 
@@ -40,6 +43,7 @@ pub struct OperationalLimits {
     control_slots: usize,
     app_calls_per_socket: usize,
     live_conversations: usize,
+    agent_idle: Option<Duration>,
     read_work_budget: Duration,
 }
 
@@ -59,6 +63,8 @@ pub enum InvalidOperationalLimits {
     /// App calls must leave one slot another mount can take.
     AppCalls,
     LiveConversations,
+    /// An idle wait longer than [`MAX_AGENT_IDLE_SECONDS`].
+    AgentIdle,
     ReadWorkBudget,
 }
 
@@ -75,6 +81,7 @@ impl InvalidOperationalLimits {
             Self::ControlSlots => "control_slots",
             Self::AppCalls => "app_calls_per_socket",
             Self::LiveConversations => "live_conversations",
+            Self::AgentIdle => "agent_idle_seconds",
             Self::ReadWorkBudget => "read_work_budget",
         }
     }
@@ -120,6 +127,10 @@ impl Default for OperationalLimits {
             // a machine's open-file limit can run out first; nothing lowers
             // this to fit it yet (#994).
             live_conversations: 65_536,
+            // Long enough that a person reading a reply and answering keeps
+            // the agent, short enough that a swarm's quiet members stop
+            // holding memory (docs/design/agent-parking.md).
+            agent_idle: Some(Duration::from_secs(120)),
             read_work_budget: READ_WORK_BUDGET,
         }
     }
@@ -161,6 +172,7 @@ impl OperationalLimits {
                 input.live_conversations,
                 InvalidOperationalLimits::LiveConversations,
             )?,
+            agent_idle: agent_idle(input.agent_idle_seconds)?,
             read_work_budget: budget(input.read_work_budget)?,
         })
     }
@@ -207,8 +219,24 @@ impl OperationalLimits {
     pub(crate) fn live_conversations(self) -> usize {
         self.live_conversations
     }
+    /// How long an idle agent nobody watches keeps running before it is
+    /// parked; `None` never parks one.
+    pub(crate) fn agent_idle(self) -> Option<Duration> {
+        self.agent_idle
+    }
     pub(crate) fn read_work_budget(self) -> Duration {
         self.read_work_budget
+    }
+}
+
+/// The longest idle wait a configuration may ask for: a week.
+pub(crate) const MAX_AGENT_IDLE_SECONDS: u64 = 7 * 24 * 60 * 60;
+
+fn agent_idle(seconds: u64) -> Result<Option<Duration>, InvalidOperationalLimits> {
+    match seconds {
+        0 => Ok(None),
+        1..=MAX_AGENT_IDLE_SECONDS => Ok(Some(Duration::from_secs(seconds))),
+        _ => Err(InvalidOperationalLimits::AgentIdle),
     }
 }
 
@@ -254,6 +282,7 @@ mod tests {
         assert_eq!(limits.ordinary_lane(), 20);
         assert_eq!(limits.control_lane(), 4);
         assert_eq!(limits.live_conversations(), 65_536);
+        assert_eq!(limits.agent_idle(), Some(Duration::from_secs(120)));
         assert_eq!(limits.read_work_budget(), READ_WORK_BUDGET);
     }
 
@@ -270,6 +299,7 @@ mod tests {
             control_slots: defaults.control_slots() as u64,
             app_calls_per_socket: defaults.app_calls_per_socket() as u64,
             live_conversations: defaults.live_conversations() as u64,
+            agent_idle_seconds: 120,
             read_work_budget: defaults.read_work_budget(),
         };
         input.requests = 0;
@@ -296,5 +326,37 @@ mod tests {
         );
         input.read_work_budget = Duration::from_millis(1);
         assert!(OperationalLimits::configured(input).is_ok());
+    }
+
+    #[test]
+    fn an_idle_wait_of_zero_parks_nothing_and_one_past_a_week_is_refused() {
+        let defaults = OperationalLimits::default();
+        let mut input = ConfiguredLimits {
+            requests: defaults.requests() as u64,
+            controls: defaults.controls() as u64,
+            record_reads: defaults.record_reads() as u64,
+            upload_begins: defaults.upload_begins() as u64,
+            deletions: defaults.deletions() as u64,
+            ordinary_slots: defaults.ordinary_slots() as u64,
+            control_slots: defaults.control_slots() as u64,
+            app_calls_per_socket: defaults.app_calls_per_socket() as u64,
+            live_conversations: defaults.live_conversations() as u64,
+            agent_idle_seconds: 0,
+            read_work_budget: defaults.read_work_budget(),
+        };
+        assert_eq!(
+            OperationalLimits::configured(input).unwrap().agent_idle(),
+            None
+        );
+        input.agent_idle_seconds = MAX_AGENT_IDLE_SECONDS;
+        assert_eq!(
+            OperationalLimits::configured(input).unwrap().agent_idle(),
+            Some(Duration::from_secs(MAX_AGENT_IDLE_SECONDS))
+        );
+        input.agent_idle_seconds = MAX_AGENT_IDLE_SECONDS + 1;
+        assert_eq!(
+            OperationalLimits::configured(input),
+            Err(InvalidOperationalLimits::AgentIdle)
+        );
     }
 }

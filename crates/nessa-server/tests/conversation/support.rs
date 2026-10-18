@@ -913,6 +913,9 @@ pub(crate) struct ProviderFactory {
     /// The SDK session each open named: what a host keys its MCP grants to.
     pub(crate) opened_sessions:
         Mutex<Vec<Option<nessa_sdk::domain::agent_execution::sessions::SessionId>>>,
+    /// Each successful open's provider session, and the one it was asked to
+    /// restore: `session/resume` of a recorded session, or `None` for new.
+    pub(crate) provider_opens: Mutex<Vec<(ExecutionSessionId, Option<ExecutionSessionId>)>>,
     pub(crate) open_failure: Mutex<Option<AgentError>>,
     pub(crate) opening: Notify,
     pub(crate) open_gate: Mutex<Option<Receiver<()>>>,
@@ -1496,7 +1499,13 @@ impl AgentProvider for Provider {
             }
             let (sender, receiver) = mpsc::unbounded_channel();
             let session_id = restore
+                .clone()
                 .unwrap_or_else(|| ExecutionSessionId::new(Uuid::new_v4().to_string()).unwrap());
+            self.factory
+                .provider_opens
+                .lock()
+                .unwrap()
+                .push((session_id.clone(), restore));
             let controller = ExecutionController::new(session_id.clone());
             let authority = controller.permission_authority_source();
             Ok(OpenedProviderSession {

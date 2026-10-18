@@ -989,6 +989,7 @@ async fn a_failed_opening_holding_its_slot_is_read_by_a_follower_as_its_history(
             ready: Notify::new(),
             started: AtomicBool::new(true),
             stopping: AtomicBool::new(false),
+            touched: std::sync::Mutex::new(tokio::time::Instant::now()),
         }),
     );
     let (view, cursor) = fixture
