@@ -143,6 +143,7 @@ contract.
 | --- | --- | --- |
 | Last permitted successor is running when its parent stops | Capture and stop that exact successor; keep lifetime open | `parent_stop_captures_the_last_permitted_running_successor` |
 | Root settles after classification and a correlated report leaves its queue | Capture report in dequeue handoff or active phase; retain durable report, keep unrelated work | `parent_stop_captures_correlated_report_after_dequeue` |
+| Correlated report fails and becomes owed after root classification but before capture | Capture and decline that exact report; preserve its durable delivery until later person input | `parent_stop_captures_correlated_report_owed_after_dequeue` |
 | Later person input supersedes a failed successor without finishing | Shared historical and live owed decisions agree; report publishes final failure | SDK resumption conformance |
 | Mutation observation encounters oversized SQLite fields | Persistence bounds reject before extraction or copy, including foreign principal rows | Session storage mutation observation bounds |
 | Same ownership evidence is retried at a later clock reading | Same durable identity and first observation time survive | Ownership audit retry regression |

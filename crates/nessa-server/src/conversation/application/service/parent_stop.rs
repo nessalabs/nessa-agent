@@ -329,13 +329,16 @@ impl ConversationService {
                     .resolve(id, caller)
                     .await
                     .map_err(MutationFailure::Target)?;
-                let unfinished = live.agent.unsettled_execution_ids().await;
+                let mut unfinished = live.agent.unsettled_execution_ids().await;
                 let history = live
                     .agent
                     .session_manager()
                     .snapshot()
                     .await
                     .ok_or_else(unavailable)?;
+                // A previously admitted report can fail during capture and
+                // await resumption. It still belongs to this exact Stop.
+                unfinished.extend(owed_turn_ids(&history.invocations));
                 let commands = storage
                     .mutations(caller.principal_id.as_str().into())
                     .await

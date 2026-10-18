@@ -2606,13 +2606,23 @@ impl ThreadReportStore for PausedPendingReports {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn parent_stop_captures_correlated_report_after_dequeue_active() {
-    correlated_report_after_dequeue(false).await;
+    correlated_report_after_dequeue(ReportPhase::Active).await;
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn parent_stop_captures_correlated_report_after_dequeue_handoff() {
-    correlated_report_after_dequeue(true).await;
+    correlated_report_after_dequeue(ReportPhase::Handoff).await;
 }
-async fn correlated_report_after_dequeue(handoff: bool) {
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn parent_stop_captures_correlated_report_owed_after_dequeue() {
+    correlated_report_after_dequeue(ReportPhase::Owed).await;
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ReportPhase {
+    Active,
+    Handoff,
+    Owed,
+}
+async fn correlated_report_after_dequeue(phase: ReportPhase) {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("data");
     let provider = Arc::new(ProviderFactory::default());
@@ -2676,17 +2686,26 @@ async fn correlated_report_after_dequeue(handoff: bool) {
     // The original root was classified Effect. Its existing SDK runner can
     // now dequeue the correlated report despite gateway admission fencing.
     let (finish_report, report_gate) = oneshot::channel();
-    *provider.execution_gate.lock().unwrap() = Some(report_gate);
+    if phase != ReportPhase::Owed {
+        *provider.execution_gate.lock().unwrap() = Some(report_gate);
+    } else {
+        drop(report_gate);
+    }
     let prepared = Arc::new(Notify::new());
     let (continue_prepare, prepare_gate) = oneshot::channel();
-    if handoff {
+    let mut continue_prepare = Some(continue_prepare);
+    if phase == ReportPhase::Owed {
+        *provider.prepare_failure.lock().unwrap() =
+            Some(AgentError::Transport("report preparation failed".into()));
+    }
+    if phase != ReportPhase::Active {
         *provider.prepare_gate.lock().unwrap() = Some((prepared.clone(), prepare_gate));
     } else {
         drop(prepare_gate);
     }
     let began = provider.execution_started.notified();
     p.send(()).unwrap();
-    if handoff {
+    if phase != ReportPhase::Active {
         tokio::time::timeout(TURN_HOLD_HANG, prepared.notified())
             .await
             .unwrap();
@@ -2695,12 +2714,30 @@ async fn correlated_report_after_dequeue(handoff: bool) {
             .await
             .unwrap();
     }
-    assert!(!live.agent.queued_ids().await.contains(&report_id));
-    assert!(live
-        .agent
-        .unsettled_execution_ids()
+    if phase == ReportPhase::Owed {
+        continue_prepare.take().unwrap().send(()).unwrap();
+        tokio::time::timeout(TURN_HOLD_HANG, async {
+            while !live
+                .agent
+                .owed_turns()
+                .await
+                .iter()
+                .any(|turn| turn.execution_id() == &report_id)
+            {
+                tokio::task::yield_now().await;
+            }
+        })
         .await
-        .contains(&report_id));
+        .unwrap();
+    }
+    assert!(!live.agent.queued_ids().await.contains(&report_id));
+    assert_eq!(
+        live.agent
+            .unsettled_execution_ids()
+            .await
+            .contains(&report_id),
+        phase != ReportPhase::Owed
+    );
     let (captured, after_capture) = oneshot::channel();
     let (allow_control, control_gate) = oneshot::channel();
     *observed.gate.lock().unwrap() = Some((captured, control_gate));
@@ -2711,9 +2748,9 @@ async fn correlated_report_after_dequeue(handoff: bool) {
         .unwrap();
     // This observation occurs after the unfinished-ID snapshot. Keep
     // provider preparation paused until capture has actually happened.
-    if handoff {
+    if phase == ReportPhase::Handoff {
         assert!(live.agent.active_execution_id().is_none());
-        continue_prepare.send(()).unwrap();
+        continue_prepare.take().unwrap().send(()).unwrap();
         tokio::time::timeout(TURN_HOLD_HANG, began).await.unwrap();
     }
     allow_control.send(()).unwrap();
@@ -2726,10 +2763,26 @@ async fn correlated_report_after_dequeue(handoff: bool) {
         "exact report stop must settle: {stopped:?}"
     );
     let cancelled = provider.cancel_turns.lock().unwrap().clone();
-    assert!(
-        cancelled.contains(&"correlated-report".into()),
-        "dequeued report escaped Stop (handoff={handoff}): {cancelled:?}"
-    );
+    if phase == ReportPhase::Owed {
+        assert!(
+            !live
+                .agent
+                .owed_turns()
+                .await
+                .iter()
+                .any(|turn| turn.execution_id() == &report_id),
+            "owed correlated report escaped Stop"
+        );
+        assert!(
+            cancelled.is_empty(),
+            "an already failed report needs decline, not provider cancellation"
+        );
+    } else {
+        assert!(
+            cancelled.contains(&"correlated-report".into()),
+            "dequeued report escaped Stop ({phase:?}): {cancelled:?}"
+        );
+    }
     assert_eq!(
         retained.pending().await.unwrap().len(),
         1,
