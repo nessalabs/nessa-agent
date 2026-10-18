@@ -141,8 +141,21 @@ impl Fixture {
 
     /// The conversation's slot, once its agent is attached.
     async fn attached(&self) {
-        let slot = self.slot().await.expect("a live conversation");
-        let live = self.service.wait_for_slot(&self.id, slot).await.unwrap();
+        self.attach(&self.id).await;
+    }
+
+    /// Wait for `id`'s agent to attach: one still attaching is not parked.
+    async fn attach(&self, id: &ConversationId) {
+        let slot = self
+            .service
+            .inner
+            .conversations
+            .lock()
+            .await
+            .get(id)
+            .cloned()
+            .expect("a live conversation");
+        let live = self.service.wait_for_slot(id, slot).await.unwrap();
         let _ = live.join_attachment_owner().await;
     }
 
@@ -167,7 +180,7 @@ impl Fixture {
         view
     }
 
-    /// Create one more conversation, which opens its agent.
+    /// Create one more conversation, and wait for its agent to attach.
     async fn create_another(&self) -> Result<ConversationId, ConversationError> {
         let id = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
         tokio::time::timeout(
@@ -180,6 +193,7 @@ impl Fixture {
         )
         .await
         .expect("the creation is answered")?;
+        self.attach(&id).await;
         Ok(id)
     }
 
@@ -547,5 +561,53 @@ async fn past_the_bound_an_agent_at_work_is_not_parked() {
     release.send(()).unwrap();
     sent.await.unwrap().unwrap();
     fixture.completed("long").await;
+    fixture.service.shutdown().await.unwrap();
+}
+
+/// Past the bound, the agent used longest ago is the one parked, and a read
+/// is use. One whose submission lock is held (a read or message using it
+/// now) is passed over for the next, and so is one a window follows; with
+/// none left, the opening is refused.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn past_the_bound_the_one_used_longest_ago_is_parked_and_one_in_use_is_passed_over() {
+    let fixture = Fixture::bounded(2).await;
+    let live = |id: ConversationId| {
+        let service = fixture.service.clone();
+        async move { service.inner.conversations.lock().await.contains_key(&id) }
+    };
+    fixture.wait(Duration::from_secs(1));
+    let second = fixture.create_another().await.expect("room for two");
+    fixture.wait(Duration::from_secs(1));
+    // Read after the second opened: the first is now the more recently used.
+    fixture
+        .service
+        .read(fixture.id.clone(), caller("read"))
+        .await
+        .unwrap();
+    fixture.wait(Duration::from_secs(1));
+    let third = fixture.create_another().await.expect("room is made");
+    assert!(
+        !live(second.clone()).await,
+        "the one used longest ago was parked"
+    );
+    assert!(live(fixture.id.clone()).await, "the one read since stays");
+    fixture.wait(Duration::from_secs(1));
+    // The first is now the one used longest ago, but in use: the third goes.
+    let held = fixture.service.inner.mode_changes.lock(&fixture.id).await;
+    let fourth = fixture.create_another().await.expect("room is made");
+    drop(held);
+    assert!(
+        live(fixture.id.clone()).await,
+        "the one in use was passed over"
+    );
+    assert!(!live(third).await, "the next was parked");
+    // A window follows the first, and the fourth is in use: nothing can go.
+    let follower = fixture.service.live_changes(&fixture.id);
+    let held = fixture.service.inner.mode_changes.lock(&fourth).await;
+    assert!(matches!(
+        fixture.create_another().await,
+        Err(ConversationError::Capacity)
+    ));
+    drop((held, follower));
     fixture.service.shutdown().await.unwrap();
 }

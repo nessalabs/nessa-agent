@@ -873,17 +873,24 @@ fn rejected_lane<T>(
     }
 }
 
-/// Queue a refusal, waiting for room on a full lane rather than closing the
-/// socket: a client that asks for more than its slots is told so, frame by
-/// frame, and reading its next frame waits until the writer takes this one.
-/// A writer that cannot write is bounded by the write timeout, which closes
-/// the socket. Answers whether the writer is gone.
-async fn refusal_waits<T>(lane: &tokio::sync::mpsc::Sender<T>, refusal: T) -> bool {
+/// Queue a refusal, or park it in `waiting` when the lane is full rather than
+/// closing the socket: a client that asks for more than its slots is told so,
+/// frame by frame. While one waits the socket reads no further frame, and
+/// still polls its writer, expiry, shutdown and finished requests; the loop
+/// sends it once the writer takes the one ahead
+/// (`a_waiting_refusal_does_not_stop_the_socket_closing`). Answers whether
+/// the socket must close: the writer is gone, or, never on a path the loop
+/// takes, a second refusal found the place taken.
+fn refuse_or_wait(
+    lane: &tokio::sync::mpsc::Sender<OutgoingMessage>,
+    waiting: &mut Option<OutgoingMessage>,
+    refusal: OutgoingMessage,
+) -> bool {
     match lane.try_send(refusal) {
         Ok(()) => false,
         Err(tokio::sync::mpsc::error::TrySendError::Full(refusal)) => {
             note_limit("socket.refusal_lane");
-            lane.send(refusal).await.is_err()
+            waiting.replace(refusal).is_some()
         }
         Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => true,
     }
@@ -969,6 +976,9 @@ where
     // ahead of them, so a stalled refusal cannot hold a release unread.
     // `a_release_is_admitted_while_an_app_refusal_waits`.
     let mut held_input: VecDeque<RequestFrame> = VecDeque::new();
+    // Any other refusal waiting for the refusal lane (`refuse_or_wait`). No
+    // frame is read while it waits, so it never needs a second place.
+    let mut waiting_refusal: Option<OutgoingMessage> = None;
     let mut current_state = interval(state.settings.current_state_interval());
     current_state.set_missed_tick_behavior(MissedTickBehavior::Delay);
     current_state.tick().await;
@@ -998,23 +1008,26 @@ where
         // A held app call is admitted only once the waiting refusal has a
         // place. Until then the socket still reads, and a control frame is
         // admitted ahead of what is held.
-        let staged_record =
-            if app_refusal.is_none() && pending_input.is_none() && input_check.is_none() {
-                held_input.pop_front().and_then(|frame| {
-                    if matches!(
-                        ResponseClass::for_method(&frame.method),
-                        ResponseClass::Record
-                    ) {
-                        Some(frame)
-                    } else {
-                        pending_input = Some(AuthenticatedInput::Request(frame));
-                        input_check = Some(Box::pin(current_session_error(&state, &session)));
-                        None
-                    }
-                })
-            } else {
-                None
-            };
+        let staged_record = if app_refusal.is_none()
+            && waiting_refusal.is_none()
+            && pending_input.is_none()
+            && input_check.is_none()
+        {
+            held_input.pop_front().and_then(|frame| {
+                if matches!(
+                    ResponseClass::for_method(&frame.method),
+                    ResponseClass::Record
+                ) {
+                    Some(frame)
+                } else {
+                    pending_input = Some(AuthenticatedInput::Request(frame));
+                    input_check = Some(Box::pin(current_session_error(&state, &session)));
+                    None
+                }
+            })
+        } else {
+            None
+        };
         // Authority checks suspend only their own admission. Request completion,
         // delivery teardown and expiry retain independently polled owners (R60).
         let admitted = if let Some(frame) = staged_record {
@@ -1115,6 +1128,20 @@ where
                     Err(_) => break,
                 }
             }
+            permit = refusal_send.reserve(), if waiting_refusal.is_some() => {
+                match permit {
+                    Ok(permit) => {
+                        permit.send(
+                            waiting_refusal
+                                .take()
+                                .expect("refusal reserve is gated on a waiting refusal"),
+                        );
+                        None
+                    }
+                    // The writer has dropped the lane.
+                    Err(_) => break,
+                }
+            }
             error = async { input_check.as_mut().expect("input check selected while pending").await }, if input_check.is_some() => {
                 input_check = None;
                 if let Some(error) = error {
@@ -1124,7 +1151,7 @@ where
                 match pending_input.take().expect("input check owns one input") {
                     AuthenticatedInput::Request(frame) => Some((frame, Instant::now())),
                     AuthenticatedInput::Refusal(response) => {
-                        if refusal_waits(&refusal_send, response).await {
+                        if refuse_or_wait(&refusal_send, &mut waiting_refusal, response) {
                             break;
                         }
                         None
@@ -1132,6 +1159,7 @@ where
                 }
             }
             message = incoming.next(), if pending_input.is_none()
+                && waiting_refusal.is_none()
                 && held_input.len() < HELD_INPUT_WHILE_APP_REFUSAL
                 && (app_refusal.is_some() || held_input.is_empty()) => {
                 let Some(Ok(message)) = message else { break };
@@ -1231,7 +1259,7 @@ where
                     record_send.try_send(QueuedRecordResponse::refusal(response)),
                 )
             } else {
-                refusal_waits(&refusal_send, response).await
+                refuse_or_wait(&refusal_send, &mut waiting_refusal, response)
             };
             if refused {
                 break;
@@ -7537,6 +7565,54 @@ mod tests {
         );
         assert!(!task.is_finished(), "the socket stays open");
         task.abort();
+    }
+
+    /// A refusal waiting for the lane does not stop the socket's loop: the
+    /// gateway closing the socket is acted on while the writer is stalled, so
+    /// once the writer is free the close follows the frame it was sending.
+    #[tokio::test]
+    async fn a_waiting_refusal_does_not_stop_the_socket_closing() {
+        let (state, _) = fixture(MembershipRole::Member);
+        let session = authenticate(&state).await;
+        let (release, gate) = tokio::sync::oneshot::channel();
+        let (socket, mut peer) = test_socket(Some(gate));
+        let task = tokio::spawn(run_authenticated(socket, state.clone(), session));
+        admit(&peer, "server.health", "held-0").await;
+        timeout(Duration::from_secs(1), peer.writing.recv())
+            .await
+            .expect("the stalled writer has taken the first response");
+        for id in 1..16 {
+            admit(&peer, "server.health", &format!("held-{id}")).await;
+        }
+        // The first refusal takes the lane's place; the second waits.
+        admit(&peer, "server.health", "over-0").await;
+        admit(&peer, "server.health", "over-1").await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        state.close_sockets();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        release.send(()).unwrap();
+        let mut sent = Vec::new();
+        let close = loop {
+            match peer.message().await {
+                Message::Close(close) => break close,
+                Message::Text(text) => {
+                    let value: Value = serde_json::from_str(&text).unwrap();
+                    sent.push(value["id"].as_str().unwrap_or_default().to_owned());
+                }
+                _ => {}
+            }
+        };
+        assert_eq!(
+            close.map(|close| close.code),
+            Some(SessionCloseReason::TemporaryUnavailable.web_socket_code())
+        );
+        // Stuck waiting for the lane, the loop would see the close only once
+        // the writer had sent the queued refusal and every held reply.
+        assert_eq!(sent, ["held-0"], "the close follows the stalled frame");
+        timeout(Duration::from_secs(5), task)
+            .await
+            .expect("the socket ends once closed")
+            .unwrap();
     }
 
     #[tokio::test]

@@ -819,7 +819,6 @@ struct Inner {
     access_policy: Arc<dyn ConversationAccessPolicyEvaluator>,
     limits: ConversationLimits,
     conversations: Mutex<HashMap<ConversationId, Arc<Slot>>>,
-    /// Asks for an owner so far, which stamps [`Slot::used`].
     /// Places held by creations between their capacity check and their slot:
     /// a creation writes its metadata and audit in between, so two creations
     /// of different conversations at the last place must not both pass the
@@ -1722,24 +1721,33 @@ impl ConversationService {
     /// waiting on an app's review, or unable to resume is never parked.
     /// Answers whether one was.
     async fn make_room(&self, keep: &ConversationId) -> bool {
-        let mut owners: Vec<(ConversationId, Arc<Slot>)> = self
+        let mut owners: Vec<(u64, ConversationId, Arc<Slot>)> = self
             .inner
             .conversations
             .lock()
             .await
             .iter()
             .filter(|(id, slot)| *id != keep && !slot.stopping.load(Ordering::SeqCst))
-            .map(|(id, slot)| (id.clone(), slot.clone()))
+            .map(|(id, slot)| {
+                (
+                    slot.touched.load(Ordering::SeqCst),
+                    id.clone(),
+                    slot.clone(),
+                )
+            })
             .collect();
-        owners.sort_by_key(|(_, slot)| slot.touched.load(Ordering::SeqCst));
-        for (id, slot) in owners {
+        owners.sort_by_key(|(touched, _, _)| *touched);
+        for (touched, id, slot) in owners {
             // A submission or read holds this while it uses the agent; one
             // held now is a use. Never waited for: two openings at the bound
             // would each wait for the other's.
             let Some(submissions) = self.inner.mode_changes.try_lock(&id) else {
                 continue;
             };
-            if self.park_held(&id, slot, None, submissions).await {
+            if self
+                .park_held(&id, slot, ParkWhen::UnusedSince(touched), submissions)
+                .await
+            {
                 return true;
             }
         }
@@ -6569,6 +6577,7 @@ mod environment_tools;
 mod event_read;
 mod notes;
 mod parking;
+use parking::ParkWhen;
 mod resumption;
 pub use environment_tools::{
     CommandAnswer, CommandCall, CommandCallError, EnvironmentListing, HERE,
