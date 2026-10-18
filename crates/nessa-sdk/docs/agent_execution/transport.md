@@ -221,6 +221,19 @@ delivery deadline. A timed-out record reports `AuditFailure`; later records are
 still attempted with a fresh deadline before UI publication. Bulk audit latency
 can therefore grow with the bounded number of pending reviews.
 
+The bounded-deadline slice of #762 tests the following audit orderings through
+the ACP worker's `record_audit`, with a paused runtime clock. The shared timer
+port migration remains separate work.
+
+| Audit operation at poll | Deadline | Expected result |
+| --- | --- | --- |
+| Spends the cooperative budget and remains pending | Not reached | Pending; retain the original deadline |
+| Spends the cooperative budget and remains pending | Reached | `AuditFailure`; drop the pending audit future |
+| Spends the cooperative budget and returns success | Reached in the same poll | Success; operation is polled first |
+| Still pending when its caller is dropped | Not reached | Drop the audit future; no acknowledged audit |
+
+Regression owner: `tests/infrastructure/acp/executions/worker/audit_deadlines.rs`.
+
 Cooperative shutdown starts one `shutdown_grace` deadline. Initial cancellation,
 fallback cancellation after failure, and waiting for process exit consume that same
 interval; a retry does not start another grace period. Normal completion's pending

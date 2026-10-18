@@ -1,0 +1,3 @@
+*held = Some(lease.clone());
+BECOMES
+// deliberate omission: no retained host lease

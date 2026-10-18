@@ -59,7 +59,7 @@ use std::sync::{Arc, Mutex};
 use std::task::Poll;
 use std::time::Duration;
 use tokio::sync::mpsc::Receiver;
-use tokio::sync::{mpsc, watch, OwnedSemaphorePermit, Semaphore};
+use tokio::sync::{mpsc, oneshot, watch, OwnedSemaphorePermit, Semaphore};
 use tokio::time::error::Elapsed;
 use tokio::time::{interval, timeout, timeout_at, Instant, MissedTickBehavior};
 use uuid::Uuid;
@@ -653,7 +653,6 @@ impl QueuedRecordResponse {
 
 enum ControlOutput {
     Response(Box<QueuedResponse>),
-    Close(SessionCloseReason),
 }
 
 enum WriterResponse {
@@ -668,6 +667,9 @@ enum WriterResponse {
 async fn write_authenticated<S>(
     mut sink: SplitSink<S, Message>,
     mut controls: Receiver<ControlOutput>,
+    // The terminal close has its own one-value slot so a full control lane
+    // cannot crowd it out. It is written after the controls already queued.
+    close: oneshot::Receiver<SessionCloseReason>,
     mut refusals: Receiver<OutgoingMessage>,
     mut ordinary: Receiver<QueuedResponse>,
     mut records: Receiver<QueuedRecordResponse>,
@@ -681,6 +683,7 @@ async fn write_authenticated<S>(
     // physical-send priority change. The retained-position bound is documented in
     // docs/design/authorized-record-reads.md, R62.
     let mut pending_record: Option<QueuedRecordResponse> = None;
+    let mut close = Some(close);
     loop {
         let deadline = retained_delivery_deadline(&pending_record, &subscriptions);
         let next = tokio::select! {
@@ -695,7 +698,14 @@ async fn write_authenticated<S>(
             },
             Some(control) = controls.recv() => match control {
                 ControlOutput::Response(response) => Some(Ok(WriterResponse::Queued(response))),
-                ControlOutput::Close(reason) => Some(Err(reason)),
+            },
+            reason = async { close.as_mut().expect("close selected while present").await }, if close.is_some() => {
+                close = None;
+                match reason {
+                    Ok(reason) => Some(Err(reason)),
+                    // The owner ended without a reason: drain what is queued.
+                    Err(_) => continue,
+                }
             },
             Some(response) = refusals.recv() => Some(Ok(WriterResponse::Refusal(Box::new(response)))),
             Some(response) = ordinary.recv() => Some(Ok(WriterResponse::Queued(Box::new(response)))),
@@ -888,6 +898,10 @@ where
     let mut subscriptions = ConnectionSubscriptions::new(sequence.clone());
     let limits = state.limits;
     let (control_send, control_receive) = mpsc::channel(limits.control_lane());
+    let (close_send, close_receive) = oneshot::channel();
+    // Why this owner ended the session, if it chose to. Sent once, after the
+    // loop, on its own slot (#979).
+    let mut close: Option<SessionCloseReason> = None;
     let (refusal_send, refusal_receive) = mpsc::channel(REFUSAL_LANE);
     // Room for every ordinary slot's response and every app call's, which
     // share it: a full queue closes the socket.
@@ -896,6 +910,7 @@ where
     let mut writer = tokio::spawn(write_authenticated(
         sink,
         control_receive,
+        close_receive,
         refusal_receive,
         ordinary_receive,
         record_receive,
@@ -995,9 +1010,8 @@ where
                 break;
             }
             outcome = async { notice_task.as_mut().expect("notice task selected while present").await }, if notice_task.is_some() => {
-                // Fatal publication belongs to this connection owner. A full
-                // control lane may reject its close frame; it cannot discard
-                // the only signal that ends the connection (full-lane regression).
+                // Fatal publication belongs to this connection owner, and it
+                // ends the connection whatever the control lane holds.
                 notice_task = None;
                 let reason = match outcome {
                     Ok(Err(failure)) => {
@@ -1009,18 +1023,11 @@ where
                         SessionCloseReason::TemporaryUnavailable
                     }
                 };
-                let _ = rejected_lane(
-                    "socket.control_lane",
-                    control_send.try_send(ControlOutput::Close(reason)),
-                );
+                close = Some(reason);
                 break;
             }
             _ = state.closed() => {
-                let _ = rejected_lane(
-                    "socket.control_lane",
-                    control_send
-                        .try_send(ControlOutput::Close(SessionCloseReason::TemporaryUnavailable)),
-                );
+                close = Some(SessionCloseReason::TemporaryUnavailable);
                 break;
             }
             Some(result) = requests.next(), if !requests.is_empty() => {
@@ -1051,10 +1058,7 @@ where
                 None
             }
             _ = &mut expiry => {
-                let _ = rejected_lane(
-                    "socket.control_lane",
-                    control_send.try_send(ControlOutput::Close(SessionCloseReason::CredentialExpired)),
-                );
+                close = Some(SessionCloseReason::CredentialExpired);
                 break;
             }
             current = async { refresh.as_mut().expect("refresh selected while pending").await }, if refresh.is_some() => {
@@ -1071,10 +1075,7 @@ where
                         });
                     }
                     Err(error) => {
-                        let _ = rejected_lane(
-                            "socket.control_lane",
-                            control_send.try_send(ControlOutput::Close(close_reason(error))),
-                        );
+                        close = Some(close_reason(error));
                         break;
                     }
                 }
@@ -1101,10 +1102,7 @@ where
             error = async { input_check.as_mut().expect("input check selected while pending").await }, if input_check.is_some() => {
                 input_check = None;
                 if let Some(error) = error {
-                    let _ = rejected_lane(
-                        "socket.control_lane",
-                        control_send.try_send(ControlOutput::Close(close_reason(error))),
-                    );
+                    close = Some(close_reason(error));
                     break;
                 }
                 match pending_input.take().expect("input check owns one input") {
@@ -1340,6 +1338,13 @@ where
         }
         requests.push(task);
     }
+    // Dropping the slot unsent lets the writer finish once the lanes drain.
+    match close {
+        Some(reason) => {
+            let _ = close_send.send(reason);
+        }
+        None => drop(close_send),
+    }
     for call in app_calls {
         call.abort();
     }
@@ -1386,13 +1391,19 @@ async fn forward_review_notices(
     session: AuthenticatedSession,
     mut authority_updates: watch::Receiver<u64>,
 ) -> Result<(), ReviewNoticePublicationFailure> {
+    // Passes spent because access itself moved while selecting: who may see
+    // what, or the authority revision. Those are rare, and each pass writes
+    // audit records, so continuous change closes the socket. Reviews coming
+    // and going on the board are ordinary traffic: under many busy agents the
+    // board can change during every audit, and closing every socket for it
+    // dropped clients mid-command. A pass the board alone outdated is
+    // published, less what settled meanwhile.
     const MAX_SELECTION_PASSES: usize = 3;
     let mut selection_passes = 0;
     'snapshots: loop {
         if selection_passes == MAX_SELECTION_PASSES {
             return Err(ReviewNoticePublicationFailure::Unstable);
         }
-        selection_passes += 1;
         let (generation, reviews) = board.current();
         let visibility = board.visibility();
         // Observe before either await: a later authority update stays pending
@@ -1410,6 +1421,7 @@ async fn forward_review_notices(
                 ReviewNoticeVisibility::Audited(selection) => {
                     let revision = selection.authority_revision();
                     if selected_revision.is_some_and(|earlier| earlier != revision) {
+                        selection_passes += 1;
                         continue 'snapshots;
                     }
                     selected_revision = Some(revision);
@@ -1427,7 +1439,29 @@ async fn forward_review_notices(
             .execute(&session)
             .await
             .map_err(ReviewNoticePublicationFailure::Authority)?;
-            if current.revision != revision || !board.is_current(generation, visibility) {
+            if !board.is_current(generation, visibility) {
+                // A spent counter never matches, so it counts as access moving.
+                let board_moved = current.revision == revision
+                    && board.visibility() == visibility
+                    && generation != u64::MAX
+                    && visibility != u64::MAX;
+                if !board_moved {
+                    selection_passes += 1;
+                    continue 'snapshots;
+                }
+                // Only the board moved, with the same access: this selection
+                // still holds for every review it kept that is still waiting,
+                // so it is published without those that settled, under the
+                // generation it was taken at. The board is past that
+                // generation, so the next pass starts at once and adds what
+                // came since. Redoing it instead never finished while busy
+                // agents changed the board during every audit, and no card
+                // was shown until its review was denied for want of an answer.
+                let (_, waiting) = board.current();
+                visible.retain(|review| waiting.contains(review));
+            }
+            if current.revision != revision {
+                selection_passes += 1;
                 continue 'snapshots;
             }
         }
@@ -2294,6 +2328,11 @@ pub(crate) use tests::host_fixture::HostProductFixture;
 mod tests {
     use super::super::state::SessionSettings;
     use super::*;
+
+    /// A writer's close slot whose owner ended without a reason.
+    fn no_close() -> oneshot::Receiver<SessionCloseReason> {
+        oneshot::channel().1
+    }
     use crate::agents_test_support::StubAgentProbe;
     use crate::browser_session::application::SessionStore;
     use crate::browser_session::domain::value_objects::{
@@ -6020,6 +6059,7 @@ mod tests {
         let writer = tokio::spawn(write_authenticated(
             sink,
             controls,
+            no_close(),
             refusals,
             ordinary,
             records,
@@ -6108,6 +6148,7 @@ mod tests {
         let writer = tokio::spawn(write_authenticated(
             sink,
             controls,
+            no_close(),
             refusals,
             ordinary,
             records,
@@ -6410,6 +6451,7 @@ mod tests {
         let writer = tokio::spawn(write_authenticated(
             sink,
             controls,
+            no_close(),
             refusals,
             ordinary,
             records,

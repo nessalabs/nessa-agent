@@ -37,9 +37,8 @@ impl ConversationService {
         let physical = self
             .inner
             .agent_tool_admissions
-            .clone()
-            .try_acquire_owned()
-            .map_err(|_| ConversationError::Unavailable)?;
+            .try_acquire(&source)
+            .ok_or(ConversationError::Unavailable)?;
         let service = self.clone();
         tokio::spawn(async move {
             let _physical = physical;

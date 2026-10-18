@@ -19,7 +19,6 @@ use nessa_protocol::product::generated::{
     AgentsListResult, AgentsListed, MAX_CONNECTION_CONVERSATION_SUBSCRIPTIONS, MAX_SHARE_PAGE,
     SUBSCRIPTION_DELIVERY_TIMEOUT_MS,
 };
-use nessa_sdk::application::agent_execution::sessions::ChangeWatchError;
 use nessa_sdk::domain::agent_execution::sessions::ExecutionSessionId;
 use std::task::Waker;
 use tempfile::TempDir;
@@ -1532,21 +1531,13 @@ async fn a_pending_mode_change_is_shown_not_recovered_by_a_follower() {
     client.close().await;
 }
 
-/// Row S29: a subscribe the session may not make is refused before it takes
-/// a watch: with the SDK's watch pool full, it is refused `forbidden`, not
-/// `subscription_capacity`.
+/// Row S29: a subscribe the session may not make is refused `forbidden` and
+/// leaves no watch behind.
 #[tokio::test]
 async fn a_forbidden_subscribe_is_refused_before_it_takes_a_watch() {
     let fixture = SubscriptionFixture::new().await;
     grants(&fixture.authority, &["server.read"]);
-    let mut held = Vec::new();
-    loop {
-        match fixture.storage.watch_any_committed() {
-            Ok(watch) => held.push(watch),
-            Err(ChangeWatchError::Capacity) => break,
-            Err(error) => panic!("{error:?}"),
-        }
-    }
+    let held = fixture.storage.committed_watches();
     let mut client = fixture.connect();
     client.send(
         "view",
@@ -1558,7 +1549,7 @@ async fn a_forbidden_subscribe_is_refused_before_it_takes_a_watch() {
     client.send("list", "conversation.subscribeList", json!({}));
     let (reply, _) = client.reply("list").await;
     assert_eq!(reply["error"]["code"], "forbidden", "{reply}");
-    drop(held);
+    assert_eq!(fixture.storage.committed_watches(), held);
     client.close().await;
 }
 
@@ -1587,33 +1578,21 @@ async fn a_forbidden_unsubscribe_is_refused() {
 async fn closing_the_socket_drops_every_subscription() {
     let fixture = SubscriptionFixture::new().await;
     let other = fixture.create().await;
+    let before = fixture.storage.committed_watches();
     let mut client = fixture.connect();
     client.subscribe("one", &fixture.id).await;
     client.subscribe("two", &other).await;
     client.send("list", "conversation.subscribeList", json!({}));
     assert_eq!(client.reply("list").await.0["ok"], true);
     client.close().await;
-    // The SDK's watch registry is full again only if all three let go.
-    let held = timeout(EXPECTED, async {
-        loop {
-            let mut held = Vec::new();
-            loop {
-                match fixture.storage.watch_any_committed() {
-                    Ok(watch) => held.push(watch),
-                    Err(ChangeWatchError::Capacity) => break,
-                    Err(error) => panic!("{error:?}"),
-                }
-            }
-            if held.len() == 64 {
-                return held.len();
-            }
-            drop(held);
+    // The SDK's watch registry is back where it was only if all three let go.
+    timeout(EXPECTED, async {
+        while fixture.storage.committed_watches() != before {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })
     .await
-    .unwrap();
-    assert_eq!(held, 64);
+    .expect("every subscription's watch goes with its socket");
     assert_eq!(
         fixture.state.requests.available_permits(),
         fixture.state.limits.requests()
@@ -2030,21 +2009,13 @@ impl SubscriptionFixture {
             let reply = self.call(method, json!({})).await;
             assert_eq!(reply["error"]["code"], "forbidden", "{method}: {reply}");
         }
-        // With the watch pool full, a refused subscribe answers `forbidden`,
-        // not `subscription_capacity`: it took no watch first (row S29).
-        let mut held = Vec::new();
-        loop {
-            match self.storage.watch_any_committed() {
-                Ok(watch) => held.push(watch),
-                Err(ChangeWatchError::Capacity) => break,
-                Err(error) => panic!("{error:?}"),
-            }
-        }
+        // A refused subscribe answers `forbidden` and leaves no watch (row S29).
+        let held = self.storage.committed_watches();
         let mut client = self.connect();
         client.send("list", "conversation.subscribeList", json!({}));
         let (reply, _) = client.reply("list").await;
         assert_eq!(reply["error"]["code"], "forbidden", "{reply}");
-        drop(held);
+        assert_eq!(self.storage.committed_watches(), held);
         client.close().await;
     }
 }

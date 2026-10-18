@@ -54,7 +54,11 @@ person may no longer view the thread.
 
 The send saves and registers its report before it submits, so a turn that ends
 at once is not missed, and again after a submit that succeeded, so a
-concurrent retry that failed cannot let it go. A report that cannot be saved is
+concurrent retry that failed cannot let it go. A saved report identity is bound
+to its child, watched execution, parent and caller. `LocalThreadReports::save` refuses a conflicting binding rather than
+installing another watch, and cleanup deletes only a row for the named child.
+The storage conflict and child-scoped cleanup regressions enforce these rules.
+A report that cannot be saved is
 not promised (`reportsBack: false`). The send then looks once, so a retry of a
 turn that already ended still reports. A refused send asks the thread's saved
 history: with no turn under its execution, the report goes; with one, it waits
@@ -71,8 +75,11 @@ history when it is not. A watched execution is finished once its settlement is
 saved: settled, or cancelled, or injected into the turn its scheduling names as
 `target` once that turn has settled, whose outcome and reply are then its own.
 The hook runs before the settlement it follows is saved, and a failed turn
-makes the agent cancel the turns queued behind it after that, so a look keeps
-looking for up to five seconds while a watched turn is settling.
+makes the agent cancel the turns queued behind it after that. The gateway's
+existing queued-receipt watcher also asks for a look after its SDK receipt
+settles, including receipts already settled when first watched. That final
+wake does not depend on how long hooks or final storage take. Early looks
+keep looking for up to five seconds while a watched turn is settling.
 
 The report's execution identity derives from the send's source, request and
 purpose. The parent's own history is what says it has the report: each
@@ -91,6 +98,10 @@ not taken for an earlier run's.
 
 | When | What happens |
 | --- | --- |
+| Exact report binding saved again | Existing row retained; no replacement |
+| Report identity reused for another child, execution, parent or caller | Store refuses registration; original row and watch remain |
+| Failed-send cleanup names another child | Original child's saved row retained |
+| SDK receipt settles after the hook's early look ends | Receipt watcher wakes a new look after final settlement |
 | The send's submit succeeds | Report saved and held; one look |
 | The send is refused, no turn saved | Report let go |
 | The send is refused, a turn saved | Report waits for that turn |
@@ -175,13 +186,15 @@ The tool returns up to 16 semantic facts per read step, with a maximum 256 MiB
 logical input budget because a stored semantic fact may span physical records.
 Only the metadata projection is returned, and tool result JSON is bounded to
 32 KiB before the MCP text/structured duplication. At most four observation calls
-run across the built-in tool server, leaving capacity under the relay's eight
-concurrent calls per connection. Independently, one conversation service admits
-at most eight physical source-admission owners across all tools. The permit is
+run at once for one source conversation, leaving capacity under the relay's
+eight concurrent calls per connection. Independently, one source conversation
+holds at most eight physical source-admission owners across all tools. Both
+bounds are per source, never a gateway total, so they grow with the agents; a
+source's entry leaves with its last permit (`SourcePermits`). The permit is
 acquired without waiting before spawning and is retained inside the detached
 owner until metadata/admission/audit work physically ends. Cancelling an observer
 releases its observation slot but does not free that physical permit. Further
-admission refuses unavailable while all eight are retained. Shutdown still waits
+admission from that source refuses unavailable while all eight are retained. Shutdown still waits
 for retained service admission, or reports its existing bounded drain failure.
 Initial source certification has a ten-second preparation bound beginning before
 source admission; setup, reauthorization and reads share cancellation and their
@@ -224,7 +237,7 @@ is not a claim that an external effect was rolled back.
 | Slow or oversized observation | Reader permits, step/response budgets and timeout refuse explicitly. |
 | Delayed stop versus newer execution | Existing exact-execution stop coordinator owns cancellation; `tests/conversation/mutation_commands.rs`. |
 | Running parent followed by enough Injected steering children to leave the message window; idle with queued work | Authoritative application snapshot resolves the parent or no active turn; shared service regression and the Relay active-stop regression in `tests/conversation/agent_tools.rs`. |
-| Repeated observer cancellation during blocked source metadata | Four observation slots return, but eight detached source owners retain separate permits and service admission; the ninth fails before metadata I/O, and shutdown drains only after release; same tests. |
+| Repeated observer cancellation during blocked source metadata | Four observation slots return, but eight detached source owners retain separate permits and service admission; that source's ninth fails before metadata I/O, and shutdown drains only after release; same tests. |
 | Target deleted or policy revoked while Page/Idle read is blocked | The final delivery check refuses before any event or cursor is returned; `tests/composition/conversation_tools_subscription.rs`. |
 | Prior Idle checkpoint, then target revoked during another read, reauthorization, or idle sleep as deadline expires | The cached checkpoint still passes final delivery admission; refusal returns no prior cursor; same tests. |
 | Final delivery authorization is blocked while source cancels or its delivery budget expires | Cancellation returns cancelled; ten-second delivery timeout returns unavailable, without events/cursor; same tests. |

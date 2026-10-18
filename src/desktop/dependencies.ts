@@ -35,8 +35,10 @@ import type { AgentsApi, AttachmentApi, McpAppsApi } from "@nessa/client"
 import {
   bindWaitingReviewNotices,
   browserReviewNotifier,
+  hostReviewNotices,
   openReviewEvent,
   waitingReviewNotices,
+  type HostNotices,
   type WaitingReview,
 } from "./workspace/adapters/gateway/review-notices"
 import {
@@ -154,6 +156,12 @@ export function createDesktopDependencies(
      * at all, no app plugin is registered.
      */
     apps?: AppsOptions
+    /**
+     * The desktop host's notices for waiting reviews, where the window runs
+     * in the app (`main.tsx`). Without them, a waiting review is the
+     * browser's notification, which only a browser preview has.
+     */
+    reviewNotices?: HostNotices
   } = {},
 ): DesktopDependencies {
   // The real clock and timers; tests pass their own. The clock is a steady
@@ -182,7 +190,7 @@ export function createDesktopDependencies(
   // its conversations; a source composition names has no client to give.
   const source =
     options.workspace === undefined && gateway
-      ? gatewayWorkspace(gateway, { now, after }, widgets, apps)
+      ? gatewayWorkspace(gateway, { now, after }, widgets, apps, options.reviewNotices)
       : undefined
   const workspace =
     options.workspace ?? source ?? samples ?? inMemorySource({ now, after })
@@ -248,12 +256,16 @@ type WindowGatewayClient = GatewayClient &
   }
 
 /** Notices for reviews that are waiting, replaced by each snapshot the gateway sends. */
-function reviewWaiting(): (reviews: readonly WaitingReview[]) => void {
-  const notices = waitingReviewNotices(
-    browserReviewNotifier((conversationId) => {
-      window.dispatchEvent(openReviewEvent(conversationId))
-    }),
-  )
+function reviewWaiting(
+  host: HostNotices | undefined,
+): (reviews: readonly WaitingReview[]) => void {
+  const notices = host
+    ? hostReviewNotices(host)
+    : waitingReviewNotices(
+        browserReviewNotifier((conversationId) => {
+          window.dispatchEvent(openReviewEvent(conversationId))
+        }),
+      )
   bindWaitingReviewNotices(notices.showWaiting)
   return notices.apply
 }
@@ -270,8 +282,9 @@ function gatewayWorkspace(
   clock: { now: () => number; after: Timers["after"] },
   registry: DesktopWidgetRegistry,
   apps: AppsOptions | undefined,
+  reviewNotices: HostNotices | undefined,
 ): GatewaySource<WindowGatewayClient> {
-  const onReviewWaiting = reviewWaiting()
+  const onReviewWaiting = reviewWaiting(reviewNotices)
   if (!apps) return gatewaySource({ connect, clock, onReviewWaiting })
   const mcpApps = (): Promise<McpAppsApi> =>
     source.connected().then((client) => client.mcpApps)
