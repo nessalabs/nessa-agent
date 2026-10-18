@@ -60,7 +60,7 @@ fn watch_pending(watch: &mut CommittedChangeWatch) {
 #[tokio::test]
 async fn sqlite_refuses_invalid_resume_origin_before_publishing_input() {
     let directory = tempfile::tempdir().unwrap();
-    let storage = RecordStorage::new(directory.path()).unwrap();
+    let storage = RecordStorage::new(directory.path().join("sessions")).unwrap();
     let id = SessionId::new("invalid-resume-origin").unwrap();
     let lease = storage.open(id.clone()).await.unwrap();
     let (opening, prior) = opened(&id);
