@@ -2917,23 +2917,94 @@ struct PausedMutationObservation {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn parent_stop_captures_a_restored_reports_queued_canonical_successor() {
-    restored_report_successor(false, false).await;
+    restored_report_successor(false, None).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn parent_stop_captures_a_restored_reports_active_canonical_successor() {
-    restored_report_successor(true, false).await;
+    restored_report_successor(true, None).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn parent_stop_preserves_a_canonical_successor_with_an_explicit_person_command() {
-    restored_report_successor(false, true).await;
+    restored_report_successor(false, Some(ReportPersonCommand::Original)).await;
 }
 
-async fn restored_report_successor(active: bool, command_collision: bool) {
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn parent_stop_preserves_a_later_successor_after_an_intermediate_person_submit() {
+    restored_report_successor(false, Some(ReportPersonCommand::Intermediate)).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn parent_stop_preserves_an_active_later_successor_after_an_intermediate_person_submit() {
+    restored_report_successor(true, Some(ReportPersonCommand::Intermediate)).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn parent_stop_preserves_a_report_successor_with_its_own_person_submit() {
+    restored_report_successor(false, Some(ReportPersonCommand::Current)).await;
+}
+
+#[derive(Clone, Copy)]
+enum ReportPersonCommand {
+    Original,
+    Intermediate,
+    Current,
+}
+
+async fn acknowledge_report_delivery(
+    service: &ConversationService,
+    storage: &Arc<RecordStorage>,
+    parent: &ConversationId,
+    execution: &str,
+) {
+    let live = service
+        .resolve(parent, &caller("inspect-report"))
+        .await
+        .unwrap();
+    let history = live.agent.session_manager().snapshot().await.unwrap();
+    let record = history
+        .invocations
+        .iter()
+        .find(|record| record.request.execution_id.as_str() == execution)
+        .unwrap();
+    let mut person = caller("report-action");
+    person.surface_id = record.actor.surface_id().into();
+    person.action_id = record.actor.request_id().into();
+    assert_eq!(person.actor().unwrap(), record.actor);
+    let submitted = service
+        .submit_command(
+            storage.clone(),
+            parent.clone(),
+            person,
+            Initiation::owner(),
+            false,
+            execution.into(),
+            message(record.request.user_message.text_str()),
+            SubmissionMode::Queue,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        submitted.progress.outcome(),
+        Some(MutationOutcome::Dispatched)
+    );
+    let saved = commands::CreationStorage::mutations(storage.as_ref(), "person".into())
+        .await
+        .unwrap();
+    assert!(saved
+        .iter()
+        .any(|receipt| receipt.binding().turn_id().as_str() == execution
+            && receipt.binding().operation() == MutationOperation::Submit
+            && receipt.outcome() == Some(MutationOutcome::Dispatched)));
+}
+
+async fn restored_report_successor(active: bool, person_command: Option<ReportPersonCommand>) {
+    let command_collision = person_command.is_some();
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("data");
     let parent = id();
+    let mut owed_report = "restored-report".to_owned();
     {
         let provider = Arc::new(ProviderFactory::default());
         provider.turn_cancel.store(true, Ordering::SeqCst);
@@ -2972,29 +3043,8 @@ async fn restored_report_successor(active: bool, command_collision: bool) {
         })
         .await
         .unwrap();
-        if command_collision {
-            // A real explicit Submit can acknowledge an already queued input
-            // under the same actor/request. Its receipt excludes that lineage
-            // from report-only cancellation, including after canonical resume.
-            let history = live.agent.session_manager().snapshot().await.unwrap();
-            let original = history
-                .invocations
-                .iter()
-                .find(|record| record.request.execution_id.as_str() == "restored-report")
-                .unwrap();
-            service
-                .submit_command(
-                    storage.clone(),
-                    parent.clone(),
-                    caller("report-action"),
-                    Initiation::owner(),
-                    false,
-                    "restored-report".into(),
-                    message(original.request.user_message.text_str()),
-                    SubmissionMode::Queue,
-                )
-                .await
-                .unwrap();
+        if matches!(person_command, Some(ReportPersonCommand::Original)) {
+            acknowledge_report_delivery(&service, &storage, &parent, "restored-report").await;
         }
         let (release, gate) = oneshot::channel();
         *provider.execution_gate.lock().unwrap() = Some(gate);
@@ -3003,6 +3053,43 @@ async fn restored_report_successor(active: bool, command_collision: bool) {
         tokio::time::timeout(TURN_HOLD_HANG, started).await.unwrap();
         suspend_child_turn(&service, &provider, &parent, release).await;
         drop(live);
+        retire(service, storage, metadata).await;
+    }
+    if matches!(person_command, Some(ReportPersonCommand::Intermediate)) {
+        let provider = Arc::new(ProviderFactory::default());
+        provider.turn_cancel.store(true, Ordering::SeqCst);
+        let (service, storage, metadata) = fixture(&root, provider.clone());
+        bind(&service, &storage, &root, true).await;
+        service.bind_thread_reports(Arc::new(
+            LocalThreadReports::open(&root.join("reports.sqlite3")).unwrap(),
+        ));
+        let live = service
+            .resolve(&parent, &caller("reopen-first-successor"))
+            .await
+            .unwrap();
+        let owed = live
+            .agent
+            .owed_turns()
+            .await
+            .into_iter()
+            .find(|turn| turn.execution_id().as_str() == owed_report)
+            .unwrap();
+        let (release, gate) = oneshot::channel();
+        *provider.execution_gate.lock().unwrap() = Some(gate);
+        let started = provider.execution_started.notified();
+        let Resumed::Continued(first) = live
+            .agent
+            .resume_turn(&owed, caller("resume-first").actor().unwrap())
+            .await
+            .unwrap()
+        else {
+            panic!("the original report resumes through the SDK")
+        };
+        tokio::time::timeout(TURN_HOLD_HANG, started).await.unwrap();
+        owed_report = first.id().as_str().to_owned();
+        acknowledge_report_delivery(&service, &storage, &parent, &owed_report).await;
+        suspend_child_turn(&service, &provider, &parent, release).await;
+        drop((first, live));
         retire(service, storage, metadata).await;
     }
     let provider = Arc::new(ProviderFactory::default());
@@ -3042,7 +3129,7 @@ async fn restored_report_successor(active: bool, command_collision: bool) {
         .owed_turns()
         .await
         .into_iter()
-        .find(|turn| turn.execution_id().as_str() == "restored-report")
+        .find(|turn| turn.execution_id().as_str() == owed_report)
         .unwrap();
     let Resumed::Continued(successor) = live
         .agent
@@ -3079,6 +3166,9 @@ async fn restored_report_successor(active: bool, command_collision: bool) {
         pending = Some((waiting, resume_capture));
     }
     drop(admission);
+    if matches!(person_command, Some(ReportPersonCommand::Current)) {
+        acknowledge_report_delivery(&service, &storage, &parent, next.as_str()).await;
+    }
     // The provider's cancellation acknowledgement and terminal result are
     // separate: hold the real result until after gateway Stop has selected.
     *provider.execution_updates.lock().unwrap() =
@@ -3117,14 +3207,16 @@ async fn restored_report_successor(active: bool, command_collision: bool) {
         release_parent.take().unwrap().send(()).unwrap();
         tokio::time::timeout(TURN_HOLD_HANG, started).await.unwrap();
         assert_eq!(live.agent.active_execution_id(), Some(next.clone()));
-        *provider.execution_updates.lock().unwrap() =
-            vec![ExecutionUpdate::Finished(ExecutionOutcome::Cancelled)];
-        *provider.execution_reply.lock().unwrap() =
-            Some(ProviderExecutionReply::Finished(ExecutionReport::new(
-                Some(Ok(ExecutionOutcome::Cancelled)),
-                None,
-                ProviderSessionState::Usable,
-            )));
+        if !command_collision {
+            *provider.execution_updates.lock().unwrap() =
+                vec![ExecutionUpdate::Finished(ExecutionOutcome::Cancelled)];
+            *provider.execution_reply.lock().unwrap() =
+                Some(ProviderExecutionReply::Finished(ExecutionReport::new(
+                    Some(Ok(ExecutionOutcome::Cancelled)),
+                    None,
+                    ProviderSessionState::Usable,
+                )));
+        }
         release_report = Some(release);
         resume_capture.send(()).unwrap();
     }
@@ -3134,13 +3226,14 @@ async fn restored_report_successor(active: bool, command_collision: bool) {
         .unwrap()
         .unwrap();
     if active {
-        assert!(
+        assert_eq!(
             provider
                 .cancel_turns
                 .lock()
                 .unwrap()
                 .contains(&next.as_str().to_owned()),
-            "active canonical report was not selected for cancellation"
+            !command_collision,
+            "active cancellation follows the full report/person provenance"
         );
         release_report.take().unwrap().send(()).unwrap();
     } else {
@@ -3204,11 +3297,14 @@ async fn restored_report_successor(active: bool, command_collision: bool) {
         "stopped successor keeps its report obligation"
     );
     if active {
-        assert!(provider
-            .cancel_turns
-            .lock()
-            .unwrap()
-            .contains(&next.as_str().to_owned()));
+        assert_eq!(
+            provider
+                .cancel_turns
+                .lock()
+                .unwrap()
+                .contains(&next.as_str().to_owned()),
+            !command_collision
+        );
     } else {
         assert_eq!(
             provider

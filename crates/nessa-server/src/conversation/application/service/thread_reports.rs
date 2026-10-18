@@ -734,7 +734,7 @@ impl ConversationService {
             let mut waiting = false;
             let mut previously_cancelled = false;
             if let Some(history) = &history {
-                let ids = super::thread_report_admission::report_execution_ids(
+                let ids: HashSet<_> = super::thread_report_admission::report_deliveries(
                     &report.execution,
                     history,
                     |record| {
@@ -750,10 +750,13 @@ impl ConversationService {
                         }
                         matches
                     },
-                );
+                )
+                .into_iter()
+                .map(|delivery| delivery.current().clone())
+                .collect();
                 for record in history
                     .iter()
-                    .filter(|record| ids.contains(record.request.execution_id.as_str()))
+                    .filter(|record| ids.contains(&record.request.execution_id))
                 {
                     if stopped
                         .as_ref()

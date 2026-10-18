@@ -352,16 +352,17 @@ impl ConversationService {
                                 && receipt.binding().turn_id() == turn
                         })
                     };
-                    let report_ids = super::thread_report_admission::report_execution_ids(
+                    let deliveries = super::thread_report_admission::report_deliveries(
                         &report.report.execution,
                         &history.invocations,
-                        |record| {
-                            super::thread_report_admission::is_report_record(&report, record)
-                                && !is_command(&record.request.execution_id)
-                        },
+                        |record| super::thread_report_admission::is_report_record(&report, record),
                     );
-                    for turn in &unfinished {
-                        if report_ids.contains(turn.as_str()) && !is_command(turn) {
+                    for delivery in deliveries {
+                        if delivery.execution_ids().any(&is_command) {
+                            continue;
+                        }
+                        let turn = delivery.current();
+                        if unfinished.contains(turn) {
                             targets.insert((id.to_string(), turn.as_str().to_owned()));
                         }
                     }

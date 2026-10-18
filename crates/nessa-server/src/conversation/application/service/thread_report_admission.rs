@@ -19,7 +19,7 @@ use nessa_sdk::application::agent_execution::{
     sessions::InvocationRecord,
 };
 use nessa_sdk::domain::agent_execution::{
-    executions::{Resumption, SubmissionMode as InvocationSubmission},
+    executions::{ExecutionId, Resumption, SubmissionMode as InvocationSubmission},
     prompts::MessageSender,
 };
 use sha2::{Digest, Sha256};
@@ -32,14 +32,30 @@ fn delivery_id(original: &str, person: &str) -> String {
     let bytes = serde_json::to_vec(&(original, person)).expect("strings serialize");
     format!("thread-report-{:x}", Sha256::digest(bytes))
 }
-/// Exact current executions descended from validated report deliveries.
+/// One delivery and the successors admitted by the SDK. Keeping the original
+/// separately makes the current identity available before any successor exists.
+pub(super) struct ReportDelivery {
+    original: ExecutionId,
+    successors: Vec<ExecutionId>,
+}
+impl ReportDelivery {
+    pub(super) fn current(&self) -> &ExecutionId {
+        self.successors.last().unwrap_or(&self.original)
+    }
+
+    pub(super) fn execution_ids(&self) -> impl Iterator<Item = &ExecutionId> {
+        std::iter::once(&self.original).chain(self.successors.iter())
+    }
+}
+
+/// Admitted execution chains descended from validated report deliveries.
 /// The SDK alone validates each canonical successor; continuation notice text
 /// and caller-chosen ID prefixes cannot confer report provenance.
-pub(super) fn report_execution_ids(
+pub(super) fn report_deliveries(
     original: &str,
     history: &[InvocationRecord],
     mut is_delivery: impl FnMut(&InvocationRecord) -> bool,
-) -> HashSet<String> {
+) -> Vec<ReportDelivery> {
     let candidates: HashSet<_> = std::iter::once(original.to_owned())
         .chain(
             history
@@ -47,18 +63,21 @@ pub(super) fn report_execution_ids(
                 .map(|record| delivery_id(original, record.request.execution_id.as_str())),
         )
         .collect();
-    let mut current = HashSet::new();
+    let mut deliveries = Vec::new();
     for record in history {
         if !candidates.contains(record.request.execution_id.as_str()) || !is_delivery(record) {
             continue;
         }
-        let mut execution = record.request.execution_id.clone();
-        while let Some(next) = resumed_turn_id(history, &execution) {
-            execution = next;
+        let mut delivery = ReportDelivery {
+            original: record.request.execution_id.clone(),
+            successors: Vec::new(),
+        };
+        while let Some(next) = resumed_turn_id(history, delivery.current()) {
+            delivery.successors.push(next);
         }
-        current.insert(execution.as_str().to_owned());
+        deliveries.push(delivery);
     }
-    current
+    deliveries
 }
 /// Both durable source binding and saved submission identify a report. A
 /// caller-chosen execution ID alone cannot confer ownership over queued work.

@@ -142,7 +142,8 @@ report ID prefixes nor continuation notice text create provenance.
 | --- | --- | --- |
 | Queued original or later delivery | Durable row, validated request/actor, SDK queue | Capture exact ID and withdraw before root cancellation |
 | Dequeue handoff or active | Same provenance, SDK unfinished IDs | Capture exact ID through handoff; cancel that identity |
-| Canonical resumed successor, queued/active | Validated original plus SDK saved successor links | Carry provenance through the chain; preserve unrelated commands |
+| Canonical resumed successor, queued/active | Validated original plus the full admitted SDK successor chain | Carry provenance through the chain; preserve unrelated commands |
+| Person Submit acknowledges any admitted delivery/successor, then that turn resumes again | Existing Submit receipt at any identity in that SDK-validated chain | Exclude the entire delivery from report-only cancellation, including later queued/active successors |
 | Failed result still owed | SDK owed work, retained provider result | Capture and decline through mutation owner; preserve result and row |
 | Declined report with retained failed result | Exact Stop receipt Withdrawn/Cancelled; provider result remains distinct | Retain obligation; do not treat failed result as paid delivery |
 | Accepted/Attempted Stop before acknowledgement | Existing captured binding and unresolved receipt | Retain uncertainty and row; do not infer delivery from result |
@@ -155,8 +156,13 @@ report ID prefixes nor continuation notice text create provenance.
 Regressions exercise canonical successor capture through the real gateway Stop,
 and an explicit delivery poll after owed-report decline. The latter must retain
 the row before and after reopening and deliver only after later person input.
-An explicit person command excludes its original delivery and canonical chain
-from report-only cancellation. A controlled delivery poll also proves that
+An explicit person command at any admitted execution excludes that delivery
+and its canonical chain from report-only cancellation. The report owner keeps
+the original and every SDK-validated successor together until the cancellation
+consumer checks the existing Submit receipts; reducing the chain to its endpoint
+before that check loses an intervening person command. Canonical identity stays
+owned by the SDK, and the existing gateway mutation receipts alone establish
+the person-command boundary. A controlled delivery poll also proves that
 unavailable receipt evidence cannot call the SQLite report settlement port.
 
 The SDK owns three distinct facts: exact locally unfinished executions, canonical
