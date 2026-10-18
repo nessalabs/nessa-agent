@@ -32,7 +32,7 @@ use super::{
 use crate::conversation::domain::{
     Conversation, ConversationDeletion, ProviderSessionErasure, ProviderSessionLink, ToolSource,
 };
-use futures_util::{future::join_all, FutureExt};
+use futures_util::{FutureExt, StreamExt};
 use nessa_auth::application::ports::Clock;
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_protocol::agents::AgentId;
@@ -161,6 +161,11 @@ pub struct ConversationDeletionBudgets {
 /// cannot finish — its agent will not answer, its history is damaged — is
 /// reported and left for the next start rather than retried forever.
 const DELETION_ATTEMPTS: u32 = 3;
+/// Most owners retirement stops at once. Each stop's own writes take a few
+/// milliseconds of the record store's one writer, so this many keep it busy
+/// without leaving a stop waiting behind thousands of others' writes for
+/// longer than its budget (`retirement_stops_a_bounded_number_of_owners_at_once`).
+const RETIRING_AT_ONCE: usize = 64;
 const DELETION_RETRY_DELAY: Duration = Duration::from_secs(1);
 
 /// Most agents asked at once, across every delete on this gateway, about their
@@ -5269,7 +5274,11 @@ impl ConversationService {
             .map(|(id, slot)| (id.clone(), slot.clone()))
             .collect();
         // Give every owner its own bounded attempt. A stalled opening or provider
-        // cannot consume another owner's cleanup opportunity.
+        // cannot consume another owner's cleanup opportunity, and neither can
+        // a crowd: every stop saves its end through the one record store, so
+        // thousands started at once all share it and all run out of budget
+        // together. At most `RETIRING_AT_ONCE` run at a time, and an owner's
+        // budget starts when its stop does.
         let attempts = slots.into_iter().map(|(id, slot)| async move {
             let stopped = match submissions {
                 Submissions::Drained => {
@@ -5307,7 +5316,11 @@ impl ConversationService {
                 (id.to_string(), error)
             })
         });
-        let failures: Vec<_> = join_all(attempts).await.into_iter().flatten().collect();
+        let failures: Vec<_> = futures_util::stream::iter(attempts)
+            .buffer_unordered(RETIRING_AT_ONCE)
+            .filter_map(std::future::ready)
+            .collect()
+            .await;
         if failures.is_empty() {
             Ok(())
         } else {

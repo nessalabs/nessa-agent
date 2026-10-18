@@ -54,10 +54,22 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..")
 const knobs = {
   conversations: { default: "100", help: "conversations created" },
   sockets: { default: "", help: "client sockets (default: conversations / 4)" },
-  workers: { default: String(Math.max(1, Math.min(8, cpus().length))), help: "client processes" },
-  parallel: { default: "64", help: "operations in flight per worker, at most four per socket" },
-  rounds: { default: "2", help: "messages sent to every conversation, one round at a time" },
-  "hold-seconds": { default: "5", help: "how long every conversation sits idle, sampled, before the list" },
+  workers: {
+    default: String(Math.max(1, Math.min(8, cpus().length))),
+    help: "client processes",
+  },
+  parallel: {
+    default: "64",
+    help: "operations in flight per worker, at most four per socket",
+  },
+  rounds: {
+    default: "2",
+    help: "messages sent to every conversation, one round at a time",
+  },
+  "hold-seconds": {
+    default: "5",
+    help: "how long every conversation sits idle, sampled, before the list",
+  },
   "agent-delay-ms": { default: "0", help: "how long the agent takes per prompt" },
   "request-timeout-ms": { default: "60000", help: "client request timeout" },
   "turn-timeout-ms": { default: "120000", help: "how long a turn may take to end" },
@@ -76,8 +88,13 @@ const { values } = parseArgs({
 })
 if (values.help) {
   process.stdout.write(
-    `gateway-scale — many conversations and sockets on one gateway\n\n${Object.entries(knobs)
-      .map(([name, k]) => `  --${name.padEnd(20)} ${k.help} (default ${k.default || "derived"})`)
+    `gateway-scale — many conversations and sockets on one gateway\n\n${Object.entries(
+      knobs,
+    )
+      .map(
+        ([name, k]) =>
+          `  --${name.padEnd(20)} ${k.help} (default ${k.default || "derived"})`,
+      )
       .join("\n")}\n`,
   )
   process.exit(0)
@@ -88,12 +105,14 @@ const knob = (name) =>
   knobs[name].default
 const number = (name) => {
   const value = Number(knob(name))
-  if (!Number.isInteger(value) || value < 0) throw new Error(`--${name} must be a whole number`)
+  if (!Number.isInteger(value) || value < 0)
+    throw new Error(`--${name} must be a whole number`)
   return value
 }
 
 const conversations = number("conversations")
-const sockets = knob("sockets") === "" ? Math.max(1, Math.ceil(conversations / 4)) : number("sockets")
+const sockets =
+  knob("sockets") === "" ? Math.max(1, Math.ceil(conversations / 4)) : number("sockets")
 const workers = Math.min(number("workers"), sockets)
 // A socket admits four controls at once (`limits.controlSlots`), and a client
 // past that is the client's fault, not the gateway's: each worker keeps its
@@ -111,7 +130,11 @@ const agentBinary = resolve(
 const evidence = knob("evidence") ? resolve(knob("evidence")) : null
 for (const [what, path, build] of [
   ["gateway", binary, "cargo build --release -p nessa-server"],
-  ["scale agent", agentBinary, "cargo build --release -p nessa-sdk --example scale_agent"],
+  [
+    "scale agent",
+    agentBinary,
+    "cargo build --release -p nessa-sdk --example scale_agent",
+  ],
 ])
   if (!existsSync(path)) {
     process.stderr.write(`gateway-scale: no ${what} at ${path}; build it: ${build}\n`)
@@ -155,7 +178,8 @@ function sample(pid, directory) {
       const fields = readFileSync(`/proc/${entry}/stat`, "utf8").split(") ")[1].split(" ")
       if (Number(fields[1]) !== pid) continue
       children += 1
-      childRssKib += Number(readFileSync(`/proc/${entry}/statm`, "utf8").split(" ")[1]) * 4
+      childRssKib +=
+        Number(readFileSync(`/proc/${entry}/statm`, "utf8").split(" ")[1]) * 4
     } catch {}
   }
   let fds = 0
@@ -186,14 +210,17 @@ function directorySize(path) {
 }
 
 const quantile = (sorted, q) =>
-  sorted.length === 0 ? null : Math.round(sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))])
+  sorted.length === 0
+    ? null
+    : Math.round(sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))])
 
 function summarize(results) {
   const latencies = results.flatMap((r) => r.latencies).sort((a, b) => a - b)
   const failures = {}
   const samples = {}
   for (const r of results) {
-    for (const [code, count] of Object.entries(r.failures)) failures[code] = (failures[code] ?? 0) + count
+    for (const [code, count] of Object.entries(r.failures))
+      failures[code] = (failures[code] ?? 0) + count
     Object.assign(samples, r.samples)
   }
   return {
@@ -215,17 +242,33 @@ let children = []
 let timer
 const samples = []
 const output = []
-const verdict = { check: "gateway-scale", conversations, sockets, workers, parallel, phases: {} }
+const verdict = {
+  check: "gateway-scale",
+  conversations,
+  sockets,
+  workers,
+  parallel,
+  phases: {},
+}
+
+// How long the gateway may take to stop every conversation's agent and
+// confirm it, after SIGTERM.
+const SHUTDOWN_MS = 120_000
 
 const cleanup = async () => {
   clearInterval(timer)
   for (const child of children) child.kill("SIGKILL")
   if (gateway && gateway.exitCode === null) {
     gateway.kill("SIGTERM")
+    const started = performance.now()
     const exited = await Promise.race([
       new Promise((done) => gateway.once("exit", () => done(true))),
-      sleep(30_000, false),
+      sleep(SHUTDOWN_MS, false),
     ])
+    verdict.shutdown = {
+      seconds: Number(((performance.now() - started) / 1000).toFixed(3)),
+      exitCode: gateway.exitCode,
+    }
     if (!exited) gateway.kill("SIGKILL")
   }
   if (evidence) {
@@ -252,10 +295,14 @@ try {
     NESSA_INSTANCE: instance,
   }
   const token = join(directory, "owner.token")
-  const init = spawnSync(binary, ["auth", "init", "--local", "--owner-token-file", token], {
-    env,
-    encoding: "utf8",
-  })
+  const init = spawnSync(
+    binary,
+    ["auth", "init", "--local", "--owner-token-file", token],
+    {
+      env,
+      encoding: "utf8",
+    },
+  )
   if (init.status !== 0) throw new Error(`provisioning failed: ${init.stderr}`)
   const configPath = join(directory, "ci", "instances", instance, "config.json")
   writeFileSync(
@@ -288,7 +335,9 @@ try {
   const started = Date.now()
   for (;;) {
     if (gateway.exitCode !== null)
-      throw new Error(`gateway exited (${gateway.exitCode}):\n${output.join("").slice(-4000)}`)
+      throw new Error(
+        `gateway exited (${gateway.exitCode}):\n${output.join("").slice(-4000)}`,
+      )
     try {
       if ((await fetch(`http://127.0.0.1:${port}/health`)).ok) break
     } catch {}
@@ -306,8 +355,9 @@ try {
   timer = setInterval(record, 1000)
 
   const credential = readFileSync(token, "utf8").trim()
-  const perWorker = Array.from({ length: workers }, (_, i) =>
-    Math.floor(sockets / workers) + (i < sockets % workers ? 1 : 0),
+  const perWorker = Array.from(
+    { length: workers },
+    (_, i) => Math.floor(sockets / workers) + (i < sockets % workers ? 1 : 0),
   )
   // Conversations per socket, as even as the counts allow: the first
   // `conversations % sockets` sockets take one more.
@@ -341,7 +391,8 @@ try {
     children.map((child, worker) => {
       const count = perWorker[worker]
       const remaining = conversations - assigned
-      const mine = worker === workers - 1 ? remaining : Math.min(remaining, count * perSocket)
+      const mine =
+        worker === workers - 1 ? remaining : Math.min(remaining, count * perSocket)
       assigned += mine
       return ask(child, {
         type: "setup",
@@ -365,7 +416,9 @@ try {
     phase = name
     log(`${name}...`)
     const began = Date.now()
-    const results = await Promise.all(children.map((child) => ask(child, { type: name, ...message })))
+    const results = await Promise.all(
+      children.map((child) => ask(child, { type: name, ...message })),
+    )
     const summary = { ...summarize(results), seconds: (Date.now() - began) / 1000 }
     if (name === "list") summary.listed = Math.max(...results.map((r) => r.listed ?? 0))
     if (results.some((r) => r.steps)) {
@@ -395,7 +448,9 @@ try {
     const seconds = (during.at(-1).at - during[0].at) / 1000
     verdict.hold = {
       seconds,
-      cpuCoresBusy: Number(((during.at(-1).cpuSeconds - during[0].cpuSeconds) / seconds).toFixed(3)),
+      cpuCoresBusy: Number(
+        ((during.at(-1).cpuSeconds - during[0].cpuSeconds) / seconds).toFixed(3),
+      ),
       rssMib: during.at(-1).rssMib,
       threads: during.at(-1).threads,
       fds: during.at(-1).fds,
@@ -419,15 +474,24 @@ try {
   verdict.gatewayAlive = gateway.exitCode === null
   const failures = []
   for (const [name, summary] of Object.entries(verdict.phases)) {
-    if (summary.failed > 0) failures.push(`${name}: ${summary.failed} failed (${JSON.stringify(summary.failures)})`)
+    if (summary.failed > 0)
+      failures.push(
+        `${name}: ${summary.failed} failed (${JSON.stringify(summary.failures)})`,
+      )
     if (p99Bound > 0 && summary.p99 !== null && summary.p99 > p99Bound)
       failures.push(`${name}: p99 ${summary.p99} ms is over ${p99Bound} ms`)
   }
   if (!verdict.gatewayAlive) failures.push("the gateway exited during the run")
-  // A conversation is listed once something was said in it.
+  // A conversation is listed once a turn in it ended, so the count is only
+  // owed when every turn did; a failed turn is already reported above.
   const listed = verdict.phases.list?.listed
-  if (number("rounds") > 0 && listed !== conversations)
-    failures.push(`a socket's list and observe pages named ${listed} conversations, not ${conversations}`)
+  const turnsFailed = Object.entries(verdict.phases).some(
+    ([name, summary]) => name.startsWith("turn") && summary.failed > 0,
+  )
+  if (number("rounds") > 0 && !turnsFailed && listed !== conversations)
+    failures.push(
+      `a socket's list and observe pages named ${listed} conversations, not ${conversations}`,
+    )
   verdict.failures = failures
   verdict.passed = failures.length === 0
 } catch (error) {
@@ -435,6 +499,15 @@ try {
   verdict.error = String(error?.stack ?? error)
 } finally {
   await cleanup()
+}
+// A gateway that could not confirm every agent stopped exits non-zero; one
+// that did not exit in time has no exit code yet.
+if (verdict.shutdown && verdict.shutdown.exitCode !== 0) {
+  verdict.failures = [
+    ...(verdict.failures ?? []),
+    `the gateway's shutdown ${verdict.shutdown.exitCode === null ? `did not end within ${SHUTDOWN_MS / 1000} s` : `exited ${verdict.shutdown.exitCode}`}`,
+  ]
+  verdict.passed = false
 }
 process.stdout.write(`${JSON.stringify(verdict)}\n`)
 process.exit(verdict.passed ? 0 : 1)

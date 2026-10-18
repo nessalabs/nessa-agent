@@ -194,6 +194,10 @@ process.on("message", async (message) => {
   try {
     process.send({ type: "done", phase: message.type, result: await phase(message) })
   } catch (error) {
-    process.send({ type: "done", phase: message.type, error: String(error?.stack ?? error) })
+    process.send({
+      type: "done",
+      phase: message.type,
+      error: String(error?.stack ?? error),
+    })
   }
 })

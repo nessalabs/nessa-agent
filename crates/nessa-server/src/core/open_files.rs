@@ -12,7 +12,7 @@
 
 /// Raise the soft open-file limit as far as this process may, and return the
 /// limit it now has, or `None` when it cannot be read.
-pub(crate) fn raise() -> Option<u64> {
+pub(crate) fn raise() -> Option<libc::rlim_t> {
     let mut limit = libc::rlimit {
         rlim_cur: 0,
         rlim_max: 0,
@@ -23,7 +23,7 @@ pub(crate) fn raise() -> Option<u64> {
     }
     let wanted = ceiling(limit.rlim_max);
     if wanted <= limit.rlim_cur {
-        return Some(limit.rlim_cur as u64);
+        return Some(limit.rlim_cur);
     }
     let raised = libc::rlimit {
         rlim_cur: wanted,
@@ -31,9 +31,9 @@ pub(crate) fn raise() -> Option<u64> {
     };
     // SAFETY: `raised` is a valid rlimit whose soft value is within its hard one.
     if unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &raised) } == 0 {
-        Some(wanted as u64)
+        Some(wanted)
     } else {
-        Some(limit.rlim_cur as u64)
+        Some(limit.rlim_cur)
     }
 }
 
@@ -79,7 +79,7 @@ mod tests {
             unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) },
             0
         );
-        assert_eq!(limit.rlim_cur as u64, first);
+        assert_eq!(limit.rlim_cur, first);
         assert_eq!(limit.rlim_cur, super::ceiling(limit.rlim_max));
         assert_eq!(super::raise(), Some(first));
     }

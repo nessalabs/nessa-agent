@@ -125,6 +125,21 @@ impl Default for OperationalLimits {
 }
 
 impl OperationalLimits {
+    /// A gateway of a few sockets: the limits a product state starts with
+    /// before composition gives it the configured ones
+    /// (`ProductState::with_limits`), small enough that a test fills them.
+    /// The gateway never runs on these; it runs on [`Self::default`] or what
+    /// `config.json` says.
+    pub(crate) fn small() -> Self {
+        Self {
+            requests: 128,
+            controls: 32,
+            record_reads: 4,
+            live_conversations: 32,
+            ..Self::default()
+        }
+    }
+
     /// Check `input`. A count outside 1..=65536, fewer than two app calls, or
     /// a budget that cannot be a deadline is refused. Nothing here is mutated
     /// afterward.

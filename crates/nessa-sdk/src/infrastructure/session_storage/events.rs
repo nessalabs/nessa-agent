@@ -266,10 +266,19 @@ impl State {
             // rather than one per frame. What it finishes waits in `pending`,
             // which is then bounded by the page: at most `PAGE_FRAMES` frames
             // of at most a page's bytes, published over the next steps.
+            // A resume still unsettled is read one frame at a time, as it
+            // settles on the exact frame its cursor names: a page could carry
+            // the emitter past it, and the units after it with it.
             let from = self.emitter.downloaded();
+            let page = if self.resume.is_some() {
+                1
+            } else {
+                PAGE_FRAMES
+            };
             let shared: Vec<Record> = certified_page
                 .into_iter()
                 .filter(|record| record.position > from && record.position <= self.certified)
+                .take(page)
                 .collect();
             let records = if shared
                 .first()
@@ -277,7 +286,7 @@ impl State {
             {
                 shared
             } else {
-                read_frames(runtime, stream, scope, from, self.certified, PAGE_FRAMES).await?
+                read_frames(runtime, stream, scope, from, self.certified, page).await?
             };
             self.emitter.apply(&records).map_err(map_fold)?;
             self.take_events()?;
