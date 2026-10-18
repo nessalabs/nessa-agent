@@ -1,4 +1,5 @@
 mod acquisition;
+mod cached;
 mod export;
 mod share_grants;
 
@@ -21,6 +22,7 @@ use crate::conversation::domain::{
     Conversation, ConversationDeletion, DeletionContradiction, ProviderSessionErasure,
     ProviderSessionLink,
 };
+use cached::CachedSql;
 use nessa_auth::domain::{OrganizationId, PrincipalId, MAX_IDENTIFIER_BYTES};
 use nessa_local_database::rusqlite::{
     params, Connection, Error, OptionalExtension, Row, TransactionBehavior,
@@ -169,6 +171,7 @@ impl LocalConversationStore {
     /// (docs/adr/todo/202-versioned-local-datasets.md).
     pub fn open(path: &Path) -> Result<Self, OpenError> {
         let connection = nessa_local_database::open(path, &Schema::new(DEFINITION)?)?;
+        connection.set_prepared_statement_cache_capacity(cached::STATEMENTS);
         Ok(Self {
             connection: Arc::new(Mutex::new(connection)),
             changes: CatalogueChanges::default(),
@@ -332,7 +335,7 @@ fn granted_head(
     receiver: &str,
 ) -> Result<i64, ConversationError> {
     connection
-        .query_row(
+        .cached_row(
             &format!(
                 "SELECT MAX(
                      COALESCE((SELECT MAX(c.change_revision) FROM conversations AS c
@@ -372,7 +375,7 @@ fn owner_head(
     owner: &PrincipalId,
 ) -> Result<i64, ConversationError> {
     let head: Option<i64> = connection
-        .query_row(
+        .cached_row(
             "SELECT head FROM catalogue_owners WHERE organization = ?1 AND owner = ?2",
             params![organization.as_str(), owner.as_str()],
             |row| row.get(0),
@@ -380,7 +383,7 @@ fn owner_head(
         .optional()
         .map_err(failed)?;
     let latest: Option<i64> = connection
-        .query_row(
+        .cached_row(
             "SELECT MAX(change_revision) FROM conversations WHERE organization = ?1 AND owner = ?2",
             params![organization.as_str(), owner.as_str()],
             |row| row.get(0),
@@ -407,7 +410,7 @@ fn next_revision(
     )?;
     if creating && head == 0 {
         connection
-            .execute(
+            .cached_execute(
                 "INSERT OR IGNORE INTO catalogue_owners (organization, owner, head)
              VALUES (?1, ?2, 0)",
                 params![
@@ -420,7 +423,7 @@ fn next_revision(
         return Err(ConversationError::Metadata);
     }
     let changed = connection
-        .execute(
+        .cached_execute(
             "UPDATE catalogue_owners SET head = head + 1
          WHERE organization = ?1 AND owner = ?2 AND head < 9223372036854775807",
             params![
@@ -433,7 +436,7 @@ fn next_revision(
         return Err(ConversationError::Metadata);
     }
     connection
-        .query_row(
+        .cached_row(
             "SELECT head FROM catalogue_owners WHERE organization = ?1 AND owner = ?2",
             params![
                 conversation.organization().as_str(),
@@ -615,7 +618,7 @@ fn read_deletion(
     id: &ConversationId,
 ) -> Result<Option<ConversationDeletion>, ConversationError> {
     let row = connection
-        .query_row(
+        .cached_row(
             &format!(
                 "SELECT {} FROM deletions WHERE conversation_id = ?1",
                 deletion_columns()?
@@ -683,7 +686,7 @@ fn read(
     id: &ConversationId,
 ) -> Result<Option<Conversation>, ConversationError> {
     let stored = connection
-        .query_row(
+        .cached_row(
             &format!(
                 "SELECT {} FROM conversations WHERE id = ?1",
                 acquisition::conversation("")
@@ -710,7 +713,7 @@ fn read(
 
 fn catalogue_incarnation(connection: &Connection, expected: &str) -> Result<(), ConversationError> {
     let current: String = connection
-        .query_row(
+        .cached_row(
             &format!(
                 "SELECT {} FROM catalogue_identity WHERE id = 1",
                 acquisition::text("incarnation", MAX_ID_BYTES, false)
@@ -802,9 +805,9 @@ fn read_mode_request(
     };
     let row = match request_id {
         Some(request_id) => {
-            connection.query_row(query, params![id.to_string(), request_id], decode)
+            connection.cached_row(query, params![id.to_string(), request_id], decode)
         }
-        None => connection.query_row(query, [id.to_string()], decode),
+        None => connection.cached_row(query, [id.to_string()], decode),
     }
     .optional()
     .map_err(failed)?;
@@ -893,7 +896,7 @@ fn write_deletion(
         }
     };
     connection
-        .execute(
+        .cached_execute(
             "INSERT INTO deletions (conversation_id, organization, initiator, surface, request,
                                     requested_at_ms, provider_session, provider_session_id,
                                     provider_erasure, erased)
@@ -947,7 +950,7 @@ impl ConversationRepository for LocalConversationStore {
                 .ok_or(ConversationError::AgentUnsupported)?;
             let revision = next_revision(&transaction, &conversation, true)?;
             transaction
-                .execute(
+                .cached_execute(
                     &format!(
                         "INSERT INTO conversations ({}, creation_revision, change_revision)
                          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10)",
@@ -1015,7 +1018,7 @@ impl ConversationRepository for LocalConversationStore {
                 return Err(ConversationError::ApprovalModeUncertain);
             }
             transaction
-                .execute(
+                .cached_execute(
                     "INSERT INTO mode_requests
                  (conversation_id, request_id, initiator, surface, prior_mode,
                   requested_mode, state, requested_at_ms)
@@ -1055,7 +1058,7 @@ impl ConversationRepository for LocalConversationStore {
         let id = id.clone();
         self.run(move |connection| {
             let found = connection
-                .query_row(
+                .cached_row(
                     "SELECT EXISTS (
                     SELECT 1 FROM mode_requests
                     WHERE conversation_id = ?1 AND state = 'applied'
@@ -1092,7 +1095,7 @@ impl ConversationRepository for LocalConversationStore {
                 return Ok(request);
             }
             transaction
-                .execute(
+                .cached_execute(
                     "UPDATE mode_requests SET application = ?1
                  WHERE conversation_id = ?2 AND request_id = ?3 AND application IS NULL",
                     params![mode_application(application), id.to_string(), request_id],
@@ -1152,7 +1155,7 @@ impl ConversationRepository for LocalConversationStore {
             if state == ConversationModeRequestState::Applied {
                 let revision = next_revision(&transaction, &current, false)?;
                 transaction
-                    .execute(
+                    .cached_execute(
                         "UPDATE conversations SET approval_mode = ?1, change_revision = ?4
                      WHERE id = ?2 AND approval_mode = ?3",
                         params![
@@ -1165,7 +1168,7 @@ impl ConversationRepository for LocalConversationStore {
                     .map_err(failed)?;
             }
             transaction
-                .execute(
+                .cached_execute(
                     "UPDATE mode_requests SET state = ?1
                  WHERE conversation_id = ?2 AND request_id = ?3 AND state = 'pending'",
                     params![mode_request_state(state), id.to_string(), request_id],
@@ -1199,7 +1202,7 @@ impl ConversationRepository for LocalConversationStore {
             if first_deletion {
                 let revision = next_revision(&transaction, &deleted, false)?;
                 transaction
-                    .execute(
+                    .cached_execute(
                         "UPDATE conversations SET change_revision = ?1 WHERE id = ?2",
                         params![revision, id.to_string()],
                     )
@@ -1237,7 +1240,7 @@ impl UnfinishedTurns for LocalConversationStore {
         let id = id.to_string();
         self.run(move |connection| {
             connection
-                .execute(
+                .cached_execute(
                     "INSERT INTO unfinished_turns (conversation_id) VALUES (?1)
                      ON CONFLICT (conversation_id) DO NOTHING",
                     [id],
@@ -1250,7 +1253,7 @@ impl UnfinishedTurns for LocalConversationStore {
         let id = id.to_string();
         self.run(move |connection| {
             connection
-                .execute(
+                .cached_execute(
                     "DELETE FROM unfinished_turns WHERE conversation_id = ?1",
                     [id],
                 )
@@ -1269,7 +1272,7 @@ impl UnfinishedTurns for LocalConversationStore {
             let retry_at_ms =
                 i64::try_from(retry_at_ms).map_err(|_| ConversationError::Metadata)?;
             connection
-                .execute(
+                .cached_execute(
                     "INSERT INTO unfinished_turns (conversation_id, failures, retry_at_ms)
                      VALUES (?1, ?2, ?3)
                      ON CONFLICT (conversation_id) DO UPDATE
@@ -1323,7 +1326,7 @@ impl ConversationSummaries for LocalConversationStore {
         let id = id.clone();
         self.run(move |connection| {
             let stored = connection
-                .query_row(
+                .cached_row(
                     &format!(
                         "SELECT {} FROM summaries WHERE conversation_id = ?1",
                         acquisition::summary("")
@@ -1364,7 +1367,7 @@ impl ConversationSummaries for LocalConversationStore {
             }
             let revision = next_revision(&transaction, &conversation, false)?;
             transaction
-                .execute(
+                .cached_execute(
                     "INSERT INTO summaries (conversation_id, title, preview, updated_at_ms, archived)
                      VALUES (?1, ?2, ?3, ?4, ?5)
                      ON CONFLICT (conversation_id) DO UPDATE SET
@@ -1381,7 +1384,7 @@ impl ConversationSummaries for LocalConversationStore {
                     ],
                 )
                 .map_err(failed)?;
-            transaction.execute(
+            transaction.cached_execute(
                 "UPDATE conversations SET change_revision = ?1 WHERE id = ?2",
                 params![revision, id.to_string()],
             ).map_err(failed)?;
@@ -1399,7 +1402,7 @@ impl ConversationSummaries for LocalConversationStore {
                 .map_err(failed)?;
             let conversation = read(&transaction, &id)?;
             let removed = transaction
-                .execute(
+                .cached_execute(
                     "DELETE FROM summaries WHERE conversation_id = ?1",
                     [id.to_string()],
                 )
@@ -1409,7 +1412,7 @@ impl ConversationSummaries for LocalConversationStore {
             {
                 let revision = next_revision(&transaction, &conversation, false)?;
                 transaction
-                    .execute(
+                    .cached_execute(
                         "UPDATE conversations SET change_revision = ?1 WHERE id = ?2",
                         params![revision, id.to_string()],
                     )
@@ -1665,7 +1668,7 @@ impl ConversationCatalogue for LocalConversationStore {
             admit_catalogue_target(&reader, &organization, &owner)?;
             let transaction = connection.transaction().map_err(failed)?;
             let incarnation: String = transaction
-                .query_row(
+                .cached_row(
                     &format!(
                         "SELECT {} FROM catalogue_identity WHERE id = 1",
                         acquisition::text("incarnation", MAX_ID_BYTES, false)
@@ -1776,7 +1779,7 @@ impl ConversationCatalogue for LocalConversationStore {
             catalogue_incarnation(&transaction, incarnation.as_str())?;
             owner_head(&transaction, &organization, &owner)?;
             let row = transaction
-                .query_row(
+                .cached_row(
                     &format!(
                         "SELECT creation_revision, change_revision,
                         EXISTS (SELECT 1 FROM deletions WHERE conversation_id = ?1),
@@ -1833,7 +1836,7 @@ impl ConversationCatalogue for LocalConversationStore {
                 None
             } else {
                 let stored = transaction
-                    .query_row(
+                    .cached_row(
                         &format!(
                             "SELECT {} FROM summaries WHERE conversation_id = ?1",
                             acquisition::summary("")

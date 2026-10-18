@@ -104,6 +104,12 @@ fn catalogue() -> &'static [Limit] {
             meaning: "an upload past the gateway's admission is refused",
         },
         Limit {
+            id: "server.live_conversations",
+            tier: "configured",
+            owner: "config.json limits.liveConversations",
+            meaning: "opening a conversation past this many open at once, each with its agent running, is refused capacity",
+        },
+        Limit {
             id: "socket.ordinary_slots",
             tier: "configured",
             owner: "config.json limits.ordinarySlots",
@@ -550,6 +556,10 @@ pub(crate) fn effective_json(
     put("server.record_reads", count(limits.record_reads()));
     put("server.deletions", count(limits.deletions()));
     put("server.upload_begins", count(limits.upload_begins()));
+    put(
+        "server.live_conversations",
+        count(limits.live_conversations()),
+    );
     put("socket.ordinary_slots", count(limits.ordinary_slots()));
     put("socket.control_slots", count(limits.control_slots()));
     put("socket.record_slot", count(RECORD_SLOT));

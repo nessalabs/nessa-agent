@@ -103,7 +103,7 @@ use std::{
     panic::AssertUnwindSafe,
     pin::Pin,
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc, OnceLock, Weak,
     },
     time::Duration,
@@ -161,7 +161,40 @@ pub struct ConversationDeletionBudgets {
 /// cannot finish — its agent will not answer, its history is damaged — is
 /// reported and left for the next start rather than retried forever.
 const DELETION_ATTEMPTS: u32 = 3;
+/// Most owners retirement starts stopping at once. Each stop's own writes take
+/// a few milliseconds of the record store's one writer, so this many keep it
+/// busy without leaving a stop waiting behind thousands of others' writes for
+/// longer than its budget (`retirement_stops_a_bounded_number_of_owners_at_once`).
+const RETIRING_AT_ONCE: usize = 64;
+/// How long a stop keeps its place among [`RETIRING_AT_ONCE`]. One still
+/// running after this is waiting on its agent, not the store, so it gives its
+/// place to the next owner and carries on within its own budget: a crowd of
+/// agents that will not stop cannot hold every other owner's stop back
+/// (`agents_that_will_not_stop_do_not_hold_back_the_other_stops`).
+const RETIRING_PLACE_HELD: Duration = Duration::from_secs(1);
 const DELETION_RETRY_DELAY: Duration = Duration::from_secs(1);
+
+/// One creation's place among the live conversations, held from its capacity
+/// check until its slot is in the map (`Inner::creating`).
+struct CreationPlace<'a>(&'a AtomicUsize);
+
+impl<'a> CreationPlace<'a> {
+    /// Take a place, or refuse when the live conversations and the other
+    /// creations' places fill `max`. Called under the `conversations` lock.
+    fn take(creating: &'a AtomicUsize, live: usize, max: usize) -> Result<Self, ConversationError> {
+        if live + creating.load(Ordering::SeqCst) >= max {
+            return Err(ConversationError::Capacity);
+        }
+        creating.fetch_add(1, Ordering::SeqCst);
+        Ok(Self(creating))
+    }
+}
+
+impl Drop for CreationPlace<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
 
 /// Most agents asked at once, across every delete on this gateway, about their
 /// own record of a session. Each ask may launch an agent process; a delete
@@ -258,6 +291,8 @@ impl ConversationLimits {
         text.len() > self.max_input_bytes
     }
 }
+/// A small service's limits. The gateway does not use these: it passes
+/// `limits.liveConversations` from its configuration.
 impl Default for ConversationLimits {
     fn default() -> Self {
         Self {
@@ -749,7 +784,16 @@ struct Inner {
     access_policy: Arc<dyn ConversationAccessPolicyEvaluator>,
     limits: ConversationLimits,
     conversations: Mutex<HashMap<ConversationId, Arc<Slot>>>,
-    creation: Mutex<()>,
+    /// Places held by creations between their capacity check and their slot:
+    /// a creation writes its metadata and audit in between, so two creations
+    /// of different conversations at the last place must not both pass the
+    /// check and one then be refused after it was saved. Taken only under the
+    /// `conversations` lock, and counted by every capacity check there.
+    creating: AtomicUsize,
+    /// One conversation's create, reopen and deletion decisions, in turn.
+    /// Per conversation, so creating one never waits behind another's
+    /// metadata and audit writes.
+    creation: ConversationLocks,
     retirement: OnceLock<ActionContext>,
     admission: Arc<RwLock<()>>,
     // Counts stop passes, bumped the moment one is decided and before it waits
@@ -1231,7 +1275,8 @@ impl ConversationService {
                 access_policy,
                 limits,
                 conversations: Mutex::new(HashMap::new()),
-                creation: Mutex::new(()),
+                creating: AtomicUsize::new(0),
+                creation: ConversationLocks::default(),
                 retirement: OnceLock::new(),
                 admission: Arc::new(RwLock::new(())),
                 stops: watch::channel(0).0,
@@ -1301,7 +1346,7 @@ impl ConversationService {
         // Serialize create/reopen decisions without holding the live-owner map
         // across repository or audit I/O. Existing ownership is checked before
         // this request can reserve capacity or open a provider.
-        let creation_guard = service.inner.creation.lock().await;
+        let creation_guard = service.inner.creation.lock(&id).await;
         if let Some(record) = load_conversation(service.inner.metadata.as_ref(), &id).await? {
             // A deleted conversation is not created again under its
             // identity, whoever asks; only its owner is told why
@@ -1320,7 +1365,7 @@ impl ConversationService {
                 // finished since the check above leaves no reopen
                 // recorded after its deletion
                 // (`a_reopen_racing_a_delete_is_not_recorded_after_the_deletion`).
-                let _creation = service.inner.creation.lock().await;
+                let _creation = service.inner.creation.lock(&id).await;
                 let current = load_conversation(service.inner.metadata.as_ref(), &id)
                     .await?
                     .ok_or(ConversationError::NotFound)?;
@@ -1397,15 +1442,21 @@ impl ConversationService {
             approval_mode,
         )
         .map_err(|_| ConversationError::InvalidInput)?;
-        {
+        let place = {
             let owners = service.inner.conversations.lock().await;
             if service.inner.retirement.get().is_some() {
                 return Err(ConversationError::Unavailable);
             }
-            if !owners.contains_key(&id) && owners.len() >= service.inner.limits.max_conversations {
-                return Err(ConversationError::Capacity);
+            if owners.contains_key(&id) {
+                None
+            } else {
+                Some(CreationPlace::take(
+                    &service.inner.creating,
+                    owners.len(),
+                    service.inner.limits.max_conversations,
+                )?)
             }
-        }
+        };
         // Where it runs is recorded before the conversation exists, under the
         // creation lock, so it never exists without knowing; a host the
         // configuration does not name creates nothing.
@@ -1455,10 +1506,17 @@ impl ConversationService {
             if service.inner.retirement.get().is_some() {
                 return Err(ConversationError::Unavailable);
             }
-            if !owners.contains_key(&id) && owners.len() >= service.inner.limits.max_conversations {
+            // This creation's own place, taken above, is the one its slot
+            // fills; without one (its owner was live then and has gone since)
+            // it is checked as any other.
+            if place.is_none()
+                && !owners.contains_key(&id)
+                && owners.len() + service.inner.creating.load(Ordering::SeqCst)
+                    >= service.inner.limits.max_conversations
+            {
                 return Err(ConversationError::Capacity);
             }
-            match owners.entry(id.clone()) {
+            let slot = match owners.entry(id.clone()) {
                 std::collections::hash_map::Entry::Occupied(entry) => entry.get().clone(),
                 std::collections::hash_map::Entry::Vacant(entry) => {
                     let slot = Arc::new(Slot {
@@ -1471,7 +1529,9 @@ impl ConversationService {
                     service.start_slot(id.clone(), slot.clone(), actor.clone());
                     slot
                 }
-            }
+            };
+            drop(place);
+            slot
         };
         drop(creation_guard);
         service.wait_for_slot(&id, slot).await
@@ -1562,7 +1622,9 @@ impl ConversationService {
             } else if !open {
                 return Err(ConversationError::McpApp(McpAppError::Cancelled).into());
             } else {
-                if owners.len() >= self.inner.limits.max_conversations {
+                if owners.len() + self.inner.creating.load(Ordering::SeqCst)
+                    >= self.inner.limits.max_conversations
+                {
                     return Err(ConversationError::Capacity.into());
                 }
                 let slot = Arc::new(Slot {
@@ -4378,7 +4440,7 @@ impl ConversationService {
             }
         }
         let record = {
-            let _creation = self.inner.creation.lock().await;
+            let _creation = self.inner.creation.lock(id).await;
             self.inner
                 .metadata
                 .record_deletion(id, proposed.clone())
@@ -5264,43 +5326,71 @@ impl ConversationService {
             .map(|(id, slot)| (id.clone(), slot.clone()))
             .collect();
         // Give every owner its own bounded attempt. A stalled opening or provider
-        // cannot consume another owner's cleanup opportunity.
-        let attempts = slots.into_iter().map(|(id, slot)| async move {
-            let stopped = match submissions {
-                Submissions::Drained => {
-                    self.stop_slot(
-                        &id,
-                        slot,
-                        StopBy {
-                            actor,
-                            ended_by: &McpAppInitiator::System,
-                            cause: LeaseEndCause::Stopped,
-                            // The gateway is going away, not the work: what
-                            // its agents were doing is resumed at the next
-                            // start (`resume_unfinished`).
-                            end: AgentEnd::Suspend,
-                        },
-                    )
-                    .await
-                }
+        // cannot consume another owner's cleanup opportunity, and neither can
+        // a crowd: every stop saves its end through the one record store, so
+        // thousands started at once all share it and all run out of budget
+        // together. At most `RETIRING_AT_ONCE` start at a time, an owner's
+        // budget starts when its stop does, and a stop still running after
+        // `RETIRING_PLACE_HELD` gives its place to the next.
+        let places = tokio::sync::Semaphore::new(RETIRING_AT_ONCE);
+        let places = &places;
+        let attempts = slots.into_iter().map(|(id, slot)| {
+            // Not held while this owner waits for a place, or through the
+            // wait for submissions: an agent that a command ahead of this
+            // stop lets go of must not keep its history leased here, or the
+            // conversation opened again after it answers `Busy`
+            // (`a_desktop_stop_stops_the_owner_live_when_it_takes_the_lock`).
+            let slot = match submissions {
+                Submissions::Drained => Some(slot),
                 Submissions::Admitted => {
-                    // Not held through the wait: an agent that a command ahead
-                    // of this stop lets go of must not keep its history leased
-                    // here, or the conversation opened again after it answers
-                    // `Busy` (`a_desktop_stop_stops_the_owner_live_when_it_takes_the_lock`).
                     drop(slot);
-                    self.stop_after_submissions(&id, actor).await
+                    None
                 }
             };
-            // Retirement reports every stop as the agent's error: over its
-            // budget is a deadline there.
-            stopped.err().map(|stop| {
-                let error = match stop {
-                    StopFailure::OverBudget => AgentError::Deadline,
-                    StopFailure::Failed(error) => error,
+            async move {
+                let place = places
+                    .acquire()
+                    .await
+                    .expect("retirement's places are never closed");
+                let stop = async {
+                    match slot {
+                        Some(slot) => {
+                            self.stop_slot(
+                                &id,
+                                slot,
+                                StopBy {
+                                    actor,
+                                    ended_by: &McpAppInitiator::System,
+                                    cause: LeaseEndCause::Stopped,
+                                    // The gateway is going away, not the work:
+                                    // what its agents were doing is resumed at
+                                    // the next start (`resume_unfinished`).
+                                    end: AgentEnd::Suspend,
+                                },
+                            )
+                            .await
+                        }
+                        None => self.stop_after_submissions(&id, actor).await,
+                    }
                 };
-                (id.to_string(), error)
-            })
+                tokio::pin!(stop);
+                let stopped = tokio::select! {
+                    stopped = &mut stop => stopped,
+                    () = tokio::time::sleep(RETIRING_PLACE_HELD) => {
+                        drop(place);
+                        stop.await
+                    }
+                };
+                // Retirement reports every stop as the agent's error: over its
+                // budget is a deadline there.
+                stopped.err().map(|stop| {
+                    let error = match stop {
+                        StopFailure::OverBudget => AgentError::Deadline,
+                        StopFailure::Failed(error) => error,
+                    };
+                    (id.to_string(), error)
+                })
+            }
         });
         let failures: Vec<_> = join_all(attempts).await.into_iter().flatten().collect();
         if failures.is_empty() {

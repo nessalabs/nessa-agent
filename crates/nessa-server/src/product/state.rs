@@ -277,7 +277,7 @@ impl ProductRouteState {
         audience: AudienceId,
         dependencies: ProductDependencies,
     ) -> Self {
-        let limits = OperationalLimits::default();
+        let limits = OperationalLimits::small();
         Self {
             browser_sessions: None,
             browser_session_id: None,

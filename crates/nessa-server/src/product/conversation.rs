@@ -43,7 +43,7 @@ use nessa_protocol::product::generated::{
 };
 use nessa_protocol::product::passive_read::decimal_u64;
 use nessa_protocol::product_contract::generated::ConversationErrorCode;
-use nessa_protocol::protocol::{OutgoingMessage, RequestFrame};
+use nessa_protocol::protocol::{OutgoingMessage, RequestFrame, MAX_PAYLOAD_BYTES};
 use nessa_protocol::{
     agents::AgentId,
     conversation::domain::{ConversationApprovalMode, ConversationId},
@@ -201,7 +201,7 @@ pub(crate) async fn dispatch(
                 }
                 let listed =
                     read_list(state, service, session, archived.unwrap_or(false), &frame.id).await?;
-                Ok(success(&frame.id, &listed))
+                Ok(success(&frame.id, &fitted_list(listed, &frame.id)))
             }
             "conversation.observe" => {
                 let params = params!(ConversationObserveParams);
@@ -1159,6 +1159,43 @@ fn wire_view(
 /// conversation on the machine, because the panel sends it on all of them.
 fn requested_agent(value: Option<&str>) -> Option<RequestedAgent> {
     value.map(|name| AgentId::parse(name).map_or(RequestedAgent::Unknown, RequestedAgent::Known))
+}
+
+/// The list cut, newest first, to what fits one response frame, and marked
+/// incomplete when anything was cut: the caller walks `conversation.observe`
+/// for the rest, as for any incomplete list. Five hundred rows are more than
+/// one frame holds, and a response past the frame closes the socket, so an
+/// uncut list of a few hundred conversations would take the caller's socket
+/// with it (`a_list_longer_than_a_frame_is_cut_and_says_so`). A list
+/// subscription's frame is cut the same way (`subscription::target::fitted`).
+/// Compact JSON is the sum of its parts, so each row is measured once.
+fn fitted_list(mut list: ConversationListResult, request_id: &str) -> ConversationListResult {
+    let empty = ConversationListResult {
+        conversations: Vec::new(),
+        complete: false,
+    };
+    let Ok(empty) = success(request_id, &empty).to_wire_text() else {
+        return list;
+    };
+    let budget = MAX_PAYLOAD_BYTES as usize;
+    let mut size = empty.len();
+    let mut keep = 0;
+    for (index, row) in list.conversations.iter().enumerate() {
+        let Ok(row) = serde_json::to_string(row) else {
+            break;
+        };
+        // A comma before every row but the first.
+        size += row.len() + usize::from(index > 0);
+        if size > budget {
+            break;
+        }
+        keep += 1;
+    }
+    if keep < list.conversations.len() {
+        list.conversations.truncate(keep);
+        list.complete = false;
+    }
+    list
 }
 
 /// A list as the wire carries it, saying whether the bound left any out
