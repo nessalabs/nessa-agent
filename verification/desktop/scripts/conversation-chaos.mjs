@@ -498,10 +498,12 @@ async function settle(run) {
             .catch((error) => log(`settle: stop ${id}: ${explain(error)}`))
         }
       }
-      // A review answered lets its turn ask the next one: read it again now.
-      if (view.permissions.length) continue
+      // A review answered lets its turn ask the next one, and a view read
+      // short of the end goes on from where it stopped: read it again now.
+      // Read later, other conversations' reads let its agent go past the cap
+      // on live agents, and opening it again writes past where it stopped.
+      if (view.permissions.length || !whole(view)) continue
       return !(
-        !whole(view) ||
         running.length ||
         view.pending.length ||
         view.questions.length ||
