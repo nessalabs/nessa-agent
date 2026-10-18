@@ -882,7 +882,7 @@ impl Agent {
         // Captured with the permit. Close detaches the attachment before it
         // takes this scheduler lock, so a later read would name the binding
         // preset for a generation that was admitted under the live one.
-        let approval_mode = self.approval_mode_at(work.live_generation());
+        let approval_mode = self.approval_mode_on(work.footing());
         submitter.admits(approval_mode)?;
         scheduler
             .queue
@@ -1548,11 +1548,11 @@ impl Agent {
         }
         let close_notice = self.inner.lifecycle.close_notice();
         *work_owner = Some(self.inner.lifecycle.accept_waiting_work()?);
-        let approval_mode = self.approval_mode_at(
+        let approval_mode = self.approval_mode_on(
             work_owner
                 .as_ref()
                 .expect("admitted steering owner")
-                .live_generation(),
+                .footing(),
         );
         submitter.admits(approval_mode)?;
         scheduler

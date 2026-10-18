@@ -9,7 +9,7 @@ use super::{
         AttachmentAttemptFailure, AttachmentEvidenceTransition, AttachmentFailureSource,
     },
     audit_observation::AuditObserver,
-    lifecycle::{SessionLifecycle, WorkPermit},
+    lifecycle::{Footing, SessionLifecycle, WorkPermit},
     scheduling::{ActiveInvocation, CloseMode, Scheduler},
 };
 use crate::application::agent_execution::agents::{
@@ -624,32 +624,31 @@ impl Agent {
     /// mode the next attachment will run at. `None` means this provider
     /// makes no claim.
     pub fn approval_mode(&self) -> Option<ApprovalMode> {
-        self.approval_mode_at(self.inner.lifecycle.attached_generation())
+        self.approval_mode_on(self.inner.lifecycle.footing())
     }
-    /// The preset of `generation` when that attachment accepted the work.
-    /// `None` means nothing was attached, so the preset is the one a later
+    /// The preset of what accepted the work ([`Footing`], read with its
+    /// permit). With nothing attached, the preset is the one a later
     /// attachment runs at: the binding's, or the live change an automatic
-    /// recovery keeps. Close can detach the current attachment
-    /// before the admission record is written; the generation captured when
-    /// the work was accepted still names its own preset.
-    pub(super) fn approval_mode_at(&self, generation: Option<u64>) -> Option<ApprovalMode> {
-        let Some(generation) = generation else {
-            // The agent's own recovery keeps the mode in force on the
-            // attachment it lost (`carried_approval_mode`).
-            return self
-                .inner
-                .lifecycle
-                .recovering()
-                .and_then(|recovery| {
-                    let live = *self
-                        .inner
-                        .live_approval_mode
-                        .read()
-                        .expect("approval mode lock");
-                    live.filter(|(generation, _)| recovery.carries(*generation))
-                        .map(|(_, mode)| mode)
-                })
-                .or_else(|| self.inner.provider.approval_mode());
+    /// recovery keeps (`carried_approval_mode`). Close can detach the
+    /// current attachment before the admission record is written; the
+    /// generation captured when the work was accepted still names its own
+    /// preset.
+    pub(super) fn approval_mode_on(&self, footing: Footing) -> Option<ApprovalMode> {
+        let generation = match footing {
+            Footing::Attached(generation) => generation,
+            Footing::Detached(recovery) => {
+                return recovery
+                    .and_then(|recovery| {
+                        let live = *self
+                            .inner
+                            .live_approval_mode
+                            .read()
+                            .expect("approval mode lock");
+                        live.filter(|(generation, _)| recovery.carries(*generation))
+                            .map(|(_, mode)| mode)
+                    })
+                    .or_else(|| self.inner.provider.approval_mode());
+            }
         };
         let live = *self
             .inner
