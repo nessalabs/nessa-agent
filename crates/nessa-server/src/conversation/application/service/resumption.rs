@@ -36,10 +36,11 @@ use nessa_protocol::conversation::domain::{ConversationApprovalMode, Conversatio
 use nessa_sdk::application::agent_execution::{
     agents::{AttachmentPhase, OwedTurn, Resumed},
     permissions::ActionContext,
+    providers::ApprovalMode,
 };
 use nessa_sdk::domain::agent_execution::executions::Initiator;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 /// How long a failure's retry waits: `first` after the first failure in a
@@ -118,7 +119,7 @@ async fn non_default_mode(live: &LiveConversation) -> bool {
 /// Whether `live`'s agent cannot take a turn until it is closed and opened
 /// again: it awaits its close, its attachment failed, or it lost the
 /// conversation's approval mode with its attachment ([`mode_lost`]).
-async fn stuck(live: &LiveConversation) -> bool {
+pub(super) async fn stuck(live: &LiveConversation) -> bool {
     live.agent.awaits_close()
         || matches!(
             live.agent.attachment_status().phase(),
@@ -133,22 +134,26 @@ async fn stuck(live: &LiveConversation) -> bool {
 /// turn, a lost process), the next one opens at the mode the agent was
 /// opened with (`Agent::approval_mode`). A turn must never run so: the
 /// agent is closed and the conversation opened again, at its record's mode.
+///
+/// Asked under the conversation's submission lock, which a mode change holds
+/// until both the agent and the record have it: a diverged mode in any
+/// phase, an attachment the agent recovered at its first mode among them,
+/// is then a lost one.
 pub(super) async fn mode_lost(live: &LiveConversation) -> bool {
-    if !matches!(
-        live.agent.attachment_status().phase(),
-        AttachmentPhase::Absent | AttachmentPhase::Failed(_)
-    ) {
-        return false;
-    }
-    let committed = live
-        .projection
+    committed_mode(live)
+        .await
+        .is_some_and(|mode| live.agent.approval_mode() != Some(mode))
+}
+
+/// The conversation's committed approval mode, as the agent names it.
+pub(super) async fn committed_mode(live: &LiveConversation) -> Option<ApprovalMode> {
+    live.projection
         .lock()
         .await
         .view()
         .selection
         .as_ref()
-        .map(|selection| selection.approval_mode);
-    committed.is_some_and(|mode| live.agent.approval_mode() != Some(provider_approval_mode(mode)))
+        .map(|selection| provider_approval_mode(selection.approval_mode))
 }
 
 /// How many marked conversations the startup sweep opens at once. Each
@@ -309,8 +314,9 @@ impl ConversationService {
         }
         let _ = live.join_attachment_owner().await;
         // An agent that is stuck takes no turn: its retry closes it and
-        // opens a new one (`resume_or_retry`, `after_settle`).
-        if stuck(&live).await
+        // opens a new one (`resume_or_retry`, `after_settle`). Its mode is
+        // asked under the lock below, where no mode change is half done.
+        if live.agent.awaits_close()
             || !matches!(
                 live.agent.attachment_status().phase(),
                 AttachmentPhase::Attached | AttachmentPhase::Absent
@@ -329,6 +335,14 @@ impl ConversationService {
         let Some(live) = waiting.upgrade() else {
             return false;
         };
+        // A close or a stop that held the lock first let this agent go, and
+        // a closed agent's lifecycle opens again for work no one will run:
+        // a turn given to it would hold its history until a restart
+        // (`a_close_while_a_resumed_agent_opens_lets_its_history_go`). The
+        // agent the conversation holds now resumes it, when it opens.
+        if !self.holds_open(id, &live).await || stuck(&live).await {
+            return false;
+        }
         // Its approval mode is not settled: nothing runs until it is, and
         // the next opening resumes it.
         if !matches!(self.inner.metadata.pending_mode_change(id).await, Ok(None)) {
@@ -339,6 +353,14 @@ impl ConversationService {
             return false;
         };
         let non_default_mode = non_default_mode(&live).await;
+        // Its attachment can still fail from here, and a successor admitted
+        // then would run at the mode the agent was opened with: the agent
+        // checks the mode again as it admits each one.
+        let required_mode = match self.inner.metadata.requires_mode_verification(id).await {
+            Ok(verify) if non_default_mode || verify => committed_mode(&live).await,
+            Ok(_) => None,
+            Err(_) => return false,
+        };
         let mut resumed = Vec::new();
         let mut unsettled = false;
         for turn in live.agent.owed_turns().await {
@@ -359,7 +381,11 @@ impl ConversationService {
                     continue;
                 }
             };
-            match live.agent.resume_turn(&turn, actor.clone()).await {
+            match live
+                .agent
+                .resume_turn_at(&turn, actor.clone(), required_mode)
+                .await
+            {
                 Ok(Resumed::Continued(admission)) => resumed.push(admission),
                 Ok(Resumed::ContinuedUnaudited { admission, error }) => {
                     tracing::error!(conversation_id = %id, execution_id = %turn.execution_id().as_str(), %error, "a resumed turn's audit record could not be saved");
@@ -506,6 +532,46 @@ impl ConversationService {
             self.release_for_reopen(id, live).await;
         }
         self.schedule_retry(id, true).await;
+    }
+
+    /// Whether `live`'s agent is settled, or settles within the stop
+    /// budget: a failed turn and the work queued behind it settle on their
+    /// own, and only then can the agent be closed and opened again. Work
+    /// left queued with no attachment to run it, and none opening, waits
+    /// for nothing: the close stops it, and the agent opened next carries it
+    /// on.
+    pub(super) async fn settles(&self, live: &LiveConversation) -> bool {
+        let deadline = Instant::now() + self.inner.deletion_budgets.stop;
+        loop {
+            if live.agent.is_idle().await
+                || (live.agent.active_execution_id().is_none()
+                    && matches!(
+                        live.agent.attachment_status().phase(),
+                        AttachmentPhase::Absent | AttachmentPhase::Failed(_)
+                    ))
+            {
+                return true;
+            }
+            if Instant::now() >= deadline {
+                return false;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
+    /// Whether `live` is the agent `id`'s slot holds now, and nothing is
+    /// stopping it. Asked under the conversation's submission lock, which
+    /// every close and stop takes before it lets an agent go.
+    async fn holds_open(&self, id: &ConversationId, live: &Arc<LiveConversation>) -> bool {
+        self.inner
+            .conversations
+            .lock()
+            .await
+            .get(id)
+            .is_some_and(|slot| {
+                !slot.stopping.load(std::sync::atomic::Ordering::SeqCst)
+                    && matches!(slot.value.get(), Some(Ok(open)) if Arc::ptr_eq(open, live))
+            })
     }
 
     /// Close `live`, an agent that cannot take its retry, and let its slot go

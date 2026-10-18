@@ -2,6 +2,11 @@ name: Conversation stress load
 
 # The conversation stress check at load numbers: many more rounds, background
 # conversations and reviews than the pull request's run in local-auth.yml.
+# Then the conversation chaos check (conversation-chaos.mjs) at many long
+# seeds: random actions from several clients at once, shrunk on a failure:
+#
+#   pnpm test:e2e:chaos -- --seed <seed> --runs 1 --waves <waves> ...
+#   pnpm test:e2e:chaos -- --replay <evidence>/chaos/shrunk-seed-<seed>.json
 # Nightly at the numbers below, or by hand with any of them changed. A failed
 # run prints its plan and seed first; passing the same numbers replays it:
 #
@@ -48,6 +53,12 @@ on:
       threads:
         description: Turns that hand work to another thread and wait for its report.
         default: "6"
+      chaos-runs:
+        description: Chaos check seeds, each on a gateway of its own.
+        default: "8"
+      chaos-waves:
+        description: Waves of random actions in each chaos seed.
+        default: "150"
 
 permissions:
   contents: read
@@ -63,7 +74,7 @@ jobs:
     # Planning bound: a cold gateway build, the browser download, and a check
     # whose length follows its numbers. The step bound below is what a run of
     # the default load numbers must fit.
-    timeout-minutes: 150
+    timeout-minutes: 210
     env:
       STRESS_EVIDENCE: ${{ github.workspace }}-stress-evidence
       # A scheduled run has no inputs; each falls back to the same default
@@ -79,6 +90,15 @@ jobs:
       NESSA_STRESS_LARGE: ${{ inputs.large || '3' }}
       NESSA_STRESS_RESTARTS: ${{ inputs.restarts || '4' }}
       NESSA_STRESS_THREADS: ${{ inputs.threads || '6' }}
+      # The chaos check's numbers; its seed is the stress seed.
+      NESSA_CHAOS_RUNS: ${{ inputs.chaos-runs || '8' }}
+      NESSA_CHAOS_WAVES: ${{ inputs.chaos-waves || '150' }}
+      NESSA_CHAOS_WIDTH: "10"
+      NESSA_CHAOS_CONVERSATIONS: "8"
+      NESSA_CHAOS_CLIENTS: "4"
+      NESSA_CHAOS_FOLLOWERS: "3"
+      NESSA_CHAOS_RESTARTS: "6"
+      NESSA_CHAOS_SHRINK: "20"
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -102,6 +122,7 @@ jobs:
           seed="${SEED:-$(( (RANDOM << 15) | RANDOM ))}"
           echo "Seed $seed"
           echo "NESSA_STRESS_SEED=$seed" >> "$GITHUB_ENV"
+          echo "NESSA_CHAOS_SEED=$seed" >> "$GITHUB_ENV"
       - name: Run the conversation stress check at load
         shell: bash
         run: |
@@ -109,6 +130,14 @@ jobs:
           mkdir -p "$STRESS_EVIDENCE"
           pnpm test:e2e:stress -- --channel bundled --evidence "$STRESS_EVIDENCE" 2>&1 | tee "$STRESS_EVIDENCE/stress.log"
         timeout-minutes: 100
+      - name: Run the conversation chaos check at load
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p "$STRESS_EVIDENCE/chaos"
+          pnpm test:e2e:chaos -- --evidence "$STRESS_EVIDENCE/chaos" 2>&1 | tee "$STRESS_EVIDENCE/chaos/chaos.log"
+        timeout-minutes: 60
       - name: Keep the evidence
         if: always()
         uses: actions/upload-artifact@v4

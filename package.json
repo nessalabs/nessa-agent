@@ -63,6 +63,7 @@
     "desktop:dev": "vite --host 127.0.0.1 --port 1438 --strictPort",
     "test:e2e:scripted": "node verification/desktop/scripts/scripted-e2e.mjs",
     "test:e2e:stress": "node verification/desktop/scripts/conversation-stress.mjs",
+    "test:e2e:chaos": "node verification/desktop/scripts/conversation-chaos.mjs",
     "verify:desktop": "node verification/desktop/scripts/run-all.mjs",
     "verify:desktop:test": "node --test verification/desktop/scripts/lib/*.test.mjs",
     "verify:desktop:smoke": "node verification/desktop/scripts/smoke.mjs",

@@ -21,6 +21,7 @@ export const STRESS = {
   cut: "stress cut",
   fail: "stress fail",
   delegate: "stress delegate",
+  watch: "stress watch",
 }
 
 /**
@@ -43,7 +44,15 @@ export const SAYS = {
   failure: "the stress scenario failed this turn",
   delegated: "Delegated to ",
   report: "Report received.",
+  watched: "Watched: ",
 }
+
+/**
+ * How many reads of one thread a watch turn makes at once: more than one
+ * conversation's agent may have waiting, so some are refused and the rest
+ * wait out their `waitMs`.
+ */
+export const WATCH_CALLS = 12
 
 /** The tool every review asks for: the test server's own, so an allow can run it. */
 const TOOL = "report_rows"
@@ -125,6 +134,36 @@ export function stressScenario({
       {
         when: STRESS.cut,
         steps: [{ do: "text", chunks: [SAYS.pausing] }, { do: "wait-cancel" }],
+      },
+      {
+        when: STRESS.watch,
+        steps: [
+          {
+            do: "tool",
+            server: "nessa-agents",
+            tool: "create_thread",
+            arguments: {},
+            save: "thread",
+          },
+          {
+            do: "tool",
+            server: "nessa-agents",
+            tool: "subscribe",
+            arguments: { threadId: "${thread.threadId}", waitMs: 1500 },
+            save: "watched",
+            times: WATCH_CALLS,
+          },
+          // Once those end, a read is taken again: refusals hold nothing back.
+          {
+            do: "tool",
+            server: "nessa-agents",
+            tool: "subscribe",
+            arguments: { threadId: "${thread.threadId}", replay: true, limit: 10 },
+            save: "again",
+          },
+          { do: "text", chunks: [SAYS.watched + "${watched}"] },
+          { do: "end" },
+        ],
       },
       {
         when: STRESS.fail,

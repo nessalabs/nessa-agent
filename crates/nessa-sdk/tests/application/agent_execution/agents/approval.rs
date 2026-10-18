@@ -474,3 +474,69 @@ async fn a_backend_panic_before_returning_the_approval_future_fences_its_generat
     assert_eq!(agent.approval_mode(), Some(ApprovalMode::Ask));
     agent.close(close_action()).await.unwrap();
 }
+
+/// A host that checked the mode before submitting cannot know the attachment
+/// that held it did not go in between. A turn that asks for a mode is
+/// admitted only where it runs at that mode, and is refused with nothing
+/// saved where it would run at another.
+#[tokio::test]
+async fn a_turn_that_asks_for_a_mode_is_refused_where_it_would_run_at_another() {
+    let Prepared { agent, audit, .. } = prepared().await;
+    agent.set_approval_mode(ApprovalMode::Auto).await.unwrap();
+    let at = |mode| Submitter::owner(close_action()).with_approval_mode(mode);
+    assert_eq!(
+        agent
+            .enqueue(request("refused-attached"), at(ApprovalMode::Ask))
+            .await
+            .err(),
+        Some(AgentError::ApprovalModeChanged)
+    );
+    assert_eq!(
+        agent
+            .enqueue(request("live"), at(ApprovalMode::Auto))
+            .await
+            .unwrap()
+            .wait()
+            .await,
+        Ok(ExecutionOutcome::Completed)
+    );
+
+    // Detached, the next attachment opens at the binding's preset: work that
+    // asks for the live change would run at another mode.
+    agent.close(close_action()).await.unwrap();
+    assert_eq!(
+        agent
+            .enqueue(request("refused-detached"), at(ApprovalMode::Auto))
+            .await
+            .err(),
+        Some(AgentError::ApprovalModeChanged)
+    );
+    assert!(matches!(
+        agent
+            .steer(request("refused-steer"), at(ApprovalMode::Auto))
+            .await
+            .err(),
+        Some(AgentError::ApprovalModeChanged)
+    ));
+    let detached = agent
+        .enqueue(request("detached"), at(ApprovalMode::Ask))
+        .await
+        .unwrap();
+    // Only the admitted turns were recorded or saved.
+    assert_eq!(
+        *audit.0.lock().unwrap(),
+        [Some(ApprovalMode::Auto), Some(ApprovalMode::Ask)]
+    );
+    let saved = agent
+        .session_manager()
+        .snapshot()
+        .await
+        .unwrap()
+        .invocations
+        .iter()
+        .map(|record| record.request.execution_id.as_str().to_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(saved, ["live", "detached"]);
+    drop(detached);
+    agent.close(close_action()).await.unwrap();
+}

@@ -1465,3 +1465,108 @@ async fn a_message_after_a_failed_turn_runs_at_the_mode_chosen_live() {
     );
     service.shutdown().await.unwrap();
 }
+
+/// The same failure, with messages sent while it is still settling: one
+/// queued behind the failing turn, and more sent the moment it fails. None
+/// is refused as `approval_mode_not_applied`, or as closed: each waits for
+/// the failed agent to settle, which closes it and opens the conversation
+/// again at its record's mode, and a message the stopping agent or one at
+/// another mode refused is offered again. Found by the conversation chaos check
+/// (`verification/desktop/scripts/conversation-chaos.mjs`).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn messages_sent_while_a_failed_turn_settles_are_not_refused_for_the_mode() {
+    use nessa_sdk::application::agent_execution::providers::{
+        ExecutionReport, ObservationFailure, ObservationFailureCause, ProviderExecutionReply,
+        ProviderSessionState,
+    };
+    let (service, provider, _repository, _, _) = mode_fixture();
+    let id = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
+    service
+        .create(id.clone(), caller(), RequestedConversation::default())
+        .await
+        .unwrap();
+    // Changed live, so a new attachment would open at the agent's first mode.
+    // The agent opening the conversation may still be busy for a moment.
+    let changed = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            match service
+                .set_approval_mode(id.clone(), caller(), ConversationApprovalMode::Full)
+                .await
+            {
+                Err(ConversationError::TurnRunning) => {
+                    tokio::time::sleep(Duration::from_millis(10)).await
+                }
+                other => break other,
+            }
+        }
+    })
+    .await
+    .expect("the opening agent settles");
+    changed.unwrap();
+    let failure = AgentError::Protocol("the provider refused the prompt".into());
+    *provider.execution_reply.lock().unwrap() =
+        Some(ProviderExecutionReply::Finished(ExecutionReport::new(
+            Some(Err(failure.clone())),
+            None,
+            ProviderSessionState::CleanupRequired,
+        )));
+    *provider.execution_observation_failure.lock().unwrap() = Some(ObservationFailure::new(
+        failure,
+        ObservationFailureCause::ExecutionFailed,
+    ));
+    let (release, gate) = oneshot::channel();
+    *provider.execution_gate.lock().unwrap() = Some(gate);
+    let message = |text: &str| SubmittedMessage {
+        text: text.into(),
+        ..SubmittedMessage::default()
+    };
+    service
+        .submit(
+            id.clone(),
+            caller(),
+            "fails".into(),
+            message("This one fails"),
+            SubmissionMode::Queue,
+        )
+        .await
+        .unwrap();
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        provider.execution_started.notified(),
+    )
+    .await
+    .expect("the failing turn reaches the provider");
+    service
+        .submit(
+            id.clone(),
+            caller(),
+            "behind".into(),
+            message("Queued behind it"),
+            SubmissionMode::Queue,
+        )
+        .await
+        .unwrap();
+    release.send(()).unwrap();
+    for n in 0..20 {
+        let sent = service
+            .submit(
+                id.clone(),
+                caller(),
+                format!("after-{n}"),
+                message("And now?"),
+                SubmissionMode::Queue,
+            )
+            .await;
+        // Nor for the agent stopping after its failed turn: the message
+        // waits for it to recover, or for the conversation to open again.
+        assert!(
+            !matches!(
+                sent,
+                Err(ConversationError::ApprovalModeNotApplied
+                    | ConversationError::Agent(AgentError::Closed))
+            ),
+            "message {n} was refused: {sent:?}"
+        );
+    }
+    service.shutdown().await.unwrap();
+}

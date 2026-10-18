@@ -883,6 +883,7 @@ impl Agent {
         // takes this scheduler lock, so a later read would name the binding
         // preset for a generation that was admitted under the live one.
         let approval_mode = self.approval_mode_at(work.live_generation());
+        submitter.admits(approval_mode)?;
         scheduler
             .queue
             .validate_enqueue(&input.execution_id)
@@ -1553,6 +1554,7 @@ impl Agent {
                 .expect("admitted steering owner")
                 .live_generation(),
         );
+        submitter.admits(approval_mode)?;
         scheduler
             .queue
             .validate_enqueue(&input.execution_id)
