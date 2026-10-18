@@ -1,0 +1,45 @@
+name: Native refusal 997 focused diagnostic
+on:
+  push:
+    branches: [codex/997-native-diagnostic-20261018]
+permissions:
+  contents: read
+jobs:
+  compare:
+    name: Collect Windows synthetic evidence, not acceptance
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      CARGO_BUILD_JOBS: 2
+      CARGO_INCREMENTAL: 0
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /*
+            !/docs/reviews/evidence/desktop-host-ownership-943/
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: local-auth
+          save-if: false
+      - name: Preserve private diagnostic driver outside disposable source checkouts
+        shell: pwsh
+        run: |
+          $probe = Join-Path $env:RUNNER_TEMP native997-driver
+          New-Item -ItemType Directory -Force $probe | Out-Null
+          Copy-Item verification/ci/native-refusal-997/*.py $probe
+      - name: Compare exact main and candidate, original assertion retained
+        shell: pwsh
+        run: python "$env:RUNNER_TEMP/native997-driver/run.py"
+      - name: Retain complete focused synthetic evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native997-windows-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/native997-evidence
+          if-no-files-found: error
+          retention-days: 7
