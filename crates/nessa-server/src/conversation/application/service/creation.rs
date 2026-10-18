@@ -33,8 +33,27 @@ impl ConversationService {
     ) -> Result<CreationReceipt, CreationFailure<ConversationError>> {
         let binding = binding(&id, &caller, &requested).map_err(CreationFailure::Target)?;
         // Held until readiness is saved, by the task below when it runs, so
-        // the next request for this conversation finds it created.
-        let creation = self.inner.creations.lock(&id).await;
+        // the next request for this conversation finds it created. Only
+        // another request waits for it: this same request, still running,
+        // is answered `Busy` by its own command history, never queued
+        // behind itself.
+        let creation = match self.inner.creations.try_lock(&id) {
+            Some(creation) => creation,
+            None => {
+                let actor = binding.actor();
+                drop(
+                    storage
+                        .open_creation(
+                            actor.principal_id().into(),
+                            actor.request_id().into(),
+                            false,
+                        )
+                        .await
+                        .map_err(CreationFailure::Storage)?,
+                );
+                self.inner.creations.lock(&id).await
+            }
+        };
         if let Some(reopened) = self
             .reopen_owned(storage.clone(), &id, &caller, &requested, &binding)
             .await?
