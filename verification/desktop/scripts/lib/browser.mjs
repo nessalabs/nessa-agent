@@ -157,10 +157,10 @@ export async function openPage(browser, o) {
     )
   }
   const lines = watchLines()
-  page.on("pageerror", (error) => {
+  const onPageError = (error) => {
     lines.keep(`pageerror: ${error.message.split("\n")[0]}`, false)
-  })
-  page.on("console", (message) => {
+  }
+  const onConsole = (message) => {
     if (message.type() !== "error") return
     const text = message.text()
     const url = message.location()?.url ?? ""
@@ -169,10 +169,12 @@ export async function openPage(browser, o) {
       entry,
       harmlessConsole.some((h) => h.text.test(text) && h.url.test(url)),
     )
-  })
+  }
+  page.on("pageerror", onPageError)
+  page.on("console", onConsole)
   const sizeReports = []
   const deferredResources = new Set()
-  page.on("requestfailed", (request) => {
+  const onRequestFailed = (request) => {
     const pageUrl = page.url()
     // Hold endpoint Requests before any string, pattern or size exemption,
     // including when their browser observer report has not arrived yet.
@@ -204,7 +206,8 @@ export async function openPage(browser, o) {
         }),
       ),
     )
-  })
+  }
+  page.on("requestfailed", onRequestFailed)
   let finalizing
   const settleBeforeClose = () => {
     if (finalizing) return finalizing
@@ -215,26 +218,41 @@ export async function openPage(browser, o) {
       if (!resource) return
       const summary = resource.collector.summary()
       if (!summary.cutoff) resource.collector.invalidate()
-      for (const request of deferredResources)
-        classifyResourceFailure(request, resource.collector, lines)
-      deferredResources.clear()
-      const final = resource.collector.summary()
-      if (!final.cutoff || final.failed || final.verified === 0)
-        lines.errors.push(
-          "resource-read evidence: no complete verified live read at the acknowledged cutoff",
-        )
-      else
-        lines.harmless.push(
-          `resource-read evidence: ${final.verified} verified consumed live read(s); three factory decorators active`,
-        )
-      resource.collector.dispose()
     })()
     return finalizing
+  }
+  let collectionFinished = false
+  // The line owner calls this synchronously immediately before its final drain.
+  // Binding ACKs do not flush the independent network event channel (#996 R1).
+  const finishLineCollection = () => {
+    if (collectionFinished) return
+    collectionFinished = true
+    page.off?.("pageerror", onPageError)
+    page.off?.("console", onConsole)
+    page.off?.("requestfailed", onRequestFailed)
+    if (!resource) return
+    for (const request of deferredResources)
+      classifyResourceFailure(request, resource.collector, lines)
+    deferredResources.clear()
+    const final = resource.collector.summary()
+    if (!final.cutoff || final.failed || final.verified === 0)
+      lines.errors.push(
+        "resource-read evidence: no complete verified live read at the acknowledged cutoff",
+      )
+    else
+      lines.harmless.push(
+        `resource-read evidence: ${final.verified} verified consumed live read(s); three factory decorators active`,
+      )
+    resource.collector.dispose()
+  }
+  const closeLines = async () => {
+    await settleBeforeClose()
+    finishLineCollection()
   }
   const abandon = async (message, includeErrors) => {
     // A size report can still move a full-body abort before the lines are
     // reported. Closing first would drop that report.
-    await settleBeforeClose()
+    await closeLines()
     await withCleanup(
       async () => {
         if (reporterBound()) {
@@ -281,10 +299,10 @@ export async function openPage(browser, o) {
     noteHarmless: (pattern) => lines.noteHarmless(pattern),
     reclassifyHeld: (keep, asHarmless) => lines.reclassifyHeld(keep, asHarmless),
     settleBeforeClose,
-    close: () => (retiring ??= withCleanup(settleBeforeClose, () => context.close())),
+    close: () => (retiring ??= withCleanup(closeLines, () => context.close())),
     settleRequests: () => settleSizeReports(sizeReports),
   }
-  attachLines(opened, lineBase, lines)
+  attachLines(opened, lineBase, lines, finishLineCollection)
   return opened
 }
 

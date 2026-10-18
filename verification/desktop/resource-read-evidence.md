@@ -36,7 +36,8 @@ reach the successful client method unchanged.
 | event / Request binding arrives in either order | join exactly once by private single-use identity; ambiguous candidates fail |
 | failed request before or after eligibility | retain its exact Request and line until final page reporting |
 | eligibility revoked before reporting | final line is an error, including cancellation after live |
-| page close before context teardown | settle existing bounded reports, classify retained requests once, then original close/report ownership |
+| observer cutoff acknowledged | observer messages are ordered; independent network notifications remain collected |
+| final report owner, before context teardown | synchronously stop collection, classify retained Requests, then drain lines with no intervening await |
 
 The new exception requires the same Request, HTTP200, exact `/mcp-resources`,
 `net::ERR_ABORTED`, complete consumed bytes/EOF, verified length/digest and the
@@ -49,6 +50,14 @@ The request-specific lines are deferred until close rather than drained into an
 earlier result that could not be revoked. Other page lines retain their current
 step attribution. Measurement ends before the context's own disposal; it is not
 an assertion that a successful app can never subsequently close.
+
+The observer acknowledgement does not flush Playwright's independent network
+event channel. `page-lines.mjs` invokes the final synchronous collection cutoff
+immediately before taking its arrays: browser listeners stop, every candidate
+received so far is classified against the still-retained collector, and only
+then is evidence disposed. `settleBeforeClose` alone does not classify or release
+Requests. Opening abandonment and reporter-absent close use that same cutoff.
+The late-notification regression in `page-lines.test.mjs` holds this handoff.
 
 Tests cover each ordering, duplicate URLs/requests, missing/forged proof,
 metadata limits, corruption, truncation, caller/deadline/reader cancellation,

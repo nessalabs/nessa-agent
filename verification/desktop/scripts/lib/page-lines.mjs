@@ -108,8 +108,9 @@ export function reportDetached(base, errors, harmless) {
  * @param {{ close(): Promise<unknown>, settleBeforeClose?: () => Promise<unknown> }} opened
  * @param {object} base
  * @param {ReturnType<typeof watchLines>} lines
+ * @param {() => void} [finishCollection] final synchronous cutoff before draining
  */
-export function attachLines(opened, base, lines) {
+export function attachLines(opened, base, lines, finishCollection) {
   if (!reporter) return
   const entry = { lines, base }
   currentPage.enterWith(entry)
@@ -120,6 +121,7 @@ export function attachLines(opened, base, lines) {
     closed = true
     try {
       await opened.settleBeforeClose?.()
+      finishCollection?.()
       // The barrier can deliver ordinary page lines too. Drain after it.
       const errors = lines.errors.splice(0, lines.errors.length)
       const harmless = lines.harmless.splice(0, lines.harmless.length)
