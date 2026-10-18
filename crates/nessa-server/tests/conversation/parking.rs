@@ -14,8 +14,14 @@ use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_protocol::conversation::view::{
     ConversationLeaseCause, ConversationLeaseState, ConversationMessageStatus,
 };
+use nessa_sdk::application::agent_execution::sessions::{
+    CommittedSession, SessionChange, SessionLoad, SessionSaveGeneration, SessionSaveReceipt,
+    SessionSaveUnit, SessionSnapshot, SessionStorage, SessionStorageLease, StorageFuture,
+};
+use nessa_sdk::domain::agent_execution::{executions::ExecutionOutcome, sessions::SessionId};
 use nessa_sdk::infrastructure::session_storage::InMemoryStorage;
 use std::sync::atomic::AtomicU64;
+use std::sync::Mutex as StdMutex;
 use std::time::Duration;
 use tokio::sync::oneshot;
 
@@ -44,12 +50,109 @@ impl nessa_auth::application::ports::Clock for ManualClock {
     }
 }
 
+struct HeldSave {
+    entered: oneshot::Sender<()>,
+    release: oneshot::Receiver<()>,
+}
+
+/// Publish the first completed result, retaining the SDK's save acknowledgement.
+struct CompletionSaveGate {
+    held: StdMutex<Option<HeldSave>>,
+    idle_waiting: StdMutex<Option<oneshot::Sender<()>>>,
+}
+
+struct HeldCompletionStorage {
+    inner: Arc<InMemoryStorage>,
+    gate: Arc<CompletionSaveGate>,
+}
+
+impl SessionStorage for HeldCompletionStorage {
+    fn read_committed(&self, id: SessionId) -> StorageFuture<'_, Option<CommittedSession>> {
+        self.inner.read_committed(id)
+    }
+
+    fn open(&self, id: SessionId) -> StorageFuture<'_, Box<dyn SessionStorageLease>> {
+        Box::pin(async move {
+            let lease: Box<dyn SessionStorageLease> = Box::new(HeldCompletionLease {
+                inner: self.inner.open(id).await?,
+                gate: self.gate.clone(),
+            });
+            Ok(lease)
+        })
+    }
+
+    fn open_existing(
+        &self,
+        id: SessionId,
+    ) -> StorageFuture<'_, Option<Box<dyn SessionStorageLease>>> {
+        Box::pin(async move {
+            let Some(inner) = self.inner.open_existing(id).await? else {
+                return Ok(None);
+            };
+            let lease: Box<dyn SessionStorageLease> = Box::new(HeldCompletionLease {
+                inner,
+                gate: self.gate.clone(),
+            });
+            Ok(Some(lease))
+        })
+    }
+}
+
+struct HeldCompletionLease {
+    inner: Box<dyn SessionStorageLease>,
+    gate: Arc<CompletionSaveGate>,
+}
+
+impl SessionStorageLease for HeldCompletionLease {
+    fn load(&self) -> StorageFuture<'_, SessionLoad> {
+        self.inner.load()
+    }
+
+    fn save_changes(
+        &self,
+        binding: SessionSaveGeneration,
+        snapshot: SessionSnapshot,
+        units: Vec<SessionSaveUnit>,
+    ) -> StorageFuture<'_, SessionSaveReceipt> {
+        Box::pin(async move {
+            let completed = units.iter().any(|unit| {
+                unit.changes().iter().any(|change| {
+                    matches!(
+                        change,
+                        SessionChange::LocalSettlement {
+                            after: Ok(ExecutionOutcome::Completed),
+                            ..
+                        }
+                    )
+                })
+            });
+            let receipt = self.inner.save_changes(binding, snapshot, units).await?;
+            if completed {
+                let held = self.gate.held.lock().unwrap().take();
+                if let Some(HeldSave { entered, release }) = held {
+                    entered
+                        .send(())
+                        .expect("the test observes the committed result");
+                    // Dropping the test's sender also releases this synthetic save.
+                    let _ = release.await;
+                }
+            }
+            Ok(receipt)
+        })
+    }
+
+    fn erase(&self) -> StorageFuture<'_, ()> {
+        self.inner.erase()
+    }
+}
+
 struct Fixture {
     service: ConversationService,
     provider: Arc<ProviderFactory>,
     storage: Arc<InMemoryStorage>,
     clock: Arc<ManualClock>,
     id: ConversationId,
+    save_gate: Option<Arc<CompletionSaveGate>>,
 }
 
 impl Fixture {
@@ -79,6 +182,15 @@ impl Fixture {
     }
 
     async fn build(park_after: Option<Duration>, images: bool, live: usize) -> Self {
+        Self::build_with_save_gate(park_after, images, live, None).await
+    }
+
+    async fn build_with_save_gate(
+        park_after: Option<Duration>,
+        images: bool,
+        live: usize,
+        save_gate: Option<Arc<CompletionSaveGate>>,
+    ) -> Self {
         let provider = Arc::new(ProviderFactory::default());
         provider.session_resume.store(true, Ordering::SeqCst);
         provider.image_input.store(images, Ordering::SeqCst);
@@ -86,12 +198,19 @@ impl Fixture {
         let repository = Arc::new(MemoryRepository::default());
         let summaries = Arc::new(MemorySummaries::default());
         let storage = Arc::new(InMemoryStorage::new());
+        let backend: Arc<dyn SessionStorage> = match &save_gate {
+            Some(gate) => Arc::new(HeldCompletionStorage {
+                inner: storage.clone(),
+                gate: gate.clone(),
+            }),
+            None => storage.clone(),
+        };
         let clock = Arc::new(ManualClock(AtomicU64::new(1_700_000_000_000)));
         let service = ConversationService::new(
             ConversationDependencies {
                 access_policy: access_policy(),
                 agents: only(Arc::new(Provider::new(provider.clone()))),
-                storage: storage.clone(),
+                storage: backend,
                 metadata: repository.clone(),
                 mode_audit: Arc::new(crate::conversation_test_support::AcceptingModeAudit),
                 creation_audit: Arc::new(AcceptingCreationAudit),
@@ -134,6 +253,7 @@ impl Fixture {
             storage,
             clock,
             id,
+            save_gate,
         };
         fixture.attached().await;
         fixture
@@ -235,8 +355,10 @@ impl Fixture {
             .unwrap();
         assert!(sent.is_ok(), "{action} is admitted: {sent:?}");
         self.completed(action).await;
+        self.wait_until_idle().await;
     }
 
+    /// Observe the committed view, independently of SDK settlement.
     async fn completed(&self, action: &str) {
         tokio::time::timeout(BOUND, async {
             loop {
@@ -256,6 +378,23 @@ impl Fixture {
         })
         .await
         .unwrap_or_else(|_| panic!("{action} completes"));
+    }
+
+    async fn wait_until_idle(&self) {
+        let slot = self.slot().await.expect("a live conversation");
+        let live = self.service.wait_for_slot(&self.id, slot).await.unwrap();
+        tokio::time::timeout(BOUND, async {
+            while !live.agent.is_idle().await {
+                if let Some(gate) = &self.save_gate {
+                    if let Some(waiting) = gate.idle_waiting.lock().unwrap().take() {
+                        waiting.send(()).expect("the test observes the idle wait");
+                    }
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the SDK retires the completed turn");
     }
 
     /// The committed lease's state and cause.
@@ -359,6 +498,7 @@ async fn a_running_turn_is_not_parked() {
     release.send(()).unwrap();
     sent.await.unwrap().unwrap();
     fixture.completed("long").await;
+    fixture.wait_until_idle().await;
     assert!(fixture.slot().await.is_some());
     fixture.wait(LIMIT * 2);
     assert_eq!(fixture.service.park_idle(LIMIT).await, 1);
@@ -431,6 +571,99 @@ async fn a_message_after_parking_resumes_the_provider_session() {
     fixture.turn("after").await;
     fixture.resumed_the_first_session();
     fixture.service.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_completed_view_does_not_finish_a_turn_before_sdk_settlement() {
+    let (entered, mut committed) = oneshot::channel();
+    let (release, released) = oneshot::channel();
+    let (waiting, mut idle_waiting) = oneshot::channel();
+    let gate = Arc::new(CompletionSaveGate {
+        held: StdMutex::new(Some(HeldSave {
+            entered,
+            release: released,
+        })),
+        idle_waiting: StdMutex::new(Some(waiting)),
+    });
+    let fixture = Fixture::build_with_save_gate(
+        Some(LIMIT),
+        false,
+        ConversationLimits::default().max_conversations,
+        Some(gate),
+    )
+    .await;
+    let first = fixture.turn("first");
+    tokio::pin!(first);
+    let mut returned_early = false;
+    tokio::time::timeout(BOUND, async {
+        tokio::select! {
+            biased;
+            observed = &mut committed => observed.unwrap(),
+            () = &mut first => {
+                returned_early = true;
+                committed.await.unwrap();
+            }
+        }
+    })
+    .await
+    .expect("the first completed result is committed");
+    if !returned_early {
+        tokio::time::timeout(BOUND, async {
+            tokio::select! {
+                () = fixture.completed("first") => {},
+                () = &mut first => returned_early = true,
+            }
+        })
+        .await
+        .expect("the committed completed view is readable");
+    }
+    fixture.completed("first").await;
+    if !returned_early {
+        tokio::time::timeout(BOUND, async {
+            tokio::select! {
+                observed = &mut idle_waiting => observed.unwrap(),
+                () = &mut first => returned_early = true,
+            }
+        })
+        .await
+        .expect("the fixture observes SDK settlement separately");
+    }
+    let slot = fixture.slot().await.unwrap();
+    let live = fixture
+        .service
+        .wait_for_slot(&fixture.id, slot)
+        .await
+        .unwrap();
+    assert!(
+        !live.agent.is_idle().await,
+        "the save acknowledgement is held"
+    );
+    let before = fixture.clock.now();
+    fixture.wait(LIMIT * 2);
+    assert_eq!(fixture.service.park_idle(LIMIT).await, 0, "still SDK-owned");
+    assert!(
+        fixture.touched_now().await,
+        "the busy sweep restarts idle time"
+    );
+    release.send(()).unwrap();
+    if !returned_early {
+        tokio::time::timeout(BOUND, &mut first)
+            .await
+            .expect("the fixture finishes once SDK settlement retires");
+    }
+    fixture.wait_until_idle().await;
+    assert!(live.agent.is_idle().await);
+    assert_eq!(fixture.clock.now(), before + (LIMIT * 2).as_millis() as u64);
+    drop(live);
+    fixture.wait(LIMIT * 2);
+    assert_eq!(fixture.service.park_idle(LIMIT).await, 1);
+    fixture.turn("after").await;
+    fixture.resumed_the_first_session();
+    fixture.service.shutdown().await.unwrap();
+    assert!(
+        !returned_early,
+        "completed view returned before SDK settlement"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
