@@ -597,16 +597,6 @@ impl SubscriptionFixture {
             binding = writer
                 .save_changes(
                     binding,
-                    SessionSnapshot {
-                        id: session.clone(),
-                        provider: provider.clone(),
-                        provider_context: context.clone(),
-                        invocations: Vec::new(),
-                        queue_history: Vec::new(),
-                        lease: None,
-                        artifacts: Vec::new(),
-                        notes: Vec::new(),
-                    },
                     vec![SessionSaveUnit::new(vec![change]).unwrap()],
                 )
                 .await
@@ -642,41 +632,22 @@ impl SubscriptionFixture {
         let writer = self.storage.open(id.clone()).await.unwrap();
         let provider = ProviderIdentity::new("gateway-test", "test", "test").unwrap();
         let loaded = writer.load().await.unwrap();
-        let (context, changes) = match loaded.snapshot() {
-            None => (
-                ProviderContext::Absent,
-                vec![SessionChange::Opened {
-                    id: id.clone(),
-                    provider: provider.clone(),
-                    context: ProviderContext::Absent,
-                }],
-            ),
-            Some(snapshot) => {
-                let after = ProviderContext::Recorded(
+        let changes = match loaded.snapshot() {
+            None => vec![SessionChange::Opened {
+                id: id.clone(),
+                provider: provider.clone(),
+                context: ProviderContext::Absent,
+            }],
+            Some(snapshot) => vec![SessionChange::ProviderContext {
+                before: snapshot.provider_context.clone(),
+                after: ProviderContext::Recorded(
                     ExecutionSessionId::new(Uuid::new_v4().to_string()).unwrap(),
-                );
-                (
-                    after.clone(),
-                    vec![SessionChange::ProviderContext {
-                        before: snapshot.provider_context.clone(),
-                        after,
-                    }],
-                )
-            }
+                ),
+            }],
         };
         writer
             .save_changes(
                 loaded.binding().clone(),
-                SessionSnapshot {
-                    id,
-                    provider,
-                    provider_context: context,
-                    invocations: Vec::new(),
-                    queue_history: Vec::new(),
-                    lease: None,
-                    artifacts: Vec::new(),
-                    notes: Vec::new(),
-                },
                 vec![SessionSaveUnit::new(changes).unwrap()],
             )
             .await

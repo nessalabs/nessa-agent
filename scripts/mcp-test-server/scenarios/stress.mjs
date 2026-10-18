@@ -22,6 +22,7 @@ export const STRESS = {
   fail: "stress fail",
   delegate: "stress delegate",
   watch: "stress watch",
+  long: "stress long",
 }
 
 /**
@@ -45,6 +46,7 @@ export const SAYS = {
   delegated: "Delegated to ",
   report: "Report received.",
   watched: "Watched: ",
+  long: "Long answer: ",
 }
 
 /**
@@ -73,12 +75,16 @@ const review = (title, args, allowedText) => ({
 
 /**
  * The scenario for `reviews` reviews in one turn, one review of about
- * `largeBytes` bytes, and turns that pause for `pauseMs`.
+ * `largeBytes` bytes, turns that pause for `pauseMs`, and long answers
+ * streamed as `longChunks` chunks of `longChunkBytes` bytes each, so a
+ * conversation's history grows fast.
  */
 export function stressScenario({
   reviews = 20,
   largeBytes = 24_000,
   pauseMs = 3_000,
+  longChunks = 40,
+  longChunkBytes = 300,
 } = {}) {
   const many = Array.from({ length: Math.max(1, reviews) }, (_, index) =>
     review(`Review ${index + 1} of ${reviews}`, { index }, `Allowed ${index + 1}.`),
@@ -98,6 +104,23 @@ export function stressScenario({
       {
         when: STRESS.reply,
         steps: [{ do: "text", chunks: [SAYS.echo, "${prompt.text}"] }, { do: "end" }],
+      },
+      {
+        when: STRESS.long,
+        steps: [
+          {
+            do: "text",
+            chunks: [
+              SAYS.long,
+              "${prompt.text}",
+              ...Array.from(
+                { length: longChunks },
+                (_, index) => ` ${index} ${"x".repeat(longChunkBytes)}`,
+              ),
+            ],
+          },
+          { do: "end" },
+        ],
       },
       {
         when: STRESS.permission,

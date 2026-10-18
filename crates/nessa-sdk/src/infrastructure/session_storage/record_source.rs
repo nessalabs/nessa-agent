@@ -1237,7 +1237,6 @@ mod tests {
             provider: ProviderIdentity::new("provider", "model", "workspace").unwrap(),
             context: ProviderContext::Absent,
         };
-        let observed = records::fold_changes(None, std::slice::from_ref(&change)).unwrap();
         let mut writer = RecordWriter::replay(runtime, session.clone(), stream.clone())
             .await
             .unwrap();
@@ -1247,7 +1246,6 @@ mod tests {
                 runtime,
                 None,
                 original,
-                &observed,
                 &[SessionSaveUnit::new(vec![change]).unwrap()],
             )
             .await
@@ -1307,7 +1305,6 @@ mod tests {
         lease
             .save_changes(
                 lease.load().await.unwrap().binding().clone(),
-                snapshot,
                 vec![SessionSaveUnit::new(changes).unwrap()],
             )
             .await
@@ -2343,14 +2340,12 @@ mod tests {
         let mut writer = RecordWriter::replay(&runtime, session.clone(), stream.clone())
             .await
             .unwrap();
-        let opening_snapshot = records::fold_changes(None, std::slice::from_ref(&change)).unwrap();
         let binding = writer.readable_snapshot().unwrap().binding().clone();
         writer
             .save(
                 &runtime,
                 None,
                 binding,
-                &opening_snapshot,
                 &[SessionSaveUnit::new(vec![change]).unwrap()],
             )
             .await
@@ -2380,15 +2375,12 @@ mod tests {
             before: ProviderContext::Absent,
             after: ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap()),
         };
-        let with_context =
-            records::fold_changes(view.snapshot(), std::slice::from_ref(&context)).unwrap();
         let binding = writer.readable_snapshot().unwrap().binding().clone();
         writer
             .save(
                 &runtime,
                 None,
                 binding,
-                &with_context,
                 &[SessionSaveUnit::new(vec![context]).unwrap()],
             )
             .await
@@ -2425,7 +2417,6 @@ mod tests {
                     &runtime,
                     None,
                     binding,
-                    &snapshot,
                     &[SessionSaveUnit::new(vec![change]).unwrap()],
                 )
                 .await
@@ -2444,14 +2435,12 @@ mod tests {
             before: snapshot.provider_context.clone(),
             after: ProviderContext::Absent,
         };
-        let last = records::fold_changes(Some(&snapshot), std::slice::from_ref(&later)).unwrap();
         let binding = writer.readable_snapshot().unwrap().binding().clone();
         writer
             .save(
                 &runtime,
                 None,
                 binding,
-                &last,
                 &[SessionSaveUnit::new(vec![later.clone()]).unwrap()],
             )
             .await
@@ -3440,23 +3429,12 @@ mod tests {
         let provider = ProviderIdentity::new("fixture", "model", "workspace").unwrap();
         let opened = SessionChange::Opened {
             id: session.clone(),
-            provider: provider.clone(),
-            context: ProviderContext::Absent,
-        };
-        let snapshot = SessionSnapshot {
-            id: session.clone(),
             provider,
-            provider_context: ProviderContext::Absent,
-            invocations: Vec::new(),
-            queue_history: Vec::new(),
-            lease: None,
-            artifacts: Vec::new(),
-            notes: Vec::new(),
+            context: ProviderContext::Absent,
         };
         runtime
             .block_on(lease.save_changes(
                 runtime.block_on(lease.load()).unwrap().binding().clone(),
-                snapshot.clone(),
                 vec![SessionSaveUnit::new(vec![opened]).unwrap()],
             ))
             .unwrap();
@@ -3478,7 +3456,6 @@ mod tests {
             .block_on(
                 lease.save_changes(
                     runtime.block_on(lease.load()).unwrap().binding().clone(),
-                    snapshot,
                     changes
                         .into_iter()
                         .map(|change| SessionSaveUnit::new(vec![change]).unwrap())

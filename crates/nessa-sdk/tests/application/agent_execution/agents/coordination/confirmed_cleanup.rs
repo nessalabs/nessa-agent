@@ -3,8 +3,8 @@ use super::*;
 use crate::application::agent_execution::{
     providers::ResourceCleanup,
     sessions::{
-        SessionLoad, SessionSaveGeneration, SessionSaveReceipt, SessionSaveUnit, SessionSnapshot,
-        SessionStorage, SessionStorageLease, StorageFuture,
+        SessionLoad, SessionSaveGeneration, SessionSaveReceipt, SessionSaveUnit, SessionStorage,
+        SessionStorageLease, StorageFuture,
     },
 };
 use crate::domain::agent_execution::sessions::SessionId;
@@ -47,10 +47,9 @@ impl SessionStorageLease for TrackedLease {
     fn save_changes(
         &self,
         binding: SessionSaveGeneration,
-        snapshot: SessionSnapshot,
         units: Vec<SessionSaveUnit>,
     ) -> StorageFuture<'_, SessionSaveReceipt> {
-        self.backing.save_changes(binding, snapshot, units)
+        self.backing.save_changes(binding, units)
     }
     fn erase(&self) -> StorageFuture<'_, ()> {
         self.backing.erase()
