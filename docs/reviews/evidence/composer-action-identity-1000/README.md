@@ -51,15 +51,15 @@ skip actual engine launch.
 | Send or Stop | Stable button Space/Enter or textarea Enter | Existing button operation or textarea submission |
 | Stop | Disabled initially or disabled after pointer down | No Stop callback; draft retained |
 
-The runner checks23cases per engine (46total), including measured button/icon
+The runner checks 23 cases per engine (46 total), including measured button/icon
 geometry and zero console, page and failed-request errors. Private key-removal
 mutation failed the same runner in both engines: the Send-to-Stop padding
 gesture invoked Stop once instead of zero. The private copy initially lacked
 the checked-in model catalog; that setup failure is retained separately. No
 production source was mutated and no production test switch is used.
-The earlier reviewer ran17cases per engine independently. A first implementer
+The earlier reviewer ran 17 cases per engine independently. A first implementer
 runner attempt was invalidated by formatting during its execution and is retained
-as failed setup evidence; the formatted frozen runner subsequently passed46/46.
+as failed setup evidence; the formatted frozen runner subsequently passed 46/46.
 
 This committed replay lives beside its own evidence under the explicit hold on
 all shared `verification/**` writes, including its checklist. That location is
