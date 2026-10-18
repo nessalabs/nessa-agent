@@ -984,7 +984,7 @@ pub(crate) struct ProviderFactory {
     pub(crate) slow_close: AtomicBool,
     /// This many closes, the first to start, wait for `closes_released`
     /// before they answer, as an agent that will not stop does.
-    pub(crate) stalled_closes: AtomicUsize,
+    pub(crate) stalled_closes: Mutex<usize>,
     pub(crate) closes_released: AtomicBool,
     pub(crate) close_release: Notify,
     /// Whether the agent agreed to take images, and its model can see them.
@@ -1957,13 +1957,12 @@ impl ProviderSessionBackend for Backend {
             if let Some(gate) = gate {
                 let _ = gate.await;
             }
-            let stalled = self
-                .factory
-                .stalled_closes
-                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
-                    left.checked_sub(1)
-                })
-                .is_ok();
+            let stalled = {
+                let mut left = self.factory.stalled_closes.lock().unwrap();
+                let stalled = *left > 0;
+                *left = left.saturating_sub(1);
+                stalled
+            };
             while stalled && !self.factory.closes_released.load(Ordering::SeqCst) {
                 let released = self.factory.close_release.notified();
                 tokio::pin!(released);

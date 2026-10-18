@@ -612,9 +612,7 @@ async fn agents_that_will_not_stop_do_not_hold_back_the_other_stops() {
         max_conversations: owners,
         ..ConversationLimits::default()
     });
-    provider
-        .stalled_closes
-        .store(super::RETIRING_AT_ONCE, Ordering::SeqCst);
+    *provider.stalled_closes.lock().unwrap() = super::RETIRING_AT_ONCE;
     for n in 0..owners {
         service
             .create(
