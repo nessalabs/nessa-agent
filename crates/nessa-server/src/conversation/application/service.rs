@@ -1644,6 +1644,23 @@ impl ConversationService {
             .await
             .map(|(_, live)| live)?)
     }
+    /// The conversation live now, for an answer to what its agent holds (a
+    /// review). One with no agent live holds nothing to answer, so it is not
+    /// opened, which past `limits.liveConversations` could be refused
+    /// `conversation_capacity` or park another: the answer is stale.
+    async fn resolve_holding_reviews(
+        &self,
+        id: &ConversationId,
+        caller: &ConversationCaller,
+    ) -> Result<Arc<LiveConversation>, ConversationError> {
+        match self.resolve_opening(id, caller, false).await {
+            Ok((_, live)) => Ok(live),
+            Err(Halt::Failed(ConversationError::McpApp(McpAppError::Cancelled))) => {
+                Err(AgentError::StalePermission.into())
+            }
+            Err(halt) => Err(halt.into()),
+        }
+    }
     /// [`Self::resolve`]; with `open` false, only a conversation live now:
     /// one with none is refused `mcp_cancelled`, and not opened. The gateway
     /// retiring is [`Halt::Retired`]; an opening that failed is its own
@@ -4124,7 +4141,7 @@ impl ConversationService {
                     );
                 }
             }
-            let live = service.resolve(&id, &caller).await?;
+            let live = service.resolve_holding_reviews(&id, &caller).await?;
             // An app's review first: it is the gateway's own, not the agent's.
             match live.app_reviews.answer(
                 &execution,
@@ -4265,7 +4282,7 @@ impl ConversationService {
                 ExecutionId::new(&execution).map_err(|_| ConversationError::InvalidInput)?;
             let permission_id =
                 PermissionId::new(&permission).map_err(|_| ConversationError::InvalidInput)?;
-            let live = service.resolve(&id, &caller).await?;
+            let live = service.resolve_holding_reviews(&id, &caller).await?;
             match live
                 .app_reviews
                 .cancel(&execution, &permission, &review, answerer(&caller))

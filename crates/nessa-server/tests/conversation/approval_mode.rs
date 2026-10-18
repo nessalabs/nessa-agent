@@ -1800,3 +1800,56 @@ async fn an_answer_to_an_agent_that_let_its_process_go_is_stale() {
     );
     service.shutdown().await.unwrap();
 }
+
+/// An answer to a conversation with no agent live names a review nothing
+/// holds: it is told so, and the conversation is not opened for it, which
+/// past the live-agent bound would be refused `conversation_capacity` or
+/// park another agent. Found by the conversation chaos check's extreme run.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_answer_to_a_conversation_with_no_agent_live_is_stale_and_opens_nothing() {
+    let (service, provider, _repository, _, _) = mode_fixture();
+    let id = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
+    service
+        .create(id.clone(), caller(), RequestedConversation::default())
+        .await
+        .unwrap();
+    service.close(id.clone(), caller()).await.unwrap();
+    let opens = provider.open_calls.load(Ordering::SeqCst);
+    let answered = service
+        .answer(
+            id.clone(),
+            caller(),
+            "execution".into(),
+            "permission".into(),
+            "0".repeat(32),
+            "allow".into(),
+            PermissionCaller::Owner,
+        )
+        .await;
+    assert!(
+        matches!(
+            answered,
+            Err(ConversationError::Agent(AgentError::StalePermission))
+        ),
+        "{answered:?}"
+    );
+    let withdrawn = service
+        .cancel_permission(
+            id.clone(),
+            caller(),
+            "execution".into(),
+            "permission".into(),
+            "0".repeat(32),
+            "no".into(),
+        )
+        .await;
+    assert!(
+        matches!(
+            withdrawn,
+            Err(ConversationError::Agent(AgentError::StalePermission))
+        ),
+        "{withdrawn:?}"
+    );
+    assert_eq!(provider.open_calls.load(Ordering::SeqCst), opens);
+    service.shutdown().await.unwrap();
+}
