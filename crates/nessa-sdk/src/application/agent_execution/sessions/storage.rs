@@ -567,6 +567,9 @@ pub struct InvocationRecord {
     /// Source execution admitted by the SDK resumption owner, saved atomically
     /// with this input. Ordinary enqueue/invoke never set this fact. It is
     /// independent of the later TurnResumed audit acknowledgement.
+    /// Persistence refuses an origin without a preceding resumable source and
+    /// the exact queued successor binding. A later final source checkpoint
+    /// changes eligibility without erasing this historical admission fact.
     pub resumed_from: Option<ExecutionId>,
     /// Target observation count at steering admission; not a provider consumption acknowledgement.
     pub target_event_offset: Option<usize>,

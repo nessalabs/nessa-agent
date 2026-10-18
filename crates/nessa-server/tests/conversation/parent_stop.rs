@@ -3073,11 +3073,22 @@ async fn parent_stop_preserves_a_report_successor_with_its_own_person_submit() {
     restored_report_successor(false, Some(ReportPersonCommand::Current)).await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn parent_stop_captures_a_report_successor_after_a_conflicting_person_submit() {
+    restored_report_successor(false, Some(ReportPersonCommand::RejectedCurrent)).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn parent_stop_captures_an_active_report_after_a_conflicting_person_submit() {
+    restored_report_successor(true, Some(ReportPersonCommand::RejectedCurrent)).await;
+}
+
 #[derive(Clone, Copy)]
 enum ReportPersonCommand {
     Original,
     Intermediate,
     Current,
+    RejectedCurrent,
 }
 
 async fn acknowledge_report_delivery(
@@ -3128,7 +3139,14 @@ async fn acknowledge_report_delivery(
 }
 
 async fn restored_report_successor(active: bool, person_command: Option<ReportPersonCommand>) {
-    let command_collision = person_command.is_some();
+    let command_collision = matches!(
+        person_command,
+        Some(
+            ReportPersonCommand::Original
+                | ReportPersonCommand::Intermediate
+                | ReportPersonCommand::Current
+        )
+    );
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("data");
     let parent = id();
@@ -3296,6 +3314,36 @@ async fn restored_report_successor(active: bool, person_command: Option<ReportPe
     drop(admission);
     if matches!(person_command, Some(ReportPersonCommand::Current)) {
         acknowledge_report_delivery(&service, &storage, &parent, next.as_str()).await;
+    }
+    if matches!(person_command, Some(ReportPersonCommand::RejectedCurrent)) {
+        let refused = service
+            .submit_command(
+                storage.clone(),
+                parent.clone(),
+                caller("conflicting-person"),
+                Initiation::owner(),
+                false,
+                next.as_str().into(),
+                message("different person input"),
+                SubmissionMode::Queue,
+            )
+            .await;
+        assert!(matches!(
+            refused,
+            Err(commands::MutationFailure::Target(ConversationError::Agent(
+                AgentError::SubmissionConflict
+            )))
+        ));
+        let receipts = commands::CreationStorage::mutations(storage.as_ref(), "person".into())
+            .await
+            .unwrap();
+        let rejected = receipts
+            .iter()
+            .find(|receipt| receipt.binding().actor().request_id() == "conflicting-person")
+            .unwrap();
+        assert_eq!(rejected.stage(), commands::MutationStage::Attempted);
+        assert_eq!(rejected.outcome(), None);
+        assert!(live.agent.queued_ids().await.contains(&next));
     }
     // The provider's cancellation acknowledgement and terminal result are
     // separate: hold the real result until after gateway Stop has selected.

@@ -153,6 +153,10 @@ report ID prefixes nor continuation notice text create provenance.
 | Ordinary person input has a resume-shaped ID | Exact later Dispatched person Submit receipt | Release the pause; execution-ID spelling supplies no origin or intervention authority |
 | Genuine SDK successor has no person command | SDK admission alone, no matching later person Submit receipt | Keep reports paused |
 | Genuine SDK successor is explicitly submitted by a person later | Exact later Dispatched person Submit receipt for that saved input | Release the pause; SDK origin does not veto a separate person intervention |
+| A conflicting public Submit targets an existing report or successor | Attempted receipt, no successful person admission, saved report unchanged | Do not exempt that report chain from Stop; capture consumes the same exact successful person-admission decision as pause release |
+| Admission acknowledgement is uncertain | Existing mutation owner retains uncertainty | Do not relabel Attempted as either successful person admission or definite refusal; exact retries reconcile through that owner |
+| Restored origin names a missing, later, self or incompatible source | Existing SDK resumption owner validates the retained admission relationship | Reject contradictory snapshot evidence before restoration can classify owed work or dispatch it |
+| Valid origin remains after later settlement or checkpoint | Earlier recorded resumable stop plus exact admitted request, caller, initiation and queued identity | Preserve the admission fact independently of current retry eligibility and later audit acknowledgement |
 | Restarted pending row | Same durable row, transcript, canonical links and receipts | Reconcile original identities without replay or recapture |
 | Completed report with no effective Stop | SDK final result and no withdrawal/cancellation receipt | Settle existing obligation without duplicate delivery |
 

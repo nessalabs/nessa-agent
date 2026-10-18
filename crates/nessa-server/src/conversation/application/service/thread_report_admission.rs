@@ -145,7 +145,7 @@ impl ConversationService {
         Ok(stopped)
     }
 
-    async fn person_turns(
+    pub(super) async fn person_turns(
         &self,
         id: &ConversationId,
         caller: &ConversationCaller,

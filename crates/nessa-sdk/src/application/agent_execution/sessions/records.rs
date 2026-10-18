@@ -9,7 +9,10 @@ use super::{
     SessionChange, SessionSnapshot, StorageError, SubmissionAcknowledgement,
 };
 use crate::{
-    application::agent_execution::{agents::AgentError, executions::ExecutionUpdate},
+    application::agent_execution::{
+        agents::{validate_saved_resumption, AgentError},
+        executions::ExecutionUpdate,
+    },
     domain::agent_execution::{
         executions::{
             ExecutionId, ExecutionOutcome, InvocationHistory, InvocationObservation,
@@ -417,6 +420,14 @@ impl continuation::Continuation {
                 if positions.contains_key(&record.request.execution_id) {
                     return Err(corrupt("execution identity was accepted twice"));
                 }
+                validate_saved_resumption(
+                    record,
+                    record.resumed_from.as_ref().and_then(|source| {
+                        positions
+                            .get(source)
+                            .map(|&index| &snapshot.invocations[index])
+                    }),
+                )?;
                 // The target's observations end at the offset here
                 // (`validate_target_prefix`), as they stood at admission.
                 super::app_sources::validate_saved(

@@ -26,7 +26,7 @@ use crate::application::agent_execution::{
         ExecutionAuditRecord, ExecutionRequest, Submitter, TurnResumption, TurnResumptionRecord,
     },
     permissions::ActionContext,
-    sessions::{InvocationRecord, InvocationSchedulingEvent, NoteCandidates},
+    sessions::{InvocationRecord, InvocationSchedulingEvent, NoteCandidates, StorageError},
 };
 use crate::domain::agent_execution::{
     executions::{
@@ -143,20 +143,53 @@ fn canonical_successor<'a>(
     if successor_index <= index {
         return None;
     }
-    let successor = &history[successor_index];
-    if successor.resumed_from.as_ref() != Some(execution)
-        || successor.submission != SubmissionMode::Queued
-    {
-        return None;
-    }
     let Stop::Recorded(edge) = owed(record, false, false, |_| false)? else {
         return None;
     };
-    (successor.actor == record.actor
-        && successor.initiation == record.initiation
-        && successor_request(record, edge.cause, next)
-            .is_ok_and(|request| request == successor.request))
-    .then_some(&successor.request.execution_id)
+    let successor = &history[successor_index];
+    matches_resumption_admission(record, successor, edge.cause)
+        .then_some(&successor.request.execution_id)
+}
+
+fn matches_resumption_admission(
+    source: &InvocationRecord,
+    successor: &InvocationRecord,
+    cause: SchedulingCause,
+) -> bool {
+    successor.resumed_from.as_ref() == Some(&source.request.execution_id)
+        && successor.submission == SubmissionMode::Queued
+        && successor.actor == source.actor
+        && successor.initiation == source.initiation
+        && Resumption::of(&source.request.execution_id)
+            .successor()
+            .is_some_and(|next| {
+                successor_request(source, cause, next)
+                    .is_ok_and(|request| request == successor.request)
+            })
+}
+
+/// Validate the retained admission fact, independently of whether its source
+/// is still owed today. The persistence owner supplies only a preceding source.
+pub(crate) fn validate_saved_resumption(
+    successor: &InvocationRecord,
+    source: Option<&InvocationRecord>,
+) -> Result<(), StorageError> {
+    if successor.resumed_from.is_none() {
+        return Ok(());
+    }
+    if source.is_some_and(|source| {
+        source.submission != SubmissionMode::Immediate
+            && source.scheduling.iter().any(|edge| {
+                recorded_resume_stop(source, edge, false)
+                    && matches_resumption_admission(source, successor, edge.cause)
+            })
+    }) {
+        Ok(())
+    } else {
+        Err(StorageError::Corrupt(
+            "resumption origin does not match a preceding resumable admission".into(),
+        ))
+    }
 }
 
 /// Exact saved turns whose work is owed when no local execution owns it.
@@ -257,14 +290,8 @@ fn owed(
     }
     let last = record.scheduling.last()?;
     match last.stage {
-        // Decided already: the host's NotResumed edge is final.
-        InvocationStage::Cancelled if last.cause.leaves_work_owed() => {
-            Some(Stop::Recorded(last.clone()))
-        }
-        // Ended by a failure a retry can fix: the attempt's own, or the
-        // runner's when it stopped behind another turn's failure.
         InvocationStage::Cancelled | InvocationStage::Settled
-            if last.cause.stopped_by_failure() && !superseded && failure_owed(record) =>
+            if recorded_resume_stop(record, last, superseded) =>
         {
             Some(Stop::Recorded(last.clone()))
         }
@@ -313,6 +340,20 @@ fn owed(
         }
         _ => None,
     }
+}
+
+fn recorded_resume_stop(
+    record: &InvocationRecord,
+    edge: &InvocationSchedulingEvent,
+    superseded: bool,
+) -> bool {
+    (edge.stage == InvocationStage::Cancelled && edge.cause.leaves_work_owed())
+        || (matches!(
+            edge.stage,
+            InvocationStage::Cancelled | InvocationStage::Settled
+        ) && edge.cause.stopped_by_failure()
+            && !superseded
+            && failure_owed(record))
 }
 
 /// Whether `record` is a turn that moved past every failure before it: one

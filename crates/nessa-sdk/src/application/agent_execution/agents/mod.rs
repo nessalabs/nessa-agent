@@ -58,6 +58,7 @@ pub use error::{
 };
 pub use initialization::AgentInitializationError;
 pub use lifetime::{lifetime_disposition, LifetimeDisposition, OwnedLifetime};
+pub(crate) use resumption::validate_saved_resumption;
 pub use resumption::{owed_turn_ids, resumed_turn_id, OwedTurn, Resumed};
 pub use scheduling::{
     AdmissionEvidence, AdmissionEvidenceFailure, QueueAdmission, QueueRemoval, QueueReorder,

@@ -340,17 +340,13 @@ impl ConversationService {
                 // A previously admitted report can fail during capture and
                 // await resumption. It still belongs to this exact Stop.
                 unfinished.extend(owed_turn_ids(&history.invocations));
-                let commands = storage
-                    .mutations(caller.principal_id.as_str().into())
+                let people = self
+                    .person_turns(id, caller, &history.invocations)
                     .await
-                    .map_err(MutationFailure::Storage)?;
+                    .map_err(MutationFailure::Target)?;
                 for report in pending.into_iter().filter(|row| row.report.parent == *id) {
                     let is_command = |turn: &ExecutionId| {
-                        commands.iter().any(|receipt| {
-                            receipt.binding().operation() == MutationOperation::Submit
-                                && receipt.binding().target() == &conversation_session(id)
-                                && receipt.binding().turn_id() == turn
-                        })
+                        people.iter().any(|(_, person)| person == turn.as_str())
                     };
                     let deliveries = super::thread_report_admission::report_deliveries(
                         &report.report.execution,

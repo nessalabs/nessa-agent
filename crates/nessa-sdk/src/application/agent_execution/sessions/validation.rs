@@ -7,7 +7,7 @@ use super::{
     InvocationCancellationEvent, InvocationRecord, InvocationSchedulingEvent, ProviderContext,
     SessionSnapshot, StorageError, SubmissionAcknowledgement,
 };
-use crate::application::agent_execution::agents::AgentError;
+use crate::application::agent_execution::agents::{validate_saved_resumption, AgentError};
 use crate::application::agent_execution::executions::{
     limits::{validate_observation_id, ObservationUsage, MAX_RETAINED_OUTPUT_EVENTS},
     ExecutionEvent, ExecutionUpdate,
@@ -208,6 +208,14 @@ pub(super) fn continuation(
     // against those before it, through each one's observation index.
     let mut positions = HashMap::with_capacity(snapshot.invocations.len());
     for invocation in &snapshot.invocations {
+        validate_saved_resumption(
+            invocation,
+            invocation.resumed_from.as_ref().and_then(|source| {
+                positions
+                    .get(source)
+                    .map(|&index: &usize| &snapshot.invocations[index])
+            }),
+        )?;
         // The snapshot holds a steered message's target whole, so the offset
         // bounds which of its calls came before the message.
         let steered = SteeringPosition::saved(invocation)?;

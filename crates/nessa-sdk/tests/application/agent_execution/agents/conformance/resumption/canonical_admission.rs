@@ -1,6 +1,127 @@
 //! Canonical relationships require the SDK owner's saved admission, not input shape.
 use super::*;
 
+#[tokio::test]
+async fn contradictory_restored_origin_cannot_revive_superseded_work() {
+    let (agent, backend, storage) = workflow().await;
+    let error = AgentError::Transport("recoverable failure".into());
+    *backend.execution_fault.lock().unwrap() = Some(ProviderOperationFailure::new(
+        error.clone(),
+        ProviderSessionState::CleanupReported(CleanupReport::confirmed(CloseOutcome {
+            forced: false,
+        })),
+    ));
+    let old = agent
+        .enqueue(request("old-failure"), Submitter::owner(actor()))
+        .await
+        .unwrap();
+    assert_eq!(bounded(old.wait()).await, Err(error));
+    *backend.execution_fault.lock().unwrap() = None;
+    let later = agent
+        .enqueue(request("later-person"), Submitter::owner(actor()))
+        .await
+        .unwrap();
+    assert_eq!(bounded(later.wait()).await, Ok(ExecutionOutcome::Completed));
+    assert!(agent.owed_turns().await.is_empty());
+    let snapshot = storage.snapshot();
+    bounded(agent.close(actor())).await.unwrap();
+    // The unmodified ordinary input remains valid and supersedes the failure.
+    let ordinary = MemoryStorage::default();
+    ordinary.0.lock().unwrap().snapshot = Some(snapshot.clone());
+    let (restored, _, _) = workflow_from_storage(ordinary).await;
+    assert!(restored.owed_turns().await.is_empty());
+    bounded(restored.close(actor())).await.unwrap();
+    for source in ["missing-source", "later-person", "old-failure"] {
+        let mut invalid = snapshot.clone();
+        invalid.invocations[1].resumed_from = Some(ExecutionId::new(source).unwrap());
+        let saved = MemoryStorage::default();
+        saved.0.lock().unwrap().snapshot = Some(invalid);
+        let backend = workflow_backend();
+        let result = Agent::prepare(
+            Arc::new(WorkflowProvider(backend.clone())),
+            saved.manager().await,
+            backend.audit.clone(),
+        )
+        .await;
+        assert!(
+            matches!(result, Err(error) if matches!(error.cause(), AgentError::Storage(StorageError::Corrupt(_)))),
+            "contradictory origin {source} must be refused before restoring work"
+        );
+        assert!(backend.executions.lock().unwrap().is_empty());
+        assert_eq!(saved.0.lock().unwrap().writes, 0);
+    }
+}
+
+#[tokio::test]
+async fn restored_resume_origin_requires_the_exact_admitted_binding() {
+    use nessa_sdk::domain::agent_execution::executions::{GrantInitiator, Initiation};
+
+    let saved = stopped_storage(Stop::Suspend).await;
+    let (agent, backend, storage, _hold) = restore_holding(saved).await;
+    let turn = agent.owed_turns().await.remove(0);
+    let Resumed::Continued(_) = agent.resume_turn(&turn, resumer()).await.unwrap() else {
+        panic!("a real SDK resume is admitted")
+    };
+    bounded(backend.dispatched.notified()).await;
+    let snapshot = storage.snapshot();
+    bounded(agent.close(actor())).await.unwrap();
+
+    for mismatch in ["actor", "initiation", "request", "mode", "stop"] {
+        let mut invalid = snapshot.clone();
+        match mismatch {
+            "actor" => {
+                let successor = &mut invalid.invocations[1];
+                let original_actor = successor.actor.clone();
+                successor.actor = resumer();
+                for edge in &mut successor.scheduling {
+                    if edge.actor.as_ref() == Some(&original_actor) {
+                        edge.actor = Some(resumer());
+                    }
+                }
+                for entry in &mut invalid.queue_history {
+                    if entry.mutation.id() == Some(&successor.request.execution_id)
+                        && entry.actor.as_ref() == Some(&original_actor)
+                    {
+                        entry.actor = Some(resumer());
+                    }
+                }
+            }
+            "initiation" => {
+                invalid.invocations[1].initiation =
+                    Initiation::grant(GrantInitiator::new("different-grant", 1).unwrap());
+            }
+            "request" => invalid.invocations[1].request.estimated_input_tokens += 1,
+            "mode" => invalid.invocations[1].submission = SubmissionMode::Immediate,
+            "stop" => {
+                let source = &mut invalid.invocations[0];
+                source.scheduling.last_mut().unwrap().cause = SchedulingCause::SessionClosed;
+                source.local_cancellation.as_mut().unwrap().cause = SchedulingCause::SessionClosed;
+            }
+            _ => unreachable!(),
+        }
+        assert_eq!(
+            resumed_turn_id(&invalid.invocations, turn.execution_id()),
+            None,
+            "a contradictory {mismatch} cannot grant canonical continuation authority"
+        );
+        let saved = MemoryStorage::default();
+        saved.0.lock().unwrap().snapshot = Some(invalid);
+        let backend = workflow_backend();
+        let result = Agent::prepare(
+            Arc::new(WorkflowProvider(backend.clone())),
+            saved.manager().await,
+            backend.audit.clone(),
+        )
+        .await;
+        assert!(
+            matches!(result, Err(error) if matches!(error.cause(), AgentError::Storage(StorageError::Corrupt(_)))),
+            "the SDK owner must reject a contradictory {mismatch} before restoring work"
+        );
+        assert!(backend.executions.lock().unwrap().is_empty());
+        assert_eq!(saved.0.lock().unwrap().writes, 0);
+    }
+}
+
 /// Obtain the exact continuation input from a genuine SDK resume in a separate
 /// Agent. The Agents under test below admit only ordinary caller inputs.
 async fn canonical_requests(id: &str) -> (ExecutionRequest, ExecutionRequest) {
@@ -243,6 +364,46 @@ async fn a_real_resume_retains_its_admission_relationship_after_restore() {
     assert_eq!(
         resumed_turn_id(&storage.snapshot().invocations, turn.execution_id()),
         Some(next.id().clone())
+    );
+    assert!(!restored
+        .owed_turns()
+        .await
+        .iter()
+        .any(|owed| owed.execution_id() == turn.execution_id()));
+    bounded(restored.close(actor())).await.unwrap();
+}
+
+#[tokio::test]
+async fn a_saved_resume_origin_survives_a_later_source_checkpoint() {
+    let saved = stopped_storage(Stop::Suspend).await;
+    let (agent, backend, storage, _hold) = restore_holding(saved).await;
+    let turn = agent.owed_turns().await.remove(0);
+    let Resumed::Continued(next) = agent.resume_turn(&turn, resumer()).await.unwrap() else {
+        panic!("a real SDK resume is admitted")
+    };
+    bounded(backend.dispatched.notified()).await;
+    let mut snapshot = storage.snapshot();
+    bounded(agent.close(actor())).await.unwrap();
+    // A later final decision changes eligibility, not the already saved
+    // admission fact. This does not depend on the best-effort resume audit.
+    let source = &mut snapshot.invocations[0];
+    let mut checkpoint = source.scheduling.last().unwrap().clone();
+    checkpoint.before = Some(InvocationStage::Cancelled);
+    checkpoint.cause = SchedulingCause::NotResumed;
+    checkpoint.actor = Some(resumer());
+    source.scheduling.push(checkpoint);
+    assert_eq!(
+        resumed_turn_id(&snapshot.invocations, turn.execution_id()),
+        None
+    );
+    let saved = MemoryStorage::default();
+    saved.0.lock().unwrap().snapshot = Some(snapshot);
+    let (restored, _, storage) = workflow_from_storage(saved).await;
+    let snapshot = storage.snapshot();
+    assert_eq!(snapshot.invocations[1].request.execution_id, *next.id());
+    assert_eq!(
+        snapshot.invocations[1].resumed_from.as_ref(),
+        Some(turn.execution_id())
     );
     assert!(!restored
         .owed_turns()
