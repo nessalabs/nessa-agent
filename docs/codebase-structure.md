@@ -382,6 +382,11 @@ against a private scripted gateway.
   (`SessionAccessory`, drawn by the workspace's slot). Counts live in
   `src/desktop/model/counts.ts`. The preview is the window preference
   `useSubagentsPreview`, offered under Settings › Advanced › Experimental.
+- The desktop composer's Send and Stop controls have separate DOM identities
+  (`src/desktop/ui/composer.tsx`). A gesture that began on one cannot invoke
+  the replacement action after a source phase change; the unsent draft stays.
+  `composer-action-lifetime.test.tsx` checks both directions and activation
+  of the current control under StrictMode.
 - The shared desktop light's fixed grain tile lives in
   `src/desktop/ui/ambient-grain.png`, drawn by `.desktop-grain` in the desktop
   stylesheet. It is pre-rendered to keep SVG turbulence out of runtime raster
