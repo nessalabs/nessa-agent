@@ -265,6 +265,8 @@ impl ThreadReportStore for ObservedReportSettlement {
 #[tokio::test]
 async fn unavailable_stop_receipts_cannot_acknowledge_a_declined_failed_report() {
     let directory = tempfile::tempdir().unwrap();
+    let private = directory.path().join("reports");
+    nessa_local_storage::create_directory(&private).unwrap();
     let (service, provider, _, _) = fixture(ConversationLimits::default());
     let coordinator = OwnershipCoordinator::new(OwnershipDependencies {
         store: Arc::new(MemoryOwnershipStore::new()),
@@ -278,9 +280,7 @@ async fn unavailable_stop_receipts_cannot_acknowledge_a_declined_failed_report()
     coordinator.resume().await.unwrap();
     service.bind_owned_threads(coordinator, true).unwrap();
     let store = Arc::new(ObservedReportSettlement {
-        inner: Arc::new(
-            LocalThreadReports::open(&directory.path().join("reports.sqlite3")).unwrap(),
-        ),
+        inner: Arc::new(LocalThreadReports::open(&private.join("reports.sqlite3")).unwrap()),
         calls: AtomicUsize::new(0),
     });
     service.bind_thread_reports(store.clone());
