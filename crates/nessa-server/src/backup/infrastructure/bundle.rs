@@ -12,7 +12,7 @@ use nessa_local_storage::{create_directory, open, sync_directory, OpenMode};
 use async_trait::async_trait;
 
 use crate::backup::application::{ManifestPublisher, PublishedRecord};
-use crate::backup::domain::StoreKind;
+use crate::backup::domain::{encode_identity as encode, StoreKind};
 
 /// Writes a bundle under `root`. Identities are percent-encoded, so a
 /// record cannot choose a path outside its store directory.
@@ -130,24 +130,6 @@ fn record_path(root: &Path, store: StoreKind, identity: &str) -> Result<PathBuf,
         return Err(());
     }
     Ok(root.join("records").join(store.as_str()).join(name))
-}
-
-fn encode(value: &str) -> String {
-    const HEX: &[u8; 16] = b"0123456789ABCDEF";
-    let mut out = String::new();
-    for byte in value.bytes() {
-        match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(byte as char);
-            }
-            _ => {
-                out.push('%');
-                out.push(HEX[(byte >> 4) as usize] as char);
-                out.push(HEX[(byte & 0xf) as usize] as char);
-            }
-        }
-    }
-    out
 }
 
 #[cfg(test)]

@@ -802,11 +802,21 @@ impl NativeSession {
         directory: &Path,
         address: SocketAddr,
     ) -> Result<Self, SessionFailure> {
+        Self::open_with_clock(root, directory, address, Arc::new(Monotonic::new()))
+    }
+    /// Compose a private session over its host's monotonic elapsed-time clock.
+    /// The clock controls retained reads and product socket budgets; it must
+    /// satisfy [`Clock`]'s monotonic contract. Auth's wall clock is independent.
+    pub fn open_with_clock(
+        root: &Path,
+        directory: &Path,
+        address: SocketAddr,
+        clock: Arc<dyn Clock>,
+    ) -> Result<Self, SessionFailure> {
         let state = Arc::new(
             FilePairingState::open(root, directory).map_err(SessionFailure::PrivateState)?,
         );
         let wall = Arc::new(Wall);
-        let clock = Arc::new(Monotonic::new());
         let runtime = Builder::new_current_thread()
             .enable_all()
             .build()

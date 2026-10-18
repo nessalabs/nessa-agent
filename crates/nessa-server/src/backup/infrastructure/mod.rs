@@ -6,11 +6,20 @@ mod cedar;
 mod committed;
 mod credentials;
 mod decision_audit;
+mod deletion_decode;
+mod encoding;
 mod gateway;
 mod jsonl;
 mod log;
+mod manifest_decode;
 mod outbox;
 mod sensitivity;
+mod verification;
+mod verification_format;
+
+pub use verification_format::ExportFormat;
+
+pub use verification::{read_verification_key, DirectoryVerificationSource};
 pub(crate) mod snapshot;
 
 pub use admission::ConversationAdmission;
