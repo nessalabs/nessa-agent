@@ -144,6 +144,8 @@ class Run {
     this.busy = 0
     this.paused = null
     this.background = []
+    /** Other conversations a step opened that the final rest check sweeps too. */
+    this.checked = []
     this.sent = new Map()
   }
 
@@ -697,6 +699,7 @@ const steps = {
   async long(run, step, failures) {
     const conversationId = randomUUID()
     await run.client.conversation.create({ conversationId, agent: run.stack.agent })
+    run.checked.push(conversationId)
     // Each answer streams LONG_CHUNKS chunks, so the history grows by about
     // 12 KB a turn and every save comes after a long one.
     const took = []
@@ -1029,6 +1032,7 @@ await main(
           ...base,
           failures: await atRest(run, [
             run.main.id,
+            ...run.checked,
             ...done.map((each) => each.conversationId),
           ]),
         })
