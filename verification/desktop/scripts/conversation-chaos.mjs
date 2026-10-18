@@ -270,7 +270,7 @@ const apply = {
 
   async note(run, action, client) {
     const requestId = randomUUID()
-    const note = { slot: action.slot, requestId }
+    const note = { slot: action.slot, requestId, index: action.index }
     run.notes.push(note)
     await client.conversation.message(
       run.slots[action.slot],
@@ -443,6 +443,14 @@ async function everyConversation(run) {
 }
 
 /**
+ * Whether `view` was read from a whole transcript. One read takes a bounded
+ * number of saved records, and a view read short of the end does not list
+ * what is queued, so it cannot show a conversation at rest.
+ */
+const whole = (view) =>
+  view.transcriptState === "complete" || view.transcriptState === "complete_empty"
+
+/**
  * Lets everything end: allows every waiting review and stops every turn that
  * only ends when stopped, until every conversation is at rest. Resolves with
  * the conversations' last views.
@@ -493,6 +501,7 @@ async function settle(run) {
       // A review answered lets its turn ask the next one: read it again now.
       if (view.permissions.length) continue
       return !(
+        !whole(view) ||
         running.length ||
         view.pending.length ||
         view.questions.length ||
@@ -560,6 +569,7 @@ async function check(run, { views, quiet }) {
     for (const [id, view] of views) {
       const running = view.messages.filter((each) => !ended(each))
       if (
+        !whole(view) ||
         running.length ||
         view.pending.length ||
         view.permissions.length ||
@@ -567,6 +577,7 @@ async function check(run, { views, quiet }) {
       )
         run.fail(
           `${id} is not at rest after ${SETTLE_MS / 1000} s: ${JSON.stringify({
+            transcript: view.transcriptState,
             running: running.map((each) => [each.status, each.userText.slice(0, 50)]),
             pending: view.pending.map((each) => [each.mode, each.text.slice(0, 50)]),
             reviews: view.permissions.length,
@@ -679,7 +690,9 @@ async function check(run, { views, quiet }) {
         note.requestId,
       )
       if (!status.found)
-        run.fail(`a note the gateway took cannot be found: ${note.requestId}`)
+        run.fail(
+          `a note the gateway took cannot be found: action ${note.index}, ${note.requestId}`,
+        )
     } catch (error) {
       run.fail(`a note's status could not be read: ${explain(error)}`)
     }

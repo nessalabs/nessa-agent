@@ -5513,6 +5513,108 @@ async fn custom_committed_adapter_cannot_substitute_requested_session_or_destroy
     service.shutdown().await.unwrap();
 }
 
+/// A committed read that has taken none of the records yet the first time it
+/// is asked, as one read of a long history stops at its bound.
+struct ShortFirstRead {
+    inner: Arc<InMemoryStorage>,
+    short: AtomicBool,
+}
+impl SessionStorage for ShortFirstRead {
+    fn open(&self, id: SessionId) -> StorageFuture<'_, Box<dyn SessionStorageLease>> {
+        self.inner.open(id)
+    }
+    fn open_existing(
+        &self,
+        id: SessionId,
+    ) -> StorageFuture<'_, Option<Box<dyn SessionStorageLease>>> {
+        self.inner.open_existing(id)
+    }
+    fn read_committed(&self, id: SessionId) -> StorageFuture<'_, Option<CommittedSession>> {
+        Box::pin(async move {
+            if self.short.swap(false, Ordering::SeqCst) {
+                Ok(Some(CommittedSession::new(
+                    id,
+                    "short".into(),
+                    0,
+                    0,
+                    5,
+                    None,
+                    CommittedStatus::new(
+                        CommittedCompleteness::NotLoaded,
+                        CommittedFreshness::Stale,
+                    ),
+                )?))
+            } else {
+                self.inner.read_committed(id).await
+            }
+        })
+    }
+}
+#[tokio::test]
+async fn a_note_past_where_one_committed_read_stops_is_still_found() {
+    let (_, provider, repository, storage) = fixture(ConversationLimits::default());
+    let storage = Arc::new(ShortFirstRead {
+        inner: storage,
+        short: AtomicBool::new(false),
+    });
+    let service = ConversationService::new(
+        ConversationDependencies {
+            access_policy: crate::conversation_test_support::access_policy(),
+            agents: only(Arc::new(Provider::new(provider))),
+            storage: storage.clone(),
+            metadata: repository,
+            mode_audit: Arc::new(AcceptingModeAudit),
+            creation_audit: Arc::new(AcceptingCreationAudit),
+            file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+            attachments: None,
+            summaries: Arc::new(MemorySummaries::default()),
+            listing: Arc::new(Unlisted),
+            deletion_audit: Arc::new(AcceptingDeletionAudit),
+            provider_sessions: ProviderSessionErasers::default(),
+            deletion_budgets: DELETION_BUDGETS,
+            message_commit_clock: Arc::new(RuntimeMessageCommitClock::new()),
+            clock: Arc::new(TestClock),
+            environment: crate::conversation::infrastructure::in_process_environment().into(),
+        },
+        ConversationLimits::default(),
+        None,
+    )
+    .unwrap();
+    let id = id();
+    service
+        .create(
+            id.clone(),
+            caller("panel", "create"),
+            RequestedConversation::default(),
+        )
+        .await
+        .unwrap();
+    service
+        .leave_note(
+            id.clone(),
+            caller("panel", "note"),
+            nessa_sdk::domain::agent_execution::executions::Initiator::Owner,
+            "a note".into(),
+            nessa_sdk::application::agent_execution::sessions::NoteDelivery::NextTurn,
+        )
+        .await
+        .unwrap();
+    storage.short.store(true, Ordering::SeqCst);
+    let status = service
+        .note_status(id, caller("panel", "note"))
+        .await
+        .unwrap();
+    assert!(
+        !storage.short.load(Ordering::SeqCst),
+        "the short read was met"
+    );
+    assert!(
+        status.is_some(),
+        "the saved note is found past the short read"
+    );
+    service.shutdown().await.unwrap();
+}
+
 #[tokio::test]
 async fn committed_reads_recheck_tombstone_after_title_lookup() {
     for pending_mode in [false, true] {
