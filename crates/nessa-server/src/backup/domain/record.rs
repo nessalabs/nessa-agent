@@ -5,6 +5,9 @@ use sha2::{Digest, Sha256};
 
 use super::inventory::StoreKind;
 
+/// Byte bound shared by record identities and watermarks.
+pub(crate) const MAX_NAME_BYTES: usize = 512;
+
 /// The store's own cursor at the moment the hold was taken.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Watermark(String);
@@ -14,7 +17,8 @@ impl Watermark {
     /// omitted the cursor would not be checkable later.
     pub fn new(token: impl Into<String>) -> Result<Self, RecordError> {
         let token = token.into();
-        if token.is_empty() || token.len() > 512 || token.bytes().any(|byte| byte < 0x20) {
+        if token.is_empty() || token.len() > MAX_NAME_BYTES || token.bytes().any(|byte| byte < 0x20)
+        {
             return Err(RecordError::Watermark);
         }
         Ok(Self(token))
@@ -38,7 +42,9 @@ pub fn outbox_watermark(rows: &[(&str, u64)]) -> Result<Watermark, RecordError> 
     ordered.sort_by(|left, right| left.0.cmp(right.0));
     let mut text = String::new();
     for (identity, length) in ordered {
-        if identity.is_empty() || identity.len() > 512 || identity.bytes().any(|byte| byte <= 0x20)
+        if identity.is_empty()
+            || identity.len() > MAX_NAME_BYTES
+            || identity.bytes().any(|byte| byte <= 0x20)
         {
             return Err(RecordError::Identity);
         }
@@ -66,6 +72,20 @@ impl Fingerprint {
         let mut out = [0u8; 32];
         out.copy_from_slice(&digest);
         Self(out)
+    }
+
+    /// Decode a SHA-256 spelling. Uppercase digits remain accepted by the
+    /// live deletion inventory; strict listings compare with `hex()`.
+    pub fn from_hex(hex: &str) -> Result<Self, RecordError> {
+        if hex.len() != 64 || !hex.is_ascii() {
+            return Err(RecordError::Fingerprint);
+        }
+        let mut bytes = [0u8; 32];
+        for (output, pair) in bytes.iter_mut().zip(hex.as_bytes().as_chunks::<2>().0) {
+            let text = std::str::from_utf8(pair).map_err(|_| RecordError::Fingerprint)?;
+            *output = u8::from_str_radix(text, 16).map_err(|_| RecordError::Fingerprint)?;
+        }
+        Ok(Self::from_digest(bytes))
     }
 
     pub fn bytes(&self) -> &[u8; 32] {
@@ -186,6 +206,19 @@ impl SkipReason {
             Self::Bounded => "bounded",
             Self::Secret => "secret",
         }
+    }
+
+    /// The canonical spelling emitted by the manifest writer.
+    pub fn parse(token: &str) -> Option<Self> {
+        [
+            Self::Unreadable,
+            Self::Unavailable,
+            Self::Unnameable,
+            Self::Bounded,
+            Self::Secret,
+        ]
+        .into_iter()
+        .find(|reason| reason.as_str() == token)
     }
 }
 
@@ -338,6 +371,8 @@ impl SourceCut {
 /// Why a record was refused before it could enter a cut.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RecordError {
+    /// The digest was not 64 ASCII hexadecimal digits.
+    Fingerprint,
     /// The identity was empty, too long, or contained a control character.
     Identity,
     /// The watermark was empty or contained a control character.
@@ -346,8 +381,11 @@ pub enum RecordError {
     Store,
 }
 
-fn checked_identity(identity: String) -> Result<String, RecordError> {
-    if identity.is_empty() || identity.len() > 512 || identity.bytes().any(|byte| byte < 0x20) {
+pub(super) fn checked_identity(identity: String) -> Result<String, RecordError> {
+    if identity.is_empty()
+        || identity.len() > MAX_NAME_BYTES
+        || identity.bytes().any(|byte| byte < 0x20)
+    {
         return Err(RecordError::Identity);
     }
     Ok(identity)

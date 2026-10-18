@@ -38,18 +38,27 @@ pub struct RetainedDirectory {
 }
 
 impl RetainedDirectory {
-    pub fn open_beneath(root: &Path, directory: &Path) -> io::Result<Self> {
+    pub fn open_root(root: &Path) -> io::Result<Self> {
+        let root = root.components().collect::<PathBuf>();
         if !root.is_absolute() {
             return Err(unsafe_file());
         }
+        let root_file = open_directory(&root, FILE_LIST_DIRECTORY | FILE_TRAVERSE)?;
+        let retained = Self {
+            chain: vec![DirectoryBinding {
+                identity: file_identity(&root_file)?,
+                file: root_file,
+                path: root,
+            }],
+        };
+        retained.verify_binding()?;
+        Ok(retained)
+    }
+
+    pub fn open_beneath(root: &Path, directory: &Path) -> io::Result<Self> {
         let components = normal_components(directory)?;
-        let mut path = root.to_path_buf();
-        let root_file = open_directory(&path, FILE_LIST_DIRECTORY | FILE_TRAVERSE)?;
-        let mut chain = vec![DirectoryBinding {
-            identity: file_identity(&root_file)?,
-            file: root_file,
-            path: path.clone(),
-        }];
+        let mut retained = Self::open_root(root)?;
+        let mut path = retained.directory().path.clone();
         let last = components.len() - 1;
         for (index, component) in components.into_iter().enumerate() {
             path.push(component);
@@ -57,12 +66,36 @@ impl RetainedDirectory {
                 &path,
                 FILE_LIST_DIRECTORY | FILE_TRAVERSE | if index == last { FILE_ADD_FILE } else { 0 },
             )?;
-            chain.push(DirectoryBinding {
+            retained.chain.push(DirectoryBinding {
                 identity: file_identity(&file)?,
                 file,
                 path: path.clone(),
             });
         }
+        retained.verify_binding()?;
+        Ok(retained)
+    }
+
+    pub fn open_directory(&self, name: &OsStr) -> io::Result<Self> {
+        self.verify_binding()?;
+        let path = self.path(name)?;
+        let file = open_directory(&path, FILE_LIST_DIRECTORY | FILE_TRAVERSE)?;
+        let mut chain = self
+            .chain
+            .iter()
+            .map(|binding| {
+                Ok(DirectoryBinding {
+                    path: binding.path.clone(),
+                    file: binding.file.try_clone()?,
+                    identity: binding.identity,
+                })
+            })
+            .collect::<io::Result<Vec<_>>>()?;
+        chain.push(DirectoryBinding {
+            identity: file_identity(&file)?,
+            file,
+            path,
+        });
         let retained = Self { chain };
         retained.verify_binding()?;
         Ok(retained)
