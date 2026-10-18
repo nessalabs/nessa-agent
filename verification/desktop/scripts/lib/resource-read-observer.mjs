@@ -77,6 +77,12 @@ export function createResourceObserver(deliver, generation) {
       emit({ type: "failed", read: read.id })
     }
   }
+  const publishLive = (read) => {
+    // Acceptance and original-owner liveness can arrive in either order.
+    // resource-read-liveness.test.mjs covers both orders and irreversible stop.
+    if (!read.failed && read.accepted && read.mount.live && !read.mount.signal?.aborted)
+      emit({ type: "live", read: read.id })
+  }
   const signal = (value, cancel) => {
     if (!value || typeof value.addEventListener !== "function") {
       cancel()
@@ -267,6 +273,7 @@ export function createResourceObserver(deliver, generation) {
             read.accepted = true
             read.bytes = null
             emit({ type: "accepted", read: read.id })
+            publishLive(read)
           },
           () => fail(read),
         )
@@ -323,11 +330,7 @@ export function createResourceObserver(deliver, generation) {
           }
           if (cutoff) return
           mount.live = view?.lifecycle?.kind === "live"
-          if (mount.live)
-            for (const read of mount.reads) {
-              if (!read.accepted || mount.signal?.aborted) fail(read)
-              else emit({ type: "live", read: read.id })
-            }
+          if (mount.live) for (const read of mount.reads) publishLive(read)
           else if (["gone", "failed", "ending"].includes(view?.lifecycle?.kind))
             for (const read of mount.reads) fail(read)
         },

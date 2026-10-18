@@ -28,6 +28,12 @@ const controls = [
   "duplicate-request",
   "large-complete",
   "two-mounts",
+  "later-complete",
+  "later-concurrent",
+  "later-corrupt",
+  "later-truncated",
+  "later-remove-after-accept",
+  "later-replaced",
 ]
 
 /** Runs in the fixture page, importing the exact decorated production modules. */
@@ -48,6 +54,10 @@ async function readFixture(input) {
   let bridge
   const reading = []
   let apiAccepted = false
+  let acceptances = 0
+  let viewCallbacks = 0
+  let callbacksBeforeLater = null
+  let callbacksAfterLater = null
   let canceled = false
   let errorKind = null
   const api = createMcpAppsApi(
@@ -106,10 +116,14 @@ async function readFixture(input) {
               },
               { once: true },
             )
-            const token = reading.length === 0 ? input.ticket : "V".repeat(43)
+            const token =
+              reading.length === 0
+                ? input.ticket
+                : String(reading.length).padStart(43, "V")
             const result = api.fetchResource(token, input.expected, { signal }).then(
               (bytes) => {
                 apiAccepted = true
+                acceptances++
                 return {
                   kind: "ok",
                   result: {
@@ -143,32 +157,55 @@ async function readFixture(input) {
       },
       post() {},
       host: { open() {}, close() {} },
-      onView() {},
+      onView() {
+        viewCallbacks++
+      },
+    }
+    const initialize = (mounted) => {
+      if (mounted.view().lifecycle.kind !== "proxy") return
+      mounted.receive({
+        kind: "notification",
+        notification: { method: sandboxMethods.proxyReady },
+      })
+      mounted.receive({
+        kind: "request",
+        id: 1,
+        request: {
+          method: "ui/initialize",
+          initialize: { protocolVersion: "2026-01-26", appName: "Synthetic" },
+        },
+      })
+      mounted.receive({
+        kind: "notification",
+        notification: { method: "ui/notifications/initialized" },
+      })
     }
     bridge = createAppBridge(bridgeOptions)
-    const second = input.control === "two-mounts" ? createAppBridge(bridgeOptions) : null
+    let second = input.control === "two-mounts" ? createAppBridge(bridgeOptions) : null
     await Promise.all(reading)
     // Let the original bridge's read reaction run, then use its typed events.
     await Promise.resolve()
-    for (const mounted of [bridge, second].filter(Boolean))
-      if (mounted.view().lifecycle.kind === "proxy") {
-        mounted.receive({
-          kind: "notification",
-          notification: { method: sandboxMethods.proxyReady },
-        })
-        mounted.receive({
+    for (const mounted of [bridge, second].filter(Boolean)) initialize(mounted)
+    if (input.control.startsWith("later-")) {
+      callbacksBeforeLater = viewCallbacks
+      for (let index = 0; index < (input.control === "later-concurrent" ? 2 : 1); index++)
+        bridge.receive({
           kind: "request",
-          id: 1,
-          request: {
-            method: "ui/initialize",
-            initialize: { protocolVersion: "2026-01-26", appName: "Synthetic" },
-          },
+          id: `later-${index}`,
+          request: { method: "resources/read", uri: call.resourceUri },
         })
-        mounted.receive({
-          kind: "notification",
-          notification: { method: "ui/notifications/initialized" },
-        })
+      await Promise.all(reading)
+      await Promise.resolve()
+      callbacksAfterLater = viewCallbacks
+      if (["later-remove-after-accept", "later-replaced"].includes(input.control))
+        bridge.remove()
+      if (input.control === "later-replaced") {
+        second = createAppBridge(bridgeOptions)
+        await Promise.all(reading)
+        await Promise.resolve()
+        initialize(second)
       }
+    }
     if (["remove-after-live", "two-mounts"].includes(input.control)) bridge.remove()
     if (["unrelated-request", "duplicate-request"].includes(input.control)) {
       await fetch(input.url, {
@@ -180,6 +217,9 @@ async function readFixture(input) {
     }
     const outcome = {
       apiAccepted,
+      acceptances,
+      callbacksBeforeLater,
+      callbacksAfterLater,
       canceled,
       state: bridge.view().lifecycle.kind,
       errorKind,
@@ -197,13 +237,14 @@ async function resourceControl(browser, origin, control) {
     `<html><body>${"synthetic ".repeat(control === "large-complete" ? 300000 : 64)}</body></html>`,
   )
   const ticket = "T".repeat(43)
-  const served =
-    control === "corrupt"
+  const responseBody = (later) =>
+    control === "corrupt" || (control === "later-corrupt" && later)
       ? Buffer.from(body.map((byte, index) => (index === 15 ? byte ^ 1 : byte)))
-      : control === "truncated"
+      : control === "truncated" || (control === "later-truncated" && later)
         ? body.subarray(0, body.length - 1)
         : body
   const server = createServer((request, response) => {
+    const served = responseBody(request.headers["x-nessa-resource-ticket"] !== ticket)
     response.setHeader("Access-Control-Allow-Origin", origin)
     response.setHeader("Access-Control-Allow-Headers", "x-nessa-resource-ticket")
     if (request.method === "OPTIONS") {
@@ -252,9 +293,14 @@ async function resourceControl(browser, origin, control) {
       await observed.finalize()
       observed.finish()
       assert.equal(observed.collector.summary().cutoff, true)
-      const positive = ["complete", "large-complete", "unrelated-request"].includes(
-        control,
-      )
+      const positive =
+        ["complete", "large-complete", "unrelated-request"].includes(control) ||
+        [
+          "later-complete",
+          "later-concurrent",
+          "later-corrupt",
+          "later-truncated",
+        ].includes(control)
       assert.equal(
         observed.collector.readState(requests[0]),
         positive ? "verified" : "invalid",
@@ -268,6 +314,41 @@ async function resourceControl(browser, origin, control) {
         )
         assert.equal(outcome.secondState, "live")
         assert.equal(observed.collector.summary().verified, 1)
+      }
+      if (control.startsWith("later-")) {
+        assert.equal(
+          outcome.callbacksAfterLater,
+          outcome.callbacksBeforeLater,
+          "production resources/read does not republish the already-live view",
+        )
+        const laterPositive = ["later-complete", "later-concurrent"].includes(control)
+        assert.equal(
+          observed.collector.readState(requests[1]),
+          laterPositive ? "verified" : "invalid",
+        )
+        if (control === "later-concurrent") {
+          assert.equal(observed.collector.readState(requests[2]), "verified")
+          assert.equal(outcome.acceptances, 3)
+        }
+        if (["later-corrupt", "later-truncated"].includes(control)) {
+          assert.equal(outcome.acceptances, 1)
+          assert.equal(outcome.errorKind, "integrity")
+        }
+        if (control === "later-replaced") {
+          assert.equal(outcome.secondState, "live")
+          assert.equal(observed.collector.readState(requests[2]), "verified")
+          assert.equal(observed.collector.summary().verified, 1)
+        }
+        const laterClassification = { errors: [], harmless: [] }
+        const originalFailure = requests[1].failure
+        requests[1].failure = () => ({ errorText: "net::ERR_ABORTED" })
+        try {
+          classifyResourceFailure(requests[1], observed.collector, laterClassification)
+        } finally {
+          requests[1].failure = originalFailure
+        }
+        assert.equal(laterClassification.harmless.length, laterPositive ? 1 : 0)
+        assert.equal(laterClassification.errors.length, laterPositive ? 0 : 1)
       }
       const classification = { errors: [], harmless: [] }
       // Deliberately simulated ERR_ABORTED on the exact actual Request. This is

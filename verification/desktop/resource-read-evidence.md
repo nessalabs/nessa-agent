@@ -31,7 +31,12 @@ reach the successful client method unchanged.
 | reading / chunk | bounded actual bytes; keep reading |
 | reading / EOF | exact expected length and SHA256; otherwise failed |
 | EOF / original client method resolves | matching byte-array/read identity; wrapper and integrity accepted |
-| verified / original bridge view live | exact original mount, still uncanceled at the original browser observer cutoff; eligible |
+| accepted read / original bridge view becomes live | publish live evidence for that read from its original mount |
+| already-live original mount / original client accepts a later read | publish live evidence without requiring another view callback |
+| live before acceptance / pending read | retain the mount's live fact; publish nothing until original client acceptance |
+| successive or concurrent reads / acceptance in either order | each unique read joins its own acceptance with the same original mount; no sibling lends acceptance |
+| accepted read / original owner stops or is replaced before cutoff | permanently failed even if a replacement owner is live |
+| eligible / original browser observer cutoff | exact original mount still live and uncanceled; retain eligibility |
 | before browser observer cutoff / cancel, replacement, rejection, duplicate or impossible ordering | permanently failed; later success cannot repair it |
 | event / Request binding arrives in either order | join exactly once by private single-use identity; ambiguous candidates fail |
 | failed request before or after eligibility | retain its exact Request and line until final page reporting |
@@ -113,6 +118,11 @@ Implementation contract:
 - Observe original promises with nonthrowing reactions and return those exact
   promises. Browser sequence numbers describe causal order; one bounded delivery
   chain orders binding calls. No application read awaits an observer receipt.
+- One browser observer helper joins original client acceptance with original
+  mount liveness. Both the acceptance reaction and the view callback ask that
+  helper; a live callback alone does not fail an unfinished read or supply its
+  acceptance. No new view callback is required for reads begun on a live mount.
+  Failure remains irreversible, and finalize still checks the original owner.
 - At finalization a synchronous browser cutoff snapshots original signals and
   live owners and stops admission. Its acknowledged final sequence is required
   within the existing 2000ms settlement budget shared with size reports. Missing

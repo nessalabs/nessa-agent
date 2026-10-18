@@ -1370,6 +1370,11 @@ says why where the conversations would be.
   before browser cutoff and duplicate proof bypasses all older size/live patterns.
   _Check:_ `resource-read-regression.mjs` exercises real factories in Chromium
   and WebKit with synthetic HTTP/ports; simulated aborts are explicitly labelled.
+  Later successful `resources/read` calls on an already-live bridge qualify
+  without another view callback, including concurrent reads. Corrupt, truncated,
+  stopped and replaced original-owner reads remain invalid; a live replacement
+  cannot lend proof to them. `resource-read-liveness.test.mjs` additionally gates
+  both acceptance/view orders and cancellation before and after acceptance.
 - [ ] **Opening failure evidence precedes page disposal (#981).** A failed
   gateway app open keeps bounded animation, post-failure RAF, redacted unfinished
   HTTP/RPC state and a screenshot. The original readiness predicate, 3000ms

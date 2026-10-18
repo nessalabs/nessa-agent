@@ -86,6 +86,7 @@ verification/
         server.mjs          reuse/start the dev server (warmed before the first page, a reused one too), or build + preview production
         browser.mjs         launch Chromium/WebKit, seed preferences, keep page diagnostic queues private
         resource-read-observer.mjs browser factory decorators: original consumed stream/client/mount observations, bounded transport and cutoff
+        resource-read-liveness.test.mjs accepted/live ordering, later concurrent reads and original-owner stop/replacement controls
         resource-read-evidence.mjs Node incremental hash, exact Request correlation and bounded evidence ownership (#996)
         resource-read-modules.mjs opt-in exact Vite export decoration before navigation
         open-failure-evidence.mjs failure-only animation/RAF and redacted pending HTTP/RPC capture before disposal (#981)
