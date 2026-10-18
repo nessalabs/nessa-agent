@@ -19,7 +19,7 @@ use nessa_sdk::application::agent_execution::{
     sessions::InvocationRecord,
 };
 use nessa_sdk::domain::agent_execution::{
-    executions::{ExecutionId, Resumption, SubmissionMode as InvocationSubmission},
+    executions::{ExecutionId, SubmissionMode as InvocationSubmission},
     prompts::MessageSender,
 };
 use sha2::{Digest, Sha256};
@@ -160,9 +160,7 @@ impl ConversationService {
             .map_err(|_| ConversationError::Unavailable)?;
         let mut people = Vec::new();
         for record in history {
-            if record.request.user_message.sender() != &MessageSender::Person
-                || Resumption::of(&record.request.execution_id).attempt() != 0
-            {
+            if record.request.user_message.sender() != &MessageSender::Person {
                 continue;
             }
             let message = SubmittedMessage {

@@ -150,6 +150,9 @@ report ID prefixes nor continuation notice text create provenance.
 | Command receipt evidence is unavailable | Existing command read refuses; provider result remains known | Retain and retry; never acknowledge delivery from missing Stop facts |
 | Parent reports paused | Durable Stop marker, no later person admission | Do not settle or enqueue report work |
 | Later person admitted | Existing person command ordering | Redeliver withdrawn report under that person turn's delivery ID |
+| Ordinary person input has a resume-shaped ID | Exact later Dispatched person Submit receipt | Release the pause; execution-ID spelling supplies no origin or intervention authority |
+| Genuine SDK successor has no person command | SDK admission alone, no matching later person Submit receipt | Keep reports paused |
+| Genuine SDK successor is explicitly submitted by a person later | Exact later Dispatched person Submit receipt for that saved input | Release the pause; SDK origin does not veto a separate person intervention |
 | Restarted pending row | Same durable row, transcript, canonical links and receipts | Reconcile original identities without replay or recapture |
 | Completed report with no effective Stop | SDK final result and no withdrawal/cancellation receipt | Settle existing obligation without duplicate delivery |
 
@@ -194,7 +197,7 @@ contract.
 | A source is owed but its derived successor ID belongs to an unrelated saved input | Resumption returns `SubmissionConflict` before changing the source. Host decline can still end the source; the unrelated input is preserved | SDK canonical-admission conformance |
 | Ordinary queued input exactly matches a continuation after a recorded owed stop | Only the SDK resumption owner's `resumed_from` fact, saved atomically with successor input admission, can establish the relationship. Caller fields do not create it; collision refuses before source effects | `an_exact_queued_caller_input_after_a_recorded_stop_is_not_a_resume` |
 | Ordinary enqueue wins the scheduler after the source stop is saved but before resume admits input | Scheduler-held retry recovery refuses its missing owner fact rather than claiming Continued | `ordinary_enqueue_winning_after_resume_settlement_keeps_its_origin` |
-| Ordinary person input uses a resume-shaped ID | Its saved origin, not its spelling, decides person intervention and failed-turn eligibility | Ordinary-origin resumption conformance |
+| Ordinary person input uses a resume-shaped ID | Within SDK owed-work eligibility, its saved origin, not its spelling, distinguishes ordinary intervention from a retry; the gateway's separate person-command boundary is owned by exact Submit receipts | Ordinary-origin resumption conformance and person report-pause release conformance |
 | Legitimate resume admission survives restart, audit failure or an identical input retry | Its saved source identity remains authoritative independently of the later TurnResumed audit; canonical validation still checks identity/request/order/stop and retry joins exact work | Real-resume restoration and ContinuedUnaudited conformance |
 | A matching successor was admitted as immediate input | It cannot carry a queued resumption's work; the original stays owed | SDK canonical-admission conformance |
 | Automatic resume races Stop capture | Both hold application admission before mode changes through successor admission | Parent Stop recovery plus existing resume conformance |

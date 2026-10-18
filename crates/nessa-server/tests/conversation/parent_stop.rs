@@ -7,7 +7,7 @@ use crate::conversation::application::{
     PendingReport, ThreadReport, ThreadReportStore,
 };
 use crate::conversation::infrastructure::{DurableOwnershipAudit, LocalThreadReports};
-use nessa_sdk::application::agent_execution::agents::{owed_turn_ids, Resumed};
+use nessa_sdk::application::agent_execution::agents::{owed_turn_ids, resumed_turn_id, Resumed};
 use nessa_sdk::application::agent_execution::commands;
 use nessa_sdk::application::agent_execution::executions::{
     ExecutionRequest, ExecutionUpdate, Submitter,
@@ -1119,6 +1119,18 @@ async fn an_accepted_selection_recovers_without_replaying_work_or_reinterpreting
 
 #[tokio::test]
 async fn foreign_callers_and_report_id_collisions_do_not_cancel_unrelated_user_work() {
+    person_input_releases_report_pause("later-person").await;
+}
+
+#[tokio::test]
+async fn an_ordinary_resume_shaped_person_submit_releases_report_pause() {
+    let execution = Resumption::of(&ExecutionId::new("arbitrary-person-input").unwrap())
+        .successor()
+        .unwrap();
+    person_input_releases_report_pause(execution.as_str()).await;
+}
+
+async fn person_input_releases_report_pause(later_person: &str) {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("data");
     let provider = Arc::new(ProviderFactory::default());
@@ -1209,19 +1221,37 @@ async fn foreign_callers_and_report_id_collisions_do_not_cancel_unrelated_user_w
         1,
         "an unrelated record cannot acknowledge the report"
     );
-    service
+    let submitted = service
         .submit_command(
             storage.clone(),
             parent.clone(),
             caller("later-person"),
             Initiation::owner(),
             false,
-            "later-person".into(),
+            later_person.into(),
             message("continue"),
             SubmissionMode::Queue,
         )
         .await
         .unwrap();
+    assert_eq!(
+        submitted.progress.outcome(),
+        Some(MutationOutcome::Dispatched)
+    );
+    let history = live.agent.session_manager().snapshot().await.unwrap();
+    let record = history
+        .invocations
+        .iter()
+        .find(|record| record.request.execution_id.as_str() == later_person)
+        .unwrap();
+    assert_eq!(record.resumed_from, None);
+    assert!(
+        !service
+            .reports_paused(&parent, &caller("read"), &history.invocations)
+            .await
+            .unwrap(),
+        "the exact later person Submit receipt releases reports regardless of execution-ID spelling"
+    );
     tokio::time::timeout(Duration::from_secs(10), async {
         loop {
             if reports.pending().await.unwrap().is_empty() {
@@ -1243,6 +1273,104 @@ async fn foreign_callers_and_report_id_collisions_do_not_cancel_unrelated_user_w
         1
     );
     drop(live);
+    retire(service, storage, metadata).await;
+}
+
+#[tokio::test]
+async fn a_real_sdk_resume_releases_report_pause_only_after_an_explicit_person_submit() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("data");
+    let parent = id();
+    let source = ExecutionId::new("sdk-source").unwrap();
+    {
+        let provider = Arc::new(ProviderFactory::default());
+        provider.turn_cancel.store(true, Ordering::SeqCst);
+        let (service, storage, metadata) = fixture(&root, provider.clone());
+        bind(&service, &storage, &root, true).await;
+        opened(&service, &provider, &parent).await;
+        let p = hold_turn(&service, &provider, &parent, "parent").await;
+        service
+            .stop_command(
+                storage.clone(),
+                parent.clone(),
+                caller("stop"),
+                "parent".into(),
+            )
+            .await
+            .unwrap();
+        drop(p);
+        // Direct submission admits SDK work without a person command receipt.
+        let release = hold_turn(&service, &provider, &parent, source.as_str()).await;
+        suspend_child_turn(&service, &provider, &parent, release).await;
+        retire(service, storage, metadata).await;
+    }
+    let provider = Arc::new(ProviderFactory::default());
+    provider.turn_cancel.store(true, Ordering::SeqCst);
+    let (service, storage, metadata) = fixture(&root, provider.clone());
+    bind(&service, &storage, &root, true).await;
+    // Prevent automatic gateway resume from winning the deliberate SDK call.
+    let admission = service.inner.thread_admission.lock().await;
+    let live = service.resolve(&parent, &caller("reopen")).await.unwrap();
+    let owed = live
+        .agent
+        .owed_turns()
+        .await
+        .into_iter()
+        .find(|turn| turn.execution_id() == &source)
+        .unwrap();
+    let (release, gate) = oneshot::channel();
+    *provider.execution_gate.lock().unwrap() = Some(gate);
+    let started = provider.execution_started.notified();
+    let Resumed::Continued(resumed) = live
+        .agent
+        .resume_turn(&owed, caller("sdk-resume").actor().unwrap())
+        .await
+        .unwrap()
+    else {
+        panic!("the saved SDK source must resume")
+    };
+    tokio::time::timeout(TURN_HOLD_HANG, started).await.unwrap();
+    let successor = resumed.id().clone();
+    let history = live.agent.session_manager().snapshot().await.unwrap();
+    let saved = history
+        .invocations
+        .iter()
+        .find(|record| record.request.execution_id == successor)
+        .unwrap();
+    assert_eq!(saved.resumed_from.as_ref(), Some(&source));
+    assert_eq!(
+        resumed_turn_id(&history.invocations, &source),
+        Some(successor.clone())
+    );
+    assert!(
+        service
+            .reports_paused(&parent, &caller("read"), &history.invocations)
+            .await
+            .unwrap(),
+        "a genuine SDK resume alone is not an explicit person command"
+    );
+    drop(admission);
+
+    acknowledge_report_delivery(&service, &storage, &parent, successor.as_str()).await;
+    let history = live.agent.session_manager().snapshot().await.unwrap();
+    assert!(
+        !service
+            .reports_paused(&parent, &caller("read"), &history.invocations)
+            .await
+            .unwrap(),
+        "the exact later person Submit receipt establishes a separate intervention"
+    );
+    assert_eq!(
+        history
+            .invocations
+            .iter()
+            .find(|record| record.request.execution_id == successor)
+            .unwrap()
+            .resumed_from
+            .as_ref(),
+        Some(&source)
+    );
+    drop((release, resumed, live));
     retire(service, storage, metadata).await;
 }
 
