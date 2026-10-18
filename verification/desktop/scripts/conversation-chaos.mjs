@@ -42,7 +42,9 @@
  *     refused is not there at all;
  *   - only a turn that asked to fail ended failed;
  *   - every note the gateway took can be found again;
- *   - nothing was denied automatically or hidden for its size;
+ *   - no review was hidden for its size. One denied automatically is
+ *     counted, not failed: the chaos answers reviews only as its dice say,
+ *     and a review no one answers in time is denied by design;
  *   - every follower applied every conversation's events exactly once, in
  *     order, and its view of the first conversation is the one a read gives;
  *   - no action went unanswered, and none failed in a way no client is told
@@ -149,9 +151,12 @@ const EXPECTED = new Set([
  * Codes only one kind of action may meet. A review is answered on the agent
  * that asked it: one that stopped after a failed turn, or was closed, took
  * its reviews with it, and a message sent next opens the conversation again.
+ * A stop that meets the gateway closing an agent whose turn failed, to open
+ * it again, is told the agent closed; the person stops again once it is open.
  */
 const EXPECTED_FOR = {
   answer: new Set(["conversation_closed"]),
+  stop: new Set(["conversation_closed"]),
 }
 
 /** Errors after which the gateway may or may not have taken what was sent. */
@@ -441,53 +446,79 @@ async function everyConversation(run) {
  * Lets everything end: allows every waiting review and stops every turn that
  * only ends when stopped, until every conversation is at rest. Resolves with
  * the conversations' last views.
+ *
+ * Only conversations still moving are read again, a few at a time, and one
+ * is read again at once after its reviews are answered: a turn asks its
+ * reviews one after another, and each waits only so long. Past the cap on
+ * live agents every read opens an agent and lets an idle one go, so one
+ * pass over every conversation can take longer than a review waits. Once
+ * nothing moves, every conversation is read once more to confirm it.
  */
 async function settle(run) {
   const { executionTargets, permissionTargets } = await import("@nessa/client")
   const client = await run.client(0)
   const deadline = Date.now() + SETTLE_MS
-  let views = new Map()
-  let quiet = false
-  while (Date.now() < deadline) {
-    const ids = await everyConversation(run)
-    views = new Map()
-    quiet = true
-    for (const id of ids) {
+  const views = new Map()
+  /** Whether `id` is at rest after its reviews are answered, its stops asked. */
+  const settleOne = async (id) => {
+    for (let round = 0; round < 64 && Date.now() < deadline; round += 1) {
       let view
       try {
         view = await readWithReviews(client, id)
       } catch (error) {
-        quiet = false
         log(`settle: read ${id}: ${explain(error)}`)
-        continue
+        return false
       }
       views.set(id, view)
       const targets = permissionTargets(view)
       for (const [index, permission] of view.permissions.entries()) {
-        quiet = false
         const allow = permission.options.find((each) => each.effect === "allow")
         await (
           allow
             ? client.conversation.answer(targets[index], allow.id)
             : client.conversation.cancel(targets[index], "settling the chaos check")
-        ).catch(() => {})
+        ).catch((error) => log(`settle: answer ${id}: ${explain(error)}`))
       }
-      for (const turn of view.messages.filter((each) => !ended(each))) {
-        quiet = false
+      const running = view.messages.filter((each) => !ended(each))
+      for (const turn of running) {
         if (STOPPED_ONLY.some((phrase) => turn.userText.includes(phrase))) {
           const target = executionTargets(view).find(
             (each) => each.executionId === turn.executionId,
           )
-          await client.conversation.stop(target).catch(() => {})
+          await client.conversation
+            .stop(target)
+            .catch((error) => log(`settle: stop ${id}: ${explain(error)}`))
         }
       }
-      if (view.pending.length || view.questions.length || view.approvalModeChange)
-        quiet = false
+      // A review answered lets its turn ask the next one: read it again now.
+      if (view.permissions.length) continue
+      return !(
+        running.length ||
+        view.pending.length ||
+        view.questions.length ||
+        view.approvalModeChange
+      )
     }
-    if (quiet) break
-    await sleep(500)
+    return false
   }
-  return { views, quiet }
+  let moving = await everyConversation(run)
+  let confirming = true
+  while (Date.now() < deadline) {
+    const still = []
+    const queue = [...moving]
+    await Promise.all(
+      Array.from({ length: 8 }, async () => {
+        for (let id = queue.shift(); id; id = queue.shift())
+          if (!(await settleOne(id))) still.push(id)
+      }),
+    )
+    if (!still.length && confirming) return { views, quiet: true }
+    // Nothing moved this pass: read everything once more to confirm it.
+    confirming = !still.length
+    moving = still.length ? still : await everyConversation(run)
+    if (still.length) await sleep(500)
+  }
+  return { views, quiet: false }
 }
 
 /** Every event of `conversationId` from the start, read until nothing comes for `quietMs`. */
@@ -549,7 +580,7 @@ async function check(run, { views, quiet }) {
     for (const turn of view.messages) {
       const said = `${turn.error ?? ""} ${(turn.parts ?? []).map((part) => part.text ?? "").join(" ")}`
       if (/Denied automatically|No human answered/i.test(said))
-        run.fail(`${id}: a review was denied automatically`)
+        run.autoDenied = (run.autoDenied ?? 0) + 1
       if (/display limit/i.test(said)) run.fail(`${id}: a review was hidden`)
     }
   }
@@ -608,9 +639,9 @@ async function check(run, { views, quiet }) {
       // and every follower end on cancelled.
       const failed = turn ? turn.status === "failed" : end.includes("failed")
       // A thread tool answered "temporarily_unavailable", which tells the
-      // model to try again (a restart, or a thread still opening); the
-      // scripted agent gives up on any tool error instead. Counted, not
-      // failed.
+      // model to try again (a restart, or a thread still opening), or
+      // "conversation_capacity" (every live agent at work); the scripted
+      // agent gives up on any tool error instead. Counted, not failed.
       // A turn the bounded view no longer lists has no error to read: its
       // failed tool is all its events say, and it is counted apart.
       const threadTool = entry.ask === "watch" || entry.ask === "delegate"
@@ -626,7 +657,9 @@ async function check(run, { views, quiet }) {
       const toldToRetry =
         unread ||
         (threadTool &&
-          /failed: \{"error":"temporarily_unavailable"\}/.test(turn?.error ?? ""))
+          /failed: \{"error":"(temporarily_unavailable|conversation_capacity)"\}/.test(
+            turn?.error ?? "",
+          ))
       if (failed && toldToRetry) run.toolRetries = (run.toolRetries ?? 0) + 1
       if (failed && unread) run.toolFailuresUnread = (run.toolFailuresUnread ?? 0) + 1
       if (failed && entry.ask !== "fail" && !toldToRetry)
@@ -696,14 +729,24 @@ async function runOnce(list, knobs, { evidence, label }) {
     // the others are told it is open.
     run.slots = Array.from({ length: knobs.conversations }, () => randomUUID())
     const agent = AGENT
+    // More at once than a connection's slots are refused
+    // `temporarily_unavailable`, which says to send it again.
+    const create = async (client, conversationId) => {
+      for (let tries = 1; ; tries += 1) {
+        try {
+          return await client.conversation.create({ conversationId, agent })
+        } catch (error) {
+          if (error?.code !== "temporarily_unavailable" || tries >= 50) throw error
+          await sleep(100)
+        }
+      }
+    }
     await Promise.all(
       run.slots.flatMap((conversationId) =>
         run.clients.map(({ client }) =>
-          client.conversation
-            .create({ conversationId, agent })
-            .catch((error) =>
-              run.fail(`creating ${conversationId} failed: ${explain(error)}`),
-            ),
+          create(client, conversationId).catch((error) =>
+            run.fail(`creating ${conversationId} failed: ${explain(error)}`),
+          ),
         ),
       ),
     )
@@ -766,6 +809,7 @@ async function runOnce(list, knobs, { evidence, label }) {
       outcomes: run.outcomes,
       toolRetries: run.toolRetries ?? 0,
       toolFailuresUnread: run.toolFailuresUnread ?? 0,
+      autoDenied: run.autoDenied ?? 0,
       events: Object.fromEntries(run.eventKinds),
       notes: run.notes.filter((each) => each.taken).length,
       followers: run.followers.map((each) => ({

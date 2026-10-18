@@ -103,7 +103,7 @@ use std::{
     panic::AssertUnwindSafe,
     pin::Pin,
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, OnceLock, Weak,
     },
     time::Duration,
@@ -700,6 +700,10 @@ struct Slot {
     /// A person's close needs none: it holds the submission lock until its
     /// slot is let go.
     stopping: AtomicBool,
+    /// When this owner was last asked for, as a count of asks across every
+    /// owner: the one asked for longest ago is let go first to make room
+    /// ([`ConversationService::make_room`]).
+    used: AtomicU64,
 }
 struct Inner {
     workspace: Option<String>,
@@ -753,6 +757,8 @@ struct Inner {
     access_policy: Arc<dyn ConversationAccessPolicyEvaluator>,
     limits: ConversationLimits,
     conversations: Mutex<HashMap<ConversationId, Arc<Slot>>>,
+    /// Asks for an owner so far, which stamps [`Slot::used`].
+    asks: AtomicU64,
     creation: Mutex<()>,
     retirement: OnceLock<ActionContext>,
     admission: Arc<RwLock<()>>,
@@ -1261,6 +1267,7 @@ impl ConversationService {
                 access_policy,
                 limits,
                 conversations: Mutex::new(HashMap::new()),
+                asks: AtomicU64::new(0),
                 creation: Mutex::new(()),
                 retirement: OnceLock::new(),
                 admission: Arc::new(RwLock::new(())),
@@ -1427,12 +1434,18 @@ impl ConversationService {
             approval_mode,
         )
         .map_err(|_| ConversationError::InvalidInput)?;
-        {
-            let owners = service.inner.conversations.lock().await;
-            if service.inner.retirement.get().is_some() {
-                return Err(ConversationError::Unavailable);
+        loop {
+            let full = {
+                let owners = service.inner.conversations.lock().await;
+                if service.inner.retirement.get().is_some() {
+                    return Err(ConversationError::Unavailable);
+                }
+                !owners.contains_key(&id) && owners.len() >= service.inner.limits.max_conversations
+            };
+            if !full {
+                break;
             }
-            if !owners.contains_key(&id) && owners.len() >= service.inner.limits.max_conversations {
+            if !service.make_room(&id).await {
                 return Err(ConversationError::Capacity);
             }
         }
@@ -1480,15 +1493,19 @@ impl ConversationService {
                 .await
                 .map_err(|_| ConversationError::Audit)?;
         }
-        let slot = {
+        let slot = loop {
             let mut owners = service.inner.conversations.lock().await;
             if service.inner.retirement.get().is_some() {
                 return Err(ConversationError::Unavailable);
             }
             if !owners.contains_key(&id) && owners.len() >= service.inner.limits.max_conversations {
-                return Err(ConversationError::Capacity);
+                drop(owners);
+                if !service.make_room(&id).await {
+                    return Err(ConversationError::Capacity);
+                }
+                continue;
             }
-            match owners.entry(id.clone()) {
+            let slot = match owners.entry(id.clone()) {
                 std::collections::hash_map::Entry::Occupied(entry) => entry.get().clone(),
                 std::collections::hash_map::Entry::Vacant(entry) => {
                     let slot = Arc::new(Slot {
@@ -1496,12 +1513,15 @@ impl ConversationService {
                         ready: Notify::new(),
                         started: AtomicBool::new(false),
                         stopping: AtomicBool::new(false),
+                    used: AtomicU64::new(0),
                     });
                     entry.insert(slot.clone());
                     service.start_slot(id.clone(), slot.clone(), actor.clone());
                     slot
                 }
-            }
+            };
+            service.touch(&slot);
+            break slot;
         };
         drop(creation_guard);
         service.wait_for_slot(&id, slot).await
@@ -1582,32 +1602,108 @@ impl ConversationService {
         self.access()
             .admit(&record, caller)
             .map_err(ConversationError::from)?;
-        let slot = {
+        let slot = loop {
             let mut owners = self.inner.conversations.lock().await;
             if self.inner.retirement.get().is_some() {
                 return Err(Halt::Retired);
             }
-            if let Some(slot) = owners.get(id) {
+            let slot = if let Some(slot) = owners.get(id) {
                 slot.clone()
             } else if !open {
                 return Err(ConversationError::McpApp(McpAppError::Cancelled).into());
             } else {
                 if owners.len() >= self.inner.limits.max_conversations {
-                    return Err(ConversationError::Capacity.into());
+                    drop(owners);
+                    if !self.make_room(id).await {
+                        return Err(ConversationError::Capacity.into());
+                    }
+                    continue;
                 }
                 let slot = Arc::new(Slot {
                     value: OnceCell::new(),
                     ready: Notify::new(),
                     started: AtomicBool::new(false),
                     stopping: AtomicBool::new(false),
+                    used: AtomicU64::new(0),
                 });
                 owners.insert(id.clone(), slot.clone());
-                self.start_slot(id.clone(), slot.clone(), actor);
+                self.start_slot(id.clone(), slot.clone(), actor.clone());
                 slot
-            }
+            };
+            self.touch(&slot);
+            break slot;
         };
         let live = self.wait_for_slot(id, slot.clone()).await?;
         Ok((slot, live))
+    }
+    /// Stamp `slot` as asked for now.
+    fn touch(&self, slot: &Slot) {
+        let ask = self.inner.asks.fetch_add(1, Ordering::Relaxed) + 1;
+        slot.used.store(ask, Ordering::Relaxed);
+    }
+    /// Let go of the agent asked for longest ago that has nothing to do, so
+    /// one more conversation can open past the bound on live agents rather
+    /// than being refused. Nothing of it is lost: its records stay, and the
+    /// next read or message opens it again. An agent with a turn running or
+    /// queued, a turn owed after a restart, or an app's review waiting is
+    /// never let go. Answers whether one was.
+    async fn make_room(&self, keep: &ConversationId) -> bool {
+        let mut owners: Vec<(ConversationId, Arc<Slot>)> = self
+            .inner
+            .conversations
+            .lock()
+            .await
+            .iter()
+            .filter(|(id, slot)| *id != keep && !slot.stopping.load(Ordering::SeqCst))
+            .map(|(id, slot)| (id.clone(), slot.clone()))
+            .collect();
+        owners.sort_by_key(|(_, slot)| slot.used.load(Ordering::Relaxed));
+        let Ok(actor) = ActionContext::new("gateway", "make_room", Uuid::new_v4().to_string())
+        else {
+            return false;
+        };
+        for (id, slot) in owners {
+            // A submission or read holds this while it uses the agent; one
+            // held now is a use, and the agent is not idle.
+            let Some(_submissions) = self.inner.mode_changes.try_lock(&id) else {
+                continue;
+            };
+            let still_owner = self
+                .inner
+                .conversations
+                .lock()
+                .await
+                .get(&id)
+                .is_some_and(|known| Arc::ptr_eq(known, &slot));
+            let Some(Ok(live)) = slot.value.get() else {
+                continue;
+            };
+            if !still_owner
+                || slot.stopping.load(Ordering::SeqCst)
+                || !live.agent.is_idle().await
+                || !live.agent.owed_turns().await.is_empty()
+                || !live.app_reviews.entries().is_empty()
+            {
+                continue;
+            }
+            tracing::info!(conversation_id = %id, "letting an idle agent go to make room");
+            // Past the stop budget the stop carries on and lets the slot go
+            // once its close is confirmed; this ask looks for another.
+            let stopped = self
+                .stop_and_release(
+                    &id,
+                    slot.clone(),
+                    &actor,
+                    &McpAppInitiator::System,
+                    LeaseEndCause::Stopped,
+                    AgentEnd::Close,
+                )
+                .await;
+            if stopped.is_ok() {
+                return true;
+            }
+        }
+        false
     }
     fn start_slot(&self, id: ConversationId, slot: Arc<Slot>, actor: ActionContext) {
         let service = self.clone();

@@ -873,6 +873,22 @@ fn rejected_lane<T>(
     }
 }
 
+/// Queue a refusal, waiting for room on a full lane rather than closing the
+/// socket: a client that asks for more than its slots is told so, frame by
+/// frame, and reading its next frame waits until the writer takes this one.
+/// A writer that cannot write is bounded by the write timeout, which closes
+/// the socket. Answers whether the writer is gone.
+async fn refusal_waits<T>(lane: &tokio::sync::mpsc::Sender<T>, refusal: T) -> bool {
+    match lane.try_send(refusal) {
+        Ok(()) => false,
+        Err(tokio::sync::mpsc::error::TrySendError::Full(refusal)) => {
+            note_limit("socket.refusal_lane");
+            lane.send(refusal).await.is_err()
+        }
+        Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => true,
+    }
+}
+
 enum AuthenticatedInput {
     Request(RequestFrame),
     Refusal(OutgoingMessage),
@@ -1108,7 +1124,7 @@ where
                 match pending_input.take().expect("input check owns one input") {
                     AuthenticatedInput::Request(frame) => Some((frame, Instant::now())),
                     AuthenticatedInput::Refusal(response) => {
-                        if rejected_lane("socket.refusal_lane", refusal_send.try_send(response)) {
+                        if refusal_waits(&refusal_send, response).await {
                             break;
                         }
                         None
@@ -1215,7 +1231,7 @@ where
                     record_send.try_send(QueuedRecordResponse::refusal(response)),
                 )
             } else {
-                rejected_lane("socket.refusal_lane", refusal_send.try_send(response))
+                refusal_waits(&refusal_send, response).await
             };
             if refused {
                 break;
@@ -7474,6 +7490,47 @@ mod tests {
             assert!(text.contains(limit), "{method} log:\n{text}");
             task.abort();
         }
+    }
+
+    /// A client asking for more than its slots and the refusal lane hold
+    /// while the writer is stalled keeps its socket: reading waits for the
+    /// lane, and every frame is answered.
+    #[tokio::test]
+    async fn a_client_past_its_slots_is_refused_frame_by_frame_not_cut_off() {
+        let (state, _) = fixture(MembershipRole::Member);
+        let session = authenticate(&state).await;
+        let (release, gate) = tokio::sync::oneshot::channel();
+        let (socket, mut peer) = test_socket(Some(gate));
+        let task = tokio::spawn(run_authenticated(socket, state, session));
+        admit(&peer, "server.health", "held-0").await;
+        timeout(Duration::from_secs(1), peer.writing.recv())
+            .await
+            .expect("the stalled writer has taken the first response");
+        for id in 1..16 {
+            admit(&peer, "server.health", &format!("held-{id}")).await;
+        }
+        for id in 0..4 {
+            admit(&peer, "server.health", &format!("over-{id}")).await;
+        }
+        release.send(()).unwrap();
+        let mut refused = Vec::new();
+        let mut answered = 0;
+        while answered < 20 {
+            let Message::Text(text) = peer.message().await else {
+                continue;
+            };
+            let value: Value = serde_json::from_str(&text).unwrap();
+            answered += 1;
+            if value["error"]["code"] == "temporarily_unavailable" {
+                refused.push(value["id"].as_str().unwrap().to_owned());
+            }
+        }
+        // The first two past the slots are refused; later ones may find a
+        // slot the writer gave back by then.
+        assert!(refused.starts_with(&["over-0".to_owned(), "over-1".to_owned()]), "{refused:?}");
+        assert!(refused.iter().all(|id| id.starts_with("over-")), "{refused:?}");
+        assert!(!task.is_finished(), "the socket stays open");
+        task.abort();
     }
 
     #[tokio::test]

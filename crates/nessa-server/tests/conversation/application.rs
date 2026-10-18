@@ -3837,32 +3837,75 @@ async fn rejected_capacity_does_not_write_metadata_even_with_concurrent_creates(
         max_conversations: 1,
         ..ConversationLimits::default()
     });
-    let (a, b) = tokio::join!(
+    let busy = id();
+    service
+        .create(
+            busy.clone(),
+            caller("panel", "a"),
+            crate::conversation::application::RequestedConversation::default(),
+        )
+        .await
+        .unwrap();
+    opened(&provider, 1).await;
+    // An agent at work is never let go to make room.
+    let (release, held) = tokio::sync::oneshot::channel::<()>();
+    *provider.execution_gate.lock().unwrap() = Some(held);
+    let running = provider.execution_started.notified();
+    service
+        .submit(
+            busy.clone(),
+            caller("panel", "work"),
+            "work".into(),
+            SubmittedMessage {
+                text: "Hold on".into(),
+                ..SubmittedMessage::default()
+            },
+            SubmissionMode::Queue,
+        )
+        .await
+        .unwrap();
+    running.await;
+    let (b, c) = tokio::join!(
         service.create(
             id(),
-            caller("panel", "a"),
+            caller("panel", "b"),
             crate::conversation::application::RequestedConversation::default()
         ),
         service.create(
             id(),
-            caller("phone", "b"),
+            caller("phone", "c"),
             crate::conversation::application::RequestedConversation::default()
         )
     );
-    assert_eq!(usize::from(a.is_ok()) + usize::from(b.is_ok()), 1);
+    assert!(matches!(b, Err(ConversationError::Capacity)), "{b:?}");
+    assert!(matches!(c, Err(ConversationError::Capacity)), "{c:?}");
     assert_eq!(repository.records.lock().unwrap().len(), 1);
-    opened(&provider, 1).await;
-    assert!(matches!(
-        service
-            .create(
-                id(),
-                caller("panel", "c"),
-                crate::conversation::application::RequestedConversation::default()
-            )
-            .await,
-        Err(ConversationError::Capacity)
-    ));
-    assert_eq!(repository.records.lock().unwrap().len(), 1);
+    assert_eq!(provider.close_calls.load(Ordering::SeqCst), 0);
+    // Once it has nothing to do, it is let go for the next one; its
+    // conversation stays and opens again when asked for.
+    release.send(()).unwrap();
+    completed(&service, &busy, 1).await;
+    // Its receipt settles a moment before the runner lets it go idle.
+    let next = id();
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        loop {
+            match service
+                .create(
+                    next.clone(),
+                    caller("panel", "d"),
+                    crate::conversation::application::RequestedConversation::default(),
+                )
+                .await
+            {
+                Err(ConversationError::Capacity) => tokio::task::yield_now().await,
+                created => break created.unwrap(),
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(provider.close_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(repository.records.lock().unwrap().len(), 2);
     service.shutdown().await.unwrap();
 }
 #[tokio::test]
