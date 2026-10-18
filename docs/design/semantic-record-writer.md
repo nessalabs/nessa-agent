@@ -173,7 +173,7 @@ encoded size and construct bounded identity/chain metadata, then drops that
 encoded body. Persistence and exact-prefix comparison re-encode one unit at a
 time. An uncertain physical append retains its original framed bytes across
 cancellation and retry. There is no aggregate encoded copy of the outer plan.
-The caller's plan, observed snapshot, validation continuation and bounded
+The caller's plan, validation continuation and bounded
 per-unit metadata remain retained; this is not a 160 MiB whole-save heap bound.
 RecordWriter::save and encode_unit own this algorithm. Exact encode-phase and
 concurrent-buffer measurements below are historical private-fixture observations;

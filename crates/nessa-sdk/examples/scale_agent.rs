@@ -1,12 +1,14 @@
 //! A stdio ACP agent with no model and almost no footprint, for the gateway
 //! scale check (`scripts/scale/gateway-scale.mjs`):
 //!
-//!   scale_agent <harness-name> <harness-version> [reply-delay-ms]
+//!   scale_agent <harness-name> <harness-version> [reply-delay-ms] [chunks]
 //!
 //! It answers the handshake as Claude's pinned harness would (the same frames
 //! `scripts/mcp-test-server/scripted-agent.mjs` sends for `claude`), and every
-//! prompt with one text chunk, `Noted.`, then `end_turn`, after
-//! `reply-delay-ms` (0 by default). The scripted agent is a Node process of
+//! prompt with `chunks` text chunks (1 by default; the first is `Noted.`, the
+//! rest about 120 bytes each, as a real reply streams), then `end_turn`,
+//! after `reply-delay-ms` (0 by default). More chunks make each turn's
+//! history larger, so a long conversation grows as a real one does. The scripted agent is a Node process of
 //! tens of megabytes; ten thousand of them do not fit on one machine, which
 //! would make the check measure Node instead of the gateway. This one is a
 //! few hundred kilobytes, so what grows with the conversation count is the
@@ -22,10 +24,11 @@ use std::time::Duration;
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let [_, name, version, rest @ ..] = args.as_slice() else {
-        eprintln!("usage: scale_agent <harness-name> <harness-version> [reply-delay-ms]");
+        eprintln!("usage: scale_agent <harness-name> <harness-version> [reply-delay-ms] [chunks]");
         std::process::exit(2);
     };
     let delay = Duration::from_millis(rest.first().and_then(|v| v.parse().ok()).unwrap_or(0));
+    let chunks: usize = rest.get(1).and_then(|v| v.parse().ok()).unwrap_or(1).max(1);
     let out = Arc::new(Mutex::new(std::io::stdout()));
     // Option values by session id, as the claude harness reports them.
     let mut sessions: HashMap<String, Vec<(String, String)>> = HashMap::new();
@@ -91,15 +94,25 @@ fn main() {
                 // Off this thread, so a cancel or a second session is still read.
                 std::thread::spawn(move || {
                     std::thread::sleep(delay);
-                    let chunk = json!({ "jsonrpc": "2.0", "method": "session/update", "params": {
-                        "sessionId": session,
-                        "update": {
-                            "sessionUpdate": "agent_message_chunk",
-                            "content": { "type": "text", "text": "Noted." },
-                        },
-                    }});
+                    for index in 0..chunks {
+                        let text = if index == 0 {
+                            "Noted.".to_owned()
+                        } else {
+                            format!(
+                                " {index:>4} {}",
+                                "a reply streams in pieces like this one. ".repeat(3)
+                            )
+                        };
+                        let chunk = json!({ "jsonrpc": "2.0", "method": "session/update", "params": {
+                            "sessionId": session,
+                            "update": {
+                                "sessionUpdate": "agent_message_chunk",
+                                "content": { "type": "text", "text": text },
+                            },
+                        }});
+                        write(&out, &chunk);
+                    }
                     let end = json!({ "jsonrpc": "2.0", "id": id, "result": { "stopReason": "end_turn" } });
-                    write(&out, &chunk);
                     write(&out, &end);
                 });
                 continue;

@@ -322,7 +322,6 @@ impl SessionStorageLease for SchedulingPanicLease {
     fn save_changes(
         &self,
         binding: SessionSaveGeneration,
-        snapshot: SessionSnapshot,
         units: Vec<SessionSaveUnit>,
     ) -> StorageFuture<'_, SessionSaveReceipt> {
         Box::pin(async move {
@@ -331,17 +330,12 @@ impl SessionStorageLease for SchedulingPanicLease {
             } else {
                 "queued"
             };
-            let panic = snapshot.invocations.iter().any(|record| {
-                record.request.execution_id.as_str() == target
-                    && record
-                        .scheduling
-                        .last()
-                        .is_some_and(|event| event.stage == self.stage)
-            }) && !self.panicked.swap(true, Ordering::SeqCst);
+            let panic =
+                moves_to(&units, target, self.stage) && !self.panicked.swap(true, Ordering::SeqCst);
             if panic && !self.commit_first {
                 panic!("first scheduling save panic before commit");
             }
-            let receipt = self.backing.save_changes(binding, snapshot, units).await?;
+            let receipt = self.backing.save_changes(binding, units).await?;
             if panic {
                 panic!("first scheduling save panic after commit");
             }

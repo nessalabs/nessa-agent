@@ -6,9 +6,7 @@ use nessa_protocol::conversation::domain::ConversationId;
 use nessa_sdk::{
     application::agent_execution::{
         providers::ProviderIdentity,
-        sessions::{
-            ProviderContext, SessionChange, SessionSaveUnit, SessionSnapshot, SessionStorage,
-        },
+        sessions::{ProviderContext, SessionChange, SessionSaveUnit, SessionStorage},
     },
     domain::agent_execution::sessions::ExecutionSessionId,
     infrastructure::session_storage::MAX_PHYSICAL_RECORD_PAYLOAD_BYTES,
@@ -99,16 +97,6 @@ async fn exact_admitted_scope_reads_committed_frames_and_joins_before_shutdown()
     writer
         .save_changes(
             writer.load().await.unwrap().binding().clone(),
-            SessionSnapshot {
-                id: session.clone(),
-                provider: provider.clone(),
-                provider_context: ProviderContext::Absent,
-                invocations: Vec::new(),
-                queue_history: Vec::new(),
-                lease: None,
-                artifacts: Vec::new(),
-                notes: Vec::new(),
-            },
             vec![SessionSaveUnit::new(vec![SessionChange::Opened {
                 id: session.clone(),
                 provider,
@@ -347,21 +335,10 @@ async fn small_saves(directory: &std::path::Path, session: &SessionId, saves: us
     storage.initialize().await.unwrap();
     let writer = storage.open(session.clone()).await.unwrap();
     let provider = ProviderIdentity::new("fixture", "model", "workspace").unwrap();
-    let snapshot = SessionSnapshot {
-        id: session.clone(),
-        provider: provider.clone(),
-        provider_context: ProviderContext::Absent,
-        invocations: Vec::new(),
-        queue_history: Vec::new(),
-        lease: None,
-        artifacts: Vec::new(),
-        notes: Vec::new(),
-    };
     let mut binding = writer.load().await.unwrap().binding().clone();
     binding = writer
         .save_changes(
             binding,
-            snapshot.clone(),
             vec![SessionSaveUnit::new(vec![SessionChange::Opened {
                 id: session.clone(),
                 provider,
@@ -380,7 +357,6 @@ async fn small_saves(directory: &std::path::Path, session: &SessionId, saves: us
         binding = writer
             .save_changes(
                 binding,
-                snapshot.clone(),
                 vec![SessionSaveUnit::new(vec![
                     SessionChange::ProviderContext {
                         before: ProviderContext::Absent,

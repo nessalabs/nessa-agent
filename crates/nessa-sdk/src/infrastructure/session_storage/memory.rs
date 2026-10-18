@@ -1,7 +1,8 @@
 use crate::application::agent_execution::sessions::{
-    CommittedCompleteness, CommittedFreshness, CommittedSession, CommittedStatus, SessionLoad,
-    SessionLoadState, SessionSaveGeneration, SessionSaveReceipt, SessionSaveUnit, SessionSnapshot,
-    SessionStorage, SessionStorageLease, StorageError, StorageFuture,
+    records::{continuation::Continuation, AppliedUnits},
+    CommittedCompleteness, CommittedFreshness, CommittedSession, CommittedStatus, SessionChange,
+    SessionLoad, SessionLoadState, SessionSaveGeneration, SessionSaveReceipt, SessionSaveUnit,
+    SessionSnapshot, SessionStorage, SessionStorageLease, StorageError, StorageFuture,
 };
 use crate::domain::agent_execution::sessions::SessionId;
 use sha2::{Digest, Sha256};
@@ -13,22 +14,25 @@ use uuid::Uuid;
 
 struct Entry {
     leased: bool,
-    snapshot: Option<SessionSnapshot>,
+    /// The saved state, built only by applying each save's units.
+    state: Continuation,
+    /// The last save's units, so a retry of it can return to the state
+    /// before them.
+    applied: AppliedUnits,
     revision: u64,
     incarnation: [u8; 16],
     receipt: Option<SessionSaveReceipt>,
-    original: Option<SessionSnapshot>,
     units: Vec<SessionSaveUnit>,
 }
 impl Default for Entry {
     fn default() -> Self {
         Self {
             leased: false,
-            snapshot: None,
+            state: Continuation::empty(),
+            applied: AppliedUnits::default(),
             revision: 0,
             incarnation: *Uuid::new_v4().as_bytes(),
             receipt: None,
-            original: None,
             units: Vec::new(),
         }
     }
@@ -36,6 +40,9 @@ impl Default for Entry {
 impl Entry {
     fn binding(&self, id: &SessionId) -> SessionSaveGeneration {
         SessionSaveGeneration::snapshot(id.clone(), self.incarnation, self.revision)
+    }
+    fn snapshot(&self) -> Option<SessionSnapshot> {
+        self.state.snapshot.clone()
     }
 }
 
@@ -70,9 +77,9 @@ impl SessionStorage for InMemoryStorage {
                         entry.revision,
                         entry.revision,
                         entry.revision,
-                        entry.snapshot.clone(),
+                        entry.snapshot(),
                         CommittedStatus::new(
-                            if entry.snapshot.is_some() {
+                            if entry.state.snapshot.is_some() {
                                 CommittedCompleteness::Complete
                             } else {
                                 CommittedCompleteness::CompleteEmpty
@@ -131,7 +138,7 @@ impl SessionStorageLease for MemoryStore {
                 .map_err(|_| StorageError::Io("memory storage lock poisoned".into()))?;
             let entry = entries.get(self.id.as_str()).expect("leased entry exists");
             Ok(SessionLoad::new(
-                entry.snapshot.clone(),
+                entry.snapshot(),
                 entry.binding(&self.id),
                 SessionLoadState::Published,
             ))
@@ -140,7 +147,6 @@ impl SessionStorageLease for MemoryStore {
     fn save_changes(
         &self,
         binding: SessionSaveGeneration,
-        snapshot: SessionSnapshot,
         units: Vec<SessionSaveUnit>,
     ) -> StorageFuture<'_, SessionSaveReceipt> {
         Box::pin(async move {
@@ -158,15 +164,24 @@ impl SessionStorageLease for MemoryStore {
             if !retry && binding != entry.binding(&self.id) {
                 return Err(StorageError::IdentityMismatch);
             }
-            if snapshot.id != self.id {
+            if units.is_empty() {
+                return Err(StorageError::Corrupt("semantic save plan is empty".into()));
+            }
+            if units
+                .iter()
+                .flat_map(SessionSaveUnit::changes)
+                .any(|change| matches!(change, SessionChange::Opened { id, .. } if *id != self.id))
+            {
                 return Err(StorageError::IdentityMismatch);
             }
-            let base = if retry {
-                entry.original.as_ref()
+            // A retry's units apply to the state before the save it retries.
+            if retry {
+                entry
+                    .state
+                    .before_applied(&mut entry.applied, |state| state.check_units(&units))??;
             } else {
-                entry.snapshot.as_ref()
-            };
-            SessionSaveUnit::validate_plan(base, &units, &snapshot)?;
+                entry.state.check_units(&units)?;
+            }
             let mut hash = Sha256::new();
             for unit in &units {
                 let bytes = super::snapshot::encode_semantic_batch(unit.changes())?;
@@ -185,10 +200,16 @@ impl SessionStorageLease for MemoryStore {
                 .revision
                 .checked_add(1)
                 .ok_or_else(|| StorageError::Corrupt("memory revision exhausted".into()))?;
-            if !retry {
-                entry.original = entry.snapshot.clone();
+            if retry {
+                entry.state.revert(&mut entry.applied);
+            } else {
+                entry.applied = AppliedUnits::default();
             }
-            entry.snapshot = Some(snapshot);
+            for unit in &units {
+                entry
+                    .state
+                    .apply_kept(unit.changes().to_vec(), &mut entry.applied)?;
+            }
             entry.revision = revision;
             let receipt = SessionSaveReceipt::new(
                 binding,
@@ -213,11 +234,11 @@ impl SessionStorageLease for MemoryStore {
                     .revision
                     .checked_add(1)
                     .ok_or_else(|| StorageError::Corrupt("memory revision exhausted".into()))?;
-                entry.snapshot = None;
+                entry.state = Continuation::empty();
+                entry.applied = AppliedUnits::default();
                 entry.revision = next_revision;
                 entry.incarnation = *Uuid::new_v4().as_bytes();
                 entry.receipt = None;
-                entry.original = None;
                 entry.units.clear();
             }
             Ok(())

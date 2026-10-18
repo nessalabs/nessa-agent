@@ -4355,7 +4355,6 @@ async fn changed_configuration_retains_history_and_reports_exact_opening_failure
     lease
         .save_changes(
             lease.load().await.unwrap().binding().clone(),
-            saved.clone(),
             vec![SessionSaveUnit::new(vec![SessionChange::Opened {
                 id: saved.id.clone(),
                 provider: saved.provider.clone(),

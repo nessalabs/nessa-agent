@@ -222,28 +222,26 @@ impl SessionStorageLease for ReceiptPanicLease {
     fn save_changes(
         &self,
         binding: SessionSaveGeneration,
-        snapshot: SessionSnapshot,
         units: Vec<SessionSaveUnit>,
     ) -> StorageFuture<'_, SessionSaveReceipt> {
         Box::pin(async move {
             let selected = matches!(self.fault, ReceiptFault::Selection)
-                && snapshot.queue_history.last().is_some_and(|entry| {
-                    matches!(&entry.mutation, QueueMutation::Selected { id } if id.as_str() == "queued")
+                && decisions(&units).any(|change| {
+                    matches!(
+                        change,
+                        SessionChange::QueueDecision(entry)
+                            if matches!(&entry.mutation, QueueMutation::Selected { id } if id.as_str() == "queued")
+                    )
                 });
-            let scheduled = snapshot.invocations.iter().any(|record| {
-                record.request.execution_id.as_str() == "queued"
-                    && record.scheduling.last().is_some_and(|event| {
-                        matches!(
-                            (self.fault, event.stage),
-                            (ReceiptFault::Dispatch, InvocationStage::Running)
-                                | (ReceiptFault::Settlement, InvocationStage::Settled)
-                        )
-                    })
-            });
+            let scheduled = match self.fault {
+                ReceiptFault::Dispatch => moves_to(&units, "queued", InvocationStage::Running),
+                ReceiptFault::Settlement => moves_to(&units, "queued", InvocationStage::Settled),
+                ReceiptFault::Selection => false,
+            };
             if (selected || scheduled) && !self.panicked.swap(true, Ordering::SeqCst) {
                 panic!("original queued receipt persistence panicked");
             }
-            self.backing.save_changes(binding, snapshot, units).await
+            self.backing.save_changes(binding, units).await
         })
     }
     fn erase(&self) -> StorageFuture<'_, ()> {

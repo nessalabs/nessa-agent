@@ -24,6 +24,9 @@
  *   delegate    the agent creates a thread and messages it; the thread's
  *               report comes back as a turn of its own
  *   aside       another conversation is opened in the window and talked to
+ *   long        another conversation takes `--long` turns of long streamed
+ *               answers through the gateway; the last answer is whole, and
+ *               the message sent in the window after them is answered
  *   park        another conversation is left idle, unwatched, until the
  *               gateway parks its agent (its lease ends `idle`); it is opened
  *               in the window and the message sent there starts the agent
@@ -110,6 +113,9 @@ Options:
  * the gateway looks four times within it.
  */
 const PARK_IDLE_SECONDS = 3
+
+/** How many 2 KB chunks each answer of the `long` step streams. */
+const LONG_CHUNKS = 40
 
 const fold = (text) =>
   String(text ?? "")
@@ -681,6 +687,56 @@ const steps = {
       failures.push("the next message ran on the parked agent's lease, not a new one")
     await open(run.page, run.main.title)
   },
+
+  async long(run, step, failures) {
+    const conversationId = randomUUID()
+    await run.client.conversation.create({ conversationId, agent: run.stack.agent })
+    // Each answer streams LONG_CHUNKS chunks, so the history grows by about
+    // 80 KB a turn and every save comes after a long one.
+    const took = []
+    let text
+    for (let turn = 0; turn < step.turns; turn += 1) {
+      text = prompt(run, STRESS.long, step, ` t${turn}`)
+      const started = Date.now()
+      await run.client.conversation.submit(
+        run.client.conversation.prepare(conversationId, text),
+      )
+      const before = failures.length
+      const { turn: done } = await settled(
+        run,
+        conversationId,
+        new Set(),
+        text,
+        "completed",
+        failures,
+      )
+      took.push(Date.now() - started)
+      if (!done || failures.length > before) return
+    }
+    log(
+      `long conversation: ${step.turns} turns, first ${took[0]} ms, last ${took.at(-1)} ms`,
+    )
+    // The newest answer is whole: every chunk, in order, once.
+    const view = await run.client.conversation.read(conversationId)
+    const answer = view.messages.find((each) => each.userText === text)
+    const said = (answer?.parts ?? []).map((part) => part.text ?? "").join("")
+    const chunks = [...said.matchAll(/ (\d+) x{2000}/g)].map((match) => Number(match[1]))
+    if (
+      !said.startsWith(`${SAYS.long}${text}`) ||
+      chunks.length !== LONG_CHUNKS ||
+      chunks.some((index, at) => index !== at)
+    )
+      failures.push(
+        `the last long answer came back with ${chunks.length} of ${LONG_CHUNKS} chunks: ${JSON.stringify(said.slice(0, 80))}`,
+      )
+    // A person opens the long conversation and writes in it.
+    await open(run.page, await titleOf(run, conversationId))
+    const last = prompt(run, STRESS.reply, step, " after the long answers")
+    const seen = await send(run, conversationId, last, failures)
+    await settled(run, conversationId, seen, last, "completed", failures)
+    await expectShown(run.page, `${SAYS.echo}${last}`, failures)
+    await open(run.page, run.main.title)
+  },
 }
 
 /**
@@ -829,7 +885,10 @@ async function startStack(options) {
   const knobs = knobsFrom(options)
   const directory = mkdtempSync(join(tmpdir(), "nessa-stress-"))
   const scenario = join(directory, "stress.json")
-  writeFileSync(scenario, JSON.stringify(stressScenario({ reviews: knobs.reviews })))
+  writeFileSync(
+    scenario,
+    JSON.stringify(stressScenario({ reviews: knobs.reviews, longChunks: LONG_CHUNKS })),
+  )
   if (options.evidence) {
     mkdirSync(options.evidence, { recursive: true })
     writeFileSync(

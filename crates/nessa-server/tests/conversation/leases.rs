@@ -274,7 +274,6 @@ impl SessionStorageLease for RecordsLease {
     fn save_changes(
         &self,
         binding: SessionSaveGeneration,
-        snapshot: SessionSnapshot,
         units: Vec<SessionSaveUnit>,
     ) -> StorageFuture<'_, SessionSaveReceipt> {
         let issues = units
@@ -338,7 +337,7 @@ impl SessionStorageLease for RecordsLease {
         // The future is lazy: the write starts when it is polled, after the
         // release, so a grant change can be shown waiting on the admission
         // hold while this save has not committed.
-        let save = self.inner.save_changes(binding, snapshot, units);
+        let save = self.inner.save_changes(binding, units);
         if let Some((entered, release)) = input_stall {
             Box::pin(async move {
                 entered.notify_one();
@@ -824,7 +823,6 @@ async fn l11_l12_l16_a_lease_left_live_by_an_earlier_run_ends_lost_before_the_ne
         lease
             .save_changes(
                 load.binding().clone(),
-                snapshot,
                 vec![SessionSaveUnit::new(vec![SessionChange::Lease(record)]).unwrap()],
             )
             .await
@@ -1000,7 +998,6 @@ async fn a_latest_lease_this_build_cannot_read_is_never_issued_over(profiles: Sa
         lease
             .save_changes(
                 load.binding().clone(),
-                snapshot,
                 vec![SessionSaveUnit::new(vec![SessionChange::Lease(later.clone())]).unwrap()],
             )
             .await

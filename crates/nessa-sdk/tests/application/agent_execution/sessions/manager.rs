@@ -16,6 +16,18 @@ use crate::infrastructure::session_storage::{InMemoryStorage, RecordStorage};
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::{Barrier, Semaphore};
 
+/// Evidence that saved `committed` and has `pending` applied after it.
+fn evidence_with(committed: SessionSnapshot, pending: Vec<SessionSaveUnit>) -> Evidence {
+    let mut evidence = Evidence {
+        observed: Continuation::restore(Some(committed)).unwrap(),
+        ..Evidence::default()
+    };
+    for unit in pending {
+        evidence.record(unit.changes().to_vec()).unwrap();
+    }
+    evidence
+}
+
 struct FixedMessageClock(std::sync::Mutex<std::time::Duration>);
 impl MessageCommitClock for FixedMessageClock {
     fn now(&self) -> std::time::Duration {
@@ -49,7 +61,6 @@ impl SessionStorageLease for PauseAfterSave {
     fn save_changes(
         &self,
         generation: SessionSaveGeneration,
-        snapshot: SessionSnapshot,
         units: Vec<SessionSaveUnit>,
     ) -> StorageFuture<'_, SessionSaveReceipt> {
         Box::pin(async move {
@@ -61,7 +72,7 @@ impl SessionStorageLease for PauseAfterSave {
                     .expect("test releases save")
                     .forget();
             }
-            let receipt = self.inner.save_changes(generation, snapshot, units).await?;
+            let receipt = self.inner.save_changes(generation, units).await?;
             if self.pause_after.swap(false, Ordering::SeqCst) {
                 self.started.wait().await;
                 self.release
@@ -94,7 +105,6 @@ async fn source_visible_commit_before_lost_ack_retries_same_generation_once() {
     inner
         .save_changes(
             inner.load().await.unwrap().binding().clone(),
-            initial.clone(),
             vec![SessionSaveUnit::new(vec![opened]).unwrap()],
         )
         .await
@@ -107,7 +117,6 @@ async fn source_visible_commit_before_lost_ack_retries_same_generation_once() {
     inner
         .save_changes(
             inner.load().await.unwrap().binding().clone(),
-            initial.clone(),
             vec![SessionSaveUnit::new(vec![input]).unwrap()],
         )
         .await
@@ -131,9 +140,6 @@ async fn source_visible_commit_before_lost_ack_retries_same_generation_once() {
         storage_lease: lease.clone(),
         evidence: Arc::new(Mutex::new(Evidence {
             save_generation: Some(pending_generation.clone()),
-            observed: Some(observed.clone()),
-            committed: Some(initial),
-            pending: vec![SessionSaveUnit::new(vec![first]).unwrap()],
             message_commit: Some(PendingMessageCommit {
                 generation: pending_generation.clone(),
                 deadline: std::time::Duration::ZERO,
@@ -141,7 +147,7 @@ async fn source_visible_commit_before_lost_ack_retries_same_generation_once() {
                 retained_bytes: 1,
                 count: 1,
             }),
-            ..Evidence::default()
+            ..evidence_with(initial, vec![SessionSaveUnit::new(vec![first]).unwrap()])
         })),
         dispatched: RwLock::new(HashMap::new()),
         attachment: Arc::new(AttachmentLease::empty()),
@@ -162,11 +168,13 @@ async fn source_visible_commit_before_lost_ack_retries_same_generation_once() {
     );
     caller.abort();
     assert!(caller.await.unwrap_err().is_cancelled());
-    let evidence = tokio::time::timeout(std::time::Duration::from_secs(3), manager.evidence.lock())
-        .await
-        .expect("cancellation releases manager evidence");
+    let mut evidence =
+        tokio::time::timeout(std::time::Duration::from_secs(3), manager.evidence.lock())
+            .await
+            .expect("cancellation releases manager evidence");
     assert_eq!(evidence.pending.len(), 1);
-    assert_ne!(evidence.committed.as_ref(), Some(&observed));
+    assert_eq!(evidence.observed(), Some(&observed));
+    assert_ne!(evidence.committed(), Some(observed.clone()));
     assert_eq!(
         evidence
             .message_commit
@@ -217,7 +225,6 @@ async fn measure_growing_history_message_commit_latency() {
     inner
         .save_changes(
             inner.load().await.unwrap().binding().clone(),
-            initial.clone(),
             vec![SessionSaveUnit::new(vec![opened]).unwrap()],
         )
         .await
@@ -230,7 +237,6 @@ async fn measure_growing_history_message_commit_latency() {
     inner
         .save_changes(
             inner.load().await.unwrap().binding().clone(),
-            initial.clone(),
             vec![SessionSaveUnit::new(vec![input]).unwrap()],
         )
         .await
@@ -243,9 +249,7 @@ async fn measure_growing_history_message_commit_latency() {
         storage_lease: Arc::from(inner),
         evidence: Arc::new(Mutex::new(Evidence {
             save_generation: Some(current_binding),
-            observed: Some(initial.clone()),
-            committed: Some(initial),
-            ..Evidence::default()
+            ..evidence_with(initial, Vec::new())
         })),
         dispatched: RwLock::new(HashMap::new()),
         attachment: Arc::new(AttachmentLease::empty()),
@@ -293,6 +297,140 @@ async fn measure_growing_history_message_commit_latency() {
     storage.shutdown().await.unwrap();
 }
 
+/// A prior turn as a real one leaves it: `chunks` streamed text chunks of
+/// about 120 bytes, then its end.
+fn streamed_turn(id: &str, chunks: usize) -> InvocationRecord {
+    let mut record = invocation(id, true);
+    let execution_id = record.request.execution_id.clone();
+    let finished = record.events.pop().expect("a complete turn ends");
+    record.events = (0..chunks)
+        .map(|index| {
+            ExecutionEvent::new(
+                execution_id.clone(),
+                ExecutionUpdate::Message(MessageChunk::text(format!(
+                    "{index:>4} {}",
+                    "a reply streams in pieces like this one. ".repeat(3)
+                ))),
+            )
+        })
+        .collect();
+    record.events.push(finished);
+    record
+}
+
+#[tokio::test]
+#[ignore = "run explicitly to measure what one save costs as a conversation's history grows"]
+async fn measure_save_cost_as_history_grows() {
+    const CHUNKS: usize = 40;
+    const SAVES: usize = 32;
+    for prior in [0usize, 100, 300, 1000] {
+        let directory = tempfile::tempdir().unwrap();
+        let storage = Arc::new(RecordStorage::new(directory.path().join("sessions")).unwrap());
+        let id = SessionId::new("save-cost").unwrap();
+        let lease = storage.open(id.clone()).await.unwrap();
+        let active = invocation("active", false);
+        let active_id = active.request.execution_id.clone();
+        let mut invocations: Vec<_> = (0..prior)
+            .map(|index| streamed_turn(&format!("prior-{index}"), CHUNKS))
+            .collect();
+        invocations.push(active);
+        let snapshot = SessionSnapshot {
+            queue_history: Vec::new(),
+            lease: None,
+            artifacts: Vec::new(),
+            notes: Vec::new(),
+            id: id.clone(),
+            provider: ProviderIdentity::new("fixture", "model", "workspace").unwrap(),
+            provider_context: ProviderContext::Recorded(
+                ExecutionSessionId::new("provider-session").unwrap(),
+            ),
+            invocations,
+        };
+        let mut binding = lease.load().await.unwrap().binding().clone();
+        let mut folded: Option<SessionSnapshot> = None;
+        let mut setup = vec![SessionChange::Opened {
+            id: id.clone(),
+            provider: snapshot.provider.clone(),
+            context: snapshot.provider_context.clone(),
+        }];
+        // One save per prior turn, as the conversation was built.
+        for record in &snapshot.invocations {
+            let mut input = record.clone();
+            input.events.clear();
+            input.result = None;
+            input.local_outcome = None;
+            setup.push(SessionChange::InputAccepted(Box::new(input)));
+            setup.extend(
+                record
+                    .events
+                    .iter()
+                    .cloned()
+                    .map(SessionChange::ProviderObservation),
+            );
+            if let Some(result) = &record.result {
+                setup.push(SessionChange::LocalSettlement {
+                    execution_id: record.request.execution_id.clone(),
+                    before: None,
+                    after: result.clone(),
+                    local_outcome: record.local_outcome,
+                });
+            }
+            let next = super::super::records::fold_changes(folded.as_ref(), &setup).unwrap();
+            let receipt = lease
+                .save_changes(
+                    binding.clone(),
+                    vec![SessionSaveUnit::new(std::mem::take(&mut setup)).unwrap()],
+                )
+                .await
+                .unwrap();
+            binding = receipt.next().clone();
+            folded = Some(next);
+        }
+        assert_eq!(folded.as_ref(), Some(&snapshot));
+        // Text alone; each chunk is about 130 bytes.
+        let encoded = prior * CHUNKS * 130;
+        let clone_started = std::time::Instant::now();
+        for _ in 0..SAVES {
+            std::hint::black_box(snapshot.clone());
+        }
+        let clone_ms = clone_started.elapsed().as_secs_f64() * 1000.0 / SAVES as f64;
+        let manager = SessionManager {
+            id,
+            message_commit_clock: Arc::new(
+                crate::infrastructure::session_storage::RuntimeMessageCommitClock::new(),
+            ),
+            storage_lease: Arc::from(lease),
+            evidence: Arc::new(Mutex::new(Evidence {
+                save_generation: Some(binding),
+                ..evidence_with(snapshot, Vec::new())
+            })),
+            dispatched: RwLock::new(HashMap::new()),
+            attachment: Arc::new(AttachmentLease::empty()),
+        };
+        manager.begin_dispatch(&active_id);
+        let mut saves = Vec::new();
+        for _ in 0..SAVES {
+            manager.event(text(&active_id)).await.unwrap();
+            let (generation, deadline) = manager.pending_message_deadline().await.unwrap();
+            manager.wait_for_message_deadline(deadline).await;
+            let started = std::time::Instant::now();
+            manager.flush_due_messages(generation).await.unwrap();
+            saves.push(started.elapsed().as_secs_f64() * 1000.0);
+        }
+        saves.sort_by(f64::total_cmp);
+        eprintln!(
+            "save_cost prior_turns={prior} events={} history_kib={} save_p50_ms={:.2} save_max_ms={:.2} one_clone_ms={:.2}",
+            prior * (CHUNKS + 1),
+            encoded / 1024,
+            saves[SAVES / 2],
+            saves[SAVES - 1],
+            clone_ms,
+        );
+        drop(manager);
+        storage.shutdown().await.unwrap();
+    }
+}
+
 #[tokio::test]
 async fn dense_control_output_flushes_before_the_record_body_limit_and_reopens() {
     let directory = tempfile::tempdir().unwrap();
@@ -308,7 +446,6 @@ async fn dense_control_output_flushes_before_the_record_body_limit_and_reopens()
     inner
         .save_changes(
             inner.load().await.unwrap().binding().clone(),
-            initial.clone(),
             vec![SessionSaveUnit::new(vec![opened]).unwrap()],
         )
         .await
@@ -321,7 +458,6 @@ async fn dense_control_output_flushes_before_the_record_body_limit_and_reopens()
     inner
         .save_changes(
             inner.load().await.unwrap().binding().clone(),
-            initial.clone(),
             vec![SessionSaveUnit::new(vec![input]).unwrap()],
         )
         .await
@@ -335,12 +471,10 @@ async fn dense_control_output_flushes_before_the_record_body_limit_and_reopens()
             ))
         })
         .collect();
-    let candidate = super::super::records::fold_changes(Some(&initial), &oversized).unwrap();
     assert_eq!(
         inner
             .save_changes(
                 inner.load().await.unwrap().binding().clone(),
-                candidate,
                 vec![SessionSaveUnit::new(oversized).unwrap()],
             )
             .await,
@@ -357,9 +491,7 @@ async fn dense_control_output_flushes_before_the_record_body_limit_and_reopens()
         storage_lease: lease.clone(),
         evidence: Arc::new(Mutex::new(Evidence {
             save_generation: Some(current_binding),
-            observed: Some(initial.clone()),
-            committed: Some(initial),
-            ..Evidence::default()
+            ..evidence_with(initial, Vec::new())
         })),
         dispatched: RwLock::new(HashMap::new()),
         attachment: Arc::new(AttachmentLease::empty()),
@@ -438,7 +570,7 @@ async fn settlement_failure_retains_the_storage_failure_wrapper() {
     ));
     let evidence = manager.evidence.lock().await;
     assert!(matches!(
-        evidence.observed.as_ref().unwrap().invocations[0].result,
+        evidence.observed().unwrap().invocations[0].result,
         Some(Err(AgentError::StorageAfterExecution { .. }))
     ));
     assert_eq!(evidence.pending.len(), 2);
@@ -464,7 +596,6 @@ impl SessionStorageLease for FaultLease {
     fn save_changes(
         &self,
         binding: SessionSaveGeneration,
-        snapshot: SessionSnapshot,
         units: Vec<SessionSaveUnit>,
     ) -> StorageFuture<'_, SessionSaveReceipt> {
         self.changes.lock().unwrap().push(
@@ -477,7 +608,7 @@ impl SessionStorageLease for FaultLease {
             if self.fail_save.load(Ordering::SeqCst) {
                 return Err(StorageError::Io("injected save failure".into()));
             }
-            self.inner.save_changes(binding, snapshot, units).await
+            self.inner.save_changes(binding, units).await
         })
     }
     fn erase(&self) -> StorageFuture<'_, ()> {
@@ -574,7 +705,6 @@ async fn manager(previous_turns: usize) -> (SessionManager, Arc<FaultLease>, Exe
         .inner
         .save_changes(
             lease.load().await.unwrap().binding().clone(),
-            snapshot.clone(),
             vec![SessionSaveUnit::new(setup).unwrap()],
         )
         .await
@@ -587,9 +717,7 @@ async fn manager(previous_turns: usize) -> (SessionManager, Arc<FaultLease>, Exe
         storage_lease: lease.clone(),
         evidence: Arc::new(Mutex::new(Evidence {
             save_generation: Some(receipt.next().clone()),
-            observed: Some(snapshot.clone()),
-            committed: Some(snapshot),
-            ..Evidence::default()
+            ..evidence_with(snapshot, Vec::new())
         })),
         dispatched: RwLock::new(HashMap::new()),
         attachment: Arc::new(AttachmentLease::empty()),
@@ -1004,7 +1132,7 @@ fn counts() -> (usize, usize) {
 }
 
 #[tokio::test]
-async fn streamed_chunks_do_not_rescan_prior_turns_and_terminal_invalidates_cached_history() {
+async fn observations_never_rescan_prior_turns_and_output_after_the_terminal_is_refused() {
     for fail_save in [false, true] {
         let (manager, lease, active) = manager(1001).await;
         reset_counts();
@@ -1013,12 +1141,8 @@ async fn streamed_chunks_do_not_rescan_prior_turns_and_terminal_invalidates_cach
             manager.validate_event_retention(&event).await.unwrap();
             manager.event(event).await.unwrap();
         }
-        let (full_scans, history_checks) = counts();
-        assert!(full_scans <= 4, "only cadence saves may scan full evidence");
-        assert!(
-            history_checks <= 4 * 1004,
-            "history checks follow cadence saves, not each chunk"
-        );
+        // Each chunk is applied as a record, which checks only its own turn.
+        assert_eq!(counts(), (0, 0), "no chunk rescans the conversation");
         assert_eq!(
             manager.snapshot().await.unwrap().invocations[1001]
                 .events
@@ -1033,25 +1157,14 @@ async fn streamed_chunks_do_not_rescan_prior_turns_and_terminal_invalidates_cach
             ))
             .await;
         assert_eq!(result.is_err(), fail_save);
-        assert!(
-            counts().0 > 0,
-            "terminal boundary validates complete evidence"
-        );
-        reset_counts();
+        assert_eq!(counts(), (0, 0), "the terminal rescans nothing either");
         assert!(matches!(
             manager.event(text(&active)).await,
             Err(StorageError::Corrupt(_))
         ));
-        assert_eq!(
-            counts(),
-            (0, 1),
-            "terminal forces a fresh active history check"
-        );
         let evidence = manager.evidence.lock().await;
         assert_eq!(
-            evidence.observed.as_ref().unwrap().invocations[1001]
-                .events
-                .len(),
+            evidence.observed().unwrap().invocations[1001].events.len(),
             129
         );
         drop(evidence);
@@ -1072,14 +1185,14 @@ async fn local_failure_preserves_inferred_prior_success_before_save_and_after_re
         // The public snapshot contract also accepts success without duplicating its outcome.
         {
             let mut evidence = manager.evidence.lock().await;
-            evidence.observed.as_mut().unwrap().invocations[0].result =
-                Some(Ok(ExecutionOutcome::Completed));
-            evidence.push_change(SessionChange::LocalSettlement {
-                execution_id: active.clone(),
-                before: None,
-                after: Ok(ExecutionOutcome::Completed),
-                local_outcome: Some(ExecutionOutcome::Completed),
-            });
+            evidence
+                .record(vec![SessionChange::LocalSettlement {
+                    execution_id: active.clone(),
+                    before: None,
+                    after: Ok(ExecutionOutcome::Completed),
+                    local_outcome: Some(ExecutionOutcome::Completed),
+                }])
+                .unwrap();
         }
         if retain_receipt {
             assert_eq!(
@@ -1104,7 +1217,8 @@ async fn local_failure_preserves_inferred_prior_success_before_save_and_after_re
             Some(Err(AgentError::AuditFailure))
         );
         // Rebuild authority from persisted facts, discarding any earlier history cache.
-        manager.evidence.lock().await.observed = Some(saved.clone());
+        manager.evidence.lock().await.observed =
+            Continuation::restore(Some(saved.clone())).unwrap();
         assert!(manager
             .record_provider_report(
                 0,
@@ -1170,8 +1284,7 @@ async fn a_refused_reorder_retains_no_mutation_and_never_changes_the_live_queue(
         .evidence
         .lock()
         .await
-        .observed
-        .as_ref()
+        .observed()
         .unwrap()
         .queue_history
         .is_empty());
@@ -1319,14 +1432,7 @@ mod lease_records {
         assert!(matches!(unreadable, Err(LeaseRecordError::Unreadable)));
         assert!(lease.changes.lock().unwrap().is_empty());
         assert_eq!(
-            manager
-                .evidence
-                .lock()
-                .await
-                .observed
-                .as_ref()
-                .unwrap()
-                .lease,
+            manager.evidence.lock().await.observed().unwrap().lease,
             None
         );
     }
@@ -1353,7 +1459,7 @@ mod lease_records {
     #[tokio::test]
     async fn nothing_is_recorded_before_the_conversation_is_loaded() {
         let (manager, _, _) = manager(0).await;
-        manager.evidence.lock().await.observed = None;
+        manager.evidence.lock().await.observed = Continuation::default();
         let refused = manager.record_lease(|_| (vec![issued()], ())).await;
         assert!(matches!(refused, Err(LeaseRecordError::NotLoaded)));
     }
@@ -1429,8 +1535,7 @@ mod artifact_records {
             .evidence
             .lock()
             .await
-            .observed
-            .as_ref()
+            .observed()
             .unwrap()
             .artifacts
             .clone()
@@ -1580,6 +1685,7 @@ mod artifact_records {
             .lock()
             .await
             .observed
+            .snapshot
             .as_mut()
             .unwrap()
             .artifacts = vec![artifact("lease-1", None); ArtifactRecord::MAX_PER_CONVERSATION];
@@ -1618,6 +1724,7 @@ mod artifact_records {
             .lock()
             .await
             .observed
+            .snapshot
             .as_mut()
             .unwrap()
             .artifacts
@@ -1671,7 +1778,7 @@ mod artifact_records {
     #[tokio::test]
     async fn nothing_is_recorded_or_counted_before_the_conversation_is_loaded() {
         let (manager, _, _) = manager(0).await;
-        manager.evidence.lock().await.observed = None;
+        manager.evidence.lock().await.observed = Continuation::default();
         assert_eq!(manager.artifact_room().await, None);
         assert_eq!(
             manager.record_artifact(artifact("lease-1", None)).await,
@@ -1725,8 +1832,7 @@ mod note_records {
             .evidence
             .lock()
             .await
-            .observed
-            .as_ref()
+            .observed()
             .unwrap()
             .notes
             .clone()
@@ -1858,7 +1964,7 @@ mod note_records {
     #[tokio::test]
     async fn no_note_is_recorded_before_the_conversation_is_loaded() {
         let (manager, _, _) = at(0).await;
-        manager.evidence.lock().await.observed = None;
+        manager.evidence.lock().await.observed = Continuation::default();
         assert_eq!(
             manager.record_note(request("note", "x")).await,
             Err(NoteRecordError::NotLoaded)
