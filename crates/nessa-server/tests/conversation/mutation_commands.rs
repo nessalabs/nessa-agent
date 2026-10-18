@@ -1538,6 +1538,58 @@ async fn a_stop_that_meets_a_turn_leaving_the_queue_stops_it() {
     retire(service, storage, metadata).await;
 }
 
+/// A stop whose cancel finds the agent ending (a close tearing it down) while
+/// its turn is still listed as running is answered by how the turn ends, not
+/// by the cancel's refusal.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_stop_whose_cancel_meets_the_agent_ending_is_answered_by_the_turns_end() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("data");
+    let provider = Arc::new(ProviderFactory::default());
+    provider.turn_cancel.store(true, Ordering::SeqCst);
+    let (service, storage, metadata) = fixture(&root, provider.clone());
+    let target = id();
+    opened(&service, &provider, &target).await;
+    let (release, execution_gate) = oneshot::channel::<()>();
+    *provider.execution_gate.lock().unwrap() = Some(execution_gate);
+    *provider.cancel_failure.lock().unwrap() = Some(AgentError::AttachmentAuthorizationStale);
+    provider.cancel_failure_ends.store(true, Ordering::SeqCst);
+    let started = provider.execution_started.notified();
+    send(&service, &target, "ending", "now").await;
+    tokio::time::timeout(Duration::from_secs(5), started)
+        .await
+        .expect("the turn runs");
+    let cancelling = provider.cancel_started.notified();
+    let stopping = {
+        let service = service.clone();
+        let storage = storage.clone();
+        let target = target.clone();
+        tokio::spawn(async move {
+            service
+                .stop_command(storage, target, caller("stop"), "ending".into())
+                .await
+        })
+    };
+    tokio::time::timeout(Duration::from_secs(5), cancelling)
+        .await
+        .expect("the cancel reaches the agent");
+    // The cancel has failed with the turn still running; then it ends.
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(!stopping.is_finished(), "the stop waits for the turn's end");
+    release.send(()).unwrap();
+    let receipt = tokio::time::timeout(Duration::from_secs(5), stopping)
+        .await
+        .unwrap()
+        .unwrap();
+    let outcome = receipt.as_ref().ok().and_then(|receipt| receipt.outcome());
+    assert!(
+        matches!(outcome, Some(MutationOutcome::AlreadyFinal)),
+        "{:?}",
+        receipt.map(|receipt| receipt.outcome())
+    );
+    retire(service, storage, metadata).await;
+}
+
 /// A stop whose cancel reaches the turn as it ends is answered by how the
 /// turn ended, not by the cancel's refusal of a turn no longer running.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

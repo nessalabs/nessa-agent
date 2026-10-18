@@ -11,6 +11,7 @@ use nessa_sdk::application::agent_execution::commands::{
     MutationBinding, MutationCoordinator, MutationFailure, MutationOperation, MutationOutcome,
     MutationPlan, MutationReceipt, MutationStage, MutationTarget,
 };
+use nessa_sdk::application::agent_execution::providers::ProviderSessionState;
 use nessa_sdk::domain::agent_execution::executions::{ExecutionId, Initiation, InvocationStage};
 use sha2::{Digest, Sha256};
 use std::sync::{Arc, Mutex};
@@ -419,6 +420,9 @@ impl MutationTarget for StopTarget {
             // or ends, rather than answered as not found
             // (`a_stop_that_meets_a_turn_leaving_the_queue_stops_it`).
             let deadline = std::time::Instant::now() + MOVING_TURN_WAIT;
+            // A cancel that met the agent's lifecycle ending (a close, or a
+            // failure stopping it) while its turn was still listed as running.
+            let mut ending: Option<AgentError> = None;
             loop {
                 if live
                     .agent
@@ -441,13 +445,22 @@ impl MutationTarget for StopTarget {
                         QueueRemoval::NotPending => {}
                     }
                 }
-                if live.agent.active_execution_id().as_ref() == Some(&turn) {
+                if ending.is_none() && live.agent.active_execution_id().as_ref() == Some(&turn) {
                     match live.agent.cancel_turn(turn.clone()).await {
                         Ok(()) => return Ok(MutationOutcome::Cancelled),
                         // The turn ended as the cancel reached it, its agent
                         // stopping with it after a failure, say: the stop is
                         // answered by how the turn ends, below.
                         Err(_) if live.agent.active_execution_id().as_ref() != Some(&turn) => {}
+                        // The agent no longer takes control because it is
+                        // ending, and its turn ends with it: answered by how
+                        // the turn ends, below, not by the cancel's refusal
+                        // (`a_stop_whose_cancel_meets_the_agent_ending_is_answered_by_the_turns_end`).
+                        Err(failure)
+                            if !matches!(failure.session_state(), ProviderSessionState::Usable) =>
+                        {
+                            ending = Some(failure.into_parts().0);
+                        }
                         Err(failure) => {
                             return Err(CreationInitializationFailure::Target(
                                 ConversationError::Agent(failure.into_parts().0),
@@ -462,7 +475,9 @@ impl MutationTarget for StopTarget {
                     }
                     Some(false) => {
                         return Err(CreationInitializationFailure::Target(
-                            ConversationError::Agent(AgentError::SubmissionUnresolved),
+                            ConversationError::Agent(
+                                ending.unwrap_or(AgentError::SubmissionUnresolved),
+                            ),
                         ))
                     }
                     None => {
