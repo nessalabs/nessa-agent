@@ -126,6 +126,27 @@ partial target failures, lost acknowledgements and restart with changed settings
 Browser acceptance, exact-head review and current-main CI remain release gates;
 a draft implementation is not evidence that those gates passed.
 
+### Focused correction orderings — 18 October 2026
+
+The SDK owns three distinct facts: exact locally unfinished executions, canonical
+saved successor links, and work eligible for another resume. Stop consumes the
+first and the shared historical owed-work decision; report following consumes
+canonical links before asking whether another resume is owed and the existing
+`Resumption::successor` value permits another attempt. Exhausted unfinished work
+still waits for its own result; exhausted final failures report their result
+without depending on a later host-decline wake-up. An exhausted retry
+budget does not make a locally unfinished execution final. No new selection or
+retry ledger is introduced: existing immutable Stop bindings remain the recovery
+contract.
+
+| Ordering | Required result | Regression |
+| --- | --- | --- |
+| Last permitted successor is running when its parent stops | Capture and stop that exact successor; keep lifetime open | `parent_stop_captures_the_last_permitted_running_successor` |
+| Root settles after classification and a correlated report leaves its queue | Capture report in dequeue handoff or active phase; retain durable report, keep unrelated work | `parent_stop_captures_correlated_report_after_dequeue` |
+| Later person input supersedes a failed successor without finishing | Shared historical and live owed decisions agree; report publishes final failure | SDK resumption conformance |
+| Mutation observation encounters oversized SQLite fields | Persistence bounds reject before extraction or copy, including foreign principal rows | Session storage mutation observation bounds |
+| Same ownership evidence is retried at a later clock reading | Same durable identity and first observation time survive | Ownership audit retry regression |
+
 ### Review orderings added during runtime validation
 
 | Ordering | Owner and decision | Regression |

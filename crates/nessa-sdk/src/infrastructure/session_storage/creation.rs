@@ -17,11 +17,11 @@ use crate::application::agent_execution::{
 use crate::domain::agent_execution::{executions::ExecutionId, sessions::SessionId};
 use event_stream::{
     Cursor, EventId, EventReader, EventSink, NewEvent, PageLimits, Payload, SchemaId, SchemaRef,
-    StreamId, StreamKey,
+    StreamId, StreamKey, MAX_IDENTIFIER_BYTES,
 };
 use nessa_local_database::rusqlite::{self, Connection, OpenFlags};
 use sha2::{Digest, Sha256};
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, path::PathBuf, sync::Arc, time::Duration};
 use tokio::sync::Mutex;
 
 pub(super) const CONTROL_STREAM_PREFIX: &str = "nessa:commands:";
@@ -127,38 +127,58 @@ impl CreationStorage for RecordStorage {
     }
 }
 
+const OBSERVED_MUTATIONS_SQL: &str = "WITH observed AS (
+             SELECT s.public_id,r.offset,r.event_id,r.schema_id,r.schema_version,r.payload,a.admitted,
+                typeof(s.public_id)='text' AND octet_length(s.public_id)<=?2
+                AND typeof(r.offset)='blob' AND length(r.offset)=8
+                AND typeof(r.event_id)='text' AND octet_length(r.event_id) BETWEEN 1 AND ?2
+                AND typeof(r.schema_id)='text' AND octet_length(r.schema_id) BETWEEN 1 AND ?2
+                AND typeof(r.schema_version)='integer'
+                AND typeof(r.payload)='blob' AND octet_length(r.payload)<=?3 AS bounded
+             FROM event_stream_names n
+             JOIN event_streams s ON n.active_stream_key=s.stream_key
+             JOIN event_records r ON r.stream_key=s.stream_key
+             JOIN (SELECT stream_key,MIN(rowid) AS admitted FROM event_records GROUP BY stream_key) a
+                  ON a.stream_key=s.stream_key
+             WHERE s.public_id GLOB ?1 AND s.retired=0
+         ) SELECT CASE WHEN bounded THEN public_id END,
+                  CASE WHEN bounded THEN offset END,
+                  CASE WHEN bounded THEN event_id END,
+                  CASE WHEN bounded THEN schema_id END,
+                  CASE WHEN bounded THEN schema_version END,
+                  CASE WHEN bounded THEN payload END
+           FROM observed ORDER BY admitted,CASE WHEN bounded THEN offset END";
+
 // SQLite's existing physical Accepted row supplies the observation order. No
 // index or additional command publication is written by this read.
-fn read_mutations(
-    path: std::path::PathBuf,
-    principal: &str,
-) -> Result<Vec<MutationReceipt>, StorageError> {
+fn read_mutations(path: PathBuf, principal: &str) -> Result<Vec<MutationReceipt>, StorageError> {
     let connection =
         Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(query_error)?;
     connection
-        .busy_timeout(std::time::Duration::from_secs(5))
+        .busy_timeout(Duration::from_secs(5))
         .map_err(query_error)?;
     let mut statement = connection
-        .prepare(
-            "SELECT s.public_id,r.offset,r.event_id,r.schema_id,r.schema_version,r.payload
-         FROM event_stream_names n
-         JOIN event_streams s ON n.active_stream_key=s.stream_key
-         JOIN event_records r ON r.stream_key=s.stream_key
-         JOIN (SELECT stream_key,MIN(rowid) AS admitted FROM event_records GROUP BY stream_key) a
-              ON a.stream_key=s.stream_key
-         WHERE s.public_id GLOB ?1 AND s.retired=0
-         ORDER BY a.admitted,r.offset",
-        )
+        .prepare(OBSERVED_MUTATIONS_SQL)
         .map_err(query_error)?;
     let mut rows = statement
-        .query([format!("{CONTROL_STREAM_PREFIX}*")])
+        .query(rusqlite::params![
+            format!("{CONTROL_STREAM_PREFIX}*"),
+            i64::try_from(MAX_IDENTIFIER_BYTES).map_err(|_| corrupt("invalid identity bound"))?,
+            i64::try_from(MAX_COMMAND_BYTES.max(MAX_RECORD_BYTES))
+                .map_err(|_| corrupt("invalid payload bound"))?
+        ])
         .map_err(query_error)?;
     let mut current = String::new();
     let mut offset = 0;
     let mut held = HashMap::new();
     let mut result = Vec::new();
     while let Some(row) = rows.next().map_err(query_error)? {
-        let stream: String = row.get(0).map_err(query_error)?;
+        // The persistence boundary CASE-gates every external field before the
+        // SQLite driver can allocate it. NULL is typed malformed input, not I/O.
+        let stream: String = row
+            .get::<_, Option<String>>(0)
+            .map_err(query_error)?
+            .ok_or_else(|| corrupt("command observation record exceeds field bounds"))?;
         if stream != current {
             collect_mutation(&mut held, principal, &mut result)?;
             current = stream;

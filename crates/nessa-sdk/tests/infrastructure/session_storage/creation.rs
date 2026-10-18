@@ -1,7 +1,12 @@
 use super::*;
 use crate::application::agent_execution::{
-    commands::CreationInitializationFailure, sessions::SessionStorage,
+    commands::{
+        CreationInitializationFailure, MutationBinding, MutationOperation, MutationReceipt,
+        MutationStage,
+    },
+    sessions::SessionStorage,
 };
+use nessa_local_database::rusqlite::{params, types::ValueRef, Connection};
 
 fn binding(request: &str) -> CreationBinding {
     CreationBinding::new(
@@ -524,9 +529,6 @@ async fn direct_sdk_caller_loss_retains_the_original_initializer_and_lease() {
 
 #[tokio::test]
 async fn mutation_enumeration_is_principal_scoped_read_only_and_keeps_latest_progress() {
-    use crate::application::agent_execution::commands::{
-        MutationBinding, MutationOperation, MutationReceipt, MutationStage,
-    };
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("records");
     let storage = RecordStorage::new(&root).unwrap();
@@ -597,4 +599,69 @@ async fn mutation_enumeration_is_principal_scoped_read_only_and_keeps_latest_pro
         [attempted, later]
     );
     storage.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn mutation_observation_sql_bounds_fields_before_driver_materialization() {
+    // Query the real persistence statement as well as the public observer:
+    // typed corruption alone cannot prove it refused before allocating data.
+    for (column, expression) in [
+        ("event_id", "CAST(zeroblob(1048576) AS TEXT)"),
+        ("schema_id", "CAST(zeroblob(1048576) AS TEXT)"),
+        ("payload", "zeroblob(1048576)"),
+        ("offset", "zeroblob(1048576)"),
+        ("schema_version", "'wrong-type'"),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("records");
+        let storage = RecordStorage::new(&root).unwrap();
+        let lease = storage
+            .open_creation("person".into(), "create".into(), true)
+            .await
+            .unwrap()
+            .unwrap();
+        lease
+            .save(CreationReceipt::accepted(binding("create")))
+            .await
+            .unwrap();
+        drop(lease);
+        let connection = Connection::open(root.join("records.sqlite3")).unwrap();
+        // This private temporary database models malformed retained bytes,
+        // including corruption a healthy writer's CHECK would prevent.
+        connection
+            .pragma_update(None, "ignore_check_constraints", true)
+            .unwrap();
+        connection
+            .execute(
+                &format!("UPDATE event_records SET {column}={expression}"),
+                [],
+            )
+            .unwrap();
+        let mut statement = connection.prepare(OBSERVED_MUTATIONS_SQL).unwrap();
+        let mut rows = statement
+            .query(params![
+                format!("{CONTROL_STREAM_PREFIX}*"),
+                i64::try_from(MAX_IDENTIFIER_BYTES).unwrap(),
+                i64::try_from(MAX_COMMAND_BYTES.max(MAX_RECORD_BYTES)).unwrap()
+            ])
+            .unwrap();
+        let row = rows.next().unwrap().unwrap();
+        for field in 0..6 {
+            assert_eq!(
+                row.get_ref(field).unwrap(),
+                ValueRef::Null,
+                "oversized {column} reached field {field}"
+            );
+        }
+        drop(rows);
+        drop(statement);
+        drop(connection);
+        // Even an unrelated principal must see typed malformed evidence rather
+        // than allocate it before filtering. The read cannot repair the row.
+        assert!(matches!(
+            storage.mutations("other".into()).await,
+            Err(CreationStorageError::Storage(StorageError::Corrupt(_)))
+        ));
+        storage.shutdown().await.unwrap();
+    }
 }

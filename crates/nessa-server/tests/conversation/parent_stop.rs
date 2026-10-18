@@ -1,15 +1,34 @@
 //! Actual gateway composition: persistent SDK graph + ordinary command receipts.
+
 use super::*;
 use crate::conversation::application::{
-    AgentToolSource, Environment, EnvironmentDeclaration, EnvironmentFuture, EnvironmentLease,
+    AgentToolSource, ConversationCreationAudit, ConversationCreationAuditRecord,
+    ConversationFuture, Environment, EnvironmentDeclaration, EnvironmentFuture, EnvironmentLease,
+    PendingReport, ThreadReport, ThreadReportStore,
 };
-use nessa_sdk::application::agent_execution::providers::AgentProvider;
+use crate::conversation::infrastructure::{DurableOwnershipAudit, LocalThreadReports};
+use nessa_sdk::application::agent_execution::agents::{owed_turn_ids, Resumed};
+use nessa_sdk::application::agent_execution::commands;
+use nessa_sdk::application::agent_execution::executions::ExecutionUpdate;
+use nessa_sdk::application::agent_execution::providers::{
+    AgentProvider, CleanupReport, CloseOutcome, ExecutionReport, ObservationFailure,
+    ObservationFailureCause, ProviderExecutionReply, ProviderSessionState,
+};
+use nessa_sdk::application::agent_execution::sessions::StorageError;
 use nessa_sdk::application::agent_execution::subagents::{
-    LiveCapacity, OwnershipCoordinator, OwnershipDependencies,
+    CloseCommand, LiveCapacity, OwnershipAudit, OwnershipCoordinator, OwnershipDependencies,
+    OwnershipStore, PortFailure,
 };
+use nessa_sdk::domain::agent_execution::executions::{ExecutionOutcome, Resumption};
 use nessa_sdk::domain::agent_execution::leases::{LeaseCleanup, LeaseId, LeaseRefusal, LeaseTerms};
+use nessa_sdk::domain::agent_execution::subagents::{
+    HostActor, Initiator, LifetimeCause, LifetimeState, OwnershipEvidence, OwnershipMeaning,
+    OwnershipSnapshot, SpawnProgress,
+};
 use nessa_sdk::infrastructure::session_storage::SqliteOwnershipStore;
-
+use std::sync::atomic::AtomicBool;
+use std::sync::Mutex;
+use tokio::sync::Notify;
 pub(super) async fn bind(
     service: &ConversationService,
     storage: &Arc<RecordStorage>,
@@ -30,10 +49,7 @@ async fn bind_with_capacity(
     let coordinator = OwnershipCoordinator::new(OwnershipDependencies {
         store: Arc::new(SqliteOwnershipStore::open(&root.join("ownership.sqlite3")).unwrap()),
         audit: Arc::new(
-            crate::conversation::infrastructure::DurableOwnershipAudit::new(
-                root.join("ownership-audit"),
-            )
-            .unwrap(),
+            DurableOwnershipAudit::new(root.join("ownership-audit"), Arc::new(TestClock)).unwrap(),
         ),
         factory: service.owned_thread_factory(),
         room: Arc::new(LiveCapacity::new(capacity)),
@@ -43,10 +59,7 @@ async fn bind_with_capacity(
         .bind_owned_threads(coordinator.clone(), cascade)
         .unwrap();
     let restored = SqliteOwnershipStore::open(&root.join("ownership.sqlite3")).unwrap();
-    let snapshot =
-        nessa_sdk::application::agent_execution::subagents::OwnershipStore::read(&restored)
-            .await
-            .unwrap();
+    let snapshot = OwnershipStore::read(&restored).await.unwrap();
     service.recover_owned_threads(&snapshot).await.unwrap();
     coordinator
 }
@@ -76,11 +89,8 @@ async fn child(
 }
 
 struct RejectChildCreationAudit;
-impl crate::conversation::application::ConversationCreationAudit for RejectChildCreationAudit {
-    fn record(
-        &self,
-        record: crate::conversation::application::ConversationCreationAuditRecord,
-    ) -> crate::conversation::application::ConversationFuture<'_, ()> {
+impl ConversationCreationAudit for RejectChildCreationAudit {
+    fn record(&self, record: ConversationCreationAuditRecord) -> ConversationFuture<'_, ()> {
         Box::pin(async move {
             if record.correlation_id == "audit-failed-child" {
                 Err(ConversationError::Audit)
@@ -93,8 +103,6 @@ impl crate::conversation::application::ConversationCreationAudit for RejectChild
 
 #[tokio::test]
 async fn child_creation_audit_failure_cannot_strand_unacquired_cleanup() {
-    use nessa_sdk::application::agent_execution::subagents::OwnershipStore;
-    use nessa_sdk::domain::agent_execution::subagents::LifetimeState;
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("data");
     let provider = Arc::new(ProviderFactory::default());
@@ -316,7 +324,7 @@ async fn parent_stop_default_override_grandchildren_and_unrelated_execution() {
                     .active_lifetime_for_session(&conversation_session(&parent))
                     .unwrap()
             ),
-            Some(nessa_sdk::domain::agent_execution::subagents::LifetimeState::Open)
+            Some(LifetimeState::Open)
         );
         let count = provider.cancel_calls.load(Ordering::SeqCst);
         assert_eq!(
@@ -488,7 +496,7 @@ async fn parent_stop_cancels_owned_active_and_queued_turns_and_keeps_threads_reu
                 .unwrap();
             assert_eq!(
                 coordinator.lifetime_state(&lifetime),
-                Some(nessa_sdk::domain::agent_execution::subagents::LifetimeState::Open)
+                Some(LifetimeState::Open)
             );
         }
         drop((p, c, g, queued_release));
@@ -636,9 +644,6 @@ async fn caller_disconnect_and_late_creation_cannot_escape_a_selected_stop() {
 
 #[tokio::test]
 async fn queued_child_report_is_retained_across_stop_restart_and_only_person_work_releases_it() {
-    use crate::conversation::application::{ThreadReport, ThreadReportStore};
-    use crate::conversation::infrastructure::LocalThreadReports;
-    use nessa_sdk::application::agent_execution::sessions::StorageError;
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("data");
     let provider = Arc::new(ProviderFactory::default());
@@ -831,20 +836,19 @@ async fn queued_child_report_is_retained_across_stop_restart_and_only_person_wor
     retire(service, storage, metadata).await;
 }
 
-use nessa_sdk::application::agent_execution::commands;
 struct FaultyCommands {
     storage: Arc<RecordStorage>,
     target: ConversationId,
     commit: bool,
     stage: MutationStage,
-    once: Arc<std::sync::atomic::AtomicBool>,
+    once: Arc<AtomicBool>,
 }
 struct FaultyLease {
     inner: Arc<dyn commands::CreationStorageLease>,
     target: ConversationId,
     commit: bool,
     stage: MutationStage,
-    once: Arc<std::sync::atomic::AtomicBool>,
+    once: Arc<AtomicBool>,
 }
 impl commands::CreationStorage for FaultyCommands {
     fn mutations(&self, principal: String) -> commands::CreationFuture<'_, Vec<MutationReceipt>> {
@@ -901,9 +905,7 @@ impl commands::CreationStorageLease for FaultyLease {
                 self.inner.save_mutation(receipt).await?;
             }
             Err(commands::CreationStorageError::Storage(
-                nessa_sdk::application::agent_execution::sessions::StorageError::Corrupt(
-                    "simulated settlement acknowledgement loss".into(),
-                ),
+                StorageError::Corrupt("simulated settlement acknowledgement loss".into()),
             ))
         })
     }
@@ -934,7 +936,7 @@ async fn partial_child_settlement_and_lost_ack_keep_exact_retry_and_honest_looku
             target: first.clone(),
             commit,
             stage: MutationStage::Settled,
-            once: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            once: Arc::new(AtomicBool::new(true)),
         });
         assert!(service
             .stop_command(
@@ -1016,7 +1018,6 @@ async fn partial_child_settlement_and_lost_ack_keep_exact_retry_and_honest_looku
 
 #[tokio::test]
 async fn an_accepted_selection_recovers_without_replaying_work_or_reinterpreting_settings() {
-    use nessa_sdk::application::agent_execution::subagents::OwnershipStore;
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("data");
     let provider = Arc::new(ProviderFactory::default());
@@ -1033,7 +1034,7 @@ async fn an_accepted_selection_recovers_without_replaying_work_or_reinterpreting
         target: parent.clone(),
         commit: true,
         stage: MutationStage::Accepted,
-        once: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+        once: Arc::new(AtomicBool::new(true)),
     });
     assert!(service
         .stop_command(
@@ -1115,8 +1116,6 @@ async fn an_accepted_selection_recovers_without_replaying_work_or_reinterpreting
 
 #[tokio::test]
 async fn foreign_callers_and_report_id_collisions_do_not_cancel_unrelated_user_work() {
-    use crate::conversation::application::{ThreadReport, ThreadReportStore};
-    use crate::conversation::infrastructure::LocalThreadReports;
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("data");
     let provider = Arc::new(ProviderFactory::default());
@@ -1268,17 +1267,14 @@ async fn deleting_an_owned_child_releases_ownership_and_does_not_block_parent_st
     let sibling = child(&service, &parent, "parent", "surviving-child").await;
     let s = hold_turn(&service, &provider, &sibling, "sibling").await;
     let owned_store = SqliteOwnershipStore::open(&root.join("ownership.sqlite3")).unwrap();
-    let before_erasure_close =
-        nessa_sdk::application::agent_execution::subagents::OwnershipStore::read(&owned_store)
-            .await
-            .unwrap();
+    let before_erasure_close = OwnershipStore::read(&owned_store).await.unwrap();
     assert!(service
         .delete(removed, caller("delete-child"))
         .await
         .unwrap());
     assert_eq!(
         coordinator.lifetime_state(&lifetime),
-        Some(nessa_sdk::domain::agent_execution::subagents::LifetimeState::Closed)
+        Some(LifetimeState::Closed)
     );
     service
         .stop_command(
@@ -1296,12 +1292,9 @@ async fn deleting_an_owned_child_releases_ownership_and_does_not_block_parent_st
     retire(service, storage, metadata).await;
     // Restore the exact valid ownership snapshot from before close, leaving
     // deletion's saved erased tombstone: the crash/lost-close-write boundary.
-    nessa_sdk::application::agent_execution::subagents::OwnershipStore::write(
-        &owned_store,
-        &before_erasure_close,
-    )
-    .await
-    .unwrap();
+    OwnershipStore::write(&owned_store, &before_erasure_close)
+        .await
+        .unwrap();
     let provider = Arc::new(ProviderFactory::default());
     let (service, storage, metadata) = fixture(&root, provider.clone());
     let coordinator = bind(&service, &storage, &root, false).await;
@@ -1314,7 +1307,7 @@ async fn deleting_an_owned_child_releases_ownership_and_does_not_block_parent_st
     );
     assert_eq!(
         coordinator.lifetime_state(&lifetime),
-        Some(nessa_sdk::domain::agent_execution::subagents::LifetimeState::Closed)
+        Some(LifetimeState::Closed)
     );
     assert!(provider.executions.lock().unwrap().is_empty());
     retire(service, storage, metadata).await;
@@ -1322,7 +1315,6 @@ async fn deleting_an_owned_child_releases_ownership_and_does_not_block_parent_st
 
 #[tokio::test]
 async fn deleting_a_cold_owned_tree_reconciles_confirmed_leases_and_cannot_reparent_children() {
-    use nessa_sdk::domain::agent_execution::subagents::LifetimeState;
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("data");
     let provider = Arc::new(ProviderFactory::default());
@@ -1354,9 +1346,7 @@ async fn deleting_a_cold_owned_tree_reconciles_confirmed_leases_and_cannot_repar
     );
     let coordinator = bind(&service, &storage, &root, true).await;
     let owned = SqliteOwnershipStore::open(&root.join("ownership.sqlite3")).unwrap();
-    let snapshot = nessa_sdk::application::agent_execution::subagents::OwnershipStore::read(&owned)
-        .await
-        .unwrap();
+    let snapshot = OwnershipStore::read(&owned).await.unwrap();
     service.recover_owned_threads(&snapshot).await.unwrap();
     assert!(service
         .delete(parent, caller("delete-cold-parent"))
@@ -1382,9 +1372,9 @@ async fn deleting_a_cold_owned_tree_reconciles_confirmed_leases_and_cannot_repar
 
 struct PausedOwnedOpening {
     inner: Arc<dyn Environment>,
-    pause: std::sync::atomic::AtomicBool,
-    entered: tokio::sync::Notify,
-    release: tokio::sync::Notify,
+    pause: AtomicBool,
+    entered: Notify,
+    release: Notify,
 }
 impl Environment for PausedOwnedOpening {
     fn declaration(&self) -> EnvironmentDeclaration {
@@ -1412,15 +1402,13 @@ impl Environment for PausedOwnedOpening {
 
 #[tokio::test]
 async fn an_opening_owner_prevents_historical_cleanup_from_closing_its_lifetime() {
-    use nessa_sdk::application::agent_execution::subagents::CloseCommand;
-    use nessa_sdk::domain::agent_execution::subagents::{Initiator, LifetimeCause, LifetimeState};
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("data");
     let environment = Arc::new(PausedOwnedOpening {
         inner: crate::conversation::infrastructure::in_process_environment(),
-        pause: std::sync::atomic::AtomicBool::new(false),
-        entered: tokio::sync::Notify::new(),
-        release: tokio::sync::Notify::new(),
+        pause: AtomicBool::new(false),
+        entered: Notify::new(),
+        release: Notify::new(),
     });
     let provider = Arc::new(ProviderFactory::default());
     let (service, storage, metadata) = fixture_in(
@@ -1448,9 +1436,7 @@ async fn an_opening_owner_prevents_historical_cleanup_from_closing_its_lifetime(
     );
     let coordinator = bind(&service, &storage, &root, true).await;
     let owned = SqliteOwnershipStore::open(&root.join("ownership.sqlite3")).unwrap();
-    let snapshot = nessa_sdk::application::agent_execution::subagents::OwnershipStore::read(&owned)
-        .await
-        .unwrap();
+    let snapshot = OwnershipStore::read(&owned).await.unwrap();
     service.recover_owned_threads(&snapshot).await.unwrap();
     environment.pause.store(true, Ordering::SeqCst);
     let opening = {
@@ -1486,9 +1472,6 @@ async fn an_opening_owner_prevents_historical_cleanup_from_closing_its_lifetime(
 
 #[tokio::test]
 async fn stopping_owed_parent_work_cascades_only_after_command_attempt_is_durable() {
-    use nessa_sdk::application::agent_execution::providers::{
-        ExecutionReport, ProviderExecutionReply, ProviderSessionState,
-    };
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("data");
     let provider = Arc::new(ProviderFactory::default());
@@ -1503,10 +1486,10 @@ async fn stopping_owed_parent_work_cascades_only_after_command_attempt_is_durabl
             None,
             ProviderSessionState::Usable,
         )));
-    *provider.execution_observation_failure.lock().unwrap() = Some(
-        nessa_sdk::application::agent_execution::providers::ObservationFailure::new(
-            AgentError::Transport("pipe".into()),
-            nessa_sdk::application::agent_execution::providers::ObservationFailureCause::ExecutionFailed));
+    *provider.execution_observation_failure.lock().unwrap() = Some(ObservationFailure::new(
+        AgentError::Transport("pipe".into()),
+        ObservationFailureCause::ExecutionFailed,
+    ));
     let p = hold_turn(&service, &provider, &parent, "parent").await;
     let child_id = child(&service, &parent, "parent", "child").await;
     let c = hold_turn(&service, &provider, &child_id, "child").await;
@@ -1533,7 +1516,7 @@ async fn stopping_owed_parent_work_cascades_only_after_command_attempt_is_durabl
         target: parent.clone(),
         commit: false,
         stage: MutationStage::Attempted,
-        once: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+        once: Arc::new(AtomicBool::new(true)),
     });
     assert!(service
         .stop_command(
@@ -1607,7 +1590,6 @@ async fn hold_recovery_turn_in_org(
 
 #[tokio::test]
 async fn accepted_parent_stops_recover_each_targets_organization_for_one_principal() {
-    use nessa_sdk::application::agent_execution::subagents::OwnershipStore;
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("data");
     let provider = Arc::new(ProviderFactory::default());
@@ -1668,7 +1650,7 @@ async fn accepted_parent_stops_recover_each_targets_organization_for_one_princip
             target: parent.clone(),
             commit: true,
             stage: MutationStage::Accepted,
-            once: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            once: Arc::new(AtomicBool::new(true)),
         });
         assert!(service
             .stop_command(
@@ -1745,10 +1727,6 @@ async fn accepted_parent_stops_recover_each_targets_organization_for_one_princip
 
 #[tokio::test]
 async fn owned_creation_retry_cannot_report_a_sealed_child_as_ready() {
-    use nessa_sdk::application::agent_execution::subagents::CloseCommand;
-    use nessa_sdk::domain::agent_execution::subagents::{
-        HostActor, Initiator, LifetimeCause, LifetimeState,
-    };
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("data");
     let provider = Arc::new(ProviderFactory::default());
@@ -1808,14 +1786,10 @@ async fn owned_creation_retry_cannot_report_a_sealed_child_as_ready() {
 
 #[tokio::test]
 async fn failed_queued_report_withdrawal_keeps_root_active_and_retries_before_root_stop() {
-    use crate::conversation::application::{ThreadReport, ThreadReportStore};
-    use crate::conversation::infrastructure::LocalThreadReports;
-    use nessa_sdk::application::agent_execution::agents::{turn_continuation, TurnContinuation};
-    use nessa_sdk::application::agent_execution::sessions::StorageError;
     struct AfterFault {
         inner: Arc<dyn commands::CreationStorage>,
-        once: Arc<std::sync::atomic::AtomicBool>,
-        opens: Arc<std::sync::Mutex<Vec<bool>>>,
+        once: Arc<AtomicBool>,
+        opens: Arc<Mutex<Vec<bool>>>,
     }
     impl commands::CreationStorage for AfterFault {
         fn mutations(
@@ -1886,8 +1860,8 @@ async fn failed_queued_report_withdrawal_keeps_root_active_and_retries_before_ro
             if committed.snapshot().is_some_and(|history| {
                 history.invocations.iter().any(|record| {
                     record.request.execution_id.as_str() == "independent"
-                        && turn_continuation(&history.invocations, &record.request.execution_id)
-                            == TurnContinuation::Pending
+                        && owed_turn_ids(&history.invocations)
+                            .contains(&record.request.execution_id)
                 })
             }) {
                 break;
@@ -1897,8 +1871,8 @@ async fn failed_queued_report_withdrawal_keeps_root_active_and_retries_before_ro
     })
     .await
     .expect("the independent child is committed before capturing Stop targets");
-    let once = Arc::new(std::sync::atomic::AtomicBool::new(true));
-    let opens = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let once = Arc::new(AtomicBool::new(true));
+    let opens = Arc::new(Mutex::new(Vec::new()));
     let faulty: Arc<dyn commands::CreationStorage> = Arc::new(AfterFault {
         inner: Arc::new(FaultyCommands {
             storage: storage.clone(),
@@ -2073,22 +2047,14 @@ async fn failed_queued_report_withdrawal_keeps_root_active_and_retries_before_ro
 }
 
 struct HoldPreparationAdmission {
-    durable: crate::conversation::infrastructure::DurableOwnershipAudit,
-    entered: tokio::sync::Notify,
-    release: tokio::sync::Notify,
+    durable: DurableOwnershipAudit,
+    entered: Notify,
+    release: Notify,
 }
 #[async_trait::async_trait]
-impl nessa_sdk::application::agent_execution::subagents::OwnershipAudit
-    for HoldPreparationAdmission
-{
-    async fn record(
-        &self,
-        evidence: &nessa_sdk::domain::agent_execution::subagents::OwnershipEvidence,
-    ) -> Result<(), nessa_sdk::application::agent_execution::subagents::PortFailure> {
-        use nessa_sdk::application::agent_execution::subagents::OwnershipAudit;
-        if evidence.after
-            == nessa_sdk::domain::agent_execution::subagents::OwnershipMeaning::Reserved
-        {
+impl OwnershipAudit for HoldPreparationAdmission {
+    async fn record(&self, evidence: &OwnershipEvidence) -> Result<(), PortFailure> {
+        if evidence.after == OwnershipMeaning::Reserved {
             self.entered.notify_one();
             self.release.notified().await;
         }
@@ -2139,12 +2105,10 @@ async fn failed_child_preparation_cannot_claim_a_foreign_live_slot_during_storag
         tokio::time::timeout(TURN_HOLD_HANG, started).await.unwrap();
 
         let audit = Arc::new(HoldPreparationAdmission {
-            durable: crate::conversation::infrastructure::DurableOwnershipAudit::new(
-                root.join("ownership-audit"),
-            )
-            .unwrap(),
-            entered: tokio::sync::Notify::new(),
-            release: tokio::sync::Notify::new(),
+            durable: DurableOwnershipAudit::new(root.join("ownership-audit"), Arc::new(TestClock))
+                .unwrap(),
+            entered: Notify::new(),
+            release: Notify::new(),
         });
         let coordinator = OwnershipCoordinator::new(OwnershipDependencies {
             store: Arc::new(SqliteOwnershipStore::open(&root.join("ownership.sqlite3")).unwrap()),
@@ -2299,11 +2263,9 @@ impl commands::CreationStorageLease for RejectChildReadyLease {
             if receipt.binding().target() == &conversation_session(&self.child)
                 && receipt.stage() == commands::CreationStage::Ready
             {
-                return Err(commands::CreationStorageError::Storage(
-                    nessa_sdk::application::agent_execution::sessions::StorageError::Io(
-                        "injected rejection before child Ready append".into(),
-                    ),
-                ));
+                return Err(commands::CreationStorageError::Storage(StorageError::Io(
+                    "injected rejection before child Ready append".into(),
+                )));
             }
             self.inner.save(receipt).await
         })
@@ -2321,47 +2283,30 @@ impl commands::CreationStorageLease for RejectChildReadyLease {
 
 struct CaptureReservedOwnership {
     inner: Arc<SqliteOwnershipStore>,
-    reserved:
-        std::sync::Mutex<Option<nessa_sdk::domain::agent_execution::subagents::OwnershipSnapshot>>,
+    reserved: Mutex<Option<OwnershipSnapshot>>,
 }
 #[async_trait::async_trait]
-impl nessa_sdk::application::agent_execution::subagents::OwnershipStore
-    for CaptureReservedOwnership
-{
-    async fn read(
-        &self,
-    ) -> Result<
-        nessa_sdk::domain::agent_execution::subagents::OwnershipSnapshot,
-        nessa_sdk::application::agent_execution::subagents::PortFailure,
-    > {
-        nessa_sdk::application::agent_execution::subagents::OwnershipStore::read(
-            self.inner.as_ref(),
-        )
-        .await
+impl OwnershipStore for CaptureReservedOwnership {
+    async fn read(&self) -> Result<OwnershipSnapshot, PortFailure> {
+        OwnershipStore::read(self.inner.as_ref()).await
     }
-    async fn write(
-        &self,
-        snapshot: &nessa_sdk::domain::agent_execution::subagents::OwnershipSnapshot,
-    ) -> Result<(), nessa_sdk::application::agent_execution::subagents::PortFailure> {
-        if snapshot.spawns.iter().any(|row| {
-            row.progress == nessa_sdk::domain::agent_execution::subagents::SpawnProgress::Reserved
-        }) {
+    async fn write(&self, snapshot: &OwnershipSnapshot) -> Result<(), PortFailure> {
+        if snapshot
+            .spawns
+            .iter()
+            .any(|row| row.progress == SpawnProgress::Reserved)
+        {
             self.reserved
                 .lock()
                 .unwrap()
                 .get_or_insert_with(|| snapshot.clone());
         }
-        nessa_sdk::application::agent_execution::subagents::OwnershipStore::write(
-            self.inner.as_ref(),
-            snapshot,
-        )
-        .await
+        OwnershipStore::write(self.inner.as_ref(), snapshot).await
     }
 }
 
 #[tokio::test]
 async fn startup_retains_attempted_child_creation_without_binding_or_replaying_it() {
-    use nessa_sdk::application::agent_execution::subagents::OwnershipStore;
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("data");
     let provider = Arc::new(ProviderFactory::default());
@@ -2374,15 +2319,12 @@ async fn startup_retains_attempted_child_creation_without_binding_or_replaying_i
     let owned = Arc::new(SqliteOwnershipStore::open(&root.join("ownership.sqlite3")).unwrap());
     let captured = Arc::new(CaptureReservedOwnership {
         inner: owned.clone(),
-        reserved: std::sync::Mutex::new(None),
+        reserved: Mutex::new(None),
     });
     let coordinator = OwnershipCoordinator::new(OwnershipDependencies {
         store: captured.clone(),
         audit: Arc::new(
-            crate::conversation::infrastructure::DurableOwnershipAudit::new(
-                root.join("ownership-audit"),
-            )
-            .unwrap(),
+            DurableOwnershipAudit::new(root.join("ownership-audit"), Arc::new(TestClock)).unwrap(),
         ),
         factory: service.owned_thread_factory(),
         room: Arc::new(LiveCapacity::new(32)),
@@ -2473,7 +2415,6 @@ async fn startup_retains_attempted_child_creation_without_binding_or_replaying_i
 
 #[tokio::test]
 async fn restart_preserves_child_capacity_without_preventing_its_cold_reopen() {
-    use nessa_sdk::application::agent_execution::subagents::OwnershipStore;
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("data");
     let provider = Arc::new(ProviderFactory::default());
@@ -2517,3 +2458,309 @@ async fn restart_preserves_child_capacity_without_preventing_its_cold_reopen() {
 
 #[path = "owned_recovery.rs"]
 mod owned_recovery;
+
+#[tokio::test]
+async fn parent_stop_captures_the_last_permitted_running_successor() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("data");
+    let parent = id();
+    let child_id;
+    {
+        let provider = Arc::new(ProviderFactory::default());
+        provider.turn_cancel.store(true, Ordering::SeqCst);
+        let (service, storage, metadata) = fixture(&root, provider.clone());
+        bind(&service, &storage, &root, true).await;
+        opened(&service, &provider, &parent).await;
+        let p = hold_turn(&service, &provider, &parent, "parent-original").await;
+        child_id = child(&service, &parent, "parent-original", "create-child").await;
+        let c = hold_turn(&service, &provider, &child_id, "child-original").await;
+        suspend_child_turn(&service, &provider, &child_id, c).await;
+        drop(p);
+        retire(service, storage, metadata).await;
+    }
+    for attempt in 1..=Resumption::MAX_RESUMES {
+        let provider = Arc::new(ProviderFactory::default());
+        provider.turn_cancel.store(true, Ordering::SeqCst);
+        let (service, storage, metadata) = fixture(&root, provider.clone());
+        let coordinator = bind(&service, &storage, &root, true).await;
+        let live = service
+            .resolve(&child_id, &caller("read-child"))
+            .await
+            .unwrap();
+        let owed = live.agent.owed_turns().await.remove(0);
+        let (release, gate) = oneshot::channel();
+        *provider.execution_gate.lock().unwrap() = Some(gate);
+        let started = provider.execution_started.notified();
+        let Resumed::Continued(admission) = live
+            .agent
+            .resume_turn(&owed, caller("resume").actor().unwrap())
+            .await
+            .unwrap()
+        else {
+            panic!("successor is owed")
+        };
+        tokio::time::timeout(TURN_HOLD_HANG, started).await.unwrap();
+        let current = admission.id().clone();
+        assert_eq!(Resumption::of(&current).attempt(), attempt);
+        if attempt == Resumption::MAX_RESUMES {
+            let p = hold_turn(&service, &provider, &parent, "parent-current").await;
+            service
+                .stop_command(
+                    storage.clone(),
+                    parent.clone(),
+                    caller("stop-parent"),
+                    "parent-current".into(),
+                )
+                .await
+                .unwrap();
+            let cancelled = provider.cancel_turns.lock().unwrap().clone();
+            assert!(
+                cancelled.contains(&current.as_str().to_owned()),
+                "last allowed successor omitted: {current:?}; cancelled={cancelled:?}"
+            );
+            let lifetime = coordinator
+                .active_lifetime_for_session(&conversation_session(&child_id))
+                .unwrap();
+            assert_eq!(
+                coordinator.lifetime_state(&lifetime),
+                Some(LifetimeState::Open)
+            );
+            assert!(live.agent.owed_turns().await.is_empty());
+            drop(p);
+        }
+        if attempt < Resumption::MAX_RESUMES {
+            suspend_child_turn(&service, &provider, &child_id, release).await;
+        } else {
+            drop(release);
+        }
+        drop(live);
+        retire(service, storage, metadata).await;
+    }
+}
+
+async fn suspend_child_turn(
+    service: &ConversationService,
+    provider: &ProviderFactory,
+    child: &ConversationId,
+    release: oneshot::Sender<()>,
+) {
+    let live = service
+        .resolve(child, &caller("suspend-read"))
+        .await
+        .unwrap();
+    *provider.execution_updates.lock().unwrap() =
+        vec![ExecutionUpdate::Finished(ExecutionOutcome::Cancelled)];
+    *provider.execution_reply.lock().unwrap() = Some(ProviderExecutionReply::Finished(
+        ExecutionReport::cancelled_locally(CleanupReport::confirmed(CloseOutcome {
+            forced: false,
+        })),
+    ));
+    let stopping = {
+        let live = live.clone();
+        tokio::spawn(async move {
+            live.agent
+                .suspend(caller("host-shutdown").actor().unwrap())
+                .await
+        })
+    };
+    tokio::time::timeout(TURN_HOLD_HANG, async {
+        while live.agent.attachment_status().phase() == AttachmentPhase::Attached {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    drop(release);
+    tokio::time::timeout(TURN_HOLD_HANG, stopping)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+}
+
+struct PausedPendingReports {
+    inner: Arc<dyn ThreadReportStore>,
+    gate: Mutex<Option<(oneshot::Sender<()>, oneshot::Receiver<()>)>>,
+}
+impl ThreadReportStore for PausedPendingReports {
+    fn save(&self, report: &PendingReport) -> ConversationFuture<'_, bool> {
+        self.inner.save(report)
+    }
+    fn settle(&self, child: &ConversationId, report: &str) -> ConversationFuture<'_, ()> {
+        self.inner.settle(child, report)
+    }
+    fn forget_conversation(&self, id: &ConversationId) -> ConversationFuture<'_, ()> {
+        self.inner.forget_conversation(id)
+    }
+    fn pending(&self) -> ConversationFuture<'_, Vec<PendingReport>> {
+        let gate = self.gate.lock().unwrap().take();
+        Box::pin(async move {
+            if let Some((entered, release)) = gate {
+                entered.send(()).unwrap();
+                release.await.unwrap();
+            }
+            self.inner.pending().await
+        })
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn parent_stop_captures_correlated_report_after_dequeue_active() {
+    correlated_report_after_dequeue(false).await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn parent_stop_captures_correlated_report_after_dequeue_handoff() {
+    correlated_report_after_dequeue(true).await;
+}
+async fn correlated_report_after_dequeue(handoff: bool) {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("data");
+    let provider = Arc::new(ProviderFactory::default());
+    provider.turn_cancel.store(true, Ordering::SeqCst);
+    let (service, storage, metadata) = fixture(&root, provider.clone());
+    bind(&service, &storage, &root, true).await;
+    let retained = Arc::new(LocalThreadReports::open(&root.join("reports.sqlite3")).unwrap());
+    let reports = Arc::new(PausedPendingReports {
+        inner: retained.clone(),
+        gate: Default::default(),
+    });
+    service.bind_thread_reports(reports.clone());
+    let parent = id();
+    opened(&service, &provider, &parent).await;
+    let p = hold_turn(&service, &provider, &parent, "parent").await;
+    let child_id = child(&service, &parent, "parent", "create-reporter").await;
+    let c = hold_turn(&service, &provider, &child_id, "child").await;
+    service
+        .report_thread_turn(
+            child_id.clone(),
+            "child".into(),
+            ThreadReport {
+                parent: parent.clone(),
+                caller: caller("report-action"),
+                execution: "correlated-report".into(),
+            },
+        )
+        .await;
+    c.send(()).unwrap();
+    service.look_for_reports(child_id, false).await;
+    let live = service.resolve(&parent, &caller("inspect")).await.unwrap();
+    let report_id = ExecutionId::new("correlated-report").unwrap();
+    tokio::time::timeout(TURN_HOLD_HANG, async {
+        while !live.agent.queued_ids().await.contains(&report_id) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    let (entered, waiting) = oneshot::channel();
+    let (continue_selection, gate) = oneshot::channel();
+    *reports.gate.lock().unwrap() = Some((entered, gate));
+    let observed = Arc::new(PausedMutationObservation {
+        inner: storage.clone(),
+        gate: Default::default(),
+    });
+    let stopping = {
+        let service = service.clone();
+        let storage = observed.clone();
+        let parent = parent.clone();
+        tokio::spawn(async move {
+            service
+                .stop_command(storage, parent, caller("stop-parent"), "parent".into())
+                .await
+        })
+    };
+    tokio::time::timeout(TURN_HOLD_HANG, waiting)
+        .await
+        .unwrap()
+        .unwrap();
+    // The original root was classified Effect. Its existing SDK runner can
+    // now dequeue the correlated report despite gateway admission fencing.
+    let (finish_report, report_gate) = oneshot::channel();
+    *provider.execution_gate.lock().unwrap() = Some(report_gate);
+    let prepared = Arc::new(Notify::new());
+    let (continue_prepare, prepare_gate) = oneshot::channel();
+    if handoff {
+        *provider.prepare_gate.lock().unwrap() = Some((prepared.clone(), prepare_gate));
+    } else {
+        drop(prepare_gate);
+    }
+    let began = provider.execution_started.notified();
+    p.send(()).unwrap();
+    if handoff {
+        tokio::time::timeout(TURN_HOLD_HANG, prepared.notified())
+            .await
+            .unwrap();
+    } else {
+        tokio::time::timeout(TURN_HOLD_HANG, provider.execution_started.notified())
+            .await
+            .unwrap();
+    }
+    assert!(!live.agent.queued_ids().await.contains(&report_id));
+    assert!(live
+        .agent
+        .unsettled_execution_ids()
+        .await
+        .contains(&report_id));
+    let (captured, after_capture) = oneshot::channel();
+    let (allow_control, control_gate) = oneshot::channel();
+    *observed.gate.lock().unwrap() = Some((captured, control_gate));
+    continue_selection.send(()).unwrap();
+    tokio::time::timeout(TURN_HOLD_HANG, after_capture)
+        .await
+        .unwrap()
+        .unwrap();
+    // This observation occurs after the unfinished-ID snapshot. Keep
+    // provider preparation paused until capture has actually happened.
+    if handoff {
+        assert!(live.agent.active_execution_id().is_none());
+        continue_prepare.send(()).unwrap();
+        tokio::time::timeout(TURN_HOLD_HANG, began).await.unwrap();
+    }
+    allow_control.send(()).unwrap();
+    let stopped = tokio::time::timeout(TURN_HOLD_HANG, stopping)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        stopped.is_ok(),
+        "exact report stop must settle: {stopped:?}"
+    );
+    let cancelled = provider.cancel_turns.lock().unwrap().clone();
+    assert!(
+        cancelled.contains(&"correlated-report".into()),
+        "dequeued report escaped Stop (handoff={handoff}): {cancelled:?}"
+    );
+    assert_eq!(
+        retained.pending().await.unwrap().len(),
+        1,
+        "cancelled report remains durable"
+    );
+    drop(finish_report);
+    drop(live);
+    retire(service, storage, metadata).await;
+}
+
+struct PausedMutationObservation {
+    inner: Arc<dyn commands::CreationStorage>,
+    gate: Mutex<Option<(oneshot::Sender<()>, oneshot::Receiver<()>)>>,
+}
+impl commands::CreationStorage for PausedMutationObservation {
+    fn open_creation(
+        &self,
+        principal: String,
+        request: String,
+        create: bool,
+    ) -> commands::CreationFuture<'_, Option<Arc<dyn commands::CreationStorageLease>>> {
+        self.inner.open_creation(principal, request, create)
+    }
+    fn mutations(&self, principal: String) -> commands::CreationFuture<'_, Vec<MutationReceipt>> {
+        let gate = self.gate.lock().unwrap().take();
+        Box::pin(async move {
+            if let Some((entered, release)) = gate {
+                entered.send(()).unwrap();
+                release.await.unwrap();
+            }
+            self.inner.mutations(principal).await
+        })
+    }
+}

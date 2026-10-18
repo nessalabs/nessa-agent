@@ -10,23 +10,28 @@
 //! A partial selection with no root marker never authorizes effects. Attempted
 //! mutations keep the SDK's uncertainty contract; a lost ACK is not cancelled
 //! again. No lifetime is sealed and no second graph or progress ledger is added.
+
 use super::mutation::{ensure_live, stop_binding, StopTarget};
 use super::{
     conversation_session, ConversationCaller, ConversationError, ConversationId,
     ConversationService,
 };
-use nessa_sdk::application::agent_execution::{
-    agents::{turn_continuation, TurnContinuation},
-    commands::{
-        CreationStorage, CreationTaskFault, MutationBinding, MutationCoordinator, MutationFailure,
-        MutationOperation, MutationPlan, MutationReceipt, MutationTarget,
-    },
-    permissions::ActionContext,
+use nessa_auth::domain::PrincipalId;
+use nessa_sdk::application::agent_execution::agents::owed_turn_ids;
+use nessa_sdk::application::agent_execution::commands::{
+    CreationStorage, CreationStorageError, CreationTaskFault, MutationBinding, MutationCoordinator,
+    MutationFailure, MutationOperation, MutationOutcome, MutationPlan, MutationReceipt,
+    MutationStage, MutationTarget,
 };
-use nessa_sdk::domain::agent_execution::subagents::{LifetimeState, MAX_READ_PAGE};
+use nessa_sdk::application::agent_execution::permissions::ActionContext;
+use nessa_sdk::application::agent_execution::sessions::StorageError;
+use nessa_sdk::domain::agent_execution::subagents::{
+    LifetimeState, OwnershipSnapshot, MAX_READ_PAGE,
+};
 use sha2::{Digest, Sha256};
-use std::{collections::BTreeSet, sync::Arc};
-
+use std::collections::BTreeSet;
+use std::sync::Arc;
+use std::time::Duration;
 type Failure = MutationFailure<ConversationError>;
 struct Selection {
     root: MutationBinding,
@@ -288,18 +293,24 @@ impl ConversationService {
                                 .committed_with_order(&child_id)
                                 .await
                                 .map_err(MutationFailure::Target)?;
+                            if let Some(live) = self
+                                .live_now(&child_id, caller)
+                                .await
+                                .map_err(MutationFailure::Target)?
+                            {
+                                for execution in live.agent.unsettled_execution_ids().await {
+                                    targets.insert((
+                                        child_id.to_string(),
+                                        execution.as_str().to_owned(),
+                                    ));
+                                }
+                            }
                             if let Some(history) = committed.snapshot() {
-                                for record in &history.invocations {
-                                    if turn_continuation(
-                                        &history.invocations,
-                                        &record.request.execution_id,
-                                    ) == TurnContinuation::Pending
-                                    {
-                                        targets.insert((
-                                            child_id.to_string(),
-                                            record.request.execution_id.as_str().to_owned(),
-                                        ));
-                                    }
+                                for execution in owed_turn_ids(&history.invocations) {
+                                    targets.insert((
+                                        child_id.to_string(),
+                                        execution.as_str().to_owned(),
+                                    ));
                                 }
                             }
                         }
@@ -318,7 +329,7 @@ impl ConversationService {
                     .resolve(id, caller)
                     .await
                     .map_err(MutationFailure::Target)?;
-                let queued = live.agent.queued_ids().await;
+                let unfinished = live.agent.unsettled_execution_ids().await;
                 let history = live
                     .agent
                     .session_manager()
@@ -334,7 +345,7 @@ impl ConversationService {
                         &report.report.execution,
                         &history.invocations,
                     );
-                    for turn in &queued {
+                    for turn in &unfinished {
                         let is_report = history
                             .invocations
                             .iter()
@@ -444,8 +455,12 @@ impl ConversationService {
             origin.action_id = binding.actor().request_id().into();
             let base = stop_binding(&id, &origin, binding.turn_id().as_str())?;
             if binding == &base {
-                if matches!(receipt.stage(), nessa_sdk::application::agent_execution::commands::MutationStage::Attempted)
-                    || matches!(receipt.outcome(), Some(nessa_sdk::application::agent_execution::commands::MutationOutcome::Cancelled | nessa_sdk::application::agent_execution::commands::MutationOutcome::Withdrawn)) {
+                if matches!(receipt.stage(), MutationStage::Attempted)
+                    || matches!(
+                        receipt.outcome(),
+                        Some(MutationOutcome::Cancelled | MutationOutcome::Withdrawn)
+                    )
+                {
                     captured.push((binding.clone(), binding.clone()));
                 }
                 continue;
@@ -512,9 +527,7 @@ impl ConversationService {
                 .iter()
                 .find(|receipt| receipt.binding() == child)
                 .ok_or_else(unavailable)?;
-            if receipt.stage()
-                != nessa_sdk::application::agent_execution::commands::MutationStage::Settled
-            {
+            if receipt.stage() != MutationStage::Settled {
                 return Err(MutationFailure::Interrupted(Box::new(receipt.clone())));
             }
         }
@@ -562,7 +575,7 @@ impl ConversationService {
             // A locally owned dequeue-to-dispatch handoff is still the exact
             // selected execution. Wait for its existing owner; never target the
             // next active execution or replay an uncertain provider effect.
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            tokio::time::sleep(Duration::from_millis(10)).await;
         }
         let target = Arc::new(StopTarget {
             service: self.clone(),
@@ -581,7 +594,7 @@ impl ConversationService {
     /// command storage are bound. This does not select current work again.
     pub async fn recover_parent_stops(
         &self,
-        snapshot: &nessa_sdk::domain::agent_execution::subagents::OwnershipSnapshot,
+        snapshot: &OwnershipSnapshot,
     ) -> Result<usize, ConversationError> {
         let Some(storage) = self.commands() else {
             return Ok(0);
@@ -616,10 +629,8 @@ impl ConversationService {
                 };
                 let caller = ConversationCaller {
                     organization_id: record.organization().clone(),
-                    principal_id: nessa_auth::domain::PrincipalId::new(
-                        binding.actor().principal_id(),
-                    )
-                    .map_err(|_| ConversationError::Unavailable)?,
+                    principal_id: PrincipalId::new(binding.actor().principal_id())
+                        .map_err(|_| ConversationError::Unavailable)?,
                     surface_id: binding.actor().surface_id().into(),
                     action_id: binding.actor().request_id().into(),
                 };
@@ -629,8 +640,12 @@ impl ConversationService {
                 }
                 let selection = restore(&base, receipt, &receipts)
                     .map_err(|_| ConversationError::Unavailable)?;
-                let complete = receipt.stage() == nessa_sdk::application::agent_execution::commands::MutationStage::Settled
-                    && selection.children.iter().all(|child| receipts.iter().any(|receipt| receipt.binding() == child && receipt.stage() == nessa_sdk::application::agent_execution::commands::MutationStage::Settled));
+                let complete = receipt.stage() == MutationStage::Settled
+                    && selection.children.iter().all(|child| {
+                        receipts.iter().any(|receipt| {
+                            receipt.binding() == child && receipt.stage() == MutationStage::Settled
+                        })
+                    });
                 if !complete {
                     retry.push((id, caller, binding.turn_id().as_str().to_owned()));
                 }
@@ -653,12 +668,13 @@ impl ConversationService {
                         )
                         .await;
                     match result {
-                        Err(MutationFailure::Storage(nessa_sdk::application::agent_execution::commands::CreationStorageError::Storage(nessa_sdk::application::agent_execution::sessions::StorageError::Busy)))
-                            if service.inner.retirement.get().is_none() => {
-                                // Exclusive command leases can be occupied by a
-                                // read-only lookup. Busy admits no new effect;
-                                // retry the same durable selection only.
-                                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                        Err(MutationFailure::Storage(CreationStorageError::Storage(
+                            StorageError::Busy,
+                        ))) if service.inner.retirement.get().is_none() => {
+                            // Exclusive command leases can be occupied by a
+                            // read-only lookup. Busy admits no new effect;
+                            // retry the same durable selection only.
+                            tokio::time::sleep(Duration::from_millis(10)).await;
                         }
                         Err(error) => {
                             tracing::warn!(conversation_id=%id, ?error, "restored exact parent Stop remains unconfirmed");

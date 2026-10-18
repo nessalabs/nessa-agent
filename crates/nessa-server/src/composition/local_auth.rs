@@ -28,7 +28,7 @@ use crate::{
             CedarToolPolicyEvaluator, DurableAgentToolAudit, DurableConversationCreationAudit,
             DurableConversationDeletionAudit, DurableConversationFileLinkAudit,
             DurableConversationModeAudit, DurableDriveToolAudit, DurableMcpAppAudit,
-            LocalConversationStore,
+            DurableOwnershipAudit, LocalConversationStore,
         },
     },
 };
@@ -83,9 +83,15 @@ use nessa_protocol::{
     agents::AgentId,
     conversation::tool_uis::{McpToolUis, NoMcpToolUis},
 };
+#[cfg(unix)]
+use nessa_sdk::application::agent_execution::subagents::{
+    LiveCapacity, OwnershipCoordinator, OwnershipDependencies, OwnershipStore,
+};
 use nessa_sdk::domain::agent_execution::leases::SshDestination;
 #[cfg(unix)]
-use nessa_sdk::infrastructure::session_storage::{InMemoryStorage, RecordStorage};
+use nessa_sdk::infrastructure::session_storage::{
+    InMemoryStorage, RecordStorage, SqliteOwnershipStore,
+};
 #[cfg(unix)]
 use nessa_sdk::{
     application::agent_execution::providers::{ApprovalMode, ApprovalModeChoice},
@@ -1300,26 +1306,20 @@ async fn conversations(
     ));
     let ownership_path = root.join("ownership.sqlite3");
     let ownership_store = Arc::new(
-        nessa_sdk::infrastructure::session_storage::SqliteOwnershipStore::open(&ownership_path)
+        SqliteOwnershipStore::open(&ownership_path)
             .map_err(|error| RunError::Agent(format!("ownership store: {error}")))?,
     );
-    let ownership = nessa_sdk::application::agent_execution::subagents::OwnershipCoordinator::new(
-        nessa_sdk::application::agent_execution::subagents::OwnershipDependencies {
-            store: ownership_store.clone(),
-            audit: Arc::new(
-                crate::conversation::infrastructure::DurableOwnershipAudit::new(
-                    root.join("audit").join("ownership"),
-                )
+    let ownership = OwnershipCoordinator::new(OwnershipDependencies {
+        store: ownership_store.clone(),
+        audit: Arc::new(
+            DurableOwnershipAudit::new(root.join("audit").join("ownership"), clock.clone())
                 .map_err(|error| RunError::Agent(error.to_string()))?,
-            ),
-            factory: service.owned_thread_factory(),
-            room: Arc::new(
-                nessa_sdk::application::agent_execution::subagents::LiveCapacity::new(
-                    ConversationLimits::default().max_conversations,
-                ),
-            ),
-        },
-    );
+        ),
+        factory: service.owned_thread_factory(),
+        room: Arc::new(LiveCapacity::new(
+            ConversationLimits::default().max_conversations,
+        )),
+    });
     ownership
         .resume()
         .await
@@ -1327,10 +1327,7 @@ async fn conversations(
     service
         .bind_owned_threads(ownership, stop_children_on_parent_stop)
         .map_err(|error| RunError::Agent(error.to_string()))?;
-    let ownership_snapshot =
-        nessa_sdk::application::agent_execution::subagents::OwnershipStore::read(
-            ownership_store.as_ref(),
-        )
+    let ownership_snapshot = OwnershipStore::read(ownership_store.as_ref())
         .await
         .map_err(|error| RunError::Agent(format!("ownership read: {error:?}")))?;
     service

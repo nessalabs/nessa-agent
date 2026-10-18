@@ -2,7 +2,9 @@
 //! continued by a successor turn; a person's stop stays final.
 use super::*;
 use nessa_sdk::application::agent_execution::{
-    agents::{AttachmentFailureCode, AttachmentPhase, OwedTurn, Resumed},
+    agents::{
+        owed_turn_ids, resumed_turn_id, AttachmentFailureCode, AttachmentPhase, OwedTurn, Resumed,
+    },
     executions::TurnResumption,
 };
 
@@ -724,12 +726,12 @@ async fn a_retry_answers_as_the_successor_that_ended_the_chain() {
 
 #[tokio::test]
 async fn continuation_read_waits_for_the_exact_original_successor_and_keeps_person_stop_final() {
-    use nessa_sdk::application::agent_execution::agents::{turn_continuation, TurnContinuation};
     let saved = cut_off_while_running("report-continuation").await;
     let original = ExecutionId::new("report-continuation").unwrap();
+    assert!(owed_turn_ids(&saved.snapshot().invocations).contains(&original));
     assert_eq!(
-        turn_continuation(&saved.snapshot().invocations, &original),
-        TurnContinuation::Pending
+        resumed_turn_id(&saved.snapshot().invocations, &original),
+        None
     );
     let (agent, backend, storage, _hold) = restore_holding(saved).await;
     let turn = agent.owed_turns().await.remove(0);
@@ -739,27 +741,22 @@ async fn continuation_read_waits_for_the_exact_original_successor_and_keeps_pers
     bounded(backend.dispatched.notified()).await;
     let snapshot = storage.snapshot();
     assert_eq!(
-        turn_continuation(&snapshot.invocations, &original),
-        TurnContinuation::Successor(admission.id().clone())
+        resumed_turn_id(&snapshot.invocations, &original),
+        Some(admission.id().clone())
     );
     let mut unrelated = snapshot.invocations.clone();
     unrelated[1].actor = ActionContext::new("other", "panel", "forged-successor").unwrap();
-    assert_eq!(
-        turn_continuation(&unrelated, &original),
-        TurnContinuation::Pending
-    );
+    assert_eq!(resumed_turn_id(&unrelated, &original), None);
     let mut unrelated = snapshot.invocations;
     let mut wrong_request = request("unrelated");
     wrong_request.execution_id = admission.id().clone();
     unrelated[1].request = wrong_request;
-    assert_eq!(
-        turn_continuation(&unrelated, &original),
-        TurnContinuation::Pending
-    );
+    assert_eq!(resumed_turn_id(&unrelated, &original), None);
     bounded(agent.close(actor())).await.unwrap();
+    assert!(!owed_turn_ids(&storage.snapshot().invocations).contains(admission.id()));
     assert_eq!(
-        turn_continuation(&storage.snapshot().invocations, admission.id()),
-        TurnContinuation::Final
+        resumed_turn_id(&storage.snapshot().invocations, admission.id()),
+        None
     );
 }
 
@@ -815,7 +812,6 @@ async fn unsettled_selection_includes_dequeued_work_before_active_provider_dispa
 
 #[tokio::test]
 async fn a_saved_failed_turn_successor_is_still_followed_after_later_person_work() {
-    use nessa_sdk::application::agent_execution::agents::{turn_continuation, TurnContinuation};
     let (agent, _backend, storage) = failed_with(AgentError::Transport("pipe".into())).await;
     let owed = agent.owed_turns().await;
     let Resumed::Continued(successor) = agent.resume_turn(&owed[0], resumer()).await.unwrap()
@@ -833,11 +829,54 @@ async fn a_saved_failed_turn_successor_is_still_followed_after_later_person_work
         .unwrap();
     bounded(later.wait()).await.unwrap();
     assert_eq!(
-        turn_continuation(
+        resumed_turn_id(
             &storage.snapshot().invocations,
             &ExecutionId::new("failed").unwrap()
         ),
-        TurnContinuation::Successor(successor_id)
+        Some(successor_id)
     );
+    bounded(agent.close(actor())).await.unwrap();
+}
+
+#[tokio::test]
+async fn historical_continuation_agrees_when_a_person_message_supersedes_a_failed_successor() {
+    let error = AgentError::Transport("pipe".into());
+    let (agent, backend, storage) = failed_with(error.clone()).await;
+    *backend.execution_fault.lock().unwrap() = Some(ProviderOperationFailure::new(
+        error,
+        ProviderSessionState::CleanupReported(CleanupReport::confirmed(CloseOutcome {
+            forced: false,
+        })),
+    ));
+    let (release, gate) = oneshot::channel();
+    *backend.execution_gate.lock().unwrap() = Some(gate);
+    let mut successors = Vec::new();
+    for turn in &agent.owed_turns().await {
+        let Resumed::Continued(admission) = agent.resume_turn(turn, resumer()).await.unwrap()
+        else {
+            panic!("owed successor")
+        };
+        successors.push(admission);
+    }
+    bounded(backend.dispatched.notified()).await;
+    let next = agent
+        .enqueue(request("next"), Submitter::owner(actor()))
+        .await
+        .unwrap();
+    release.send(()).unwrap();
+    let mut ids = Vec::new();
+    for admission in successors {
+        ids.push(admission.id().clone());
+        let _ = bounded(admission.wait()).await;
+    }
+    let _ = bounded(next.wait()).await;
+    *backend.execution_fault.lock().unwrap() = None;
+    let owed = agent.owed_turns().await;
+    let history = storage.snapshot().invocations;
+    for id in ids {
+        assert!(!owed.iter().any(|turn| turn.execution_id() == &id));
+        assert!(!owed_turn_ids(&history).contains(&id));
+        assert_eq!(resumed_turn_id(&history, &id), None);
+    }
     bounded(agent.close(actor())).await.unwrap();
 }

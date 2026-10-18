@@ -951,10 +951,22 @@ impl SessionManager {
         .await
         .map_err(|_| AgentError::SubmissionUnresolved)?
     }
-    /// Latest locally observed submission, including evidence awaiting persistence.
+    /// Inspect one observed history under its evidence lock, including saves
+    /// awaiting acknowledgement, without copying the invocation records.
+    pub(crate) async fn read_invocations<T>(
+        &self,
+        inspect: impl FnOnce(&[InvocationRecord]) -> T,
+    ) -> T {
+        let evidence = self.evidence.lock().await;
+        inspect(
+            evidence
+                .observed
+                .as_ref()
+                .map_or(&[], |snapshot| &snapshot.invocations),
+        )
+    }
     /// Each observed invocation that `pick` keeps, read in saved order under
-    /// the evidence lock without copying the records: `pick` sees each with
-    /// its index and every identity this session has saved.
+    /// the evidence lock with its index and all saved execution identities.
     pub(crate) async fn pick_invocations<T>(
         &self,
         mut pick: impl FnMut(usize, &InvocationRecord, &HashSet<&ExecutionId>) -> Option<T>,

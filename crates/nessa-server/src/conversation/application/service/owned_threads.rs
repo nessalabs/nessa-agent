@@ -3,8 +3,10 @@
 //! Ordering: thread admission -> verify exact source -> coordinator reservation
 //! -> prepare ordinary conversation -> install existing gate -> Ready. Stop uses
 //! the same admission boundary when capturing its exact execution selection.
+
 use super::super::environment::{confirmed_despite, AgentEnd};
 use super::super::AgentToolSource;
+use super::mutation::SubmittedCommand;
 use super::{
     conversation_session, ConversationCaller, ConversationError, ConversationId,
     ConversationService, Inner, RequestedAgent, RequestedConversation, SubmissionMode,
@@ -13,28 +15,27 @@ use super::{
 use async_trait::async_trait;
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_protocol::agents::AgentId;
-use nessa_sdk::application::agent_execution::permissions::ActionContext;
-use nessa_sdk::application::agent_execution::{
-    agents::OwnedLifetime,
-    commands::{CreationFailure, CreationReceipt},
-    subagents::{
-        ChildFactory, ChildResources, CloseCommand, InitialSubmit, OwnershipCoordinator,
-        PortFailure, PrepareFailure, PrepareRequest, PreparedChild, ResourceReport, SpawnCommand,
-    },
+use nessa_sdk::application::agent_execution::agents::OwnedLifetime;
+use nessa_sdk::application::agent_execution::commands::{
+    CreationFailure, CreationReceipt, CreationStorage, CreationTaskFault, MutationFailure,
 };
+use nessa_sdk::application::agent_execution::permissions::ActionContext;
+use nessa_sdk::application::agent_execution::subagents::{
+    BindResourcesRefusal, ChildFactory, ChildResources, CloseCommand, InitialSubmit,
+    OwnershipCoordinator, PortFailure, PrepareFailure, PrepareRequest, PreparedChild,
+    ResourceReport, SpawnCommand,
+};
+use nessa_sdk::domain::agent_execution::executions::{ExecutionId, Initiation};
+use nessa_sdk::domain::agent_execution::leases::{LeaseCleanup, LeaseEndCause, LeasePhase};
 use nessa_sdk::domain::agent_execution::subagents::{
     AgentLifetimeId, ApprovalPolicy, EvidenceFact, HostActor, Initiator, LifetimeCause,
-    LifetimeState, PhysicalFact, PolicyRead, SpawnBinding, SpawnOrigin, SpawnProgress,
-    SpawnRequestId, TaskReceiptId,
-};
-use nessa_sdk::domain::agent_execution::{
-    executions::{ExecutionId, Initiation},
-    leases::LeaseEndCause,
+    LifetimeState, OwnershipSnapshot, PhysicalFact, PolicyRead, SpawnBinding, SpawnOrigin,
+    SpawnProgress, SpawnRequestId, TaskReceiptId,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::sync::{Arc, Weak};
-
+use std::time::Duration;
 pub(super) struct Ownership {
     pub coordinator: OwnershipCoordinator,
     pub cascade: bool,
@@ -139,12 +140,12 @@ impl ConversationService {
         };
         let service = self.clone();
         tokio::spawn(async move {
-            service.prepare_owned_thread(source, id, caller, preparation).await
+            service
+                .prepare_owned_thread(source, id, caller, preparation)
+                .await
         })
         .await
-        .map_err(|error| CreationFailure::TaskFault(
-            nessa_sdk::application::agent_execution::commands::CreationTaskFault::from_join_error(error)
-        ))?
+        .map_err(|error| CreationFailure::TaskFault(CreationTaskFault::from_join_error(error)))?
     }
 
     async fn prepare_owned_thread(
@@ -238,7 +239,7 @@ impl ConversationService {
     /// Every retry joins the saved operation, cause and initiator.
     pub async fn recover_owned_threads(
         &self,
-        snapshot: &nessa_sdk::domain::agent_execution::subagents::OwnershipSnapshot,
+        snapshot: &OwnershipSnapshot,
     ) -> Result<usize, ConversationError> {
         let Some(ownership) = self.inner.ownership.get() else {
             return Ok(0);
@@ -281,7 +282,7 @@ impl ConversationService {
                         cause,
                         initiator,
                         external_attachment: false,
-                        timeout: Some(std::time::Duration::from_secs(5)),
+                        timeout: Some(Duration::from_secs(5)),
                     })
                     .await
                 {
@@ -340,7 +341,7 @@ impl ConversationService {
                         .map_err(|_| ConversationError::InvalidInput)?,
                 ),
                 external_attachment: false,
-                timeout: Some(std::time::Duration::from_secs(5)),
+                timeout: Some(Duration::from_secs(5)),
             })
             .await
             .map_err(|_| ConversationError::Unavailable)
@@ -361,7 +362,7 @@ impl ConversationService {
         else {
             return unknown;
         };
-        use nessa_sdk::domain::agent_execution::leases::{LeaseCleanup, LeasePhase};
+
         let known = match lease.phase() {
             LeasePhase::Ended { cleanup, .. } => Some(cleanup),
             LeasePhase::Interrupted {
@@ -455,8 +456,8 @@ impl ConversationService {
             id: id.clone(),
         });
         match coordinator.bind_resources(lifetime.clone(), resources) {
-            Ok(()) => {},
-            Err(failure) if failure.reason == nessa_sdk::application::agent_execution::subagents::BindResourcesRefusal::AlreadyBound => {},
+            Ok(()) => {}
+            Err(failure) if failure.reason == BindResourcesRefusal::AlreadyBound => {}
             Err(_) => return Err(ConversationError::Unavailable),
         }
         coordinator
@@ -737,19 +738,13 @@ impl ConversationService {
     /// even when the tool's response waiter disappears.
     pub async fn submit_agent_command(
         &self,
-        storage: Arc<dyn nessa_sdk::application::agent_execution::commands::CreationStorage>,
+        storage: Arc<dyn CreationStorage>,
         target: ConversationId,
         source: AgentToolSource,
         execution: String,
         message: SubmittedMessage,
         mode: SubmissionMode,
-    ) -> Result<
-        super::mutation::SubmittedCommand,
-        nessa_sdk::application::agent_execution::commands::MutationFailure<ConversationError>,
-    > {
-        use nessa_sdk::application::agent_execution::commands::{
-            CreationTaskFault, MutationFailure,
-        };
+    ) -> Result<SubmittedCommand, MutationFailure<ConversationError>> {
         let service = self.clone();
         tokio::spawn(async move {
             let _admission = service.inner.thread_admission.clone().lock_owned().await;

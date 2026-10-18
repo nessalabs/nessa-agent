@@ -666,9 +666,14 @@ the host acts. The conformance regression
 `unsettled_selection_includes_dequeued_work_before_active_provider_dispatch`
 holds the actual before-invocation boundary to verify that handoff.
 
-`turn_continuation(history, original)` returns `Final`, `Pending`, or the exact
-saved `Successor` according to the same SDK owed-turn rules used for resumption.
-A host report owner can wait for legitimate suspended work without following an
-unrelated later turn. Explicit Stop stays final. The conformance regression
-`continuation_read_waits_for_the_exact_original_successor_and_keeps_person_stop_final`
-covers those distinctions. These reads choose no host cascade or delivery policy.
+`resumed_turn_id(history, original)` reads only an acknowledged canonical
+successor, checking its identity, actor, initiation and request. Later person
+work cannot erase that relationship. `owed_turn_ids(history)` reads historical
+owed work using the same `OwedHistory` decision as `Agent::owed_turns` and its
+admission recheck. It includes exhausted chains awaiting a host decline; it
+never grants permission to resume. Runtime unfinished identities, canonical
+successor links and future resumption eligibility remain separate facts.
+Gateway Stop consumes unfinished identities plus historically owed work;
+reports follow a canonical successor before asking whether work remains owed.
+The conformance and gateway regressions cover final permitted resumes, failed
+successors superseded by a queued person message, and report dequeue handoff.

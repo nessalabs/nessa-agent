@@ -1,11 +1,18 @@
 //! Recovery joins the original Closing operation after cleanup ownership binds.
+
 use super::*;
 use crate::conversation::application::environment::{LeaseHold, LeaseRelease};
-use nessa_sdk::application::agent_execution::subagents::LiveRoom;
-use nessa_sdk::domain::agent_execution::leases::LeaseEndCause;
+use crate::conversation::infrastructure::DurableOwnershipAudit;
+use nessa_sdk::application::agent_execution::subagents::{
+    CloseCommand, LiveRoom, OwnershipFailure, OwnershipStore,
+};
+use nessa_sdk::domain::agent_execution::leases::{LeaseEndCause, LeasePhase};
+use nessa_sdk::domain::agent_execution::subagents::{
+    HostActor, Initiator, LifetimeCause, LifetimeState,
+};
 use std::collections::HashSet;
-use std::sync::{atomic::AtomicUsize, Mutex};
-
+use std::sync::atomic::AtomicUsize;
+use std::sync::Mutex;
 #[tokio::test]
 async fn startup_retries_a_completed_closing_generation_after_rebinding_its_owner() {
     closing_recovery_after_rebind(false).await;
@@ -83,12 +90,6 @@ impl Environment for WithheldCleanup {
 }
 
 async fn closing_recovery_after_rebind(withheld: bool) {
-    use nessa_sdk::application::agent_execution::subagents::{
-        CloseCommand, OwnershipFailure, OwnershipStore,
-    };
-    use nessa_sdk::domain::agent_execution::subagents::{
-        HostActor, Initiator, LifetimeCause, LifetimeState,
-    };
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("data");
     let provider = Arc::new(ProviderFactory::default());
@@ -153,7 +154,7 @@ async fn closing_recovery_after_rebind(withheld: bool) {
                 .held()
                 .is_some_and(|lease| matches!(
                     lease.phase(),
-                    nessa_sdk::domain::agent_execution::leases::LeasePhase::Interrupted {
+                    LeasePhase::Interrupted {
                         late_cleanup: None,
                         ..
                     }
@@ -166,10 +167,7 @@ async fn closing_recovery_after_rebind(withheld: bool) {
     let coordinator = OwnershipCoordinator::new(OwnershipDependencies {
         store: Arc::new(SqliteOwnershipStore::open(&root.join("ownership.sqlite3")).unwrap()),
         audit: Arc::new(
-            crate::conversation::infrastructure::DurableOwnershipAudit::new(
-                root.join("ownership-audit"),
-            )
-            .unwrap(),
+            DurableOwnershipAudit::new(root.join("ownership-audit"), Arc::new(TestClock)).unwrap(),
         ),
         factory: service.owned_thread_factory(),
         room: room.clone(),

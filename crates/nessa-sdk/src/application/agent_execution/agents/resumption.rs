@@ -104,76 +104,105 @@ pub enum Resumed {
     NotOwed,
 }
 
-/// Whether saved work is final, awaits host continuation, or has an exact
-/// acknowledged successor. This is a history read, not permission to resume.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum TurnContinuation {
-    /// No continuation carries this work.
-    Final,
-    /// Work is owed and no matching successor has been saved yet.
-    Pending,
-    /// This exact successor carries the original work.
-    Successor(ExecutionId),
-}
-
-/// Read continuation using the same owed-work rules as [`Agent::owed_turns`].
-/// Successors must match the derived identity, original caller/initiation and
-/// canonical continuation request. An unrelated record is never followed.
-/// Running records are treated as cut off for this historical read; a live host
-/// may keep waiting for them instead. No execution is submitted or changed.
-pub fn turn_continuation(
+/// The exact canonical successor already saved for `execution`, if any.
+/// Identity, caller, initiation and the continuation request must agree. This
+/// reads a relationship, not runtime completion or permission to resume; later
+/// person input cannot erase an acknowledged successor. Use [`owed_turn_ids`]
+/// for historical resumption eligibility and [`Agent::unsettled_execution_ids`]
+/// for unfinished work admitted by a live Agent.
+pub fn resumed_turn_id(
     history: &[InvocationRecord],
     execution: &ExecutionId,
-) -> TurnContinuation {
-    let Some((index, record)) = history
+) -> Option<ExecutionId> {
+    let record = history
         .iter()
-        .enumerate()
-        .find(|(_, record)| &record.request.execution_id == execution)
-    else {
-        return TurnContinuation::Final;
-    };
-    let Some(next) = Resumption::of(execution).successor() else {
-        return TurnContinuation::Final;
-    };
-    let saved: HashSet<_> = history
+        .find(|record| &record.request.execution_id == execution)?;
+    let next = Resumption::of(execution).successor()?;
+    let successor = history
+        .iter()
+        .find(|record| record.request.execution_id == next)?;
+    let saved = history
         .iter()
         .map(|record| &record.request.execution_id)
         .filter(|id| **id != next)
         .collect();
-    let newest_final = history
-        .iter()
-        .enumerate()
-        .filter_map(|(index, record)| ended_for_good(record, &saved, |_| false).then_some(index))
-        .next_back();
-    // Later person work suppresses a new retry, but cannot erase an already
-    // admitted successor. Validate that successor's canonical request below.
-    let admitted = history
-        .iter()
-        .any(|record| record.request.execution_id == next);
-    let Some(stop) = owed(
-        record,
-        &saved,
-        !admitted && newest_final > Some(index),
-        |_| false,
-    ) else {
-        return TurnContinuation::Final;
-    };
+    let stop = owed(record, &saved, false, |_| false)?;
     let cause = match stop {
         Stop::Recorded(edge) | Stop::CutOff { edge } => edge.cause,
     };
-    match history
-        .iter()
-        .find(|record| record.request.execution_id == next)
-    {
-        Some(successor)
-            if successor.actor == record.actor
-                && successor.initiation == record.initiation
-                && successor_request(record, cause, next.clone())
-                    .is_ok_and(|expected| expected == successor.request) =>
-        {
-            TurnContinuation::Successor(next)
+    (successor.actor == record.actor
+        && successor.initiation == record.initiation
+        && successor_request(record, cause, next.clone())
+            .is_ok_and(|request| request == successor.request))
+    .then_some(next)
+}
+
+/// Exact saved turns whose work is owed when no local execution owns it.
+/// This is the historical counterpart of [`Agent::owed_turns`], sharing its
+/// supersession rules. It grants no permission or instruction to resume. An
+/// exhausted chain remains owed until the host declines it; a running final
+/// attempt is therefore still an exact Stop target.
+pub fn owed_turn_ids(history: &[InvocationRecord]) -> Vec<ExecutionId> {
+    let read = OwedHistory::new(history, |_| false);
+    (0..history.len())
+        .filter(|index| read.at(*index).is_some())
+        .map(|index| history[index].request.execution_id.clone())
+        .collect()
+}
+
+struct OwedHistory<'a, F> {
+    history: &'a [InvocationRecord],
+    saved: HashSet<&'a ExecutionId>,
+    newest_final: Option<usize>,
+    newest_message: Option<usize>,
+    live: F,
+}
+impl<'a, F: Fn(&ExecutionId) -> bool> OwedHistory<'a, F> {
+    fn new(history: &'a [InvocationRecord], live: F) -> Self {
+        let saved = history
+            .iter()
+            .map(|record| &record.request.execution_id)
+            .collect();
+        let newest_final = history
+            .iter()
+            .rposition(|record| ended_for_good(record, &saved, &live));
+        let newest_message = history.iter().rposition(|record| {
+            record.submission != SubmissionMode::Immediate
+                && Resumption::of(&record.request.execution_id).attempt() == 0
+        });
+        Self {
+            history,
+            saved,
+            newest_final,
+            newest_message,
+            live,
         }
-        _ => TurnContinuation::Pending,
+    }
+    fn at(&self, index: usize) -> Option<Stop> {
+        let record = &self.history[index];
+        let retry_moved_past = Resumption::of(&record.request.execution_id).attempt() > 0
+            && self.newest_message > Some(index);
+        owed(
+            record,
+            &self.saved,
+            self.newest_final > Some(index) || retry_moved_past,
+            &self.live,
+        )
+    }
+    fn turns(&self) -> Vec<OwedTurn> {
+        self.history
+            .iter()
+            .enumerate()
+            .filter_map(|(index, record)| {
+                self.at(index).map(|_| OwedTurn {
+                    index,
+                    execution_id: record.request.execution_id.clone(),
+                    submitted_by: record.actor.clone(),
+                    initiation: record.initiation.clone(),
+                    dispatched: dispatched(record),
+                })
+            })
+            .collect()
     }
 }
 
@@ -195,7 +224,7 @@ fn resumed(record: &InvocationRecord, saved: &HashSet<&ExecutionId>) -> bool {
 
 /// Whether `record` is owed, and how it stopped. `saved` is every identity in
 /// the session; `superseded` whether a later turn ended for good or is this
-/// process's own work ([`newest_final`]), or, for a successor, whether any
+/// process's own work (`OwedHistory`), or, for a successor, whether any
 /// message was saved after it ([`Agent::owed_turns`]); `live` whether this
 /// process admitted or is running `id`. A failure is owed only while nothing
 /// came after it: a person who sent the next message moved on, and so did one
@@ -402,26 +431,9 @@ impl Agent {
         let scheduler = self.inner.scheduler.lock().await;
         let active = self.inner.lifecycle.active();
         let live = |id: &ExecutionId| scheduler.has_receipt(id) || active.as_ref() == Some(id);
-        let newest_final = self.newest_final(live).await;
-        let newest_message = self.newest_message().await;
         self.inner
             .manager
-            .pick_invocations(|index, record, saved| {
-                // A successor is saved only once its turn has stopped, so a
-                // message saved after it was sent after that stop: the
-                // person moved on, even if their message only waited behind
-                // the successor and was stopped with it.
-                let retry_moved_past = Resumption::of(&record.request.execution_id).attempt() > 0
-                    && newest_message > Some(index);
-                let superseded = newest_final > Some(index) || retry_moved_past;
-                owed(record, saved, superseded, live).map(|_| OwedTurn {
-                    index,
-                    execution_id: record.request.execution_id.clone(),
-                    submitted_by: record.actor.clone(),
-                    initiation: record.initiation.clone(),
-                    dispatched: dispatched(record),
-                })
-            })
+            .read_invocations(|history| OwedHistory::new(history, live).turns())
             .await
     }
 
@@ -536,32 +548,6 @@ impl Agent {
         .await
     }
 
-    /// The index of the newest turn that ended for good or that this process
-    /// admitted ([`ended_for_good`]): a failure before it is not owed.
-    async fn newest_final(&self, live: impl Fn(&ExecutionId) -> bool) -> Option<usize> {
-        self.inner
-            .manager
-            .pick_invocations(|index, record, saved| {
-                ended_for_good(record, saved, &live).then_some(index)
-            })
-            .await
-            .pop()
-    }
-
-    /// The index of the newest message that is not a successor or a
-    /// steering message: someone's next step, however it ended.
-    async fn newest_message(&self) -> Option<usize> {
-        self.inner
-            .manager
-            .pick_invocations(|index, record, _| {
-                (record.submission != SubmissionMode::Immediate
-                    && Resumption::of(&record.request.execution_id).attempt() == 0)
-                    .then_some(index)
-            })
-            .await
-            .pop()
-    }
-
     /// Find `turn` if it is still owed and record its owed stop if it was
     /// cut off; with `end`, also record that `end` decided not to resume it.
     /// All under the scheduler lock, so two callers never both decide one
@@ -574,20 +560,17 @@ impl Agent {
         let scheduler = self.inner.scheduler.lock().await;
         let active = self.inner.lifecycle.active();
         let live = |id: &ExecutionId| scheduler.has_receipt(id) || active.as_ref() == Some(id);
-        let newest_final = self.newest_final(live).await;
         let found = self
             .inner
             .manager
-            .pick_invocations(|index, record, saved| {
-                (index == turn.index && record.request.execution_id == turn.execution_id)
-                    .then(|| {
-                        owed(record, saved, newest_final > Some(index), live)
-                            .map(|stop| (record.clone(), stop))
-                    })
-                    .flatten()
+            .read_invocations(|history| {
+                let read = OwedHistory::new(history, live);
+                history
+                    .get(turn.index)
+                    .filter(|record| record.request.execution_id == turn.execution_id)
+                    .and_then(|record| read.at(turn.index).map(|stop| (record.clone(), stop)))
             })
-            .await
-            .pop();
+            .await;
         let Some((record, stop)) = found else {
             return Ok(None);
         };

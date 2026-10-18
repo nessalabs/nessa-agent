@@ -34,13 +34,13 @@ use crate::conversation::application::ConversationFuture;
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_sdk::application::agent_execution::{
-    agents::{turn_continuation, TurnContinuation},
+    agents::{owed_turn_ids, resumed_turn_id},
     executions::ExecutionUpdate,
     hooks::{HookError, InvocationContext, InvocationHook},
     sessions::InvocationRecord,
 };
 use nessa_sdk::domain::agent_execution::executions::{
-    ExecutionOutcome, InvocationStage, MessageKind,
+    ExecutionOutcome, InvocationStage, MessageKind, Resumption,
 };
 use std::{
     collections::{HashMap, HashSet},
@@ -895,14 +895,20 @@ enum Found {
 }
 
 fn in_record(history: &[InvocationRecord], record: &InvocationRecord, failure: bool) -> Found {
-    match turn_continuation(history, &record.request.execution_id) {
-        TurnContinuation::Pending => return Found::Continuing,
-        TurnContinuation::Successor(next) => {
-            return invocation(history, next.as_str())
-                .map(|next| in_record(history, next, failure))
-                .unwrap_or(Found::Continuing)
-        }
-        TurnContinuation::Final => {}
+    if let Some(next) = resumed_turn_id(history, &record.request.execution_id) {
+        return invocation(history, next.as_str())
+            .map(|next| in_record(history, next, failure))
+            .unwrap_or(Found::Continuing);
+    }
+    // Owed work at the exhausted limit still requires a host decline, but
+    // cannot gain another successor. The existing domain value owns that limit;
+    // unfinished last attempts continue through the ordinary Waiting path below.
+    if Resumption::of(&record.request.execution_id)
+        .successor()
+        .is_some()
+        && owed_turn_ids(history).contains(&record.request.execution_id)
+    {
+        return Found::Continuing;
     }
     let last = record.scheduling.last();
     if settled(record) {
