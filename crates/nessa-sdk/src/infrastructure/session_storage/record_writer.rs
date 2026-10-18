@@ -249,8 +249,13 @@ impl RecordWriter {
         // taken back for the check and applied again, so it costs what the
         // units cost.
         let keep = if same { 0 } else { self.completed };
-        self.staged
-            .after_applied(&mut self.applied, keep, |state| state.check_units(units))??;
+        let checked = self
+            .staged
+            .after_applied(&mut self.applied, keep, |state| state.check_units(units));
+        // Units that applied before always apply again; if they do not, this
+        // writer's state is no longer the stream's, so it writes nothing more.
+        self.blocked |= checked.is_err();
+        checked??;
         let opens_another = units
             .iter()
             .flat_map(SessionSaveUnit::changes)

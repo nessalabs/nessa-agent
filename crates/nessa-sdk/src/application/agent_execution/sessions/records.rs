@@ -285,10 +285,12 @@ pub(super) enum ChangeUndo {
     NoteRetired(usize),
 }
 
-/// Units applied to a [`continuation::Continuation`] since its last
-/// completed save: how to undo each of their changes, and the changes, to
-/// apply them again. A save's units stay here until its completion, so the
-/// continuation can return to the completed state without a copy of it.
+/// Units applied to a [`continuation::Continuation`] that its owner may still
+/// need to take back: how to undo each of their changes, and the changes, to
+/// apply them again. The owner decides how long they stay (the record writer
+/// keeps a binding's units until the binding changes, so a retry can be
+/// checked against the state before them), so the continuation can return to
+/// an earlier state without a copy of it.
 #[derive(Default)]
 pub(crate) struct AppliedUnits {
     undo: Vec<ChangeUndo>,

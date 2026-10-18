@@ -1934,14 +1934,15 @@ impl SessionManager {
                 .invocations[index];
             let execution_id = record.request.execution_id.clone();
             let local_outcome = record.local_outcome;
-            if let Err(error) = evidence.record(vec![SessionChange::LocalSettlement {
+            // The wrapper only describes this failed write. If it does not
+            // apply, the result before it stays retained for the next save,
+            // and the caller still gets this write's failure and the result.
+            let _ = evidence.record(vec![SessionChange::LocalSettlement {
                 execution_id,
                 before: Some(before),
                 after: result.clone(),
                 local_outcome,
-            }]) {
-                return (Err(AgentError::Storage(error.clone())), Some(error));
-            }
+            }]);
         }
         (result, storage_failure)
     }
