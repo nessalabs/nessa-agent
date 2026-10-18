@@ -1,5 +1,8 @@
 //! The native session uses the real paired gateway, physical cache and private scope.
+#[path = "native_session/clock.rs"]
+mod clock;
 use super::fixtures::{Gateway, Setup};
+use clock::{watched, ManualClock};
 use nessa_auth::domain::pairing::ConsentClass;
 use nessa_client_core::{
     pairing::NativeClientError,
@@ -8,7 +11,7 @@ use nessa_client_core::{
 use nessa_device_client::{NativeSession, SessionFailure};
 use nessa_protocol::{conversation::domain::ConversationId, pairing::wire::NativePairingStatus};
 use serde_json::Value;
-use std::{ffi::OsStr, net::SocketAddr, path::Path, process::Command};
+use std::{ffi::OsStr, net::SocketAddr, path::Path, process::Command, sync::Arc};
 use uuid::Uuid;
 
 /// Opt-in generated Swift executable, linked against the same shared library.
@@ -93,8 +96,15 @@ fn native_refusal_rechecks_pinned_status_without_purging_confirmed_partial_histo
     let address: SocketAddr = profile["gatewayAddress"].as_str().unwrap().parse().unwrap();
     let state_root = Path::new(profile["stateRoot"].as_str().unwrap());
     let state_directory = Path::new(profile["stateDirectory"].as_str().unwrap());
-    let native = NativeSession::open(state_root, state_directory, address).unwrap();
-    let refresh = native.refresh(ReadStop::new()).unwrap();
+    let native = NativeSession::open_with_clock(
+        state_root,
+        state_directory,
+        address,
+        Arc::new(ManualClock::default()),
+    )
+    .unwrap();
+    let stop = ReadStop::new();
+    let refresh = watched(stop.clone(), || native.refresh(stop)).unwrap();
     let initial = refresh.initial();
     assert!(matches!(
         initial.observation(),
@@ -139,6 +149,53 @@ fn native_refusal_rechecks_pinned_status_without_purging_confirmed_partial_histo
     expected["transcriptState"] = Value::from("stale");
     assert_eq!(serde_json::to_value(saved.view()).unwrap(), expected);
     offline.close().unwrap();
+}
+
+#[test]
+fn native_budget_after_catalogue_progress_is_incomplete_without_a_refusal_recheck() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("gateway");
+    let _gateway = Gateway::start_mode(&root, "budget-head");
+    let profile: Value =
+        serde_json::from_slice(&std::fs::read(root.join("profile.json")).unwrap()).unwrap();
+    let address: SocketAddr = profile["gatewayAddress"].as_str().unwrap().parse().unwrap();
+    let state_root = Path::new(profile["stateRoot"].as_str().unwrap());
+    let state_directory = Path::new(profile["stateDirectory"].as_str().unwrap());
+    let clock = Arc::new(ManualClock::default());
+    let native =
+        NativeSession::open_with_clock(state_root, state_directory, address, clock.clone())
+            .unwrap();
+    let stop = ReadStop::new();
+    let phase = root.join("budget-head-entered");
+    let (refresh, advanced) = std::thread::scope(|scope| {
+        let advance = scope.spawn(|| clock.expire_at_head(&phase, &stop));
+        let refresh = watched(stop.clone(), || native.refresh(stop.clone()));
+        if refresh.is_err() {
+            stop.stop();
+        }
+        (refresh, advance.join().unwrap())
+    });
+    assert!(advanced, "actual source head was reached");
+    let refresh = refresh.unwrap();
+    assert!(matches!(
+        refresh.initial().observation(),
+        Some(NativePairingStatus::Active { .. })
+    ));
+    assert!(refresh.initial().purge().is_none());
+    assert!(refresh.selection_failure().is_none());
+    let report = refresh.read().unwrap().result().as_ref().unwrap();
+    assert!(report.moved);
+    assert!(!report.complete);
+    assert!(report.conversations >= 2);
+    assert!(refresh.recheck().is_none());
+    assert!(refresh.read().unwrap().withdrawn().is_empty());
+    let page = native.catalogue_page(None, 16).unwrap().unwrap();
+    assert!(page.entries().len() >= 2);
+    assert!(native
+        .purge_receipt(page.progress().scope.receiver().as_str())
+        .unwrap()
+        .is_none());
+    native.close().unwrap();
 }
 
 #[test]
