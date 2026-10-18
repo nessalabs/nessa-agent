@@ -34,6 +34,10 @@ export const KNOBS = {
     what: "gateway crashes or shutdowns among the actions, at most one a wave",
   },
   reviews: { default: 3, what: "reviews one many-reviews turn asks in a row" },
+  live: {
+    default: 0,
+    what: "live agents the gateway keeps open at once, idle ones let go past it; 0 keeps its own",
+  },
   shrink: {
     default: 8,
     what: "runs at most spent cutting a failing list of actions down; 0 skips it",
@@ -152,7 +156,8 @@ export function describe(list) {
         action.which ??
         action.signal ??
         (action.kind === "archive" ? (action.undo ? "undo" : "") : "")
-      const where = action.kind === "restart" ? "" : ` c${action.slot} by ${action.client}`
+      const where =
+        action.kind === "restart" ? "" : ` c${action.slot} by ${action.client}`
       return `${action.index}. w${action.wave} ${action.kind}${extra ? ` ${extra}` : ""}${where}`
     })
     .join("\n")

@@ -713,6 +713,7 @@ async function runOnce(list, knobs, { evidence, label }) {
       path: launch.command.path,
       mcpServer: launch.mcp,
       signedOut: launch.signedOut,
+      limits: knobs.live ? { liveConversations: knobs.live } : undefined,
     })
   } catch (error) {
     rmSync(directory, { recursive: true, force: true })
