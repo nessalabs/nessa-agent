@@ -425,6 +425,10 @@ impl CompositionRoot {
         if let Some(service) = conversations.clone() {
             let retries = service.clone();
             tokio::spawn(async move { retries.run_failure_retries().await });
+            // Idle agents nobody watches are stopped after
+            // `limits.agentIdleSeconds`; their conversations stay open (#998).
+            let parking = service.clone();
+            tokio::spawn(async move { parking.run_parking().await });
             tokio::spawn(async move {
                 match service.resume_unfinished().await {
                     Ok(0) => {}

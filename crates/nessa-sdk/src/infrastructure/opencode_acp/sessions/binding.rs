@@ -18,7 +18,11 @@ use crate::infrastructure::acp::sessions::{
     binding as acp_binding, deletion::DeletionCleanups, identity, AcpConfig,
 };
 use crate::infrastructure::process::ProcessScope;
-use std::{ffi::OsStr, path::Path, sync::Arc};
+use std::{
+    ffi::OsStr,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 use tokio::process::Command;
 
 /// What an Opencode session launched by this binding is allowed to do, as the
@@ -126,6 +130,10 @@ pub struct OpencodeAcpProvider {
     deletions: DeletionCleanups,
     /// Spans for every session this factory opens.
     traces: Arc<LocalTraceStore>,
+    /// Where every process it launches keeps its sessions (`OPENCODE_DB`),
+    /// so a session outlives the process and its private home; `None` keeps
+    /// them in that home, gone with it.
+    session_database: Option<PathBuf>,
 }
 
 impl OpencodeAcpProvider {
@@ -259,7 +267,22 @@ impl OpencodeAcpProvider {
             audit,
             deletions: DeletionCleanups::default(),
             traces: LocalTraceStore::new(),
+            session_database: None,
         })
+    }
+    /// Keep the sessions of every process this factory launches in the
+    /// SQLite database at `path`, which OpenCode creates when it is missing.
+    ///
+    /// Each process still gets a fresh private home, so no configuration,
+    /// plugin or credential carries from one launch to the next; only the
+    /// sessions do. Without this they live in that home and are deleted with
+    /// it, and `session/resume` after the process stops fails. Several
+    /// processes may share one database: OpenCode opens it in WAL mode.
+    /// The path is not part of the provider fingerprint, so moving it does
+    /// not make recorded sessions unrestorable on its own.
+    pub fn with_session_database(mut self, path: PathBuf) -> Self {
+        self.session_database = Some(path);
+        self
     }
     /// Record this factory's turns into `traces`.
     ///
@@ -309,6 +332,7 @@ impl OpencodeAcpProvider {
             .env_remove("OPENCODE_CONFIG")
             .env_remove("OPENCODE_CONFIG_CONTENT")
             .env_remove("OPENCODE_CONFIG_DIR")
+            .env_remove("OPENCODE_DB")
             .env("HOME", private_home)
             .env("XDG_CONFIG_HOME", private_home.join("config"))
             .env("XDG_CACHE_HOME", private_home.join("cache"))
@@ -351,6 +375,9 @@ impl OpencodeAcpProvider {
             // reaches the upgrade path and `acp` never does, so this makes a
             // sentence that is true of the entry point true of the binary.
             .env("OPENCODE_DISABLE_AUTOUPDATE", "1");
+        if let Some(database) = &self.session_database {
+            command.env("OPENCODE_DB", database);
+        }
         command
     }
 }
@@ -503,6 +530,8 @@ fn isolated_config(mut config: AcpConfig) -> AcpConfig {
         "OPENCODE_CONFIG",
         "OPENCODE_CONFIG_CONTENT",
         "OPENCODE_CONFIG_DIR",
+        // Only `with_session_database` names where sessions are kept.
+        "OPENCODE_DB",
     ] {
         config.environment.remove(OsStr::new(key));
         config.credential_environment.remove(OsStr::new(key));

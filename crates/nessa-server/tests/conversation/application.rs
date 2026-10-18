@@ -3837,6 +3837,8 @@ async fn rejected_capacity_does_not_write_metadata_even_with_concurrent_creates(
         max_conversations: 1,
         ..ConversationLimits::default()
     });
+    // Only an agent that can resume its provider session is parked.
+    provider.session_resume.store(true, Ordering::SeqCst);
     let busy = id();
     service
         .create(

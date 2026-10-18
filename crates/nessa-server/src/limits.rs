@@ -107,7 +107,13 @@ fn catalogue() -> &'static [Limit] {
             id: "server.live_conversations",
             tier: "configured",
             owner: "config.json limits.liveConversations",
-            meaning: "opening a conversation past this many open at once, each with its agent running, is refused capacity",
+            meaning: "opening a conversation past this many open at once, each with its agent running, parks the idle one used longest ago; it is refused capacity only when none can be parked",
+        },
+        Limit {
+            id: "server.agent_idle_seconds",
+            tier: "configured",
+            owner: "config.json limits.agentIdleSeconds",
+            meaning: "an agent idle this many seconds, nothing queued or waiting and nobody following its conversation, is stopped; the conversation stays open and the next message starts the agent again, resuming its session. 0 never stops one",
         },
         Limit {
             id: "socket.ordinary_slots",
@@ -559,6 +565,10 @@ pub(crate) fn effective_json(
     put(
         "server.live_conversations",
         count(limits.live_conversations()),
+    );
+    put(
+        "server.agent_idle_seconds",
+        limits.agent_idle().map_or(0, |idle| idle.as_secs()),
     );
     put("socket.ordinary_slots", count(limits.ordinary_slots()));
     put("socket.control_slots", count(limits.control_slots()));

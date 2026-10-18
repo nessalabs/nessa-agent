@@ -282,6 +282,9 @@ pub struct RequestedConversation {
 pub struct ConversationLimits {
     pub max_conversations: usize,
     pub max_input_bytes: usize,
+    /// How long an idle agent nobody watches keeps running before it is
+    /// parked (`service/parking.rs`); `None` never parks one.
+    pub park_after: Option<Duration>,
 }
 impl ConversationLimits {
     /// Whether `text` is past what one message may say: the one bound a
@@ -298,6 +301,7 @@ impl Default for ConversationLimits {
         Self {
             max_conversations: 32,
             max_input_bytes: 8192,
+            park_after: None,
         }
     }
 }
@@ -735,10 +739,33 @@ struct Slot {
     /// A person's close needs none: it holds the submission lock until its
     /// slot is let go.
     stopping: AtomicBool,
-    /// When this owner was last asked for, as a count of asks across every
-    /// owner: the one asked for longest ago is let go first to make room
-    /// ([`ConversationService::make_room`]).
-    used: AtomicU64,
+    /// When the conversation last showed it was in use: opened or asked for
+    /// by a read or a message, or seen busy, followed or with an app call
+    /// waiting by the parking sweep. An agent is parked only once this is
+    /// `ConversationLimits::park_after` old, or, past the bound on live
+    /// agents, the one with the oldest is parked first
+    /// (`service/parking.rs`). Unix milliseconds from the service's clock.
+    touched: AtomicU64,
+}
+impl Slot {
+    fn new(now_ms: u64) -> Self {
+        Self {
+            value: OnceCell::new(),
+            ready: Notify::new(),
+            started: AtomicBool::new(false),
+            stopping: AtomicBool::new(false),
+            touched: AtomicU64::new(now_ms),
+        }
+    }
+    /// The conversation is in use at `now_ms`.
+    fn touch(&self, now_ms: u64) {
+        self.touched.fetch_max(now_ms, Ordering::SeqCst);
+    }
+    /// How long before `now_ms` the conversation was last in use. A clock
+    /// that went back reads as just now.
+    fn untouched_for(&self, now_ms: u64) -> Duration {
+        Duration::from_millis(now_ms.saturating_sub(self.touched.load(Ordering::SeqCst)))
+    }
 }
 struct Inner {
     workspace: Option<String>,
@@ -793,7 +820,6 @@ struct Inner {
     limits: ConversationLimits,
     conversations: Mutex<HashMap<ConversationId, Arc<Slot>>>,
     /// Asks for an owner so far, which stamps [`Slot::used`].
-    asks: AtomicU64,
     /// Places held by creations between their capacity check and their slot:
     /// a creation writes its metadata and audit in between, so two creations
     /// of different conversations at the last place must not both pass the
@@ -1311,7 +1337,6 @@ impl ConversationService {
                 access_policy,
                 limits,
                 conversations: Mutex::new(HashMap::new()),
-                asks: AtomicU64::new(0),
                 creating: AtomicUsize::new(0),
                 creation: ConversationLocks::default(),
                 retirement: OnceLock::new(),
@@ -1570,19 +1595,13 @@ impl ConversationService {
             let slot = match owners.entry(id.clone()) {
                 std::collections::hash_map::Entry::Occupied(entry) => entry.get().clone(),
                 std::collections::hash_map::Entry::Vacant(entry) => {
-                    let slot = Arc::new(Slot {
-                        value: OnceCell::new(),
-                        ready: Notify::new(),
-                        started: AtomicBool::new(false),
-                        stopping: AtomicBool::new(false),
-                        used: AtomicU64::new(0),
-                    });
+                    let slot = Arc::new(Slot::new(self.inner.clock.unix_milliseconds()));
                     entry.insert(slot.clone());
                     service.start_slot(id.clone(), slot.clone(), actor.clone());
                     slot
                 }
             };
-            service.touch(&slot);
+            slot.touch(service.inner.clock.unix_milliseconds());
             drop(place);
             break slot;
         };
@@ -1684,34 +1703,24 @@ impl ConversationService {
                     }
                     continue;
                 }
-                let slot = Arc::new(Slot {
-                    value: OnceCell::new(),
-                    ready: Notify::new(),
-                    started: AtomicBool::new(false),
-                    stopping: AtomicBool::new(false),
-                    used: AtomicU64::new(0),
-                });
+                let slot = Arc::new(Slot::new(self.inner.clock.unix_milliseconds()));
                 owners.insert(id.clone(), slot.clone());
                 self.start_slot(id.clone(), slot.clone(), actor.clone());
                 slot
             };
-            self.touch(&slot);
+            slot.touch(self.inner.clock.unix_milliseconds());
             break slot;
         };
         let live = self.wait_for_slot(id, slot.clone()).await?;
         Ok((slot, live))
     }
-    /// Stamp `slot` as asked for now.
-    fn touch(&self, slot: &Slot) {
-        let ask = self.inner.asks.fetch_add(1, Ordering::Relaxed) + 1;
-        slot.used.store(ask, Ordering::Relaxed);
-    }
-    /// Let go of the agent asked for longest ago that has nothing to do, so
-    /// one more conversation can open past the bound on live agents rather
-    /// than being refused. Nothing of it is lost: its records stay, and the
-    /// next read or message opens it again. An agent with a turn running or
-    /// queued, a turn owed after a restart, or an app's review waiting is
-    /// never let go. Answers whether one was.
+    /// Park the agent used longest ago that could be parked now
+    /// (`service/parking.rs`), so one more conversation can open past the
+    /// bound on live agents rather than being refused. Nothing of it is
+    /// lost: its records and owed work stay, and the next read or message
+    /// opens it again on its provider session. An agent at work, followed,
+    /// waiting on an app's review, or unable to resume is never parked.
+    /// Answers whether one was.
     async fn make_room(&self, keep: &ConversationId) -> bool {
         let mut owners: Vec<(ConversationId, Arc<Slot>)> = self
             .inner
@@ -1722,49 +1731,15 @@ impl ConversationService {
             .filter(|(id, slot)| *id != keep && !slot.stopping.load(Ordering::SeqCst))
             .map(|(id, slot)| (id.clone(), slot.clone()))
             .collect();
-        owners.sort_by_key(|(_, slot)| slot.used.load(Ordering::Relaxed));
-        let Ok(actor) = ActionContext::new("gateway", "make_room", Uuid::new_v4().to_string())
-        else {
-            return false;
-        };
+        owners.sort_by_key(|(_, slot)| slot.touched.load(Ordering::SeqCst));
         for (id, slot) in owners {
             // A submission or read holds this while it uses the agent; one
-            // held now is a use, and the agent is not idle.
-            let Some(_submissions) = self.inner.mode_changes.try_lock(&id) else {
+            // held now is a use. Never waited for: two openings at the bound
+            // would each wait for the other's.
+            let Some(submissions) = self.inner.mode_changes.try_lock(&id) else {
                 continue;
             };
-            let still_owner = self
-                .inner
-                .conversations
-                .lock()
-                .await
-                .get(&id)
-                .is_some_and(|known| Arc::ptr_eq(known, &slot));
-            let Some(Ok(live)) = slot.value.get() else {
-                continue;
-            };
-            if !still_owner
-                || slot.stopping.load(Ordering::SeqCst)
-                || !live.agent.is_idle().await
-                || !live.agent.owed_turns().await.is_empty()
-                || !live.app_reviews.entries().is_empty()
-            {
-                continue;
-            }
-            tracing::info!(conversation_id = %id, "letting an idle agent go to make room");
-            // Past the stop budget the stop carries on and lets the slot go
-            // once its close is confirmed; this ask looks for another.
-            let stopped = self
-                .stop_and_release(
-                    &id,
-                    slot.clone(),
-                    &actor,
-                    &McpAppInitiator::System,
-                    LeaseEndCause::Stopped,
-                    AgentEnd::Close,
-                )
-                .await;
-            if stopped.is_ok() {
+            if self.park_held(&id, slot, None, submissions).await {
                 return true;
             }
         }
@@ -2051,9 +2026,11 @@ impl ConversationService {
                                 steer: true,
                                 resume: operation_capabilities.session_resume(),
                                 permissions: agent.capabilities().features().tool_use(),
+                                // Until the agent answers, the view admits what a
+                                // send admits: unknown is not no.
                                 image_input: service
                                     .takes_images(&agent, operation_capabilities)
-                                    == Some(true),
+                                    != Some(false),
                                 agent_features: operation_capabilities.into(),
                             };
                             let mut projection =
@@ -2791,7 +2768,15 @@ impl ConversationService {
         let (committed, order) = self.committed_with_order(id).await?;
         let projection = self.detached(id, &committed, &order);
         let read = (projection.read(), projection.committed_cursor());
-        self.read_only(read, &record, id, caller).await
+        let (mut view, cursor) = self.read_only(read, &record, id, caller).await?;
+        // A message opens it again, so images may be sent if this gateway
+        // takes them; an agent that does not is refused at submission.
+        view.capabilities.image_input = self
+            .inner
+            .attachments
+            .as_ref()
+            .is_some_and(|attachments| attachments.offers_images());
+        Ok((view, cursor))
     }
     /// The committed history of `id`, and its pending order.
     async fn committed_with_order(
@@ -3218,6 +3203,8 @@ impl ConversationService {
             let (mut owner, mut live) = service
                 .resolve_opening(&id, &caller, !writer.is_app())
                 .await?;
+            // A message is use: an agent is not parked from under it.
+            owner.touch(service.inner.clock.unix_milliseconds());
             // Opened again at most once for this message: by the stuck agent
             // it found, or by one that failed while it was being checked.
             let mut reopened = false;
@@ -6581,6 +6568,7 @@ pub use artifact_publish::{PublishAnswer, PublishCall, PublishCallRefusal};
 mod environment_tools;
 mod event_read;
 mod notes;
+mod parking;
 mod resumption;
 pub use environment_tools::{
     CommandAnswer, CommandCall, CommandCallError, EnvironmentListing, HERE,
@@ -6616,6 +6604,10 @@ mod resumption_tests;
 #[cfg(test)]
 #[path = "../../../tests/conversation/desktop_stop.rs"]
 mod desktop_stop_tests;
+
+#[cfg(test)]
+#[path = "../../../tests/conversation/parking.rs"]
+mod parking_tests;
 
 #[cfg(test)]
 #[path = "../../../tests/conversation/stop_release.rs"]
