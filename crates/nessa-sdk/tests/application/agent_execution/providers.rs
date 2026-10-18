@@ -178,6 +178,7 @@ pub(super) async fn provider_agent_with_review(
         provider: provider.identity(),
         provider_context: ProviderContext::Recorded(ExecutionSessionId::new("fixture").unwrap()),
         invocations: vec![InvocationRecord {
+            resumed_from: None,
             target_event_offset: None,
             submission: SubmissionMode::Immediate,
             request: ExecutionRequest {

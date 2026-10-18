@@ -487,6 +487,7 @@ impl SessionStorageLease for FaultLease {
 fn invocation(id: &str, complete: bool) -> InvocationRecord {
     let id = ExecutionId::new(id).unwrap();
     InvocationRecord {
+        resumed_from: None,
         target_event_offset: None,
         submission: SubmissionMode::Immediate,
         request: ExecutionRequest {
@@ -693,6 +694,7 @@ async fn queued_admission_resets_consumed_message_cadence() {
             },
             SubmissionMode::Queued,
             NoteIntake::default(),
+            None,
         )
         .await
         .unwrap();
@@ -904,6 +906,7 @@ async fn admission_saves_a_steering_target_with_its_offset_or_refuses_it() {
                 event,
                 SubmissionMode::Steering,
                 NoteIntake::default(),
+                None,
             )
             .await,
         Err(AgentError::InvalidInput(_))
@@ -917,6 +920,7 @@ async fn admission_saves_a_steering_target_with_its_offset_or_refuses_it() {
             event,
             SubmissionMode::Steering,
             NoteIntake::default(),
+            None,
         )
         .await
         .unwrap();
@@ -1895,6 +1899,7 @@ mod note_records {
                 },
                 SubmissionMode::Queued,
                 intake,
+                None,
             )
             .await
     }

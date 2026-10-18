@@ -755,6 +755,7 @@ impl SessionManager {
             SubmissionMode::Immediate,
             Vec::new(),
             NoteIntake::default(),
+            None,
         )
         .await
     }
@@ -768,9 +769,17 @@ impl SessionManager {
         event: InvocationSchedulingEvent,
         submission: SubmissionMode,
         notes: NoteIntake,
+        resumed_from: Option<ExecutionId>,
     ) -> Result<usize, AgentError> {
-        self.begin_record(request, submitter, submission, vec![event], notes)
-            .await
+        self.begin_record(
+            request,
+            submitter,
+            submission,
+            vec![event],
+            notes,
+            resumed_from,
+        )
+        .await
     }
     async fn begin_record(
         &self,
@@ -779,6 +788,7 @@ impl SessionManager {
         submission: SubmissionMode,
         scheduling: Vec<InvocationSchedulingEvent>,
         notes: NoteIntake,
+        resumed_from: Option<ExecutionId>,
     ) -> Result<usize, AgentError> {
         let Submitter {
             context: actor,
@@ -860,6 +870,7 @@ impl SessionManager {
                 }
             }
             next.invocations.push(InvocationRecord {
+                resumed_from,
                 target_event_offset,
                 submission,
                 request,

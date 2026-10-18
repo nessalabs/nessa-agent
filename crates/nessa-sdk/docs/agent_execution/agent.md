@@ -666,9 +666,14 @@ the host acts. The conformance regression
 `unsettled_selection_includes_dequeued_work_before_active_provider_dispatch`
 holds the actual before-invocation boundary to verify that handoff.
 
-`resumed_turn_id(history, original)` reads only an acknowledged canonical
-successor, checking forward queued admission, a recorded owed stop, identity,
-actor, initiation and request. That one SDK relationship also decides whether
+`resumed_turn_id(history, original)` requires the SDK resumption owner's
+`resumed_from` source identity, saved atomically with the successor input.
+Ordinary enqueue/invoke cannot set it, even with an exact continuation request
+and derived execution ID after a real owed stop. The fact survives restoration
+and remains independent of the later `TurnResumed` audit, including
+`ContinuedUnaudited`. A record without it supplies no resumption provenance.
+The same decision checks forward queued admission, a recorded owed stop,
+identity, actor, initiation and request. That one SDK relationship also decides whether
 the original's work moved to a successor. A caller-created matching ID before
 the source, behind an unstopped source, or submitted as immediate input cannot
 carry that work. If such an unrelated ID occupies a resumption's next identity,

@@ -564,6 +564,10 @@ impl QueueHistoryRecord {
 /// is missing: pending, cancelled, or injected input may have no execution result.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct InvocationRecord {
+    /// Source execution admitted by the SDK resumption owner, saved atomically
+    /// with this input. Ordinary enqueue/invoke never set this fact. It is
+    /// independent of the later TurnResumed audit acknowledgement.
+    pub resumed_from: Option<ExecutionId>,
     /// Target observation count at steering admission; not a provider consumption acknowledgement.
     pub target_event_offset: Option<usize>,
     /// Original delivery operation; retries must preserve this intent.
@@ -1151,6 +1155,7 @@ mod committed_tests {
             provider: ProviderIdentity::new("provider", "model", "workspace").unwrap(),
             provider_context: ProviderContext::Absent,
             invocations: vec![InvocationRecord {
+                resumed_from: None,
                 request: ExecutionRequest {
                     execution_id: ExecutionId::new("execution").unwrap(),
                     user_message: UserMessage::text_only(PromptText::new("message").unwrap()),

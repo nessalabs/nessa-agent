@@ -1,4 +1,4 @@
-//! Canonical relationships come from possible SDK admission histories, not IDs.
+//! Canonical relationships require the SDK owner's saved admission, not input shape.
 use super::*;
 
 /// Obtain the exact continuation input from a genuine SDK resume in a separate
@@ -164,4 +164,90 @@ async fn an_immediate_caller_input_after_an_owed_stop_is_not_a_queued_successor(
         .iter()
         .any(|turn| turn.execution_id() == &id));
     bounded(agent.close(actor())).await.unwrap();
+}
+
+#[tokio::test]
+async fn an_exact_queued_caller_input_after_a_recorded_stop_is_not_a_resume() {
+    let (_, successor) = canonical_requests("stopped").await;
+    let saved = stopped_storage(Stop::Suspend).await;
+    let (agent, backend, storage) = workflow_from_storage(saved).await;
+    let id = ExecutionId::new("stopped").unwrap();
+    let (_release, gate) = oneshot::channel();
+    *backend.execution_gate.lock().unwrap() = Some(gate);
+    let input = agent
+        .enqueue(successor, Submitter::owner(actor()))
+        .await
+        .unwrap();
+    bounded(backend.dispatched.notified()).await;
+    let snapshot = storage.snapshot();
+    assert!(snapshot.invocations[1].resumed_from.is_none());
+    assert_eq!(resumed_turn_id(&snapshot.invocations, &id), None);
+    assert!(owed_turn_ids(&snapshot.invocations).contains(&id));
+    let saved = MemoryStorage::default();
+    saved.0.lock().unwrap().snapshot = Some(snapshot);
+    bounded(agent.close(actor())).await.unwrap();
+    drop(input);
+    let (restored, _, storage) = workflow_from_storage(saved).await;
+    let before = storage.snapshot();
+    assert_eq!(resumed_turn_id(&before.invocations, &id), None);
+    let owed = restored
+        .owed_turns()
+        .await
+        .into_iter()
+        .find(|turn| turn.execution_id() == &id)
+        .expect("ordinary input cannot resume the source");
+    assert!(matches!(
+        restored.resume_turn(&owed, resumer()).await,
+        Err(AgentError::SubmissionConflict)
+    ));
+    assert_eq!(storage.snapshot().invocations, before.invocations);
+    let original = &before.invocations[0];
+    let retry = restored
+        .enqueue(original.request.clone(), Submitter::owner(actor()))
+        .await
+        .unwrap();
+    assert_eq!(
+        bounded(retry.wait()).await,
+        original.result.clone().unwrap_or(Err(AgentError::Closed))
+    );
+    assert_eq!(storage.snapshot().invocations, before.invocations);
+    bounded(restored.close(actor())).await.unwrap();
+}
+
+#[tokio::test]
+async fn a_real_resume_retains_its_admission_relationship_after_restore() {
+    let saved = stopped_storage(Stop::Suspend).await;
+    let (agent, backend, storage, _hold) = restore_holding(saved).await;
+    let turn = agent.owed_turns().await.remove(0);
+    let Resumed::Continued(next) = agent.resume_turn(&turn, resumer()).await.unwrap() else {
+        panic!("a real SDK resume is admitted")
+    };
+    bounded(backend.dispatched.notified()).await;
+    let snapshot = storage.snapshot();
+    assert_eq!(
+        snapshot.invocations[1].resumed_from.as_ref(),
+        Some(turn.execution_id())
+    );
+    let mut unattested = snapshot.invocations.clone();
+    unattested[1].resumed_from = None;
+    assert_eq!(resumed_turn_id(&unattested, turn.execution_id()), None);
+    assert_eq!(
+        resumed_turn_id(&snapshot.invocations, turn.execution_id()),
+        Some(next.id().clone())
+    );
+    assert!(!owed_turn_ids(&snapshot.invocations).contains(turn.execution_id()));
+    let saved = MemoryStorage::default();
+    saved.0.lock().unwrap().snapshot = Some(snapshot);
+    bounded(agent.close(actor())).await.unwrap();
+    let (restored, _, storage) = workflow_from_storage(saved).await;
+    assert_eq!(
+        resumed_turn_id(&storage.snapshot().invocations, turn.execution_id()),
+        Some(next.id().clone())
+    );
+    assert!(!restored
+        .owed_turns()
+        .await
+        .iter()
+        .any(|owed| owed.execution_id() == turn.execution_id()));
+    bounded(restored.close(actor())).await.unwrap();
 }

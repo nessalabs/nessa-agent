@@ -882,9 +882,11 @@ impl Agent {
         let waiter = CallerWaiter::Admission(input.execution_id.clone());
         contain_caller_wake(
             waiter,
-            tokio::spawn(
-                async move { agent.accept_work(input, submitter, kind, candidates).await },
-            ),
+            tokio::spawn(async move {
+                agent
+                    .accept_work(input, submitter, kind, candidates, None)
+                    .await
+            }),
         )
         .await
         .map_err(|_| AgentError::SubmissionUnresolved)?
@@ -896,6 +898,7 @@ impl Agent {
         submitter: Submitter,
         kind: InvocationKind,
         candidates: NoteCandidates,
+        resumed_from: Option<ExecutionId>,
     ) -> Result<QueueAdmission, AgentError> {
         validate_configured_input(self.capabilities(), &input)?;
         let mut scheduler = self.inner.scheduler.lock().await;
@@ -903,6 +906,19 @@ impl Agent {
             InvocationKind::Queued => SubmissionMode::Queued,
             InvocationKind::Steering => SubmissionMode::BoundarySteering,
         };
+        // An ordinary input winning admission after settle_owed is still not
+        // a continuation. Compare the retained owner fact before retry recovery.
+        if let Some(source) = &resumed_from {
+            if self
+                .inner
+                .manager
+                .submission(&input.execution_id)
+                .await
+                .is_some_and(|saved| saved.resumed_from.as_ref() != Some(source))
+            {
+                return Err(AgentError::SubmissionConflict);
+            }
+        }
         if let Some(recovered) = submissions::recover(
             &self.inner.manager,
             &scheduler.receipts,
@@ -951,6 +967,7 @@ impl Agent {
                     candidates,
                     takes_notes,
                 },
+                resumed_from,
             )
             .await?;
         // The scheduler lock spans validation and persistence, so no admission
@@ -1629,6 +1646,7 @@ impl Agent {
                 ),
                 SubmissionMode::Steering,
                 NoteIntake::default(),
+                None,
             )
             .await?;
         let refused = match after_save.as_ref() {

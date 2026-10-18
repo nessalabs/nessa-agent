@@ -1362,6 +1362,7 @@ mod tests {
 
     fn accepted_input(name: &str) -> SessionChange {
         SessionChange::InputAccepted(Box::new(InvocationRecord {
+            resumed_from: None,
             request: ExecutionRequest {
                 execution_id: ExecutionId::new(name).unwrap(),
                 user_message: UserMessage::text_only(PromptText::new("message").unwrap()),
@@ -1790,6 +1791,7 @@ mod tests {
             .unwrap();
         let execution_id = ExecutionId::new("execution").unwrap();
         let input = InvocationRecord {
+            resumed_from: None,
             target_event_offset: None,
             submission: SubmissionMode::Immediate,
             request: ExecutionRequest {

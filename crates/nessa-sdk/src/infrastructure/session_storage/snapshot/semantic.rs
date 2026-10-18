@@ -544,6 +544,7 @@ mod tests {
     fn admission_round_trip_reuses_the_existing_metadata_mapping() {
         let id = ExecutionId::new("one").unwrap();
         let record = InvocationRecord {
+            resumed_from: None,
             target_event_offset: None,
             submission: SubmissionMode::Immediate,
             request: ExecutionRequest {
@@ -717,6 +718,7 @@ mod tests {
         let image =
             ImageReference::new(Sha256Digest::from_bytes([1; 32]), ImageMediaType::Png, 1).unwrap();
         let record = InvocationRecord {
+            resumed_from: None,
             target_event_offset: None,
             submission: SubmissionMode::Immediate,
             request: ExecutionRequest {
@@ -771,6 +773,7 @@ mod tests {
     #[test]
     fn semantic_admission_restores_who_started_the_turn() {
         let record = |initiation| InvocationRecord {
+            resumed_from: None,
             target_event_offset: None,
             submission: SubmissionMode::Queued,
             request: ExecutionRequest {
@@ -916,6 +919,7 @@ mod tests {
             ])
             .unwrap();
         let record = InvocationRecord {
+            resumed_from: None,
             target_event_offset: None,
             submission: SubmissionMode::Immediate,
             request: ExecutionRequest {

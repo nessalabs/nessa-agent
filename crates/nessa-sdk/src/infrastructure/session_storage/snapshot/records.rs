@@ -170,6 +170,9 @@ impl AppModelContext {
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Metadata {
+    /// Absence is no resumption evidence; never infer origin from input shape.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) resumed_from: Option<String>,
     pub(super) target_event_offset: Option<usize>,
     pub(super) submission: Submission,
     pub(super) execution_id: String,
@@ -373,6 +376,7 @@ pub(super) enum DeclineDelivery {
 impl From<&InvocationRecord> for Metadata {
     fn from(value: &InvocationRecord) -> Self {
         Self {
+            resumed_from: value.resumed_from.as_ref().map(|id| id.as_str().into()),
             target_event_offset: value.target_event_offset,
             submission: value.submission.into(),
             execution_id: value.request.execution_id.as_str().into(),
@@ -557,6 +561,11 @@ impl Provider {
 impl Metadata {
     pub(super) fn decode(self) -> Result<InvocationRecord, StorageError> {
         Ok(InvocationRecord {
+            resumed_from: self
+                .resumed_from
+                .map(ExecutionId::new)
+                .transpose()
+                .map_err(corrupt)?,
             target_event_offset: self.target_event_offset,
             submission: self.submission.into(),
             request: ExecutionRequest {

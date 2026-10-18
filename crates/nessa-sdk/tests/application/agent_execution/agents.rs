@@ -1081,6 +1081,7 @@ async fn unfinished_saved_invocations_are_retained_without_automatic_replay() {
             ExecutionSessionId::new("saved-context").unwrap(),
         ),
         invocations: vec![InvocationRecord {
+            resumed_from: None,
             target_event_offset: None,
             provider_report: None,
             local_cancellation: None,
@@ -1209,6 +1210,7 @@ async fn restored_unresolved_admission_is_never_redispatched_by_retry() {
                 ExecutionSessionId::new("saved-context").unwrap(),
             ),
             invocations: vec![InvocationRecord {
+                resumed_from: None,
                 target_event_offset: None,
                 provider_report: None,
                 local_cancellation: None,

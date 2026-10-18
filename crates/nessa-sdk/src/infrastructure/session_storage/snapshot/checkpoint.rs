@@ -189,6 +189,7 @@ impl Snapshot {
 pub(crate) fn history_fixture(count: usize) -> SessionSnapshot {
     let invocations = (0..count)
         .map(|index| InvocationRecord {
+            resumed_from: None,
             target_event_offset: None,
             submission: SubmissionMode::Immediate,
             request: ExecutionRequest {

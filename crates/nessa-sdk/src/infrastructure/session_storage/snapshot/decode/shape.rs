@@ -223,6 +223,7 @@ impl Shape {
             (Provider, "name" | "model_id") => Text(256),
             (Provider, "context") => Text(4096),
             (Actor, _) => Text(256),
+            (Metadata, "resumed_from") => Text(ExecutionId::MAX_BYTES),
             (Metadata, "initiation") => Initiation,
             (Initiation, "initiator") => Initiator,
             (Initiation, "tools") => Text(KEY_BYTES),

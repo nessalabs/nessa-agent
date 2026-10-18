@@ -105,7 +105,8 @@ pub enum Resumed {
 }
 
 /// The exact canonical successor already saved for `execution`, if any.
-/// Forward queued admission, a recorded owed stop, identity, caller,
+/// The SDK owner's saved resumption admission, forward queued admission,
+/// a recorded owed stop, identity, caller,
 /// initiation and the continuation request must agree. This
 /// reads a relationship, not runtime completion or permission to resume; later
 /// person input cannot erase an acknowledged successor. Use [`owed_turn_ids`]
@@ -143,7 +144,9 @@ fn canonical_successor<'a>(
         return None;
     }
     let successor = &history[successor_index];
-    if successor.submission != SubmissionMode::Queued {
+    if successor.resumed_from.as_ref() != Some(execution)
+        || successor.submission != SubmissionMode::Queued
+    {
         return None;
     }
     let Stop::Recorded(edge) = owed(record, false, false, |_| false)? else {
@@ -189,8 +192,7 @@ impl<'a, F: Fn(&ExecutionId) -> bool> OwedHistory<'a, F> {
             .iter()
             .rposition(|record| ended_for_good(record, &resumed, &live));
         let newest_message = history.iter().rposition(|record| {
-            record.submission != SubmissionMode::Immediate
-                && Resumption::of(&record.request.execution_id).attempt() == 0
+            record.submission != SubmissionMode::Immediate && record.resumed_from.is_none()
         });
         Self {
             history,
@@ -202,8 +204,7 @@ impl<'a, F: Fn(&ExecutionId) -> bool> OwedHistory<'a, F> {
     }
     fn at(&self, index: usize) -> Option<Stop> {
         let record = &self.history[index];
-        let retry_moved_past = Resumption::of(&record.request.execution_id).attempt() > 0
-            && self.newest_message > Some(index);
+        let retry_moved_past = record.resumed_from.is_some() && self.newest_message > Some(index);
         owed(
             record,
             self.resumed.contains(&record.request.execution_id),
@@ -522,6 +523,7 @@ impl Agent {
                 Submitter::new(record.actor.clone(), record.initiation.clone()),
                 InvocationKind::Queued,
                 NoteCandidates::default(),
+                Some(turn.execution_id.clone()),
             )
             .await?;
         Ok(

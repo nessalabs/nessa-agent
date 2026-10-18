@@ -12,6 +12,7 @@ provider_context: Recorded(
 )
 invocations: [
     InvocationRecord {
+        resumed_from: None,
         target_event_offset: None,
         submission: Queued,
         request: ExecutionRequest {

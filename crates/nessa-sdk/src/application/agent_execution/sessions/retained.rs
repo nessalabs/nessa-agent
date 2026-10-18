@@ -322,6 +322,12 @@ pub(super) fn invocation(record: &InvocationRecord) -> usize {
         .saturating_add(events)
         .saturating_add(scheduling)
         .saturating_add(record.request.execution_id.as_str().len())
+        .saturating_add(
+            record
+                .resumed_from
+                .as_ref()
+                .map_or(0, |id| id.as_str().len()),
+        )
         .saturating_add(actor(&record.actor))
         .saturating_add(initiation(&record.initiation))
         .saturating_add(

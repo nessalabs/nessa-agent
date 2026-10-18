@@ -824,6 +824,7 @@ mod tests {
         scheduling: Vec<InvocationSchedulingEvent>,
     ) -> SessionChange {
         SessionChange::InputAccepted(Box::new(InvocationRecord {
+            resumed_from: None,
             target_event_offset: None,
             submission,
             request: ExecutionRequest {
@@ -1164,6 +1165,7 @@ mod tests {
             .unwrap();
         let secret = "NESSA_ERASE_PRIVATE_INPUT_275";
         let input = InvocationRecord {
+            resumed_from: None,
             target_event_offset: None,
             submission: SubmissionMode::Immediate,
             request: ExecutionRequest {
@@ -1526,6 +1528,7 @@ mod tests {
             .unwrap();
         let execution_id = ExecutionId::new("execution").unwrap();
         let input = SessionChange::InputAccepted(Box::new(InvocationRecord {
+            resumed_from: None,
             target_event_offset: None,
             submission: SubmissionMode::Immediate,
             request: ExecutionRequest {
@@ -2551,6 +2554,7 @@ mod tests {
         };
         let input = |execution_id: ExecutionId| {
             SessionChange::InputAccepted(Box::new(InvocationRecord {
+                resumed_from: None,
                 target_event_offset: None,
                 submission: SubmissionMode::Immediate,
                 request: ExecutionRequest {
@@ -3289,6 +3293,7 @@ mod tests {
             .unwrap();
         let execution_id = ExecutionId::new("accepted").unwrap();
         let input = SessionChange::InputAccepted(Box::new(InvocationRecord {
+            resumed_from: None,
             target_event_offset: None,
             submission: SubmissionMode::Immediate,
             request: ExecutionRequest {
