@@ -67,6 +67,7 @@ conversation again, instead of being refused as a desktop stop refuses it.
 | Idle and unwatched for less than `agentIdleSeconds` | Nothing | | `an_agent_idle_for_less_than_the_limit_is_not_parked` |
 | Idle and unwatched past it | Parked: suspended, slot released, lease ended `idle` | | `an_idle_unwatched_agent_is_parked_and_its_lease_ends_idle` |
 | A turn is running | Not parked; the wait starts again | | `a_running_turn_is_not_parked` |
+| A completed view is committed, but the SDK still owns settlement | Not parked; the wait starts again | The fixture waits for SDK idleness before advancing its idle clock | `a_completed_view_does_not_finish_a_turn_before_sdk_settlement` |
 | A turn is queued, a permission review or question waits, or an MCP App call waits on a review | Not parked: each makes `parkable` false (a queued turn or a review is a busy agent) | | by `parkable`'s checks; only the running turn has its own test |
 | A view follows the conversation | Not parked; the wait starts again when the last follower goes | | `a_followed_conversation_is_not_parked` |
 | `agentIdleSeconds` is 0 | Never parked | | `a_zero_limit_parks_nothing` |
