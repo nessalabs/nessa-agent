@@ -8,6 +8,8 @@ use nessa_sdk::application::agent_execution::{
     executions::TurnResumption,
 };
 
+mod canonical_admission;
+
 fn resumer() -> ActionContext {
     ActionContext::new("gateway", "resume_after_restart", "restart").unwrap()
 }
@@ -390,7 +392,7 @@ async fn assert_ends_after_restore(storage: &MemoryStorage) {
 #[tokio::test]
 async fn a_successor_whose_audit_record_fails_still_runs_and_says_so() {
     let saved = cut_off_while_running("unaudited").await;
-    let (agent, backend, _storage, hold) = restore_holding(saved).await;
+    let (agent, backend, storage, hold) = restore_holding(saved).await;
     let turn = agent.owed_turns().await.remove(0);
     backend.audit.reject.store(true, Ordering::SeqCst);
     let Resumed::ContinuedUnaudited { admission, error } =
@@ -399,6 +401,12 @@ async fn a_successor_whose_audit_record_fails_still_runs_and_says_so() {
         panic!("the successor is queued whether or not its record saved")
     };
     assert_eq!(error, AgentError::AuditFailure);
+    let history = storage.snapshot().invocations;
+    assert_eq!(
+        resumed_turn_id(&history, turn.execution_id()),
+        Some(admission.id().clone())
+    );
+    assert!(!owed_turn_ids(&history).contains(turn.execution_id()));
     backend.audit.reject.store(false, Ordering::SeqCst);
     // The host still has the receipt to watch. What the turn then comes to
     // is the agent's own audit rule (the same sink also refused the

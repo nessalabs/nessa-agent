@@ -190,6 +190,9 @@ contract.
 | Ordering | Owner and decision | Regression |
 | --- | --- | --- |
 | A failed original already has a canonical successor, then later person work arrives | SDK continuation follows the admitted successor; later work only suppresses a new retry | `a_saved_failed_turn_successor_is_still_followed_after_later_person_work` |
+| A caller pre-creates a matching successor before its source, or while that source has no recorded owed stop | The SDK rejects the relationship for both observation and owed-work supersession. Exact ID/request equality cannot replace forward queued admission after a recorded owed stop | SDK canonical-admission conformance |
+| A source is owed but its derived successor ID belongs to an unrelated saved input | Resumption returns `SubmissionConflict` before changing the source. Host decline can still end the source; the unrelated input is preserved | SDK canonical-admission conformance |
+| A matching successor was admitted as immediate input | It cannot carry a queued resumption's work; the original stays owed | SDK canonical-admission conformance |
 | Automatic resume races Stop capture | Both hold application admission before mode changes through successor admission | Parent Stop recovery plus existing resume conformance |
 | Report polling races ordinary person submit | Person command retains the same supervised admission scope as report delivery | `queued_child_report_is_retained_across_stop_restart_and_only_person_work_releases_it` and actual browser continuation |
 | Owned child is successfully deleted before parent Stop | Durable erasure proves its attachment was stopped; existing ownership drain ends that lifetime and returns capacity. Selection still traverses graph descendants before ignoring erased work | `deleting_an_owned_child_releases_ownership_and_does_not_block_parent_stop` |

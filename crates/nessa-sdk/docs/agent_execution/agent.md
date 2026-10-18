@@ -667,8 +667,16 @@ the host acts. The conformance regression
 holds the actual before-invocation boundary to verify that handoff.
 
 `resumed_turn_id(history, original)` reads only an acknowledged canonical
-successor, checking its identity, actor, initiation and request. Later person
-work cannot erase that relationship. `owed_turn_ids(history)` reads historical
+successor, checking forward queued admission, a recorded owed stop, identity,
+actor, initiation and request. That one SDK relationship also decides whether
+the original's work moved to a successor. A caller-created matching ID before
+the source, behind an unstopped source, or submitted as immediate input cannot
+carry that work. If such an unrelated ID occupies a resumption's next identity,
+`resume_turn` returns `SubmissionConflict` before changing the source; the host
+can still decline it. Actual public-admission and restoration regressions live
+in `conformance/resumption/canonical_admission.rs`.
+Later person work cannot erase an admitted relationship. `owed_turn_ids(history)`
+reads historical
 owed work using the same `OwedHistory` decision as `Agent::owed_turns` and its
 admission recheck. It includes exhausted chains awaiting a host decline; it
 never grants permission to resume. Runtime unfinished identities, canonical
