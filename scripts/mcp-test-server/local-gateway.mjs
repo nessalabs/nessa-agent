@@ -175,6 +175,8 @@ export async function exited(child, ms) {
  *   `verification/desktop/scripts/mcp-servers-gateway.mjs`, adds its own).
  * @param {boolean} [o.signedOut] start the gateway with no sign-in to hand an
  *   agent (`signedOutEnvironment`), for an agent that needs none
+ * @param {object} [o.limits] the config's `limits`, as `docs/limits.md` names
+ *   them (`{ agentIdleSeconds: 3 }`); the gateway's defaults when absent
  * @returns the gateway: `{ directory, token, url, log, server, stop, restart }`.
  *   `token` is the owner token file's path; `log()` the gateway's output so
  *   far; `restart(signal)` kills it (a crash by default) and starts it again
@@ -256,6 +258,7 @@ export async function startLocalGateway(o) {
             },
           },
         },
+        ...(o.limits ? { limits: o.limits } : {}),
       }),
     )
     chmodSync(configPath, 0o600)

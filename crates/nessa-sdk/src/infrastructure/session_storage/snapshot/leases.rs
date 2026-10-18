@@ -288,6 +288,7 @@ enum Cause {
     Revoked,
     Expired,
     Lost,
+    Idle,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -591,6 +592,7 @@ impl From<LeaseEndCause> for Cause {
             LeaseEndCause::Revoked => Self::Revoked,
             LeaseEndCause::Expired => Self::Expired,
             LeaseEndCause::Lost => Self::Lost,
+            LeaseEndCause::Idle => Self::Idle,
         }
     }
 }
@@ -602,6 +604,7 @@ impl From<Cause> for LeaseEndCause {
             Cause::Revoked => Self::Revoked,
             Cause::Expired => Self::Expired,
             Cause::Lost => Self::Lost,
+            Cause::Idle => Self::Idle,
         }
     }
 }
@@ -1105,6 +1108,7 @@ mod tests {
             LeaseEndCause::Revoked,
             LeaseEndCause::Expired,
             LeaseEndCause::Lost,
+            LeaseEndCause::Idle,
         ] {
             records.push(LeaseRecord::Ending {
                 lease: lease.clone(),

@@ -313,6 +313,7 @@ pub(super) async fn product_state(
                             .stop_children_on_parent_stop,
                         read_work_budget: limits.read_work_budget(),
                         live_conversations: limits.live_conversations(),
+                        agent_idle: limits.agent_idle(),
                         ssh_hosts: settings.ssh_hosts()?,
                         command_policy: settings.command_policy()?,
                         serving,
@@ -589,6 +590,8 @@ struct ConversationSettings {
     read_work_budget: std::time::Duration,
     /// The most conversations open, each with its agent, at once.
     live_conversations: usize,
+    /// How long an idle agent nobody watches runs before it is parked.
+    agent_idle: Option<std::time::Duration>,
     /// The SSH hosts a conversation may be created on.
     ssh_hosts: Vec<SshDestination>,
     /// Where the agent may run commands; `None` grants it no environment
@@ -930,6 +933,7 @@ async fn conversations(
         stop_children_on_parent_stop,
         read_work_budget,
         live_conversations,
+        agent_idle,
         ssh_hosts,
         command_policy,
         serving,
@@ -1275,6 +1279,7 @@ async fn conversations(
                 dependencies,
                 ConversationLimits {
                     max_conversations: live_conversations,
+                    park_after: agent_idle,
                     ..ConversationLimits::default()
                 },
                 workspace,
@@ -1288,6 +1293,7 @@ async fn conversations(
                 dependencies,
                 ConversationLimits {
                     max_conversations: live_conversations,
+                    park_after: agent_idle,
                     ..ConversationLimits::default()
                 },
                 workspace,

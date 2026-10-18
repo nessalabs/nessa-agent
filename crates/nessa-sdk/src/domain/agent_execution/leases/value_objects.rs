@@ -597,6 +597,10 @@ pub enum LeaseEndCause {
     /// The environment no longer holds it: the connection to it was lost, or
     /// it or the gateway started again.
     Lost,
+    /// The agent sat idle with nobody watching its conversation, and the
+    /// gateway stopped it to free what it held. The conversation stays, and
+    /// the next message starts the agent again.
+    Idle,
 }
 
 /// What an environment reported about removing what a lease created.

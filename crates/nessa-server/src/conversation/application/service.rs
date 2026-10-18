@@ -106,7 +106,7 @@ use std::{
     panic::AssertUnwindSafe,
     pin::Pin,
     sync::{
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         Arc, OnceLock, Weak,
     },
     time::Duration,
@@ -285,6 +285,9 @@ pub struct RequestedConversation {
 pub struct ConversationLimits {
     pub max_conversations: usize,
     pub max_input_bytes: usize,
+    /// How long an idle agent nobody watches keeps running before it is
+    /// parked (`service/parking.rs`); `None` never parks one.
+    pub park_after: Option<Duration>,
 }
 impl ConversationLimits {
     /// Whether `text` is past what one message may say: the one bound a
@@ -301,6 +304,7 @@ impl Default for ConversationLimits {
         Self {
             max_conversations: 32,
             max_input_bytes: 8192,
+            park_after: None,
         }
     }
 }
@@ -739,6 +743,32 @@ struct Slot {
     /// A person's close needs none: it holds the submission lock until its
     /// slot is let go.
     stopping: AtomicBool,
+    /// When the conversation last showed it was in use: opened, sent a
+    /// message, or seen busy, followed or with an app call waiting by the
+    /// parking sweep. An agent is parked only once this is
+    /// `ConversationLimits::park_after` old (`service/parking.rs`). Unix
+    /// milliseconds from the service's clock.
+    touched: AtomicU64,
+}
+impl Slot {
+    fn new(now_ms: u64) -> Self {
+        Self {
+            value: OnceCell::new(),
+            ready: Notify::new(),
+            started: AtomicBool::new(false),
+            stopping: AtomicBool::new(false),
+            touched: AtomicU64::new(now_ms),
+        }
+    }
+    /// The conversation is in use at `now_ms`.
+    fn touch(&self, now_ms: u64) {
+        self.touched.fetch_max(now_ms, Ordering::SeqCst);
+    }
+    /// How long before `now_ms` the conversation was last in use. A clock
+    /// that went back reads as just now.
+    fn untouched_for(&self, now_ms: u64) -> Duration {
+        Duration::from_millis(now_ms.saturating_sub(self.touched.load(Ordering::SeqCst)))
+    }
 }
 struct Inner {
     workspace: Option<String>,
@@ -1562,12 +1592,7 @@ impl ConversationService {
                 }
                 std::collections::hash_map::Entry::Occupied(entry) => entry.get().clone(),
                 std::collections::hash_map::Entry::Vacant(entry) => {
-                    let slot = Arc::new(Slot {
-                        value: OnceCell::new(),
-                        ready: Notify::new(),
-                        started: AtomicBool::new(false),
-                        stopping: AtomicBool::new(false),
-                    });
+                    let slot = Arc::new(Slot::new(self.inner.clock.unix_milliseconds()));
                     // Audit and admission checks already passed. From this
                     // transfer through publication/start there is no fallible
                     // I/O and no unowned slot can supply this preparation.
@@ -1678,12 +1703,7 @@ impl ConversationService {
                 {
                     return Err(ConversationError::Capacity.into());
                 }
-                let slot = Arc::new(Slot {
-                    value: OnceCell::new(),
-                    ready: Notify::new(),
-                    started: AtomicBool::new(false),
-                    stopping: AtomicBool::new(false),
-                });
+                let slot = Arc::new(Slot::new(self.inner.clock.unix_milliseconds()));
                 owners.insert(id.clone(), slot.clone());
                 self.start_slot(id.clone(), slot.clone(), actor, None);
                 slot
@@ -1990,9 +2010,11 @@ impl ConversationService {
                                 steer: true,
                                 resume: operation_capabilities.session_resume(),
                                 permissions: agent.capabilities().features().tool_use(),
+                                // Until the agent answers, the view admits what a
+                                // send admits: unknown is not no.
                                 image_input: service
                                     .takes_images(&agent, operation_capabilities)
-                                    == Some(true),
+                                    != Some(false),
                                 agent_features: operation_capabilities.into(),
                             };
                             let mut projection =
@@ -2723,7 +2745,15 @@ impl ConversationService {
         let (committed, order) = self.committed_with_order(id).await?;
         let projection = self.detached(id, &committed, &order);
         let read = (projection.read(), projection.committed_cursor());
-        self.read_only(read, &record, id, caller).await
+        let (mut view, cursor) = self.read_only(read, &record, id, caller).await?;
+        // A message opens it again, so images may be sent if this gateway
+        // takes them; an agent that does not is refused at submission.
+        view.capabilities.image_input = self
+            .inner
+            .attachments
+            .as_ref()
+            .is_some_and(|attachments| attachments.offers_images());
+        Ok((view, cursor))
     }
     /// The committed history of `id`, and its pending order.
     async fn committed_with_order(
@@ -3126,6 +3156,8 @@ impl ConversationService {
             let (mut owner, mut live) = service
                 .resolve_opening(&id, &caller, !writer.is_app())
                 .await?;
+            // A message is use: an agent is not parked from under it.
+            owner.touch(service.inner.clock.unix_milliseconds());
             // An agent that stopped itself and waits for its owner's close
             // takes nothing more (`Agent::awaits_close`): the conversation is
             // stopped, not gone, so a person's message closes it and opens
@@ -6455,6 +6487,7 @@ pub use artifact_publish::{PublishAnswer, PublishCall, PublishCallRefusal};
 mod environment_tools;
 mod event_read;
 mod notes;
+mod parking;
 mod resumption;
 pub use environment_tools::{
     CommandAnswer, CommandCall, CommandCallError, EnvironmentListing, HERE,
@@ -6490,6 +6523,10 @@ mod resumption_tests;
 #[cfg(test)]
 #[path = "../../../tests/conversation/desktop_stop.rs"]
 mod desktop_stop_tests;
+
+#[cfg(test)]
+#[path = "../../../tests/conversation/parking.rs"]
+mod parking_tests;
 
 #[cfg(test)]
 #[path = "../../../tests/conversation/stop_release.rs"]

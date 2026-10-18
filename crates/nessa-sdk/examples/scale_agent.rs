@@ -43,27 +43,29 @@ fn main() {
             "initialize" => Ok(json!({
                 "protocolVersion": 1,
                 "agentInfo": { "name": name, "version": version },
-                "agentCapabilities": { "loadSession": false, "promptCapabilities": {} },
+                // Resumable, so a parked conversation's agent can be started
+                // again on its session (docs/design/agent-parking.md).
+                "agentCapabilities": {
+                    "loadSession": false,
+                    "promptCapabilities": {},
+                    "sessionCapabilities": { "resume": {} },
+                },
                 "authMethods": [],
             })),
             "session/new" => {
-                let options = &params["_meta"]["claudeCode"]["options"];
-                match options["model"].as_str() {
-                    None => Err("session/new names no model".to_owned()),
-                    Some(model) => {
-                        next += 1;
-                        let session = format!("scale-{}-{next}", std::process::id());
-                        let mode = options["permissionMode"].as_str().unwrap_or("default");
-                        let values = vec![
-                            ("model".to_owned(), model.to_owned()),
-                            ("mode".to_owned(), mode.to_owned()),
-                        ];
-                        let listed = config_options(&values);
-                        sessions.insert(session.clone(), values);
-                        Ok(json!({ "sessionId": session, "configOptions": listed }))
-                    }
-                }
+                next += 1;
+                let session = format!("scale-{}-{next}", std::process::id());
+                open(&mut sessions, params, session)
             }
+            // The session it names, opened again as if new: this agent keeps
+            // no history, so there is nothing else to restore.
+            "session/resume" => match params["sessionId"].as_str() {
+                None | Some("") => Err("session/resume names no session".to_owned()),
+                Some(session) if sessions.contains_key(session) => {
+                    Err(format!("session {session} is already open"))
+                }
+                Some(session) => open(&mut sessions, params, session.to_owned()),
+            },
             "session/set_config_option" => {
                 let session = params["sessionId"].as_str().unwrap_or_default();
                 let config = params["configId"].as_str().unwrap_or_default();
@@ -112,6 +114,27 @@ fn main() {
         };
         write(&out, &reply);
     }
+}
+
+/// Open `session` with the model and mode `params` name, as the claude
+/// harness does for both `session/new` and `session/resume`.
+fn open(
+    sessions: &mut HashMap<String, Vec<(String, String)>>,
+    params: &Value,
+    session: String,
+) -> Result<Value, String> {
+    let options = &params["_meta"]["claudeCode"]["options"];
+    let Some(model) = options["model"].as_str() else {
+        return Err("the session names no model".to_owned());
+    };
+    let mode = options["permissionMode"].as_str().unwrap_or("default");
+    let values = vec![
+        ("model".to_owned(), model.to_owned()),
+        ("mode".to_owned(), mode.to_owned()),
+    ];
+    let listed = config_options(&values);
+    sessions.insert(session.clone(), values);
+    Ok(json!({ "sessionId": session, "configOptions": listed }))
 }
 
 /// Each option offers only its current value, as the scripted agent's do.

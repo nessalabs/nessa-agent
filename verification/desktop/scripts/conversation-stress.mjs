@@ -25,9 +25,16 @@
  *   delegate    the agent creates a thread and messages it; the thread's
  *               report comes back as a turn of its own
  *   aside       another conversation is opened in the window and talked to
+ *   park        another conversation is left idle, unwatched, until the
+ *               gateway parks its agent (its lease ends `idle`); it is opened
+ *               in the window and the message sent there starts the agent
+ *               again on its provider session
  *
  * Meanwhile `--parallel` background conversations take turns through the
- * gateway. At the end every conversation must be at rest, every turn ended as
+ * gateway. With `--parks` above 0 the gateway parks every idle conversation
+ * nobody follows after `PARK_IDLE_SECONDS`, so asides, threads and background
+ * conversations are parked and started again as the run goes. At the end
+ * every conversation must be at rest, every turn ended as
  * planned, and nothing denied automatically or hidden behind a display limit.
  *
  * Build the gateway first (`cargo build -p nessa-server`). How to add a step
@@ -97,6 +104,13 @@ Options:
                         claude; Linux offers full access only on Claude's model)
   --evidence <dir>      write the plan, acp.jsonl, mcp.jsonl, gateway.log and views/`,
 }
+
+/**
+ * How long a conversation sits idle, unwatched, before the gateway parks its
+ * agent in this run (`limits.agentIdleSeconds`). Short, so the run sees it;
+ * the gateway looks four times within it.
+ */
+const PARK_IDLE_SECONDS = 3
 
 const fold = (text) =>
   String(text ?? "")
@@ -211,10 +225,11 @@ async function open(page, title) {
  * Resolves with the turns the conversation already had, so a turn after it
  * is one not among them. A read keeps only the latest turns, so a turn is
  * never found by its position. A send the window refuses or keeps is a
- * failure, not a retry.
+ * failure, not a retry. `known`, the turns the caller already read, skips
+ * that read, which opens the conversation's agent.
  */
-async function send(run, conversationId, text, failures) {
-  const before = await seenTurns(run, conversationId)
+async function send(run, conversationId, text, failures, known) {
+  const before = known ?? (await seenTurns(run, conversationId))
   const box = dock(run.page).locator("textarea")
   await box.fill(text)
   const button = dock(run.page).getByRole(...composerControls.send)
@@ -718,6 +733,90 @@ const steps = {
     await expectShown(run.page, `${SAYS.echo}${second}`, failures)
     await open(run.page, run.main.title)
   },
+
+  async park(run, step, failures) {
+    const conversationId = randomUUID()
+    const first = prompt(run, STRESS.reply, step, " park")
+    await run.client.conversation.create({ conversationId, agent: run.stack.agent })
+    await run.client.conversation.submit(
+      run.client.conversation.prepare(conversationId, first),
+    )
+    const { view: before } = await settled(
+      run,
+      conversationId,
+      new Set(),
+      first,
+      "completed",
+      failures,
+    )
+    if (failures.length) return
+    // Nothing reads it meanwhile: a read opens its agent, a follower keeps it.
+    await sleep((PARK_IDLE_SECONDS + 4) * 1000)
+    const parked = await followedOnce(run, conversationId)
+    const lease = parked.lease
+    if (lease?.state !== "ended" || lease?.cause !== "idle") {
+      failures.push(
+        `the idle conversation was not parked: its lease is ${lease?.state ?? "missing"}${
+          lease?.cause ? ` (${lease.cause})` : ""
+        }`,
+      )
+      return
+    }
+    // A person opens the parked conversation and writes in it: the window
+    // shows it with no agent running, and Send starts one.
+    await open(run.page, await titleOf(run, conversationId))
+    const second = prompt(run, STRESS.reply, step, " after parking")
+    const seen = await send(
+      run,
+      conversationId,
+      second,
+      failures,
+      new Set(before.messages.map((each) => each.executionId)),
+    )
+    const { view: after } = await settled(
+      run,
+      conversationId,
+      seen,
+      second,
+      "completed",
+      failures,
+    )
+    await expectShown(run.page, `${SAYS.echo}${second}`, failures)
+    if (after?.lease?.state !== "live")
+      failures.push(`the next message left the lease ${after?.lease?.state ?? "missing"}`)
+    else if (!(after.lease.revision > (before.lease?.revision ?? 0)))
+      failures.push("the next message ran on the parked agent's lease, not a new one")
+    await open(run.page, run.main.title)
+  },
+}
+
+/**
+ * The first view frame of `conversationId` from a view subscription, which
+ * never opens an agent. Closed at once: a follower keeps its agent from
+ * being parked.
+ */
+async function followedOnce(run, conversationId) {
+  let seen
+  let lost
+  const first = new Promise((resolve, reject) => ((seen = resolve), (lost = reject)))
+  const opening = run.client.subscriptions.view(conversationId, {
+    view: (each) => seen(each.view),
+    ended: (end) => lost(new Error(`the view ended ${end.reason}`)),
+  })
+  try {
+    return await Promise.race([
+      first,
+      opening.then(() => first),
+      sleep(15_000).then(() => {
+        throw new Error("no view frame in 15 s")
+      }),
+    ])
+  } finally {
+    // Closed whatever happened, so nothing follows it afterwards; an open
+    // that failed left nothing to close.
+    const subscription = await opening.catch(() => null)
+    await subscription?.close().catch(() => {})
+  }
 }
 
 async function titleOf(run, conversationId) {
@@ -851,6 +950,7 @@ async function startStack(options) {
       as: "panel",
       scenario,
       evidence: options.evidence,
+      limits: { agentIdleSeconds: knobs.parks > 0 ? PARK_IDLE_SECONDS : 0 },
     })
   } catch (error) {
     rmSync(directory, { recursive: true, force: true })
