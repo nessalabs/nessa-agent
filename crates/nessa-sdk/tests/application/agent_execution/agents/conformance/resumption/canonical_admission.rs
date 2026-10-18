@@ -1,5 +1,6 @@
 //! Canonical relationships require the SDK owner's saved admission, not input shape.
 use super::*;
+use nessa_sdk::domain::agent_execution::executions::{GrantInitiator, Initiation};
 
 #[tokio::test]
 async fn contradictory_restored_origin_cannot_revive_superseded_work() {
@@ -54,8 +55,6 @@ async fn contradictory_restored_origin_cannot_revive_superseded_work() {
 
 #[tokio::test]
 async fn restored_resume_origin_requires_the_exact_admitted_binding() {
-    use nessa_sdk::domain::agent_execution::executions::{GrantInitiator, Initiation};
-
     let saved = stopped_storage(Stop::Suspend).await;
     let (agent, backend, storage, _hold) = restore_holding(saved).await;
     let turn = agent.owed_turns().await.remove(0);
