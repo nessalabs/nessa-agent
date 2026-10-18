@@ -1359,8 +1359,12 @@ impl crate::conversation::application::ThreadReportStore for HeldSave {
             Ok(wrote)
         })
     }
-    fn settle(&self, report: &str) -> crate::conversation::application::ConversationFuture<'_, ()> {
-        self.store.settle(report)
+    fn settle(
+        &self,
+        child: &ConversationId,
+        report: &str,
+    ) -> crate::conversation::application::ConversationFuture<'_, ()> {
+        self.store.settle(child, report)
     }
     fn forget_conversation(
         &self,
@@ -1491,3 +1495,7 @@ async fn a_second_registration_of_a_report_at_once_does_not_mark_it_restored() {
     );
     retire(service, storage, metadata).await;
 }
+
+#[cfg(unix)]
+#[path = "thread_report_settlement.rs"]
+mod thread_report_settlement_tests;

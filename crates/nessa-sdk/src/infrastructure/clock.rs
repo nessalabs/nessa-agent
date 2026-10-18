@@ -146,7 +146,7 @@ pub(crate) async fn within<T>(
 ) -> Option<T> {
     tokio::select! { biased;
         finished = operation => Some(finished),
-        () = clock.sleep_until(deadline) => None,
+        () = tokio::task::unconstrained(clock.sleep_until(deadline)) => None,
     }
 }
 

@@ -11,8 +11,9 @@ use crate::conversation::application::{
     MAX_ADMITTED_POLICIES, MAX_DRIVE_GRANTS_PER_CONVERSATION, MAX_SHARE_GRANTS_PER_CONVERSATION,
     PUBLISH_CALL_WAIT,
 };
+use crate::conversation::application::{MAX_AGENT_TOOL_ADMISSIONS, MAX_EVENT_READERS};
 use crate::conversation::domain::{CommandHosts, ToolRules};
-use crate::conversation::infrastructure::{DISCOVERY_STEPS_PER_READ, MAX_CATALOGUE_CHANGE_WATCHES};
+use crate::conversation::infrastructure::DISCOVERY_STEPS_PER_READ;
 use crate::mcp_servers::infrastructure::{MAX_BUILT_IN_CALLS, MAX_BUILT_IN_LINE_BYTES};
 use crate::peer_gateways::infrastructure::{
     AUDIT_QUEUE, POLL_BACKOFF_CAP, POLL_INTERVAL, PREEMPT, READS_AT_ONCE, READ_BUDGET,
@@ -32,7 +33,6 @@ use nessa_protocol::product::generated::{
 use nessa_protocol::protocol::MAX_PAYLOAD_BYTES;
 use nessa_sdk::application::agent_execution::sessions::{ArtifactRecord, NoteRecord, NoteText};
 use nessa_sdk::domain::agent_execution::leases::{CommandOutput, CommandWork, Lease};
-use nessa_sdk::infrastructure::session_storage::MAX_RECORD_CHANGE_WATCHES;
 use std::collections::BTreeMap;
 use std::time::Duration;
 
@@ -186,18 +186,6 @@ fn catalogue() -> &'static [Limit] {
             tier: "fixed",
             owner: "protocol/product/v1.json x-subscriptionLimits.listTargets",
             meaning: "a list subscription past this on one socket is refused",
-        },
-        Limit {
-            id: "record.change_watches",
-            tier: "fixed",
-            owner: "MAX_RECORD_CHANGE_WATCHES in crates/nessa-sdk/src/infrastructure/session_storage/record_changes.rs",
-            meaning: "the record watches every socket's subscriptions share; past this a subscription is refused subscription_capacity. An events or view subscription holds one record watch on its conversation and each list subscription holds one (any commit)",
-        },
-        Limit {
-            id: "conversation.catalogue_watches",
-            tier: "fixed",
-            owner: "MAX_CATALOGUE_CHANGE_WATCHES in crates/nessa-server/src/conversation/infrastructure/catalogue_changes.rs",
-            meaning: "the catalogue watches every socket's list subscriptions share; a list subscription holds one beside its record watch; past this one is refused subscription_capacity",
         },
         Limit {
             id: "conversation.share_grants",
@@ -507,6 +495,18 @@ fn catalogue() -> &'static [Limit] {
             meaning: "a tool call past this many running on one stand-in's connection is answered with an error",
         },
         Limit {
+            id: "agent_tools.waiting_reads",
+            tier: "fixed",
+            owner: "MAX_EVENT_READERS in crates/nessa-server/src/conversation/application/agent_tools.rs",
+            meaning: "a `subscribe` past this many running for one source conversation is refused subscription_capacity; other sources are not counted against it",
+        },
+        Limit {
+            id: "agent_tools.source_admissions",
+            tier: "fixed",
+            owner: "MAX_AGENT_TOOL_ADMISSIONS in crates/nessa-server/src/conversation/application/agent_tools.rs",
+            meaning: "an agent tool call past this many detached admissions retained by one source conversation is refused unavailable; other sources are not counted against it",
+        },
+        Limit {
             id: "mcp.built_in_line_bytes",
             tier: "fixed",
             owner: "built-in MCP server MAX_BUILT_IN_LINE_BYTES",
@@ -575,11 +575,6 @@ pub(crate) fn effective_json(
     put(
         "socket.list_subscriptions",
         count(MAX_CONNECTION_LIST_SUBSCRIPTIONS),
-    );
-    put("record.change_watches", count(MAX_RECORD_CHANGE_WATCHES));
-    put(
-        "conversation.catalogue_watches",
-        count(MAX_CATALOGUE_CHANGE_WATCHES),
     );
     put(
         "conversation.share_grants",
@@ -690,6 +685,11 @@ pub(crate) fn effective_json(
     put("command.max_cwd_bytes", count(CommandWork::MAX_CWD_BYTES));
     put("mcp.built_in_calls", count(MAX_BUILT_IN_CALLS));
     put("mcp.built_in_line_bytes", count(MAX_BUILT_IN_LINE_BYTES));
+    put("agent_tools.waiting_reads", count(MAX_EVENT_READERS));
+    put(
+        "agent_tools.source_admissions",
+        count(MAX_AGENT_TOOL_ADMISSIONS),
+    );
     serde_json::Value::Object(values.into_iter().collect())
 }
 

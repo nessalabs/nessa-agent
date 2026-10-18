@@ -122,18 +122,21 @@ impl CommittedEventReader for RecordEventReader {
             let scope = self.scope.clone();
             let handle = Handle::try_current()
                 .map_err(|error| EventReadError::Storage(StorageError::Io(error.to_string())))?;
-            let receipt = self.owner.read(move || {
-                // A cancelled caller abandons its answer, not physical ownership.
-                let result = (|| {
-                    let mut state = state.lock().map_err(|_| {
-                        EventReadError::Storage(StorageError::Io(
-                            "event reader lock poisoned".into(),
-                        ))
-                    })?;
-                    handle.block_on(state.step(&runtime, &stream, &scope, limits))
-                })();
-                Ok(result)
-            })?;
+            let receipt = self
+                .owner
+                .read(move || {
+                    // A cancelled caller abandons its answer, not physical ownership.
+                    let result = (|| {
+                        let mut state = state.lock().map_err(|_| {
+                            EventReadError::Storage(StorageError::Io(
+                                "event reader lock poisoned".into(),
+                            ))
+                        })?;
+                        handle.block_on(state.step(&runtime, &stream, &scope, limits))
+                    })();
+                    Ok(result)
+                })
+                .await?;
             receipt
                 .await
                 .map_err(|_| EventReadError::Storage(StorageError::ReadWorkerPanicked))??
@@ -571,29 +574,36 @@ mod tests {
             ));
             drop(read);
             drop(reader);
-            assert!(matches!(
-                storage.owner.observe(),
-                Err(StorageError::ReadCapacity)
-            ));
+            assert_eq!(
+                storage.owner.event_readers(),
+                4,
+                "the admitted worker still holds the dropped handle's registration"
+            );
             // Only the admitted worker owns the registration after this barrier opens.
             drop(guard);
             weak
         };
         // Arc's strong count reaches zero before State's fields finish dropping.
-        // Admission, rather than a weak-reference observation, owns slot release.
-        let reopened = tokio::time::timeout(std::time::Duration::from_secs(5), async {
-            loop {
-                match storage.events(session.clone(), EventStart::Beginning).await {
-                    Ok(reader) => break reader,
-                    Err(EventReadError::Capacity) => tokio::task::yield_now().await,
-                    Err(error) => panic!("reopening after read cancellation: {error:?}"),
-                }
+        // The registration count, not a weak-reference observation, owns release.
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while storage.owner.event_readers() != 3 {
+                tokio::task::yield_now().await;
             }
         })
         .await
-        .unwrap();
+        .expect("the worker releases the registration when it finishes");
         assert!(weak.upgrade().is_none());
-        drop(reopened);
+        // Readers are not counted against a store-wide limit.
+        let mut more = Vec::new();
+        for _ in 0..64 {
+            more.push(
+                storage
+                    .events(session.clone(), EventStart::Beginning)
+                    .await
+                    .unwrap(),
+            );
+        }
+        drop(more);
         drop(siblings);
         drop(lease);
         storage.shutdown().await.unwrap();

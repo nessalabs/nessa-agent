@@ -94,10 +94,10 @@ impl RecordStorage {
     /// before its final authorized identity/head recheck and retain fallback
     /// reads for incomplete tails and changes through another process/adapter.
     ///
-    /// Each actual handle occupies one of [`super::MAX_RECORD_CHANGE_WATCHES`]
-    /// producer slots until drop. That local bound is distinct from the gateway's
-    /// shared watch-owner policy. Shutdown closes interest before physical work
-    /// joins; cancellation of a pending wait preserves its slot and dirty bit.
+    /// Each handle is one registration until drop; the producer sets no count,
+    /// so the host bounds them by bounding what holds them. Shutdown closes
+    /// interest before physical work joins; cancellation of a pending wait
+    /// preserves its registration and dirty bit.
     /// See the record change-watch tests for cancellation and retained ownership.
     ///
     /// # Example
@@ -110,7 +110,7 @@ impl RecordStorage {
     /// };
     /// # async fn example(storage: &RecordStorage, id: SessionId) {
     /// // The host first authorizes this owner; a watch is not permission.
-    /// let mut watch = storage.watch_committed(&id).expect("watch capacity");
+    /// let mut watch = storage.watch_committed(&id).expect("watch admission open");
     /// let _initial = storage.read_committed(id.clone()).await.expect("head recheck");
     /// if watch.changed().await == ChangeWatchState::Dirty {
     ///     let _current = storage.read_committed(id).await.expect("current recheck");
@@ -120,8 +120,7 @@ impl RecordStorage {
     /// ```
     ///
     /// # Errors
-    /// Returns [`ChangeWatchError::Capacity`] for a full producer and
-    /// [`ChangeWatchError::Closed`] after watch admission closes.
+    /// Returns [`ChangeWatchError::Closed`] after watch admission closes.
     pub fn watch_committed(
         &self,
         id: &SessionId,
@@ -131,7 +130,7 @@ impl RecordStorage {
 
     /// Register one payloadless interest in a commit of any session.
     ///
-    /// The same notice, producer bound, shutdown and cancellation rules as
+    /// The same notice, shutdown and cancellation rules as
     /// [`Self::watch_committed`]; it wakes for every session's whole-save
     /// commit and reset. A host that follows something drawn from many
     /// sessions, such as a list of them, registers this before its final read.
@@ -144,7 +143,7 @@ impl RecordStorage {
     ///     infrastructure::session_storage::RecordStorage,
     /// };
     /// # async fn example(storage: &RecordStorage) {
-    /// let mut watch = storage.watch_any_committed().expect("watch capacity");
+    /// let mut watch = storage.watch_any_committed().expect("watch admission open");
     /// // Read what follows from the sessions, then wait for the next commit.
     /// if watch.changed().await == ChangeWatchState::Dirty {
     ///     // Read it again.
@@ -153,10 +152,16 @@ impl RecordStorage {
     /// ```
     ///
     /// # Errors
-    /// Returns [`ChangeWatchError::Capacity`] for a full producer and
-    /// [`ChangeWatchError::Closed`] after watch admission closes.
+    /// Returns [`ChangeWatchError::Closed`] after watch admission closes.
     pub fn watch_any_committed(&self) -> Result<CommittedChangeWatch, ChangeWatchError> {
         self.changes.watch_any()
+    }
+
+    /// How many committed-change registrations ([`Self::watch_committed`] and
+    /// [`Self::watch_any_committed`]) are held now. For diagnostics and tests:
+    /// the producer sets no count of its own.
+    pub fn committed_watches(&self) -> usize {
+        self.changes.count()
     }
 
     /// Opens and verifies the one SQLite runtime before the server listens.
@@ -478,16 +483,6 @@ pub(super) struct Reservation {
     owner: Arc<StorageOwner>,
 }
 impl Reservation {
-    pub(super) fn acquire_creation(
-        owner: Arc<StorageOwner>,
-        id: &str,
-    ) -> Result<Self, StorageError> {
-        owner.reserve_creation(id)?;
-        Ok(Self {
-            id: id.into(),
-            owner,
-        })
-    }
     pub(super) fn acquire(owner: Arc<StorageOwner>, id: &str) -> Result<Self, StorageError> {
         owner.reserve(id)?;
         Ok(Self {
@@ -653,7 +648,6 @@ pub(super) fn store_error(error: event_stream::Error) -> StorageError {
 
 #[cfg(test)]
 mod tests {
-    use super::super::MAX_RECORD_CHANGE_WATCHES;
     use super::super::{
         save_group::{Header, SaveIdentity, EMPTY_CHAIN},
         snapshot,
@@ -921,13 +915,9 @@ mod tests {
             .unwrap();
         watch_pending(&mut healthy);
         drop(healthy);
-        let registrations = (1..MAX_RECORD_CHANGE_WATCHES)
+        let registrations = (0..100)
             .map(|_| storage.watch_committed(&id).unwrap())
             .collect::<Vec<_>>();
-        assert!(matches!(
-            storage.watch_committed(&id),
-            Err(ChangeWatchError::Capacity)
-        ));
         drop(lease);
         storage.shutdown().await.unwrap();
         // A waker panic is not a terminal notice, so shutdown still closes it.
@@ -944,7 +934,7 @@ mod tests {
         let id = SessionId::new("watch-only").unwrap();
         let mut watch = storage.watch_committed(&id).unwrap();
         assert!(!root.join("records.sqlite3").exists());
-        // A watch occupies only its own producer slot, not the writer reservation.
+        // A watch is only its own registration, not the writer reservation.
         let reservation = Reservation::acquire(storage.owner.clone(), id.as_str()).unwrap();
         drop(reservation);
         storage.shutdown().await.unwrap();

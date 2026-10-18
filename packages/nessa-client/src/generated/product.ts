@@ -2502,7 +2502,7 @@ export interface ConversationSubscriptionEnded {
   /** Where a view subscription resumes from: the cursor of the last view frame written or, when none was, the after it was opened with. Absent for a list, and for a view subscription opened without after that wrote no frame. */
   lastDelivered?: ConversationViewCursor
 }
-/** Refusals of subscribe and unsubscribe beside the conversation error codes a refused first read carries. subscription_capacity: the connection's published limit, or a gateway-wide watch capacity (record.change_watches, or conversation.catalogue_watches for a list subscription), is full. subscription_duplicate: this connection already follows that target; the agent catalog is one target, so a connection follows it at most once. unknown_subscription: no such live subscription on this connection, or one the other unsubscribe stops. cursor_ahead: after names a position past the stored history. */
+/** Refusals of subscribe and unsubscribe beside the conversation error codes a refused first read carries. subscription_capacity: the connection's published limit is full. subscription_duplicate: this connection already follows that target; the agent catalog is one target, so a connection follows it at most once. unknown_subscription: no such live subscription on this connection, or one the other unsubscribe stops. cursor_ahead: after names a position past the stored history. */
 export const ConversationSubscriptionErrorCode = {
   SubscriptionCapacity: "subscription_capacity",
   SubscriptionDuplicate: "subscription_duplicate",

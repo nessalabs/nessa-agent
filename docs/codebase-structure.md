@@ -29,6 +29,10 @@ snapshot for retention and preview eviction. The immutable resource value carrie
 byte identity and authoritative metadata together; storage and accounting use
 that value's object identity.
 
+Desktop gateway service-label ownership is described in
+[desktop host ownership](design/desktop-host-ownership.md); its application lease
+precedes macOS recovery and shared writes, separate from registration locking.
+
 ## Today
 
 Nessa has a Rust desktop host (window, tray, settings, OS integration), a React
@@ -2247,8 +2251,8 @@ The client incoming wire admission uses `packages/nessa-client/src/protocol/uniq
 
 SDK `application/agent_execution/commands/creation.rs` owns immutable creation
 bindings, progress and effect order. `commands/mutation.rs` owns the same
-principal stream for submit and exact-turn Stop. `infrastructure/session_storage/creation.rs`
-implements that principal lease with the existing SQLite runtime; it does not
+per-request stream for submit and exact-turn Stop. `infrastructure/session_storage/creation.rs`
+implements that lease, one stream per principal and request, with the existing SQLite runtime; it does not
 modify the conversation semantic record writer. The host consumers live under
 `conversation/application/service/creation.rs` and `service/mutation.rs`, sharing
 the existing creation helper, metadata/deletion authority and admission guard.

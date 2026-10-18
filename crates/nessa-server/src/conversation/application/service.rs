@@ -4,6 +4,7 @@ mod mutation;
 mod thread_reports;
 use super::metadata_target::{load_conversation, validate_target};
 use super::session_key::conversation_session;
+use super::source_permits::SourcePermits;
 use super::{
     app_reviews::{AppReviews, ReviewAnswer, ReviewAnswerer},
     drive_tools::{checked_source, AdmittedPolicies, DriveToolHook, DriveTools},
@@ -726,6 +727,12 @@ struct Inner {
     // tombstone it left (`concurrent_deletes_of_one_conversation_run_one_after_the_other`).
     deletions: ConversationLocks,
     mode_changes: ConversationLocks,
+    // One create command of a conversation at a time, from its reopen check
+    // to its saved readiness. Each request keeps its own command history, so
+    // without it two requests for one new conversation could both find it
+    // missing and the second open it as a conflict
+    // (`two_requests_creating_one_conversation_both_open_it`).
+    creations: ConversationLocks,
     /// Who is asked to delete an agent's own record of a provider session.
     provider_sessions: ProviderSessionErasers,
     deletion_budgets: ConversationDeletionBudgets,
@@ -735,7 +742,7 @@ struct Inner {
     /// Acknowledges a source turn's delegation decision before target work.
     agent_tool_audit: OnceLock<Arc<dyn AgentToolAudit>>,
     /// Physical source admission owners retain their slot after response loss.
-    agent_tool_admissions: Arc<Semaphore>,
+    agent_tool_admissions: Arc<SourcePermits>,
     /// Agent sends waiting to report their thread's finished turn.
     thread_reports: thread_reports::ThreadReports,
     /// Decides every command's admission to a conversation.
@@ -1211,12 +1218,15 @@ impl ConversationService {
                 summary_writes: ConversationLocks::default(),
                 deletions: ConversationLocks::default(),
                 mode_changes: ConversationLocks::default(),
+                creations: ConversationLocks::default(),
                 provider_sessions,
                 deletion_budgets,
                 environment,
                 clock,
                 agent_tool_audit: OnceLock::new(),
-                agent_tool_admissions: Arc::new(Semaphore::new(super::MAX_AGENT_TOOL_ADMISSIONS)),
+                agent_tool_admissions: Arc::new(SourcePermits::new(
+                    super::MAX_AGENT_TOOL_ADMISSIONS,
+                )),
                 thread_reports: Default::default(),
                 access_policy,
                 limits,
@@ -2989,11 +2999,16 @@ impl ConversationService {
             // An agent that stopped itself and waits for its owner's close
             // takes nothing more (`Agent::awaits_close`): the conversation is
             // stopped, not gone, so a person's message closes it and opens
-            // the conversation again, as a desktop stop would have. An app's
-            // message opens nothing, and is refused below as before.
+            // the conversation again, as a desktop stop would have. So is an
+            // idle one that lost the conversation's approval mode with its
+            // attachment (`resumption::mode_lost`): it would open again at
+            // the mode it was first opened with, and the check below would
+            // refuse every message for as long as it lived. An app's message
+            // opens nothing, and is refused below as before.
             if !writer.is_app()
-                && live.agent.awaits_close()
                 && !owner.stopping.load(Ordering::SeqCst)
+                && (live.agent.awaits_close()
+                    || (resumption::mode_lost(&live).await && live.agent.is_idle().await))
             {
                 // The ended agent holds its history's lease until the last
                 // handle goes, so this one goes before the conversation
@@ -3055,7 +3070,18 @@ impl ConversationService {
                     .await?
             {
                 let _ = live.join_attachment_owner().await;
-                if live.agent.attachment_status().phase() != AttachmentPhase::Attached {
+                // Attached, the mode is the one applied to that attachment.
+                // With none yet, or one still opening, it is the mode the
+                // agent opens its attachment at (`Agent::approval_mode`): a
+                // message sent just after the conversation opened again is
+                // checked against that, not refused for being early.
+                if !matches!(
+                    live.agent.attachment_status().phase(),
+                    AttachmentPhase::Attached
+                        | AttachmentPhase::Absent
+                        | AttachmentPhase::Waiting
+                        | AttachmentPhase::Starting
+                ) {
                     return Err(ConversationError::ApprovalModeNotApplied.into());
                 }
                 let committed = live
@@ -3420,6 +3446,7 @@ impl ConversationService {
         // Inspect the actual SDK receipt, not a second admission ledger. A retry
         // can already be settled; dropping this wait never cancels SDK work.
         if let Some(_result) = completion.as_mut().now_or_never() {
+            self.wake_thread_reports(conversation);
             let snapshot = live.agent.session_manager().snapshot().await;
             let reply = completed_reply(snapshot.as_ref(), &id).filter(|_| new_submission);
             // Decided once whoever submitted it lets the conversation go.
@@ -3443,6 +3470,9 @@ impl ConversationService {
         let conversation = conversation.clone();
         tokio::spawn(async move {
             let _result = completion.await;
+            // The SDK receipt follows final settlement, unlike invocation hooks.
+            // Wake reports before summaries or resumption can wait on other work.
+            service.wake_thread_reports(&conversation);
             let snapshot = live.agent.session_manager().snapshot().await;
             let reply = completed_reply(snapshot.as_ref(), &id);
             live.watched.lock().await.remove(&id);

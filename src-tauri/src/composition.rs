@@ -62,6 +62,7 @@ use crate::linger::application::NotApplicableLinger;
 #[cfg(target_os = "linux")]
 use crate::linger::{application::LingerSession, infrastructure::SystemLogind};
 use crate::local_data;
+use crate::review_notices::application::{NoticeCenter, ReviewNotices};
 use crate::saving::{self, SaveDestination, SaveSessions};
 use crate::settings::{SettingsFile, SettingsStore};
 use crate::shortcuts::{ShortcutStore, ShortcutsFile};
@@ -154,6 +155,9 @@ pub struct HostDependencies {
     /// Whether setup may offer linger. Linux asks logind. Every other host
     /// answers `not-applicable` and has no call that enables it.
     pub linger: Arc<dyn LingerOffer>,
+    /// The system notices for reviews waiting on the person. A host with no
+    /// center it can post to and take back answers `unsupported`.
+    pub review_notices: Arc<ReviewNotices>,
 }
 
 impl HostDependencies {
@@ -306,8 +310,35 @@ impl HostDependencies {
             #[cfg(desktop)]
             releases: updater::release_source(app),
             linger,
+            review_notices: Arc::new(ReviewNotices::start(notice_center(app))),
         })
     }
+}
+
+/// macOS posts through the User Notifications framework, but only from the
+/// app bundle: the framework aborts a bare binary such as `tauri dev` runs.
+#[cfg(target_os = "macos")]
+fn notice_center(app: &AppHandle) -> Arc<dyn NoticeCenter> {
+    use crate::review_notices::infrastructure::{OpenInDesktopWindow, UserNotificationCenter};
+    match UserNotificationCenter::for_bundle(Arc::new(OpenInDesktopWindow::new(app.clone()))) {
+        Some(center) => Arc::new(center),
+        None => Arc::new(crate::review_notices::application::NoNoticeCenter),
+    }
+}
+
+/// Linux posts to the session's notification service.
+#[cfg(target_os = "linux")]
+fn notice_center(app: &AppHandle) -> Arc<dyn NoticeCenter> {
+    use crate::review_notices::infrastructure::{FreedesktopNotices, OpenInDesktopWindow};
+    Arc::new(FreedesktopNotices::session(Arc::new(
+        OpenInDesktopWindow::new(app.clone()),
+    )))
+}
+
+/// Other hosts have no center this app can post to and take back.
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn notice_center(_app: &AppHandle) -> Arc<dyn NoticeCenter> {
+    Arc::new(crate::review_notices::application::NoNoticeCenter)
 }
 
 /// Linux asks logind. Other hosts have no logind API, so they cannot enable it.
