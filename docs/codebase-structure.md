@@ -386,7 +386,10 @@ against a private scripted gateway.
   (`src/desktop/ui/composer.tsx`). A gesture that began on one cannot invoke
   the replacement action after a source phase change; the unsent draft stays.
   `composer-action-lifetime.test.tsx` checks both directions and activation
-  of the current control under StrictMode.
+  of the current control under StrictMode. The replayable native-pointer,
+  keyboard and focus regression for Chromium/WebKit lives beside its synthetic
+  evidence in `docs/reviews/evidence/composer-action-identity-1000/` while the
+  shared verification tree is held unchanged.
 - The shared desktop light's fixed grain tile lives in
   `src/desktop/ui/ambient-grain.png`, drawn by `.desktop-grain` in the desktop
   stylesheet. It is pre-rendered to keep SVG turbulence out of runtime raster
