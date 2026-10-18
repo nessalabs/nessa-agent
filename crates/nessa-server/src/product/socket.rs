@@ -4228,16 +4228,6 @@ mod tests {
         writer
             .save_changes(
                 writer.load().await.unwrap().binding().clone(),
-                SessionSnapshot {
-                    id: session_id.clone(),
-                    provider: provider.clone(),
-                    provider_context: ProviderContext::Absent,
-                    invocations: Vec::new(),
-                    queue_history: Vec::new(),
-                    lease: None,
-                    artifacts: Vec::new(),
-                    notes: Vec::new(),
-                },
                 vec![SessionSaveUnit::new(vec![SessionChange::Opened {
                     id: session_id.clone(),
                     provider,

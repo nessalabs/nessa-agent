@@ -82,6 +82,10 @@ const knobs = {
     help: "limits.agentIdleSeconds: idle agents are parked after this (0: never, and no park phase); keep it above a round's time, or later rounds include starts (verdict.park.parkedEarly)",
   },
   "agent-delay-ms": { default: "0", help: "how long the agent takes per prompt" },
+  "agent-chunks": {
+    default: "1",
+    help: "text chunks the agent streams per reply (about 120 bytes each), so history grows as a real conversation's does",
+  },
   "request-timeout-ms": { default: "60000", help: "client request timeout" },
   "turn-timeout-ms": { default: "120000", help: "how long a turn may take to end" },
   "p99-ms": { default: "0", help: "fail a phase whose p99 is over this (0: no bound)" },
@@ -412,7 +416,12 @@ try {
         runtimes: {
           claude: {
             command: agentBinary,
-            args: [harnessName, harnessVersion, String(number("agent-delay-ms"))],
+            args: [
+              harnessName,
+              harnessVersion,
+              String(number("agent-delay-ms")),
+              String(number("agent-chunks")),
+            ],
             model: "claude-sonnet-5",
             toolsEnabled: true,
           },

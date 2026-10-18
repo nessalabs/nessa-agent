@@ -36,16 +36,9 @@ impl SessionStorageLease for CancellationPanicLease {
     fn save_changes(
         &self,
         binding: SessionSaveGeneration,
-        snapshot: SessionSnapshot,
         units: Vec<SessionSaveUnit>,
     ) -> StorageFuture<'_, SessionSaveReceipt> {
-        let cancelling = snapshot.invocations.iter().any(|record| {
-            record.request.execution_id.as_str() == "pending-one"
-                && record
-                    .scheduling
-                    .last()
-                    .is_some_and(|last| last.stage == InvocationStage::Cancelled)
-        });
+        let cancelling = moves_to(&units, "pending-one", InvocationStage::Cancelled);
         #[allow(deprecated, reason = "Rust 1.89 MSRV; try_update requires Rust 1.95")]
         let panic = cancelling
             && self
@@ -62,7 +55,7 @@ impl SessionStorageLease for CancellationPanicLease {
                         "cancellation save panicked before commit"
                     );
                 }
-                let receipt = self.backing.save_changes(binding, snapshot, units).await?;
+                let receipt = self.backing.save_changes(binding, units).await?;
                 assert!(
                     !panic || self.drop_panics,
                     "cancellation save panicked after commit"

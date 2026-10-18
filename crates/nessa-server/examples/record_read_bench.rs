@@ -27,7 +27,7 @@ use nessa_sdk::{
         permissions::ActionContext,
         providers::ProviderIdentity,
         sessions::{
-            InvocationRecord, SessionChange, SessionSaveUnit, SessionSnapshot, SessionStorage,
+            InvocationRecord, SessionChange, SessionSaveUnit, SessionStorage,
             SubmissionAcknowledgement,
         },
     },
@@ -230,16 +230,6 @@ async fn seed(
     let lease = storage.open(id.clone()).await?;
     let provider = ProviderIdentity::new("claude", "claude-sonnet-5", "workspace")?;
     let context = ProviderContext::Recorded(ExecutionSessionId::new("bench-provider-session")?);
-    let mut snapshot = SessionSnapshot {
-        id: id.clone(),
-        provider: provider.clone(),
-        provider_context: context.clone(),
-        invocations: Vec::new(),
-        queue_history: Vec::new(),
-        lease: None,
-        artifacts: Vec::new(),
-        notes: Vec::new(),
-    };
     let mut binding = lease.load().await?.binding().clone();
     let opened = SessionSaveUnit::new(vec![SessionChange::Opened {
         id: id.clone(),
@@ -247,7 +237,7 @@ async fn seed(
         context,
     }])?;
     binding = lease
-        .save_changes(binding, snapshot.clone(), vec![opened])
+        .save_changes(binding, vec![opened])
         .await?
         .next()
         .clone();
@@ -256,12 +246,10 @@ async fn seed(
     for turn in 0..size / 2 {
         let record = turn_record(turn, arguments.assistant_bytes)?;
         units.push(turn_unit(&record)?);
-        snapshot.invocations.push(record);
         if units.len() == arguments.turns_per_save || turn + 1 == size / 2 {
-            let next = snapshot.clone();
             let changes = std::mem::take(&mut units);
             let started = Instant::now();
-            let receipt = lease.save_changes(binding, next, changes).await?;
+            let receipt = lease.save_changes(binding, changes).await?;
             saves.push(started.elapsed());
             binding = receipt.next().clone();
         }
