@@ -383,7 +383,6 @@ async fn finalized_provider_and_local_recipes_survive_storage_reload_exactly() {
         lease
             .save_changes(
                 lease.load().await.unwrap().binding().clone(),
-                snapshot,
                 vec![SessionSaveUnit::new(changes).unwrap()],
             )
             .await

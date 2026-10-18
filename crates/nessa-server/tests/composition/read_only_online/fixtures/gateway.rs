@@ -37,7 +37,7 @@ use nessa_protocol::conversation::read_scope::ReceiverReadScope;
 use nessa_protocol::pairing::wire::NativePairingStatus;
 use nessa_sdk::application::agent_execution::providers::ProviderIdentity;
 use nessa_sdk::application::agent_execution::sessions::{
-    SessionChange, SessionSaveUnit, SessionSnapshot, SessionStorage,
+    SessionChange, SessionSaveUnit, SessionStorage,
 };
 use nessa_sdk::domain::agent_execution::sessions::{
     ExecutionSessionId, ProviderContext, SessionId,
@@ -194,7 +194,6 @@ impl RecordReadSource for GatedRead {
                     lease
                         .save_changes(
                             lease.load().await.unwrap().binding().clone(),
-                            snapshot,
                             vec![SessionSaveUnit::new(vec![SessionChange::ProviderContext {
                                 before,
                                 after,
@@ -540,16 +539,6 @@ async fn gateway_child() {
                 lease
                     .save_changes(
                         lease.load().await.unwrap().binding().clone(),
-                        SessionSnapshot {
-                            id: session,
-                            provider,
-                            provider_context: context,
-                            invocations: vec![],
-                            queue_history: vec![],
-                            lease: None,
-                            artifacts: Vec::new(),
-                            notes: Vec::new(),
-                        },
                         vec![SessionSaveUnit::new(changes).unwrap()],
                     )
                     .await
@@ -627,7 +616,6 @@ async fn live_control(
                 lease
                     .save_changes(
                         binding,
-                        snapshot,
                         vec![SessionSaveUnit::new(vec![SessionChange::ProviderContext {
                             before,
                             after,

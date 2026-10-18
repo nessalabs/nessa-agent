@@ -1566,10 +1566,9 @@ impl SessionStorageLease for BusyLease {
     fn save_changes(
         &self,
         binding: SessionSaveGeneration,
-        snapshot: SessionSnapshot,
         units: Vec<SessionSaveUnit>,
     ) -> StorageFuture<'_, SessionSaveReceipt> {
-        self.lease.save_changes(binding, snapshot, units)
+        self.lease.save_changes(binding, units)
     }
     fn erase(&self) -> StorageFuture<'_, ()> {
         if self.erase {
@@ -1653,10 +1652,9 @@ impl SessionStorageLease for CleanupReplyLease {
     fn save_changes(
         &self,
         binding: SessionSaveGeneration,
-        snapshot: SessionSnapshot,
         units: Vec<SessionSaveUnit>,
     ) -> StorageFuture<'_, SessionSaveReceipt> {
-        self.lease.save_changes(binding, snapshot, units)
+        self.lease.save_changes(binding, units)
     }
 
     fn erase(&self) -> StorageFuture<'_, ()> {
@@ -2870,7 +2868,6 @@ impl SessionStorageLease for MisfiledLease {
     fn save_changes(
         &self,
         _: SessionSaveGeneration,
-        _: SessionSnapshot,
         _: Vec<SessionSaveUnit>,
     ) -> StorageFuture<'_, SessionSaveReceipt> {
         Box::pin(async { Err(StorageError::Io("not written here".into())) })

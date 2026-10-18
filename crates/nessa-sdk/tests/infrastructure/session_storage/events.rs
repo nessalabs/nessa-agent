@@ -66,7 +66,6 @@ async fn replay_preserves_transitions_inside_one_save_and_original_indices_on_re
     lease
         .save_changes(
             lease.load().await.unwrap().binding().clone(),
-            snapshot.clone(),
             vec![SessionSaveUnit::new(changes.clone()).unwrap()],
         )
         .await
@@ -137,11 +136,10 @@ async fn item_budget_refusal_preserves_pending_event_and_reset_invalidates_curso
     let storage = RecordStorage::new(directory.path().join("records")).unwrap();
     let session = SessionId::new("budget").unwrap();
     let lease = storage.open(session.clone()).await.unwrap();
-    let (change, snapshot) = opened(&session);
+    let (change, _) = opened(&session);
     lease
         .save_changes(
             lease.load().await.unwrap().binding().clone(),
-            snapshot,
             vec![SessionSaveUnit::new(vec![change]).unwrap()],
         )
         .await
@@ -177,11 +175,10 @@ async fn invalid_cursor_is_typed_and_retained_readers_are_not_capped() {
     let storage = RecordStorage::new(directory.path().join("records")).unwrap();
     let session = SessionId::new("capacity").unwrap();
     let lease = storage.open(session.clone()).await.unwrap();
-    let (change, snapshot) = opened(&session);
+    let (change, _) = opened(&session);
     lease
         .save_changes(
             lease.load().await.unwrap().binding().clone(),
-            snapshot,
             vec![SessionSaveUnit::new(vec![change]).unwrap()],
         )
         .await

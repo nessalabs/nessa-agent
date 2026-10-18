@@ -17,8 +17,8 @@ use nessa_sdk::application::agent_execution::providers::{
     ProviderOpenError, ProviderOpenFuture, ProviderOpenRequest, SessionCloseRequest,
 };
 use nessa_sdk::application::agent_execution::sessions::{
-    ProviderContext, SessionLoad, SessionSaveGeneration, SessionSaveReceipt, SessionSaveUnit,
-    SessionSnapshot, SessionStorage, SessionStorageLease, StorageError, StorageFuture,
+    ProviderContext, SessionChange, SessionLoad, SessionSaveGeneration, SessionSaveReceipt,
+    SessionSaveUnit, SessionStorage, SessionStorageLease, StorageError, StorageFuture,
 };
 use nessa_sdk::domain::effective_capabilities::value_objects::EffectiveCapabilities;
 use nessa_sdk::infrastructure::session_storage::InMemoryStorage;
@@ -214,15 +214,27 @@ impl SessionStorageLease for FailPublicationLease {
     fn save_changes(
         &self,
         binding: SessionSaveGeneration,
-        snapshot: SessionSnapshot,
         units: Vec<SessionSaveUnit>,
     ) -> StorageFuture<'_, SessionSaveReceipt> {
-        if matches!(snapshot.provider_context, ProviderContext::Recorded(_))
-            && !self.failed.swap(true, Ordering::SeqCst)
-        {
+        let records_context = units
+            .iter()
+            .flat_map(SessionSaveUnit::changes)
+            .any(|change| {
+                matches!(
+                    change,
+                    SessionChange::Opened {
+                        context: ProviderContext::Recorded(_),
+                        ..
+                    } | SessionChange::ProviderContext {
+                        after: ProviderContext::Recorded(_),
+                        ..
+                    }
+                )
+            });
+        if records_context && !self.failed.swap(true, Ordering::SeqCst) {
             return Box::pin(async { Err(StorageError::Io("publication rejected".into())) });
         }
-        self.inner.save_changes(binding, snapshot, units)
+        self.inner.save_changes(binding, units)
     }
     fn erase(&self) -> StorageFuture<'_, ()> {
         self.inner.erase()
