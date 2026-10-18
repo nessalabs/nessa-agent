@@ -1590,6 +1590,51 @@ async fn a_stop_whose_cancel_meets_the_agent_ending_is_answered_by_the_turns_end
     retire(service, storage, metadata).await;
 }
 
+/// A stop whose cancel the provider refuses because the turn has not reached
+/// it yet (the agent lists it running; the provider has not started it) asks
+/// again and stops it, rather than answering with the refusal.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_stop_whose_cancel_meets_the_turn_not_yet_in_the_provider_stops_it() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("data");
+    let provider = Arc::new(ProviderFactory::default());
+    provider.turn_cancel.store(true, Ordering::SeqCst);
+    let (service, storage, metadata) = fixture(&root, provider.clone());
+    let target = id();
+    opened(&service, &provider, &target).await;
+    let (release, execution_gate) = oneshot::channel::<()>();
+    *provider.execution_gate.lock().unwrap() = Some(execution_gate);
+    // Refused once with the session usable, as the ACP worker refuses a
+    // turn it has not started.
+    *provider.cancel_failure.lock().unwrap() =
+        Some(AgentError::Unsupported("turn is not active".into()));
+    let started = provider.execution_started.notified();
+    send(&service, &target, "early", "now").await;
+    tokio::time::timeout(Duration::from_secs(5), started)
+        .await
+        .expect("the turn runs");
+    let receipt = tokio::time::timeout(
+        Duration::from_secs(5),
+        service.stop_command(
+            storage.clone(),
+            target.clone(),
+            caller("stop"),
+            "early".into(),
+        ),
+    )
+    .await
+    .unwrap();
+    let outcome = receipt.as_ref().ok().and_then(|receipt| receipt.outcome());
+    assert!(
+        matches!(outcome, Some(MutationOutcome::Cancelled)),
+        "{:?}",
+        receipt.map(|receipt| receipt.outcome())
+    );
+    assert_eq!(provider.cancel_calls.load(Ordering::SeqCst), 2);
+    drop(release);
+    retire(service, storage, metadata).await;
+}
+
 /// A stop whose cancel reaches the turn as it ends is answered by how the
 /// turn ended, not by the cancel's refusal of a turn no longer running.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

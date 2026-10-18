@@ -423,6 +423,11 @@ impl MutationTarget for StopTarget {
             // A cancel that met the agent's lifecycle ending (a close, or a
             // failure stopping it) while its turn was still listed as running.
             let mut ending: Option<AgentError> = None;
+            // A cancel the provider refused with its session still usable
+            // while the turn is listed running: the turn has not reached the
+            // provider yet, or has just left it. Asked again until it reaches
+            // the turn or the turn ends; at the deadline this refusal answers.
+            let mut refused: Option<AgentError> = None;
             loop {
                 if live
                     .agent
@@ -461,11 +466,8 @@ impl MutationTarget for StopTarget {
                         {
                             ending = Some(failure.into_parts().0);
                         }
-                        Err(failure) => {
-                            return Err(CreationInitializationFailure::Target(
-                                ConversationError::Agent(failure.into_parts().0),
-                            ))
-                        }
+                        // (`a_stop_whose_cancel_meets_the_turn_not_yet_in_the_provider_stops_it`)
+                        Err(failure) => refused = Some(failure.into_parts().0),
                     }
                 }
                 match turn_is_final(&live, &turn).await {
@@ -476,7 +478,9 @@ impl MutationTarget for StopTarget {
                     Some(false) => {
                         return Err(CreationInitializationFailure::Target(
                             ConversationError::Agent(
-                                ending.unwrap_or(AgentError::SubmissionUnresolved),
+                                ending
+                                    .or(refused)
+                                    .unwrap_or(AgentError::SubmissionUnresolved),
                             ),
                         ))
                     }
