@@ -49,6 +49,13 @@ Available conversation-map space does not prove an earlier physical owner stoppe
 
 ### Admission, persistence and cancellation
 
+Current-main request isolation keeps each creation/mutation lease scoped to one
+principal and request. Orchestration reads the principal's existing immutable
+mutation receipts through the storage owner, ordered by the Accepted record's
+physical publication. This observational read creates no request or second
+ledger. Child Stop acceptances use their own request leases; the complete root
+digest is published last. A partial selection remains unconfirmed.
+
 Gateway `owned_threads.rs` and `parent_stop.rs` serialize owned creation, agent
 send, report submission and Stop selection at one application admission boundary.
 The SDK graph remains the only ownership authority. Stop traverses descendants,
@@ -142,6 +149,8 @@ a draft implementation is not evidence that those gates passed.
 | Child preparation names an existing ordinary conversation, including one created concurrently | The existing creation owner refuses adoption before reopening or binding cleanup. Exact saved Ready retries remain valid; Attempted is not re-executed. Parent Stop/deletion cannot affect the unrelated target | `owned_preparation_cannot_adopt_an_existing_unowned_conversation` and creation-owner collision regression |
 | Restart reads an original Attempted child creation | Keep that lifetime unconfirmed without binding cleanup or replaying initialization; continue starting the gateway and unrelated work | `startup_retains_attempted_child_creation_without_binding_or_replaying_it` |
 | Child creation audit fails after metadata but before a slot is acquired | Transfer no cleanup owner; definite absence releases the reservation and capacity. Slot acquisition follows audit/admission checks | `child_creation_audit_failure_cannot_strand_unacquired_cleanup` |
+| Restored nondeletion Closing drain finishes before cleanup adapters are rebound | Rejoin the original Closing owners after acknowledged resource rebinding, preserving the original cause, initiator and operation. Pending/failed cleanup retains ownership and quota; later recovery retries that same owner | `tests/conversation/owned_recovery.rs`: real SQLite nondeletion Closing, lost acknowledgement, repeated recovery and quota checks |
+| Separate request histories are admitted or progressed in a different order | The storage observation orders by first Accepted publication, not stream creation or later progress; request exclusion remains independent | `mutation_enumeration_is_principal_scoped_read_only_and_keeps_latest_progress` |
 
 
 

@@ -66,6 +66,9 @@ pub struct RecordStorage {
 }
 
 impl RecordStorage {
+    pub(super) fn command_path(&self) -> PathBuf {
+        self.options.path.clone()
+    }
     /// Verifies the private records directory. Composition calls
     /// [`Self::initialize`] before accepting conversations.
     pub fn new(root: impl Into<PathBuf>) -> Result<Self, StorageError> {
@@ -483,16 +486,6 @@ pub(super) struct Reservation {
     owner: Arc<StorageOwner>,
 }
 impl Reservation {
-    pub(super) fn acquire_creation(
-        owner: Arc<StorageOwner>,
-        id: &str,
-    ) -> Result<Self, StorageError> {
-        owner.reserve_creation(id)?;
-        Ok(Self {
-            id: id.into(),
-            owner,
-        })
-    }
     pub(super) fn acquire(owner: Arc<StorageOwner>, id: &str) -> Result<Self, StorageError> {
         owner.reserve(id)?;
         Ok(Self {

@@ -16,7 +16,7 @@ import {
 } from "./lib/gateway-stack.mjs"
 import { main } from "./lib/run.mjs"
 import { writeView } from "./lib/scripted-evidence.mjs"
-import { css, parentStop } from "./lib/selectors.mjs"
+import { css, composerControls } from "./lib/selectors.mjs"
 
 const meta = {
   name: "parent-stop",
@@ -187,7 +187,7 @@ await main(
             })
             await opened.page.locator(css.sessionRow, { hasText: title }).first().click()
             await opened.page
-              .getByRole(parentStop.stop.role, parentStop.stop)
+              .getByRole(...composerControls.stop)
               .click({ timeout: 30_000 })
             const stopped = await waitFor(async () => {
               const parent = await stack.client.conversation.read(run.parent)

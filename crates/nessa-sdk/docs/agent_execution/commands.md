@@ -24,7 +24,7 @@ original initialization supervisor's `CreationTaskFault`.
 | Attempted | Return the original interrupted attempt; no blind provider open | Return attempted evidence; no write or provider open |
 | Ready | Return original receipt after current target check | Return original receipt after current target check |
 
-One supervised task retains the original principal lease and initializer after
+One supervised task retains the original request lease and initializer after
 caller loss. The host retains its existing admission guard through the final
 receipt write; retirement joins that guard before storage shutdown. Adapters
 retain the original reservation while an append finishes after its caller stops
@@ -35,14 +35,23 @@ provider result. An attempted record without a saved success remains interrupted
 the current provider has no lookup by initialization command identity.
 
 The supplied adapter uses the same SQLite runtime as session records, not a second
-receipt database. Control records are one bounded atomic event each. Replay reads
-bounded pages but scans the full retained control history, retaining at most 4,096
-request bindings per principal; another binding returns `StorageError::TooLarge`.
-At most `commands::MAX_CREATION_OWNERS` principal leases coexist. Capacity or a
-competing owner returns `StorageError::Busy` without a queue. These limits do not
-bound all request objects already allocated by a caller or total on-disk history
-across principals. Bindings remain after target deletion and are not collected by
+receipt database. Control records are one bounded atomic event each, in one
+small stream per principal request (at most its accepted, attempted and final
+records). Opening a request excludes only that request: a second open of the same
+request while the first lease lives returns `StorageError::Busy` without a queue,
+and different requests, of the same principal or not, never wait on each other.
+Neither the number of requests nor the number held at once has a fixed limit, so
+a busy principal is never refused for its history or for its other work.
+Bindings remain after target deletion and are not collected by
 this slice. No transaction orders control and target streams together.
+
+`CreationStorage::mutations` observes one principal's latest retained mutation
+receipts in first durable acceptance order without opening a request lease or
+writing an observation stream. Progress does not change that order. The SQLite
+adapter reads the existing physical command records on its joined read worker;
+per-request writers retain their independent exclusion. The returned history
+has the same retention as commands, so observation costs grow with that history.
+The host still checks current authorization before using these receipts.
 
 The owning state/order table and regression fixture mapping are in
 [command creation](../../../../docs/design/command-creation.md).

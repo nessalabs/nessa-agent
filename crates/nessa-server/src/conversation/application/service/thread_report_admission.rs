@@ -65,15 +65,8 @@ impl ConversationService {
         let Some(storage) = self.commands() else {
             return Ok(Vec::new());
         };
-        let Some(lease) = storage
-            .open_creation(caller.principal_id.as_str().into(), false)
-            .await
-            .map_err(|_| ConversationError::Unavailable)?
-        else {
-            return Ok(Vec::new());
-        };
-        let receipts = lease
-            .mutations()
+        let receipts = storage
+            .mutations(caller.principal_id.as_str().into())
             .await
             .map_err(|_| ConversationError::Unavailable)?;
         let mut people = Vec::new();
@@ -156,15 +149,8 @@ impl ConversationService {
         let Some(storage) = self.commands() else {
             return Ok(true);
         };
-        let Some(lease) = storage
-            .open_creation(caller.principal_id.as_str().into(), false)
-            .await
-            .map_err(|_| ConversationError::Unavailable)?
-        else {
-            return Ok(true);
-        };
-        let receipts = lease
-            .mutations()
+        let receipts = storage
+            .mutations(caller.principal_id.as_str().into())
             .await
             .map_err(|_| ConversationError::Unavailable)?;
         let stopped_at = receipts
@@ -176,7 +162,6 @@ impl ConversationService {
                     .then_some(index)
             })
             .max();
-        drop(lease);
         let Some(stopped_at) = stopped_at else {
             return Ok(true);
         };

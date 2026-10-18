@@ -122,18 +122,21 @@ impl CommittedEventReader for RecordEventReader {
             let scope = self.scope.clone();
             let handle = Handle::try_current()
                 .map_err(|error| EventReadError::Storage(StorageError::Io(error.to_string())))?;
-            let receipt = self.owner.read(move || {
-                // A cancelled caller abandons its answer, not physical ownership.
-                let result = (|| {
-                    let mut state = state.lock().map_err(|_| {
-                        EventReadError::Storage(StorageError::Io(
-                            "event reader lock poisoned".into(),
-                        ))
-                    })?;
-                    handle.block_on(state.step(&runtime, &stream, &scope, limits))
-                })();
-                Ok(result)
-            })?;
+            let receipt = self
+                .owner
+                .read(move || {
+                    // A cancelled caller abandons its answer, not physical ownership.
+                    let result = (|| {
+                        let mut state = state.lock().map_err(|_| {
+                            EventReadError::Storage(StorageError::Io(
+                                "event reader lock poisoned".into(),
+                            ))
+                        })?;
+                        handle.block_on(state.step(&runtime, &stream, &scope, limits))
+                    })();
+                    Ok(result)
+                })
+                .await?;
             receipt
                 .await
                 .map_err(|_| EventReadError::Storage(StorageError::ReadWorkerPanicked))??

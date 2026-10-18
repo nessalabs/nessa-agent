@@ -141,21 +141,49 @@ impl CreationReceipt {
     }
 }
 
-/// Durable principal control stream, implemented by the existing record runtime.
-/// Opening serializes principal commands without a waiting queue. A read-only
-/// open must not create an absent stream. The returned lease owns exclusion until
-/// drop; its outstanding operations retain that ownership through completion.
+/// Durable command history, one per principal request, implemented by the
+/// existing record runtime. Opening one request excludes only that request,
+/// without a waiting queue: a second open of the same request while the first
+/// lease lives is `Busy`, and different requests never wait on each other. A
+/// read-only open must not create an absent history. The returned lease owns
+/// exclusion until drop; its outstanding operations retain that ownership
+/// through completion.
 pub trait CreationStorage: Send + Sync {
-    /// Open the host-verified principal namespace. `create` selects writable
+    /// Open the host-verified principal's `request`. `create` selects writable
     /// admission or read-only lookup; absent lookup returns `None`.
     fn open_creation(
         &self,
         principal: String,
+        request: String,
         create: bool,
     ) -> CreationFuture<'_, Option<Arc<dyn CreationStorageLease>>>;
+    /// Read this principal's retained mutation receipts in first durable
+    /// admission order. This observation opens no request and admits no effect.
+    /// Later progress preserves admission order. Creation-only stores refuse it.
+    /// Concurrent saves may be absent from this observation. Retention and read
+    /// cost follow the stored command history; no effect is admitted by a read.
+    ///
+    /// # Errors
+    /// Returns a storage failure for unsupported observation, invalid identity,
+    /// corrupt history, contention or I/O. Failure grants no command authority.
+    ///
+    /// # Cancellation
+    /// Dropping the caller grants no effect and does not release outstanding
+    /// physical read ownership; storage shutdown joins retained I/O.
+    fn mutations(
+        &self,
+        _principal: String,
+    ) -> CreationFuture<'_, Vec<super::mutation::MutationReceipt>> {
+        Box::pin(async {
+            Err(CreationStorageError::Storage(StorageError::Corrupt(
+                "mutation observation is not on this store".into(),
+            )))
+        })
+    }
 }
 
-/// Exclusive access to one principal's immutable command history.
+/// Exclusive access to one principal request's immutable command history.
+/// Its methods refuse any other request id.
 pub trait CreationStorageLease: Send + Sync {
     /// Return the existing creation binding/progress for `request_id`, without writing.
     ///
@@ -174,19 +202,6 @@ pub trait CreationStorageLease: Send + Sync {
         &self,
         _request_id: &str,
     ) -> CreationFuture<'_, Option<super::mutation::MutationReceipt>> {
-        Box::pin(async {
-            Err(CreationStorageError::Storage(StorageError::Corrupt(
-                "mutation is not on this lease".into(),
-            )))
-        })
-    }
-    /// Read the latest retained submit/stop receipts for this principal.
-    /// Ordered by each request's first durable admission, unchanged by later
-    /// progress writes. The lease's existing retention bound applies;
-    /// this does not admit effects or change progress. Hosts may reconstruct
-    /// an acknowledged orchestration selection from these immutable bindings.
-    /// Creation-only leases refuse this read, as they refuse mutation writes.
-    fn mutations(&self) -> CreationFuture<'_, Vec<super::mutation::MutationReceipt>> {
         Box::pin(async {
             Err(CreationStorageError::Storage(StorageError::Corrupt(
                 "mutation is not on this lease".into(),
@@ -285,7 +300,11 @@ impl CreationCoordinator {
         let storage = self.storage.clone();
         tokio::spawn(async move {
             let lease = storage
-                .open_creation(binding.actor().principal_id().into(), true)
+                .open_creation(
+                    binding.actor().principal_id().into(),
+                    binding.actor().request_id().into(),
+                    true,
+                )
                 .await
                 .map_err(CreationFailure::Storage)?
                 .ok_or_else(|| {
@@ -362,7 +381,11 @@ impl CreationCoordinator {
     ) -> Result<Option<CreationReceipt>, CreationFailure<T::Error>> {
         let lease = self
             .storage
-            .open_creation(binding.actor().principal_id().into(), false)
+            .open_creation(
+                binding.actor().principal_id().into(),
+                binding.actor().request_id().into(),
+                false,
+            )
             .await
             .map_err(CreationFailure::Storage)?;
         let saved = match lease {

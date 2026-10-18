@@ -1,0 +1,123 @@
+name: Conversation stress load
+
+# The conversation stress check at load numbers: many more rounds, background
+# conversations and reviews than the pull request's run in local-auth.yml.
+# Nightly at the numbers below, or by hand with any of them changed. A failed
+# run prints its plan and seed first; passing the same numbers replays it:
+#
+#   pnpm test:e2e:stress -- --seed <seed> --rounds <rounds> ...
+on:
+  schedule:
+    - cron: "23 4 * * *"
+  workflow_dispatch:
+    inputs:
+      seed:
+        description: The plan's seed. Empty picks one and prints it.
+        required: false
+        default: ""
+      rounds:
+        description: Steps on the main conversation, at least.
+        default: "80"
+      parallel:
+        description: Background conversations talking at the same time.
+        default: "12"
+      turns:
+        description: Turns each background conversation takes.
+        default: "8"
+      asides:
+        description: Other conversations opened in the window between rounds.
+        default: "8"
+      switches:
+        description: Access mode changes from the composer.
+        default: "12"
+      stops:
+        description: Turns stopped with the composer's Stop.
+        default: "8"
+      parentstops:
+        description: Parent turns stopped with owned children and grandchildren running.
+        default: "4"
+      fails:
+        description: Turns that fail, each followed by another message.
+        default: "6"
+      reviews:
+        description: Reviews one turn asks in a row.
+        default: "64"
+      large:
+        description: Turns that ask one review past the old size limit.
+        default: "3"
+      restarts:
+        description: Gateway restarts during a running turn.
+        default: "4"
+      threads:
+        description: Turns that hand work to another thread and wait for its report.
+        default: "6"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  load:
+    name: Conversation stress at load
+    runs-on: ubuntu-latest
+    # Planning bound: a cold gateway build, the browser download, and a check
+    # whose length follows its numbers. The step bound below is what a run of
+    # the default load numbers must fit.
+    timeout-minutes: 150
+    env:
+      STRESS_EVIDENCE: ${{ github.workspace }}-stress-evidence
+      # A scheduled run has no inputs; each falls back to the same default
+      # the dispatch form shows.
+      NESSA_STRESS_ROUNDS: ${{ inputs.rounds || '80' }}
+      NESSA_STRESS_PARALLEL: ${{ inputs.parallel || '12' }}
+      NESSA_STRESS_TURNS: ${{ inputs.turns || '8' }}
+      NESSA_STRESS_ASIDES: ${{ inputs.asides || '8' }}
+      NESSA_STRESS_SWITCHES: ${{ inputs.switches || '12' }}
+      NESSA_STRESS_STOPS: ${{ inputs.stops || '8' }}
+      NESSA_STRESS_PARENTSTOPS: ${{ inputs.parentstops || '4' }}
+      NESSA_STRESS_FAILS: ${{ inputs.fails || '6' }}
+      NESSA_STRESS_REVIEWS: ${{ inputs.reviews || '64' }}
+      NESSA_STRESS_LARGE: ${{ inputs.large || '3' }}
+      NESSA_STRESS_RESTARTS: ${{ inputs.restarts || '4' }}
+      NESSA_STRESS_THREADS: ${{ inputs.threads || '6' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # Reads the pull request job's cache, written from main.
+          shared-key: conversation-stress
+          save-if: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: ./.github/actions/pnpm-install
+      - name: Install the pinned Chromium and its runtime dependencies
+        run: pnpm exec playwright install --with-deps chromium
+        timeout-minutes: 15
+      - run: cargo build -p nessa-server
+      - name: Pick the seed
+        env:
+          SEED: ${{ inputs.seed }}
+        run: |
+          seed="${SEED:-$(( (RANDOM << 15) | RANDOM ))}"
+          echo "Seed $seed"
+          echo "NESSA_STRESS_SEED=$seed" >> "$GITHUB_ENV"
+      - name: Run the conversation stress check at load
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p "$STRESS_EVIDENCE"
+          pnpm test:e2e:stress -- --channel bundled --evidence "$STRESS_EVIDENCE" 2>&1 | tee "$STRESS_EVIDENCE/stress.log"
+        timeout-minutes: 100
+      - name: Keep the evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: conversation-stress-load-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.STRESS_EVIDENCE }}
+          if-no-files-found: ignore
+          retention-days: 14

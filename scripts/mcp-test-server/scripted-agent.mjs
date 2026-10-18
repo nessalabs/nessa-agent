@@ -22,7 +22,9 @@
  *
  * With `--scenario`, a prompt runs that file's steps instead
  * (`scripted-scenario.mjs`): text, a permission and the answer's branch, an
- * MCP call, a failure, a wait for cancel, or the end of the turn. The
+ * MCP call (on `mcptest` or another server the session was given), a pause,
+ * a failure, a wait for cancel, or the end of the turn. A session switched to
+ * its full-access mode asks for no permission, as the harness does. The
  * handshake is still the harness's. A prompt the file does not answer fails
  * the turn.
  *
@@ -264,30 +266,49 @@ function sessionOf(sessionId) {
   return session
 }
 
+/**
+ * Opens a session as `sessionId` with `params`' options and MCP servers, each
+ * started and initialized; none is kept if one fails.
+ */
+async function openSession(params, sessionId) {
+  const values = initialOptions(agent, process.env, params)
+  const names = (params.mcpServers ?? []).map((server) => server.name)
+  const twice = names.findIndex((name, index) => names.indexOf(name) !== index)
+  if (twice !== -1)
+    throw new Error(
+      !names[twice]
+        ? "two MCP servers with no name"
+        : `two MCP servers named ${names[twice]}`,
+    )
+  const servers = new Map()
+  try {
+    for (const server of params.mcpServers ?? [])
+      servers.set(server.name, await connect(server))
+  } catch (error) {
+    for (const client of servers.values()) client.close()
+    throw error
+  }
+  sessions.set(sessionId, { values, servers, prompt: null, recorded: false })
+  return { sessionId, configOptions: configOptions(agent, values) }
+}
+
 const handlers = {
   initialize: () => initializeResult(agent),
 
-  "session/new": async (params) => {
-    const values = initialOptions(agent, process.env, params)
-    const names = (params.mcpServers ?? []).map((server) => server.name)
-    const twice = names.findIndex((name, index) => names.indexOf(name) !== index)
-    if (twice !== -1)
-      throw new Error(
-        !names[twice]
-          ? "two MCP servers with no name"
-          : `two MCP servers named ${names[twice]}`,
-      )
-    const servers = new Map()
-    try {
-      for (const server of params.mcpServers ?? [])
-        servers.set(server.name, await connect(server))
-    } catch (error) {
-      for (const client of servers.values()) client.close()
-      throw error
-    }
-    const sessionId = randomUUID()
-    sessions.set(sessionId, { values, servers, prompt: null, recorded: false })
-    return { sessionId, configOptions: configOptions(agent, values) }
+  "session/new": (params) => openSession(params, randomUUID()),
+
+  /**
+   * The gateway carrying on a session it had before it restarted. This
+   * process never saw it, so it opens it afresh under the same id, as a
+   * harness whose history is on disk would answer: the prompt that follows
+   * is what continues the work.
+   */
+  "session/resume": (params) => {
+    if (typeof params.sessionId !== "string" || params.sessionId === "")
+      throw new Error("session/resume names no session")
+    if (sessions.has(params.sessionId))
+      throw new Error(`session ${params.sessionId} is already open`)
+    return openSession(params, params.sessionId)
   },
 
   "session/set_config_option": ({ sessionId, configId, value }) => {
@@ -393,7 +414,8 @@ async function scenarioTurn({ sessionId, prompt: blocks }) {
   const server = session.servers.get(SERVER)
   if (!server) throw new Error(`the session has no ${SERVER} server`)
   if (session.prompt) throw new Error(`session ${sessionId} is already in a prompt`)
-  const matched = turnFor(scenario, promptText(blocks))
+  const text = promptText(blocks)
+  const matched = turnFor(scenario, text)
   if (!matched) throw new Error("the scenario does not answer this prompt")
   const state = { cancelled: false, waiters: [] }
   session.prompt = state
@@ -404,11 +426,23 @@ async function scenarioTurn({ sessionId, prompt: blocks }) {
     const outcome = await runSteps(matched.steps, {
       agent,
       sessionId,
+      saved: new Map([["prompt", { text }]]),
       cancelled: () => state.cancelled,
       untilCancelled: () =>
         state.cancelled
           ? Promise.resolve()
           : new Promise((resolve) => state.waiters.push(resolve)),
+      untilCancelledOr: (ms) =>
+        state.cancelled
+          ? Promise.resolve()
+          : new Promise((resolve) => {
+              const timer = setTimeout(resolve, ms)
+              state.waiters.push(() => {
+                clearTimeout(timer)
+                resolve()
+              })
+            }),
+      mode: () => session.values.mode,
       update,
       requestPermission: (params) =>
         new Promise((resolve, reject) => {
@@ -429,10 +463,10 @@ async function scenarioTurn({ sessionId, prompt: blocks }) {
           })
           send({ id, method: "session/request_permission", params })
         }),
-      callTool: (args, name = SERVER) => {
-        const selected = session.servers.get(name)
-        if (!selected) throw new Error(`the session has no ${name} server`)
-        return selected.request("tools/call", args)
+      callTool: (args, name) => {
+        const target = session.servers.get(name)
+        if (!target) throw new Error(`the session has no ${name} server`)
+        return target.request("tools/call", args)
       },
       messageId: () => `msg-${randomUUID()}`,
       toolId: () =>

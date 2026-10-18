@@ -233,9 +233,10 @@ impl ConversationService {
             .ok_or(CreationFailure::Target(ConversationError::Unavailable))
     }
 
-    /// Rebind existing cleanup adapters and replay deletion's existing close
-    /// after a crash between the erasure tombstone and ownership settlement.
-    pub async fn recover_deleted_ownership(
+    /// Rebind acknowledged cleanup adapters, then retry retained close owners.
+    /// Resume may have completed an empty-adapter generation before this bind.
+    /// Every retry joins the saved operation, cause and initiator.
+    pub async fn recover_owned_threads(
         &self,
         snapshot: &nessa_sdk::domain::agent_execution::subagents::OwnershipSnapshot,
     ) -> Result<usize, ConversationError> {
@@ -267,6 +268,27 @@ impl ConversationService {
         }
         let mut attempted = 0;
         for row in &snapshot.lifetimes {
+            if row.state == LifetimeState::Closing && row.cascaded_from.is_none() {
+                let (Some(cause), Some(initiator)) = (row.cause.clone(), row.initiator.clone())
+                else {
+                    return Err(ConversationError::Unavailable);
+                };
+                attempted += 1;
+                if let Err(error) = ownership
+                    .coordinator
+                    .end_lifetime(CloseCommand {
+                        lifetime: row.lifetime_id.clone(),
+                        cause,
+                        initiator,
+                        external_attachment: false,
+                        timeout: Some(std::time::Duration::from_secs(5)),
+                    })
+                    .await
+                {
+                    tracing::warn!(lifetime_id = %row.lifetime_id.as_str(), %error, "restored ownership cleanup remains unconfirmed");
+                }
+                continue;
+            }
             let id = ConversationId::new(row.session_id.as_str())
                 .map_err(|_| ConversationError::InvalidInput)?;
             let Some(record) = super::load_conversation(self.inner.metadata.as_ref(), &id).await?

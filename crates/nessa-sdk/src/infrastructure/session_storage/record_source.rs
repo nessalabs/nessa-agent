@@ -935,120 +935,123 @@ impl RecordStorage {
         let terminal_cache = self.terminal_cache.clone();
         #[cfg(test)]
         let mut gate = self.committed_read_gate.lock().unwrap().take();
-        let receipt = self.owner.read(move || {
-            let discovered = handle.block_on(runtime.find_stream(&stream_id));
-            #[cfg(test)]
-            if gate
-                .as_ref()
-                .is_some_and(|gate| gate.point == CommittedReadPoint::Lookup)
-            {
-                let gate = gate.take().unwrap();
-                gate.entered.send(()).unwrap();
-                gate.release.recv().unwrap();
-            }
-            let stream = match discovered {
-                Ok(Some(stream)) => stream,
-                Ok(None)
-                | Err(StreamError::StreamUnavailable { .. } | StreamError::StreamNotFound) => {
-                    retire_invalid_receivers(&cache, &runtime, &handle)?;
-                    return Ok(None);
+        let receipt = self
+            .owner
+            .read(move || {
+                let discovered = handle.block_on(runtime.find_stream(&stream_id));
+                #[cfg(test)]
+                if gate
+                    .as_ref()
+                    .is_some_and(|gate| gate.point == CommittedReadPoint::Lookup)
+                {
+                    let gate = gate.take().unwrap();
+                    gate.entered.send(()).unwrap();
+                    gate.release.recv().unwrap();
                 }
-                Err(error) => return Err(super::record::store_error(error)),
-            };
-            let source = NessaRecordSource::start(
-                runtime.clone(),
-                stream.clone(),
-                Id::new("gateway-local").expect("fixed origin ID is valid"),
-                handle.clone(),
-                terminal_cache,
-            )?;
-            let scope = source.scope(
-                Id::new("gateway-view").expect("fixed receiver ID is valid"),
-                Id::new("local-access").expect("fixed access epoch is valid"),
-            );
-            let entry = match cached_receiver(&cache, scope.clone(), stream.clone()) {
-                Err(StorageError::ReadCapacity) => {
-                    retire_invalid_receivers(&cache, &runtime, &handle)?;
-                    cached_receiver(&cache, scope.clone(), stream)?
-                }
-                result => result?,
-            };
-            let mut receiver = entry
-                .receiver
-                .lock()
-                .map_err(|_| StorageError::Io("committed receiver lock poisoned".into()))?;
-            let result = (|| {
-                if entry.lifetime.is_obsolete() {
-                    return Err(StorageError::IdentityMismatch);
-                }
-                let mut observed = receiver.fold.downloaded();
-                for _ in 0..COMMITTED_READ_FRAMES.div_ceil(MAX_PAGE_RECORDS) {
-                    let CommittedPhysicalPage {
-                        target: head,
-                        observed_head: tail,
-                        records,
-                    } = source
-                        .committed_page(&scope, receiver.fold.downloaded(), receiver.through)
-                        .map_err(committed_source_error)?;
-                    observed = observed.max(tail);
-                    receiver.through.get_or_insert(head);
-                    entry.lifetime.pin(receiver.fold.downloaded() < head)?;
-                    if records.is_empty() {
-                        break;
+                let stream = match discovered {
+                    Ok(Some(stream)) => stream,
+                    Ok(None)
+                    | Err(StreamError::StreamUnavailable { .. } | StreamError::StreamNotFound) => {
+                        retire_invalid_receivers(&cache, &runtime, &handle)?;
+                        return Ok(None);
                     }
-                    let applied = receiver.fold.apply(&records).map_err(committed_fold_error);
-                    entry.publish_retained_bytes(&receiver);
-                    applied?;
-                    if receiver.fold.downloaded() >= head {
-                        break;
+                    Err(error) => return Err(super::record::store_error(error)),
+                };
+                let source = NessaRecordSource::start(
+                    runtime.clone(),
+                    stream.clone(),
+                    Id::new("gateway-local").expect("fixed origin ID is valid"),
+                    handle.clone(),
+                    terminal_cache,
+                )?;
+                let scope = source.scope(
+                    Id::new("gateway-view").expect("fixed receiver ID is valid"),
+                    Id::new("local-access").expect("fixed access epoch is valid"),
+                );
+                let entry = match cached_receiver(&cache, scope.clone(), stream.clone()) {
+                    Err(StorageError::ReadCapacity) => {
+                        retire_invalid_receivers(&cache, &runtime, &handle)?;
+                        cached_receiver(&cache, scope.clone(), stream)?
                     }
-                }
-                let target = receiver.through.unwrap_or(receiver.fold.downloaded());
-                receiver
-                    .fold
-                    .observe_source_head(&scope, observed)
-                    .map_err(committed_fold_error)?;
-                if receiver.fold.downloaded() >= target {
-                    receiver.through = None;
-                    let _ = entry.lifetime.pin(false);
-                }
-                Ok(())
-            })();
-            // Hold only this receiver through source join, so a failed join
-            // cannot clear a newer read's fixed target or freshness.
-            let result = finish_owned_read(&mut receiver, &entry, result, source.finish());
-            #[cfg(test)]
-            if let Some(gate) = gate {
-                assert!(gate.point == CommittedReadPoint::Joined);
-                gate.entered.send(()).unwrap();
-                gate.release.recv().unwrap();
-            }
-            let result = match handle.block_on(runtime.bounds(&entry.stream)) {
-                Ok(bounds) => result.and_then(|_| {
+                    result => result?,
+                };
+                let mut receiver = entry
+                    .receiver
+                    .lock()
+                    .map_err(|_| StorageError::Io("committed receiver lock poisoned".into()))?;
+                let result = (|| {
+                    if entry.lifetime.is_obsolete() {
+                        return Err(StorageError::IdentityMismatch);
+                    }
+                    let mut observed = receiver.fold.downloaded();
+                    for _ in 0..COMMITTED_READ_FRAMES.div_ceil(MAX_PAGE_RECORDS) {
+                        let CommittedPhysicalPage {
+                            target: head,
+                            observed_head: tail,
+                            records,
+                        } = source
+                            .committed_page(&scope, receiver.fold.downloaded(), receiver.through)
+                            .map_err(committed_source_error)?;
+                        observed = observed.max(tail);
+                        receiver.through.get_or_insert(head);
+                        entry.lifetime.pin(receiver.fold.downloaded() < head)?;
+                        if records.is_empty() {
+                            break;
+                        }
+                        let applied = receiver.fold.apply(&records).map_err(committed_fold_error);
+                        entry.publish_retained_bytes(&receiver);
+                        applied?;
+                        if receiver.fold.downloaded() >= head {
+                            break;
+                        }
+                    }
+                    let target = receiver.through.unwrap_or(receiver.fold.downloaded());
                     receiver
                         .fold
-                        .observe_source_head(&scope, bounds.tail.offset)
+                        .observe_source_head(&scope, observed)
                         .map_err(committed_fold_error)?;
-                    receiver
-                        .fold
-                        .committed_session(bounds.tail.offset)
-                        .map(Some)
-                }),
-                Err(error) => {
-                    if invalid_stream(&error) {
-                        retire_receiver(&cache, &entry)?;
+                    if receiver.fold.downloaded() >= target {
+                        receiver.through = None;
+                        let _ = entry.lifetime.pin(false);
                     }
-                    abandon_pass(&mut receiver, &entry);
-                    Err(super::record::store_error(error))
+                    Ok(())
+                })();
+                // Hold only this receiver through source join, so a failed join
+                // cannot clear a newer read's fixed target or freshness.
+                let result = finish_owned_read(&mut receiver, &entry, result, source.finish());
+                #[cfg(test)]
+                if let Some(gate) = gate {
+                    assert!(gate.point == CommittedReadPoint::Joined);
+                    gate.entered.send(()).unwrap();
+                    gate.release.recv().unwrap();
                 }
-            };
-            if result.is_err() {
-                abandon_pass(&mut receiver, &entry);
-            }
-            let result = publish_owned_read(&cache, &mut receiver, &entry, result);
-            drop(receiver);
-            result
-        })?;
+                let result = match handle.block_on(runtime.bounds(&entry.stream)) {
+                    Ok(bounds) => result.and_then(|_| {
+                        receiver
+                            .fold
+                            .observe_source_head(&scope, bounds.tail.offset)
+                            .map_err(committed_fold_error)?;
+                        receiver
+                            .fold
+                            .committed_session(bounds.tail.offset)
+                            .map(Some)
+                    }),
+                    Err(error) => {
+                        if invalid_stream(&error) {
+                            retire_receiver(&cache, &entry)?;
+                        }
+                        abandon_pass(&mut receiver, &entry);
+                        Err(super::record::store_error(error))
+                    }
+                };
+                if result.is_err() {
+                    abandon_pass(&mut receiver, &entry);
+                }
+                let result = publish_owned_read(&cache, &mut receiver, &entry, result);
+                drop(receiver);
+                result
+            })
+            .await?;
         receipt
             .await
             .map_err(|error| StorageError::Io(error.to_string()))?
@@ -2228,6 +2231,7 @@ mod tests {
                 entered.send(()).unwrap();
                 source.finish()
             })
+            .await
             .unwrap();
         started.recv().unwrap();
         drop(receipt);

@@ -47,7 +47,7 @@ async fn bind_with_capacity(
         nessa_sdk::application::agent_execution::subagents::OwnershipStore::read(&restored)
             .await
             .unwrap();
-    service.recover_deleted_ownership(&snapshot).await.unwrap();
+    service.recover_owned_threads(&snapshot).await.unwrap();
     coordinator
 }
 fn source(parent: &ConversationId, execution: &str, request: &str) -> AgentToolSource {
@@ -847,15 +847,19 @@ struct FaultyLease {
     once: Arc<std::sync::atomic::AtomicBool>,
 }
 impl commands::CreationStorage for FaultyCommands {
+    fn mutations(&self, principal: String) -> commands::CreationFuture<'_, Vec<MutationReceipt>> {
+        self.storage.mutations(principal)
+    }
     fn open_creation(
         &self,
         principal: String,
+        request: String,
         create: bool,
     ) -> commands::CreationFuture<'_, Option<Arc<dyn commands::CreationStorageLease>>> {
         Box::pin(async move {
             Ok(self
                 .storage
-                .open_creation(principal, create)
+                .open_creation(principal, request, create)
                 .await?
                 .map(|inner| {
                     Arc::new(FaultyLease {
@@ -884,9 +888,6 @@ impl commands::CreationStorageLease for FaultyLease {
         request: &str,
     ) -> commands::CreationFuture<'_, Option<MutationReceipt>> {
         self.inner.load_mutation(request)
-    }
-    fn mutations(&self) -> commands::CreationFuture<'_, Vec<MutationReceipt>> {
-        self.inner.mutations()
     }
     fn save_mutation(&self, receipt: MutationReceipt) -> commands::CreationFuture<'_, ()> {
         let fail = receipt.binding().target() == &conversation_session(&self.target)
@@ -1306,7 +1307,7 @@ async fn deleting_an_owned_child_releases_ownership_and_does_not_block_parent_st
     let coordinator = bind(&service, &storage, &root, false).await;
     assert_eq!(
         service
-            .recover_deleted_ownership(&before_erasure_close)
+            .recover_owned_threads(&before_erasure_close)
             .await
             .unwrap(),
         1
@@ -1356,7 +1357,7 @@ async fn deleting_a_cold_owned_tree_reconciles_confirmed_leases_and_cannot_repar
     let snapshot = nessa_sdk::application::agent_execution::subagents::OwnershipStore::read(&owned)
         .await
         .unwrap();
-    service.recover_deleted_ownership(&snapshot).await.unwrap();
+    service.recover_owned_threads(&snapshot).await.unwrap();
     assert!(service
         .delete(parent, caller("delete-cold-parent"))
         .await
@@ -1450,7 +1451,7 @@ async fn an_opening_owner_prevents_historical_cleanup_from_closing_its_lifetime(
     let snapshot = nessa_sdk::application::agent_execution::subagents::OwnershipStore::read(&owned)
         .await
         .unwrap();
-    service.recover_deleted_ownership(&snapshot).await.unwrap();
+    service.recover_owned_threads(&snapshot).await.unwrap();
     environment.pause.store(true, Ordering::SeqCst);
     let opening = {
         let service = service.clone();
@@ -1817,14 +1818,21 @@ async fn failed_queued_report_withdrawal_keeps_root_active_and_retries_before_ro
         opens: Arc<std::sync::Mutex<Vec<bool>>>,
     }
     impl commands::CreationStorage for AfterFault {
+        fn mutations(
+            &self,
+            principal: String,
+        ) -> commands::CreationFuture<'_, Vec<MutationReceipt>> {
+            self.inner.mutations(principal)
+        }
         fn open_creation(
             &self,
             principal: String,
+            request: String,
             create: bool,
         ) -> commands::CreationFuture<'_, Option<Arc<dyn commands::CreationStorageLease>>> {
             Box::pin(async move {
                 let after_fault = !self.once.load(Ordering::SeqCst);
-                let result = self.inner.open_creation(principal, create).await;
+                let result = self.inner.open_creation(principal, request, create).await;
                 if after_fault {
                     self.opens.lock().unwrap().push(matches!(
                         &result,
@@ -1906,7 +1914,10 @@ async fn failed_queued_report_withdrawal_keeps_root_active_and_retries_before_ro
     // write failure on a loaded runner. That refusal is not the fault boundary.
     let principal_lease = tokio::time::timeout(TURN_HOLD_HANG, async {
         loop {
-            match storage.open_creation("person".into(), true).await {
+            match storage
+                .open_creation("person".into(), "stop-parent".into(), true)
+                .await
+            {
                 Ok(Some(lease)) => break lease,
                 Err(commands::CreationStorageError::Storage(StorageError::Busy)) => {
                     tokio::task::yield_now().await;
@@ -2168,7 +2179,10 @@ async fn failed_child_preparation_cannot_claim_a_foreign_live_slot_during_storag
         // Hold the principal stream only after source admission, so the fault
         // occurs in the factory's command owner, not before child reservation.
         let principal_lease = if busy {
-            storage.open_creation("person".into(), true).await.unwrap()
+            storage
+                .open_creation("person".into(), "foreign-collision".into(), true)
+                .await
+                .unwrap()
         } else {
             None
         };
@@ -2250,15 +2264,19 @@ struct RejectChildReadyLease {
     child: ConversationId,
 }
 impl commands::CreationStorage for RejectChildReadyCommands {
+    fn mutations(&self, principal: String) -> commands::CreationFuture<'_, Vec<MutationReceipt>> {
+        self.storage.mutations(principal)
+    }
     fn open_creation(
         &self,
         principal: String,
+        request: String,
         create: bool,
     ) -> commands::CreationFuture<'_, Option<Arc<dyn commands::CreationStorageLease>>> {
         Box::pin(async move {
             Ok(self
                 .storage
-                .open_creation(principal, create)
+                .open_creation(principal, request, create)
                 .await?
                 .map(|inner| {
                     Arc::new(RejectChildReadyLease {
@@ -2298,9 +2316,6 @@ impl commands::CreationStorageLease for RejectChildReadyLease {
     }
     fn save_mutation(&self, receipt: MutationReceipt) -> commands::CreationFuture<'_, ()> {
         self.inner.save_mutation(receipt)
-    }
-    fn mutations(&self) -> commands::CreationFuture<'_, Vec<MutationReceipt>> {
-        self.inner.mutations()
     }
 }
 
@@ -2389,7 +2404,7 @@ async fn startup_retains_attempted_child_creation_without_binding_or_replaying_i
         .is_err());
     assert!(metadata.load(&child).await.unwrap().is_some());
     let lease = storage
-        .open_creation("person".into(), false)
+        .open_creation("person".into(), "attempted-child".into(), false)
         .await
         .unwrap()
         .unwrap();
@@ -2499,3 +2514,6 @@ async fn restart_preserves_child_capacity_without_preventing_its_cold_reopen() {
     drop(parent_release);
     retire(service, storage, metadata).await;
 }
+
+#[path = "owned_recovery.rs"]
+mod owned_recovery;

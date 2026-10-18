@@ -195,10 +195,11 @@ fn resumed(record: &InvocationRecord, saved: &HashSet<&ExecutionId>) -> bool {
 
 /// Whether `record` is owed, and how it stopped. `saved` is every identity in
 /// the session; `superseded` whether a later turn ended for good or is this
-/// process's own work ([`newest_final`]); `live` whether this process
-/// admitted or is running `id`. A failure is owed only while nothing came
-/// after it: a person who sent the next message moved on, and so did one who
-/// stopped it.
+/// process's own work ([`newest_final`]), or, for a successor, whether any
+/// message was saved after it ([`Agent::owed_turns`]); `live` whether this
+/// process admitted or is running `id`. A failure is owed only while nothing
+/// came after it: a person who sent the next message moved on, and so did one
+/// who stopped it.
 fn owed(
     record: &InvocationRecord,
     saved: &HashSet<&ExecutionId>,
@@ -402,10 +403,18 @@ impl Agent {
         let active = self.inner.lifecycle.active();
         let live = |id: &ExecutionId| scheduler.has_receipt(id) || active.as_ref() == Some(id);
         let newest_final = self.newest_final(live).await;
+        let newest_message = self.newest_message().await;
         self.inner
             .manager
             .pick_invocations(|index, record, saved| {
-                owed(record, saved, newest_final > Some(index), live).map(|_| OwedTurn {
+                // A successor is saved only once its turn has stopped, so a
+                // message saved after it was sent after that stop: the
+                // person moved on, even if their message only waited behind
+                // the successor and was stopped with it.
+                let retry_moved_past = Resumption::of(&record.request.execution_id).attempt() > 0
+                    && newest_message > Some(index);
+                let superseded = newest_final > Some(index) || retry_moved_past;
+                owed(record, saved, superseded, live).map(|_| OwedTurn {
                     index,
                     execution_id: record.request.execution_id.clone(),
                     submitted_by: record.actor.clone(),
@@ -534,6 +543,20 @@ impl Agent {
             .manager
             .pick_invocations(|index, record, saved| {
                 ended_for_good(record, saved, &live).then_some(index)
+            })
+            .await
+            .pop()
+    }
+
+    /// The index of the newest message that is not a successor or a
+    /// steering message: someone's next step, however it ended.
+    async fn newest_message(&self) -> Option<usize> {
+        self.inner
+            .manager
+            .pick_invocations(|index, record, _| {
+                (record.submission != SubmissionMode::Immediate
+                    && Resumption::of(&record.request.execution_id).attempt() == 0)
+                    .then_some(index)
             })
             .await
             .pop()

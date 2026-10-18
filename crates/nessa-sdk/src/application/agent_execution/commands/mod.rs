@@ -2,7 +2,7 @@
 //!
 //! ```text
 //! verified host -> CreationCoordinator / MutationCoordinator
-//!                     |-> principal control lease (one request namespace)
+//!                     |-> request control lease (one stream per request)
 //!                     |-> host current access/deletion + one original effect
 //! creation: Accepted -> Attempted -> Ready
 //! submit/stop: Accepted -> Attempted -> Settled
@@ -27,7 +27,3 @@ pub use mutation::{
     MutationBinding, MutationCoordinator, MutationFailure, MutationOperation, MutationOutcome,
     MutationPlan, MutationReceipt, MutationStage, MutationTarget,
 };
-
-/// Maximum simultaneous principal creation leases on the shared record adapter.
-/// A seventeenth owner receives `StorageError::Busy` without a waiting queue.
-pub const MAX_CREATION_OWNERS: usize = 16;

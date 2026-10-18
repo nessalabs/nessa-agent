@@ -1,4 +1,5 @@
-//! Principal creation control records on the existing SQLite runtime.
+//! Command control records on the existing SQLite runtime: one small stream
+//! per principal request, so requests never wait on each other.
 use super::{
     record::{store_error, RecordStorage, Reservation},
     save_batch::RecordRuntime,
@@ -18,6 +19,7 @@ use event_stream::{
     Cursor, EventId, EventReader, EventSink, NewEvent, PageLimits, Payload, SchemaId, SchemaRef,
     StreamId, StreamKey,
 };
+use nessa_local_database::rusqlite::{self, Connection, OpenFlags};
 use sha2::{Digest, Sha256};
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::Mutex;
@@ -25,7 +27,8 @@ use tokio::sync::Mutex;
 pub(super) const CONTROL_STREAM_PREFIX: &str = "nessa:commands:";
 const SCHEMA: &str = "nessa.creation";
 const COMMAND_SCHEMA: &str = "nessa.command";
-const MAX_RECEIPTS: usize = 4096;
+/// A request's whole history: accepted, attempted, then its end.
+const MAX_REQUEST_EVENTS: u64 = 3;
 const MAX_RECORD_BYTES: usize = 3 * ActionContext::MAX_IDENTITY_BYTES + SessionId::MAX_BYTES + 48;
 const MAX_COMMAND_BYTES: usize =
     3 * ActionContext::MAX_IDENTITY_BYTES + SessionId::MAX_BYTES + ExecutionId::MAX_BYTES + 64;
@@ -43,50 +46,55 @@ enum Held {
     Creation(CreationReceipt),
     Mutation(MutationReceipt),
 }
-/// Cache of one validated control stream, preserving first admission order.
-#[derive(Default)]
-struct Receipts {
-    held: HashMap<String, Held>,
-    order: Vec<String>,
-}
-impl Receipts {
-    fn get(&self, request: &str) -> Option<&Held> {
-        self.held.get(request)
-    }
-    fn len(&self) -> usize {
-        self.held.len()
-    }
-    fn insert(&mut self, request: String, receipt: Held) {
-        if !self.held.contains_key(&request) {
-            self.order.push(request.clone());
-        }
-        self.held.insert(request, receipt);
-    }
-}
 struct ControlInner {
     _reservation: Reservation,
     runtime: RecordRuntime,
     stream: StreamKey,
     principal: String,
-    receipts: Mutex<Receipts>,
+    request: String,
+    receipts: Mutex<HashMap<String, Held>>,
     writable: bool,
 }
+/// The control stream holding one principal request's history. The principal's
+/// length goes first, so no two (principal, request) pairs share a stream.
+pub(super) fn control_stream_id(principal: &str, request: &str) -> String {
+    let mut digest = Sha256::new();
+    digest.update((principal.len() as u64).to_be_bytes());
+    digest.update(principal.as_bytes());
+    digest.update(request.as_bytes());
+    format!("{CONTROL_STREAM_PREFIX}{:x}", digest.finalize())
+}
 impl CreationStorage for RecordStorage {
+    fn mutations(&self, principal: String) -> CreationFuture<'_, Vec<MutationReceipt>> {
+        Box::pin(async move {
+            ActionContext::new(&principal, "control", "observe")
+                .map_err(|_| corrupt("invalid command principal"))?;
+            self.runtime().await?;
+            let path = self.command_path();
+            let received = self
+                .owner
+                .read(move || read_mutations(path, &principal))
+                .await?;
+            received
+                .await
+                .map_err(|_| StorageError::ReadWorkerPanicked)?
+                .map_err(Into::into)
+        })
+    }
     fn open_creation(
         &self,
         principal: String,
+        request: String,
         create: bool,
     ) -> CreationFuture<'_, Option<Arc<dyn CreationStorageLease>>> {
         Box::pin(async move {
             // Validate identity before hashing it or retaining caller capacity.
-            let actor = ActionContext::new(&principal, "control", "lookup")
-                .map_err(|_| corrupt("invalid creation principal"))?;
+            let actor = ActionContext::new(&principal, "control", &request)
+                .map_err(|_| corrupt("invalid command identity"))?;
             let principal = actor.principal_id().to_owned();
-            let id = format!(
-                "{CONTROL_STREAM_PREFIX}{:x}",
-                Sha256::digest(principal.as_bytes())
-            );
-            let reservation = Reservation::acquire_creation(self.owner.clone(), &id)?;
+            let request = actor.request_id().to_owned();
+            let id = control_stream_id(&principal, &request);
+            let reservation = Reservation::acquire(self.owner.clone(), &id)?;
             let runtime = self.runtime().await?.clone();
             tokio::spawn(async move {
                 let id = StreamId::new(&id).map_err(|_| corrupt("invalid control stream ID"))?;
@@ -98,13 +106,14 @@ impl CreationStorage for RecordStorage {
                         None => return Ok::<_, CreationStorageError>(None),
                     }
                 };
-                let receipts = replay(&runtime, &stream, &principal).await?;
+                let receipts = replay(&runtime, &stream, &principal, &request).await?;
                 Ok(Some(Arc::new(Control {
                     inner: Arc::new(ControlInner {
                         _reservation: reservation,
                         runtime,
                         stream,
                         principal,
+                        request,
                         receipts: Mutex::new(receipts),
                         writable: create,
                     }),
@@ -117,11 +126,141 @@ impl CreationStorage for RecordStorage {
         })
     }
 }
+
+// SQLite's existing physical Accepted row supplies the observation order. No
+// index or additional command publication is written by this read.
+fn read_mutations(
+    path: std::path::PathBuf,
+    principal: &str,
+) -> Result<Vec<MutationReceipt>, StorageError> {
+    let connection =
+        Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(query_error)?;
+    connection
+        .busy_timeout(std::time::Duration::from_secs(5))
+        .map_err(query_error)?;
+    let mut statement = connection
+        .prepare(
+            "SELECT s.public_id,r.offset,r.event_id,r.schema_id,r.schema_version,r.payload
+         FROM event_stream_names n
+         JOIN event_streams s ON n.active_stream_key=s.stream_key
+         JOIN event_records r ON r.stream_key=s.stream_key
+         JOIN (SELECT stream_key,MIN(rowid) AS admitted FROM event_records GROUP BY stream_key) a
+              ON a.stream_key=s.stream_key
+         WHERE s.public_id GLOB ?1 AND s.retired=0
+         ORDER BY a.admitted,r.offset",
+        )
+        .map_err(query_error)?;
+    let mut rows = statement
+        .query([format!("{CONTROL_STREAM_PREFIX}*")])
+        .map_err(query_error)?;
+    let mut current = String::new();
+    let mut offset = 0;
+    let mut held = HashMap::new();
+    let mut result = Vec::new();
+    while let Some(row) = rows.next().map_err(query_error)? {
+        let stream: String = row.get(0).map_err(query_error)?;
+        if stream != current {
+            collect_mutation(&mut held, principal, &mut result)?;
+            current = stream;
+            offset = 0;
+        }
+        let position: Vec<u8> = row.get(1).map_err(query_error)?;
+        let position = u64::from_be_bytes(
+            position
+                .try_into()
+                .map_err(|_| corrupt("invalid command position"))?,
+        );
+        offset += 1;
+        if position != offset || offset > MAX_REQUEST_EVENTS {
+            return Err(corrupt(
+                "command observation lost its prefix or exceeds request bounds",
+            ));
+        }
+        let event = NewEvent {
+            id: EventId::new(row.get::<_, String>(2).map_err(query_error)?)
+                .map_err(|_| corrupt("invalid command event ID"))?,
+            schema: SchemaRef {
+                id: SchemaId::new(row.get::<_, String>(3).map_err(query_error)?)
+                    .map_err(|_| corrupt("invalid command schema"))?,
+                version: row.get(4).map_err(query_error)?,
+            },
+            payload: Payload::copy_from_slice(&row.get::<_, Vec<u8>>(5).map_err(query_error)?),
+        };
+        let (request, owner, next) = match event.schema.id.as_str() {
+            SCHEMA => {
+                let receipt = decode(&event)?;
+                check_creation(&held, &receipt).map_err(replay_error)?;
+                if encode(&receipt)? != event {
+                    return Err(corrupt("creation event identity disagrees"));
+                }
+                (
+                    receipt.binding().actor().request_id().to_owned(),
+                    receipt.binding().actor().principal_id().to_owned(),
+                    Held::Creation(receipt),
+                )
+            }
+            COMMAND_SCHEMA => {
+                let receipt = decode_mutation(&event)?;
+                check_mutation(&held, &receipt).map_err(replay_error)?;
+                if encode_mutation(&receipt)? != event {
+                    return Err(corrupt("command event identity disagrees"));
+                }
+                (
+                    receipt.binding().actor().request_id().to_owned(),
+                    receipt.binding().actor().principal_id().to_owned(),
+                    Held::Mutation(receipt),
+                )
+            }
+            _ => return Err(corrupt("unknown command control schema")),
+        };
+        if current != control_stream_id(&owner, &request) {
+            return Err(corrupt("command observation identity disagrees"));
+        }
+        held.insert(request, next);
+    }
+    collect_mutation(&mut held, principal, &mut result)?;
+    Ok(result)
+}
+
+fn collect_mutation(
+    held: &mut HashMap<String, Held>,
+    principal: &str,
+    result: &mut Vec<MutationReceipt>,
+) -> Result<(), StorageError> {
+    for (_, receipt) in held.drain() {
+        if let Held::Mutation(receipt) = receipt {
+            if receipt.binding().actor().principal_id() == principal {
+                result.push(receipt);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn query_error(error: rusqlite::Error) -> StorageError {
+    match error.sqlite_error_code() {
+        Some(rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked) => {
+            StorageError::Busy
+        }
+        _ => StorageError::Io(error.to_string()),
+    }
+}
+impl ControlInner {
+    /// A lease answers for the one request it was opened for.
+    fn holds(&self, request_id: &str) -> Result<(), CreationStorageError> {
+        if request_id == self.request {
+            Ok(())
+        } else {
+            Err(corrupt("another request's command history").into())
+        }
+    }
+}
 impl CreationStorageLease for Control {
     fn load(&self, request_id: &str) -> CreationFuture<'_, Option<CreationReceipt>> {
         let request_id = request_id.to_owned();
         let inner = self.inner.clone();
         Box::pin(async move {
+            inner.holds(&request_id)?;
             match inner.receipts.lock().await.get(&request_id) {
                 Some(Held::Creation(receipt)) => Ok(Some(receipt.clone())),
                 Some(Held::Mutation(_)) => Err(CreationStorageError::ForeignRequest),
@@ -139,6 +278,7 @@ impl CreationStorageLease for Control {
                 if receipt.binding().actor().principal_id() != inner.principal {
                     return Err(StorageError::IdentityMismatch.into());
                 }
+                inner.holds(receipt.binding().actor().request_id())?;
                 let mut receipts = inner.receipts.lock().await;
                 check_creation(&receipts, &receipt)?;
                 let event = encode(&receipt)?;
@@ -165,25 +305,12 @@ impl CreationStorageLease for Control {
         let request_id = request_id.to_owned();
         let inner = self.inner.clone();
         Box::pin(async move {
+            inner.holds(&request_id)?;
             match inner.receipts.lock().await.get(&request_id) {
                 Some(Held::Mutation(receipt)) => Ok(Some(receipt.clone())),
                 Some(Held::Creation(_)) => Err(CreationStorageError::ForeignRequest),
                 None => Ok(None),
             }
-        })
-    }
-    fn mutations(&self) -> CreationFuture<'_, Vec<MutationReceipt>> {
-        let inner = self.inner.clone();
-        Box::pin(async move {
-            let receipts = inner.receipts.lock().await;
-            Ok(receipts
-                .order
-                .iter()
-                .filter_map(|request| match receipts.get(request) {
-                    Some(Held::Mutation(receipt)) => Some(receipt.clone()),
-                    _ => None,
-                })
-                .collect())
         })
     }
     fn save_mutation(&self, receipt: MutationReceipt) -> CreationFuture<'_, ()> {
@@ -196,6 +323,7 @@ impl CreationStorageLease for Control {
                 if receipt.binding().actor().principal_id() != inner.principal {
                     return Err(StorageError::IdentityMismatch.into());
                 }
+                inner.holds(receipt.binding().actor().request_id())?;
                 let mut receipts = inner.receipts.lock().await;
                 check_mutation(&receipts, &receipt)?;
                 let event = encode_mutation(&receipt)?;
@@ -217,7 +345,10 @@ impl CreationStorageLease for Control {
         })
     }
 }
-fn check_creation(receipts: &Receipts, next: &CreationReceipt) -> Result<(), CreationStorageError> {
+fn check_creation(
+    receipts: &HashMap<String, Held>,
+    next: &CreationReceipt,
+) -> Result<(), CreationStorageError> {
     match receipts.get(next.binding().actor().request_id()) {
         Some(Held::Mutation(_)) => Err(CreationStorageError::ForeignRequest),
         Some(Held::Creation(previous)) if previous == next => Ok(()),
@@ -231,11 +362,13 @@ fn check_creation(receipts: &Receipts, next: &CreationReceipt) -> Result<(), Cre
         None if next.stage() != CreationStage::Accepted => {
             Err(corrupt("creation has no acceptance").into())
         }
-        None if receipts.len() == MAX_RECEIPTS => Err(StorageError::TooLarge.into()),
         None => Ok(()),
     }
 }
-fn check_mutation(receipts: &Receipts, next: &MutationReceipt) -> Result<(), CreationStorageError> {
+fn check_mutation(
+    receipts: &HashMap<String, Held>,
+    next: &MutationReceipt,
+) -> Result<(), CreationStorageError> {
     match receipts.get(next.binding().actor().request_id()) {
         Some(Held::Creation(_)) => Err(CreationStorageError::ForeignRequest),
         Some(Held::Mutation(previous)) if previous == next => Ok(()),
@@ -249,7 +382,6 @@ fn check_mutation(receipts: &Receipts, next: &MutationReceipt) -> Result<(), Cre
         None if next.stage() != MutationStage::Accepted => {
             Err(corrupt("command has no acceptance").into())
         }
-        None if receipts.len() == MAX_RECEIPTS => Err(StorageError::TooLarge.into()),
         None => Ok(()),
     }
 }
@@ -264,14 +396,15 @@ async fn replay(
     runtime: &RecordRuntime,
     stream: &StreamKey,
     principal: &str,
-) -> Result<Receipts, StorageError> {
+    request: &str,
+) -> Result<HashMap<String, Held>, StorageError> {
     let bounds = runtime.bounds(stream).await.map_err(store_error)?;
-    if bounds.floor.offset != 0 || bounds.tail.offset > (MAX_RECEIPTS * 3) as u64 {
+    if bounds.floor.offset != 0 || bounds.tail.offset > MAX_REQUEST_EVENTS {
         return Err(corrupt(
             "creation control history exceeds bounds or lost its prefix",
         ));
     }
-    let mut receipts = Receipts::default();
+    let mut receipts = HashMap::new();
     let mut cursor = Cursor::new(stream.clone(), 0);
     while cursor.offset < bounds.tail.offset {
         let page = runtime
@@ -314,6 +447,9 @@ async fn replay(
                 Held::Creation(receipt) => receipt.binding().actor().request_id().to_owned(),
                 Held::Mutation(receipt) => receipt.binding().actor().request_id().to_owned(),
             };
+            if request_id != request {
+                return Err(corrupt("control stream holds another request"));
+            }
             receipts.insert(request_id, held);
             cursor = record.cursor.clone();
         }

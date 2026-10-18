@@ -15,6 +15,7 @@
  * | running | text | one `agent_message_chunk` per chunk, one message id, still running |
  * | running | tool | the MCP call, then its completion, still running |
  * | running | permission | the call is announced, the request is sent, waiting |
+ * | running | permission, session in its full-access mode | the call is announced, no request: the allow-once branch runs |
  * | waiting | selected, and the branch does not end or fail the turn | that answer's steps, then the steps after the request |
  * | waiting | selected, and the branch ends or fails the turn | stop there; the steps after the request do not run |
  * | waiting | selected, and the turn is already cancelled | stop `cancelled`; the answer's steps do not run |
@@ -22,10 +23,25 @@
  * | waiting | outcome cancelled, no branch, or the turn is cancelled | stop `cancelled` |
  * | waiting | an answer that is not a selection or a cancellation | the turn fails |
  * | running | fail | the turn fails; chunks and calls already sent stay sent |
+ * | running | pause | waits `ms`, or until `session/cancel`, then the next step |
  * | running | wait-cancel | waiting for `session/cancel` |
  * | waiting for cancel | `session/cancel` | stop `cancelled` |
  * | running | end, or the steps run out | stop `end_turn` |
  * | running | `session/cancel` between steps | stop `cancelled`; nothing further is sent |
+ *
+ * A session in its harness's full-access mode (Claude's `bypassPermissions`,
+ * Codex's `agent-full-access`, set by `session/set_config_option` `mode`)
+ * asks for nothing, as the real harness does: a permission step runs its
+ * allow-once branch unasked. That is how a check sees an access change reach
+ * the agent.
+ *
+ * A tool step calls `mcptest` unless it names another of the session's MCP
+ * servers (`server`, such as the gateway's own `nessa-agents`). With `save`,
+ * its result's `structuredContent` is kept under that name for the rest of
+ * the turn, and a result that is an error fails the turn. A string anywhere
+ * in a later step's arguments or text that is `${name.path}` is replaced by
+ * that saved value's field, so one call can name what an earlier call made.
+ * `${prompt.text}` is the prompt the turn answers.
  *
  * A permission offers two answers, the two the window can give: allow once
  * and deny once. A withdrawn review is the third answer, `cancelled`, not
@@ -44,17 +60,27 @@ export const ALLOW_ONCE = "allow-once"
 export const DENY_ONCE = "deny-once"
 
 const ANSWERS = [ALLOW_ONCE, DENY_ONCE, "cancelled"]
-const KINDS = ["text", "permission", "tool", "fail", "wait-cancel", "end"]
-const BRANCH_KINDS = ["text", "tool", "fail", "end"]
+const KINDS = ["text", "permission", "tool", "pause", "fail", "wait-cancel", "end"]
+const BRANCH_KINDS = ["text", "tool", "pause", "fail", "end"]
 
 const FIELDS = {
   text: ["do", "chunks"],
   permission: ["do", "tool", "arguments", "title", "on"],
-  tool: ["do", "tool", "arguments", "server"],
+  tool: ["do", "tool", "arguments"],
+  pause: ["do", "ms"],
   fail: ["do", "message"],
   "wait-cancel": ["do"],
   end: ["do"],
 }
+
+/** Fields a step may leave out. */
+const OPTIONAL = { tool: ["server", "save"] }
+
+/** The modes, by harness, in which the harness asks for nothing. */
+export const FULL_ACCESS = { claude: "bypassPermissions", codex: "agent-full-access" }
+
+/** The longest pause a step may ask for. */
+const MAX_PAUSE_MS = 60_000
 
 const OPTIONS = [
   { optionId: ALLOW_ONCE, kind: "allow_once", name: "Allow once" },
@@ -118,10 +144,13 @@ function parseStep(step, branch) {
   if (branch && !BRANCH_KINDS.includes(step.do))
     throw new Error(`a permission answer cannot ${step.do}`)
   const allowed = FIELDS[step.do]
-  const unknown = Object.keys(step).filter((key) => !allowed.includes(key))
+  const optional = OPTIONAL[step.do] ?? []
+  const unknown = Object.keys(step).filter(
+    (key) => !allowed.includes(key) && !optional.includes(key),
+  )
   if (unknown.length > 0) throw new Error(`unknown ${step.do} field ${unknown[0]}`)
   for (const key of allowed)
-    if (key !== "do" && key !== "server" && !Object.hasOwn(step, key))
+    if (key !== "do" && !Object.hasOwn(step, key))
       throw new Error(`a ${step.do} step needs ${key}`)
   switch (step.do) {
     case "text":
@@ -135,10 +164,15 @@ function parseStep(step, branch) {
     case "tool":
       return {
         do: "tool",
-        ...(step.server === undefined ? {} : { server: toolName(step.server) }),
         tool: toolName(step.tool),
         arguments: argumentsOf(step.arguments),
+        ...(Object.hasOwn(step, "server") ? { server: toolName(step.server) } : {}),
+        ...(Object.hasOwn(step, "save") ? { save: toolName(step.save) } : {}),
       }
+    case "pause":
+      if (!Number.isInteger(step.ms) || step.ms < 0 || step.ms > MAX_PAUSE_MS)
+        throw new Error(`a pause is a whole number of ms from 0 to ${MAX_PAUSE_MS}`)
+      return { do: "pause", ms: step.ms }
     case "fail":
       if (typeof step.message !== "string" || step.message === "")
         throw new Error("a failure needs a message")
@@ -331,11 +365,13 @@ export function completedUpdate(id, result) {
  * does not end the turn: the steps after its permission still run.
  *
  * `ctx` carries the turn: `cancelled()`, `untilCancelled()`, `update(frame)`,
- * `requestPermission(params)`, `callTool(args)`, `messageId()`, `toolId()`,
+ * `requestPermission(params)`, `callTool(args, server)`, `messageId()`, `toolId()`,
  * `openCall(tool)`, `rememberCall(tool, id)`, `clearCall(tool)`, `agent`,
- * `sessionId`.
+ * `sessionId`, and optionally `mode()`, the session's current mode, and
+ * `untilCancelledOr(ms)`, which a pause waits on.
  */
 export async function runSteps(steps, ctx) {
+  ctx.saved ??= new Map()
   for (const step of steps) {
     if (ctx.cancelled()) return { stopReason: "cancelled" }
     const outcome = await runStep(step, ctx)
@@ -348,7 +384,8 @@ async function runStep(step, ctx) {
   switch (step.do) {
     case "text": {
       const messageId = ctx.messageId()
-      for (const text of step.chunks) {
+      for (const chunk of step.chunks) {
+        const text = filled(chunk, ctx.saved)
         if (ctx.cancelled()) return { stopReason: "cancelled" }
         ctx.update({
           sessionUpdate: "agent_message_chunk",
@@ -362,6 +399,11 @@ async function runStep(step, ctx) {
       return callTool(step, ctx, ctx.openCall(step.tool))
     case "permission":
       return ask(step, ctx)
+    case "pause":
+      await (ctx.untilCancelledOr
+        ? ctx.untilCancelledOr(step.ms)
+        : new Promise((resolve) => setTimeout(resolve, step.ms)))
+      return ctx.cancelled() ? { stopReason: "cancelled" } : null
     case "fail":
       return { fail: step.message }
     case "wait-cancel":
@@ -374,14 +416,59 @@ async function runStep(step, ctx) {
   }
 }
 
+/**
+ * `value` with every `${name.path}` string in it replaced by that field of the
+ * result saved as `name`. A whole-string reference keeps the field's type; a
+ * reference inside longer text is written into it. A name or field not saved
+ * is left as written, so the call shows what it could not fill.
+ */
+export function filled(value, saved) {
+  if (typeof value === "string") {
+    const whole = /^\$\{([A-Za-z0-9_-]+)((?:\.[A-Za-z0-9_-]+)*)\}$/.exec(value)
+    if (whole) {
+      const found = lookup(saved, whole[1], whole[2])
+      return found === undefined ? value : found
+    }
+    return value.replace(
+      /\$\{([A-Za-z0-9_-]+)((?:\.[A-Za-z0-9_-]+)*)\}/g,
+      (all, name, path) => {
+        const found = lookup(saved, name, path)
+        return found === undefined
+          ? all
+          : typeof found === "string"
+            ? found
+            : JSON.stringify(found)
+      },
+    )
+  }
+  if (Array.isArray(value)) return value.map((each) => filled(each, saved))
+  if (plain(value))
+    return Object.fromEntries(
+      Object.entries(value).map(([key, each]) => [key, filled(each, saved)]),
+    )
+  return value
+}
+
+function lookup(saved, name, path) {
+  if (!saved?.has(name)) return undefined
+  let value = saved.get(name)
+  for (const key of path.split(".").filter(Boolean)) {
+    if (value === null || typeof value !== "object" || !Object.hasOwn(value, key))
+      return undefined
+    value = value[key]
+  }
+  return value
+}
+
 async function callTool(step, ctx, existing) {
   const id = existing ?? ctx.toolId()
+  const args = filled(step.arguments, ctx.saved)
   if (!existing) {
     const announced = permissionCall(ctx.agent, {
       id,
       tool: step.tool,
       title: step.tool,
-      arguments: step.arguments,
+      arguments: args,
       server: step.server,
     })
     ctx.update(announced.update)
@@ -389,8 +476,8 @@ async function callTool(step, ctx, existing) {
   let result
   try {
     result = await ctx.callTool(
-      mcpArguments(ctx.agent, { id, tool: step.tool, arguments: step.arguments }),
-      step.server,
+      mcpArguments(ctx.agent, { id, tool: step.tool, arguments: args }),
+      step.server ?? SERVER,
     )
   } catch (error) {
     if (ctx.cancelled()) return { stopReason: "cancelled" }
@@ -399,6 +486,11 @@ async function callTool(step, ctx, existing) {
   if (ctx.cancelled()) return { stopReason: "cancelled" }
   ctx.update(completedUpdate(id, result))
   ctx.clearCall(step.tool)
+  if (step.save) {
+    if (result?.isError === true)
+      return { fail: `${step.tool} failed: ${resultText(result)}` }
+    ctx.saved.set(step.save, result?.structuredContent ?? null)
+  }
   return null
 }
 
@@ -412,6 +504,7 @@ async function ask(step, ctx) {
   })
   ctx.update(call.update)
   ctx.rememberCall(step.tool, id)
+  const unattended = ctx.mode?.() === FULL_ACCESS[ctx.agent]
   // The branch did not complete the announced call. Fail it before a later
   // step can reuse its id, and leave a cancelled turn's call alone.
   const abandon = () => {
@@ -424,13 +517,15 @@ async function ask(step, ctx) {
     ctx.clearCall(step.tool)
   }
   let result
-  try {
-    result = await ctx.requestPermission(call.request(ctx.sessionId))
-  } catch (error) {
-    if (ctx.cancelled()) return { stopReason: "cancelled" }
-    abandon()
-    return { fail: error.message }
-  }
+  if (unattended) result = { outcome: { outcome: "selected", optionId: ALLOW_ONCE } }
+  else
+    try {
+      result = await ctx.requestPermission(call.request(ctx.sessionId))
+    } catch (error) {
+      if (ctx.cancelled()) return { stopReason: "cancelled" }
+      abandon()
+      return { fail: error.message }
+    }
   const decision = branchFor(result, ctx.cancelled(), step.on)
   if (decision.kind === "stop") return { stopReason: decision.stopReason }
   if (decision.kind === "fail") {

@@ -192,14 +192,20 @@ impl ConversationService {
         caller: &ConversationCaller,
         root: MutationBinding,
     ) -> Result<Selection, Failure> {
-        // Exclusive principal leases must be released before nested ordinary
-        // mutations, including source/child creation and physical cancellation.
+        // The root request lease is released before ordinary target effects.
         let lease = storage
-            .open_creation(caller.principal_id.as_str().into(), true)
+            .open_creation(
+                caller.principal_id.as_str().into(),
+                caller.action_id.clone(),
+                true,
+            )
             .await
             .map_err(MutationFailure::Storage)?
             .ok_or_else(unavailable)?;
-        let receipts = lease.mutations().await.map_err(MutationFailure::Storage)?;
+        let receipts = storage
+            .mutations(caller.principal_id.as_str().into())
+            .await
+            .map_err(MutationFailure::Storage)?;
         if let Some(saved) = lease
             .load_mutation(caller.action_id.as_str())
             .await
@@ -319,13 +325,10 @@ impl ConversationService {
                     .snapshot()
                     .await
                     .ok_or_else(unavailable)?;
-                let lease = storage
-                    .open_creation(caller.principal_id.as_str().into(), false)
+                let commands = storage
+                    .mutations(caller.principal_id.as_str().into())
                     .await
-                    .map_err(MutationFailure::Storage)?
-                    .ok_or_else(unavailable)?;
-                let commands = lease.mutations().await.map_err(MutationFailure::Storage)?;
-                drop(lease);
+                    .map_err(MutationFailure::Storage)?;
                 for report in pending.into_iter().filter(|row| row.report.parent == *id) {
                     let report_ids = super::thread_report_admission::report_execution_ids(
                         &report.report.execution,
@@ -367,11 +370,18 @@ impl ConversationService {
         }
         let selected_root = plan_binding(&root, &children)?;
         let lease = storage
-            .open_creation(caller.principal_id.as_str().into(), true)
+            .open_creation(
+                caller.principal_id.as_str().into(),
+                caller.action_id.clone(),
+                true,
+            )
             .await
             .map_err(MutationFailure::Storage)?
             .ok_or_else(unavailable)?;
-        let previous = lease.mutations().await.map_err(MutationFailure::Storage)?;
+        let previous = storage
+            .mutations(caller.principal_id.as_str().into())
+            .await
+            .map_err(MutationFailure::Storage)?;
         // A prior partial write cannot be replaced by a newly selected target.
         for saved in previous
             .iter()
@@ -382,7 +392,16 @@ impl ConversationService {
             }
         }
         for child in &children {
-            lease
+            let child_lease = storage
+                .open_creation(
+                    child.actor().principal_id().into(),
+                    child.actor().request_id().into(),
+                    true,
+                )
+                .await
+                .map_err(MutationFailure::Storage)?
+                .ok_or_else(unavailable)?;
+            child_lease
                 .save_mutation(MutationReceipt::accepted(child.clone()))
                 .await
                 .map_err(MutationFailure::Storage)?;
@@ -408,15 +427,8 @@ impl ConversationService {
         let Some(storage) = self.commands() else {
             return Ok(Vec::new());
         };
-        let Some(lease) = storage
-            .open_creation(caller.principal_id.as_str().into(), false)
-            .await
-            .map_err(|_| ConversationError::Unavailable)?
-        else {
-            return Ok(Vec::new());
-        };
-        let receipts = lease
-            .mutations()
+        let receipts = storage
+            .mutations(caller.principal_id.as_str().into())
             .await
             .map_err(|_| ConversationError::Unavailable)?;
         let mut captured = Vec::new();
@@ -473,7 +485,11 @@ impl ConversationService {
         requested: &MutationBinding,
     ) -> Result<MutationBinding, Failure> {
         let Some(lease) = storage
-            .open_creation(requested.actor().principal_id().into(), false)
+            .open_creation(
+                requested.actor().principal_id().into(),
+                requested.actor().request_id().into(),
+                false,
+            )
             .await
             .map_err(MutationFailure::Storage)?
         else {
@@ -486,7 +502,10 @@ impl ConversationService {
         else {
             return Ok(requested.clone());
         };
-        let receipts = lease.mutations().await.map_err(MutationFailure::Storage)?;
+        let receipts = storage
+            .mutations(requested.actor().principal_id().into())
+            .await
+            .map_err(MutationFailure::Storage)?;
         let selection = restore(requested, &saved, &receipts)?;
         for child in &selection.children {
             let receipt = receipts
@@ -579,15 +598,8 @@ impl ConversationService {
         }
         let mut retry = Vec::new();
         for principal in owners {
-            let Some(lease) = storage
-                .open_creation(principal.clone(), false)
-                .await
-                .map_err(|_| ConversationError::Unavailable)?
-            else {
-                continue;
-            };
-            let receipts = lease
-                .mutations()
+            let receipts = storage
+                .mutations(principal.clone())
                 .await
                 .map_err(|_| ConversationError::Unavailable)?;
             for receipt in &receipts {
