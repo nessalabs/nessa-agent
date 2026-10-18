@@ -115,10 +115,13 @@ Options:
 const PARK_IDLE_SECONDS = 3
 
 /**
- * How many 1 KB chunks each answer of the `long` step streams: one answer
- * stays within the gateway's 60 KB view, which clips a longer one.
+ * How many chunks each answer of the `long` step streams, and how many bytes
+ * each carries. One answer stays within the 16 KB of text the gateway's view
+ * shows of a message, which clips a longer one; the saved history keeps all
+ * of every answer.
  */
 const LONG_CHUNKS = 40
+const LONG_CHUNK_BYTES = 300
 
 const fold = (text) =>
   String(text ?? "")
@@ -695,7 +698,7 @@ const steps = {
     const conversationId = randomUUID()
     await run.client.conversation.create({ conversationId, agent: run.stack.agent })
     // Each answer streams LONG_CHUNKS chunks, so the history grows by about
-    // 40 KB a turn and every save comes after a long one.
+    // 12 KB a turn and every save comes after a long one.
     const took = []
     let text
     for (let turn = 0; turn < step.turns; turn += 1) {
@@ -723,7 +726,9 @@ const steps = {
     const view = await run.client.conversation.read(conversationId)
     const answer = view.messages.find((each) => each.userText === text)
     const said = (answer?.parts ?? []).map((part) => part.text ?? "").join("")
-    const chunks = [...said.matchAll(/ (\d+) x{1000}/g)].map((match) => Number(match[1]))
+    const chunks = [
+      ...said.matchAll(new RegExp(` (\\d+) x{${LONG_CHUNK_BYTES}}`, "g")),
+    ].map((match) => Number(match[1]))
     if (
       !said.startsWith(`${SAYS.long}${text}`) ||
       chunks.length !== LONG_CHUNKS ||
@@ -890,7 +895,13 @@ async function startStack(options) {
   const scenario = join(directory, "stress.json")
   writeFileSync(
     scenario,
-    JSON.stringify(stressScenario({ reviews: knobs.reviews, longChunks: LONG_CHUNKS })),
+    JSON.stringify(
+      stressScenario({
+        reviews: knobs.reviews,
+        longChunks: LONG_CHUNKS,
+        longChunkBytes: LONG_CHUNK_BYTES,
+      }),
+    ),
   )
   if (options.evidence) {
     mkdirSync(options.evidence, { recursive: true })
