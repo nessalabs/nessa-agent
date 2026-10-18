@@ -1,9 +1,12 @@
 //! Canonical bundle listings and the shared live inventory decoder.
 
+use crate::backup::application::{DeletionReadError, ManifestReadError, VerificationFormat};
+use crate::backup::infrastructure::ExportFormat;
+
 use crate::backup::domain::{
     AuthenticatedManifest, CapturedRecord, CredentialKind, DeferredEntry, DeletionFence,
-    DeletionLog, DeletionReadError, Fingerprint, Manifest, ManifestListing, ManifestReadError,
-    Sensitivity, SkipReason, SkippedRecord, SourceCut, StoreKind, Watermark, WRITER_INVENTORY,
+    DeletionLog, Fingerprint, Manifest, Sensitivity, SkipReason, SkippedRecord, SourceCut,
+    StoreKind, Watermark, WRITER_INVENTORY,
 };
 
 fn listing(entries: bool) -> AuthenticatedManifest {
@@ -105,8 +108,8 @@ fn writer_omission_rows_can_repeat_and_overlap_public_names() {
             Fingerprint::of(b"synthetic mac"),
         );
         let raw = sealed.encoded();
-        let listing = ManifestListing::parse(&raw, rows).unwrap();
-        let store = &listing.stores()[index];
+        let listing = ExportFormat.manifest(&raw, rows).unwrap();
+        let store = &listing.listing.stores()[index];
         assert_eq!(store.skipped(), skipped);
         assert_eq!(store.records().len(), records.len());
         for (listed, original) in store.records().iter().zip(&records) {
@@ -115,7 +118,7 @@ fn writer_omission_rows_can_repeat_and_overlap_public_names() {
             assert_eq!(listed.is_public(), original.public_bytes().is_some());
         }
         assert_eq!(
-            ManifestListing::parse(&raw, rows - 1),
+            ExportFormat.manifest(&raw, rows - 1),
             Err(ManifestReadError::EntryLimit)
         );
     }
@@ -147,8 +150,8 @@ fn writer_omission_rows_can_repeat_and_overlap_public_names() {
         raw.replacen(&redacted, &(redacted.clone() + &redacted), 1),
         raw.replacen(&deferred, &(deferred.clone() + &deferred), 1),
     ] {
-        let parsed = ManifestListing::parse(&allowed, 100).unwrap();
-        let first = &parsed.stores()[0];
+        let parsed = ExportFormat.manifest(&allowed, 100).unwrap();
+        let first = &parsed.listing.stores()[0];
         assert_eq!(
             first.records().len() + first.deferred().len() + first.skipped().len(),
             allowed.lines().count() - (WRITER_INVENTORY.len() + 3)
@@ -160,13 +163,13 @@ fn writer_omission_rows_can_repeat_and_overlap_public_names() {
 fn canonical_listings_keep_metadata_and_the_mac_offset() {
     let sealed = listing(true);
     let raw = sealed.encoded();
-    let read = ManifestListing::parse(&raw, 5).unwrap();
-    assert_eq!(read.canonical_len(), sealed.manifest().canonical().len());
-    assert_eq!(&raw[..read.canonical_len()], sealed.manifest().canonical());
-    assert_eq!(read.mac(), *sealed.mac());
-    assert_eq!(read.captured_at_ms(), 123);
-    assert_eq!(read.stores().len(), 22);
-    let first = &read.stores()[0];
+    let read = ExportFormat.manifest(&raw, 5).unwrap();
+    assert_eq!(read.canonical_len, sealed.manifest().canonical().len());
+    assert_eq!(&raw[..read.canonical_len], sealed.manifest().canonical());
+    assert_eq!(read.mac, *sealed.mac());
+    assert_eq!(read.listing.captured_at_ms(), 123);
+    assert_eq!(read.listing.stores().len(), 22);
+    let first = &read.listing.stores()[0];
     assert_eq!(first.store(), StoreKind::CanonicalRecords);
     assert_eq!(first.watermark().as_str(), "cut cursor/é");
     assert_eq!(first.records()[0].identity(), "public/name é");
@@ -180,9 +183,9 @@ fn canonical_listings_keep_metadata_and_the_mac_offset() {
     assert!(first.records()[2].is_public());
     assert_eq!(first.deferred()[0].size(), 123);
     assert_eq!(first.skipped()[0].reason(), SkipReason::Bounded);
-    assert!(ManifestListing::parse(&listing(false).encoded(), 0).is_ok());
+    assert!(ExportFormat.manifest(&listing(false).encoded(), 0).is_ok());
     assert_eq!(
-        ManifestListing::parse(&raw, 4),
+        ExportFormat.manifest(&raw, 4),
         Err(ManifestReadError::EntryLimit)
     );
 }
@@ -241,20 +244,20 @@ fn malformed_listing_grammar_is_refused() {
     ];
     for (index, bad) in cases.iter().enumerate() {
         assert_eq!(
-            ManifestListing::parse(bad, 100),
+            ExportFormat.manifest(bad, 100),
             Err(ManifestReadError::Malformed),
             "case {index}"
         );
     }
     assert_eq!(
-        ManifestListing::parse(
+        ExportFormat.manifest(
             &raw.replacen("nessa-export-cut/1", "nessa-export-cut/2", 1),
             100
         ),
         Err(ManifestReadError::UnsupportedVersion)
     );
     assert_eq!(
-        ManifestListing::parse("unrelated\n", 100),
+        ExportFormat.manifest("unrelated\n", 100),
         Err(ManifestReadError::Malformed)
     );
 }
@@ -268,23 +271,23 @@ fn deletion_decoder_reuses_live_grammar_without_tightening_it() {
             .unwrap(),
     );
     let canonical = log.canonical();
-    assert_eq!(DeletionLog::decode(&canonical).unwrap(), log);
+    assert_eq!(ExportFormat.inventory(&canonical).unwrap(), log);
     let noncanonical = canonical.replace("%2F", "%2f").replace(
         &Fingerprint::of(b"synthetic").hex(),
         &Fingerprint::of(b"synthetic").hex().to_uppercase(),
     ) + "\n";
-    assert_eq!(DeletionLog::decode(&noncanonical).unwrap(), log);
+    assert_eq!(ExportFormat.inventory(&noncanonical).unwrap(), log);
     assert_ne!(noncanonical, log.canonical());
     assert_eq!(
-        DeletionLog::decode("nessa-deletion-inventory/2\n"),
+        ExportFormat.inventory("nessa-deletion-inventory/2\n"),
         Err(DeletionReadError::UnsupportedVersion)
     );
     assert_eq!(
-        DeletionLog::decode("garbage\n"),
+        ExportFormat.inventory("garbage\n"),
         Err(DeletionReadError::Malformed)
     );
     assert_eq!(
-        DeletionLog::decode("nessa-deletion-inventory/1\n2 conversation gap\n"),
+        ExportFormat.inventory("nessa-deletion-inventory/1\n2 conversation gap\n"),
         Err(DeletionReadError::Malformed)
     );
     assert!(Fingerprint::from_hex(&format!("é{}", "a".repeat(62))).is_err());
@@ -295,7 +298,7 @@ fn listing_name_bounds_count_decoded_bytes_before_retaining_names() {
     let raw = listing(true).encoded();
     for encoded in ["a".repeat(512), "%20".repeat(512)] {
         let valid = raw.replacen("public%2Fname%20%C3%A9", &encoded, 1);
-        assert!(ManifestListing::parse(&valid, 5).is_ok());
+        assert!(ExportFormat.manifest(&valid, 5).is_ok());
     }
     for encoded in [
         "a".repeat(513),
@@ -304,13 +307,29 @@ fn listing_name_bounds_count_decoded_bytes_before_retaining_names() {
     ] {
         let bad_identity = raw.replacen("public%2Fname%20%C3%A9", &encoded, 1);
         assert_eq!(
-            ManifestListing::parse(&bad_identity, 5),
+            ExportFormat.manifest(&bad_identity, 5),
             Err(ManifestReadError::Malformed)
         );
         let bad_watermark = raw.replacen("cut%20cursor%2F%C3%A9", &encoded, 1);
         assert_eq!(
-            ManifestListing::parse(&bad_watermark, 5),
+            ExportFormat.manifest(&bad_watermark, 5),
             Err(ManifestReadError::Malformed)
         );
     }
+}
+
+#[test]
+fn duplicate_public_names_are_refused_before_a_later_entry_limit() {
+    let raw = listing(true).encoded();
+    let line = raw
+        .lines()
+        .find(|line| line.starts_with("record "))
+        .unwrap();
+    // Two entries are allowed: the second is already invalid. A later third
+    // line must not change that refusal to EntryLimit.
+    let repeated = raw.replacen(line, &format!("{line}\n{line}"), 1);
+    assert_eq!(
+        ExportFormat.manifest(&repeated, 2),
+        Err(ManifestReadError::Malformed)
+    );
 }

@@ -12,6 +12,7 @@ use crate::backup::application::{
     PublishedRecord, VerificationLimits,
 };
 use crate::backup::domain::{outbox_watermark, Sensitivity, SkipReason, StoreKind};
+use crate::backup::infrastructure::ExportFormat;
 use crate::backup::infrastructure::{
     capture_namespace, jsonl_cut, path_sensitivity, DirectoryPublisher,
     DirectoryVerificationSource, FileDeletionLog,
@@ -126,6 +127,7 @@ async fn current_writer_omissions_verify_without_publishing_secret_bytes() {
         .await
         .unwrap();
         let report = verify_bundle(
+            &ExportFormat,
             &DirectoryVerificationSource::open(bundle.clone()).unwrap(),
             &inventory.key(),
             VerificationLimits::default(),

@@ -1,7 +1,6 @@
 //! What a cut is allowed to hold. No clock, no files, no serde.
 
 mod deletion;
-mod deletion_decode;
 mod encoding;
 mod inventory;
 mod manifest;
@@ -19,6 +18,6 @@ pub use record::{
     Sensitivity, SkipReason, SkippedRecord, SourceCut, Watermark,
 };
 
-pub use deletion_decode::DeletionReadError;
 pub(crate) use encoding::encode_identity;
-pub use verification::{ListedRecord, ListedStore, ManifestListing, ManifestReadError};
+pub(crate) use record::MAX_NAME_BYTES;
+pub use verification::{ListedRecord, ListedRecords, ListedStore, ManifestListing};

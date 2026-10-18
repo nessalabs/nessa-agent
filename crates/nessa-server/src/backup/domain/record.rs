@@ -6,7 +6,7 @@ use sha2::{Digest, Sha256};
 use super::inventory::StoreKind;
 
 /// Byte bound shared by record identities and watermarks.
-pub(super) const MAX_NAME_BYTES: usize = 512;
+pub(crate) const MAX_NAME_BYTES: usize = 512;
 
 /// The store's own cursor at the moment the hold was taken.
 #[derive(Clone, Debug, PartialEq, Eq)]

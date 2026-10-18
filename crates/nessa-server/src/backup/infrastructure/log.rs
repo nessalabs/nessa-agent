@@ -216,7 +216,7 @@ fn read_log(path: &Path, key: MacKey) -> Result<DeletionLog, ()> {
     if expected.hex() != mac_hex {
         return Err(());
     }
-    DeletionLog::decode(canonical).map_err(|_| ())
+    super::deletion_decode::decode_inventory(canonical).map_err(|_| ())
 }
 
 fn split_mac(text: &str) -> Result<(&str, &str), ()> {

@@ -6,10 +6,9 @@ use std::io::Read;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
-use crate::backup::domain::{
-    DeletionLog, DeletionReadError, Fingerprint, ListedStore, ManifestListing, ManifestReadError,
-    StoreKind, EXPORT_HEADER,
-};
+use crate::backup::domain::{Fingerprint, ListedStore, StoreKind, EXPORT_HEADER};
+
+use super::verification_format::{DeletionReadError, ManifestReadError, VerificationFormat};
 
 /// Reads are supplied by the caller; the verifier has no profile locator.
 pub trait VerificationSource {
@@ -108,19 +107,26 @@ pub struct VerifiedOmission {
 /// Authenticate the manifest before any payload access, match its public
 /// layout, then stream each body and check the exported inventory (V1–V11).
 pub fn verify_bundle(
+    format: &dyn VerificationFormat,
     source: &dyn VerificationSource,
     verifier: &dyn ManifestMacVerifier,
     limits: VerificationLimits,
 ) -> Result<VerificationReport, VerificationFailure> {
     let bytes = read_bounded(source.manifest()?, limits.manifest_bytes)?;
     let text = std::str::from_utf8(&bytes).map_err(|_| VerificationFailure::MalformedManifest)?;
-    let listing =
-        ManifestListing::parse(text, limits.named_entries).map_err(|error| match error {
+    let listing = format
+        .manifest(text, limits.named_entries)
+        .map_err(|error| match error {
             ManifestReadError::UnsupportedVersion => VerificationFailure::UnsupportedFormat,
             ManifestReadError::Malformed => VerificationFailure::MalformedManifest,
             ManifestReadError::EntryLimit => VerificationFailure::ResourceLimit,
         })?;
-    verifier.verify(&text[..listing.canonical_len()], listing.mac())?;
+    verifier.verify(
+        text.get(..listing.canonical_len)
+            .ok_or(VerificationFailure::MalformedManifest)?,
+        listing.mac,
+    )?;
+    let listing = listing.listing;
 
     let mut expected: BTreeMap<StoreKind, BTreeSet<String>> = BTreeMap::new();
     for store in listing.stores() {
@@ -184,7 +190,8 @@ pub fn verify_bundle(
                 return Err(VerificationFailure::BodyFingerprint);
             }
             if is_inventory {
-                report.inventory = verify_inventory(&inventory, store, limits.named_entries)?;
+                report.inventory =
+                    verify_inventory(format, &inventory, store, limits.named_entries)?;
             }
             report.public_records_verified += 1;
         }
@@ -276,6 +283,7 @@ fn hash_body(
 }
 
 fn verify_inventory(
+    format: &dyn VerificationFormat,
     bytes: &[u8],
     store: &ListedStore,
     max_entries: usize,
@@ -284,7 +292,7 @@ fn verify_inventory(
     if text.lines().count().saturating_sub(1) > max_entries {
         return Err(VerificationFailure::ResourceLimit);
     }
-    let log = DeletionLog::decode(text).map_err(|error| match error {
+    let log = format.inventory(text).map_err(|error| match error {
         DeletionReadError::UnsupportedVersion => VerificationFailure::UnsupportedInventory,
         DeletionReadError::Malformed => VerificationFailure::MalformedInventory,
     })?;

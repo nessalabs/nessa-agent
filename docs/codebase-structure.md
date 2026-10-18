@@ -1624,7 +1624,10 @@ The separate `nessa-backup-verify` binary enters through `backup_verify_main.rs`
 and `composition/backup_verification.rs`, without gateway bootstrap.
 `backup/entrypoint/arguments.rs` parses explicit input paths; `application/verification.rs`
 authenticates and streams the supplied cut through read-only ports;
-`domain/verification.rs` owns its current manifest grammar. The directory and
+`domain/verification.rs` owns validated cut metadata; `application/verification_format.rs`
+owns the typed decoding port and authentication offsets. `infrastructure/manifest_decode.rs`
+and `deletion_decode.rs` own persisted grammars, shared by live storage and the injected
+`ExportFormat` verification adapter. The directory and
 key readers live in `infrastructure/verification.rs`. Tests follow these owners
 under `tests/backup/verification*.rs`; `tests/backup_verifier.rs` exercises the
 actual binary. [Standalone verification](design/backup-verification.md) defines

@@ -5,6 +5,11 @@ mod deletion_inventory;
 mod export;
 mod ports;
 mod verification;
+mod verification_format;
+
+pub use verification_format::{
+    DecodedManifest, DeletionReadError, ManifestReadError, VerificationFormat,
+};
 
 pub use verification::{
     verify_bundle, InventoryVerification, ManifestMacVerifier, VerificationFailure,

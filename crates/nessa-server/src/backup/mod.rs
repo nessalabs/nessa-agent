@@ -70,3 +70,7 @@ mod verification_format_tests;
 #[cfg(test)]
 #[path = "../../tests/backup/verification_directory.rs"]
 mod verification_directory_tests;
+
+#[cfg(test)]
+#[path = "../../tests/backup/verification_metadata.rs"]
+mod verification_metadata_tests;

@@ -11,7 +11,9 @@ use crate::backup::application::{
 use crate::backup::entrypoint::{
     parse_verification, VerificationCommand, VerificationUsageError, VERIFY_HELP,
 };
-use crate::backup::infrastructure::{read_verification_key, DirectoryVerificationSource};
+use crate::backup::infrastructure::{
+    read_verification_key, DirectoryVerificationSource, ExportFormat,
+};
 
 #[derive(Serialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
@@ -41,7 +43,7 @@ pub fn run_backup_verifier(arguments: &[OsString], output: &mut dyn Write) -> u8
     };
     let result = read_verification_key(&mac_key_file).and_then(|key| {
         let source = DirectoryVerificationSource::open(bundle)?;
-        verify_bundle(&source, &key, VerificationLimits::default())
+        verify_bundle(&ExportFormat, &source, &key, VerificationLimits::default())
     });
     match result {
         Ok(report) => print(output, &VerificationOutput::Verified { report }, 0),

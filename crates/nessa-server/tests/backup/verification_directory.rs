@@ -7,6 +7,7 @@ use crate::backup::application::{
     verify_bundle, InventoryVerification, MacKey, VerificationFailure, VerificationLimits,
     VerificationReport,
 };
+use crate::backup::infrastructure::ExportFormat;
 use crate::backup::infrastructure::{read_verification_key, DirectoryVerificationSource};
 
 #[path = "verification_fixture.rs"]
@@ -15,6 +16,7 @@ use fixture::{private_file, Fixture, BODY};
 
 fn verify(fixture: &Fixture) -> Result<VerificationReport, VerificationFailure> {
     verify_bundle(
+        &ExportFormat,
         &DirectoryVerificationSource::open(fixture.bundle.clone())?,
         &fixture.key,
         VerificationLimits::default(),
@@ -36,6 +38,7 @@ async fn a_published_directory_verifies_with_its_explicit_private_key() {
     let fixture = Fixture::published().await;
     let key = read_verification_key(&fixture.key_file).unwrap();
     let report = verify_bundle(
+        &ExportFormat,
         &DirectoryVerificationSource::open(fixture.bundle.clone()).unwrap(),
         &key,
         VerificationLimits::default(),
@@ -70,6 +73,7 @@ async fn corrupted_and_truncated_directory_bodies_are_refused() {
 async fn a_wrong_key_refuses_an_authentic_directory() {
     let fixture = Fixture::published().await;
     let result = verify_bundle(
+        &ExportFormat,
         &DirectoryVerificationSource::open(fixture.bundle.clone()).unwrap(),
         &MacKey([38; 32]),
         VerificationLimits::default(),
@@ -205,7 +209,12 @@ mod unix {
             fixture: &fixture,
             change,
         };
-        let result = verify_bundle(&source, &verifier, VerificationLimits::default());
+        let result = verify_bundle(
+            &ExportFormat,
+            &source,
+            &verifier,
+            VerificationLimits::default(),
+        );
         if matches!(change, RootChange::Unchanged) {
             let report = result.unwrap();
             assert_eq!(report.public_records_verified, 0);
@@ -336,7 +345,12 @@ mod unix {
             source: DirectoryVerificationSource::open(fixture.bundle.clone()).unwrap(),
             fixture: &fixture,
         };
-        let result = verify_bundle(&source, &fixture.key, VerificationLimits::default());
+        let result = verify_bundle(
+            &ExportFormat,
+            &source,
+            &fixture.key,
+            VerificationLimits::default(),
+        );
         assert!(
             matches!(
                 result,
@@ -401,7 +415,13 @@ mod unix {
             fixture: &fixture,
         };
         assert_eq!(
-            verify_bundle(&source, &fixture.key, VerificationLimits::default()).unwrap_err(),
+            verify_bundle(
+                &ExportFormat,
+                &source,
+                &fixture.key,
+                VerificationLimits::default()
+            )
+            .unwrap_err(),
             VerificationFailure::Unreadable
         );
         assert_eq!(
@@ -476,7 +496,13 @@ mod unix {
             replacement,
         };
         assert_eq!(
-            verify_bundle(&source, &fixture.key, VerificationLimits::default()).unwrap_err(),
+            verify_bundle(
+                &ExportFormat,
+                &source,
+                &fixture.key,
+                VerificationLimits::default()
+            )
+            .unwrap_err(),
             VerificationFailure::Unreadable
         );
         assert_eq!(fs::read(fixture.body()).unwrap(), BODY);

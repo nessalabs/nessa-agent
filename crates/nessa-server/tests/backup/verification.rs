@@ -6,14 +6,16 @@ use std::io::{self, Cursor, Read};
 use std::rc::Rc;
 
 use crate::backup::application::{
-    verify_bundle, Authenticator, InventoryVerification, MacKey, VerificationFailure,
-    VerificationLimits, VerificationSource,
+    verify_bundle, Authenticator, DecodedManifest, DeletionReadError, InventoryVerification,
+    MacKey, ManifestReadError, VerificationFailure, VerificationFormat, VerificationLimits,
+    VerificationSource,
 };
 use crate::backup::domain::{
     encode_identity, AuthenticatedManifest, CapturedRecord, DeferredEntry, DeletionLog,
     Fingerprint, Manifest, Sensitivity, SkipReason, SkippedRecord, SourceCut, StoreKind, Watermark,
     WRITER_INVENTORY,
 };
+use crate::backup::infrastructure::ExportFormat;
 
 const KEY: MacKey = MacKey([37; 32]);
 
@@ -142,14 +144,20 @@ fn valid() -> MemoryBundle {
 }
 
 fn result(bundle: &MemoryBundle, limits: VerificationLimits) -> Result<(), VerificationFailure> {
-    verify_bundle(bundle, &KEY, limits).map(|_| ())
+    verify_bundle(&ExportFormat, bundle, &KEY, limits).map(|_| ())
 }
 
 #[test]
 fn authentication_precedes_payload_reads() {
     let source = valid();
     assert_eq!(
-        verify_bundle(&source, &MacKey([38; 32]), VerificationLimits::default()).unwrap_err(),
+        verify_bundle(
+            &ExportFormat,
+            &source,
+            &MacKey([38; 32]),
+            VerificationLimits::default()
+        )
+        .unwrap_err(),
         VerificationFailure::Authentication
     );
     assert_eq!(source.payload_access.get(), 0);
@@ -356,7 +364,8 @@ fn inventory_reads_and_entries_are_bounded() {
 #[test]
 fn authenticated_inventory_structure_and_watermark_are_checked() {
     let source = bundle("nessa-deletion-inventory/1\n1 conversation saved\n", "1");
-    let report = verify_bundle(&source, &KEY, VerificationLimits::default()).unwrap();
+    let report =
+        verify_bundle(&ExportFormat, &source, &KEY, VerificationLimits::default()).unwrap();
     assert!(matches!(
         report.inventory,
         InventoryVerification::Verified { entries: 1 }
@@ -479,7 +488,8 @@ fn an_authenticated_partial_cut_is_reported_honestly() {
             })
             .collect(),
     );
-    let report = verify_bundle(&source, &KEY, VerificationLimits::default()).unwrap();
+    let report =
+        verify_bundle(&ExportFormat, &source, &KEY, VerificationLimits::default()).unwrap();
     assert_eq!(report.public_records_verified, 0);
     assert!(matches!(
         report.inventory,
@@ -491,4 +501,35 @@ fn an_authenticated_partial_cut_is_reported_honestly() {
     assert_eq!(report.payload_compatibility, "not_assessed");
     let output = serde_json::to_string(&report).unwrap();
     assert!(!output.contains("synthetic secret"));
+}
+
+#[test]
+fn decoder_offsets_are_checked_before_authentication_or_payload_access() {
+    struct BadOffset(usize);
+    impl VerificationFormat for BadOffset {
+        fn manifest(
+            &self,
+            text: &str,
+            max_entries: usize,
+        ) -> Result<DecodedManifest, ManifestReadError> {
+            let mut decoded = ExportFormat.manifest(text, max_entries)?;
+            decoded.canonical_len = self.0;
+            Ok(decoded)
+        }
+        fn inventory(&self, _: &str) -> Result<DeletionLog, DeletionReadError> {
+            unreachable!()
+        }
+    }
+    let source = valid();
+    assert_eq!(
+        verify_bundle(
+            &BadOffset(usize::MAX),
+            &source,
+            &KEY,
+            VerificationLimits::default()
+        )
+        .unwrap_err(),
+        VerificationFailure::MalformedManifest
+    );
+    assert_eq!(source.payload_access.get(), 0);
 }

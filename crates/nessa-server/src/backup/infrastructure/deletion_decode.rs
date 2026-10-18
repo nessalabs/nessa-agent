@@ -1,32 +1,27 @@
 //! The deletion inventory decoder shared by live storage and verification.
 
 use super::encoding::decode;
-use super::{CredentialKind, DeletionEntry, DeletionFence, DeletionLog, Fingerprint, GrantRole};
+use crate::backup::application::DeletionReadError;
+use crate::backup::domain::{
+    CredentialKind, DeletionEntry, DeletionFence, DeletionLog, Fingerprint, GrantRole,
+};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum DeletionReadError {
-    UnsupportedVersion,
-    Malformed,
-}
-
-impl DeletionLog {
-    /// Decode the live inventory grammar. This keeps its accepted blank lines
-    /// and noncanonical spellings; a verifier also compares `canonical()`.
-    pub fn decode(text: &str) -> Result<Self, DeletionReadError> {
-        match text.lines().next() {
-            Some("nessa-deletion-inventory/1") => {}
-            Some(header) if header.starts_with("nessa-deletion-inventory/") => {
-                return Err(DeletionReadError::UnsupportedVersion);
-            }
-            _ => return Err(DeletionReadError::Malformed),
+/// Keeps the live grammar's accepted blank lines and noncanonical spellings.
+/// Verification separately compares the canonical representation.
+pub(super) fn decode_inventory(text: &str) -> Result<DeletionLog, DeletionReadError> {
+    match text.lines().next() {
+        Some("nessa-deletion-inventory/1") => {}
+        Some(header) if header.starts_with("nessa-deletion-inventory/") => {
+            return Err(DeletionReadError::UnsupportedVersion);
         }
-        parse_entries(text).map_err(|()| DeletionReadError::Malformed)
+        _ => return Err(DeletionReadError::Malformed),
     }
+    parse_entries(text).map_err(|()| DeletionReadError::Malformed)
 }
 
 fn parse_entries(canonical: &str) -> Result<DeletionLog, ()> {
     let mut lines = canonical.lines();
-    // `decode` owns header/version validation before entering this helper.
+    // `decode_inventory` owns header/version validation before entering this helper.
     lines.next();
     let mut entries = Vec::new();
     for (index, line) in lines.enumerate() {
