@@ -105,7 +105,7 @@ export function reportDetached(base, errors, harmless) {
  * `console` result keeps. The async work that opens the page is the one
  * whose later results take its lines. Does nothing when no reporter is bound.
  *
- * @param {{ close(): Promise<unknown> }} opened
+ * @param {{ close(): Promise<unknown>, settleBeforeClose?: () => Promise<unknown> }} opened
  * @param {object} base
  * @param {ReturnType<typeof watchLines>} lines
  */
@@ -118,9 +118,11 @@ export function attachLines(opened, base, lines) {
   opened.close = async () => {
     if (closed) return
     closed = true
-    const errors = lines.errors.splice(0, lines.errors.length)
-    const harmless = lines.harmless.splice(0, lines.harmless.length)
     try {
+      await opened.settleBeforeClose?.()
+      // The barrier can deliver ordinary page lines too. Drain after it.
+      const errors = lines.errors.splice(0, lines.errors.length)
+      const harmless = lines.harmless.splice(0, lines.harmless.length)
       if ((errors.length > 0 || harmless.length > 0) && reporter) {
         reporter.add({
           ...base,

@@ -1360,6 +1360,21 @@ says why where the conversations would be.
 
 ## Console errors
 
+- [ ] **Observed resource failures keep exact read and mount ownership through
+  final reporting (#996).** The dev `gateway-window` apps check requires all
+  three factory decorators and a real accepted live read. Only the same Request's
+  HTTP200 `net::ERR_ABORTED`, complete consumed EOF, matching length/SHA256,
+  original client acceptance and uncanceled owning bridge qualifies. Pending,
+  invalid, canceled and duplicate proof bypasses all older size/live patterns.
+  _Check:_ `resource-read-regression.mjs` exercises real factories in Chromium
+  and WebKit with synthetic HTTP/ports; simulated aborts are explicitly labelled.
+- [ ] **Opening failure evidence precedes page disposal (#981).** A failed
+  gateway app open keeps bounded animation, post-failure RAF, redacted unfinished
+  HTTP/RPC state and a screenshot. The original readiness predicate, 3000ms
+  animation deadline, failure and subsequent not-run checks stay authoritative.
+  _Check:_ `resource-read-regression.mjs`'s finite-animation failure control;
+  diagnostics do not attribute the historical failure's cause.
+
 - [ ] **No console error, page error or failed request** while any script
   runs. _Check:_ every script adds them to its failures; `smoke.mjs` reports them
   per layout as `console`.

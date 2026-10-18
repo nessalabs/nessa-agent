@@ -542,6 +542,7 @@ await main(
           opened = await openPage(browser, {
             url: `${origin}/desktop.html`,
             layout,
+            resourceReads: options.mode !== "prod" && only.includes("apps"),
             lines: { engine, layout },
             initScripts: [[gatewayHost, { endpoint, credential: stack.credential }]],
             // The window drawn; what it lists, or says, is the steps' to judge.

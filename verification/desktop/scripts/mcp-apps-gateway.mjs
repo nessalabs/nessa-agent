@@ -79,6 +79,7 @@ import {
 } from "./lib/gateway-view.mjs"
 import { agentTurn, startGatewayStack, waitFor } from "./lib/gateway-stack.mjs"
 import { main } from "./lib/run.mjs"
+import { captureOpenFailure, watchOpenRequests } from "./lib/open-failure-evidence.mjs"
 import { writeView } from "./lib/scripted-evidence.mjs"
 import { css, names, offeredLabel, selectorFor } from "./lib/selectors.mjs"
 import {
@@ -502,21 +503,47 @@ async function reviewAndAnswer(page, stack, baseline, effect, failures, pending)
  * loaded, and `conversationOpen`, whether the window opened the
  * conversation (#485, B1″ and B5).
  */
-async function openConversation(browser, stack, layout) {
+async function openConversation(browser, stack, layout, options) {
   let reviewsBefore
+  let requests
   const opened = await openPage(browser, {
     url: `${stack.url}?gateway`,
     layout,
+    preparePage: async (page) => {
+      requests = watchOpenRequests(page)
+    },
     // Before the window's page exists (`signIn`).
     beforeLoad: async (context) => {
       reviewsBefore = await signIn(context, stack)
     },
+  }).catch((error) => {
+    requests?.dispose()
+    throw error
   })
+  const progress = {
+    lastCompleted: "openPage",
+    wait: "windowOpened",
+    startedAt: Date.now(),
+  }
   try {
     const conversationOpen = await windowOpened(opened.page, stack, reviewsBefore)
+    progress.lastCompleted = "windowOpened"
+    progress.wait = "settled"
+    progress.startedAt = Date.now()
     await settled(opened.page)
+    requests.dispose()
     return { ...opened, reviewsBefore, conversationOpen }
   } catch (error) {
+    const directory = await captureOpenFailure(opened.page, requests, options, {
+      ...progress,
+      failedAt: Date.now(),
+    })
+    try {
+      if (directory) log(`opening failure evidence: ${directory}`)
+    } catch {
+      /* Keep the readiness fault primary. */
+    }
+    requests.dispose()
     // Size reports can still move a full-body abort. Close then reports
     // whatever lines remain; the open result does not take them, and the
     // steps not started are "not run".
@@ -1064,7 +1091,7 @@ await main(
         const started = Date.now()
         let opened
         try {
-          opened = await openConversation(browser, stack, layout)
+          opened = await openConversation(browser, stack, layout, options)
         } catch (error) {
           // `resultOfThrown` owns the fault's stack (#475). Close already
           // reported the page's lines; this result keeps the error's first line.
