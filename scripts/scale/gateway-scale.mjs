@@ -423,7 +423,7 @@ try {
       children.map((child) => ask(child, { type: name, ...message })),
     )
     const summary = { ...summarize(results), seconds: (Date.now() - began) / 1000 }
-    if (name === "list") summary.listed = Math.max(...results.map((r) => r.listed ?? 0))
+    if (name === "list") summary.listed = Math.min(...results.map((r) => r.listed ?? 0))
     if (results.some((r) => r.steps)) {
       summary.steps = {}
       for (const step of ["subscribe", "send", "end"]) {
@@ -493,7 +493,7 @@ try {
   )
   if (number("rounds") > 0 && !turnsFailed && listed !== conversations)
     failures.push(
-      `a socket's list and observe pages named ${listed} conversations, not ${conversations}`,
+      `a socket's list and observe pages named only ${listed} conversations, not ${conversations}`,
     )
   verdict.failures = failures
   verdict.passed = failures.length === 0

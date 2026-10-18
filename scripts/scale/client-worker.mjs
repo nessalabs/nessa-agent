@@ -157,7 +157,8 @@ const phases = {
   // the catalogue says it is whole.
   async list() {
     const live = clients.flatMap((client) => (client ? [client] : []))
-    let listed = 0
+    // The fewest any socket saw: every socket must see them all.
+    let listed = Infinity
     const result = await pool(live.length, setup.parallel, async (i) => {
       const api = live[i].conversation
       const first = await api.list()
@@ -172,9 +173,9 @@ const phases = {
           cursor = page.cursor
         }
       }
-      listed = Math.max(listed, seen)
+      listed = Math.min(listed, seen)
     })
-    return { ...result, listed }
+    return { ...result, listed: Number.isFinite(listed) ? listed : 0 }
   },
 
   async close() {
