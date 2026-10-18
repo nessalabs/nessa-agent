@@ -139,6 +139,11 @@ const EXPECTED = new Set([
   "submission_unresolved",
   // The control lane was full; the code says send it again.
   "temporarily_unavailable",
+  // An action on a conversation with no agent live opens it (its queue and
+  // owed work are in storage), and past `limits.liveConversations`, with
+  // every live agent at work or followed, none can be parked to make room.
+  // The code says try again; an answer opens nothing and is stale instead.
+  "conversation_capacity",
   // A restart.
   "disconnected",
   "connection_closed",

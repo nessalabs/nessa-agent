@@ -297,14 +297,16 @@ impl MutationTarget for SubmitTarget {
         let mode = self.mode;
         let delivery = self.delivery.clone();
         Box::pin(async move {
+            // `submit_command` holds admission through this effect.
             let submitted = service
-                .submit_as(
+                .submit_admitted_as(
                     id,
                     caller,
                     execution_id,
                     message.map_err(CreationInitializationFailure::Target)?,
                     mode,
                     Writer::Person(initiation, offers_remember),
+                    true,
                 )
                 .await
                 .map_err(SubmitFailure::into_error);

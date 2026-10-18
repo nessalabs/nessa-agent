@@ -682,6 +682,7 @@ async fn a_desktop_stop_stops_the_owner_live_when_it_takes_the_lock() {
             nessa_sdk::domain::agent_execution::executions::Initiation::owner(),
             true,
         ),
+        false,
     );
     // The close holds mode_changes. Admission is open and uncontended, so
     // without Tokio's cooperative yield the first Pending is the held mutex,

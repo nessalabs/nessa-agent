@@ -3149,6 +3149,24 @@ impl ConversationService {
         mode: SubmissionMode,
         writer: Writer,
     ) -> Result<SubmissionReceipt, SubmitFailure> {
+        self.submit_admitted_as(id, caller, execution_id, message, mode, writer, false)
+            .await
+    }
+    /// [`Self::submit_as`] for a caller already holding admission for the
+    /// whole call (`held`), which is not asked for again. Tokio's lock is
+    /// fair: a second read queues behind a waiting retirement, which waits on
+    /// the first, and neither moves until retirement gives up waiting.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) async fn submit_admitted_as(
+        &self,
+        id: ConversationId,
+        caller: ConversationCaller,
+        execution_id: String,
+        message: SubmittedMessage,
+        mode: SubmissionMode,
+        writer: Writer,
+        held: bool,
+    ) -> Result<SubmissionReceipt, SubmitFailure> {
         // A message that reaches an agent between a failed turn and its
         // recovery is refused with nothing taken (`Halt::Again`): the agent
         // is stopping, or would run it at a mode other than the
@@ -3166,6 +3184,7 @@ impl ConversationService {
                 message.clone(),
                 mode,
                 writer.clone(),
+                held,
             );
             let outcome = tokio::spawn(submission).await;
             if !matches!(outcome, Ok(Err(Halt::Again(_)))) || std::time::Instant::now() >= deadline
@@ -3189,6 +3208,7 @@ impl ConversationService {
     }
     /// The submission task, shared by normal supervision and controlled polling
     /// in the desktop-stop ordering test. Refusal attribution stays on this task.
+    #[allow(clippy::too_many_arguments)]
     fn submission_future(
         &self,
         id: ConversationId,
@@ -3197,6 +3217,7 @@ impl ConversationService {
         message: SubmittedMessage,
         mode: SubmissionMode,
         writer: Writer,
+        held: bool,
     ) -> (
         Arc<AtomicBool>,
         impl Future<Output = Result<SubmissionReceipt, Halt>> + Send + 'static,
@@ -3210,7 +3231,11 @@ impl ConversationService {
         let refused_for = writer.clone();
         let asked_when_refused = asked.clone();
         let submission = async move {
-            let _admission = service.admit().await?;
+            let _admission = if held {
+                None
+            } else {
+                Some(service.admit().await?)
+            };
             let _mode = service.inner.mode_changes.lock(&id).await;
             service.recover_mode_change(&id, &caller).await?;
             let actor = caller.actor()?;

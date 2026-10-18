@@ -25,7 +25,7 @@ use nessa_sdk::domain::agent_execution::executions::{ExecutionId, Initiation};
 use nessa_sdk::infrastructure::session_storage::{RecordStorage, RuntimeMessageCommitClock};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tokio::sync::oneshot;
 
@@ -337,6 +337,105 @@ async fn submit_commits_the_attempt_before_enqueue() {
     assert_eq!(provider.executions.lock().unwrap().as_slice(), ["turn"]);
     assert_eq!(provider.close_calls.load(Ordering::SeqCst), 0);
     retire(service, storage, metadata).await;
+}
+
+/// Holds the first command opened here until `release`, telling `opening`.
+struct HoldFirstOpen {
+    storage: Arc<RecordStorage>,
+    held: AtomicBool,
+    opening: Arc<tokio::sync::Notify>,
+    release: Arc<tokio::sync::Notify>,
+}
+impl nessa_sdk::application::agent_execution::commands::CreationStorage for HoldFirstOpen {
+    fn open_creation(
+        &self,
+        principal: String,
+        request: String,
+        create: bool,
+    ) -> nessa_sdk::application::agent_execution::commands::CreationFuture<
+        '_,
+        Option<Arc<dyn nessa_sdk::application::agent_execution::commands::CreationStorageLease>>,
+    > {
+        Box::pin(async move {
+            if !self.held.swap(true, Ordering::SeqCst) {
+                self.opening.notify_one();
+                self.release.notified().await;
+            }
+            self.storage.open_creation(principal, request, create).await
+        })
+    }
+}
+
+/// A submit holds admission through its effect. Asking for it again there
+/// queues the second read behind a retirement that waits on the first, so
+/// shutdown stalled until it gave up waiting, and a running turn with it.
+#[tokio::test]
+async fn a_submit_admitted_before_retirement_does_not_hold_it_back() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("data");
+    let provider = Arc::new(ProviderFactory::default());
+    let (service, storage, metadata) = fixture(&root, provider.clone());
+    let target = id();
+    opened(&service, &provider, &target).await;
+    let opening = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let held = Arc::new(HoldFirstOpen {
+        storage: storage.clone(),
+        held: AtomicBool::new(false),
+        opening: opening.clone(),
+        release: release.clone(),
+    });
+    let task = {
+        let service = service.clone();
+        let target = target.clone();
+        tokio::spawn(async move {
+            service
+                .submit_command(
+                    held,
+                    target,
+                    caller("submit"),
+                    Initiation::owner(),
+                    true,
+                    "turn".into(),
+                    message("hello"),
+                    SubmissionMode::Queue,
+                )
+                .await
+        })
+    };
+    // Admitted, and held before its effect.
+    tokio::time::timeout(Duration::from_secs(5), opening.notified())
+        .await
+        .unwrap();
+    let shutdown = {
+        let service = service.clone();
+        tokio::spawn(async move { service.shutdown().await })
+    };
+    // Retirement is fenced and waiting on the submit's admission.
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while service.inner.retirement.get().is_none() || service.inner.admission.try_read().is_ok()
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    release.notify_one();
+    tokio::time::timeout(Duration::from_secs(5), shutdown)
+        .await
+        .expect("retirement is not held back by a submit it already admitted")
+        .unwrap()
+        .unwrap();
+    // Fenced before its effect ran, the submit is refused with nothing taken.
+    match task.await.unwrap() {
+        Err(MutationFailure::Target(ConversationError::Unavailable)) => {}
+        Err(other) => panic!("refused with {other:?}"),
+        Ok(submitted) => panic!("dispatched: {:?}", submitted.progress.outcome()),
+    }
+    drop(service);
+    storage.shutdown().await.unwrap();
+    drop(storage);
+    drop(metadata);
 }
 
 #[tokio::test]
