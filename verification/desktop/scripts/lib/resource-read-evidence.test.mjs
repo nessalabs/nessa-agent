@@ -30,10 +30,8 @@ const request = (overrides = {}) => ({
   ...overrides,
 })
 
-function proof({ change = () => {}, requestFirst = false, req = request() } = {}) {
-  const collector = resourceReadEvidence("page")
-  if (requestFirst) collector.observeRequest(req)
-  const events = [
+function proofEvents() {
+  return [
     {
       type: "begin",
       read: 1,
@@ -49,6 +47,12 @@ function proof({ change = () => {}, requestFirst = false, req = request() } = {}
     { type: "live", read: 1 },
     { type: "cutoff", failed: false, activation: { bridge: 1, api: 1, transport: 1 } },
   ]
+}
+
+function proof({ change = () => {}, requestFirst = false, req = request() } = {}) {
+  const collector = resourceReadEvidence("page")
+  if (requestFirst) collector.observeRequest(req)
+  const events = proofEvents()
   change(events)
   events.forEach((event, index) => {
     if (!requestFirst && index === events.length - 1) collector.observeRequest(req)
@@ -510,3 +514,128 @@ test("mount overflow fails observation while still invoking every original facto
   assert.equal(calls, 129)
   assert.equal(cutoff.failed, true)
 })
+
+async function installedProof() {
+  const page = new EventEmitter()
+  const frame = {}
+  let binding
+  let acknowledge
+  const acknowledged = new Promise((resolve) => {
+    acknowledge = resolve
+  })
+  page.mainFrame = () => frame
+  page.exposeBinding = async (_name, callback) => {
+    binding = callback
+  }
+  page.route = async () => {}
+  page.evaluate = async (_fn, url) => {
+    const generation = url.match(/resource_(.*)\.mjs$/)[1]
+    proofEvents().forEach((event, index) =>
+      binding({ page, frame }, { generation, sequence: index + 1, ...event }),
+    )
+    acknowledge()
+  }
+  const observed = await installResourceObservation(page)
+  const req = request({ frame: () => frame })
+  page.emit("request", req)
+  return { page, frame, req, observed, acknowledged }
+}
+
+for (const event of ["requestfinished", "requestfailed"])
+  test(`actual ${event} in a later task completes the admitted Request barrier`, async () => {
+    const { page, req, observed, acknowledged } = await installedProof()
+    let completed = false
+    const pending = observed.finalize().then(() => {
+      completed = true
+    })
+    await acknowledged
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.equal(completed, false, "binding ACK is not terminal delivery")
+    page.emit(event, req)
+    await pending
+    observed.finish()
+    assert.equal(observed.collector.summary().verified, 1)
+    assert.equal(observed.collector.summary().failed, false)
+    assert.equal(page.listenerCount("requestfailed"), 0)
+  })
+
+test("synchronous finish rejects pending proof and cleanup cannot repair it", async () => {
+  const { page, req, observed, acknowledged } = await installedProof()
+  const pending = observed.finalize()
+  await acknowledged
+  observed.finish()
+  await pending
+  assert.equal(observed.collector.summary().failed, true)
+  assert.equal(observed.collector.summary().verified, 0)
+  page.emit("requestfinished", req)
+  observed.finish()
+  assert.equal(observed.collector.summary().verified, 0)
+})
+
+for (const kind of ["unowned", "query", "method", "preflight", "subframe"])
+  test(`a terminal verified read cannot conceal another pending ${kind} candidate`, async () => {
+    const { page, frame, req, observed, acknowledged } = await installedProof()
+    page.emit("requestfinished", req)
+    const other = request({
+      frame: () => (kind === "subframe" ? {} : frame),
+      method: () =>
+        kind === "preflight" ? "OPTIONS" : kind === "method" ? "POST" : "GET",
+      url: () => `http://127.0.0.1:2345/mcp-resources${kind === "query" ? "?x=1" : ""}`,
+      headers: () => ({ "x-nessa-resource-ticket": "U".repeat(43) }),
+    })
+    page.emit("request", other)
+    const pending = observed.finalize()
+    await acknowledged
+    observed.finish()
+    await pending
+    assert.equal(observed.collector.summary().failed, true)
+    assert.equal(observed.collector.summary().verified, 0)
+  })
+
+for (const completed of [false, true])
+  test(`new candidates after the wait empties remain refused: terminal=${completed}`, async () => {
+    const { page, req, frame, observed } = await installedProof()
+    page.emit("requestfinished", req)
+    await observed.finalize()
+    const other = request({ frame: () => frame, method: () => "OPTIONS" })
+    page.emit("request", other)
+    if (completed) page.emit("requestfinished", other)
+    observed.finish()
+    assert.equal(observed.collector.summary().verified, 0)
+    assert.equal(observed.collector.summary().failed, true)
+  })
+
+for (const contradiction of [false, true])
+  test(`terminal tombstones make repeats idempotent and contradictions invalid: ${contradiction}`, async () => {
+    const { page, req, observed } = await installedProof()
+    page.emit("requestfinished", req)
+    page.emit(contradiction ? "requestfailed" : "requestfinished", req)
+    await observed.finalize()
+    observed.finish()
+    assert.equal(observed.collector.summary().failed, contradiction)
+    assert.equal(observed.collector.summary().verified, contradiction ? 0 : 1)
+  })
+
+test("a terminal notification cannot invent admission by URL", async () => {
+  const { page, req, frame, observed } = await installedProof()
+  page.emit("requestfinished", req)
+  page.emit("requestfailed", request({ frame: () => frame }))
+  await observed.finalize()
+  observed.finish()
+  assert.equal(observed.collector.summary().failed, true)
+})
+
+for (const count of [512, 513])
+  test(`the Request lifetime bound includes ${count} completed identities`, async () => {
+    const { page, req, frame, observed } = await installedProof()
+    page.emit("requestfinished", req)
+    for (let index = 1; index < count; index++) {
+      const preflight = request({ frame: () => frame, method: () => "OPTIONS" })
+      page.emit("request", preflight)
+      page.emit("requestfinished", preflight)
+    }
+    await observed.finalize()
+    observed.finish()
+    assert.equal(observed.collector.summary().failed, count > 512)
+    assert.equal(observed.collector.summary().verified, count > 512 ? 0 : 1)
+  })

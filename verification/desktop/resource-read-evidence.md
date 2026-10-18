@@ -36,7 +36,10 @@ reach the successful client method unchanged.
 | event / Request binding arrives in either order | join exactly once by private single-use identity; ambiguous candidates fail |
 | failed request before or after eligibility | retain its exact Request and line until final page reporting |
 | eligibility revoked before reporting | final line is an error, including cancellation after live |
-| observer cutoff acknowledged | observer messages are ordered; independent network notifications remain collected |
+| observer cutoff acknowledged | observer messages are ordered; await actual terminal events for every admitted candidate Request |
+| admitted actual Request / requestfinished or requestfailed | record its terminal state synchronously; failed-line listener runs in the same event dispatch before settlement resumes |
+| final report / any admitted Request still pending | permanently invalidate positive evidence, including another verified read; cleanup cannot repair it |
+| terminal Request / repeated same terminal or contradictory terminal | same terminal is idempotent; contradiction or unknown admission invalidates evidence |
 | final report owner, before context teardown | synchronously stop collection, classify retained Requests, then drain lines with no intervening await |
 
 The new exception requires the same Request, HTTP200, exact `/mcp-resources`,
@@ -52,12 +55,30 @@ step attribution. Measurement ends before the context's own disposal; it is not
 an assertion that a successful app can never subsequently close.
 
 The observer acknowledgement does not flush Playwright's independent network
-event channel. `page-lines.mjs` invokes the final synchronous collection cutoff
-immediately before taking its arrays: browser listeners stop, every candidate
-received so far is classified against the still-retained collector, and only
-then is evidence disposed. `settleBeforeClose` alone does not classify or release
-Requests. Opening abandonment and reporter-absent close use that same cutoff.
-The late-notification regression in `page-lines.test.mjs` holds this handoff.
+event channel. `resource-read-modules.mjs` owns a bounded lifecycle map keyed by
+actual Request identity, from the page's `request` event through its
+`requestfinished` or `requestfailed` event. It tracks all candidates the failed
+handler would retain, including subframes, OPTIONS, other methods and queries.
+After the browser cutoff ACK, finalization awaits those actual terminal events
+within the same existing 2000ms budget shared with size reports. No sleep or
+response-body hint establishes terminal delivery.
+
+`page-lines.mjs` invokes the final synchronous collection cutoff immediately
+before taking its arrays. The resource owner first invalidates any still-pending
+candidate, detaches its lifecycle listeners and releases waiters. Only then do
+browser line listeners stop, retained failures receive their exact classification,
+and evidence is disposed after its summary. No await separates that final pending
+scan, classification and drain. An unresolved Request therefore cannot leave a
+verified-only success, even if its failure is queued in a later event-loop task.
+Opening abandonment and reporter-absent close use the same owner. Cleanup-induced
+aborts cannot settle pending proof successfully.
+
+Admission means receiving the actual page Request event. These checks do not
+claim that a binding ACK or an empty pending set flushes arbitrary future network
+starts. A candidate admitted after finalization begins invalidates evidence; a
+start and terminal both delivered after the synchronous measurement cutoff are
+outside this observed interval. The later-task regression holds terminal delivery
+for an already admitted Request, rather than simulating it in the ACK microtask.
 
 Tests cover each ordering, duplicate URLs/requests, missing/forged proof,
 metadata limits, corruption, truncation, caller/deadline/reader cancellation,
@@ -85,7 +106,11 @@ Implementation contract:
 - At finalization a synchronous browser cutoff snapshots original signals and
   live owners and stops admission. Its acknowledged final sequence is required
   within the existing 2000ms settlement budget shared with size reports. Missing
-  acknowledgement fails all candidate evidence. Ordinary lines drain afterward.
+  acknowledgement or actual Request completion fails all candidate evidence.
+  The installer retains at most 512 candidate identities including terminal
+  tombstones: same terminal repeats are idempotent; unknown/contradictory
+  terminals and overflow invalidate globally. The final synchronous pending scan
+  covers candidates added after an earlier waiter snapshot. Ordinary lines drain afterward.
   Opening failure, no reporter and repeated close use the same finalizer.
 - Defer every possible endpoint Request before legacy rules, even
   when its producer report has not arrived. Known invalid or ambiguous evidence

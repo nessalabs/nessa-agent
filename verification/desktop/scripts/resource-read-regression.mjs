@@ -8,7 +8,13 @@ import { createHash } from "node:crypto"
 import { createServer } from "node:http"
 import { mkdir } from "node:fs/promises"
 import { join } from "node:path"
-import { launch, classifyResourceFailure, withCleanup } from "./lib/browser.mjs"
+import {
+  launch,
+  classifyResourceFailure,
+  withCleanup,
+  enqueueSizeReport,
+  settleSizeReports,
+} from "./lib/browser.mjs"
 import { installResourceObservation } from "./lib/resource-read-modules.mjs"
 import { resourceEndpoint } from "./lib/resource-read-evidence.mjs"
 import { captureOpenFailure, watchOpenRequests } from "./lib/open-failure-evidence.mjs"
@@ -223,10 +229,11 @@ async function resourceControl(browser, origin, control) {
   })
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve))
   const context = await browser.newContext()
+  let observed
   return withCleanup(
     async () => {
       const page = await context.newPage()
-      const observed = await installResourceObservation(page)
+      observed = await installResourceObservation(page)
       const requests = []
       const failureKinds = []
       page.on("requestfailed", (request) => {
@@ -246,7 +253,9 @@ async function resourceControl(browser, origin, control) {
         },
         url: `http://127.0.0.1:${server.address().port}/mcp-resources`,
       })
-      await observed.finalize()
+      await settleSizeReports([enqueueSizeReport(observed.finalize(), () => {})])
+      observed.finish()
+      assert.equal(observed.collector.summary().cutoff, true)
       const positive = ["complete", "large-complete", "unrelated-request"].includes(
         control,
       )
@@ -299,6 +308,8 @@ async function resourceControl(browser, origin, control) {
       }
     },
     async () => {
+      observed?.finish()
+      observed?.collector.dispose()
       await context.close()
       server.closeAllConnections()
       await new Promise((resolve) => server.close(resolve))

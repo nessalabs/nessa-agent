@@ -227,6 +227,7 @@ export async function openPage(browser, o) {
   const finishLineCollection = () => {
     if (collectionFinished) return
     collectionFinished = true
+    resource?.finish()
     page.off?.("pageerror", onPageError)
     page.off?.("console", onConsole)
     page.off?.("requestfailed", onRequestFailed)

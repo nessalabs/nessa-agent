@@ -63,6 +63,10 @@ function resourcePage({
   let binding
   let closed = 0
   let finalized = 0
+  let acknowledgeCutoff
+  const cutoff = new Promise((resolve) => {
+    acknowledgeCutoff = resolve
+  })
   const request = {
     method: () => "GET",
     frame: () => frame,
@@ -91,7 +95,10 @@ function resourcePage({
     page.emit("framenavigated", frame)
     page.emit("request", request)
     if (!late) page.emit("requestfailed", request)
-    if (late === "unowned") page.emit("request", unrelated)
+    if (late === "unowned") {
+      page.emit("requestfinished", request)
+      page.emit("request", unrelated)
+    }
   }
   page.waitForSelector = async () => {
     if (openingFailure) throw new Error("synthetic opening fault")
@@ -120,6 +127,7 @@ function resourcePage({
     for (const [index, event] of events.entries())
       binding({ page, frame }, { generation, sequence: index + 1, ...event })
     if (!late) page.emit("pageerror", new Error("late ordinary fault"))
+    acknowledgeCutoff()
   }
   const context = {
     addInitScript: async () => {},
@@ -135,6 +143,7 @@ function resourcePage({
   }
   return {
     browser,
+    cutoff,
     closed: () => closed,
     finalized: () => finalized,
     deliverLateFailure: () =>
@@ -151,8 +160,7 @@ for (const late of ["owned", "unowned"])
       url: "http://127.0.0.1:2345/desktop.html",
       resourceReads: true,
     })
-    const acknowledged = opened.settleBeforeClose()
-    acknowledged.then(() => fixture.deliverLateFailure())
+    fixture.cutoff.then(() => fixture.deliverLateFailure())
     await opened.close()
     await opened.close()
     const result = rep.results[0]
@@ -176,6 +184,43 @@ for (const late of ["owned", "unowned"])
     )
     assert.equal(fixture.closed(), 1)
     assert.equal(fixture.finalized(), 1)
+  })
+
+for (const late of ["owned", "unowned"])
+  test(`R2: ${late} requestfailed in a later event-loop task is reported before retirement`, async () => {
+    const fixture = resourcePage({ late, disposalAbort: true })
+    const rep = report("terminal-network-delivery", {})
+    bindReporter(rep)
+    const opened = await openPage(fixture.browser, {
+      url: "http://127.0.0.1:2345/desktop.html",
+      resourceReads: true,
+    })
+    let delivered = false
+    const delivery = fixture.cutoff.then(
+      () =>
+        new Promise((resolve) => {
+          setImmediate(() => {
+            delivered = true
+            fixture.deliverLateFailure()
+            resolve()
+          })
+        }),
+    )
+    await opened.close()
+    assert.equal(delivered, true, "close must account for the pending actual Request")
+    await delivery
+    assert.equal(rep.results.length, 1)
+    assert.equal(rep.results[0].ok, late === "owned")
+    assert.equal(
+      (rep.results[0].harmless ?? []).some((line) => line.includes("#996")),
+      late === "owned",
+    )
+    assert.equal(
+      rep.results[0].failures.filter((line) => line.startsWith("requestfailed:")).length,
+      late === "unowned" ? 1 : 0,
+    )
+    assert.equal(opened.heldErrorCount, 0)
+    assert.equal(fixture.closed(), 1)
   })
 
 test("observed endpoint Requests bypass step drains, patterns and size rules until final cutoff", async () => {
@@ -608,3 +653,49 @@ test("page consumers and wrappers do not access private queues through any handl
   }
   assert.deepEqual(offenders, [])
 })
+
+test("missing actual Request completion fails within the unchanged settlement budget", async () => {
+  const fixture = resourcePage({ late: "owned", disposalAbort: true })
+  const rep = report("terminal-network-timeout", {})
+  bindReporter(rep)
+  const opened = await openPage(fixture.browser, {
+    url: "http://127.0.0.1:2345/desktop.html",
+    resourceReads: true,
+  })
+  await opened.close()
+  assert.equal(rep.results.length, 1)
+  assert.equal(rep.results[0].ok, false)
+  assert.ok(
+    rep.results[0].failures.includes(
+      "resource-read evidence: no complete verified live read at the acknowledged cutoff",
+    ),
+  )
+  assert.equal(rep.results[0].harmless, undefined)
+  assert.equal(fixture.closed(), 1)
+})
+
+for (const openingFailure of [false, true])
+  test(`later-task terminal delivery precedes ${openingFailure ? "opening abandonment" : "reporter-absent close"}`, async () => {
+    bindReporter(null)
+    const fixture = resourcePage({ late: "owned", openingFailure, disposalAbort: true })
+    let delivered = false
+    fixture.cutoff.then(() =>
+      setImmediate(() => {
+        delivered = true
+        fixture.deliverLateFailure()
+      }),
+    )
+    const opening = openPage(fixture.browser, {
+      url: "http://127.0.0.1:2345/desktop.html",
+      resourceReads: true,
+    })
+    if (openingFailure) await assert.rejects(opening, /synthetic opening fault/)
+    else {
+      const opened = await opening
+      await opened.close()
+      await opened.close()
+      assert.equal(opened.heldErrorCount, 0)
+    }
+    assert.equal(delivered, true)
+    assert.equal(fixture.closed(), 1)
+  })

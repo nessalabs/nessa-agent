@@ -38,7 +38,8 @@ line metadata, so a late console failure also fails that engine's summary cell
 | the dev gateway app check observes resource factories (#996) | retain exact endpoint Requests outside generic string queues until the final browser cutoff acknowledgement; step drains and harmless patterns cannot take them |
 | that exact observed Request has consumed EOF, matching length/SHA256, original client acceptance and its same uncanceled live bridge | `browser.mjs` classifies only its HTTP200 `net::ERR_ABORTED` as harmless, including cross-origin; close reports it once |
 | known proof is canceled, corrupt, truncated, ambiguous, missing or timed out | final direct reporting keeps the failure even with a same-origin size hint or live pattern; no older result needs revocation |
-| a network failure notification arrives independently after the observer ACK but before the final drain (#996 R1) | the line owner synchronously stops collection and classifies every retained candidate immediately before taking its arrays; evidence is still available, and no await separates classification from draining |
+| an admitted resource Request has no terminal event after observer ACK (#996) | the installer waits for its actual requestfinished/requestfailed within the existing shared settlement budget; an unresolved candidate invalidates positive evidence at final reporting |
+| that Request fails in a later event-loop task (#996 R2) | its terminal and failed-line listeners run synchronously before settlement resumes; the line owner then checks for remaining pending candidates, stops collection, classifies retained Requests and drains without an intervening await |
 
 The opt-in observer contract and bounds are in
 [resource-read evidence](resource-read-evidence.md). Its finalizer runs even

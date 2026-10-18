@@ -1,7 +1,7 @@
 /** Opt-in Vite response decoration, installed before the gateway page loads. */
 import { randomUUID } from "node:crypto"
 import { readFile } from "node:fs/promises"
-import { resourceEndpoint, resourceReadEvidence } from "./resource-read-evidence.mjs"
+import { resourceCandidate, resourceReadEvidence } from "./resource-read-evidence.mjs"
 
 const factories = new Map([
   ["/src/desktop/widgets/app/application/bridge.ts", ["createAppBridge", "bridge"]],
@@ -34,6 +34,43 @@ export async function installResourceObservation(page) {
   const module = `${source}\nconst observation = createResourceObserver((message) => globalThis[${JSON.stringify(binding)}](message), ${JSON.stringify(generation)});\nexport { observation };\n`
   let navigated = false
   let finalizing
+  let finished = false
+  let releaseTerminals
+  const candidates = new Map()
+  const releaseIfTerminal = () => {
+    if ([...candidates.values()].every((state) => state !== "pending"))
+      releaseTerminals?.()
+  }
+  const onRequest = (request) => {
+    try {
+      if (resourceCandidate(request)) {
+        if (finalizing) collector.invalidate()
+        if (!candidates.has(request)) {
+          if (candidates.size >= 512) collector.invalidate()
+          else candidates.set(request, "pending")
+        }
+      }
+      if (request.frame() === page.mainFrame()) collector.observeRequest(request)
+    } catch {
+      collector.invalidate()
+    }
+  }
+  const terminal = (request, state) => {
+    try {
+      if (!resourceCandidate(request)) return
+      const previous = candidates.get(request)
+      if (!previous || (previous !== "pending" && previous !== state))
+        collector.invalidate()
+      else candidates.set(request, state)
+    } catch {
+      collector.invalidate()
+    }
+    // Playwright emits all page listeners synchronously. Its failed-line
+    // listener retains the Request before this promise can resume finalize.
+    releaseIfTerminal()
+  }
+  const onFinished = (request) => terminal(request, "finished")
+  const onFailed = (request) => terminal(request, "failed")
   await page.exposeBinding(binding, (origin, message) => {
     if (origin.page !== page || origin.frame !== page.mainFrame()) {
       collector.invalidate()
@@ -41,20 +78,15 @@ export async function installResourceObservation(page) {
     }
     collector.receive(message)
   })
-  page.on("framenavigated", (frame) => {
+  const onNavigation = (frame) => {
     if (frame !== page.mainFrame()) return
     if (navigated) collector.invalidate()
     navigated = true
-  })
-  page.on("request", (request) => {
-    try {
-      if (request.frame() !== page.mainFrame()) return
-      if (finalizing && resourceEndpoint(request)) collector.invalidate()
-      collector.observeRequest(request)
-    } catch {
-      collector.invalidate()
-    }
-  })
+  }
+  page.on("framenavigated", onNavigation)
+  page.on("request", onRequest)
+  page.on("requestfinished", onFinished)
+  page.on("requestfailed", onFailed)
   await page.route(
     new RegExp(
       `(?:${[...factories.keys(), moduleUrl].map((path) => path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})(?:\\?.*)?$`,
@@ -93,13 +125,37 @@ export async function installResourceObservation(page) {
     collector,
     finalize() {
       if (!finalizing)
-        finalizing = page
-          .evaluate(async (url) => {
-            const { observation } = await import(url)
-            await observation.finalize()
-          }, moduleUrl)
-          .catch(() => collector.invalidate())
+        finalizing = Promise.resolve().then(async () => {
+          try {
+            await page.evaluate(async (url) => {
+              const { observation } = await import(url)
+              await observation.finalize()
+            }, moduleUrl)
+          } catch {
+            collector.invalidate()
+          }
+          if (finished) return
+          await new Promise((resolve) => {
+            releaseTerminals = resolve
+            releaseIfTerminal()
+          })
+        })
       return finalizing
+    },
+    // Called synchronously by the report owner within the existing shared
+    // settlement budget. Cleanup cannot count as a Request terminal event.
+    finish() {
+      if (finished) return
+      finished = true
+      if ([...candidates.values()].some((state) => state === "pending"))
+        collector.invalidate()
+      page.off("request", onRequest)
+      page.off("requestfinished", onFinished)
+      page.off("requestfailed", onFailed)
+      page.off("framenavigated", onNavigation)
+      candidates.clear()
+      releaseTerminals?.()
+      releaseTerminals = undefined
     },
   }
 }
