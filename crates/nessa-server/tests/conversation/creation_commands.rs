@@ -54,20 +54,6 @@ fn id() -> ConversationId {
     ConversationId::new(&uuid::Uuid::new_v4().to_string()).unwrap()
 }
 
-/// The stage `request`'s creation receipt was saved at, or `None` when that
-/// request saved none.
-async fn saved_stage(storage: &RecordStorage, request: &str) -> Option<CreationStage> {
-    let lease = storage
-        .open_creation("person".into(), request.into(), false)
-        .await
-        .unwrap()?;
-    lease
-        .load(request)
-        .await
-        .unwrap()
-        .map(|receipt| receipt.stage())
-}
-
 /// Hang ceiling for a creation step that is still doing durable work.
 ///
 /// The wait is the provider open signal or the live slot. Five seconds
@@ -516,7 +502,7 @@ async fn creation_commits_the_original_attempt_before_provider_open() {
         .await
         .unwrap();
     // Read the committed SQLite rows through a separate SQL observer while the
-    // original principal lease is still held; this observes durable event bytes,
+    // original request lease is still held; this observes durable event bytes,
     // rather than the coordinator's in-memory projection.
     let db = nessa_local_database::rusqlite::Connection::open(
         directory.path().join("data/records/records.sqlite3"),
@@ -1091,10 +1077,16 @@ async fn deletion_during_initialization_refuses_the_returned_receipt() {
         task.await.unwrap(),
         Err(CreationFailure::Target(ConversationError::Deleted))
     ));
+    let lease = storage
+        .open_creation("person".into(), "request".into(), false)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(
-        saved_stage(&storage, "request").await,
-        Some(CreationStage::Ready)
+        lease.load("request").await.unwrap().unwrap().stage(),
+        CreationStage::Ready
     );
+    drop(lease);
     assert!(matches!(
         service
             .lookup_creation(
@@ -1412,7 +1404,12 @@ async fn a_second_creation_request_cannot_reinitialize_the_original_target() {
         )
         .await
         .unwrap();
-    assert!(saved_stage(&storage, "another").await.is_none());
+    // An exact reopen writes no receipt of its own.
+    assert!(storage
+        .open_creation("person".into(), "another".into(), false)
+        .await
+        .unwrap()
+        .is_none());
     assert_eq!(provider.open_calls.load(Ordering::SeqCst), 1);
     let record = ConversationRepository::load(metadata.as_ref(), &target)
         .await
@@ -1420,6 +1417,51 @@ async fn a_second_creation_request_cannot_reinitialize_the_original_target() {
         .unwrap();
     assert_eq!(record.creation_action(), "original");
     assert_eq!(record.creator_surface(), "panel");
+    retire(service, storage, metadata).await;
+}
+
+#[tokio::test]
+async fn two_requests_creating_one_conversation_both_open_it() {
+    let directory = tempfile::tempdir().unwrap();
+    let provider = Arc::new(ProviderFactory::default());
+    let (release, gate) = oneshot::channel();
+    *provider.open_gate.lock().unwrap() = Some(gate);
+    let (service, storage, metadata) = fixture(&directory.path().join("data"), provider.clone());
+    let target = id();
+    let start = |request: &'static str| {
+        let service = service.clone();
+        let storage = storage.clone();
+        let target = target.clone();
+        tokio::spawn(async move {
+            service
+                .create_command(
+                    storage,
+                    target,
+                    caller(request),
+                    RequestedConversation::default(),
+                )
+                .await
+        })
+    };
+    let original = start("original");
+    tokio::time::timeout(CREATION_HANG, provider.opening.notified())
+        .await
+        .unwrap();
+    // Sent while the first is still opening the agent: it waits, then
+    // reopens what the first created rather than refusing as a conflict.
+    let another = start("another");
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(!another.is_finished());
+    release.send(()).unwrap();
+    for task in [original, another] {
+        let ready = tokio::time::timeout(CREATION_HANG, task)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(ready.stage(), CreationStage::Ready);
+    }
+    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 1);
     retire(service, storage, metadata).await;
 }
 
@@ -1451,7 +1493,12 @@ async fn a_new_request_reopens_an_owned_conversation_and_attaches_after_restart(
         .await
         .unwrap();
     assert_eq!(provider.open_calls.load(Ordering::SeqCst), 2);
-    assert!(saved_stage(&storage, "request-reopen").await.is_none());
+    // An exact reopen writes no receipt of its own.
+    assert!(storage
+        .open_creation("person".into(), "request-reopen".into(), false)
+        .await
+        .unwrap()
+        .is_none());
     let record = ConversationRepository::load(metadata.as_ref(), &target)
         .await
         .unwrap()

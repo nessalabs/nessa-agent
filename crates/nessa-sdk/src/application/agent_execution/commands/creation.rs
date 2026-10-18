@@ -141,12 +141,13 @@ impl CreationReceipt {
     }
 }
 
-/// Durable control history of one principal request, implemented by the
-/// existing record runtime. Opening one request excludes a second open of the
-/// same request, without a waiting queue; requests of the same principal do
-/// not exclude each other. A read-only open must not create an absent stream.
-/// The returned lease owns exclusion until drop; its outstanding operations
-/// retain that ownership through completion.
+/// Durable command history, one per principal request, implemented by the
+/// existing record runtime. Opening one request excludes only that request,
+/// without a waiting queue: a second open of the same request while the first
+/// lease lives is `Busy`, and different requests never wait on each other. A
+/// read-only open must not create an absent history. The returned lease owns
+/// exclusion until drop; its outstanding operations retain that ownership
+/// through completion.
 pub trait CreationStorage: Send + Sync {
     /// Open the host-verified principal's `request`. `create` selects writable
     /// admission or read-only lookup; absent lookup returns `None`.
@@ -158,8 +159,8 @@ pub trait CreationStorage: Send + Sync {
     ) -> CreationFuture<'_, Option<Arc<dyn CreationStorageLease>>>;
 }
 
-/// Exclusive access to one principal request's immutable command history. A
-/// load or save naming another request is refused as an identity mismatch.
+/// Exclusive access to one principal request's immutable command history.
+/// Its methods refuse any other request id.
 pub trait CreationStorageLease: Send + Sync {
     /// Return the existing creation binding/progress for `request_id`, without writing.
     ///

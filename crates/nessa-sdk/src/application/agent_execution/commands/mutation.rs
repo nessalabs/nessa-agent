@@ -1,4 +1,4 @@
-//! Durable submit and exact-turn Stop on the principal control stream.
+//! Durable submit and exact-turn Stop on the request control stream.
 use super::creation::{
     CreationFuture, CreationInitializationFailure, CreationStorage, CreationStorageError,
     CreationTaskFault,
@@ -241,7 +241,7 @@ pub struct MutationCoordinator {
     storage: Arc<dyn CreationStorage>,
 }
 impl MutationCoordinator {
-    /// Receive the shared principal control storage.
+    /// Receive the shared request control storage.
     pub fn new(storage: Arc<dyn CreationStorage>) -> Self {
         Self { storage }
     }

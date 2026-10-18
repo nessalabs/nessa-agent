@@ -2,7 +2,7 @@
 //!
 //! ```text
 //! verified host -> CreationCoordinator / MutationCoordinator
-//!                     |-> request control lease (one stream per principal request)
+//!                     |-> request control lease (one stream per request)
 //!                     |-> host current access/deletion + one original effect
 //! creation: Accepted -> Attempted -> Ready
 //! submit/stop: Accepted -> Attempted -> Settled

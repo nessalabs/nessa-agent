@@ -1369,3 +1369,99 @@ async fn terminal_panic_payload_ownership_preserves_settlement() {
         "terminal panic escaped owned settlement: {violations:?}"
     );
 }
+
+/// A mode changed while the agent was attached is held by that attachment.
+/// A failed turn that ends the attachment leaves an agent whose next one
+/// would open at the mode it was first opened with, so the message after the
+/// failure was refused as `approval_mode_not_applied` for as long as the
+/// gateway ran, and a retry could run under the old mode. The next message
+/// closes that agent and opens the conversation again at its record's mode.
+/// Found by the conversation stress check (`verification/desktop/scripts/conversation-stress.mjs`).
+#[tokio::test]
+async fn a_message_after_a_failed_turn_runs_at_the_mode_chosen_live() {
+    use nessa_sdk::application::agent_execution::providers::{
+        ExecutionReport, ObservationFailure, ObservationFailureCause, ProviderExecutionReply,
+        ProviderSessionState,
+    };
+    let (service, provider, _repository, id, _, actor) = ready_mode_case().await;
+    service
+        .set_approval_mode(id.clone(), actor, ConversationApprovalMode::Full)
+        .await
+        .unwrap();
+    assert_eq!(
+        *provider.mode_updates.lock().unwrap(),
+        vec![nessa_sdk::application::agent_execution::providers::ApprovalMode::Full]
+    );
+    let failure = AgentError::Protocol("the provider refused the prompt".into());
+    *provider.execution_reply.lock().unwrap() =
+        Some(ProviderExecutionReply::Finished(ExecutionReport::new(
+            Some(Err(failure.clone())),
+            None,
+            ProviderSessionState::CleanupRequired,
+        )));
+    *provider.execution_observation_failure.lock().unwrap() = Some(ObservationFailure::new(
+        failure,
+        ObservationFailureCause::ExecutionFailed,
+    ));
+    let message = |text: &str| SubmittedMessage {
+        text: text.into(),
+        ..SubmittedMessage::default()
+    };
+    service
+        .submit(
+            id.clone(),
+            caller(),
+            "fails".into(),
+            message("This one fails"),
+            SubmissionMode::Queue,
+        )
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let view = service.read(id.clone(), caller()).await.unwrap();
+            if view.messages.first().is_some_and(|message| {
+                message.status
+                    == nessa_protocol::conversation::view::ConversationMessageStatus::Failed
+            }) && provider.close_calls.load(Ordering::SeqCst) >= 1
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the failed turn ends the attachment");
+    let opened = provider.open_calls.load(Ordering::SeqCst);
+
+    service
+        .submit(
+            id.clone(),
+            caller(),
+            "after".into(),
+            message("And now?"),
+            SubmissionMode::Queue,
+        )
+        .await
+        .expect("the message after a failed turn is sent at the chosen mode");
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !provider
+            .executions
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|execution| execution == "after")
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the message reaches the provider");
+    assert!(provider.open_calls.load(Ordering::SeqCst) > opened);
+    let view = service.read(id.clone(), caller()).await.unwrap();
+    assert_eq!(
+        view.selection.as_ref().unwrap().approval_mode,
+        ConversationApprovalMode::Full
+    );
+    service.shutdown().await.unwrap();
+}

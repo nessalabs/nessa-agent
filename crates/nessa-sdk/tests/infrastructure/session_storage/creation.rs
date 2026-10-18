@@ -36,7 +36,7 @@ async fn creation_replay_refuses_impossible_history() {
     ));
     drop(lease);
     let runtime = storage.runtime().await.unwrap();
-    let id = StreamId::new(control_stream("person", "request")).unwrap();
+    let id = StreamId::new(control_stream_id("person", "request")).unwrap();
     let stream = runtime.find_stream(&id).await.unwrap().unwrap();
     runtime
         .append(&stream, encode(&ready).unwrap())
@@ -51,63 +51,53 @@ async fn creation_replay_refuses_impossible_history() {
     storage.shutdown().await.unwrap();
 }
 #[tokio::test]
-async fn each_request_keeps_its_own_receipts_however_many_a_person_sends() {
-    // More requests than one shared stream ever held (4,096): each request's
-    // receipts are in a stream of its own, so none of them is refused for
-    // the ones before it, and each still reads back after a reopen.
-    let directory = tempfile::tempdir().unwrap();
-    let root = directory.path().join("records");
-    let storage = RecordStorage::new(&root).unwrap();
-    for index in 0..5000 {
-        let request = index.to_string();
-        let lease = storage
-            .open_creation("person".into(), request.clone(), true)
-            .await
-            .unwrap()
-            .unwrap();
-        lease
-            .save(CreationReceipt::accepted(binding(&request)))
-            .await
-            .unwrap();
-    }
-    storage.shutdown().await.unwrap();
-    drop(storage);
-    let storage = RecordStorage::new(&root).unwrap();
-    for request in ["0", "4999"] {
-        let lease = storage
-            .open_creation("person".into(), request.into(), false)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(
-            lease.load(request).await.unwrap(),
-            Some(CreationReceipt::accepted(binding(request)))
-        );
-    }
-    storage.shutdown().await.unwrap();
-}
-#[tokio::test]
-async fn a_lease_answers_for_its_own_request_only() {
+async fn requests_never_wait_on_each_other_and_a_lease_holds_one_request() {
     let directory = tempfile::tempdir().unwrap();
     let storage = RecordStorage::new(directory.path().join("records")).unwrap();
+    // Far more than any old per-principal or per-gateway limit, all held at once.
+    let mut leases = Vec::new();
+    for index in 0..64 {
+        leases.push(
+            storage
+                .open_creation("person".into(), index.to_string(), true)
+                .await
+                .unwrap()
+                .unwrap(),
+        );
+    }
+    for (index, lease) in leases.iter().enumerate() {
+        lease
+            .save(CreationReceipt::accepted(binding(&index.to_string())))
+            .await
+            .unwrap();
+    }
+    // Only the same request waits for its own lease to end.
+    assert!(matches!(
+        storage
+            .open_creation("person".into(), "0".into(), true)
+            .await,
+        Err(CreationStorageError::Storage(StorageError::Busy))
+    ));
+    // A lease answers for its own request only.
+    assert!(matches!(
+        leases[0].load("1").await,
+        Err(CreationStorageError::Storage(StorageError::Corrupt(_)))
+    ));
+    assert!(matches!(
+        leases[0]
+            .save(CreationReceipt::accepted(binding("1")))
+            .await,
+        Err(CreationStorageError::Storage(StorageError::Corrupt(_)))
+    ));
+    drop(leases);
     let lease = storage
-        .open_creation("person".into(), "request".into(), true)
+        .open_creation("person".into(), "0".into(), false)
         .await
         .unwrap()
         .unwrap();
     assert_eq!(
-        lease.load("another").await,
-        Err(CreationStorageError::Storage(
-            StorageError::IdentityMismatch
-        ))
-    );
-    assert_eq!(
-        lease
-            .save(CreationReceipt::accepted(binding("another")))
-            .await,
-        Err(CreationStorageError::Storage(
-            StorageError::IdentityMismatch
-        ))
+        lease.load("0").await.unwrap().unwrap().stage(),
+        CreationStage::Accepted
     );
     drop(lease);
     storage.shutdown().await.unwrap();
@@ -192,43 +182,6 @@ fn creation_codec_bounds_fields_and_preserves_exact_non_content_identity() {
         extra.payload = Payload::copy_from_slice(&bytes);
         assert!(decode(&extra).is_err());
     }
-}
-
-#[tokio::test]
-async fn one_request_has_one_owner_and_other_requests_do_not_wait_on_it() {
-    let directory = tempfile::tempdir().unwrap();
-    let storage = RecordStorage::new(directory.path().join("records")).unwrap();
-    // Many of one person's requests are open at once, as many as are sent.
-    let mut leases = Vec::new();
-    for index in 0..64 {
-        leases.push(
-            storage
-                .open_creation("person".into(), format!("request-{index}"), true)
-                .await
-                .unwrap()
-                .unwrap(),
-        );
-    }
-    // The same request again is refused while its owner, or any clone of
-    // it, is held.
-    let held = leases.pop().unwrap();
-    let clone = held.clone();
-    drop(held);
-    assert!(matches!(
-        storage
-            .open_creation("person".into(), "request-63".into(), true)
-            .await,
-        Err(CreationStorageError::Storage(StorageError::Busy))
-    ));
-    drop(clone);
-    let replacement = storage
-        .open_creation("person".into(), "request-63".into(), true)
-        .await
-        .unwrap()
-        .unwrap();
-    drop(replacement);
-    drop(leases);
-    storage.shutdown().await.unwrap();
 }
 
 struct FaultTarget {
@@ -389,7 +342,7 @@ async fn creation_replay_refuses_foreign_or_forged_control_evidence() {
         };
         drop(lease);
         let runtime = storage.runtime().await.unwrap();
-        let id = StreamId::new(control_stream("person", "request")).unwrap();
+        let id = StreamId::new(control_stream_id("person", "request")).unwrap();
         let stream = runtime.find_stream(&id).await.unwrap().unwrap();
         let mut event = encode(&receipt).unwrap();
         match violation {
@@ -419,6 +372,24 @@ async fn creation_replay_refuses_foreign_or_forged_control_evidence() {
             ));
         }
         storage.shutdown().await.unwrap();
+    }
+}
+
+struct ReadyTarget;
+impl crate::application::agent_execution::commands::CreationTarget for ReadyTarget {
+    type Error = std::convert::Infallible;
+    fn check(
+        &self,
+        _: &CreationBinding,
+        _: Option<CreationStage>,
+    ) -> CreationFuture<'_, (), Self::Error> {
+        Box::pin(async { Ok(()) })
+    }
+    fn initialize(
+        &self,
+        _: &CreationBinding,
+    ) -> CreationFuture<'_, (), CreationInitializationFailure<Self::Error>> {
+        Box::pin(async { Ok(()) })
     }
 }
 
@@ -503,6 +474,16 @@ async fn direct_sdk_caller_loss_retains_the_original_initializer_and_lease() {
             .await,
         Err(CreationStorageError::Storage(StorageError::Busy))
     ));
+    // Another request of the same person does not wait on the held one.
+    let other = binding("other-request");
+    assert_eq!(
+        CreationCoordinator::new(storage.clone())
+            .create(other.clone(), Arc::new(ReadyTarget))
+            .await
+            .unwrap()
+            .stage(),
+        CreationStage::Ready
+    );
     release.send(()).unwrap();
     let coordinator = CreationCoordinator::new(storage.clone());
     let ready = tokio::time::timeout(INITIALIZER_HANG, async {
