@@ -1294,9 +1294,18 @@ pub(super) mod build {
                         "OpenCode approval policy is fixed to ask".into(),
                     ));
                 }
+                // One sessions database for every OpenCode conversation here,
+                // outside each process's private home, so a session survives
+                // its agent being stopped: parked, or the gateway restarting.
+                let sessions = dependencies.directory.join("opencode");
+                nessa_local_storage::create_directory(&sessions).map_err(|error| {
+                    RunError::Agent(format!("OpenCode's sessions directory: {error}"))
+                })?;
                 bound(
                     OpencodeAcpProvider::SANDBOX_PROFILES,
-                    OpencodeAcpProvider::new(acp, &model, limits, audit.clone()).map_err(failed)?,
+                    OpencodeAcpProvider::new(acp, &model, limits, audit.clone())
+                        .map_err(failed)?
+                        .with_session_database(sessions.join("sessions.sqlite3")),
                 )
             }
         };

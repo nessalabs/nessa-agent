@@ -20,12 +20,20 @@ gateway. Clients are `@nessa/client` sockets spread over a few Node processes
 3. sends every conversation a message and waits for its `turn.ended`, once per
    round;
 4. lets every conversation sit idle for a while;
-5. lists conversations from every socket, walking `observe` when the list is
+5. waits for the gateway to park every idle agent (`--idle-seconds`, written
+   as `limits.agentIdleSeconds`; [agent-parking.md](agent-parking.md)),
+   holds with no agent running, then sends every conversation one more
+   message, which starts its agent again and resumes its session;
+6. lists conversations from every socket, walking `observe` when the list is
    cut.
 
-It samples the gateway once a second (memory, threads, open files, CPU,
-child processes and the data directory) and prints one JSON verdict. The
-verdict fails on any failed operation. Each turn also reports how long it
+It samples the gateway and every process under it once a second (memory,
+threads, open files, CPU, child processes and the data directory) and the
+machine (busy CPU and used memory). Every phase reports its resources: cores
+used by the gateway, by its agents and by the whole machine, the gateway's
+and the agents' resident memory, and the most and fewest agents running. It
+prints one JSON verdict. The verdict fails on any failed operation, and when
+an agent is still running after the park phase. Each turn also reports how long it
 waited on its subscription, its send and the turn itself, so a slow run says
 where the time went.
 
@@ -57,6 +65,25 @@ gateway, and room for 10,000 small agent processes. The gateway raises its
 own soft open-file limit to the hard one at start (`core/open_files.rs`). A
 hard limit under that, or a `pid_max` under the agent count, is the machine's
 limit, not the gateway's.
+
+## What parking saves
+
+Measured on the same machine with 1,000 conversations on 250 sockets, two
+rounds, `--idle-seconds 30`:
+
+| | agents running | gateway | agents' memory |
+| --- | --- | --- | --- |
+| idle, agents up (hold) | 1,000 | 0.13 of a core | about 2.3 GB |
+| parked (parked hold) | 0 | 0.01 of a core | none |
+
+Every agent was parked within 22 s of the park phase starting, and all 1,000
+turns after it completed, each starting its agent again on its session
+(median 14 s at 64 sends at a time, against 8.5 s with agents running; the
+difference is 1,000 agent starts competing for 4 cores). The scale agent is
+about 2.3 MB; a real Claude agent idles at about 260 MB and a Codex agent at
+165 to 200 MB ([#998](https://github.com/nessalabs/nessa-agent/issues/998)), so
+what parking frees on a real gateway is about a hundred times the table's
+memory column.
 
 ## What was fixed to get here
 

@@ -2990,8 +2990,8 @@
         },
         "cause": {
           "type": "string",
-          "enum": ["stopped", "closed", "revoked", "expired", "lost"],
-          "description": "Why the lease is ending or ended: the first cause recorded. lost: the environment no longer held it, for example because the gateway started again or the connection to it was lost."
+          "enum": ["stopped", "closed", "revoked", "expired", "lost", "idle"],
+          "description": "Why the lease is ending or ended: the first cause recorded. lost: the environment no longer held it, for example because the gateway started again or the connection to it was lost. idle: the agent sat idle with nobody following the conversation, past limits.agentIdleSeconds, and the gateway stopped it; the conversation stays open and the next message starts the agent again, resuming its provider session."
         },
         "cleanup": {
           "type": "string",

@@ -373,7 +373,7 @@ export interface TranscriptLease {
   /** The SSH destination, or the paired machine's `peer:<key>`, exactly when
    * `environment` is `ssh` or `peer`. */
   readonly host?: string
-  readonly cause?: "stopped" | "closed" | "revoked" | "expired" | "lost"
+  readonly cause?: "stopped" | "closed" | "revoked" | "expired" | "lost" | "idle"
   readonly refusal?:
     | "sandbox_unavailable"
     | "environment_unreachable"

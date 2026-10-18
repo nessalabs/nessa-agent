@@ -12,6 +12,7 @@ describe("a lease's status in words", () => {
       [{ state: "ending", cause: "closed" }, "Stopping"],
       [{ state: "ended", cause: "closed" }, "Closed"],
       [{ state: "ended", cause: "stopped" }, "Stopped"],
+      [{ state: "ended", cause: "idle" }, "Paused while idle"],
       [{ state: "ended" }, "Ended"],
       [{ state: "ended", cause: "revoked" }, "Access withdrawn"],
       [{ state: "ended", cause: "expired" }, "Timed out"],

@@ -45,6 +45,10 @@ export const KNOBS = {
     default: 1,
     what: "turns that hand work to another thread and wait for its report",
   },
+  parks: {
+    default: 1,
+    what: "conversations left idle until the gateway parks their agent, then talked to again",
+  },
 }
 
 /** The numbers, from flags, then `NESSA_STRESS_*`, then the defaults. A bad one throws. */
@@ -99,6 +103,7 @@ export function plan(knobs) {
   add(knobs.switches, () => ({ kind: "switch" }))
   add(knobs.asides, () => ({ kind: "aside" }))
   add(knobs.large, () => ({ kind: "large" }))
+  add(knobs.parks, () => ({ kind: "park" }))
   if (knobs.reviews > 0) steps.push({ kind: "reviews" })
   while (steps.length < knobs.rounds)
     steps.push({ kind: next() < 0.5 ? "reply" : "permission" })

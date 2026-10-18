@@ -20,6 +20,7 @@ test("every required step appears as often as its number says", () => {
   assert.equal(count("delegate"), knobs.threads)
   assert.equal(count("aside"), knobs.asides)
   assert.equal(count("large"), knobs.large)
+  assert.equal(count("park"), knobs.parks)
   assert.equal(count("reviews"), 1)
   assert.ok(count("switch") >= knobs.switches)
   assert.ok(steps.length >= 40)
