@@ -96,7 +96,11 @@ impl ConversationService {
         binding: &CreationBinding,
     ) -> Result<Option<CreationReceipt>, CreationFailure<ConversationError>> {
         let saved = match storage
-            .open_creation(binding.actor().principal_id().into(), false)
+            .open_creation(
+                binding.actor().principal_id().into(),
+                binding.actor().request_id().into(),
+                false,
+            )
             .await
         {
             Ok(Some(lease)) => match lease.load(binding.actor().request_id()).await {

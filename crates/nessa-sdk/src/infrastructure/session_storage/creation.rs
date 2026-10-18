@@ -1,4 +1,6 @@
-//! Principal creation control records on the existing SQLite runtime.
+//! Command control records on the existing SQLite runtime: one stream per
+//! principal request, so commands of one person never wait on each other and
+//! no stream grows with how many that person has ever sent.
 use super::{
     record::{store_error, RecordStorage, Reservation},
     save_batch::RecordRuntime,
@@ -25,7 +27,10 @@ use tokio::sync::Mutex;
 pub(super) const CONTROL_STREAM_PREFIX: &str = "nessa:commands:";
 const SCHEMA: &str = "nessa.creation";
 const COMMAND_SCHEMA: &str = "nessa.command";
-const MAX_RECEIPTS: usize = 4096;
+/// Events one request's stream can hold: a creation's Accepted, Attempted
+/// and Ready, or a command's Accepted, Attempted and Settled. An exact retry
+/// of one is deduplicated by its event id, so it adds none.
+const MAX_REQUEST_EVENTS: u64 = 3;
 const MAX_RECORD_BYTES: usize = 3 * ActionContext::MAX_IDENTITY_BYTES + SessionId::MAX_BYTES + 48;
 const MAX_COMMAND_BYTES: usize =
     3 * ActionContext::MAX_IDENTITY_BYTES + SessionId::MAX_BYTES + ExecutionId::MAX_BYTES + 64;
@@ -48,6 +53,7 @@ struct ControlInner {
     runtime: RecordRuntime,
     stream: StreamKey,
     principal: String,
+    request: String,
     receipts: Mutex<HashMap<String, Held>>,
     writable: bool,
 }
@@ -55,18 +61,17 @@ impl CreationStorage for RecordStorage {
     fn open_creation(
         &self,
         principal: String,
+        request: String,
         create: bool,
     ) -> CreationFuture<'_, Option<Arc<dyn CreationStorageLease>>> {
         Box::pin(async move {
             // Validate identity before hashing it or retaining caller capacity.
-            let actor = ActionContext::new(&principal, "control", "lookup")
+            let actor = ActionContext::new(&principal, "control", &request)
                 .map_err(|_| corrupt("invalid creation principal"))?;
             let principal = actor.principal_id().to_owned();
-            let id = format!(
-                "{CONTROL_STREAM_PREFIX}{:x}",
-                Sha256::digest(principal.as_bytes())
-            );
-            let reservation = Reservation::acquire_creation(self.owner.clone(), &id)?;
+            let request = actor.request_id().to_owned();
+            let id = control_stream(&principal, &request);
+            let reservation = Reservation::acquire(self.owner.clone(), &id)?;
             let runtime = self.runtime().await?.clone();
             tokio::spawn(async move {
                 let id = StreamId::new(&id).map_err(|_| corrupt("invalid control stream ID"))?;
@@ -78,13 +83,14 @@ impl CreationStorage for RecordStorage {
                         None => return Ok::<_, CreationStorageError>(None),
                     }
                 };
-                let receipts = replay(&runtime, &stream, &principal).await?;
+                let receipts = replay(&runtime, &stream, &principal, &request).await?;
                 Ok(Some(Arc::new(Control {
                     inner: Arc::new(ControlInner {
                         _reservation: reservation,
                         runtime,
                         stream,
                         principal,
+                        request,
                         receipts: Mutex::new(receipts),
                         writable: create,
                     }),
@@ -97,11 +103,23 @@ impl CreationStorage for RecordStorage {
         })
     }
 }
+/// The stream that holds `request`'s receipts for `principal`. Its id holds a
+/// `:`, which a conversation's `SessionId` cannot, so the two never alias.
+pub(super) fn control_stream(principal: &str, request: &str) -> String {
+    format!(
+        "{CONTROL_STREAM_PREFIX}{:x}:{:x}",
+        Sha256::digest(principal.as_bytes()),
+        Sha256::digest(request.as_bytes())
+    )
+}
 impl CreationStorageLease for Control {
     fn load(&self, request_id: &str) -> CreationFuture<'_, Option<CreationReceipt>> {
         let request_id = request_id.to_owned();
         let inner = self.inner.clone();
         Box::pin(async move {
+            if request_id != inner.request {
+                return Err(StorageError::IdentityMismatch.into());
+            }
             match inner.receipts.lock().await.get(&request_id) {
                 Some(Held::Creation(receipt)) => Ok(Some(receipt.clone())),
                 Some(Held::Mutation(_)) => Err(CreationStorageError::ForeignRequest),
@@ -116,7 +134,9 @@ impl CreationStorageLease for Control {
                 if !inner.writable {
                     return Err(corrupt("read-only creation lease").into());
                 }
-                if receipt.binding().actor().principal_id() != inner.principal {
+                if receipt.binding().actor().principal_id() != inner.principal
+                    || receipt.binding().actor().request_id() != inner.request
+                {
                     return Err(StorageError::IdentityMismatch.into());
                 }
                 let mut receipts = inner.receipts.lock().await;
@@ -145,6 +165,9 @@ impl CreationStorageLease for Control {
         let request_id = request_id.to_owned();
         let inner = self.inner.clone();
         Box::pin(async move {
+            if request_id != inner.request {
+                return Err(StorageError::IdentityMismatch.into());
+            }
             match inner.receipts.lock().await.get(&request_id) {
                 Some(Held::Mutation(receipt)) => Ok(Some(receipt.clone())),
                 Some(Held::Creation(_)) => Err(CreationStorageError::ForeignRequest),
@@ -159,7 +182,9 @@ impl CreationStorageLease for Control {
                 if !inner.writable {
                     return Err(corrupt("read-only creation lease").into());
                 }
-                if receipt.binding().actor().principal_id() != inner.principal {
+                if receipt.binding().actor().principal_id() != inner.principal
+                    || receipt.binding().actor().request_id() != inner.request
+                {
                     return Err(StorageError::IdentityMismatch.into());
                 }
                 let mut receipts = inner.receipts.lock().await;
@@ -200,7 +225,6 @@ fn check_creation(
         None if next.stage() != CreationStage::Accepted => {
             Err(corrupt("creation has no acceptance").into())
         }
-        None if receipts.len() == MAX_RECEIPTS => Err(StorageError::TooLarge.into()),
         None => Ok(()),
     }
 }
@@ -221,7 +245,6 @@ fn check_mutation(
         None if next.stage() != MutationStage::Accepted => {
             Err(corrupt("command has no acceptance").into())
         }
-        None if receipts.len() == MAX_RECEIPTS => Err(StorageError::TooLarge.into()),
         None => Ok(()),
     }
 }
@@ -236,9 +259,10 @@ async fn replay(
     runtime: &RecordRuntime,
     stream: &StreamKey,
     principal: &str,
+    request: &str,
 ) -> Result<HashMap<String, Held>, StorageError> {
     let bounds = runtime.bounds(stream).await.map_err(store_error)?;
-    if bounds.floor.offset != 0 || bounds.tail.offset > (MAX_RECEIPTS * 3) as u64 {
+    if bounds.floor.offset != 0 || bounds.tail.offset > MAX_REQUEST_EVENTS {
         return Err(corrupt(
             "creation control history exceeds bounds or lost its prefix",
         ));
@@ -286,6 +310,9 @@ async fn replay(
                 Held::Creation(receipt) => receipt.binding().actor().request_id().to_owned(),
                 Held::Mutation(receipt) => receipt.binding().actor().request_id().to_owned(),
             };
+            if request_id != request {
+                return Err(corrupt("control stream names another request"));
+            }
             receipts.insert(request_id, held);
             cursor = record.cursor.clone();
         }

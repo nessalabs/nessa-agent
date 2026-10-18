@@ -21,7 +21,7 @@ async fn creation_replay_refuses_impossible_history() {
         .advance(CreationStage::Ready)
         .unwrap();
     let lease = storage
-        .open_creation("person".into(), true)
+        .open_creation("person".into(), "request".into(), true)
         .await
         .unwrap()
         .unwrap();
@@ -36,59 +36,79 @@ async fn creation_replay_refuses_impossible_history() {
     ));
     drop(lease);
     let runtime = storage.runtime().await.unwrap();
-    let id = StreamId::new(format!(
-        "{CONTROL_STREAM_PREFIX}{:x}",
-        Sha256::digest(b"person")
-    ))
-    .unwrap();
+    let id = StreamId::new(control_stream("person", "request")).unwrap();
     let stream = runtime.find_stream(&id).await.unwrap().unwrap();
     runtime
         .append(&stream, encode(&ready).unwrap())
         .await
         .unwrap();
     assert!(matches!(
-        storage.open_creation("person".into(), false).await,
+        storage
+            .open_creation("person".into(), "request".into(), false)
+            .await,
         Err(CreationStorageError::Storage(StorageError::Corrupt(_)))
     ));
     storage.shutdown().await.unwrap();
 }
 #[tokio::test]
-async fn creation_capacity_preserves_existing_receipts() {
+async fn each_request_keeps_its_own_receipts_however_many_a_person_sends() {
+    // More requests than one shared stream ever held (4,096): each request's
+    // receipts are in a stream of its own, so none of them is refused for
+    // the ones before it, and each still reads back after a reopen.
     let directory = tempfile::tempdir().unwrap();
-    let storage = RecordStorage::new(directory.path().join("records")).unwrap();
-    let lease = storage
-        .open_creation("person".into(), true)
-        .await
-        .unwrap()
-        .unwrap();
-    for index in 0..MAX_RECEIPTS {
+    let root = directory.path().join("records");
+    let storage = RecordStorage::new(&root).unwrap();
+    for index in 0..5000 {
+        let request = index.to_string();
+        let lease = storage
+            .open_creation("person".into(), request.clone(), true)
+            .await
+            .unwrap()
+            .unwrap();
         lease
-            .save(CreationReceipt::accepted(binding(&index.to_string())))
+            .save(CreationReceipt::accepted(binding(&request)))
             .await
             .unwrap();
     }
-    assert_eq!(
-        lease
-            .save(CreationReceipt::accepted(binding("overflow")))
-            .await,
-        Err(CreationStorageError::Storage(StorageError::TooLarge))
-    );
-    let first = lease.load("0").await.unwrap().unwrap();
-    lease
-        .save(first.advance(CreationStage::Attempted).unwrap())
-        .await
-        .unwrap();
-    drop(lease);
+    storage.shutdown().await.unwrap();
+    drop(storage);
+    let storage = RecordStorage::new(&root).unwrap();
+    for request in ["0", "4999"] {
+        let lease = storage
+            .open_creation("person".into(), request.into(), false)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            lease.load(request).await.unwrap(),
+            Some(CreationReceipt::accepted(binding(request)))
+        );
+    }
+    storage.shutdown().await.unwrap();
+}
+#[tokio::test]
+async fn a_lease_answers_for_its_own_request_only() {
+    let directory = tempfile::tempdir().unwrap();
+    let storage = RecordStorage::new(directory.path().join("records")).unwrap();
     let lease = storage
-        .open_creation("person".into(), false)
+        .open_creation("person".into(), "request".into(), true)
         .await
         .unwrap()
         .unwrap();
     assert_eq!(
-        lease.load("0").await.unwrap().unwrap().stage(),
-        CreationStage::Attempted
+        lease.load("another").await,
+        Err(CreationStorageError::Storage(
+            StorageError::IdentityMismatch
+        ))
     );
-    assert_eq!(lease.load("overflow").await.unwrap(), None);
+    assert_eq!(
+        lease
+            .save(CreationReceipt::accepted(binding("another")))
+            .await,
+        Err(CreationStorageError::Storage(
+            StorageError::IdentityMismatch
+        ))
+    );
     drop(lease);
     storage.shutdown().await.unwrap();
 }
@@ -97,12 +117,12 @@ async fn read_only_creation_lookup_does_not_create_a_stream_or_change_progress()
     let directory = tempfile::tempdir().unwrap();
     let storage = RecordStorage::new(directory.path().join("records")).unwrap();
     assert!(storage
-        .open_creation("person".into(), false)
+        .open_creation("person".into(), "request".into(), false)
         .await
         .unwrap()
         .is_none());
     let lease = storage
-        .open_creation("person".into(), true)
+        .open_creation("person".into(), "request".into(), true)
         .await
         .unwrap()
         .unwrap();
@@ -111,7 +131,7 @@ async fn read_only_creation_lookup_does_not_create_a_stream_or_change_progress()
     lease.save(accepted.clone()).await.unwrap();
     drop(lease);
     let lease = storage
-        .open_creation("person".into(), false)
+        .open_creation("person".into(), "request".into(), false)
         .await
         .unwrap()
         .unwrap();
@@ -175,34 +195,34 @@ fn creation_codec_bounds_fields_and_preserves_exact_non_content_identity() {
 }
 
 #[tokio::test]
-async fn creation_owner_capacity_releases_only_with_the_original_lease() {
-    use crate::application::agent_execution::commands::MAX_CREATION_OWNERS;
+async fn one_request_has_one_owner_and_other_requests_do_not_wait_on_it() {
     let directory = tempfile::tempdir().unwrap();
     let storage = RecordStorage::new(directory.path().join("records")).unwrap();
+    // Many of one person's requests are open at once, as many as are sent.
     let mut leases = Vec::new();
-    for index in 0..MAX_CREATION_OWNERS {
+    for index in 0..64 {
         leases.push(
             storage
-                .open_creation(format!("principal-{index}"), true)
+                .open_creation("person".into(), format!("request-{index}"), true)
                 .await
                 .unwrap()
                 .unwrap(),
         );
     }
-    assert!(matches!(
-        storage.open_creation("overflow".into(), true).await,
-        Err(CreationStorageError::Storage(StorageError::Busy))
-    ));
+    // The same request again is refused while its owner, or any clone of
+    // it, is held.
     let held = leases.pop().unwrap();
     let clone = held.clone();
     drop(held);
     assert!(matches!(
-        storage.open_creation("overflow".into(), true).await,
+        storage
+            .open_creation("person".into(), "request-63".into(), true)
+            .await,
         Err(CreationStorageError::Storage(StorageError::Busy))
     ));
     drop(clone);
     let replacement = storage
-        .open_creation("overflow".into(), true)
+        .open_creation("person".into(), "request-63".into(), true)
         .await
         .unwrap()
         .unwrap();
@@ -255,7 +275,7 @@ async fn a_panicked_creation_task_keeps_original_progress_and_a_typed_fault() {
             Err(CreationFailure::TaskFault(CreationTaskFault::Panicked))
         ));
         let lease = storage
-            .open_creation("person".into(), false)
+            .open_creation("person".into(), request.into(), false)
             .await
             .unwrap()
             .unwrap();
@@ -287,7 +307,7 @@ async fn creation_save_refuses_another_principal_or_original_binding() {
     let root = directory.path().join("records");
     let storage = RecordStorage::new(&root).unwrap();
     let lease = storage
-        .open_creation("person".into(), true)
+        .open_creation("person".into(), "request".into(), true)
         .await
         .unwrap()
         .unwrap();
@@ -326,7 +346,7 @@ async fn creation_save_refuses_another_principal_or_original_binding() {
     drop(storage);
     let storage = RecordStorage::new(&root).unwrap();
     let lease = storage
-        .open_creation("person".into(), false)
+        .open_creation("person".into(), "request".into(), false)
         .await
         .unwrap()
         .unwrap();
@@ -344,7 +364,7 @@ async fn creation_replay_refuses_foreign_or_forged_control_evidence() {
         let root = directory.path().join("records");
         let storage = RecordStorage::new(&root).unwrap();
         let lease = storage
-            .open_creation("person".into(), true)
+            .open_creation("person".into(), "request".into(), true)
             .await
             .unwrap()
             .unwrap();
@@ -369,11 +389,7 @@ async fn creation_replay_refuses_foreign_or_forged_control_evidence() {
         };
         drop(lease);
         let runtime = storage.runtime().await.unwrap();
-        let id = StreamId::new(format!(
-            "{CONTROL_STREAM_PREFIX}{:x}",
-            Sha256::digest(b"person")
-        ))
-        .unwrap();
+        let id = StreamId::new(control_stream("person", "request")).unwrap();
         let stream = runtime.find_stream(&id).await.unwrap().unwrap();
         let mut event = encode(&receipt).unwrap();
         match violation {
@@ -386,7 +402,9 @@ async fn creation_replay_refuses_foreign_or_forged_control_evidence() {
         storage.shutdown().await.unwrap();
         drop(storage);
         let storage = RecordStorage::new(&root).unwrap();
-        let outcome = storage.open_creation("person".into(), false).await;
+        let outcome = storage
+            .open_creation("person".into(), "request".into(), false)
+            .await;
         if violation == "principal" {
             assert!(matches!(
                 outcome,
@@ -480,7 +498,9 @@ async fn direct_sdk_caller_loss_retains_the_original_initializer_and_lease() {
     caller.abort();
     assert!(caller.await.unwrap_err().is_cancelled());
     assert!(matches!(
-        storage.open_creation("person".into(), true).await,
+        storage
+            .open_creation("person".into(), "direct-request".into(), true)
+            .await,
         Err(CreationStorageError::Storage(StorageError::Busy))
     ));
     release.send(()).unwrap();

@@ -28,8 +28,9 @@ use crate::{
 #[cfg(any(test, feature = "test-support"))]
 use event_stream::EventSink;
 use event_stream::{
-    infrastructure::SqliteOptions, EventConfig, EventReader, EventRuntime, LifecycleAction,
-    LifecycleOperationId, LifecycleRequest, PersistenceProfile, RuntimeConfig, StreamId,
+    infrastructure::SqliteOptions, AppendConfig, EventConfig, EventReader, EventRuntime,
+    LifecycleAction, LifecycleOperationId, LifecycleRequest, PersistenceProfile, ReadConfig,
+    RuntimeConfig, SchedulingConfig, StreamId,
 };
 use nessa_sync::replication::domain::Scope;
 use sha2::{Digest, Sha256};
@@ -451,6 +452,46 @@ impl SessionStorage for RecordStorage {
     }
 }
 
+/// The runtime every conversation's records share.
+///
+/// Its own defaults admit 1024 streams and 1024 queued appends at once and
+/// refuse whatever waits past five seconds, which a gateway with ten thousand
+/// conversations saving turns at once passes in its first burst: a save then
+/// fails `AdmissionTimeout` while the store is only busy. One queue entry per
+/// conversation fits here many times over, and a waiting save keeps its place
+/// for a minute, so a busy store slows saves down rather than failing them.
+fn scaled_config() -> RuntimeConfig {
+    const ENTRIES: usize = 65_536;
+    const BYTES: usize = 256 * 1024 * 1024;
+    const WAIT: std::time::Duration = std::time::Duration::from_secs(60);
+    let defaults = RuntimeConfig::default();
+    RuntimeConfig {
+        events: EventConfig {
+            max_bytes: MAX_STORED_RECORD_BYTES,
+            minimum_persistence: PersistenceProfile::ProcessRestart,
+        },
+        appends: AppendConfig {
+            max_queued: ENTRIES,
+            max_queued_bytes: BYTES,
+            max_waiters: ENTRIES,
+            max_waiter_bytes: BYTES,
+            admission_timeout: WAIT,
+            ..defaults.appends
+        },
+        reads: ReadConfig {
+            max_concurrent: 64,
+            max_waiters: ENTRIES,
+            admission_timeout: WAIT,
+            ..defaults.reads
+        },
+        scheduling: SchedulingConfig {
+            max_coordinators: ENTRIES,
+            ..defaults.scheduling
+        },
+        ..defaults
+    }
+}
+
 async fn initialize_runtime<'a>(
     cell: &'a OnceCell<RecordRuntime>,
     options: &SqliteOptions,
@@ -458,13 +499,7 @@ async fn initialize_runtime<'a>(
 ) -> Result<&'a RecordRuntime, StorageError> {
     let saves = Arc::clone(saves);
     cell.get_or_try_init(|| async {
-        let config = RuntimeConfig {
-            events: EventConfig {
-                max_bytes: MAX_STORED_RECORD_BYTES,
-                minimum_persistence: PersistenceProfile::ProcessRestart,
-            },
-            ..RuntimeConfig::default()
-        };
+        let config = scaled_config();
         event_stream::Runtime::open(
             RecordStoreOptions {
                 sqlite: options.clone(),
@@ -483,16 +518,6 @@ pub(super) struct Reservation {
     owner: Arc<StorageOwner>,
 }
 impl Reservation {
-    pub(super) fn acquire_creation(
-        owner: Arc<StorageOwner>,
-        id: &str,
-    ) -> Result<Self, StorageError> {
-        owner.reserve_creation(id)?;
-        Ok(Self {
-            id: id.into(),
-            owner,
-        })
-    }
     pub(super) fn acquire(owner: Arc<StorageOwner>, id: &str) -> Result<Self, StorageError> {
         owner.reserve(id)?;
         Ok(Self {

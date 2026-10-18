@@ -141,21 +141,25 @@ impl CreationReceipt {
     }
 }
 
-/// Durable principal control stream, implemented by the existing record runtime.
-/// Opening serializes principal commands without a waiting queue. A read-only
-/// open must not create an absent stream. The returned lease owns exclusion until
-/// drop; its outstanding operations retain that ownership through completion.
+/// Durable control history of one principal request, implemented by the
+/// existing record runtime. Opening one request excludes a second open of the
+/// same request, without a waiting queue; requests of the same principal do
+/// not exclude each other. A read-only open must not create an absent stream.
+/// The returned lease owns exclusion until drop; its outstanding operations
+/// retain that ownership through completion.
 pub trait CreationStorage: Send + Sync {
-    /// Open the host-verified principal namespace. `create` selects writable
+    /// Open the host-verified principal's `request`. `create` selects writable
     /// admission or read-only lookup; absent lookup returns `None`.
     fn open_creation(
         &self,
         principal: String,
+        request: String,
         create: bool,
     ) -> CreationFuture<'_, Option<Arc<dyn CreationStorageLease>>>;
 }
 
-/// Exclusive access to one principal's immutable command history.
+/// Exclusive access to one principal request's immutable command history. A
+/// load or save naming another request is refused as an identity mismatch.
 pub trait CreationStorageLease: Send + Sync {
     /// Return the existing creation binding/progress for `request_id`, without writing.
     ///
@@ -272,7 +276,11 @@ impl CreationCoordinator {
         let storage = self.storage.clone();
         tokio::spawn(async move {
             let lease = storage
-                .open_creation(binding.actor().principal_id().into(), true)
+                .open_creation(
+                    binding.actor().principal_id().into(),
+                    binding.actor().request_id().into(),
+                    true,
+                )
                 .await
                 .map_err(CreationFailure::Storage)?
                 .ok_or_else(|| {
@@ -349,7 +357,11 @@ impl CreationCoordinator {
     ) -> Result<Option<CreationReceipt>, CreationFailure<T::Error>> {
         let lease = self
             .storage
-            .open_creation(binding.actor().principal_id().into(), false)
+            .open_creation(
+                binding.actor().principal_id().into(),
+                binding.actor().request_id().into(),
+                false,
+            )
             .await
             .map_err(CreationFailure::Storage)?;
         let saved = match lease {

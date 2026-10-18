@@ -27,6 +27,14 @@ use std::{
 };
 use tokio::runtime::Handle;
 
+/// Frames one read step folds at most while it catches up to a fixed
+/// boundary: certifying a conversation's history on open, or skipping what
+/// comes before a resume position. A long conversation opens in a few steps,
+/// and each step is still a bounded piece of work.
+const CATCH_UP_FRAMES: u64 = 4096;
+/// Frames asked of storage per page while catching up.
+const PAGE_FRAMES: usize = 64;
+
 struct State {
     certificate: TranscriptFold,
     emitter: TranscriptFold,
@@ -154,15 +162,10 @@ impl State {
         runtime: &RecordRuntime,
         stream: &StreamKey,
     ) -> Result<u64, EventReadError> {
-        if runtime
-            .find_stream(&stream.id)
-            .await
-            .map_err(map_stream)?
-            .as_ref()
-            != Some(stream)
-        {
-            return Err(EventReadError::IdentityChanged);
-        }
+        // Bounds are read by the exact key: a stream deleted, retired or
+        // created again under a new incarnation is refused there, and
+        // `map_stream` says so as `IdentityChanged`. A name lookup first
+        // would be a second store command per step answering the same thing.
         let bounds = runtime.bounds(stream).await.map_err(map_stream)?;
         if bounds.floor.offset != 0 {
             return Err(EventReadError::HistoryPruned);
@@ -176,28 +179,39 @@ impl State {
         scope: &Scope,
         limits: EventReadLimits,
     ) -> Result<EventRead, EventReadError> {
-        let tail = self.check(runtime, stream).await?;
+        // Only a reader with nothing left to emit asks where the tail is now.
+        // Any other step reads by the exact stream key, which is refused for a
+        // stream that changed identity, and checks again before publishing.
         if self.ceiling.is_none()
             && self.pending.is_empty()
             && self.emitter.downloaded() >= self.certified
         {
-            self.ceiling = Some(tail);
+            self.ceiling = Some(self.check(runtime, stream).await?);
         }
+        // The last page the certificate pass read. A live reader's emitter
+        // stands where that page starts, so it takes the certified part of
+        // the same frames instead of reading them a second time.
+        let mut certified_page = Vec::new();
         if let Some(ceiling) = self.ceiling {
-            if self.certificate.downloaded() < ceiling {
+            let budget = self
+                .certificate
+                .downloaded()
+                .saturating_add(CATCH_UP_FRAMES);
+            while self.certificate.downloaded() < ceiling.min(budget) {
                 let records = read_frames(
                     runtime,
                     stream,
                     scope,
                     self.certificate.downloaded(),
                     ceiling,
-                    16,
+                    PAGE_FRAMES,
                 )
                 .await?;
                 self.certificate.apply(&records).map_err(map_fold)?;
-                if self.certificate.downloaded() < ceiling {
-                    return Ok(EventRead::Preparing);
-                }
+                certified_page = records;
+            }
+            if self.certificate.downloaded() < ceiling {
+                return Ok(EventRead::Preparing);
             }
             self.certified = self.certificate.applied();
             self.ceiling = None;
@@ -216,65 +230,105 @@ impl State {
                 self.resume = None;
             }
         }
+        // Frames before the resume position finish only units this read
+        // skips, so they leave nothing pending and are read a page at a time:
+        // opening a long conversation, or resuming one far back, takes a few
+        // steps rather than one per frame.
+        let skip_through = self
+            .resume
+            .as_ref()
+            .map_or(0, |resume| resume.position().saturating_sub(1))
+            .min(self.certified);
+        if self.pending.is_empty() && self.emitter.downloaded() < skip_through {
+            let budget = self.emitter.downloaded().saturating_add(CATCH_UP_FRAMES);
+            while self.emitter.downloaded() < skip_through.min(budget) {
+                let records = read_frames(
+                    runtime,
+                    stream,
+                    scope,
+                    self.emitter.downloaded(),
+                    skip_through,
+                    PAGE_FRAMES,
+                )
+                .await?;
+                self.emitter.apply(&records).map_err(map_fold)?;
+                self.take_events()?;
+            }
+            if self.emitter.downloaded() < skip_through {
+                return Ok(EventRead::Preparing);
+            }
+        }
         if self.pending.is_empty() && self.emitter.downloaded() < self.certified {
-            // One frame can finish at most one unit, keeping pending output
-            // independent of the number of units in an outer save.
-            let records = read_frames(
-                runtime,
-                stream,
-                scope,
-                self.emitter.downloaded(),
-                self.certified,
-                1,
-            )
-            .await?;
+            // A page at a time, so a live turn's frames cost one read per page
+            // rather than one per frame. What it finishes waits in `pending`,
+            // which is then bounded by the page: at most `PAGE_FRAMES` frames
+            // of at most a page's bytes, published over the next steps.
+            let from = self.emitter.downloaded();
+            let shared: Vec<Record> = certified_page
+                .into_iter()
+                .filter(|record| record.position > from && record.position <= self.certified)
+                .collect();
+            let records = if shared
+                .first()
+                .is_some_and(|first| first.position == from + 1)
+            {
+                shared
+            } else {
+                read_frames(runtime, stream, scope, from, self.certified, PAGE_FRAMES).await?
+            };
             self.emitter.apply(&records).map_err(map_fold)?;
-            for event in self.emitter.take_events() {
-                let (position, index, change, bytes) = match event {
-                    FoldEvent::Change {
-                        position,
-                        index,
-                        change,
-                        bytes,
-                    } => (position, index, Some(change), bytes),
-                    FoldEvent::Gap { position } => (position, 0, None, 1),
-                };
-                let cursor = CommittedEventCursor::new(
-                    self.cursor.session().clone(),
-                    self.cursor.incarnation().clone(),
-                    position,
-                    Some(index),
-                );
-                if let Some(resume) = &self.resume {
-                    if &cursor == resume {
-                        self.cursor = cursor;
-                        self.resume = None;
-                        continue;
-                    }
-                    if position > resume.position() {
-                        return Err(EventReadError::InvalidCursor);
-                    }
-                    continue;
-                }
-                let event = match change {
-                    Some(change) => CommittedEvent::boxed_change(cursor, change),
-                    None => CommittedEvent::gap(cursor),
-                };
-                self.pending.push_back((event, bytes));
-            }
-            if let Some(resume) = &self.resume {
-                if resume.change_index().is_none() && self.emitter.applied() == resume.position() {
-                    self.cursor = resume.clone();
-                    self.resume = None;
-                } else if self.emitter.downloaded() >= resume.position() {
-                    return Err(EventReadError::InvalidCursor);
-                }
-            }
+            self.take_events()?;
         }
         // Finish fallible source I/O before removing pending delivery. A failed
         // metadata recheck leaves both payload and delivery cursor retryable.
         let checked = self.check(runtime, stream).await.map(|_| ());
         self.publish(limits, checked)
+    }
+    /// Turn the emitter's finished units into pending events, skipping the
+    /// ones before the resume position and settling the resume on reaching it.
+    fn take_events(&mut self) -> Result<(), EventReadError> {
+        for event in self.emitter.take_events() {
+            let (position, index, change, bytes) = match event {
+                FoldEvent::Change {
+                    position,
+                    index,
+                    change,
+                    bytes,
+                } => (position, index, Some(change), bytes),
+                FoldEvent::Gap { position } => (position, 0, None, 1),
+            };
+            let cursor = CommittedEventCursor::new(
+                self.cursor.session().clone(),
+                self.cursor.incarnation().clone(),
+                position,
+                Some(index),
+            );
+            if let Some(resume) = &self.resume {
+                if &cursor == resume {
+                    self.cursor = cursor;
+                    self.resume = None;
+                    continue;
+                }
+                if position > resume.position() {
+                    return Err(EventReadError::InvalidCursor);
+                }
+                continue;
+            }
+            let event = match change {
+                Some(change) => CommittedEvent::boxed_change(cursor, change),
+                None => CommittedEvent::gap(cursor),
+            };
+            self.pending.push_back((event, bytes));
+        }
+        if let Some(resume) = &self.resume {
+            if resume.change_index().is_none() && self.emitter.applied() == resume.position() {
+                self.cursor = resume.clone();
+                self.resume = None;
+            } else if self.emitter.downloaded() >= resume.position() {
+                return Err(EventReadError::InvalidCursor);
+            }
+        }
+        Ok(())
     }
     fn publish(
         &mut self,

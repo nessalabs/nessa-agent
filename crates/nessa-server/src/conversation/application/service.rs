@@ -258,6 +258,8 @@ impl ConversationLimits {
         text.len() > self.max_input_bytes
     }
 }
+/// A small service's limits. The gateway does not use these: it passes
+/// `limits.liveConversations` from its configuration.
 impl Default for ConversationLimits {
     fn default() -> Self {
         Self {
@@ -743,7 +745,10 @@ struct Inner {
     access_policy: Arc<dyn ConversationAccessPolicyEvaluator>,
     limits: ConversationLimits,
     conversations: Mutex<HashMap<ConversationId, Arc<Slot>>>,
-    creation: Mutex<()>,
+    /// One conversation's create, reopen and deletion decisions, in turn.
+    /// Per conversation, so creating one never waits behind another's
+    /// metadata and audit writes.
+    creation: ConversationLocks,
     retirement: OnceLock<ActionContext>,
     admission: Arc<RwLock<()>>,
     // Counts stop passes, bumped the moment one is decided and before it waits
@@ -1224,7 +1229,7 @@ impl ConversationService {
                 access_policy,
                 limits,
                 conversations: Mutex::new(HashMap::new()),
-                creation: Mutex::new(()),
+                creation: ConversationLocks::default(),
                 retirement: OnceLock::new(),
                 admission: Arc::new(RwLock::new(())),
                 stops: watch::channel(0).0,
@@ -1294,7 +1299,7 @@ impl ConversationService {
         // Serialize create/reopen decisions without holding the live-owner map
         // across repository or audit I/O. Existing ownership is checked before
         // this request can reserve capacity or open a provider.
-        let creation_guard = service.inner.creation.lock().await;
+        let creation_guard = service.inner.creation.lock(&id).await;
         if let Some(record) = load_conversation(service.inner.metadata.as_ref(), &id).await? {
             // A deleted conversation is not created again under its
             // identity, whoever asks; only its owner is told why
@@ -1313,7 +1318,7 @@ impl ConversationService {
                 // finished since the check above leaves no reopen
                 // recorded after its deletion
                 // (`a_reopen_racing_a_delete_is_not_recorded_after_the_deletion`).
-                let _creation = service.inner.creation.lock().await;
+                let _creation = service.inner.creation.lock(&id).await;
                 let current = load_conversation(service.inner.metadata.as_ref(), &id)
                     .await?
                     .ok_or(ConversationError::NotFound)?;
@@ -4355,7 +4360,7 @@ impl ConversationService {
             }
         }
         let record = {
-            let _creation = self.inner.creation.lock().await;
+            let _creation = self.inner.creation.lock(id).await;
             self.inner
                 .metadata
                 .record_deletion(id, proposed.clone())

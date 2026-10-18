@@ -1,6 +1,7 @@
 //! Rows the export cut keeps from this database. The journal is read here
 //! because this store owns it.
 
+use super::cached::CachedSql;
 use std::path::Path;
 
 use super::failed;
@@ -108,14 +109,14 @@ pub struct ExportFacts {
 
 fn watermark(connection: &Connection) -> Result<String, ConversationError> {
     let head: i64 = connection
-        .query_row(
+        .cached_row(
             "SELECT COALESCE(MAX(head), 0) FROM catalogue_owners",
             [],
             |row| row.get(0),
         )
         .map_err(failed)?;
     let journal: i64 = connection
-        .query_row(
+        .cached_row(
             "SELECT COALESCE(MAX(sequence), 0) FROM share_grant_changes",
             [],
             |row| row.get(0),

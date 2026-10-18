@@ -800,10 +800,8 @@ pub(crate) async fn commit_expected<R: EventRuntime>(
         }
         cursor = receipt.record.cursor.clone();
     }
-    let (verified, cursor) = matching_suffix(runtime, stream, after, expected).await?;
-    if verified != expected.len() {
-        return Err(FactCommitError::InvalidStream);
-    }
+    // Each receipt above named this exact event at the next offset, so the
+    // suffix is the expected one without reading it back.
     Ok(cursor)
 }
 

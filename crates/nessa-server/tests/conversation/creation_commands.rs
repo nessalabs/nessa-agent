@@ -54,6 +54,20 @@ fn id() -> ConversationId {
     ConversationId::new(&uuid::Uuid::new_v4().to_string()).unwrap()
 }
 
+/// The stage `request`'s creation receipt was saved at, or `None` when that
+/// request saved none.
+async fn saved_stage(storage: &RecordStorage, request: &str) -> Option<CreationStage> {
+    let lease = storage
+        .open_creation("person".into(), request.into(), false)
+        .await
+        .unwrap()?;
+    lease
+        .load(request)
+        .await
+        .unwrap()
+        .map(|receipt| receipt.stage())
+}
+
 /// Hang ceiling for a creation step that is still doing durable work.
 ///
 /// The wait is the provider open signal or the live slot. Five seconds
@@ -739,7 +753,7 @@ async fn an_accepted_creation_can_make_its_first_attempt_after_reopen() {
     let target = id();
     let (service, storage, metadata) = fixture(&root, provider.clone());
     let lease = storage
-        .open_creation("person".into(), true)
+        .open_creation("person".into(), "request".into(), true)
         .await
         .unwrap()
         .unwrap();
@@ -822,7 +836,7 @@ async fn deletion_refuses_each_creation_state_and_read_only_lookup() {
             .unwrap();
         if let Some(stage) = stage {
             let lease = storage
-                .open_creation("person".into(), true)
+                .open_creation("person".into(), request.clone(), true)
                 .await
                 .unwrap()
                 .unwrap();
@@ -1077,16 +1091,10 @@ async fn deletion_during_initialization_refuses_the_returned_receipt() {
         task.await.unwrap(),
         Err(CreationFailure::Target(ConversationError::Deleted))
     ));
-    let lease = storage
-        .open_creation("person".into(), false)
-        .await
-        .unwrap()
-        .unwrap();
     assert_eq!(
-        lease.load("request").await.unwrap().unwrap().stage(),
-        CreationStage::Ready
+        saved_stage(&storage, "request").await,
+        Some(CreationStage::Ready)
     );
-    drop(lease);
     assert!(matches!(
         service
             .lookup_creation(
@@ -1116,12 +1124,13 @@ impl CreationStorage for LoseReply {
     fn open_creation(
         &self,
         principal: String,
+        request: String,
         create: bool,
     ) -> CreationFuture<'_, Option<Arc<dyn CreationStorageLease>>> {
         Box::pin(async move {
             Ok(self
                 .storage
-                .open_creation(principal, create)
+                .open_creation(principal, request, create)
                 .await?
                 .map(|original| {
                     Arc::new(LoseReplyLease {
@@ -1163,12 +1172,13 @@ impl CreationStorage for PanicSave {
     fn open_creation(
         &self,
         principal: String,
+        request: String,
         create: bool,
     ) -> CreationFuture<'_, Option<Arc<dyn CreationStorageLease>>> {
         Box::pin(async move {
             Ok(self
                 .storage
-                .open_creation(principal, create)
+                .open_creation(principal, request, create)
                 .await?
                 .map(|original| {
                     Arc::new(PanicSaveLease {
@@ -1402,13 +1412,7 @@ async fn a_second_creation_request_cannot_reinitialize_the_original_target() {
         )
         .await
         .unwrap();
-    let lease = storage
-        .open_creation("person".into(), false)
-        .await
-        .unwrap()
-        .unwrap();
-    assert!(lease.load("another").await.unwrap().is_none());
-    drop(lease);
+    assert!(saved_stage(&storage, "another").await.is_none());
     assert_eq!(provider.open_calls.load(Ordering::SeqCst), 1);
     let record = ConversationRepository::load(metadata.as_ref(), &target)
         .await
@@ -1447,13 +1451,7 @@ async fn a_new_request_reopens_an_owned_conversation_and_attaches_after_restart(
         .await
         .unwrap();
     assert_eq!(provider.open_calls.load(Ordering::SeqCst), 2);
-    let lease = storage
-        .open_creation("person".into(), false)
-        .await
-        .unwrap()
-        .unwrap();
-    assert!(lease.load("request-reopen").await.unwrap().is_none());
-    drop(lease);
+    assert!(saved_stage(&storage, "request-reopen").await.is_none());
     let record = ConversationRepository::load(metadata.as_ref(), &target)
         .await
         .unwrap()
@@ -1486,12 +1484,13 @@ impl CreationStorage for GateReady {
     fn open_creation(
         &self,
         principal: String,
+        request: String,
         create: bool,
     ) -> CreationFuture<'_, Option<Arc<dyn CreationStorageLease>>> {
         Box::pin(async move {
             Ok(self
                 .storage
-                .open_creation(principal, create)
+                .open_creation(principal, request, create)
                 .await?
                 .map(|original| {
                     Arc::new(GateReadyLease {
@@ -1729,7 +1728,7 @@ async fn a_ready_receipt_does_not_invent_missing_target_metadata() {
     let (service, storage, metadata) = fixture(&directory.path().join("data"), provider.clone());
     let target = id();
     let lease = storage
-        .open_creation("person".into(), true)
+        .open_creation("person".into(), "request".into(), true)
         .await
         .unwrap()
         .unwrap();

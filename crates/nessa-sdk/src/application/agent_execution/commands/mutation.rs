@@ -262,7 +262,11 @@ impl MutationCoordinator {
         let storage = self.storage.clone();
         tokio::spawn(async move {
             let lease = storage
-                .open_creation(binding.actor().principal_id().into(), true)
+                .open_creation(
+                    binding.actor().principal_id().into(),
+                    binding.actor().request_id().into(),
+                    true,
+                )
                 .await
                 .map_err(MutationFailure::Storage)?
                 .ok_or_else(|| {
@@ -374,7 +378,11 @@ impl MutationCoordinator {
     ) -> Result<Option<MutationReceipt>, MutationFailure<T::Error>> {
         let lease = self
             .storage
-            .open_creation(binding.actor().principal_id().into(), false)
+            .open_creation(
+                binding.actor().principal_id().into(),
+                binding.actor().request_id().into(),
+                false,
+            )
             .await
             .map_err(MutationFailure::Storage)?;
         let saved = match lease {

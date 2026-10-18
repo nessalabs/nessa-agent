@@ -1,0 +1,81 @@
+name: Gateway scale
+
+# Many conversations and sockets on one release gateway, with no window and no
+# model (scripts/scale/gateway-scale.mjs). Nightly at the numbers below, or by
+# hand with any of them changed; the same numbers run locally:
+#
+#   pnpm test:scale -- --conversations <n> --sockets <n> --rounds <n>
+#
+# A hosted runner has 4 cores and 16 GB; each conversation keeps its agent
+# running, so a few thousand is what fits. Ten thousand needs a bigger runner
+# or machine (see docs/design/gateway-scale.md).
+on:
+  schedule:
+    - cron: "41 5 * * *"
+  workflow_dispatch:
+    inputs:
+      conversations:
+        description: Conversations created, each with its agent running.
+        default: "2000"
+      sockets:
+        description: Client sockets the conversations are spread over.
+        default: "500"
+      rounds:
+        description: Messages sent to every conversation, one round at a time.
+        default: "2"
+      hold-seconds:
+        description: How long every conversation sits idle before the list.
+        default: "10"
+      p99-ms:
+        description: Fail a phase whose p99 is over this many ms (0 for no bound).
+        default: "0"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  scale:
+    name: Gateway at scale
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      SCALE_EVIDENCE: ${{ github.workspace }}-scale-evidence
+      # A scheduled run has no inputs; each falls back to the same default
+      # the dispatch form shows.
+      NESSA_SCALE_CONVERSATIONS: ${{ inputs.conversations || '2000' }}
+      NESSA_SCALE_SOCKETS: ${{ inputs.sockets || '500' }}
+      NESSA_SCALE_ROUNDS: ${{ inputs.rounds || '2' }}
+      NESSA_SCALE_HOLD_SECONDS: ${{ inputs.hold-seconds || '10' }}
+      NESSA_SCALE_P99_MS: ${{ inputs.p99-ms || '0' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: gateway-scale
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: ./.github/actions/pnpm-install
+      - run: cargo build --release -p nessa-server
+      - run: cargo build --release -p nessa-sdk --example scale_agent
+      - name: Run the gateway at scale
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p "$SCALE_EVIDENCE"
+          ulimit -n "$(ulimit -Hn)"
+          pnpm test:scale -- --evidence "$SCALE_EVIDENCE" 2>&1 | tee "$SCALE_EVIDENCE/scale.log"
+        timeout-minutes: 80
+      - name: Keep the evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gateway-scale-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.SCALE_EVIDENCE }}
+          if-no-files-found: ignore
+          retention-days: 14
