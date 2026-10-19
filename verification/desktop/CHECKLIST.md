@@ -1405,6 +1405,20 @@ says why where the conversations would be.
 - [ ] **No console error, page error or failed request** while any script
   runs. _Check:_ every script adds them to its failures; `smoke.mjs` reports them
   per layout as `console`.
+- [ ] **Stress opens the exact created conversation.** Repeated titles across
+  browsers must not redirect its window actions. Use the existing exact-ID row
+  selector with the title constraint; a missing ID fails rather than opening
+  another same-title row. Preserve the15-second opening/composer deadlines.
+  _Check:_ `lib/stress-conversation.test.mjs`, default and raised stress runs.
+- [ ] **Stress restart errors belong to the planned gateway outage.** Install
+  socket observation before navigation. Only exact owned `/session` refusal/reset
+  console occurrences during the action, corroborated by actual socket errors,
+  a new receiving connection after the latest observed error that remains live
+  through successful existing recovery assertions, may be
+  retained as harmless. Older duplicates, later errors, another endpoint or cause,
+  missing evidence, failed recovery and overflow stay failures. No permanent
+  pattern is installed. _Check:_ `lib/stress-restart.test.mjs` and the default
+  and raised `conversation-stress.mjs` runs in Chromium and WebKit (#1024).
 - _Harmless:_ the first page in a fresh browser asks for `/favicon.ico` and
   gets a 404 (matched by source URL in `lib/selectors.mjs`,
   `harmlessConsole`). Chromium reports a request as failed with
