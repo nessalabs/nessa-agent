@@ -164,9 +164,10 @@ const EXPECTED_FOR = {
   // Native pre-effect refusal (including Busy), or an uncertain receipt that
   // the final authoritative read must reconcile. Neither means it applied.
   model: new Set(["model_change_not_applied", "model_change_uncertain"]),
-  // A concurrent access change may settle not-applied. The final source read
-  // must still show no pending configuration; this does not count as applied.
-  mode: new Set(["approval_mode_not_applied"]),
+  // An access preset can be unavailable for the selected model, or a change
+  // can settle not-applied. Final reads must still show no pending configuration;
+  // neither outcome counts as applied.
+  mode: new Set(["approval_mode_not_applied", "approval_mode_unavailable"]),
   answer: new Set(["conversation_closed"]),
   stop: new Set(["conversation_closed"]),
 }

@@ -812,6 +812,8 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   _Check:_ model command/adapter tests; `conversation-stress.mjs`'s actual-window
   model step (default `--modelSwitches 1`, raised `--modelSwitches 6`), both
   harness profiles in focused runs; the next native prompt reports its model.
+  Positive model steps follow the existing non-model/preset steps and confirm
+  Ask through the real access shield before creating their original review.
   The existing chaos model action additionally races controls and checks no
   pending model change remains; client-only chaos does not replace window proof.
   Window stress opens each known conversation by its exact existing row ID;

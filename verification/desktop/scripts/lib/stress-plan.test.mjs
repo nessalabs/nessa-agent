@@ -65,10 +65,61 @@ test("numbers come from flags, then NESSA_STRESS_*, then defaults, and a bad one
   assert.match(describe(plan(knobsFrom({}, {}))), /^1\. /)
 })
 
-test("model switches have default and raised actual steps", () => {
-  assert.equal(plan(knobsFrom({}, {})).filter((s) => s.kind === "model").length, 1)
-  assert.equal(
-    plan(knobsFrom({ modelSwitches: "6" }, {})).filter((s) => s.kind === "model").length,
-    6,
+test("positive model steps retain default and raised counts, run last, and enter Ask", () => {
+  for (let seed = 0; seed < 50; seed += 1) {
+    for (const count of [1, 6]) {
+      const steps = plan(
+        knobsFrom({ seed: String(seed), modelSwitches: String(count) }, {}),
+      )
+      const first = steps.findIndex((step) => step.kind === "model")
+      assert.equal(steps.filter((step) => step.kind === "model").length, count)
+      assert.ok(steps.slice(first).every((step) => step.kind === "model"))
+      let mode = "ask"
+      for (const step of steps) {
+        if (step.kind === "switch") {
+          assert.equal(step.from, mode)
+          mode = step.to
+        }
+        if (step.kind === "model") {
+          assert.equal(step.mode, "ask")
+          assert.equal(mode, "ask")
+        }
+      }
+    }
+  }
+})
+
+test("the default seed preserves the existing non-model work's relative order", () => {
+  const steps = plan(knobsFrom({}, {}))
+  // A forced Ask before a card has no following switch-witness permission.
+  // Keep the original seed's required work and its existing witness turns.
+  const original = steps.filter(
+    (step, index) =>
+      step.kind !== "model" &&
+      !(step.kind === "switch" && steps[index + 1]?.after !== "switch"),
+  )
+  assert.deepEqual(
+    original.map((step) => step.kind),
+    [
+      "delegate",
+      "park",
+      "stop",
+      "long",
+      "watch",
+      "fail",
+      "reply",
+      "switch",
+      "permission",
+      "reviews",
+      "switch",
+      "permission",
+      "restart",
+      "aside",
+      "large",
+      "switch",
+      "permission",
+      "stop",
+      "aside",
+    ],
   )
 })
