@@ -1,12 +1,4 @@
 #![deny(missing_docs)]
-use crate::application::agent_execution::executions::{
-    ConfigurationControl, ConfigurationControlRequest,
-};
-
-use crate::application::agent_execution::providers::ModelConfiguration;
-use crate::application::agent_execution::providers::ProviderIdentity;
-use crate::application::agent_execution::providers::SessionConfigurationKind;
-use crate::application::agent_execution::traces::LocalTraceStore;
 
 use super::{
     attachment::{
@@ -25,9 +17,9 @@ use crate::application::agent_execution::agents::{
 };
 use crate::application::agent_execution::caller_wake::{contain_caller_wake, CallerWaiter};
 use crate::application::agent_execution::executions::{
-    limits::MAX_RETAINED_OUTPUT_EVENTS, EffortChangeOutcome, EffortLevelChange,
-    EffortLevelChangeRecord, ExecutionAudit, ExecutionAuditRecord, ExecutionEvent,
-    ExecutionRequest, ExecutionUpdate, Submitter,
+    limits::MAX_RETAINED_OUTPUT_EVENTS, ConfigurationControl, ConfigurationControlRequest,
+    EffortChangeOutcome, EffortLevelChange, EffortLevelChangeRecord, ExecutionAudit,
+    ExecutionAuditRecord, ExecutionEvent, ExecutionRequest, ExecutionUpdate, Submitter,
 };
 use crate::application::agent_execution::hooks::{
     EvaluationSuffix, HookFailureKind, HookRegistration, InvocationHook, InvocationHooks,
@@ -40,16 +32,17 @@ use crate::application::agent_execution::permissions::{
 };
 use crate::application::agent_execution::providers::{
     validate_configured_input, AgentProvider, ApprovalMode, CleanupReport, CloseOutcome,
-    ExecutionEventStream, ExecutionReportSource, ObservationFailure, ObservationFailureCause,
-    OperationCapabilities, ProviderExecutionReply, ProviderOperationFailure,
-    ProviderOperationResult, ProviderSession, ProviderSessionState, SessionCloseRequest,
+    ExecutionEventStream, ExecutionReportSource, ModelConfiguration, ObservationFailure,
+    ObservationFailureCause, OperationCapabilities, ProviderExecutionReply, ProviderIdentity,
+    ProviderOperationFailure, ProviderOperationResult, ProviderSession, ProviderSessionState,
+    SessionCloseRequest, SessionConfigurationKind,
 };
 use crate::application::agent_execution::sessions::{
     AttachmentOpenFailureSource, InvocationCancellationEvent, MessageCommitSleep, ProviderContext,
     SessionManager, StorageError,
 };
 use crate::application::agent_execution::tools::ToolReviewInput;
-use crate::application::agent_execution::traces::GenAiSpan;
+use crate::application::agent_execution::traces::{GenAiSpan, LocalTraceStore};
 use crate::domain::agent_execution::executions::{Initiation, Initiator, ToolChecking};
 use crate::domain::agent_execution::permissions::{
     CustomPermissionCancellationReason, PendingQuestion, PendingReview, PermissionAuthorityError,

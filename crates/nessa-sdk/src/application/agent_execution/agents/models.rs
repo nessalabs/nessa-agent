@@ -1,5 +1,4 @@
 //! A live model choice changes the next binding without replacing an active invocation.
-use crate::application::agent_execution::providers::ModelConfiguration;
 
 use super::lifecycle::WorkPermit;
 use super::{Agent, AgentError};
@@ -7,13 +6,13 @@ use crate::application::agent_execution::executions::{
     ConfigurationControl, ConfigurationControlRequest, ConfigurationControlStage,
     ExecutionAuditRecord,
 };
-use crate::application::agent_execution::providers::ProviderIdentity;
 use crate::application::agent_execution::{
     caller_wake::{contain_caller_wake, CallerWaiter},
     permissions::ActionContext,
     providers::{
-        AgentProvider, ModelChange, ModelChangeEffect, ProviderOperationFailure,
-        ProviderOperationResult, ProviderOperationStage, ProviderSessionState,
+        AgentProvider, ModelChange, ModelChangeEffect, ModelConfiguration, ProviderIdentity,
+        ProviderOperationFailure, ProviderOperationResult, ProviderOperationStage,
+        ProviderSessionState,
     },
 };
 use std::future::Future;

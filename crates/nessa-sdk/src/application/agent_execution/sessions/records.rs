@@ -1,9 +1,5 @@
 //! Logical Nessa fact identity, separate from an event-stream cursor or retry ID.
 //! One accepted fact can use one inline record or several sealed physical records.
-use crate::application::agent_execution::providers::ModelChangeRecord;
-use crate::application::agent_execution::providers::ProviderIdentity;
-use crate::application::agent_execution::providers::SessionConfigurationKind;
-use crate::application::agent_execution::providers::SessionConfigurationRecord;
 
 pub(crate) mod continuation;
 
@@ -14,7 +10,14 @@ use super::{
     SessionChange, SessionSnapshot, StorageError, SubmissionAcknowledgement,
 };
 use crate::{
-    application::agent_execution::{agents::AgentError, executions::ExecutionUpdate},
+    application::agent_execution::{
+        agents::AgentError,
+        executions::ExecutionUpdate,
+        providers::{
+            ModelChangeRecord, ProviderIdentity, SessionConfigurationKind,
+            SessionConfigurationRecord,
+        },
+    },
     domain::agent_execution::{
         executions::{
             ExecutionId, ExecutionOutcome, InvocationHistory, InvocationObservation,

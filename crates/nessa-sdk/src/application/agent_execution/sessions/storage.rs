@@ -1,9 +1,6 @@
 //! Typed session snapshot persistence and exclusive access contracts.
 #![deny(missing_docs)]
 
-use crate::application::agent_execution::providers::ModelChangeRecord;
-use crate::application::agent_execution::providers::SessionConfigurationRecord;
-
 use super::{
     ArtifactRecord, CommittedEventReader, CommittedStatus, CommittedViewState, CurrentLease,
     EventFuture, EventReadError, EventStart, LeaseRecord, NoteDelivery, NoteId, NoteRecord,
@@ -14,7 +11,9 @@ use crate::application::agent_execution::executions::{
     ExecutionEvent, ExecutionRequest, SubmissionMode,
 };
 use crate::application::agent_execution::permissions::ActionContext;
-use crate::application::agent_execution::providers::{ExecutionReport, ProviderIdentity};
+use crate::application::agent_execution::providers::{
+    ExecutionReport, ModelChangeRecord, ProviderIdentity, SessionConfigurationRecord,
+};
 pub use crate::domain::agent_execution::sessions::ProviderContext;
 use crate::domain::agent_execution::{
     executions::{

@@ -1,11 +1,6 @@
 //! Version 1 semantic fact bodies using the existing typed snapshot field mappings.
 //! The physical frame and the application fold are separate boundaries.
 
-use crate::application::agent_execution::providers::ModelChangeRecord;
-use crate::application::agent_execution::providers::ModelChangeTiming;
-use crate::application::agent_execution::providers::ModelConfiguration;
-use crate::application::agent_execution::providers::SessionConfigurationKind;
-use crate::application::agent_execution::providers::SessionConfigurationRecord;
 use crate::domain::model_metadata::value_objects::EffortLevel;
 
 use super::{
@@ -23,7 +18,10 @@ use super::{
 };
 use crate::{
     application::agent_execution::{
-        providers::ExecutionReport,
+        providers::{
+            ExecutionReport, ModelChangeRecord, ModelChangeTiming, ModelConfiguration,
+            SessionConfigurationKind, SessionConfigurationRecord,
+        },
         sessions::{ProviderContext, SessionChange, SessionSaveUnit, StorageError},
     },
     domain::agent_execution::{

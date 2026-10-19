@@ -1,9 +1,3 @@
-use crate::application::agent_execution::providers::ModelChangeRecord;
-use crate::application::agent_execution::providers::ModelConfiguration;
-use crate::application::agent_execution::providers::SessionConfigurationKind;
-use crate::application::agent_execution::providers::SessionConfigurationRecord;
-use crate::application::agent_execution::providers::{ModelChange, ModelChangeTiming};
-
 use super::{
     app_sources,
     artifacts::ArtifactRefusal,
@@ -27,8 +21,9 @@ use crate::application::agent_execution::{
     permissions::ActionContext,
     providers::{
         AgentProvider, ExecutionEventStream, ExecutionReport, ExecutionReportSource,
-        FailedOpenCauseSource, FailedOpenCleanup, ProviderOpenControl, ProviderOpenRequest,
-        ProviderSession,
+        FailedOpenCauseSource, FailedOpenCleanup, ModelChange, ModelChangeRecord,
+        ModelChangeTiming, ModelConfiguration, ProviderOpenControl, ProviderOpenRequest,
+        ProviderSession, SessionConfigurationKind, SessionConfigurationRecord,
     },
     tools::ToolReviewInput,
 };
