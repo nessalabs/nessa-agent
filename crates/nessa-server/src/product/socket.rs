@@ -1642,6 +1642,17 @@ async fn dispatch(
     session: &AuthenticatedSession,
     frame: RequestFrame,
 ) -> OutgoingMessage {
+    let method = frame.method.clone();
+    let response = answer_request(state, session, frame).await;
+    super::conversation::trace_refused_command(&method, &response);
+    response
+}
+
+async fn answer_request(
+    state: &ProductRouteState,
+    session: &AuthenticatedSession,
+    frame: RequestFrame,
+) -> OutgoingMessage {
     let (session, snapshot) = match current_identity(state, session).await {
         Ok(current) => current,
         Err(_) => return failure(&frame.id, "unauthorized"),
@@ -1669,10 +1680,7 @@ async fn dispatch(
     }
     match super::read_access::admit_request(state, &session, &frame).await {
         Ok(initiation) => dispatch_authorized(state, &session, frame, initiation).await,
-        Err(code) => {
-            super::conversation::trace_admission_refusal(&frame.method, code);
-            failure(&frame.id, code)
-        }
+        Err(code) => failure(&frame.id, code),
     }
 }
 

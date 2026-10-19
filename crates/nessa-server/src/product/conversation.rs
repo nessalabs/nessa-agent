@@ -71,12 +71,9 @@ pub(crate) async fn dispatch(
     let method = frame.method.clone();
     let request_id = frame.id.clone();
     match answer(state, session, frame, initiation).await {
-        Ok(response) => {
-            trace_answered_refusal(&method, &response);
-            response
-        }
+        Ok(response) => response,
         Err(error) => {
-            trace_command_refusal(&method, &error);
+            trace_refusal_causes(&method, &error);
             match error {
                 ConversationError::PermissionAnswer { error, selection } => {
                     permission_answer_failure(&request_id, error, selection)
@@ -683,24 +680,16 @@ async fn answer(
     result
 }
 
-/// A refused conversation command — any method, reads included — as a
-/// warning in the gateway log at `dispatch`, the one place every answer
-/// passes: the method, the wire code, and every cause behind it, since the
-/// code keeps only one. A read's own span may also have warned; this line
-/// is the boundary's, so a refusal before or after that span is not lost.
-fn trace_command_refusal(method: &str, error: &ConversationError) {
-    tracing::warn!(
-        method,
-        code = error_code(error).as_str(),
-        causes = %super::refusal_causes::refusal_causes(error),
-        "conversation command refused",
-    );
-}
-
-/// A refusal a check answered with its own code before the command ran —
-/// access, admission, a gateway with no conversations — on the same log
-/// line. Its code is the whole cause it kept.
-fn trace_answered_refusal(method: &str, response: &OutgoingMessage) {
+/// A refused conversation command — any method, reads included — as one
+/// warning in the gateway log, at the socket's answer to every request:
+/// admission, share commands, a check answering its own code, and an error
+/// alike. Only the method and the wire code; the causes a code keeps only
+/// one of are the line `trace_refusal_causes` writes beside it. A read's own
+/// span may also have warned.
+pub(super) fn trace_refused_command(method: &str, response: &OutgoingMessage) {
+    if !method.starts_with("conversation.") {
+        return;
+    }
     let OutgoingMessage::Response(ResponseFrame {
         ok: false,
         error: Some(error),
@@ -716,13 +705,15 @@ fn trace_answered_refusal(method: &str, response: &OutgoingMessage) {
     );
 }
 
-/// A conversation command the socket's admission refused before dispatch —
-/// its grant under current policy, or browser presence — on the same line.
-/// Lane and capacity refusals keep their own limit warnings.
-pub(super) fn trace_admission_refusal(method: &str, code: &str) {
-    if method.starts_with("conversation.") {
-        tracing::warn!(method, code, "conversation command refused");
-    }
+/// Every cause behind a refusal answered as an error, beside its
+/// `conversation command refused` line: the wire code keeps only one.
+fn trace_refusal_causes(method: &str, error: &ConversationError) {
+    tracing::warn!(
+        method,
+        code = error_code(error).as_str(),
+        causes = %super::refusal_causes::refusal_causes(error),
+        "conversation command refusal causes",
+    );
 }
 
 /// Refuse a review's or a question's key that is not 32 lowercase hex
