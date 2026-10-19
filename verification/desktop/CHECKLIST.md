@@ -1976,14 +1976,6 @@ logical attribution and the mapped provider wire option. Service tests keep a
 second review pending and require live publication after success or consumption
 with a typed failure.
 
-- [ ] **Stress opens the intended conversation when titles repeat across engines** (#329).
-  `conversation-stress.mjs` selects the created conversation's exact list-row
-  identity for asides, parked and long conversations, and when returning to
-  the main conversation. The unchanged two-engine default and raised runs must
-  deliver every second message to its own conversation even with duplicate
-  titles. Bare-Node regressions cover either duplicate row order and an absent
-  target; a missing target must fail rather than open another matching title.
-
 - [ ] **Stopping a parent cancels owned child and grandchild turns by default** (#329).
   `parent-stop.mjs` creates them through the actual source-bound `nessa-agents`
   tools and clicks the window composer's ordinary Stop button. Chromium and
