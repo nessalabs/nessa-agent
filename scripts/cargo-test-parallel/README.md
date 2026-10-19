@@ -14,6 +14,16 @@ of that selection and owns all doctests. Linux/macOS use `all`. Unit and real
 process tests assert the partition union and intersection; workflow-contract
 tests hold the build arguments, platform coverage, guards and aggregate needs.
 
+On GitHub Actions, `diagnostics.mjs` copies the last 16,384 output characters
+from each failed child into one escaped error annotation. This exposes the
+executable, exit code and bounded output (including libtest's failure section)
+through the checks API when full logs are unavailable. Truncation is explicit;
+the full prefixed output remains in the normal log. The decorator forwards the
+same command, arguments, output callbacks, result and thrown error. It adds no
+retry, timeout, test filter or interpretation of whether output means success.
+The real-Cargo regression asserts that a synthetic server-library assertion
+appears in the annotation while the runner still exits 1 for libtest's exit 101.
+
 | Result | Next action |
 | --- | --- |
 | Build fails or emits no executable | Fail before running tests |

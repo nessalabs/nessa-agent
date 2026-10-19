@@ -4,12 +4,15 @@
 mod deletion_inventory;
 mod export;
 mod ports;
+mod restore_planning;
 mod verification;
 mod verification_format;
 
 pub use verification_format::{
     DecodedManifest, DeletionReadError, ManifestReadError, VerificationFormat,
 };
+
+pub use restore_planning::{plan_offline_restore, OfflineRestorePlan};
 
 pub use verification::{
     verify_bundle, InventoryVerification, ManifestMacVerifier, VerificationFailure,
