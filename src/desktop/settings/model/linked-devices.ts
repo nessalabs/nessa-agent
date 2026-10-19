@@ -70,6 +70,27 @@ export interface Enrollment {
   readonly terminal?: TerminalCause
 }
 
+/** How a saved linking change takes effect, as `pairing.setLinking` answered. */
+export type LinkingApply = "unchanged" | "restarting"
+
+/** A linking change the gateway saved. */
+export interface LinkingChange {
+  readonly enabled: boolean
+  readonly applies: LinkingApply
+}
+
+/**
+ * The switch while the gateway starts again with a change: the value it is
+ * moving to, and whether the connection has dropped since. A read before the
+ * drop still answers for the old gateway, so only one after it ends this.
+ */
+export interface Switching {
+  readonly enabled: boolean
+  readonly dropped: boolean
+  /** The gateway answered restarting; false when its answer was lost. */
+  readonly confirmed: boolean
+}
+
 /** What a read of linking, enrollments and devices answered. */
 export type ReadValue =
   | { readonly kind: "off" }
@@ -103,6 +124,8 @@ export type FailureKind =
   | "unavailable"
   | "notFound"
   | "slotOccupied"
+  | "addressInUse"
+  | "auditUnavailable"
   | "capacity"
   | "conflict"
   | "ineligible"
@@ -124,6 +147,10 @@ export type Outcome<T> =
       /** A refresh whose cancel succeeded and whose create did not. */
       readonly cancelled?: boolean
     }
+
+/** What the switch's last change said, shown under it. */
+export type LinkingNoticeKind =
+  FailureKind | "restarting" | "stalled" | "unconfirmed" | "linkingBusy"
 
 /** What the last answer said, when it said something the rows do not. */
 export type NoticeKind =
@@ -156,6 +183,7 @@ export type PendingRequest =
   | { readonly kind: "deny"; readonly seq: number; readonly invitationId: string }
   | { readonly kind: "status"; readonly seq: number; readonly invitationId: string }
   | { readonly kind: "revoke"; readonly seq: number; readonly credentialId: string }
+  | { readonly kind: "setLinking"; readonly seq: number; readonly enabled: boolean }
 
 export interface LinkedDevicesState {
   readonly connection: "connecting" | "connected" | "unreachable"
@@ -170,6 +198,10 @@ export interface LinkedDevicesState {
   readonly confirmRevoke: string | null
   readonly pending: PendingRequest | null
   readonly seq: number
+  /** Set while the gateway starts again to apply the switch. */
+  readonly switching: Switching | null
+  /** What the switch's last change said. */
+  readonly linkingNotice: LinkingNoticeKind | null
 }
 
 export type LinkedDevicesEvent =
@@ -191,6 +223,10 @@ export type LinkedDevicesEvent =
   | { readonly type: "cancelRevoke" }
   | { readonly type: "confirmRevoke" }
   | { readonly type: "poll" }
+  /** The person flipped the Native linking switch. */
+  | { readonly type: "setLinking"; readonly enabled: boolean }
+  /** A restart has not been seen through within its wait. */
+  | { readonly type: "switchStalled" }
 
 export function initialLinkedDevicesState(): LinkedDevicesState {
   return {
@@ -204,19 +240,28 @@ export function initialLinkedDevicesState(): LinkedDevicesState {
     confirmRevoke: null,
     pending: null,
     seq: 0,
+    switching: null,
+    linkingNotice: null,
   }
 }
 
 /* ——— What the window says. None of these sentences names a wire code. ——— */
 
-const EXAMPLE_ADDRESS = "127.0.0.1:47650"
-
 export const sentences = {
   checking: "Checking whether linking is on.",
   notConfigured: "Linking is off on this gateway.",
-  enable: `To turn it on, add "native": { "listenAddress": "${EXAMPLE_ADDRESS}" } to this gateway's config.json and restart it. The address has to be numbers, not a name.`,
-  disable:
-    "To turn it off, remove native.listenAddress from config.json and restart the gateway.",
+  restartNote:
+    "Changing this restarts the gateway. Running agents pick up where they left off.",
+  restarting: "Restarting the gateway to apply this.",
+  stalled:
+    "The gateway has not come back yet. The change is saved and applies when it starts.",
+  addressInUse:
+    "Linking could not start: another program is using its port. Nothing was changed.",
+  auditUnavailable:
+    "The gateway could not record this change. The switch shows where linking stands now.",
+  linkingBusy: "The gateway is applying another change. Try again in a moment.",
+  unconfirmed:
+    "The gateway has not answered yet. The switch shows where linking stood when it last did.",
   on: "Devices can pair with this gateway.",
   refused:
     "This sign-in cannot manage credentials and read conversations. Run auth recover-owner, then sign in again.",
@@ -264,6 +309,8 @@ export const noticeText: Record<NoticeKind, string> = {
   unavailable: sentences.unavailable,
   notFound: sentences.notFound,
   slotOccupied: sentences.slotOccupied,
+  addressInUse: sentences.addressInUse,
+  auditUnavailable: sentences.auditUnavailable,
   capacity: sentences.capacity,
   conflict: sentences.conflict,
   ineligible: sentences.ineligible,
@@ -280,7 +327,34 @@ export const noticeText: Record<NoticeKind, string> = {
   unreachable: sentences.unreachable,
 }
 
+/** What the switch's notice says. Total over {@link LinkingNoticeKind}. */
+export const linkingNoticeText: Record<LinkingNoticeKind, string> = {
+  ...noticeText,
+  restarting: sentences.restarting,
+  stalled: sentences.stalled,
+  linkingBusy: sentences.linkingBusy,
+  unconfirmed: sentences.unconfirmed,
+}
+
 /* ——— What may be done now ——— */
+
+/**
+ * Whether the switch may be flipped: the gateway answered on or off, can be
+ * reached, nothing is in flight, and no restart is under way.
+ */
+export function canToggle(state: LinkedDevicesState): boolean {
+  return (
+    state.connection === "connected" &&
+    (state.linking === "on" || state.linking === "off") &&
+    state.pending === null &&
+    state.switching === null
+  )
+}
+
+/** Where the switch stands: the value a restart is moving to, else the gateway's. */
+export function linkingShown(state: LinkedDevicesState): boolean {
+  return state.switching ? state.switching.enabled : state.linking === "on"
+}
 
 /** One request at a time, while linking is on and the gateway can be reached. */
 export function canAct(state: LinkedDevicesState): boolean {
@@ -298,6 +372,7 @@ export function canPoll(state: LinkedDevicesState): boolean {
     state.connection === "connected" &&
     state.pending === null &&
     state.confirmRevoke === null &&
+    state.switching === null &&
     (state.linking === "on" || (state.linking === "unknown" && state.notice !== null))
   )
 }
@@ -539,10 +614,18 @@ function waitingAfter(
 }
 
 function answeredRead(
-  state: LinkedDevicesState,
+  before: LinkedDevicesState,
   pending: Extract<PendingRequest, { kind: "read" }>,
   outcome: Outcome<ReadValue>,
 ): LinkedDevicesState {
+  // A read after the restart's drop answers for the new gateway: the switch
+  // shows what it found. One before the drop still answers for the old one.
+  // A gateway that answers has answered: "not answered yet" no longer holds.
+  const state: LinkedDevicesState = before.switching?.dropped
+    ? { ...before, switching: null, linkingNotice: null }
+    : outcome.ok && before.switching === null && before.linkingNotice === "unconfirmed"
+      ? { ...before, linkingNotice: null }
+      : before
   if (!outcome.ok) {
     const wipe = wipeFor(outcome.failure)
     const notice =
@@ -622,6 +705,55 @@ function applyStatus(
   }
 }
 
+/**
+ * A linking change. Restarting holds the switch at its new value until a
+ * read after the reconnect. So does an answer lost on the way: the restart
+ * may have closed the socket first, and only the gateway that answers next
+ * can say. Anything else reads again, because the switch shows only what the
+ * gateway says.
+ */
+function answeredSetLinking(
+  state: LinkedDevicesState,
+  pending: Extract<PendingRequest, { kind: "setLinking" }>,
+  outcome: Outcome<LinkingChange>,
+): LinkedDevicesState {
+  if (!outcome.ok && outcome.failure.kind === "unanswered")
+    return {
+      ...state,
+      pending: null,
+      switching: {
+        enabled: pending.enabled,
+        dropped: state.connection === "unreachable",
+        confirmed: false,
+      },
+      linkingNotice: null,
+    }
+  if (!outcome.ok)
+    return begin(
+      {
+        ...state,
+        pending: null,
+        // Busy here is another change or a restart, not another pairing.
+        linkingNotice:
+          outcome.failure.kind === "busy" ? "linkingBusy" : outcome.failure.kind,
+      },
+      { kind: "read" },
+      state.notice,
+    )
+  if (outcome.value.applies === "restarting")
+    return {
+      ...state,
+      pending: null,
+      switching: { enabled: pending.enabled, dropped: false, confirmed: true },
+      linkingNotice: "restarting",
+    }
+  return begin(
+    { ...state, pending: null, linkingNotice: null },
+    { kind: "read" },
+    state.notice,
+  )
+}
+
 function answered(
   state: LinkedDevicesState,
   seq: number,
@@ -677,6 +809,8 @@ function answered(
               : said(outcome.failure.kind, "read"),
         }
       return applyStatus(state, outcome.value as Enrollment)
+    case "setLinking":
+      return answeredSetLinking(state, pending, outcome as Outcome<LinkingChange>)
     case "revoke":
       if (!outcome.ok) {
         const asked = { ...state, confirmRevoke: null }
@@ -698,13 +832,22 @@ export function linkedDevicesReducer(
 ): LinkedDevicesState {
   switch (event.type) {
     case "connected": {
-      const next: LinkedDevicesState = { ...state, connection: "connected" }
+      // A gateway back after a stalled restart has its own answer to give.
+      const back =
+        state.connection === "unreachable" &&
+        (state.linkingNotice === "stalled" || state.linkingNotice === "unconfirmed")
+      const next: LinkedDevicesState = {
+        ...state,
+        connection: "connected",
+        linkingNotice: back ? null : state.linkingNotice,
+      }
       return next.pending === null ? begin(next, { kind: "read" }, null) : next
     }
     case "unreachable":
       return {
         ...state,
         connection: "unreachable",
+        switching: state.switching && { ...state.switching, dropped: true },
         notice:
           state.notice?.from === "action" ? state.notice : said("unreachable", "read"),
       }
@@ -767,6 +910,34 @@ export function linkedDevicesReducer(
     case "confirmRevoke": {
       if (!canAct(state) || state.confirmRevoke === null) return state
       return begin(state, { kind: "revoke", credentialId: state.confirmRevoke }, null)
+    }
+    case "setLinking":
+      if (!canToggle(state) || event.enabled === (state.linking === "on")) return state
+      return begin(
+        { ...state, linkingNotice: null },
+        { kind: "setLinking", enabled: event.enabled },
+        state.notice,
+      )
+    case "switchStalled": {
+      if (state.switching === null) return state
+      // The gateway is back and its read is on the way: that read says
+      // where linking stands, and ends the switching itself.
+      if (
+        state.switching.dropped &&
+        state.connection === "connected" &&
+        state.pending?.kind === "read"
+      )
+        return state
+      // The switch goes back to what the gateway last said, and says why: a
+      // change it confirmed is saved; one whose answer was lost may not be.
+      const stalled: LinkedDevicesState = {
+        ...state,
+        switching: null,
+        linkingNotice: state.switching.confirmed ? "stalled" : "unconfirmed",
+      }
+      return stalled.connection === "connected" && stalled.pending === null
+        ? begin(stalled, { kind: "read" }, stalled.notice)
+        : stalled
     }
     case "poll":
       if (!canPoll(state)) return state

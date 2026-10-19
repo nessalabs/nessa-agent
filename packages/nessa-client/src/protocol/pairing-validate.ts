@@ -7,12 +7,14 @@
 import {
   PairingActivationStop,
   PairingInitiatorKind,
+  PairingLinkingApply,
   PairingOwnerPhase,
   PairingTerminalCause,
   type PairingApproveResult,
   type PairingCreateResult,
   type PairingOwnerStatus,
   type PairingPendingResult,
+  type PairingSetLinkingResult,
 } from "../generated/product.js"
 
 const invitationBytes = 16
@@ -169,4 +171,14 @@ export function pairingApproveResult(value: unknown): PairingApproveResult {
     status: pairingOwnerStatus(own(item, "status")),
     ...(activationStopped ? { activationStopped } : {}),
   }
+}
+
+/** The answer to `pairing.setLinking`. */
+export function pairingSetLinkingResult(value: unknown): PairingSetLinkingResult {
+  const item = record(value)
+  const enabled = own(item, "enabled")
+  if (typeof enabled !== "boolean") invalid("enabled")
+  const applies = member(PairingLinkingApply, own(item, "applies"))
+  if (!applies) invalid("applies")
+  return { enabled, applies }
 }

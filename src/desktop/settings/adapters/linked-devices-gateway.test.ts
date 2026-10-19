@@ -56,6 +56,7 @@ function client(partial: Partial<LinkedDevicesClient> = {}): LinkedDevicesClient
       approve: vi.fn(),
       deny: vi.fn(),
       cancel: vi.fn(),
+      setLinking: vi.fn(),
     },
     credentials: {
       issue: vi.fn(),

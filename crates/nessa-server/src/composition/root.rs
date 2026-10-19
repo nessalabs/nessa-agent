@@ -242,6 +242,8 @@ impl CompositionRoot {
             warm_ups,
             mcp,
             native,
+            #[cfg(unix)]
+            restart,
         } = super::local_auth::product_state(&config, dependencies.clock.clone(), bundle).await?;
         let conversations = product.conversations.clone();
         // Shared with the retirement below, which asks whether any of them may
@@ -505,7 +507,25 @@ impl CompositionRoot {
         // A panic before publication leaves the report unconfirmed.
         let report: Arc<ReportSlot> = Arc::new(Mutex::new(None));
         let slot = report.clone();
-        let stop = stop_signal(shutdown_signal(), native_watch);
+        // A restart `pairing.setLinking` asked for stops the run the way a
+        // process signal does; the run then starts itself again, below.
+        // A signal stops it for good, before the restart or during its drain
+        // (`SelfRestart` owns that order).
+        #[cfg(unix)]
+        let asked = crate::core::self_restart::stop_or_restart(shutdown_signal(), restart.clone());
+        #[cfg(not(unix))]
+        let asked = shutdown_signal();
+        let stop = stop_signal(asked, native_watch);
+        // The native listener ending stops the run too: a restart not yet
+        // asked for does not happen.
+        #[cfg(unix)]
+        let stop = {
+            let restart = restart.clone();
+            async move {
+                stop.await;
+                restart.stop_unless_restarting();
+            }
+        };
         let (served, cleanup) = serve_with_cleanup(listener, router, stop, async move {
             // Native peers are woken before anything else is waited on;
             // their drain is joined last, into the same report (row S12).
@@ -579,7 +599,25 @@ impl CompositionRoot {
         })
         .await;
         let native_failed = *native_failed.borrow();
-        compose_run_result(served, native_failed, &report, cleanup)
+        let ended = compose_run_result(served, native_failed, &report, cleanup);
+        #[cfg(unix)]
+        if ended.is_ok() && restart.restarts() {
+            use crate::core::self_restart::RestartEnd;
+            tracing::info!("nessa starting again to apply its saved configuration");
+            restart.finish(RestartEnd::Exec);
+            let error = crate::core::self_restart::exec_again();
+            restart.finish(RestartEnd::ExecFailed);
+            // A serve failure: non-zero, so launchd starts a managed gateway
+            // again, and a standalone one says why it ended.
+            return Err(RunError::Serve(std::io::Error::new(
+                error.kind(),
+                format!("nessa could not start itself again: {error}"),
+            )));
+        }
+        // A restart still held did not happen: a stop won, or the drain failed.
+        #[cfg(unix)]
+        restart.finish(crate::core::self_restart::RestartEnd::Cancelled);
+        ended
     }
 }
 
@@ -676,7 +714,10 @@ async fn stop_signal(
             None => std::future::pending().await,
         }
     };
+    // The signal first: when it and the native listener end together, the
+    // signal's own handling (a restart's drain keeps listening) still runs.
     tokio::select! {
+        biased;
         () = signal => {}
         () = native_ended => {}
     }
