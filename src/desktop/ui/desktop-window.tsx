@@ -60,6 +60,7 @@ export function DesktopWindow({
       <SettingsHost
         {...props}
         open={settings.open && startup === null}
+        tab={settings.tab}
         onClose={settings.close}
       />
       <StartupFallback />

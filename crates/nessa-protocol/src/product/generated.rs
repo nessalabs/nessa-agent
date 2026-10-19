@@ -1003,6 +1003,13 @@ pub struct ConversationArchiveParams {
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationRenameParams {
+    pub conversation_id: String,
+    pub request_id: String,
+    pub title: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConversationDeleteParams {
     pub conversation_id: String,
     pub request_id: String,
@@ -2828,6 +2835,7 @@ pub mod product_method {
     pub const CONVERSATION_CLOSE: &str = "conversation.close";
     pub const CONVERSATION_ARCHIVE: &str = "conversation.archive";
     pub const CONVERSATION_UNARCHIVE: &str = "conversation.unarchive";
+    pub const CONVERSATION_RENAME: &str = "conversation.rename";
     pub const CONVERSATION_DELETE: &str = "conversation.delete";
     pub const CONVERSATION_REORDER: &str = "conversation.reorder";
     pub const ARTIFACT_READ: &str = "artifact.read";
@@ -3066,7 +3074,7 @@ pub fn wire_shape_product_session_ready(value: &Value) -> bool {
         }) && object.get("methods").is_some_and(|field| {
             let _ = field;
             field.as_array().is_some_and(|items| {
-                items.len() <= 74
+                items.len() <= 75
                     && items.iter().all(|item| {
                         let _ = item;
                         item.is_string()
@@ -3117,6 +3125,7 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "conversation.close",
     "conversation.archive",
     "conversation.unarchive",
+    "conversation.rename",
     "conversation.delete",
     "conversation.reorder",
     "artifact.read",
@@ -3227,6 +3236,7 @@ pub fn action_for_method(method: &str) -> Option<&'static str> {
         | "conversation.close"
         | "conversation.archive"
         | "conversation.unarchive"
+        | "conversation.rename"
         | "conversation.delete"
         | "conversation.reorder"
         | "attachment.begin"

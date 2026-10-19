@@ -9,12 +9,20 @@ import { createRoot, type Root } from "react-dom/client"
 import { Provider } from "react-redux"
 import { afterEach, beforeEach, expect, it } from "vitest"
 import { ClockProvider } from "../../../../clock"
-import { loadWorkspace } from "../../adapters/store/commands"
-import { settle, testStore } from "../../testing"
+import {
+  deleteAsked,
+  followWorkspace,
+  loadWorkspace,
+  renameStarted,
+} from "../../adapters/store/commands"
+import { selectFocusedSessionId, selectSession } from "../../adapters/store/selectors"
+import { fakeSource, settle, testStore } from "../../testing"
+import { DeleteSessionHost } from "../session-row-actions"
 import { SessionList } from "./session-list"
 
 let host: HTMLDivElement
 let root: Root
+let unfollow = () => {}
 
 beforeEach(() => {
   ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -30,18 +38,22 @@ beforeEach(() => {
 })
 
 afterEach(async () => {
+  unfollow()
   await act(async () => root.unmount())
   host.remove()
 })
 
-async function shown() {
-  const store = testStore()
+async function shown(source = fakeSource()) {
+  const store = testStore(source)
+  // The source's updates reach the store, as the window follows them.
+  unfollow = store.dispatch(followWorkspace())
   await store.dispatch(loadWorkspace())
   await act(async () => {
     root.render(
       <Provider store={store}>
         <ClockProvider now={() => 1_000}>
           <SessionList />
+          <DeleteSessionHost />
         </ClockProvider>
       </Provider>,
     )
@@ -101,4 +113,160 @@ it("a query that matches nothing shows the kit's empty state, and clearing it br
   await act(async () => type(""))
   expect(host.querySelector("[data-slot=empty-state]")).toBeNull()
   expect(host.querySelectorAll(".desktop-list-row").length).toBeGreaterThan(0)
+})
+
+/** The first row that is not the open one, and its id. */
+function quietRow() {
+  const row = [...host.querySelectorAll<HTMLElement>("[data-session-row]")].find(
+    (each) => !each.hasAttribute("data-selected"),
+  )
+  if (!row) throw new Error("no unselected row")
+  return { row, id: row.getAttribute("data-session-row") ?? "" }
+}
+
+async function press(element: Element | null) {
+  if (!element) throw new Error("nothing to press")
+  await act(async () => {
+    element.dispatchEvent(
+      new MouseEvent("pointerdown", { bubbles: true, cancelable: true, button: 0 }),
+    )
+    element.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }))
+    await settle()
+  })
+}
+
+/** Opens a row's "More" menu, as the pointer does. */
+async function more(row: HTMLElement) {
+  const trigger = row.querySelector<HTMLElement>('[data-session-action="more"]')
+  if (!trigger) throw new Error("no More button")
+  // A pointer press does not focus the button; in jsdom a menu opened from a
+  // focused trigger closes as it opens, so focus is let go first.
+  if (document.activeElement instanceof HTMLElement) document.activeElement.blur()
+  await act(async () => {
+    trigger.dispatchEvent(
+      new MouseEvent("pointerdown", { bubbles: true, cancelable: true, button: 0 }),
+    )
+    await settle()
+  })
+}
+
+const menuWords = () =>
+  [...document.querySelectorAll("[role=menuitem]")].map((item) =>
+    item.textContent?.trim(),
+  )
+
+it("a row's Archive button archives it, and does not open it", async () => {
+  const source = fakeSource()
+  const store = await shown(source)
+  const focused = selectFocusedSessionId(store.getState())
+  const { row, id } = quietRow()
+  const archive = row.querySelector('[data-session-action="archive"]')
+  expect(archive?.getAttribute("aria-label")).toContain("Archive")
+  expect(archive?.getAttribute("tabindex")).toBe("-1")
+  await press(archive)
+  expect(source.calls).toContainEqual(["archive", id, "person"])
+  expect(selectFocusedSessionId(store.getState())).toBe(focused)
+  expect(host.querySelector(`[data-session-row="${id}"]`)).toBeNull()
+})
+
+it("a row's More menu holds what the row can do, less the ways to open it, and Rename edits in place", async () => {
+  const source = fakeSource()
+  const store = await shown(source)
+  const { row, id } = quietRow()
+  await more(row)
+  expect(menuWords()).toEqual(["Rename", "Pin to Sidebar", "Archive", "Delete…"])
+  expect(row.getAttribute("data-actions")).toBe("true")
+
+  // Rename edits the title in place: Escape keeps what was there, ↩ what was typed.
+  const before = selectSession(store.getState(), id)?.title
+  await press(
+    [...document.querySelectorAll("[role=menuitem]")].find(
+      (item) => item.textContent === "Rename",
+    ) ?? null,
+  )
+  expect(menuWords()).toEqual([])
+  expect(row.hasAttribute("data-actions")).toBe(false)
+  expect(field(row)?.value).toBe(before)
+  expect(row.querySelector('[data-session-action="more"]')).toBeNull()
+  await type(row, "Something else", "Escape")
+  expect(field(row)).toBeNull()
+  expect(source.calls.some((call) => call[0] === "rename")).toBe(false)
+  await act(async () => store.dispatch(renameStarted({ sessionId: id })))
+  await type(row, "  Rain   plan  ", "Enter")
+  expect(field(row)).toBeNull()
+  // What was typed goes to the source, which keeps what its store does of it.
+  expect(source.calls).toContainEqual(["rename", id, "  Rain   plan  ", "person"])
+  expect(selectSession(store.getState(), id)?.title).toBe("Rain plan")
+})
+
+const field = (row: HTMLElement) =>
+  row.ownerDocument.querySelector<HTMLInputElement>(
+    `[data-session-row="${row.getAttribute("data-session-row")}"] [data-session-rename]`,
+  )
+
+async function type(row: HTMLElement, value: string, key?: string) {
+  await act(async () => {
+    const input = field(row)
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(
+      input,
+      value,
+    )
+    input?.dispatchEvent(new Event("input", { bubbles: true }))
+    if (key) input?.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }))
+    await settle()
+  })
+}
+
+it("a rename outlives its row being drawn again in another group", async () => {
+  const source = fakeSource()
+  const store = await shown(source)
+  const { row, id } = quietRow()
+  await act(async () => store.dispatch(renameStarted({ sessionId: id })))
+  await type(row, "Half typed")
+  // The agent starts: the session moves to Running, and its row is drawn there afresh.
+  const session = selectSession(store.getState(), id)
+  if (!session) throw new Error("no session")
+  await act(async () => {
+    source.emit({
+      kind: "session",
+      session: { ...session, status: "running", revision: session.revision + 1 },
+    })
+    await settle()
+  })
+  const moved = host.querySelector<HTMLElement>(`[data-session-row="${id}"]`)
+  expect(moved).not.toBe(row)
+  expect(moved?.closest("[role=group]")?.getAttribute("aria-label")).toMatch(/^Running/)
+  expect(field(moved as HTMLElement)?.value).toBe("Half typed")
+  expect(source.calls.some((call) => call[0] === "rename")).toBe(false)
+})
+
+it("Delete asks first: Cancel deletes nothing, Delete deletes, and keys in it stay in it", async () => {
+  const source = fakeSource()
+  const store = await shown(source)
+  const { id } = quietRow()
+  const focused = selectFocusedSessionId(store.getState())
+  const dialog = () => document.querySelector("[data-delete-session]")
+  await act(async () => store.dispatch(deleteAsked({ sessionId: id })))
+  expect(dialog()?.textContent).toContain("Delete this session?")
+  // ↓ in the question walks nothing in the list behind it.
+  await act(async () => {
+    dialog()?.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }),
+    )
+    await settle()
+  })
+  expect(selectFocusedSessionId(store.getState())).toBe(focused)
+  const cancel = [...(dialog()?.querySelectorAll("button") ?? [])].find(
+    (button) => button.textContent === "Cancel",
+  )
+  await press(cancel ?? null)
+  expect(dialog()).toBeNull()
+  expect(source.calls.some((call) => call[0] === "delete")).toBe(false)
+  expect(host.querySelector(`[data-session-row="${id}"]`)).not.toBeNull()
+
+  await act(async () => store.dispatch(deleteAsked({ sessionId: id })))
+  await press(dialog()?.querySelector('[data-delete-action="confirm"]') ?? null)
+  expect(dialog()).toBeNull()
+  expect(source.calls).toContainEqual(["delete", id, "person"])
+  expect(host.querySelector(`[data-session-row="${id}"]`)).toBeNull()
 })

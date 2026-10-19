@@ -36,6 +36,12 @@
  *               gateway parks its agent (its lease ends `idle`); it is opened
  *               in the window and the message sent there starts the agent
  *               again on its provider session
+ *   rename      another conversation is renamed from its row's More menu;
+ *               the gateway's list and the window say the new title, and it
+ *               keeps it after a message sent there
+ *   delete      another conversation is deleted from its row's More menu,
+ *               once asked; the gateway refuses it as deleted, and neither
+ *               list nor the window holds it
  *
  * Meanwhile `--parallel` background conversations take turns through the
  * gateway (every third one a watch), and `--followers` other clients follow
@@ -167,6 +173,8 @@ class Run {
     this.background = []
     /** Other conversations a step opened that the final rest check sweeps too. */
     this.checked = []
+    /** Conversations a step deleted: followers let them go, and nothing sweeps them. */
+    this.deleted = new Set()
     this.sent = new Map()
   }
 
@@ -251,6 +259,30 @@ async function open(page, title) {
     .first()
     .click({ timeout: 15_000 })
   await dock(page).locator("textarea").waitFor({ timeout: 15_000 })
+}
+
+/**
+ * Chooses `label` in the More menu of the row titled `title`: the pointer
+ * over the row shows its buttons, as a person sees them.
+ */
+async function choose(page, title, label) {
+  const row = page.locator(css.sessionRow, { hasText: title }).first()
+  await row.hover({ timeout: 15_000 })
+  await row.locator('[data-session-action="more"]').click({ timeout: 10_000 })
+  await page
+    .getByRole("menuitem", { name: label, exact: true })
+    .click({ timeout: 10_000 })
+}
+
+/** Waits for a row titled `title` in the window's list. */
+async function rowShown(page, title, failures) {
+  const shown = await page
+    .locator(css.sessionRow, { hasText: title })
+    .first()
+    .waitFor({ timeout: 15_000 })
+    .then(() => true)
+    .catch(() => false)
+  if (!shown) failures.push(`the window never listed ${JSON.stringify(title)}`)
 }
 
 /**
@@ -724,6 +756,92 @@ const steps = {
     await open(run.page, run.main.title)
   },
 
+  async rename(run, step, failures) {
+    const conversationId = randomUUID()
+    const first = prompt(run, STRESS.reply, step, " rename")
+    await run.client.conversation.create({ conversationId, agent: run.stack.agent })
+    run.checked.push(conversationId)
+    await run.client.conversation.submit(
+      run.client.conversation.prepare(conversationId, first),
+    )
+    const { view: before } = await settled(
+      run,
+      conversationId,
+      new Set(),
+      first,
+      "completed",
+      failures,
+    )
+    if (failures.length) return
+    const title = await titleOf(run, conversationId)
+    const renamed = `Renamed s${run.knobs.seed} ${step.index}`
+    // As a person does: the row's More menu under the pointer, Rename, the
+    // new title typed over the old one, and Return.
+    await choose(run.page, title, "Rename")
+    const field = run.page.locator("[data-session-rename]")
+    await field.fill(renamed)
+    await field.press("Enter")
+    const listed = await waitFor(async () => {
+      const { conversations } = await run.client.conversation.list({})
+      return (
+        conversations.find((each) => each.conversationId === conversationId)?.title ===
+        renamed
+      )
+    }, 15_000)
+    if (!listed) failures.push("the gateway's list never said the new title")
+    await rowShown(run.page, renamed, failures)
+    // A message after the rename keeps the person's title, not the first message's.
+    await open(run.page, renamed)
+    const second = prompt(run, STRESS.reply, step, " after rename")
+    const seen = await send(
+      run,
+      conversationId,
+      second,
+      failures,
+      new Set(before.messages.map((each) => each.executionId)),
+    )
+    await settled(run, conversationId, seen, second, "completed", failures)
+    if ((await titleOf(run, conversationId)) !== renamed)
+      failures.push("a message after the rename changed the title back")
+    await open(run.page, run.main.title)
+  },
+
+  async delete(run, step, failures) {
+    const conversationId = randomUUID()
+    const first = prompt(run, STRESS.reply, step, " delete")
+    await run.client.conversation.create({ conversationId, agent: run.stack.agent })
+    await run.client.conversation.submit(
+      run.client.conversation.prepare(conversationId, first),
+    )
+    await settled(run, conversationId, new Set(), first, "completed", failures)
+    if (failures.length) return
+    const title = await titleOf(run, conversationId)
+    // Marked before it goes, so a follower's stream of it ending is expected.
+    run.deleted.add(conversationId)
+    await choose(run.page, title, "Delete…")
+    const asked = run.page.locator("[data-delete-session]")
+    await asked.waitFor({ timeout: 10_000 })
+    await asked.locator('[data-delete-action="confirm"]').click({ timeout: 10_000 })
+    const gone = await waitFor(async () => {
+      try {
+        await run.client.conversation.read(conversationId)
+        return false
+      } catch (error) {
+        return error?.code === "conversation_deleted"
+      }
+    }, 60_000)
+    if (!gone) failures.push("the gateway still reads the deleted conversation")
+    const { conversations } = await run.client.conversation.list({})
+    if (conversations.some((each) => each.conversationId === conversationId))
+      failures.push("the gateway's list still holds the deleted conversation")
+    const hidden = await waitFor(
+      async () =>
+        (await run.page.locator(css.sessionRow, { hasText: title }).count()) === 0,
+      15_000,
+    )
+    if (!hidden) failures.push("the window still lists the deleted conversation")
+  },
+
   async long(run, step, failures) {
     const conversationId = randomUUID()
     await run.client.conversation.create({ conversationId, agent: run.stack.agent })
@@ -1103,6 +1221,7 @@ await main(
               limits: subscriptionLimits,
               random: random(knobs.seed * 1_000 + n + 1),
               mainId: run.main.id,
+              deleted: run.deleted,
             }),
         )
         await Promise.all(followers.map((each) => each.start()))

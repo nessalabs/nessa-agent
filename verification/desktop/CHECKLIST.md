@@ -1845,6 +1845,36 @@ the table in `docs/design/read-grants.md` › "Dialog state and order".
 - [ ] **The panel fits the window.** _Check:_ `fit-1200`, `fit-420`; with
   `--shots <dir>`, screenshots of the grants, Drive form, budget, refusal,
   changed refusal and the narrow panel.
+- [ ] **With no linked device and nothing shared, the dialog is one line.**
+  _Check:_ `empty`. "No linked devices yet." and Link a Device, no Done and no
+  Share; the link closes the dialog and opens Settings on Linked devices.
+
+## Session rows: hover, menu, rename, delete, swipe
+
+`session-rows.mjs` runs against the dev server's in-memory workspace, in the
+session list (`session-list.tsx`, `session-row-actions.tsx`). The swipe is
+nessa_ui's `SwipeRow`, with the mouse drag and the context menu left to the
+row.
+
+- [ ] **Under the pointer, Archive and More take the time's place.**
+  _Check:_ `hover`. Away from the row its time shows and no button does;
+  under it the two show at 26 px and the time does not.
+- [ ] **More holds what the row can do, less the ways to open it; Rename
+  edits the title where it stood.** _Check:_ `more`. Rename, Pin to Sidebar,
+  (Share…,) Archive, Delete…; the row keeps its buttons while the menu is
+  open; the field takes focus and ↩ keeps "Rain plan".
+- [ ] **Delete asks first.** _Check:_ `delete`. Cancel deletes nothing, and
+  the menu opens again after the question and stays open; Delete removes the
+  row.
+- [ ] **The Archive button archives without opening the row.** _Check:_
+  `archive`.
+- [ ] **Two fingers left uncover Archive and Delete, as Mail's rows do.**
+  _Check:_ `swipe`. A mouse drag does not slide the row (it is the drag to a
+  pane) and right-click opens the row's own menu; a swipe rests the row open,
+  slid aside, with Archive and Delete, and opens nothing; Delete asks
+  "Confirm" in place, then removes the row; a long swipe archives. On a Mac
+  trackpad by hand: the swipe follows the fingers and a flick rests open,
+  never archives.
 
 ## A record the chat could not read
 

@@ -443,6 +443,7 @@ if (
 for (const [name, fixture] of [
   ["ConversationArchiveParams", read("fixtures.json").ConversationArchiveParams],
   ["ConversationDeleteParams", read("fixtures.json").ConversationDeleteParams],
+  ["ConversationRenameParams", read("fixtures.json").ConversationRenameParams],
 ]) {
   const validate = ajv.getSchema(`${schema.$id}#/$defs/${name}`)
   for (const invalid of [
@@ -454,6 +455,17 @@ for (const [name, fixture] of [
     if (validate(invalid)) throw new Error(`Product ${name} accepts an invalid command`)
   }
 }
+const validateRename = ajv.getSchema(`${schema.$id}#/$defs/ConversationRenameParams`)
+const rename = read("fixtures.json").ConversationRenameParams
+for (const invalid of [
+  { ...rename, title: "" },
+  { ...rename, title: "😀".repeat(49) },
+  { conversationId: rename.conversationId, requestId: rename.requestId },
+]) {
+  if (validateRename(invalid)) throw new Error("Product rename accepts an invalid title")
+}
+if (!validateRename({ ...rename, title: "😀".repeat(48) }))
+  throw new Error("Product rename rejects a title at its bound")
 // Conversation command correlation and bounds are part of the product contract.
 const validateSend = ajv.getSchema(`${schema.$id}#/$defs/ConversationSendParams`)
 const send = read("fixtures.json").ConversationSendParams

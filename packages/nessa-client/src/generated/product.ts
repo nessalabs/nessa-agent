@@ -689,7 +689,7 @@ export interface ConversationView {
   unreadable: ConversationUnreadable[]
   /** True when more records could not be read than the 32 lines in unreadable. Those records were still skipped. The transcript ends with one line: More parts of this conversation couldn't be read. */
   unreadableTruncated: boolean
-  /** Name the gateway derived from the conversation's first message, the same one conversation.list shows; null before anything was said. */
+  /** Name the gateway derived from the conversation's first message, or the one a person renamed it to, the same one conversation.list shows; null before anything was said. */
   title: string | null
   /** Every question the agent is waiting on now, oldest first (the SDK holds at most MAX_OPEN_QUESTIONS open). Each entry is small and of fixed size, and a bounded view gives up everything else before any of them, so none is ever left out. */
   questions: ConversationQuestionEntry[]
@@ -755,7 +755,7 @@ export interface ConversationListParams {
 export interface ConversationSummary {
   /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
   conversationId: string
-  /** Name the gateway derived from the conversation's first message, the same one its view carries; null when none is on record. */
+  /** Name the gateway derived from the conversation's first message, or the one a person renamed it to, the same one its view carries; null when none is on record. */
   title: string | null
   /** The last thing said in the conversation, as one line of plain text, or null when there is none on record. */
   preview: string | null
@@ -1006,6 +1006,15 @@ export interface ConversationArchiveParams {
   conversationId: string
   /** Stable action identifier retained for retries of one logical command. */
   requestId: string
+}
+/** Rename a conversation: the title conversation.list and a read show from now on. A later message does not rename it back. applied is false when it already has that title, and for a conversation nothing was said in, which has no title to change. */
+export interface ConversationRenameParams {
+  /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
+  conversationId: string
+  /** Stable action identifier retained for retries of one logical command. */
+  requestId: string
+  /** The new title: one line, with no whitespace at either end and no run of more than one whitespace character. Anything else is refused invalid_request; normalize before sending. */
+  title: string
 }
 /** Delete a conversation permanently: stop it, ask its agent to delete the agent's own session, record who deleted it, and erase its history, uploads and summary. Audit evidence is retained. The identity is never reused: its owner's later commands on it answer conversation_deleted, except deleting it again, and anyone else is told conversation_not_found. A repeat of the deciding request — the same principal, surface and requestId — is answered applied true, any other delete by its owner applied false; either repeat first carries on an erasure that has not finished. conversation_erasure_incomplete and audit_unavailable mean the conversation is deleted and its erasure did not finish; deleting again, and each gateway start, tries again. Any other error from a delete means only that it is not known whether the conversation was deleted: list it, or delete again. */
 export interface ConversationDeleteParams {
@@ -2787,7 +2796,7 @@ export const mcpServerRules = {
 export const bounds = {
   maxOrdinaryResponseBytes: 65536,
   maxRequestFrameBytes: 65536,
-  maxReadyMethods: 74,
+  maxReadyMethods: 75,
   maxAuthCredentialCharacters: 16384,
   maxProductClientIdCharacters: 256,
   maxProductSurfaceInstanceCharacters: 256,
@@ -2818,6 +2827,7 @@ export const bounds = {
     "^(?:/(?!\\.{1,2}(?:/|$))[^/\\u0000-\\u001f\\u007f\\u0080-\\u009f]+)+$",
   conversationIdPattern: "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
   maxConversationTitleBytes: 256,
+  maxConversationRenameCharacters: 48,
   maxConversationPreviewBytes: 512,
   maxSyncIdBytes: 128,
   decimalU64Pattern: "^(0|[1-9][0-9]{0,19})$",
@@ -3030,6 +3040,7 @@ export const ProductMethod = {
   ConversationClose: "conversation.close",
   ConversationArchive: "conversation.archive",
   ConversationUnarchive: "conversation.unarchive",
+  ConversationRename: "conversation.rename",
   ConversationDelete: "conversation.delete",
   ConversationReorder: "conversation.reorder",
   ArtifactRead: "artifact.read",
@@ -3117,6 +3128,7 @@ export const productReadyMethods = [
   "conversation.close",
   "conversation.archive",
   "conversation.unarchive",
+  "conversation.rename",
   "conversation.delete",
   "conversation.reorder",
   "artifact.read",
@@ -3195,6 +3207,7 @@ export const productMethodGrants = {
   "conversation.close": "conversation.write",
   "conversation.archive": "conversation.write",
   "conversation.unarchive": "conversation.write",
+  "conversation.rename": "conversation.write",
   "conversation.delete": "conversation.write",
   "conversation.reorder": "conversation.write",
   "artifact.read": "conversation.read",

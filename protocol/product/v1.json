@@ -210,7 +210,7 @@
         "methods": {
           "type": "array",
           "items": { "type": "string" },
-          "maxItems": 74,
+          "maxItems": 75,
           "description": "Registered product methods; permission is checked for every command."
         }
       },
@@ -1660,7 +1660,7 @@
           "minLength": 1,
           "maxLength": 256,
           "x-utf8MaxBytes": 256,
-          "description": "Name the gateway derived from the conversation's first message, the same one conversation.list shows; null before anything was said."
+          "description": "Name the gateway derived from the conversation's first message, or the one a person renamed it to, the same one conversation.list shows; null before anything was said."
         },
         "questions": {
           "type": "array",
@@ -1877,7 +1877,7 @@
           "minLength": 1,
           "maxLength": 256,
           "x-utf8MaxBytes": 256,
-          "description": "Name the gateway derived from the conversation's first message, the same one its view carries; null when none is on record."
+          "description": "Name the gateway derived from the conversation's first message, or the one a person renamed it to, the same one its view carries; null when none is on record."
         },
         "preview": {
           "type": ["string", "null"],
@@ -2567,6 +2567,35 @@
         }
       },
       "required": ["conversationId", "requestId"]
+    },
+    "ConversationRenameParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Rename a conversation: the title conversation.list and a read show from now on. A later message does not rename it back. applied is false when it already has that title, and for a conversation nothing was said in, which has no title to change.",
+      "properties": {
+        "conversationId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization."
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Stable action identifier retained for retries of one logical command."
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 48,
+          "x-utf8MaxBytes": 192,
+          "description": "The new title: one line, with no whitespace at either end and no run of more than one whitespace character. Anything else is refused invalid_request; normalize before sending."
+        }
+      },
+      "required": ["conversationId", "requestId", "title"]
     },
     "ConversationDeleteParams": {
       "type": "object",

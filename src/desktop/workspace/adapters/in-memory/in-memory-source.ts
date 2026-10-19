@@ -12,6 +12,7 @@
  * answer. What it holds is replaced, never changed: every update it emits is
  * a new value, and a value it has handed out stays as it was.
  */
+import { conversationTitle } from "@nessa/client"
 import type { SessionSummary } from "../../model/workspace-index"
 import {
   atWork,
@@ -95,6 +96,8 @@ export interface AuditEntry {
     | "pin"
     | "unpin"
     | "archive"
+    | "rename"
+    | "delete"
     | "let-go"
     | "answer-question"
     | "decline-question"
@@ -114,6 +117,8 @@ export interface AuditEntry {
   readonly choices?: readonly QuestionChoice[]
   /** The access asked for, for a `set-access`. */
   readonly access?: AccessMode
+  /** The title asked for, for a `rename`. */
+  readonly title?: string
   /** The message that let an approval go, for a `let-go`. */
   readonly messageId?: string
   readonly initiator: Initiator
@@ -147,7 +152,7 @@ export function inMemorySource(
   schedule: Schedule,
   seed: ReturnType<typeof sampleWorkspace> = sampleWorkspace(schedule.now()),
 ): InMemorySource {
-  // Archived ids: none is begun again, so no revision of one counts from 1 twice.
+  // Archived and deleted ids: none is begun again, so no revision of one counts from 1 twice.
   const archived = new Set<string>()
   const sessions = new Map(seed.index.sessions.map((session) => [session.id, session]))
   const transcripts = new Map(seed.transcripts)
@@ -200,6 +205,7 @@ export function inMemorySource(
       | "questionId"
       | "executionId"
       | "access"
+      | "title"
       | "initiator"
     >,
     work: (record: (change: Partial<AuditEntry>) => void) => number,
@@ -697,6 +703,26 @@ export function inMemorySource(
         const revision = known(sessionId).revision + 1
         stopScript(sessionId)
         sessions.delete(sessionId)
+        archived.add(sessionId)
+        emit({ kind: "session-removed", sessionId, revision })
+        return revision
+      }),
+    // As the gateway keeps a typed title; nothing left of it changes nothing.
+    rename: (sessionId, typed, initiator) =>
+      audited({ sessionId, action: "rename", title: typed, initiator }, () => {
+        const title = conversationTitle(typed)
+        const session = known(sessionId)
+        return title === null
+          ? session.revision
+          : putSession({ ...session, title }).revision
+      }),
+    // As the gateway: nothing of it is kept, and its id is never begun again.
+    delete: (sessionId, initiator) =>
+      audited({ sessionId, action: "delete", initiator }, () => {
+        const revision = known(sessionId).revision + 1
+        stopScript(sessionId)
+        sessions.delete(sessionId)
+        transcripts.delete(sessionId)
         archived.add(sessionId)
         emit({ kind: "session-removed", sessionId, revision })
         return revision

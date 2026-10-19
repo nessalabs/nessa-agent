@@ -112,6 +112,7 @@ import {
   subscriptionLimits,
   type ConnectionState,
   type ConversationApi,
+  conversationTitle,
   type ConversationListResult,
   type ConversationObserveCursor,
   type ConversationSummary,
@@ -165,6 +166,8 @@ export interface GatewayClient {
     | "stop"
     | "setApprovalMode"
     | "archive"
+    | "rename"
+    | "delete"
   >
   readonly subscriptions: Pick<SubscriptionApi, "view" | "list">
   /** Stops the active execution, which the gateway names from its own peek. */
@@ -735,8 +738,8 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
   // The conversations followed, least recently opened first (D7).
   const views = new Map<string, Followed<Transcript>>()
   const list: Followed<void> = followed()
-  // Sessions whose archive is on its way: a list frame that arrives meanwhile
-  // may have been read before it, and does not list them again (W6).
+  // Sessions whose archive or delete is on its way: a list frame that arrives
+  // meanwhile may have been read before it, and does not list them again (W6).
   const archiving = new Set<string>()
   // The subscribes of conversations let go past the limit while on their
   // way: the gateway counts one against the limit until it is answered and
@@ -1558,6 +1561,48 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
             dispatch(live, (connected) => connected.conversation.archive(sessionId)),
           )
           remove(sessionId)
+        })
+        listing = settled
+        void settled.then(() => archiving.delete(sessionId))
+        await turn
+      }),
+    // The gateway keeps the title (`conversationTitle` is its rule) and
+    // answers once it is stored. In the list's turn, as an archive (W6), so a
+    // list frame read before it cannot say the old title after it; the row is
+    // said again with the new one at once, and the frames after it agree.
+    rename: (sessionId, typed) =>
+      within(async (live) => {
+        // Nothing left to call it: the title stays as it was.
+        const title = conversationTitle(typed)
+        if (title === null) return
+        const { turn, settled } = inTurn(listing, async () => {
+          held(sessionId)
+          await within(() =>
+            dispatch(live, (connected) => {
+              held(sessionId)
+              return connected.conversation.rename(sessionId, title)
+            }),
+          )
+          const row = rows.get(sessionId)
+          if (row && !takenOut(sessionId)) {
+            rows.set(sessionId, { ...row, title })
+            publish(sessionId)
+          }
+        })
+        listing = settled
+        await turn
+      }),
+    // As an archive, in the list's turn (W6), and the window's apps forget it.
+    delete: (sessionId) =>
+      within(async (live) => {
+        archiving.add(sessionId)
+        const { turn, settled } = inTurn(listing, async () => {
+          held(sessionId)
+          await within(() =>
+            dispatch(live, (connected) => connected.conversation.delete(sessionId)),
+          )
+          remove(sessionId)
+          tellApps(() => options.apps?.forget(sessionId))
         })
         listing = settled
         void settled.then(() => archiving.delete(sessionId))

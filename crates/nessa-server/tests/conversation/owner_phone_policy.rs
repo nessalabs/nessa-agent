@@ -276,6 +276,7 @@ async fn owner_phone_cedar_admits_published_chat_methods_and_default_denies_admi
         "conversation.read",
         "conversation.send",
         "conversation.delete",
+        "conversation.rename",
         "conversation.subscribe",
         "conversation.subscribeList",
         "conversation.subscribeEvents",

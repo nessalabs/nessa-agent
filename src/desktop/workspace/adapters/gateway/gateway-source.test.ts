@@ -2727,6 +2727,74 @@ describe("writes", () => {
     ])
   })
 
+  it("a rename is the gateway's: the summary says the new title, at its next revision, before it resolves", async () => {
+    const { gateway, source, updates, follow } = started()
+    gateway.rows.set(conversationA, row(conversationA))
+    follow()
+    await source.index()
+    updates.length = 0
+    await source.rename(conversationA, "Rain plan", "person")
+    expect(gateway.calls).toContainEqual({
+      method: "rename",
+      args: [conversationA, "Rain plan"],
+    })
+    expect(updates).toEqual([
+      {
+        kind: "session",
+        session: expect.objectContaining({
+          id: conversationA,
+          title: "Rain plan",
+          revision: 2,
+        }),
+      },
+    ])
+    // The list frame that follows says the same, and nothing more.
+    gateway.publishList()
+    await flush()
+    expect(updates).toHaveLength(1)
+  })
+
+  it("a rename of a session taken out is refused as unknown and asks nobody", async () => {
+    const { gateway, source, follow } = started()
+    gateway.rows.set(conversationA, row(conversationA))
+    follow()
+    await source.index()
+    await source.archive(conversationA, "person")
+    await expect(
+      source.rename(conversationA, "Rain plan", "person"),
+    ).rejects.toMatchObject({
+      reason: "unknown-session",
+    })
+    expect(gateway.count("rename")).toBe(0)
+  })
+
+  it("a delete says the removal before it resolves, as an archive does, and a list frame on its way cannot list it again", async () => {
+    const { gateway, source, updates, follow } = started()
+    gateway.rows.set(conversationA, row(conversationA))
+    gateway.rows.set(conversationB, row(conversationB))
+    follow()
+    await source.index()
+    updates.length = 0
+    const deleted = deferred<void>()
+    gateway.once("delete", (normal) => deleted.promise.then(normal))
+    const deleting = source.delete(conversationA, "person")
+    await flush()
+    gateway.rows.set(conversationA, row(conversationA))
+    gateway.publishList()
+    await flush()
+    deleted.resolve()
+    await deleting
+    await flush()
+    expect(updates).toContainEqual({
+      kind: "session-removed",
+      sessionId: conversationA,
+      revision: 2,
+    })
+    expect((await source.index()).sessions.map((session) => session.id)).toEqual([
+      conversationB,
+    ])
+  })
+
   it("W7: marking read asks nothing of the gateway; pinning is not supported", async () => {
     const { gateway, source } = started()
     await source.markRead(conversationA)

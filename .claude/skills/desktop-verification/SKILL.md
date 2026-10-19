@@ -29,6 +29,7 @@ This skill is how to use them; it restates neither.
 | an app's review: reading it while the app's call or message waits (`appCall` and `stale()` in `gateway-source.ts`, the `callTool` and `sendMessage` routing in `dependencies.ts`), and who asks, and what, on the card or in the overview (`approval-request.tsx`, `gateway-views.ts`) | `app-review.mjs` |
 | an agent's command in a review, including bidi (`said.tsx`, `ApprovalCommand`, the overview row) | `command-order.mjs` |
 | a file an agent published, shown and saved: its card (`conversation/ui/published-files.tsx`), a held picture read back and verified (`ui/held-files.tsx`, `adapters/browser/held-file-urls.ts`, `ui/message-images.tsx`), where the transcript places it, and saving it (`saveFile` in `src/host/window.ts`, `src-tauri/src/saving/`) | `published-files.mjs --shots <dir>` |
+| a session row's own actions: its hover buttons, its menu, rename, delete, the swipe (`session-list.tsx`, `session-row-actions.tsx`) | `session-rows.mjs --shots <dir>` |
 | widths: approval card, composer (its thinking control too), column titles, Settings sidebar | `responsive.mjs --shots <dir>` |
 | a Settings page: its masthead, tabs, the bar's title on scroll, search landing, its focus ring (`src/desktop/settings/ui/`) | `settings-page.mjs` |
 | `index.html`'s load fallback, the panel's stage and window size | `load-fallback.mjs` |

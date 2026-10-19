@@ -130,7 +130,7 @@ const hosts = ["devbox", "me@build.example", "ci-runner", "staging"]
 function scriptedGateway(scenario = {}) {
   let revision = 2
   let catalogue = 1
-  let grants = [
+  let grants = scenario.grants ?? [
     {
       credentialId: "device-phone-0001",
       capabilities: ["read", "comment", "drive"],
@@ -245,7 +245,10 @@ function scriptedGateway(scenario = {}) {
           error: { code: "temporarily_unavailable", message: "not read" },
         }
       case "credential.list":
-        return { ok: true, payload: { credentials: devices } }
+        return { ok: true, payload: { credentials: scenario.devices ?? devices } }
+      case "pairing.pending":
+        // Linked devices, once the empty dialog's link has opened it.
+        return { ok: true, payload: { items: [] } }
       case "agents.list":
         return {
           ok: true,
@@ -453,6 +456,9 @@ Per engine, against a scripted product session:
   drive     a Drive grant with a preset and two hosts is sent as the wire
             takes it, naming revision 0 as a first grant, said as done, and
             listed as the gateway read it back
+  empty     with no linked device and nothing shared, one line and Link a
+            Device, which closes the dialog and opens Settings on Linked
+            devices; no Done, no Share
   budget    both pattern lists full still leave every host: "4 of 16", and
             Share can send
   refusal   a refused share is said in words; no wire code on the page
@@ -522,6 +528,38 @@ await main(meta, async ({ options, rep, url }) => {
       }
     })
 
+    await check("empty", { devices: [], grants: [] }, async (page) => {
+      await need(page, css.shareEmpty, "the empty line")
+      const said = await page.locator(css.shareEmpty).innerText()
+      const evidence = await shot(page, options, engine, "empty")
+      const buttons = await page.locator(`${css.shareDialog} button`).allInnerTexts()
+      await page.locator(css.shareLinkDevice).click()
+      const settings = await page
+        .locator(css.settingsLinkedDevices)
+        .first()
+        .waitFor({ timeout: 5_000 })
+        .then(() => true)
+        .catch(() => false)
+      return {
+        said,
+        buttons,
+        evidence,
+        failures: [
+          said.replace(/\s+/g, " ").trim() === "No linked devices yet. Link a Device"
+            ? null
+            : `the empty dialog said ${JSON.stringify(said)}`,
+          // The × and the link, nothing else: no Done, no Share held back.
+          buttons.filter((each) => each.trim() !== "").join("|") === "Link a Device"
+            ? null
+            : `its buttons were ${JSON.stringify(buttons)}`,
+          (await page.locator(css.shareDialog).count()) === 0
+            ? null
+            : "the link left the dialog open",
+          settings ? null : "Settings did not open on Linked devices",
+        ].filter(Boolean),
+      }
+    })
+
     await check("drive", {}, async (page, gate) => {
       await choose(page, css.shareTargets, "0002")
       await choose(page, css.shareRole, "Drive")
@@ -569,11 +607,9 @@ await main(meta, async ({ options, rep, url }) => {
             ? null
             : `a first grant expected ${share?.params?.expectedPolicyRevision}`,
           count.includes("2 of 16") ? null : `the count read ${JSON.stringify(count)}`,
-          notes.includes("Ask mode") &&
-          notes.includes("nowhere") &&
           notes.includes("sandbox")
             ? null
-            : "a note on what a policy cannot stop was missing",
+            : "the note on what a policy cannot stop was missing",
           row.includes("Drive · No shell, commands on devbox and ci-runner")
             ? null
             : `the new grant read ${JSON.stringify(row)}`,

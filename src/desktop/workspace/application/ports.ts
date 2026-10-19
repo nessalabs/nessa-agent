@@ -218,6 +218,23 @@ export interface WorkspaceSource {
    * removal has one path whoever asked for it.
    */
   archive(sessionId: string, initiator: Initiator): Promise<void>
+  /**
+   * Gives a session a title of the person's own, which later messages keep:
+   * `title` is what they typed, and the source keeps of it what its store
+   * does (the gateway's `conversationTitle`), or nothing when nothing is
+   * left of it. Resolves once the session's
+   * changed summary has reached subscribers: the window shows the new title
+   * from that update alone. A session the source has not spoken of has no
+   * title to change and is refused `unknown-session`.
+   */
+  rename(sessionId: string, title: string, initiator: Initiator): Promise<void>
+  /**
+   * Deletes a session for good: its conversation, uploads and summary are
+   * erased where the source keeps them. Resolves once its `session-removed`
+   * update has reached subscribers, the one path a removal takes, as for an
+   * archive.
+   */
+  delete(sessionId: string, initiator: Initiator): Promise<void>
   markRead(sessionId: string): Promise<void>
 }
 

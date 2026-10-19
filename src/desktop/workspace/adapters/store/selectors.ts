@@ -106,6 +106,18 @@ export const selectReady = (state: Root) => state.workspace.status === "ready"
 export const selectShareable = (state: Root) => state.workspace.shareable
 /** The share dialog, while it is open; its own slice of state, nothing else. */
 export const selectShareDialog = (state: Root) => state.workspace.share
+
+/** What is typed into a session's title while it is being renamed, or `null`. */
+export const selectRenameDraft = (state: Root, sessionId: string) =>
+  state.workspace.renaming?.sessionId === sessionId
+    ? state.workspace.renaming.draft
+    : null
+
+/** The session whose deletion is being asked, while it is still held. */
+export const selectDeleteAsked = (state: Root) => {
+  const asked = state.workspace.deleteAsked
+  return asked !== null && selectSession(state, asked) ? asked : null
+}
 /** Whether the share dialog's list and form are held: the one rule for it (`formHeld`, D10). */
 export const selectShareHeld = (state: Root) => formHeld(state.workspace)
 /** Whether the open share dialog could begin a change now (`canChange`, D6). */

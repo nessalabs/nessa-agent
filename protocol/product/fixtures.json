@@ -192,6 +192,11 @@
     "conversationId": "00000000-0000-4000-8000-000000000001",
     "requestId": "archive-1"
   },
+  "ConversationRenameParams": {
+    "conversationId": "00000000-0000-4000-8000-000000000001",
+    "requestId": "rename-1",
+    "title": "Lisbon in May"
+  },
   "ConversationDeleteParams": {
     "conversationId": "00000000-0000-4000-8000-000000000001",
     "requestId": "delete-1"

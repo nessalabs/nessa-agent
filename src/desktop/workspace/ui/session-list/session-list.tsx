@@ -4,9 +4,15 @@ import { Button } from "@nessa-ui/react/button"
 import { EmptyState } from "@nessa-ui/react/empty-state"
 import { GroupHeader } from "@nessa-ui/react/group-header"
 import { SearchField } from "@nessa-ui/react/search-field"
+import { SwipeRow, SwipeRowGroup, type SwipeRowAction } from "@nessa-ui/react/swipe-row"
 import { useRunningFirstPreference } from "../../../adapters/window-preferences"
 import { DesktopIcon } from "../../../ui/icons"
-import { newSession, openSession } from "../../adapters/store/commands"
+import {
+  archiveSession,
+  deleteSession,
+  newSession,
+  openSession,
+} from "../../adapters/store/commands"
 import {
   useWorkspaceDispatch,
   useWorkspaceSelector,
@@ -36,7 +42,16 @@ import { SessionMenuItems, useOpenFromRow } from "../session-actions"
 import { useWorkspaceFrame } from "../workspace-frame"
 import "./session-list.css"
 import "../../../ui/pill-ink.css"
-import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "../../../ui/menu"
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuTrigger,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuTrigger,
+} from "../../../ui/menu"
+import { knownToSource } from "../../model/revision"
+import { useSessionRowActions, type SessionRowActions } from "../session-row-actions"
 
 /**
  * The middle column: what the sidebar chose — a channel's sessions, or every
@@ -70,6 +85,9 @@ export const SessionList = memo(function SessionList() {
   // ↑ and ↓ walk the list, Home and End go to its ends, each opening as it
   // goes; the context-menu key opens the focused row's menu.
   const onKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    // A row's menu is drawn elsewhere and React carries its keys up here
+    // anyway: only keys pressed in the list itself walk it.
+    if (!event.currentTarget.contains(event.target as Node)) return
     if (contextMenuFromKey(event)) return
     const walk: Record<string, (at: number) => number> = {
       ArrowDown: (at) => at + 1,
@@ -130,62 +148,65 @@ export const SessionList = memo(function SessionList() {
             }}
           />
         </ColumnHeader>
-        <div
-          className="workspace-list-scroll"
-          ref={listRef}
-          role="listbox"
-          aria-label="Sessions"
-          onKeyDown={onKeyDown}
-        >
-          {ordered.length === 0 ? (
-            <EmptyState
-              className="workspace-list-empty desktop-pill-ink"
-              variant="compact"
-              title={query ? "No sessions match." : "No sessions here yet."}
-              action={
-                query ? undefined : (
-                  <Button
-                    variant="tinted"
-                    size="28"
-                    shape="pill"
-                    press="scale"
-                    onClick={() => dispatch(newSession())}
-                  >
-                    New Session
-                  </Button>
-                )
-              }
-            />
-          ) : null}
-          {groups.map((group, index) => (
-            <div
-              key={group.id}
-              role="group"
-              aria-label={`${group.label} ${group.ids.length}`}
-            >
-              {/* The kit caption is a heading. Hidden here, so the listbox
+        {/* One row's swipe actions open at a time; a scroll that moves it closes it. */}
+        <SwipeRowGroup asChild data-slot="workspace-swipe">
+          <div
+            className="workspace-list-scroll"
+            ref={listRef}
+            role="listbox"
+            aria-label="Sessions"
+            onKeyDown={onKeyDown}
+          >
+            {ordered.length === 0 ? (
+              <EmptyState
+                className="workspace-list-empty desktop-pill-ink"
+                variant="compact"
+                title={query ? "No sessions match." : "No sessions here yet."}
+                action={
+                  query ? undefined : (
+                    <Button
+                      variant="tinted"
+                      size="28"
+                      shape="pill"
+                      press="scale"
+                      onClick={() => dispatch(newSession())}
+                    >
+                      New Session
+                    </Button>
+                  )
+                }
+              />
+            ) : null}
+            {groups.map((group, index) => (
+              <div
+                key={group.id}
+                role="group"
+                aria-label={`${group.label} ${group.ids.length}`}
+              >
+                {/* The kit caption is a heading. Hidden here, so the listbox
                   exposes the group and its options; the group's name keeps
                   the count the heading would have said. */}
-              <GroupHeader
-                aria-hidden="true"
-                className="workspace-group-label"
-                data-first={index === 0 || undefined}
-                level={3}
-                size="dense"
-                tone="quiet"
-                label={group.label}
-                count={group.ids.length}
-              />
-              {group.ids.map((sessionId) => (
-                <SessionRow
-                  key={sessionId}
-                  sessionId={sessionId}
-                  tabStop={sessionId === tabStop}
+                <GroupHeader
+                  aria-hidden="true"
+                  className="workspace-group-label"
+                  data-first={index === 0 || undefined}
+                  level={3}
+                  size="dense"
+                  tone="quiet"
+                  label={group.label}
+                  count={group.ids.length}
                 />
-              ))}
-            </div>
-          ))}
-        </div>
+                {group.ids.map((sessionId) => (
+                  <SessionRow
+                    key={sessionId}
+                    sessionId={sessionId}
+                    tabStop={sessionId === tabStop}
+                  />
+                ))}
+              </div>
+            ))}
+          </div>
+        </SwipeRowGroup>
       </div>
     </section>
   )
@@ -208,41 +229,184 @@ const SessionRow = memo(function SessionRow({
     shallowEqual,
   )
   const actions = useOpenFromRow()
+  const row = useSessionRowActions(sessionId)
+  const dispatch = useWorkspaceDispatch()
+  const begun = session !== undefined && knownToSource(session)
+  // The row's "More" menu: while it is open its buttons stay, as on hover.
+  const [more, setMore] = useState(false)
   if (!session) return null
   return (
     <ContextMenu>
-      <ContextMenuTrigger asChild>
-        <ListRow
-          role="option"
-          tabIndex={tabStop ? 0 : -1}
-          aria-selected={selected}
-          data-session-row={session.id}
-          className="workspace-session"
-          selected={selected}
-          unread={session.unread}
-          data-open={open || undefined}
-          // Carried by the pointer to a pane (`split-panes/adapters/dom/drag.ts`).
-          data-drag-item={paneItemKey(sessionItem(session.id))}
-          onClick={(event) => actions.activate(event, session.id)}
-          onKeyDown={(event) => {
-            if (event.key !== "Enter") return
-            event.preventDefault()
-            actions.activate(event, session.id)
-          }}
-          leading={<AgentTile model={session.model} size={22} />}
-          marker={session.unread ? <StatusGlyph status="unread" flush /> : null}
-          title={session.title}
-          trailing={<SessionTime at={session.updatedAt} />}
-          // A short first message is the title too; it is said once.
-          description={sameWords(session.title, session.preview) ? null : session.preview}
-        />
-      </ContextMenuTrigger>
-      <ContextMenuContent>
-        <SessionMenuItems sessionId={session.id} />
+      {/* A two-finger swipe left uncovers Archive and Delete, as Mail's rows
+          do. The pointer's drag stays the drag to a pane, and right-click
+          stays the row's menu, which holds the same two. */}
+      <SwipeRow
+        value={session.id}
+        name={session.title}
+        data-slot="workspace-swipe-row"
+        actions={begun && !row.renaming ? swipeActions : noSwipe}
+        mouseDrag={false}
+        openOnContextMenu={false}
+        onAction={(id, details) => {
+          if (details.hadFocus) focusNeighbour(session.id)
+          const change = { sessionId: session.id, initiator: "person" } as const
+          void dispatch(id === "delete" ? deleteSession(change) : archiveSession(change))
+        }}
+      >
+        <ContextMenuTrigger asChild>
+          <ListRow
+            role="option"
+            tabIndex={tabStop ? 0 : -1}
+            aria-selected={selected}
+            data-session-row={session.id}
+            className="workspace-session"
+            selected={selected}
+            unread={session.unread}
+            data-open={open || undefined}
+            data-renaming={row.renaming || undefined}
+            data-actions={more || undefined}
+            // Carried by the pointer to a pane (`split-panes/adapters/dom/drag.ts`).
+            data-drag-item={paneItemKey(sessionItem(session.id))}
+            onClick={(event) => {
+              if (!row.renaming) actions.activate(event, session.id)
+            }}
+            onKeyDown={(event) => {
+              if (event.key !== "Enter" || row.renaming) return
+              event.preventDefault()
+              actions.activate(event, session.id)
+            }}
+            leading={<AgentTile model={session.model} size={22} />}
+            marker={session.unread ? <StatusGlyph status="unread" flush /> : null}
+            title={row.title(session.title)}
+            trailing={
+              <>
+                <SessionTime at={session.updatedAt} />
+                {row.renaming ? null : (
+                  <SessionRowButtons
+                    sessionId={session.id}
+                    title={session.title}
+                    more={more}
+                    onMore={setMore}
+                    items={row.items}
+                    onCloseAutoFocus={row.onCloseAutoFocus}
+                  />
+                )}
+              </>
+            }
+            // A short first message is the title too; it is said once.
+            description={
+              sameWords(session.title, session.preview) ? null : session.preview
+            }
+          />
+        </ContextMenuTrigger>
+      </SwipeRow>
+      <ContextMenuContent onCloseAutoFocus={row.onCloseAutoFocus}>
+        <SessionMenuItems sessionId={session.id} {...row.items} />
       </ContextMenuContent>
     </ContextMenu>
   )
 })
+
+/**
+ * What a swipe uncovers, primary first: a full swipe archives. Delete is
+ * destructive, so it never commits from a swipe and asks once more in place.
+ */
+const swipeActions: readonly SwipeRowAction[] = [
+  { id: "archive", label: "Archive", icon: <DesktopIcon name="archive" /> },
+  {
+    id: "delete",
+    label: "Delete",
+    icon: <DesktopIcon name="delete" />,
+    tone: "destructive",
+  },
+]
+const noSwipe: readonly SwipeRowAction[] = []
+
+/**
+ * Focus was in a row that is about to go: it moves to the row after it, or
+ * the one before when it was the last, so the keys keep their place.
+ */
+function focusNeighbour(sessionId: string) {
+  const row = document.querySelector<HTMLElement>(
+    `[data-session-row="${CSS.escape(sessionId)}"]`,
+  )
+  const rows = [
+    ...(row
+      ?.closest('[role="listbox"]')
+      ?.querySelectorAll<HTMLElement>("[data-session-row]") ?? []),
+  ]
+  const at = row ? rows.indexOf(row) : -1
+  if (at === -1) return
+  ;(rows[at + 1] ?? rows[at - 1])?.focus()
+}
+
+/**
+ * What a row shows under the pointer, in its time's place: Archive, and "More",
+ * which opens the row's menu less the ways to open it. Pointer conveniences:
+ * out of the Tab order, since the context-menu key opens the same menu from
+ * the row. Nothing pressed here, the menu's items included (React carries
+ * them up through the portal), reaches the row: it would open the session.
+ */
+function SessionRowButtons({
+  sessionId,
+  title,
+  more,
+  onMore,
+  items,
+  onCloseAutoFocus,
+}: {
+  sessionId: string
+  title: string
+  more: boolean
+  onMore: (open: boolean) => void
+  items: SessionRowActions["items"]
+  onCloseAutoFocus: (event: Event) => void
+}) {
+  const dispatch = useWorkspaceDispatch()
+  const begun = useWorkspaceSelector((state) => {
+    const session = selectSession(state, sessionId)
+    return session !== undefined && knownToSource(session)
+  })
+  const stop = (event: { stopPropagation: () => void }) => event.stopPropagation()
+  return (
+    <span
+      className="workspace-session-actions"
+      // The row's menu (right-click, the context-menu key) holds the same,
+      // for the keys and assistive technology; these are the pointer's.
+      aria-hidden="true"
+      onClick={stop}
+      onDoubleClick={stop}
+      onKeyDown={stop}
+      onPointerDown={stop}
+    >
+      <IconButton
+        icon="archive"
+        label="Archive"
+        size="sm"
+        tabIndex={-1}
+        disabled={!begun}
+        aria-label={`Archive ${title}`}
+        data-session-action="archive"
+        onClick={() => void dispatch(archiveSession({ sessionId, initiator: "person" }))}
+      />
+      <DropdownMenu open={more} onOpenChange={onMore}>
+        <DropdownMenuTrigger asChild>
+          <IconButton
+            icon="moreHorizontal"
+            label="More"
+            size="sm"
+            tabIndex={-1}
+            aria-label={`More for ${title}`}
+            data-session-action="more"
+          />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" onCloseAutoFocus={onCloseAutoFocus}>
+          <SessionMenuItems sessionId={sessionId} navigation={false} {...items} />
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </span>
+  )
+}
 
 function SessionTime({ at }: { at: number }) {
   const now = useNow(30_000)
