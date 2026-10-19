@@ -957,7 +957,7 @@ const steps = {
       await Promise.allSettled(burst)
       for (const client of clients) client.close()
     }
-    await open(run.page, run.main.title)
+    await openStressConversation(run.page, run.main.id, run.main.title)
   },
 
   async park(run, step, failures) {
