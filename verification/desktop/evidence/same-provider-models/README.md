@@ -1,89 +1,64 @@
 # Same-provider model control: current source evidence
 
-Latest SDK correction source `7dcb51d216bb428d6956c36cabe3d2dc44491d2e` (tree `bdb7e1f043ab5a8deb9d770d8e54bb57127b7fb9`)
-supervises the existing effort owner’s whole post-Requested computation and
-protected future cleanup. Native acknowledgement remains distinct from local
-persistence and one terminal audit attempt. Corrected ordinary baseline has
-5 intended failures /11 positives; isolated sole-poll-supervision omission has
-6 failures /10 positives; exact restoration passes16. Final affected qualification
-passes162 unique runtime tests,57 SDK doctests, seven-package strict Clippy/fmt
-and strict SDK docs. Original mixed fixture failures remain separate records.
-R8 was incomplete; a new whole-assembly review and current CI remain required.
-The browser/server/photos below retain their earlier stated source scope.
+Runtime source `76e335294` follows integration `f9b861d7` of immutable main
+`c0119e8b35b8b537b701638ee87a1a682c74cff8`. UI pin is
+`7a8fe71fe996305a71baba319387df6e81ffbe0e`. This separate evidence commit
+refreshes only these six existing files. [Qualification](qualification.json)
+records commands, hashes, scopes, causal controls and retained historical proof.
+The [canonical summary](canonical-summary.md) keeps the short gateway lines.
 
-Runtime source `57b0e0f1b637ea0bac61405b5f237ccf6da4415f`, tree
-`74edc4a8e5eb5efad6540ec23bdeb531f3add572`, assembled immutable main
-`73fabdb883722c9ecd1c64b46f2ec8c76405342c`. UI pin remains
-`0794a41bb1482aa7e677fd2b7012874bcc3e29b2`. This separate commit refreshes
-only these six existing evidence files. [Qualification](qualification.json)
-records hashes, exact scopes, controls and historical evidence; the
-[canonical summary](canonical-summary.md) keeps the short rebuilt-gateway lines.
-
-| Actual current check | Result |
+| Current affected check | Result |
 | --- | --- |
-| Unfiltered affected server, including report/MCP, model/cold/recovery and original-budget recovery fixture | 3,502 runtime passed, 13 ignored, 4 doctests; nested child summaries excluded |
-| Exact seven-package all-target Clippy, formatting and strict SDK docs | Pass |
-| Canonical three gateway programs | Pass in Chromium and WebKit |
-| Full Claude default / six model changes | 60/60 /70/70, both engines |
-| Focused Codex one /six model changes | 9/9 /19/19, both engines |
-| Default chaos, seeds 1 and 2 | 2/2 |
-| Shared restart, conversation identity and planner tests | 60 passed |
+| Full affected server | 3,507 runtime passed, 13 ignored, 4 doctests; nested child summaries excluded |
+| Protocol/client core | 594 runtime and 8 doctests passed |
+| New SDK paged-storage case | 1 passed |
+| Full frontend with new UI pin | 4,971 tests and complete frontend contract passed |
+| Seven-package all-target strict Clippy, fmt and strict SDK docs | Pass |
+| Rebuilt own gateway canonical three programs | Pass in Chromium and WebKit |
+| Session rows / Share / Linked devices / unread | 11/11, 24/24, 17/17, 5/5 |
+| Full Claude default / six model changes, both engines | 65/65 / 76/76 |
+| Model-only Codex one / six changes, both engines | 9/9 / 19/19 |
+| Default chaos seeds 1 and 2 | 2/2 |
 
-Full Claude includes actual await 1, fresh Home 2, windows 1 and linking 1 defaults,
-then model changes last in Ask. Fresh Home sends use an engine-scoped intent,
-reject old same-title rows and require one new source identity. Focused Codex
-sets every other 19 knobs to 0; it is not full-default Codex coverage. All model
-journeys retain the original review identity/options, unsent draft and Stop,
-answer the review, then assert the selected model in the native prompt witness.
-Claude's subsequent-responses and Codex's next-turn effects remain distinct.
+Full Claude retains rename 1, delete 1, await 1, fresh Home 2, window 1 and
+linking 1 defaults, with model changes last in Ask. Focused Codex sets every
+nonmodel knob to zero, including rename/delete; it is model-only coverage.
+Actual window assertions retain original review identity/options, unsent draft
+and Stop, answer the review, and verify the selected model in the native prompt.
+Claude subsequent responses and Codex next-turn effects stay distinct.
 
-The integration keeps main's written-once/delivered report owner, undelivered
-callbacks, awaited turns, lossless reports/empty pages and original 5-second gate
-capture. At the browser qualification source, the SDK tree was exactly 8e0
-(`725049d9936400e112dfe315745119d279dc308a`). The later effort correction above
-has separate affected SDK qualification. Protocol/client/frontend source remains
-byte-equivalent; earlier SDK/R7 and frontend evidence retains its stated scope; no new whole 6,838 or full frontend run is
-claimed. The current server, canonical and strict checks ran on 66f0dfb; the
-later source delta is only the shared stress observer/test and CHECKLIST.
-The current journeys ran the exact 57b0e0f bytes before the byte-preserving commit.
+## Session-row causal evidence
 
-## Restart evidence and controls
+The first unobserved run failed 10/11. Lightweight tracing reproduced the wrong
+row opening: a press released before drag preparation became an ordinary click;
+the live first-unselected locator then retargeted while its assertion retained
+the original id. Anchoring alone exposed the unchanged no-open assertions (4/5).
+Waiting for existing prepared/carrying DOM marks plus anchoring passed 5/5;
+sole readiness omission failed 4/5; exact restoration passed 5/5. Identity omission
+with readiness passed 5/5 and is not claimed as a negative control. Normal,
+unobserved both-engine verification then passed 11/11. No product/vendor changes,
+fixed sleeps, deadline extensions or relaxed assertions were introduced.
 
-Incoming main's strict shared observer owns both restart and linking errors.
-There is no permanent pattern or per-step fallback classifier. Current probes
-separately pair each exact WebKit cause on the owned socket and console inside
-the existing action, followed by a distinct live receiving connection:
+The stress wrapper mistakenly scheduled a second chaos invocation after the
+first had already run its default two seeds successfully. That redundant partial
+invocation was stopped through its owned process group and excluded. The wrapper
+exit -15 is not counted green; the five intended commands completed successfully.
+All owned runtime jobs retired; gateway SHA stayed exact before and after.
 
-- `The network connection was lost.`: default 59/60 and focused SIGKILL 4/5 failed
-  before; focused fixed 5/5 passes. SIGTERM 4/4 was clean and did not prove an
-  extension.
-- `Could not connect to the server.`: later default 59/60 and observation-only
-  WebKit 29/30 failed before. The paired refusal occurred during linking-on.
-
-Only those exact map entries were added. Scope, matching occurrence, prior/future,
-foreign URL/path, recovery, new receiver and overflow checks remain. Each sole
-entry omission on the final private copy gives 49 passes /1 failure; each exact
-restoration gives 50 passes. The fresh-identity control also rejects an old title
-before the new frame. The first legacy-plan/lint and private-package/chaos-CLI
-setup failures are retained separately, never counted as product passes.
+Earlier floor-interrupted server compiles are preserved separately and are not
+test verdicts. No whole 6,838 rerun, broad SDK run, performance or installed-app
+parity is claimed. Newer main after immutable c011 remains outside this scope.
+Fresh whole-assembly review, current CI and prospective-source validation remain
+required before merge. Native linking used only owned ephemeral configuration.
 
 ## Inspected current screenshots
 
-- Claude/WebKit, full default: confirmed Fable 5.1, subsequent-responses text,
-  draft and Stop. The original review is offscreen; the actual window assertions
-  prove its unchanged identity/options and answering.
-- Codex/Chromium, one change: original review, draft, confirmed GPT-6 Astra,
-  next-turn text and Stop.
-- Codex/WebKit, six changes, first-change image: the same original review/draft/
-  confirmed model/Stop. Assertions prove all six changes.
+- Claude/WebKit default: confirmed Fable 5.1, subsequent-responses text, draft and
+  Stop; review offscreen, with its identity/options covered by assertions.
+- Codex Chromium and WebKit: original review, draft, GPT-6 Astra, next-turn text
+  and Stop. Both pictures come from the one-change model-only run.
 
-These are real desktop components with scripted native harness data. They do
-not establish installed-app parity or performance. Native linking touches only
-owned ephemeral ci configuration and allocated loopback ports. Raw auth/config/
-journals are not committed. A fresh whole assembled review and current platform
-CI remain required before merge.
-
-![Claude: confirmed model, draft and Stop; review offscreen](claude-webkit.png)
+![Claude: confirmed model, draft and Stop](claude-webkit.png)
 
 ![Codex Chromium: original review, model, draft and Stop](codex-chromium.png)
 
