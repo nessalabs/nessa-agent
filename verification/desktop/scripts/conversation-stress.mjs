@@ -1109,11 +1109,13 @@ const steps = {
     await settled(run, conversationId, new Set(), first, "completed", failures)
     if (failures.length) return
     const title = await titleOf(run, conversationId)
-    // Marked before it goes, so a follower's stream of it ending is expected.
-    run.deleted.add(conversationId)
     await choose(run.page, title, "Delete…")
     const asked = run.page.locator("[data-delete-session]")
     await asked.waitFor({ timeout: 10_000 })
+    // Marked as the delete is confirmed, and no sooner: from here a
+    // follower's stream of it ending is the delete's, and before it any
+    // failure of that stream is a failure.
+    run.deleted.add(conversationId)
     await asked.locator('[data-delete-action="confirm"]').click({ timeout: 10_000 })
     const gone = await waitFor(async () => {
       try {
