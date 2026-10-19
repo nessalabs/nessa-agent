@@ -1,0 +1,25 @@
+{
+  "scope": "rule-removal probes; no original browser-error reproduction claimed",
+  "probes": [
+    {
+      "rule": "private-cache-setting",
+      "status": 1,
+      "caught": true
+    },
+    {
+      "rule": "await-owned-exit",
+      "status": 1,
+      "caught": true
+    },
+    {
+      "rule": "remove-owned-cache",
+      "status": 1,
+      "caught": true
+    },
+    {
+      "rule": "startup-failure-cleanup",
+      "status": 1,
+      "caught": true
+    }
+  ]
+}
