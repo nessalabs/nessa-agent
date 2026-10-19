@@ -110,7 +110,10 @@ import {
 } from "./lib/selectors.mjs"
 import { freePort } from "./lib/server.mjs"
 import { Follower } from "./lib/stress-followers.mjs"
-import { openStressConversation } from "./lib/stress-conversation.mjs"
+import {
+  openStressConversation,
+  selectedStressConversation,
+} from "./lib/stress-conversation.mjs"
 import { observeGatewayRestarts } from "./lib/stress-restart.mjs"
 import { KNOBS, describe, knobsFrom, plan, random } from "./lib/stress-plan.mjs"
 
@@ -971,11 +974,10 @@ const steps = {
       await home.locator(css.field).waitFor({ timeout: 15_000 })
       await home.locator(css.field).fill(text)
       await home.getByRole(...composerControls.send).click({ timeout: 10_000 })
-      const conversationId = await waitFor(async () => {
-        const { conversations } = await run.client.conversation.list({})
-        return conversations.find((each) => each.title && fold(each.title) === text)
-          ?.conversationId
-      }, 30_000)
+      const conversationId = await waitFor(
+        () => selectedStressConversation(run.page, text),
+        30_000,
+      )
       if (!conversationId) {
         failures.push("the conversation started in the window was never listed")
       } else {
