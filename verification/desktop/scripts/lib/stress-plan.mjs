@@ -57,6 +57,10 @@ export const KNOBS = {
     default: 1,
     what: "conversations left idle until the gateway parks their agent, then talked to again",
   },
+  fresh: {
+    default: 2,
+    what: "conversations started from a new session's home in the window, their first message sent there",
+  },
   long: {
     default: 30,
     what: "turns of long streamed answers one conversation takes before it is talked to in the window",
@@ -117,6 +121,7 @@ export function plan(knobs) {
   add(knobs.asides, () => ({ kind: "aside" }))
   add(knobs.large, () => ({ kind: "large" }))
   add(knobs.parks, () => ({ kind: "park" }))
+  add(knobs.fresh, () => ({ kind: "fresh" }))
   if (knobs.long > 0) steps.push({ kind: "long", turns: knobs.long })
   if (knobs.reviews > 0) steps.push({ kind: "reviews" })
   while (steps.length < knobs.rounds)

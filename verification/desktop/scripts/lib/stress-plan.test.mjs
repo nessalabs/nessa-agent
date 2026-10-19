@@ -21,6 +21,7 @@ test("every required step appears as often as its number says", () => {
   assert.equal(count("aside"), knobs.asides)
   assert.equal(count("large"), knobs.large)
   assert.equal(count("park"), knobs.parks)
+  assert.equal(count("fresh"), knobs.fresh)
   assert.equal(count("reviews"), 1)
   assert.equal(count("long"), 1)
   assert.equal(steps.find((step) => step.kind === "long").turns, knobs.long)
