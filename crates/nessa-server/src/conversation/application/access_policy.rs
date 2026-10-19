@@ -121,11 +121,13 @@ pub enum AccessAction {
     NoteDeliver,
     /// Receive a waiting-review notice for the conversation.
     ReviewNotice,
+    /// Read what the owner's desktop windows show, on their workspace.
+    WorkspaceRead,
 }
 
 impl AccessAction {
     /// Every action, in declaration order.
-    pub const ALL: [Self; 16] = [
+    pub const ALL: [Self; 17] = [
         Self::AgentTools,
         Self::Locate,
         Self::Act,
@@ -142,6 +144,7 @@ impl AccessAction {
         Self::ArtifactRead,
         Self::NoteDeliver,
         Self::ReviewNotice,
+        Self::WorkspaceRead,
     ];
 
     /// The action's name, as the policy spells it.
@@ -163,6 +166,7 @@ impl AccessAction {
             Self::ArtifactRead => "artifact.read",
             Self::NoteDeliver => "note.deliver",
             Self::ReviewNotice => "review.notice",
+            Self::WorkspaceRead => "workspace.read",
         }
     }
 }
@@ -179,6 +183,11 @@ pub enum AccessResource<'a> {
     },
     /// One owner's catalogue: the list of their conversations.
     Catalogue {
+        organization: &'a OrganizationId,
+        owner: &'a PrincipalId,
+    },
+    /// One owner's workspace: what their desktop windows show.
+    Workspace {
         organization: &'a OrganizationId,
         owner: &'a PrincipalId,
     },
