@@ -1306,7 +1306,7 @@ async fn one_subscribe_naming_the_sent_turn_returns_its_reply_in_place_of_the_re
     let provider = Arc::new(ProviderFactory::default());
     provider.turn_cancel.store(true, Ordering::SeqCst);
     let (service, storage, metadata) = fixture(&root, provider.clone());
-    service.bind_commands(storage.clone());
+    super::parent_stop::bind(&service, &storage, &root, true).await;
     service.bind_agent_tool_audit(Arc::new(Audit::default()));
     let source = id();
     opened(&service, &provider, &source).await;
