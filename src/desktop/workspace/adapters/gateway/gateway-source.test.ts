@@ -2843,6 +2843,51 @@ describe("writes", () => {
     )
   })
 
+  it("D18: a walk owed again after a later rename says the later title", async () => {
+    const { gateway, source, updates, follow, advance } = started()
+    for (const id of [conversationA, conversationB, "c", "d"])
+      gateway.rows.set(id, row(id, { updatedAtMs: id.charCodeAt(0) * 1_000 }))
+    gateway.listLimit = 2
+    gateway.observePageSize = 10
+    follow()
+    await source.index()
+    const newest = [...gateway.rows.values()].sort(
+      (one, other) => other.updatedAtMs - one.updatedAtMs,
+    )[0].conversationId
+    // A frame read before the first rename was stored, whose walk fails.
+    const renamed = deferred<void>()
+    gateway.once("rename", (normal) => renamed.promise.then(normal))
+    const first = source.rename(newest, "Rain plan", "person")
+    await flush()
+    gateway.once("observe", () => Promise.reject(rpcCode("unavailable")))
+    gateway.publishList()
+    await flush()
+    renamed.resolve()
+    await first
+    await flush()
+    // A second rename, stored while that walk is still owed.
+    const second = deferred<void>()
+    gateway.once("rename", (normal) => second.promise.then(normal))
+    const later = source.rename(newest, "Snow plan", "person")
+    await flush()
+    second.resolve()
+    await later
+    await flush()
+    updates.length = 0
+    gateway.once("observe", () => Promise.resolve({ conversations: [], complete: false }))
+    await advance(timing.retryMs)
+    await flush()
+    const titles = updates.flatMap((update) =>
+      update.kind === "session" && update.session.id === newest
+        ? [update.session.title]
+        : [],
+    )
+    expect(titles.filter((title) => title !== "Snow plan")).toEqual([])
+    expect(
+      (await source.index()).sessions.find((session) => session.id === newest)?.title,
+    ).toBe("Snow plan")
+  })
+
   it("a rename of a session taken out is refused as unknown and asks nobody", async () => {
     const { gateway, source, follow } = started()
     gateway.rows.set(conversationA, row(conversationA))

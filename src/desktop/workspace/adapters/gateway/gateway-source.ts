@@ -875,7 +875,14 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
                 renaming.get(row.conversationId) === renamed ||
                 (!renaming.has(row.conversationId) &&
                   rows.get(row.conversationId)?.title === renamed?.title)
-              return renamed?.stored && newest ? { ...row, title: renamed.title } : row
+              if (!renamed?.stored) return row
+              if (newest) return { ...row, title: renamed.title }
+              // A later title is known: the newest stored here, else the row's.
+              const later = renaming.get(row.conversationId)
+              const title = later?.stored
+                ? later.title
+                : rows.get(row.conversationId)?.title
+              return title === undefined ? row : { ...row, title }
             }),
         })
       let applied = result

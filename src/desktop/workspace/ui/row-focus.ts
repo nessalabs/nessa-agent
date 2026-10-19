@@ -8,9 +8,10 @@
  *
  * The list keeps focus itself while focus is in it (`useRowFocusKept`). A
  * menu or a question a row opened is drawn outside every list, so the row
- * notes its place as it opens one (`rowPlace`) and the menu gives focus back
- * by that place as it closes (`focusRowPlace`): to the row, or past it when
- * it went meanwhile, and only ever in the list it was asked from.
+ * notes its place as it opens one (`rowPlace`). As it closes, focus goes
+ * back where it was; when that was the row or nothing, it goes by that place
+ * (`focusRowPlace`): to the row, or past it when it went meanwhile, and only
+ * ever in the list it was asked from.
  */
 import { useEffect, type RefObject } from "react"
 
@@ -33,7 +34,8 @@ function rowsOf(list: HTMLElement): HTMLElement[] {
 export function rowPlace(node: Element | null): RowPlace | null {
   const list = node?.closest<HTMLElement>(`[${LIST}]`)
   if (!list || !node) return null
-  const row = node.closest<HTMLElement>(list.getAttribute(LIST) ?? "")
+  const row =
+    node.closest<HTMLElement>(list.getAttribute(LIST) ?? "") ?? beside(node, list)
   if (!row || !list.contains(row)) return null
   return {
     list,
@@ -41,6 +43,18 @@ export function rowPlace(node: Element | null): RowPlace | null {
     node: row,
     at: rowsOf(list).indexOf(row),
   }
+}
+
+/**
+ * The row a control drawn beside it belongs to, such as its swipe tray's
+ * buttons: the one row in the nearest wrapper that holds any.
+ */
+function beside(node: Element, list: HTMLElement): HTMLElement | null {
+  for (let at = node.parentElement; at && at !== list; at = at.parentElement) {
+    const found = at.querySelectorAll<HTMLElement>(list.getAttribute(LIST) ?? "")
+    if (found.length) return found.length === 1 ? found[0] : null
+  }
+  return null
 }
 
 /** Focus the row at `place` by the rule above; whether a row took it. */

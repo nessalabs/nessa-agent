@@ -25,7 +25,7 @@ import { focusRowPlace, rowPlace, type RowPlace } from "./row-focus"
 import "./session-row-actions.css"
 
 export interface SessionRowActions {
-  /** On the row itself: where its menus give focus back to. */
+  /** On the row itself: whose place its menus note as they open. */
   readonly ref: (node: HTMLElement | null) => void
   /** For the row's `SessionMenuItems`. */
   readonly items: { readonly onRename: () => void; readonly onDelete: () => void }
@@ -44,9 +44,27 @@ export interface SessionRowActions {
   readonly title: (title: string) => ReactNode
 }
 
-// The place of the row the delete question was asked from: focus goes back
-// there, or past it once deleted, when the question closes.
-let deleteFrom: RowPlace | null = null
+/** As a row's menu opens: the row's place, and where focus was. */
+interface Opened {
+  readonly place: RowPlace | null
+  readonly from: Element | null
+}
+
+// Where the delete question was asked from: as it closes, focus goes back as
+// from the menu that asked it (`giveBack`).
+let deleteFrom: Opened | null = null
+
+/**
+ * Focus as a row's menu or question closes: back where it was as the menu
+ * opened, if that is still there; else to the row asked from, or past it if
+ * it went (`row-focus.ts`).
+ */
+function giveBack(opened: Opened | null) {
+  const from = opened?.from
+  if (from instanceof HTMLElement && from.isConnected && from !== from.ownerDocument.body)
+    from.focus({ preventScroll: true })
+  else focusRowPlace(opened?.place ?? null)
+}
 
 export function useSessionRowActions(sessionId: string): SessionRowActions {
   const dispatch = useWorkspaceDispatch()
@@ -56,8 +74,7 @@ export function useSessionRowActions(sessionId: string): SessionRowActions {
   // to its button would take it from them.
   const handOff = useRef(false)
   const node = useRef<HTMLElement | null>(null)
-  // As a menu opens: the row's place, and where focus was.
-  const opened = useRef<{ place: RowPlace | null; from: Element | null } | null>(null)
+  const opened = useRef<Opened | null>(null)
   return {
     ref: (next) => {
       node.current = next
@@ -69,7 +86,7 @@ export function useSessionRowActions(sessionId: string): SessionRowActions {
       },
       onDelete: () => {
         handOff.current = true
-        deleteFrom = opened.current?.place ?? rowPlace(node.current)
+        deleteFrom = opened.current ?? { place: rowPlace(node.current), from: null }
         dispatch(deleteAsked({ sessionId }))
       },
     },
@@ -89,16 +106,7 @@ export function useSessionRowActions(sessionId: string): SessionRowActions {
         handOff.current = false
         return
       }
-      // Back where focus was as the menu opened, if that is still there;
-      // else to the row asked from, or past it if it went (`row-focus.ts`).
-      const from = asked?.from
-      if (
-        from instanceof HTMLElement &&
-        from.isConnected &&
-        from !== from.ownerDocument.body
-      )
-        from.focus({ preventScroll: true })
-      else focusRowPlace(asked?.place ?? rowPlace(node.current))
+      giveBack(asked ?? { place: rowPlace(node.current), from: null })
     },
     renaming: draft !== null,
     title: (title) =>
@@ -204,9 +212,9 @@ export function DeleteSessionHost() {
       // asked from instead, or past it once deleted, so the list keeps its keys.
       onCloseAutoFocus={(event) => {
         event.preventDefault()
-        const place = deleteFrom
+        const asked = deleteFrom
         deleteFrom = null
-        focusRowPlace(place)
+        giveBack(asked)
       }}
       size="sm"
       title="Delete this session?"

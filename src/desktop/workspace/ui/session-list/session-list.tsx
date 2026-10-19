@@ -254,7 +254,8 @@ const SessionRow = memo(function SessionRow({
           void dispatch(id === "delete" ? deleteSession(change) : archiveSession(change))
         }}
       >
-        <ContextMenuTrigger asChild>
+        {/* Not while renaming: right-click in the field is its own editing menu. */}
+        <ContextMenuTrigger asChild disabled={row.renaming}>
           <ListRow
             ref={row.ref}
             role="option"

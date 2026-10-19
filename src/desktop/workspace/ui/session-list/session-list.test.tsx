@@ -414,3 +414,43 @@ it("a More menu gives focus back where it was as it opened: another row, or a fi
     field.remove()
   }
 })
+
+it("right-click in the rename field is the field's own: the edit stays", async () => {
+  const source = fakeSource()
+  const store = await shown(source)
+  const { row, id } = quietRow()
+  await act(async () => store.dispatch(renameStarted({ sessionId: id })))
+  await type(row, "Half typed")
+  await act(async () => {
+    field(row)?.dispatchEvent(
+      new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2 }),
+    )
+    await settle()
+  })
+  expect(menuWords()).toEqual([])
+  expect(field(row)?.value).toBe("Half typed")
+  expect(source.calls.some((call) => call[0] === "rename")).toBe(false)
+})
+
+it("a delete question cancelled gives focus back where it was as its menu opened", async () => {
+  const source = fakeSource()
+  await shown(source)
+  const { row } = quietRow()
+  const outside = document.createElement("input")
+  document.body.append(outside)
+  try {
+    await act(async () => outside.focus())
+    await more(row, true)
+    await choose("Delete…")
+    const cancel = [
+      ...(document.querySelector("[data-delete-session]")?.querySelectorAll("button") ??
+        []),
+    ].find((button) => button.textContent === "Cancel")
+    await press(cancel ?? null)
+    await act(async () => {
+      await vi.waitFor(() => expect(document.activeElement).toBe(outside))
+    })
+  } finally {
+    outside.remove()
+  }
+})
