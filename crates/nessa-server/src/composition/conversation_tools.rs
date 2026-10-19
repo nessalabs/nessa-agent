@@ -885,15 +885,20 @@ fn answered(
     json!({"threadId":target.to_string(),"events":events,"cursor":cursor.encode(),"more":more,"timedOut":false,"turn":turn})
 }
 
-/// An ended turn as an agent reads it: its outcome and final reply, cut to fit.
+/// An ended turn as an agent reads it: its outcome and final reply, cut so
+/// the reply as written in the answer's JSON fits `MAX_REPLY_BYTES`.
 fn turn_value(execution: &str, (outcome, reply): (&'static str, Option<String>)) -> Value {
+    let written = |text: &str| serde_json::to_string(text).map_or(usize::MAX, |json| json.len());
     let (reply, cut) = match reply {
-        Some(mut reply) if reply.len() > MAX_REPLY_BYTES => {
-            let mut end = MAX_REPLY_BYTES - REPLY_CUT.len();
-            while !reply.is_char_boundary(end) {
-                end -= 1;
+        Some(mut reply) if written(&reply) > MAX_REPLY_BYTES => {
+            while written(&reply) + REPLY_CUT.len() > MAX_REPLY_BYTES {
+                let over = written(&reply) + REPLY_CUT.len() - MAX_REPLY_BYTES;
+                let mut end = reply.len().saturating_sub(over.max(1));
+                while !reply.is_char_boundary(end) {
+                    end -= 1;
+                }
+                reply.truncate(end);
             }
-            reply.truncate(end);
             reply.push_str(REPLY_CUT);
             (Some(reply), true)
         }
@@ -906,6 +911,28 @@ fn turn_value(execution: &str, (outcome, reply): (&'static str, Option<String>))
 mod tests {
     use super::*;
     use serde_json::Map;
+
+    #[test]
+    fn a_long_reply_is_cut_so_it_fits_as_written_in_the_answer() {
+        for reply in [
+            "x".repeat(40_000),
+            "\n".repeat(40_000),
+            "é\"".repeat(20_000),
+        ] {
+            let turn = turn_value("run", ("completed", Some(reply.clone())));
+            let carried = turn["reply"].as_str().unwrap();
+            assert!(
+                serde_json::to_string(carried).unwrap().len()
+                    <= MAX_REPLY_BYTES + REPLY_CUT.len() * 2
+            );
+            assert!(carried.ends_with(REPLY_CUT));
+            assert_eq!(turn["replyCut"], true);
+            assert!(answer(json!({"turn": turn}))["isError"] == false);
+        }
+        let short = turn_value("run", ("completed", Some("hi".into())));
+        assert_eq!(short["reply"], "hi");
+        assert_eq!(short["replyCut"], false);
+    }
 
     #[test]
     fn published_tool_arguments_preserve_omission_and_reject_null_and_unpublished_values() {

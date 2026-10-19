@@ -129,9 +129,25 @@ person stops it as they would any turn. Tests:
 `a_long_reply_is_cut_so_the_whole_report_fits_the_input_limit`,
 `waiting_reports_survive_reopening_until_settled`.
 
-For example, call `send_message({threadId, message: "Review the change"})`, then
-`subscribe({threadId, replay: true})`. Continue with the returned `cursor` as
-`after` until `more` is false; use `waitMs` when waiting for later changes.
+For example, call `send_message({threadId, message: "Review the change"})`,
+then either end the turn and let the report wake it, or wait in place with one
+`subscribe({threadId, executionId})` naming the returned execution. That call
+waits up to 30 s (its default) and answers `turn: {finished: true, outcome,
+reply}` as soon as the turn ends, at once if it already had; `finished: false`
+means it still runs. The reply is read as the report reads it
+(`thread_turn_end`), so both always agree. While such a call waits, the turn's
+report holds back (`await_thread_turn`); a call that returns the reply lets the
+report go (`claim_thread_report`), and one that gives up looks again so the
+report is sent as usual. Test:
+`one_subscribe_naming_the_sent_turn_returns_its_reply_in_place_of_the_report`.
+
+To read a thread's events instead, call `subscribe({threadId, replay: true})`
+and continue with the returned `cursor` as `after` until `more` is false; use
+`waitMs` when waiting for later changes. A page holding only events the
+projection leaves out (message text, thinking) is read past, never answered
+empty with `more: true`, which once had an agent walk a streamed reply one
+invisible page at a time. An answer ends at the first `turn.ended`, which comes
+with `turn: {outcome, reply}`.
 
 ## Source authority
 
@@ -178,7 +194,8 @@ can finish after source cancellation, as ordinary command admission does.
 
 `subscribe` holds one independent committed SDK reader, not an Agent handle. It
 projects execution/tool IDs, kinds, statuses and outcomes; it omits message
-content, thinking and tool arguments. A history gap or invalid/reset/pruned
+content, thinking and tool arguments, except an ended turn's final reply (the
+text after its last tool step), cut to fit the answer. A history gap or invalid/reset/pruned
 cursor is an explicit refusal. A callback does not run inside a transition,
 and receiving events does not cause a model turn or enqueue another message.
 
