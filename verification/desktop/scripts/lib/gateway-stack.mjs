@@ -121,7 +121,7 @@ export function scriptedLaunch(agent, { tool, scenario, evidence } = {}) {
  * `as` the gateway's owner (the default) or its panel. With `scripted`, a tool
  * name, the scripted agent is the runtime and calls that tool. With
  * `scenario`, it runs that file. With `evidence`, the run's logs are written
- * there. `limits` is the gateway config's `limits` (`startLocalGateway`). `options.mode` `prod` previews a production build; the default is a
+ * there. `limits` and `native` are the gateway config's sections (`startLocalGateway`). `options.mode` `prod` previews a production build; the default is a
  * dev server. Resolves with `{ url, mode, close, client, gateway, timings,
  * token }`: `url` the desktop page, `token()` the owner token, `close()`
  * stops all three. A gateway that does not start is "could not run", with
@@ -130,7 +130,15 @@ export function scriptedLaunch(agent, { tool, scenario, evidence } = {}) {
 export async function startGatewayStack(
   options,
   instance,
-  { as = "owner", scripted, scenario, evidence, stopChildrenOnParentStop, limits } = {},
+  {
+    as = "owner",
+    scripted,
+    scenario,
+    evidence,
+    stopChildrenOnParentStop,
+    limits,
+    native,
+  } = {},
 ) {
   const agent = options.agent
   if (!["claude", "codex"].includes(agent))
@@ -153,6 +161,7 @@ export async function startGatewayStack(
     signedOut: launch?.signedOut ?? false,
     stopChildrenOnParentStop,
     limits,
+    native,
   }).catch((error) => {
     // What it said as it failed, on stderr; the result keeps one line.
     if (error.gatewayLog) log(error.gatewayLog.slice(-4000))

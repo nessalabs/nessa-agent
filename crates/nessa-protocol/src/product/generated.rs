@@ -2233,6 +2233,31 @@ pub struct PairingCreateResult {
 pub struct PairingPendingResult {
     pub items: Vec<PairingOwnerStatus>,
 }
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PairingSetLinkingParams {
+    pub enabled: bool,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PairingLinkingApply {
+    Unchanged,
+    Restarting,
+}
+impl PairingLinkingApply {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Unchanged => "unchanged",
+            Self::Restarting => "restarting",
+        }
+    }
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PairingSetLinkingResult {
+    pub enabled: bool,
+    pub applies: PairingLinkingApply,
+}
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PairingErrorCode {
@@ -2244,6 +2269,8 @@ pub enum PairingErrorCode {
     PairingIneligible,
     PairingBusy,
     PairingUnavailable,
+    PairingAddressInUse,
+    PairingAuditUnavailable,
 }
 impl PairingErrorCode {
     pub fn as_str(self) -> &'static str {
@@ -2256,6 +2283,8 @@ impl PairingErrorCode {
             Self::PairingIneligible => "pairing_ineligible",
             Self::PairingBusy => "pairing_busy",
             Self::PairingUnavailable => "pairing_unavailable",
+            Self::PairingAddressInUse => "pairing_address_in_use",
+            Self::PairingAuditUnavailable => "pairing_audit_unavailable",
         }
     }
 }
@@ -2961,6 +2990,7 @@ pub mod product_method {
     pub const PAIRING_APPROVE: &str = "pairing.approve";
     pub const PAIRING_DENY: &str = "pairing.deny";
     pub const PAIRING_CANCEL: &str = "pairing.cancel";
+    pub const PAIRING_SET_LINKING: &str = "pairing.setLinking";
     pub const PEER_ENROLL: &str = "peer.enroll";
     pub const PEER_LIST: &str = "peer.list";
     pub const PEER_FORGET: &str = "peer.forget";
@@ -3166,7 +3196,7 @@ pub fn wire_shape_product_session_ready(value: &Value) -> bool {
         }) && object.get("methods").is_some_and(|field| {
             let _ = field;
             field.as_array().is_some_and(|items| {
-                items.len() <= 75
+                items.len() <= 76
                     && items.iter().all(|item| {
                         let _ = item;
                         item.is_string()
@@ -3251,6 +3281,7 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "pairing.approve",
     "pairing.deny",
     "pairing.cancel",
+    "pairing.setLinking",
     "peer.enroll",
     "peer.list",
     "peer.forget",
@@ -3302,6 +3333,7 @@ pub fn action_for_method(method: &str) -> Option<&'static str> {
         | "pairing.approve"
         | "pairing.deny"
         | "pairing.cancel"
+        | "pairing.setLinking"
         | "peer.enroll"
         | "peer.list"
         | "peer.forget"

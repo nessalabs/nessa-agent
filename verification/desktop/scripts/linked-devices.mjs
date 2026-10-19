@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 /**
  * Settings › Connections › Linked devices (#462) against a scripted product
- * session: linking off, a refused owner, a code with both orbs, approve,
- * revoke, and an expired code. Chromium and WebKit. The phone's scanner is
+ * session: linking off, the switch turning it on across a gateway restart, a
+ * refused owner, a code with both orbs, approve, revoke, and an expired code. Chromium and WebKit. The phone's scanner is
  * not this screen.
  *
  * The page is the dev server's, opened with `?gateway` so it uses the browser
  * session. `/browser/check` is answered here, and so is the product socket:
- * no gateway binary. Rows L1–L3, L5, L7, L11, L15, L17, L18 and L20.
+ * no gateway binary. Rows L1–L3, L5, L7, L11, L15, L17, L18, L20 and L23.
  */
 import { openPage, need, withEngines } from "./lib/browser.mjs"
 import { attempt } from "./lib/cli.mjs"
@@ -19,6 +19,7 @@ const wireCodes = [
   "pairing_not_found",
   "pairing_busy",
   "pairing_unavailable",
+  "pairing_address_in_use",
   "pairing_slot_occupied",
   "pairing_capacity",
   "pairing_conflict",
@@ -60,6 +61,7 @@ const sessionReady = {
     "pairing.create",
     "pairing.cancel",
     "pairing.approve",
+    "pairing.setLinking",
   ],
 }
 
@@ -119,6 +121,7 @@ function scriptedGateway(scenario) {
     "pairing.status",
     "pairing.approve",
     "pairing.deny",
+    "pairing.setLinking",
   ])
 
   function reply(method, params) {
@@ -143,6 +146,12 @@ function scriptedGateway(scenario) {
     if (method === "credential.revoke") {
       devices = devices.filter((item) => item.id !== params?.credentialId)
       return { ok: true, payload: { credentialId: params?.credentialId, revision: 1 } }
+    }
+    // Answered whether linking is on or off. The gateway restarts to apply
+    // it: `route` closes the socket, and the next one finds the new mode.
+    if (method === "pairing.setLinking") {
+      scenario.mode = params?.enabled ? "on" : "off"
+      return { ok: true, payload: { enabled: params?.enabled, applies: "restarting" } }
     }
     if (scenario.mode === "off")
       return { ok: false, error: { code: "pairing_not_configured", message: "off" } }
@@ -227,6 +236,8 @@ function scriptedGateway(scenario) {
       }
       const result = reply(frame.method, frame.params)
       socket.send(JSON.stringify({ type: "res", id: frame.id, ...result }))
+      if (frame.method === "pairing.setLinking" && result.ok)
+        setTimeout(() => void socket.close(), 100)
       if (frame.method === "conversation.subscribeList" && result.ok) {
         seq += 1
         socket.send(
@@ -312,14 +323,15 @@ async function laidOut(page) {
 
 const meta = {
   name: "linked-devices",
-  summary: "Linked devices: off, refused, pair, approve, revoke, expired",
+  summary: "Linked devices: off, toggle, refused, pair, approve, revoke, expired",
   defaults: { engine: "chromium,webkit" },
   help: `
 Usage: node verification/desktop/scripts/linked-devices.mjs [options]
 
 Per engine, against a scripted product session (and one sample page):
   pending    no gateway: the page is pending and offers no pairing
-  off        linking off: disabled switch, how to turn it on, no pair control
+  off        linking off: the switch can be turned, no config hint, no group title, no pair control
+  toggle     turning the switch on restarts the gateway, and the page comes back on
   refused    this sign-in cannot pair; recover-owner is named
   pair       a code, both orbs, Cancel focused, then cancel clears it
   approve    a claimed device's fingerprint; Approve stays on a retryable stop
@@ -391,11 +403,37 @@ await main(meta, async ({ options, rep, url }) => {
         (await toggle.getAttribute("aria-checked")) === "false"
           ? null
           : "the switch read on",
-        (await toggle.isDisabled()) ? null : "the switch could be turned",
-        text.includes("127.0.0.1:47650") ? null : "the enable hint was missing",
+        (await toggle.isDisabled()) ? "the switch could not be turned" : null,
+        text.includes("config.json") ? "the config.json hint is still shown" : null,
+        (await page
+          .locator(`${css.linked} [data-slot="settings-group-title"]`, {
+            hasText: "Native linking",
+          })
+          .count()) === 0
+          ? null
+          : "the Native linking group title is still shown",
         (await page.locator(selectorFor.linkedAction("pair")).count()) === 0
           ? null
           : "pair was offered while linking is off",
+      ].filter(Boolean)
+    })
+
+    await gatewayStep("toggle", { mode: "off" }, async (page) => {
+      const toggle = page.locator("[role='switch']")
+      await toggle.click()
+      await page.waitForFunction(
+        (selector) =>
+          document.querySelector(selector)?.getAttribute("data-linked") === "on",
+        css.linked,
+        { timeout: 20_000 },
+      )
+      return [
+        (await toggle.getAttribute("aria-checked")) === "true"
+          ? null
+          : "the switch read off",
+        (await page.locator(selectorFor.linkedAction("pair")).count()) === 1
+          ? null
+          : "pair was not offered once linking came back on",
       ].filter(Boolean)
     })
 
