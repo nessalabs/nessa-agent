@@ -44,7 +44,7 @@ use nessa_protocol::product::generated::{
 };
 use nessa_protocol::product::passive_read::decimal_u64;
 use nessa_protocol::product_contract::generated::ConversationErrorCode;
-use nessa_protocol::protocol::{OutgoingMessage, RequestFrame, MAX_PAYLOAD_BYTES};
+use nessa_protocol::protocol::{OutgoingMessage, RequestFrame, ResponseFrame, MAX_PAYLOAD_BYTES};
 use nessa_protocol::{
     agents::AgentId,
     conversation::domain::{ConversationApprovalMode, ConversationId, ConversationTitle},
@@ -69,11 +69,35 @@ pub(crate) async fn dispatch(
     frame: RequestFrame,
     initiation: Initiation,
 ) -> OutgoingMessage {
+    let method = frame.method.clone();
+    let request_id = frame.id.clone();
+    match answer(state, session, frame, initiation).await {
+        Ok(response) => response,
+        Err(error) => {
+            trace_refusal_causes(&method, &error);
+            match error {
+                ConversationError::PermissionAnswer { error, selection } => {
+                    permission_answer_failure(&request_id, error, selection)
+                }
+                error => failure(&request_id, error_code(&error).as_str()),
+            }
+        }
+    }
+}
+
+/// The command's answer, or the refusal `dispatch` answers and logs. A
+/// check that answers its own code returns it as a response.
+async fn answer(
+    state: &ProductRouteState,
+    session: &AuthenticatedSession,
+    frame: RequestFrame,
+    initiation: Initiation,
+) -> Result<OutgoingMessage, ConversationError> {
     if matches!(
         frame.method.as_str(),
         "conversation.permissionRules" | "conversation.revokePermissionRule"
     ) {
-        return dispatch_permission_rules(state, session, frame).await;
+        return Ok(dispatch_permission_rules(state, session, frame).await);
     }
     // This build runs no conversations at all, which is not the same fact as a
     // caller naming an agent this one is not configured for. Sharing a code
@@ -83,10 +107,10 @@ pub(crate) async fn dispatch(
         // Not `agent_not_configured`: this gateway runs no conversations at
         // all, and telling a user with a working agent to go configure one
         // sends them to change something that was never the problem.
-        return failure(
+        return Ok(failure(
             &frame.id,
             ConversationErrorCode::ConversationsNotConfigured.as_str(),
-        );
+        ));
     };
     macro_rules! params {
         ($kind:ty) => {
@@ -674,13 +698,43 @@ pub(crate) async fn dispatch(
         }
     }
     .await;
-    match result {
-        Ok(response) => response,
-        Err(ConversationError::PermissionAnswer { error, selection }) => {
-            permission_answer_failure(&frame.id, error, selection)
-        }
-        Err(error) => failure(&frame.id, error_code(&error).as_str()),
+    result
+}
+
+/// A refused conversation command — any method, reads included — as one
+/// warning in the gateway log, at the socket's answer to every request,
+/// passive record reads included: admission, share commands, a check answering its own code, and an error
+/// alike. Only the method and the wire code; the causes a code keeps only
+/// one of are the line `trace_refusal_causes` writes beside it. A read's own
+/// span may also have warned.
+pub(super) fn trace_refused_command(method: &str, response: &OutgoingMessage) {
+    if !method.starts_with("conversation.") {
+        return;
     }
+    let OutgoingMessage::Response(ResponseFrame {
+        ok: false,
+        error: Some(error),
+        ..
+    }) = response
+    else {
+        return;
+    };
+    tracing::warn!(
+        method,
+        code = error.code.as_str(),
+        "conversation command refused",
+    );
+}
+
+/// Every cause behind a refusal answered as an error, beside its
+/// `conversation command refused` line: the wire code keeps only one.
+fn trace_refusal_causes(method: &str, error: &ConversationError) {
+    tracing::warn!(
+        method,
+        code = error_code(error).as_str(),
+        causes = %super::refusal_causes::refusal_causes(error),
+        "conversation command refusal causes",
+    );
 }
 
 /// Refuse a review's or a question's key that is not 32 lowercase hex

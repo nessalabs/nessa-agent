@@ -38,6 +38,11 @@
  *               still whole after its agent is closed and its history opened
  *               again, no slower for its length than `reopenGrowthMs`
  *               allows; the message sent in the window after them is answered
+ *   fresh       a conversation is started in the window, from a new
+ *               session's home, while `FRESH_BURST` others are started
+ *               through the gateway at the same moment; its first message is
+ *               sent and answered, and nothing the window or they sent is
+ *               refused
  *   park        another conversation is left idle, unwatched, until the
  *               gateway parks its agent (its lease ends `idle`); it is opened
  *               in the window and the message sent there starts the agent
@@ -153,6 +158,15 @@ const PARK_IDLE_SECONDS = 3
 const LONG_CHUNKS = 40
 const LONG_CHUNK_BYTES = 300
 /**
+ * How many other conversations the `fresh` step creates and sends to at the
+ * same moment as the window's own first message: more than the sixteen
+ * command owners the gateway once allowed at a time, which refused the
+ * seventeenth as `conversation_storage_unavailable` instead of queueing it.
+ */
+const FRESH_BURST = 24
+/** The clients that burst is spread over, each well within one socket's 16 requests at once. */
+const FRESH_CLIENTS = 3
+/**
  * How much longer opening the `long` conversation again may take than
  * opening one of a single long turn, both closed first so their whole saved
  * history is replayed: half a second of noise, and a little for each turn.
@@ -262,6 +276,25 @@ async function untilTurn(run, conversationId, at, ready, seconds = 60) {
     await sleep(200)
   } while (Date.now() < end)
   return { view, turn }
+}
+
+/**
+ * Reads `conversationId` until `ready` holds for its whole view, which may
+ * have no turns: a conversation whose first submit was refused has none.
+ */
+async function untilView(run, conversationId, ready, seconds = 60) {
+  const end = Date.now() + seconds * 1000
+  let view
+  do {
+    try {
+      view = await readWithReviews(run.client, conversationId)
+      if (ready(view)) return { view }
+    } catch (error) {
+      log(`read ${conversationId}: ${error.message}`)
+    }
+    await sleep(200)
+  } while (Date.now() < end)
+  return { view }
 }
 
 const ended = (turn) => turnEnded(turn.status)
@@ -497,6 +530,44 @@ const sendShown = (page, ms = 15_000) =>
 /** A text no other turn of the run has: the kind's phrase, the step and the seed. */
 const prompt = (run, phrase, step, extra = "") =>
   `${phrase} r${step.index}${extra} s${run.knobs.seed}`
+
+/**
+ * One of the `fresh` step's other conversations: created and sent to on
+ * `client`, then followed on it to its end. Registered for the rest check
+ * before it is created, so one whose create took effect and lost its answer
+ * is still swept.
+ */
+async function startedBeside(run, client, step, n, failures) {
+  const conversationId = randomUUID()
+  const first = prompt(run, STRESS.reply, step, ` burst ${n}`)
+  try {
+    await client.conversation.create({ conversationId, agent: run.stack.agent })
+  } catch (error) {
+    failures.push(
+      `a conversation started beside the window's was refused: ${explain(error)}`,
+    )
+    return
+  }
+  // Once it exists the rest check sweeps it, even if the submit's answer is
+  // lost while its turn runs.
+  run.checked.push(conversationId)
+  try {
+    await client.conversation.submit(client.conversation.prepare(conversationId, first))
+  } catch (error) {
+    failures.push(
+      `a conversation started beside the window's was refused: ${explain(error)}`,
+    )
+    return
+  }
+  await settled(
+    { ...run, client },
+    conversationId,
+    new Set(),
+    first,
+    "completed",
+    failures,
+  )
+}
 
 const steps = {
   async reply(run, step, failures) {
@@ -869,6 +940,57 @@ const steps = {
     const seen = await send(run, conversationId, second, failures)
     await settled(run, conversationId, seen, second, "completed", failures)
     await expectShown(run.page, `${SAYS.echo}${second}`, failures)
+    await open(run.page, run.main.title)
+  },
+
+  async fresh(run, step, failures) {
+    // A person starts a conversation the way the window does: a new
+    // session's home, its first message typed and sent. The window creates
+    // the conversation and sends that message itself, with no client library
+    // in between. Meanwhile `FRESH_BURST` other conversations are created and
+    // sent to at once, so the window's create and send arrive while many
+    // other commands are still in flight: a gateway that refuses a command
+    // for the commands around it, rather than queueing it, fails here.
+    const text = prompt(run, STRESS.reply, step, " fresh")
+    // Spread over clients of their own: one socket takes only so many
+    // requests at once, and what this step asks about is the gateway's whole.
+    // Each conversation is also read on its own client, for the same reason.
+    const clients = []
+    const burst = []
+    try {
+      for (let n = 0; n < FRESH_CLIENTS; n += 1)
+        clients.push(await connectClient(run.stack.gateway, INSTANCE, "panel"))
+      for (let n = 0; n < FRESH_BURST; n += 1)
+        burst.push(startedBeside(run, clients[n % FRESH_CLIENTS], step, n, failures))
+      await run.page.keyboard.press(keys.newSession)
+      const home = run.page.locator(`${css.focusedPane} ${css.paneHome}`)
+      await home.locator(css.field).waitFor({ timeout: 15_000 })
+      await home.locator(css.field).fill(text)
+      await home.getByRole(...composerControls.send).click({ timeout: 10_000 })
+      const conversationId = await waitFor(async () => {
+        const { conversations } = await run.client.conversation.list({})
+        return conversations.find((each) => each.title && fold(each.title) === text)
+          ?.conversationId
+      }, 30_000)
+      if (!conversationId) {
+        failures.push("the conversation started in the window was never listed")
+      } else {
+        run.checked.push(conversationId)
+        await settled(run, conversationId, new Set(), text, "completed", failures)
+        await expectShown(run.page, `${SAYS.echo}${text}`, failures)
+      }
+      // Answered or not, a send the window took and then failed says so in
+      // its composer, with the code it was refused with.
+      const refused = run.page.locator(css.sendFailure)
+      if ((await refused.count()) > 0)
+        failures.push(
+          `the first message of a new conversation failed: ${fold(await refused.first().innerText())}`,
+        )
+    } finally {
+      // A step that threw leaves no burst running into the next one.
+      await Promise.allSettled(burst)
+      for (const client of clients) client.close()
+    }
     await open(run.page, run.main.title)
   },
 
@@ -1306,11 +1428,10 @@ async function background(run, n) {
 async function atRest(run, ids) {
   const failures = []
   for (const conversationId of ids) {
-    const { view } = await untilTurn(
+    const { view } = await untilView(
       run,
       conversationId,
-      0,
-      (_turn, current) => current.messages.every(ended) && current.pending.length === 0,
+      (current) => current.messages.every(ended) && current.pending.length === 0,
       60,
     )
     if (!view) {

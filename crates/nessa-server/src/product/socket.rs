@@ -1292,11 +1292,13 @@ where
             } else {
                 None
             };
+            let method = frame.method.clone();
             let reply = match refused {
                 Some(refused) => Some(refused),
                 None => subscriptions.begin(&state, &session, frame, slot.clone(), received_at),
             };
             if let Some(reply) = reply {
+                super::conversation::trace_refused_command(&method, &reply);
                 let queued = QueuedResponse {
                     message: WireResponse::ordinary(reply),
                     _slot: slot,
@@ -1604,6 +1606,21 @@ async fn dispatch_passive_read(
     lease: RecordReadLease,
     deadline: Instant,
 ) -> (WireResponse, Option<RecordReadLease>) {
+    let method = frame.method.clone();
+    let answered = answer_passive_read(state, session, frame, lease, deadline).await;
+    if let WireResponse::Ordinary(response) = &answered.0 {
+        super::conversation::trace_refused_command(&method, response);
+    }
+    answered
+}
+
+async fn answer_passive_read(
+    state: &ProductRouteState,
+    session: &AuthenticatedSession,
+    frame: RequestFrame,
+    lease: RecordReadLease,
+    deadline: Instant,
+) -> (WireResponse, Option<RecordReadLease>) {
     let request_id = frame.id.clone();
     let reading = async move {
         let (current, _) = match current_identity_inner(state, session).await {
@@ -1669,6 +1686,18 @@ async fn dispatch(
 /// [`dispatch`] on a connection that holds `window`, its place to publish
 /// its window in.
 async fn dispatch_on(
+    state: &ProductRouteState,
+    session: &AuthenticatedSession,
+    frame: RequestFrame,
+    window: Option<&WindowSlot>,
+) -> OutgoingMessage {
+    let method = frame.method.clone();
+    let response = answer_request(state, session, frame, window).await;
+    super::conversation::trace_refused_command(&method, &response);
+    response
+}
+
+async fn answer_request(
     state: &ProductRouteState,
     session: &AuthenticatedSession,
     frame: RequestFrame,

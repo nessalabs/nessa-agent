@@ -65,6 +65,10 @@ export const KNOBS = {
     default: 1,
     what: "conversations deleted from a row's More menu, once asked",
   },
+  fresh: {
+    default: 2,
+    what: "conversations started from a new session's home in the window, their first message sent there",
+  },
   windows: {
     default: 1,
     what: "turns where an agent reads the window: beside another pane, then alone",
@@ -135,6 +139,7 @@ export function plan(knobs) {
   add(knobs.parks, () => ({ kind: "park" }))
   add(knobs.renames, () => ({ kind: "rename" }))
   add(knobs.deletes, () => ({ kind: "delete" }))
+  add(knobs.fresh, () => ({ kind: "fresh" }))
   add(knobs.windows, () => ({ kind: "window" }))
   add(knobs.linkings, () => ({ kind: "linking" }))
   if (knobs.long > 0) steps.push({ kind: "long", turns: knobs.long })
