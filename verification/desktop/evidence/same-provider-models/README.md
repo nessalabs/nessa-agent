@@ -1,57 +1,57 @@
 # Same-provider model control: current assembly
 
-Qualified runtime source `e22bddb2be72e9a19306f5ab0f9db4b870541a73`, tree
-`6634a8dcaf855718dd5d9b08c173de98842f8dc2`, on immutable main
-`caf742c46d3dddaf410a4129de283bcbec6638ad`; UI pin
+Runtime source `3955c6eb6360f1e7a4e5e09b98080e8d57c70e06`, on immutable main
+`281b57c7dacc39e43ed666dfc695de154c3383be` (read_window), UI pin
 `0794a41bb1482aa7e677fd2b7012874bcc3e29b2`. This evidence update changes no
-product or checker behavior. [Qualification](qualification.json) records source,
-binary and screenshot hashes; [canonical summary](canonical-summary.md) records
-the actual current three journeys in Chromium and WebKit.
+behavior. [Qualification](qualification.json) keeps exact source/binary/photo
+hashes, controls, historical failures and limits; [canonical summary](canonical-summary.md)
+keeps the current gateway journeys.
 
-The portable positive plan keeps existing preset work first, then confirms Ask
-through the real access shield before creating each model operation's original
-review. It still uses the real picker, preserves the draft/review/Stop and checks
-the next native prompt's configured model. Default one and raised six model
-steps remain actual operations. Concurrent unsupported controls remain covered
-by chaos and the independent SDK negative, rather than widening platform presets.
+The integration preserves window publication/Cedar/reconnect identities and the
+independent model request/target, authoritative confirmation, uncertain Send
+fence, original review, draft and Stop. The existing generator derives **76 ready
+methods /77 including authentication**. Stress opens conversations by exact ID.
+Default Claude retains **one window step**; focused Codex explicitly uses **zero**.
 
-Current checks: plan/chaos-plan **13/13**; backup library **6 selected** (3310
-filtered), real backup CLI **5/5**; strict four-package all-target server Clippy;
-canonical **three programs in both engines**; full Claude default **51/51** and
-raised six **58/58**; focused Codex one **8/8** and six **18/18**, both engines;
-default chaos **2/2**. These are new plan/source counts, not earlier results
-relabeled. Independent partition and Ask omissions reject; action-scoped mode
-collector controls are **synthetic**, not native Linux evidence.
+Current production assembly: full frontend **4,922 tests /369 files**, targeted
+workspace **25**, model owner **12**, wire model **2** (not the earlier inferred
+seven), cold preset **7**, protocol **170+4+2 runtime /2 doctests**, and strict
+four-package all-target Clippy passed. Canonical **three programs ×both engines**
+and Claude default **51/51** ran on `b725d56f0`; subsequent changes touch only
+ADR/CHECKLIST/stress-checker, with production/client/protocol/pin/binary bytes
+verified identical. Default51 is retained at its actual source, not relabelled.
+Final checker source passed Claude six **58/58**, focused Codex one **8/8** and
+six **18/18**, both engines; chaos **2/2**. Fresh Linux CI and whole-assembly
+review remain required. No performance claim or new whole6838 run is made.
 
-Parent cold-preset **7-case matrix / 3442 server runtime / 4 doctests** and new
-**53 focused SDK fixture tests** remain separately source-qualified. Current
-cold service/test/docs and SDK production/fixture bytes were verified against
-those checkpoints; incoming backup changes have their own current checks above.
-Earlier frontend **4906/4906** and original backend **6838** union are historical
-source-qualified evidence, not new whole-suite runs. The rejected shared-target
-restoration record and original failed runs remain excluded from green claims.
+Two checker defects were demonstrated and corrected: earlier pause text could
+satisfy restart's generic completion witness before browser recovery; the final
+witness requires the current source-confirmed successor plus completion in one
+existing60s poll. Actual held-frame before/omission reject and fixed/restored
+hold. A controlled owned outage captured WebKit's exact “Could not connect to
+the server.” line between clean-before and identity-proven recovery. Only that
+already-held exact owned-endpoint literal, alongside the existing lost-connection
+literal, is classified. Actual recorded-interval omission rejects; synthetic
+prior/wrong-endpoint/neighbor/future/unproven-recovery controls remain errors.
 
-Original Linux CI `39208371137` remains failed: Auto→Fable acknowledged a preset
-unsupported by Linux's target binding, then conservatively cancelled/reopened.
-Its exact thrown error was not captured. The original stress/follower/chaos
-failures are retained. The new portable plan still needs actual Linux CI before
-merge; local macOS success is not a substitute. No performance claim is made.
+Original failed Linux CI39208371137 and local44/59,32/46,58/59 records remain
+failed historical evidence. The controlled outage does not reconstruct the
+uncaptured original58/59 event time. Parent cold3442/4docs and SDK53 fixture
+results remain separately source-qualified. No raw journals, gateway state,
+authentication material or keys are included.
 
 ## Current inspected screenshots
 
-- **Claude / WebKit**, full default run: confirmed Fable5.1, subsequent-responses
-  text, unsent draft and Stop. The original review is offscreen in this long
-  transcript; its preservation/answer is proved by the actual window assertions,
-  not by claiming it is visible in this frame.
-- **Codex / Chromium**, focused one-switch run: original real ApprovalCard,
-  actor, draft, confirmed GPT-6 Astra, next-turn text and Stop visible.
-- **Codex / WebKit**, focused six-switch run: original real ApprovalCard,
-  actor, draft, confirmed GPT-6 Astra, next-turn text and Stop visible.
+- **Claude/WebKit**, six-switch full run, first-switch snapshot: confirmed
+  Fable5.1, subsequent-responses text, draft and Stop. The original review is
+  offscreen; preservation/answer is asserted by the real window check.
+- **Codex/Chromium**, one-switch run: original real ApprovalCard/actor, draft,
+  confirmed GPT-6 Astra, next-turn text and Stop visible.
+- **Codex/WebKit**, six-switch run, first-switch snapshot: the same visible
+  original card/draft/model/Stop; all six operations are proved by assertions.
 
-All three are actual desktop renderer components with seeded scripted native
-harness data. They do not establish installed-app frontend parity. Unpainted
-popup-entry screenshots and failed/historical screenshots are not final photos.
-No raw journals, gateway state, authentication material or keys are included.
+These are actual desktop components with scripted harness data, not proof of
+installed-app version parity. All three photos were visually inspected.
 
 ![Claude: confirmed model, draft and Stop; review offscreen](claude-webkit.png)
 

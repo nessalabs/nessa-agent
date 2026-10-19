@@ -1,45 +1,112 @@
 {
-  "qualified_source_commit": "e22bddb2be72e9a19306f5ab0f9db4b870541a73",
-  "qualified_source_tree": "6634a8dcaf855718dd5d9b08c173de98842f8dc2",
-  "base": "caf742c46d3dddaf410a4129de283bcbec6638ad",
-  "portable_checker_commit": "fd587d0ce",
+  "qualified_runtime_source_commit": "3955c6eb6360f1e7a4e5e09b98080e8d57c70e06",
+  "qualified_runtime_tree": "a0428db5c0bfcb13466969cefc15b60b579bcdac",
+  "base": "281b57c7dacc39e43ed666dfc695de154c3383be",
   "ui_pin": "0794a41bb1482aa7e677fd2b7012874bcc3e29b2",
-  "source_manifest_sha256": "e7f0ef6767dfe4ec472bd65bde489b506aab1a72633d2542aea541bd33dc925c",
-  "gateway_sha256": "fd4845fdb5388742bffa72d6c9ff1a6802ab693a19bf00c82357dfcde99744c2",
+  "source_manifest_sha256": "74c536e4a4542da64b003bb10e9c0303f6bb3fa4e1a1230bb463d874384856a2",
+  "gateway_sha256": "5691a36b0d357fbe0866fbb8a522be13030987bf42948bad3bd64e91c8016cb2",
+  "gateway_build_source": "b725d56f042cd177c928e8bc7fc057144063c952",
+  "full_frontend": {
+    "source": "b725d56f042cd177c928e8bc7fc057144063c952",
+    "public_tests": 4922,
+    "files": 369,
+    "all_normal_stages": "pass",
+    "source_scope": "All production/client/protocol/pin bytes equal qualified runtime; only ADR/CHECKLIST/stress-checker changed afterward."
+  },
   "current_scoped_checks": {
-    "plan_and_chaos_plan_tests": 13,
-    "synthetic_collector_controls": 6,
-    "independent_omission_rejections": [
-      "stable model partition",
-      "Ask preparation",
-      "mode-only unavailable outcome (synthetic collector)"
-    ],
-    "backup_library_selected": 6,
-    "backup_library_filtered": 3310,
-    "backup_cli": 5,
-    "strict_server_clippy": "nessa-server,nessa-protocol,nessa-client-core,nessa-device-client; all-targets; -D warnings"
+    "workspace_selected": 25,
+    "model_owner_selected": 12,
+    "wire_model_selected": 2,
+    "wire_filtered": 3327,
+    "cold_preset_selected": 7,
+    "protocol_runtime": [170, 4, 2],
+    "protocol_doctests": 2,
+    "strict_server_clippy": "four packages/all-targets/-D warnings PASS",
+    "planner_and_page_line_tests": 31,
+    "protocol_manifest_methods": 77,
+    "ready_methods": 76
   },
   "canonical": {
+    "source": "b725d56f042cd177c928e8bc7fc057144063c952",
     "programs": ["mcp-apps-gateway", "gateway-window", "scripted-scenarios"],
     "engines": ["chromium", "webkit"],
-    "verdict": "pass"
+    "verdict": "pass",
+    "current_source_scope": "Canonical programs and production source unchanged by subsequent stress-checker corrections."
   },
   "window_stress": {
-    "claude_default": 51,
-    "claude_raised_six": 58,
-    "codex_one": 8,
-    "codex_six": 18,
+    "claude_default": {
+      "source": "b725d56f042cd177c928e8bc7fc057144063c952",
+      "passed": 51,
+      "model_steps": 1,
+      "windows": 1
+    },
+    "claude_raised_six": {
+      "source": "3955c6eb6360f1e7a4e5e09b98080e8d57c70e06",
+      "passed": 58,
+      "model_steps": 6,
+      "windows": 1
+    },
+    "codex_one": {
+      "source": "3955c6eb6360f1e7a4e5e09b98080e8d57c70e06",
+      "passed": 8,
+      "model_steps": 1,
+      "windows": 0
+    },
+    "codex_six": {
+      "source": "3955c6eb6360f1e7a4e5e09b98080e8d57c70e06",
+      "passed": 18,
+      "model_steps": 6,
+      "windows": 0
+    },
     "engines": ["chromium", "webkit"],
     "channel": "bundled",
-    "model_steps_default": 1,
-    "model_steps_raised": 6,
-    "positive_model_preset": "Ask confirmed by actual access control before original review",
-    "note": "Actual current row counts; original preset work runs first. Empty console diagnostics do not add a row."
+    "positive_model_preset": "Real access shield confirms Ask before original review; real picker/native prompt witness/draft/review/Stop retained.",
+    "coverage_limit": "Default Claude retains pre-checker-fix source attribution; focused Codex is explicitly model-only, no Codex read_window claim."
   },
   "chaos": {
+    "source": "3955c6eb6360f1e7a4e5e09b98080e8d57c70e06",
     "passed": 2,
     "seeds": 2,
     "no_pending_model_or_mode_change": true
+  },
+  "restart_checker_regression": {
+    "identity_witness": {
+      "before": "14/15 FAIL",
+      "fixed": "15/15 PASS",
+      "sole_identity_omission": "14/15 FAIL",
+      "restored": "15/15 PASS",
+      "controlled_condition": "Real WebKit recovery frames held; old pause text visible/current successor absent; release driven by observed predicate checkpoint, no fixed sleep.",
+      "budget": "One existing60s combined current-userText/completion poll."
+    },
+    "held_console_variant": {
+      "actual_owned_outage": {
+        "old_pid": 35181,
+        "old_pid_exit_ms": 1792400245127,
+        "real_app_refusal_ms": 1792400245315,
+        "new_pid": 35313,
+        "new_pid_healthy_ms": 1792400245567,
+        "current_identity_recovered_ms": 1792400245837,
+        "before_held_errors": 0,
+        "after_held_errors": 1,
+        "literal": "Could not connect to the server.",
+        "scope": "Owned newlaunch held after oldPID exited until real app reconnect refused on same endpoint; then normal launch. Controlled diagnostic, not original58/59 timing reconstruction."
+      },
+      "actual_recorded_interval_replay": {
+        "before": "FAIL",
+        "fixed": "PASS",
+        "sole_literal_omission": "FAIL",
+        "restored": "PASS"
+      },
+      "synthetic_controls": [
+        "prior error prevents classification",
+        "wrong endpoint remains error",
+        "neighbor literal remains error",
+        "future matching line remains error",
+        "unproven recovery remains error",
+        "old exact lost-connection literal still classified"
+      ],
+      "classification_scope": "Existing cleanBefore+zeroFailure+identity-proven recovery; only already-held exact owned endpoint lines; no future/global pattern."
+    }
   },
   "parent_backend_source_qualified": {
     "cold_public_matrix": 7,
@@ -48,13 +115,13 @@
     "cold_server_docs": 4,
     "sdk_unsupported_ack_focused_fixture_tests": 53,
     "source_equivalence_receipt_sha256": "68e001c14513239614124a69e95a7d87201409bbec158bd90a90d6178f4d06f7",
-    "note": "Parent source-qualified receipts, not rerun by this UI sequence. Newcaf backup covered separately; not a new6838/all-package run."
+    "note": "Parent cold3442/4docs and SDK53 fixture receipts remain separately source-qualified; current cold7 rerun above. No new6838/all-package run. Incoming read_window changed service composition, not cold/native implementations; SDK import-only correction preserved implementation."
   },
   "historical_evidence": {
     "source_commit": "414ce25f3afa381665bf47bc0ea757069f126dfd",
     "frontend_files": 365,
     "frontend_passed": 4906,
-    "frontend_note": "Earlier source-qualified frontend; current portable delta is checker/docs only. No new fullfrontend claim.",
+    "frontend_note": "Historical4906 evidence only; current b725 fullfrontend4922 is recorded separately.",
     "backend_union_passed": 6838,
     "backend_union_ignored": 36,
     "backend_union_doctests": 69,
@@ -63,23 +130,45 @@
     "failed_ci_merge": "c38785ae421cc6bc8f824f8c319fcf1a57dac642",
     "failed_ci_note": "Linux Auto\u2192Fable acknowledged unsupported preset, conservative cancellation/reopen; original exact thrown error uncaptured. Original stress/follower/chaos failures retained, not relabelled."
   },
+  "local_integration_failures_retained": [
+    {
+      "source": "b725d56f042cd177c928e8bc7fc057144063c952",
+      "result": "44/59 raised; WebKit013 error outbox, later steps unrun; exact original send exception uncaptured"
+    },
+    {
+      "source": "b725d56f042cd177c928e8bc7fc057144063c952",
+      "result": "32/46 matched diagnostic; Chromium013 pre-wire send during recovery; WebKit prefix held; intended preceding fullChromium history incomplete"
+    },
+    {
+      "source": "398eecbd4d213e766bca80ea73b67cca6407eec1",
+      "result": "58/59 raised; all actions held; WebKit console variant not yet classified"
+    },
+    {
+      "source": "398eecbd4d213e766bca80ea73b67cca6407eec1",
+      "result": "15/16 controlled owned-outage; expected retained console variant before classifier fix"
+    }
+  ],
   "photos": {
     "claude-webkit.png": {
-      "sha256": "ff5da89a29fcde43fa39f4fde1632dbd20483357f7206d82e1089fb3067d1712",
-      "actual_source": "/tmp/nessa-975-portable-final-claude-default/model-webkit-confirmed-review-draft.png"
+      "sha256": "d076d4180009dbd2f5db67f4d6ef91cff0cca0fced0f855d139c61307646ef10",
+      "actual_source": "/tmp/nessa-975-281b-recovered-claude-raised/model-webkit-confirmed-review-draft.png",
+      "visually_inspected": true
     },
     "codex-chromium.png": {
-      "sha256": "49b4224eaf9f7ea940e49835322b6d654ba1c1fe049a1ec32feaa906ff3fbf1d",
-      "actual_source": "/tmp/nessa-975-portable-final-codex-model-1/model-chromium-confirmed-review-draft.png"
+      "sha256": "22c2dba89c1afedae74742912ab40dc1bec85fe0decd4825e5535a5759008683",
+      "actual_source": "/tmp/nessa-975-281b-recovered-codex-model-1/model-chromium-confirmed-review-draft.png",
+      "visually_inspected": true
     },
     "codex-webkit.png": {
-      "sha256": "4e55df8d5f5fae91793d91cc75b09e66eb1b091b2d83c43696b53478fcfc749b",
-      "actual_source": "/tmp/nessa-975-portable-final-codex-model-6/model-webkit-confirmed-review-draft.png"
+      "sha256": "f237c0ca2bbd4cab816b64e5163351dfa396ac523976553e4dc770694a34f405",
+      "actual_source": "/tmp/nessa-975-281b-recovered-codex-model-6/model-webkit-confirmed-review-draft.png",
+      "visually_inspected": true
     }
   },
   "historical_failures_preserved": true,
   "synthetic_controls_are_not_browser_evidence": true,
   "installed_app_parity_verified": false,
   "actual_linux_ci_required_before_merge": true,
+  "fresh_whole_assembly_review_required": true,
   "performance_claim": false
 }
