@@ -104,6 +104,7 @@ import { PaneGrid } from "../panes/pane-grid"
 import { QuickSwitcher, type SwitcherMode } from "../quick-switcher/quick-switcher"
 import { SessionList } from "../session-list/session-list"
 import { ShareDialogHost } from "../share/share-dialog"
+import { DeleteSessionHost } from "../session-row-actions"
 import { OverviewQuietProvider } from "../source-list/overview-quiet"
 import { SourceList } from "../source-list/source-list"
 import {
@@ -545,6 +546,7 @@ export function WorkspaceShell({
                     />
                     <OverviewLayer root={root} />
                     <ShareDialogHost />
+                    <DeleteSessionHost />
                     {switcher ? (
                       <SwitcherHost
                         mode={switcher}

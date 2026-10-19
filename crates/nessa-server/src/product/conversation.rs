@@ -30,11 +30,12 @@ use nessa_protocol::product::generated::{
     ConversationPermissionRulesParams, ConversationPermissionRulesResult,
     ConversationPermissionSelectionState, ConversationQuestionReviewParams,
     ConversationQuestionReviewResult, ConversationReadParams, ConversationReceiptParams,
-    ConversationReceiptResult, ConversationRemoveParams, ConversationReorderParams,
-    ConversationRevokePermissionRuleParams, ConversationRevokePermissionRuleResult,
-    ConversationSendParams, ConversationSetApprovalModeParams, ConversationSetApprovalModeResult,
-    ConversationStopParams, ConversationSummary, ConversationView as WireConversationView,
-    PermissionRule, PermissionRuleEffect, MAX_REVIEW_RANGE_BYTES,
+    ConversationReceiptResult, ConversationRemoveParams, ConversationRenameParams,
+    ConversationReorderParams, ConversationRevokePermissionRuleParams,
+    ConversationRevokePermissionRuleResult, ConversationSendParams,
+    ConversationSetApprovalModeParams, ConversationSetApprovalModeResult, ConversationStopParams,
+    ConversationSummary, ConversationView as WireConversationView, PermissionRule,
+    PermissionRuleEffect, MAX_REVIEW_RANGE_BYTES,
 };
 use nessa_protocol::product::generated::{
     ConversationMessageDelivery, ConversationMessageParams, ConversationMessageReceipt,
@@ -46,7 +47,7 @@ use nessa_protocol::product_contract::generated::ConversationErrorCode;
 use nessa_protocol::protocol::{OutgoingMessage, RequestFrame, ResponseFrame, MAX_PAYLOAD_BYTES};
 use nessa_protocol::{
     agents::AgentId,
-    conversation::domain::{ConversationApprovalMode, ConversationId},
+    conversation::domain::{ConversationApprovalMode, ConversationId, ConversationTitle},
 };
 use nessa_sdk::application::agent_execution::{
     agents::AgentError,
@@ -641,6 +642,26 @@ async fn answer(
                         conversation_id(&params.conversation_id)?,
                         caller(params.request_id.clone()),
                         frame.method == "conversation.archive",
+                    )
+                    .await?;
+                Ok(success(
+                    &frame.id,
+                    &ConversationMutationResult {
+                        request_id: params.request_id,
+                        applied,
+                    },
+                ))
+            }
+            "conversation.rename" => {
+                let params = target_params!(ConversationRenameParams);
+                // The domain owns what a title may be; the schema only bounds it.
+                let title = ConversationTitle::new(&params.title)
+                    .map_err(|_| ConversationError::InvalidInput)?;
+                let applied = service
+                    .rename(
+                        conversation_id(&params.conversation_id)?,
+                        caller(params.request_id.clone()),
+                        title,
                     )
                     .await?;
                 Ok(success(

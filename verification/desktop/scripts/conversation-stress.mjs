@@ -50,6 +50,12 @@
  *               gateway parks its agent (its lease ends `idle`); it is opened
  *               in the window and the message sent there starts the agent
  *               again on its provider session
+ *   rename      another conversation is renamed from its row's More menu;
+ *               the gateway's list and the window say the new title, and it
+ *               keeps it after a message sent there
+ *   delete      another conversation is deleted from its row's More menu,
+ *               once asked; the gateway refuses it as deleted, and neither
+ *               list nor the window holds it
  *   linking     native linking is turned on, then off, with the switch in
  *               Settings › Connections › Linked devices; each time the gateway
  *               saves config.json and starts itself again in the same
@@ -209,6 +215,8 @@ class Run {
     this.background = []
     /** Other conversations a step opened that the final rest check sweeps too. */
     this.checked = []
+    /** Conversations a step deleted: followers let them go, and nothing sweeps them. */
+    this.deleted = new Set()
     this.sent = new Map()
     /** Where native linking listens once the `linking` step turns it on. */
     this.nativeAddress = stack.nativeAddress
@@ -306,6 +314,33 @@ async function untilView(run, conversationId, ready, seconds = 60) {
 }
 
 const ended = (turn) => turnEnded(turn.status)
+
+/** The row of the conversation `conversationId` in the window's list. */
+const sessionRow = (page, conversationId) =>
+  page.locator(selectorFor.sessionListRowFor(conversationId))
+
+/**
+ * Chooses `label` in the More menu of `conversationId`'s row: the pointer
+ * over the row shows its buttons, as a person sees them.
+ */
+async function choose(page, conversationId, label) {
+  const row = sessionRow(page, conversationId)
+  await row.hover({ timeout: 15_000 })
+  await row.locator('[data-session-action="more"]').click({ timeout: 10_000 })
+  await page
+    .getByRole("menuitem", { name: label, exact: true })
+    .click({ timeout: 10_000 })
+}
+
+/** Waits for `conversationId`'s row to say `title`. */
+async function rowShown(page, conversationId, title, failures) {
+  const shown = await sessionRow(page, conversationId)
+    .filter({ has: page.getByText(title, { exact: true }) })
+    .waitFor({ timeout: 15_000 })
+    .then(() => true)
+    .catch(() => false)
+  if (!shown) failures.push(`the window never listed ${JSON.stringify(title)}`)
+}
 
 /**
  * Types `text` into the open conversation's composer and presses Send.
@@ -1059,6 +1094,91 @@ const steps = {
     await openStressConversation(run.page, run.main.id, run.main.title)
   },
 
+  async rename(run, step, failures) {
+    const conversationId = randomUUID()
+    const first = prompt(run, STRESS.reply, step, " rename")
+    await run.client.conversation.create({ conversationId, agent: run.stack.agent })
+    run.checked.push(conversationId)
+    await run.client.conversation.submit(
+      run.client.conversation.prepare(conversationId, first),
+    )
+    const { view: before } = await settled(
+      run,
+      conversationId,
+      new Set(),
+      first,
+      "completed",
+      failures,
+    )
+    if (failures.length) return
+    const renamed = `Renamed s${run.knobs.seed} ${step.index}`
+    // As a person does: the row's More menu under the pointer, Rename, the
+    // new title typed over the old one, and Return.
+    await choose(run.page, conversationId, "Rename")
+    const field = run.page.locator("[data-session-rename]")
+    await field.fill(renamed)
+    await field.press("Enter")
+    const listed = await waitFor(async () => {
+      const { conversations } = await run.client.conversation.list({})
+      return (
+        conversations.find((each) => each.conversationId === conversationId)?.title ===
+        renamed
+      )
+    }, 15_000)
+    if (!listed) failures.push("the gateway's list never said the new title")
+    await rowShown(run.page, conversationId, renamed, failures)
+    // A message after the rename keeps the person's title, not the first message's.
+    await openStressConversation(run.page, conversationId, renamed)
+    const second = prompt(run, STRESS.reply, step, " after rename")
+    const seen = await send(
+      run,
+      conversationId,
+      second,
+      failures,
+      new Set(before.messages.map((each) => each.executionId)),
+    )
+    await settled(run, conversationId, seen, second, "completed", failures)
+    if ((await titleOf(run, conversationId)) !== renamed)
+      failures.push("a message after the rename changed the title back")
+    await openStressConversation(run.page, run.main.id, run.main.title)
+  },
+
+  async delete(run, step, failures) {
+    const conversationId = randomUUID()
+    const first = prompt(run, STRESS.reply, step, " delete")
+    await run.client.conversation.create({ conversationId, agent: run.stack.agent })
+    await run.client.conversation.submit(
+      run.client.conversation.prepare(conversationId, first),
+    )
+    await settled(run, conversationId, new Set(), first, "completed", failures)
+    if (failures.length) return
+    await choose(run.page, conversationId, "Delete…")
+    const asked = run.page.locator("[data-delete-session]")
+    await asked.waitFor({ timeout: 10_000 })
+    // Marked as the delete is confirmed, and no sooner: from here a
+    // follower's stream of it ending is the delete's, and before it any
+    // failure of that stream is a failure.
+    run.deleted.add(conversationId)
+    await asked.locator('[data-delete-action="confirm"]').click({ timeout: 10_000 })
+    const gone = await waitFor(async () => {
+      try {
+        await run.client.conversation.read(conversationId)
+        return false
+      } catch (error) {
+        return error?.code === "conversation_deleted"
+      }
+    }, 60_000)
+    if (!gone) failures.push("the gateway still reads the deleted conversation")
+    const { conversations } = await run.client.conversation.list({})
+    if (conversations.some((each) => each.conversationId === conversationId))
+      failures.push("the gateway's list still holds the deleted conversation")
+    const hidden = await waitFor(
+      async () => (await sessionRow(run.page, conversationId).count()) === 0,
+      15_000,
+    )
+    if (!hidden) failures.push("the window still lists the deleted conversation")
+  },
+
   async long(run, step, failures) {
     const conversationId = randomUUID()
     await run.client.conversation.create({ conversationId, agent: run.stack.agent })
@@ -1487,6 +1607,7 @@ await main(
               limits: subscriptionLimits,
               random: random(knobs.seed * 1_000 + n + 1),
               mainId: run.main.id,
+              deleted: run.deleted,
             }),
         )
         await Promise.all(followers.map((each) => each.start()))

@@ -205,3 +205,21 @@ fn a_new_message_unarchives_and_a_reply_does_not() {
     assert!(!unarchived.archived());
     assert_eq!(unarchived.updated_at_ms(), 10);
 }
+
+#[test]
+fn a_renamed_title_sticks_through_later_messages() {
+    let said = ConversationSummary::after_message(None, "Plan the trip", None, 10);
+    let archived = said.after_archiving(true);
+    let renamed = archived.after_renaming(ConversationTitle::new("Lisbon in May").unwrap());
+    assert_eq!(renamed.title().unwrap().as_str(), "Lisbon in May");
+    // Renaming says nothing and changes nothing else, the time included.
+    assert_eq!(renamed.preview(), said.preview());
+    assert_eq!(renamed.updated_at_ms(), 10);
+    assert!(renamed.archived());
+
+    let replied = ConversationSummary::after_reply(Some(&renamed), "Done.", 20).unwrap();
+    assert_eq!(replied.title().unwrap().as_str(), "Lisbon in May");
+    let talked = ConversationSummary::after_message(Some(&replied), "And Porto?", None, 30);
+    assert_eq!(talked.title().unwrap().as_str(), "Lisbon in May");
+    assert_eq!(talked.preview().unwrap().as_str(), "And Porto?");
+}

@@ -23,6 +23,8 @@
  *   reorder   reverse the queue (steering stays first)
  *   close     close the conversation's agent
  *   archive   archive the conversation, or unarchive it
+ *   rename    rename the conversation: a plain title, one to fold, or one
+ *             too long to keep whole
  *   read      read the view with every review it lists read in full
  *   restart   crash (SIGKILL) or shut down (SIGTERM) the gateway mid-wave
  *
@@ -42,6 +44,8 @@
  *     refused is not there at all;
  *   - only a turn that asked to fail ended failed;
  *   - every note the gateway took can be found again;
+ *   - a conversation renamed is listed, and read, under one of the titles
+ *     it was renamed to, as the client's title rule made it;
  *   - no review was hidden for its size. One denied automatically is
  *     counted, not failed: the chaos answers reviews only as its dice say,
  *     and a review no one answers in time is denied by design;
@@ -184,6 +188,8 @@ class Run {
     /** executionId → what was sent and what the gateway said to it. */
     this.sent = new Map()
     this.notes = []
+    /** Each rename sent, with whether the gateway applied it. */
+    this.renames = []
     this.failures = []
     this.codes = new Map()
     this.restarts = 0
@@ -192,7 +198,7 @@ class Run {
     this.followers = []
     this.counts = new Map()
     this.eventKinds = new Map()
-    /** An action's index → the message it sent, if it sent one. */
+    /** An action's index → the message or rename it sent, if it sent one. */
     this.byAction = new Map()
     /** When each action ran and how it ended, to read beside the gateway log. */
     this.journal = []
@@ -356,6 +362,24 @@ const apply = {
     const id = run.slots[action.slot]
     if (action.undo) await client.conversation.unarchive(id)
     else await client.conversation.archive(id)
+  },
+
+  async rename(run, action, client) {
+    const { conversationTitle } = await import("@nessa/client")
+    const typed = {
+      plain: `chaos a${action.index}`,
+      folded: ` chaos\t\ta${action.index}\u0007  s${run.knobs.seed}\n`,
+      long: `chaos a${action.index} ${"long ".repeat(20)}`,
+    }[action.title]
+    const rename = {
+      slot: action.slot,
+      index: action.index,
+      title: conversationTitle(typed),
+    }
+    run.renames.push(rename)
+    run.byAction.set(action.index, rename)
+    const result = await client.conversation.rename(run.slots[action.slot], rename.title)
+    rename.applied = result?.applied !== false
   },
 
   async read(run, action, client) {
@@ -712,6 +736,33 @@ async function check(run, { views, quiet }) {
     } catch (error) {
       run.fail(`a note's status could not be read: ${explain(error)}`)
     }
+  }
+  for (const [slot, conversationId] of run.slots.entries()) {
+    // Renames land in any order, so the title is any one that may have
+    // taken: applied, or whose answer a restart or a lost connection took.
+    const titles = run.renames
+      .filter((each) => each.slot === slot && (each.applied || each.uncertain))
+      .map((each) => each.title)
+    if (!titles.length) continue
+    const listed = []
+    for (const archived of [false, true]) {
+      try {
+        const { conversations } = await client.conversation.list({ archived })
+        const found = conversations.find((each) => each.conversationId === conversationId)
+        if (found) listed.push(found.title)
+      } catch (error) {
+        run.fail(`listing conversations failed: ${explain(error)}`)
+      }
+    }
+    const read = views.get(conversationId)?.title
+    if (listed.length !== 1 || !titles.includes(listed[0]))
+      run.fail(
+        `${conversationId} was renamed to ${JSON.stringify(titles)} and is listed as ${JSON.stringify(listed)}`,
+      )
+    else if (read !== listed[0])
+      run.fail(
+        `${conversationId} is listed as ${JSON.stringify(listed[0])} and read as ${JSON.stringify(read)}`,
+      )
   }
   await Promise.all(run.followers.map((each) => each.settle()))
   for (const each of run.followers) run.failures.push(...(await each.check(client)))

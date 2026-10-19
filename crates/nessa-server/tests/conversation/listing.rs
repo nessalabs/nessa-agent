@@ -23,7 +23,9 @@ use crate::{
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_local_database::rusqlite::{params, Connection};
-use nessa_protocol::conversation::domain::{ConversationApprovalMode, ConversationModelId};
+use nessa_protocol::conversation::domain::{
+    ConversationApprovalMode, ConversationModelId, ConversationTitle,
+};
 use nessa_protocol::conversation::view::{ConversationListEntry, ConversationObservationCursor};
 use nessa_protocol::{
     agents::AgentId,
@@ -1024,6 +1026,139 @@ async fn an_archive_that_cannot_be_written_fails_visibly() {
         listing
             .service
             .archive(conversation.clone(), owner(), true)
+            .await,
+        Err(ConversationError::Metadata)
+    ));
+    assert_eq!(listing.summaries.writes.load(Ordering::SeqCst), writes);
+}
+
+fn title(value: &str) -> ConversationTitle {
+    ConversationTitle::new(value).unwrap()
+}
+
+#[tokio::test]
+async fn renaming_retitles_the_list_and_the_read_and_a_later_message_keeps_it() {
+    let listing = listing(ConversationLimits::default());
+    let conversation = id();
+    listing
+        .service
+        .create(
+            conversation.clone(),
+            owner(),
+            crate::conversation::application::RequestedConversation::default(),
+        )
+        .await
+        .unwrap();
+    let service = &listing.service;
+    // Nothing said yet: nothing listed, nothing to rename, nothing made.
+    assert!(!service
+        .rename(conversation.clone(), owner(), title("Lisbon"))
+        .await
+        .unwrap());
+    assert!(listing.summaries.summaries.lock().unwrap().is_empty());
+    service
+        .submit(
+            conversation.clone(),
+            owner(),
+            "first".into(),
+            message("Plan the trip"),
+            SubmissionMode::Queue,
+        )
+        .await
+        .unwrap();
+    // The title it already has changes nothing, and says so.
+    assert!(!service
+        .rename(conversation.clone(), owner(), title("Plan the trip"))
+        .await
+        .unwrap());
+    let before = listing.summaries.summaries.lock().unwrap()[&conversation].clone();
+    assert!(service
+        .rename(conversation.clone(), owner(), title("Lisbon in May"))
+        .await
+        .unwrap());
+    // Repeated, including by the same request: already that title.
+    assert!(!service
+        .rename(conversation.clone(), owner(), title("Lisbon in May"))
+        .await
+        .unwrap());
+    let listed = service.list(owner(), false).await.unwrap().conversations;
+    assert_eq!(listed[0].title.as_deref(), Some("Lisbon in May"));
+    let view = service.read(conversation.clone(), owner()).await.unwrap();
+    assert_eq!(view.title.as_deref(), Some("Lisbon in May"));
+    // Nothing was said, so nothing else moved, the time included.
+    let after = listing.summaries.summaries.lock().unwrap()[&conversation].clone();
+    assert_eq!(after.preview(), before.preview());
+    assert_eq!(after.updated_at_ms(), before.updated_at_ms());
+    assert_eq!(after.archived(), before.archived());
+
+    // A later message does not rename it back.
+    service
+        .submit(
+            conversation.clone(),
+            owner(),
+            "second".into(),
+            message("And Porto?"),
+            SubmissionMode::Queue,
+        )
+        .await
+        .unwrap();
+    // Its summary was written before the send answered; a reply settling
+    // since may have moved the preview, never the title.
+    let listed = service.list(owner(), false).await.unwrap().conversations;
+    assert_eq!(listed[0].title.as_deref(), Some("Lisbon in May"));
+    let written = listing.summaries.summaries.lock().unwrap()[&conversation].clone();
+    assert_eq!(written.title().unwrap().as_str(), "Lisbon in May");
+    // Nobody else can rename it, and there is nothing to rename where
+    // nothing was created.
+    for (target, who) in [
+        (conversation.clone(), caller("org", "other")),
+        (id(), owner()),
+    ] {
+        assert!(matches!(
+            service.rename(target, who, title("Mine now")).await,
+            Err(ConversationError::NotFound)
+        ));
+    }
+    listing.service.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_rename_that_cannot_be_written_fails_visibly() {
+    let listing = listing(ConversationLimits::default());
+    let conversation = id();
+    put(&listing, &conversation, "org", "person", 1);
+    summarize(&listing, &conversation, "hello", 1);
+    // A title somebody chose is their decision, as an archive is.
+    listing.summaries.record_fails.store(true, Ordering::SeqCst);
+    assert!(matches!(
+        listing
+            .service
+            .rename(conversation.clone(), owner(), title("Renamed"))
+            .await,
+        Err(ConversationError::Metadata)
+    ));
+    assert_eq!(
+        listing
+            .service
+            .list(owner(), false)
+            .await
+            .unwrap()
+            .conversations[0]
+            .title
+            .as_deref(),
+        Some("hello")
+    );
+    // Nor is a rename decided on a summary that could not be read.
+    listing
+        .summaries
+        .record_fails
+        .store(false, Ordering::SeqCst);
+    listing.summaries.load_fails.store(true, Ordering::SeqCst);
+    let writes = listing.summaries.writes.load(Ordering::SeqCst);
+    assert!(matches!(
+        listing
+            .service
+            .rename(conversation.clone(), owner(), title("Renamed"))
             .await,
         Err(ConversationError::Metadata)
     ));

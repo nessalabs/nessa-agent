@@ -34,7 +34,7 @@ when {
      "conversation.receipt", "conversation.message", "conversation.messageStatus",
      "conversation.answer", "conversation.answerQuestion", "conversation.cancel",
      "conversation.close", "conversation.archive", "conversation.unarchive", "conversation.delete",
-     "conversation.reorder", "conversation.subscribe", "conversation.subscribeList",
+     "conversation.rename", "conversation.reorder", "conversation.subscribe", "conversation.subscribeList",
      "conversation.subscribeEvents", "conversation.peek",
      "conversation.unsubscribe", "attachment.begin"].contains(context.method)
 };
