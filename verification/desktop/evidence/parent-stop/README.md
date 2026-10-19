@@ -93,3 +93,55 @@ in [#1030](https://github.com/nessalabs/nessa-agent/issues/1030). Neither failur
 has been waived or resolved by rerunning CI. Fresh source reviews cannot waive
 these failed gates. No native WKWebView, live-provider or release-gateway result
 is claimed.
+
+## Latest current-main qualification — October 19, 20:40 UTC
+
+Production-frontend captures named `current-parent-stop-*` were executed at
+`166386bc2ccd49ff950330c379aa8577057164f2`, based on main `bd739304` (#975).
+The Cargo-dev/default-feature gateway SHA256 is
+`e07df299d2d274b69466971febffb40b1799b01eab2ad0d7847c28c3afa4757f`.
+Canonical checks passed 43 dev / 23 production / 4 scripted Codex cases.
+These are Chromium and Playwright WebKit results, not native WKWebView.
+
+The images retain an unresolved rendering observation: Chromium override has
+missing assistant-marker glyphs, and WebKit default has a partial Cancelled
+status. An additive diagnostic at `f41e0483` captured a second frame after
+1500 ms: two later images still had missing glyphs, with full DOM text, loaded
+fonts and opacity 1. Cause remains unproven; no clean-four-capture claim or
+native reproduction is made. All four diagnostic behavior cases passed.
+
+![Current Chromium default](current-parent-stop-chromium-default.png)
+![Current Chromium override](current-parent-stop-chromium-override.png)
+![Current WebKit default](current-parent-stop-webkit-default.png)
+![Current WebKit override](current-parent-stop-webkit-override.png)
+
+At `f41e048394144b5aab0d304bbd699e671a121344`, default stress passed 66/66,
+raised parent stops 68/68, recovery seed 5 passed 71/71, and default chaos
+passed both seeds. Every planned step ran in both engines. Recovery has 64
+steps and seven result rows for settlement/followers/console; Chromium emitted
+no console row because it had no console lines. The selected seed retains
+model steps and puts Stops before and after restart and native linking.
+All owned browser/gateway processes were joined and reaped.
+
+The initial raised run at `166386bc` failed on newly visible empty cancelled
+history from an older report. Its complete ACP recording contains no provider
+prompt for that report. The stress oracle now checkpoints the current native
+parent session and rejects further provider prompts, even immediately cancelled
+ones; missing or damaged recording evidence fails. Its omission probe failed,
+the restored regression passed, and all 394 verification tests passed. This
+follow-up changes verification only. SDK, server and product inputs are unchanged.
+
+Full SDK 2,489 runtime tests / 58 doctests, server 3,414 tests, frontend 4,971,
+strict seven-package all-target Clippy, formatting and strict SDK docs pass
+with source-qualified records; existing ignores remain. `166386bc` hosted CI
+finished 10 success / 2 failure: native macOS page-load acceptance and aggregate
+failed; Windows server/local-auth and Linux passed. The native failure cause
+is unresolved. Prior peer-rescan and WebKit recovery failures remain historical
+evidence, not explained by new passing runs. Original chaos seed 2 remains
+open in [#1034](https://github.com/nessalabs/nessa-agent/issues/1034); the current
+chaos workload includes upstream model actions and does not close it.
+
+Main `6811e40d` (#1037) was subsequently integrated. Its sandbox startup and
+browser-default changes leave these explicitly selected `bundled` runs' browser
+selection and all SDK/server/product inputs unchanged. Exact-head CI and fresh
+complete independent reviews determine the final draft disposition.
