@@ -25,6 +25,7 @@ import { dirname, join } from "node:path"
 import { parseArgs } from "node:util"
 import { fileURLToPath } from "node:url"
 
+import { defaultChannel } from "./lib/cli.mjs"
 import {
   exitOf,
   overallVerdict,
@@ -48,8 +49,8 @@ summary is on stderr and in <evidence>/pr-summary.md.
 
 --mode prod skips mcp-apps-gateway (not run: dev server only) and runs the
 other two against a production preview. --channel is chrome (installed
-Google Chrome) or bundled (Playwright's Chromium), and is forwarded to
-each check. Exit 0 pass, 1 fail, 2 could-not-run.
+Google Chrome) or bundled (Playwright's Chromium), default
+$NESSA_BROWSER_CHANNEL else chrome, and is forwarded to each check. Exit 0 pass, 1 fail, 2 could-not-run.
 `
 
 function refuse(message) {
@@ -101,7 +102,7 @@ try {
       mode: { type: "string", default: "dev" },
       evidence: { type: "string" },
       agent: { type: "string", default: "claude" },
-      channel: { type: "string", default: "chrome" },
+      channel: { type: "string", default: defaultChannel },
     },
     allowPositionals: false,
   }))
