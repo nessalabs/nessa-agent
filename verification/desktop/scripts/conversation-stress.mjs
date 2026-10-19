@@ -657,11 +657,15 @@ const steps = {
     const found = new RegExp(`${SAYS.awaited}([0-9a-f-]+): (.*)`, "s").exec(said)
     const reply = `${SAYS.echo}${STRESS.reply} awaited by the parent`
     if (!found) {
-      failures.push(`the await turn did not say what it waited for: ${said.slice(0, 160)}`)
+      failures.push(
+        `the await turn did not say what it waited for: ${said.slice(0, 160)}`,
+      )
       return
     }
     if (!found[2].startsWith(reply))
-      failures.push(`one subscribe call did not return the thread's reply: ${found[2].slice(0, 160)}`)
+      failures.push(
+        `one subscribe call did not return the thread's reply: ${found[2].slice(0, 160)}`,
+      )
     await expectShown(run.page, `${SAYS.awaited}${found[1]}: ${reply}`, failures)
     // The reply came back in the call, so no report wakes the conversation.
     // A report would be queued as soon as the thread's turn settled, which

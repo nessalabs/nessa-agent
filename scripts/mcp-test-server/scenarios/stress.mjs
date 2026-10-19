@@ -248,7 +248,10 @@ export function stressScenario({
             do: "tool",
             server: "nessa-agents",
             tool: "subscribe",
-            arguments: { threadId: "${thread.threadId}", executionId: "${sent.executionId}" },
+            arguments: {
+              threadId: "${thread.threadId}",
+              executionId: "${sent.executionId}",
+            },
             save: "waited",
           },
           {
