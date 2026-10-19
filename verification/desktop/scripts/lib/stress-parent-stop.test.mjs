@@ -62,4 +62,11 @@ test("missing, malformed, incomplete, or replaced recordings cannot prove no res
   assert.throws(() => parentStopCheckpoint(prompt("other", "another request"), text))
   assert.throws(() => parentRestarted(checkpoint, prompt("other", text), before, []))
   assert.throws(() => parentRestarted(checkpoint, recording + "bad\n", before, []))
+  for (const invalid of [
+    { direction: "from-agent", text: "not a protocol frame" },
+    { direction: "unknown", frame: { method: "session/prompt" } },
+  ])
+    assert.throws(() =>
+      parentRestarted(checkpoint, recording + JSON.stringify(invalid) + "\n", before, []),
+    )
 })
