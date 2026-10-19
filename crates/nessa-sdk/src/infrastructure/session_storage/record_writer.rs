@@ -579,9 +579,14 @@ mod tests {
     };
     use event_stream::{
         infrastructure::{SqliteOptions, SqliteStore},
-        EventConfig, EventReader, PersistenceProfile, Runtime, RuntimeConfig, StreamId,
+        AppendReceipt, Bounds, EventConfig, EventReader, EventSink, Page, PageLimits,
+        PersistenceProfile, Result as StreamResult, Runtime, RuntimeConfig, ShutdownReport,
+        StreamId, SubscriptionOptions,
     };
-    use std::time::Duration;
+    use std::{
+        sync::atomic::{AtomicUsize, Ordering},
+        time::Duration,
+    };
 
     #[test]
     fn retain_next_fact_holds_one_oversized_fact_and_splits_before_a_second() {
@@ -673,38 +678,34 @@ mod tests {
     /// Every store call an opening's replay makes, counted.
     struct CountedRuntime<'a> {
         runtime: &'a Runtime<SqliteStore>,
-        calls: std::sync::atomic::AtomicUsize,
+        calls: AtomicUsize,
     }
     #[async_trait::async_trait]
-    impl event_stream::EventSink for CountedRuntime<'_> {
-        async fn append(
-            &self,
-            stream: &StreamKey,
-            event: event_stream::NewEvent,
-        ) -> event_stream::Result<event_stream::AppendReceipt> {
-            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    impl EventSink for CountedRuntime<'_> {
+        async fn append(&self, stream: &StreamKey, event: NewEvent) -> StreamResult<AppendReceipt> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
             self.runtime.append(stream, event).await
         }
     }
     #[async_trait::async_trait]
     impl EventReader for CountedRuntime<'_> {
-        async fn create_stream(&self, id: &StreamId) -> event_stream::Result<StreamKey> {
+        async fn create_stream(&self, id: &StreamId) -> StreamResult<StreamKey> {
             self.runtime.create_stream(id).await
         }
-        async fn find_stream(&self, id: &StreamId) -> event_stream::Result<Option<StreamKey>> {
+        async fn find_stream(&self, id: &StreamId) -> StreamResult<Option<StreamKey>> {
             self.runtime.find_stream(id).await
         }
-        async fn bounds(&self, stream: &StreamKey) -> event_stream::Result<event_stream::Bounds> {
-            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        async fn bounds(&self, stream: &StreamKey) -> StreamResult<Bounds> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
             self.runtime.bounds(stream).await
         }
         async fn read_after(
             &self,
-            after: &event_stream::Cursor,
-            limits: event_stream::PageLimits,
-            through: Option<&event_stream::Cursor>,
-        ) -> event_stream::Result<event_stream::Page> {
-            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            after: &Cursor,
+            limits: PageLimits,
+            through: Option<&Cursor>,
+        ) -> StreamResult<Page> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
             self.runtime.read_after(after, limits, through).await
         }
     }
@@ -714,22 +715,19 @@ mod tests {
         async fn try_append(
             &self,
             stream: &StreamKey,
-            event: event_stream::NewEvent,
-        ) -> event_stream::Result<event_stream::AppendReceipt> {
-            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            event: NewEvent,
+        ) -> StreamResult<AppendReceipt> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
             self.runtime.try_append(stream, event).await
         }
         async fn subscribe(
             &self,
             stream: &StreamKey,
-            options: event_stream::SubscriptionOptions,
-        ) -> event_stream::Result<Self::Subscription> {
+            options: SubscriptionOptions,
+        ) -> StreamResult<Self::Subscription> {
             self.runtime.subscribe(stream, options).await
         }
-        async fn shutdown(
-            &self,
-            deadline: Duration,
-        ) -> event_stream::Result<event_stream::ShutdownReport> {
+        async fn shutdown(&self, deadline: Duration) -> StreamResult<ShutdownReport> {
             self.runtime.shutdown(deadline).await
         }
     }
@@ -796,7 +794,7 @@ mod tests {
         };
         let mut restored = RecordWriter::replay(&counted, id, stream).await.unwrap();
         assert_eq!(restored.snapshot(), saved);
-        let calls = counted.calls.load(std::sync::atomic::Ordering::SeqCst);
+        let calls = counted.calls.load(Ordering::SeqCst);
         let pages = records.div_ceil(READ_PAGE.max_records);
         assert!(
             calls <= pages + 4,
