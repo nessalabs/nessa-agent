@@ -2427,6 +2427,103 @@ async fn c11_a_refused_submission_drops_what_it_took_on_record() {
     );
 }
 
+use super::super::{Carried, Writer};
+
+/// An offer of `execution`, carrying what `carried` holds from an earlier
+/// offer refused for now, and settled.
+async fn offered_again(fixture: &Fixture, execution: &str, carried: Carried) {
+    let (_asked, submission) = fixture.service.submission_future(
+        fixture.id.clone(),
+        fixture.caller(execution),
+        execution.into(),
+        SubmittedMessage {
+            text: "And now?".into(),
+            ..SubmittedMessage::default()
+        },
+        SubmissionMode::Queue,
+        Writer::Person(
+            nessa_sdk::domain::agent_execution::executions::Initiation::owner(),
+            true,
+        ),
+        false,
+        carried,
+    );
+    tokio::spawn(submission).await.unwrap().unwrap();
+    settled(fixture, execution).await;
+}
+
+/// A message the agent refused for now — stopping, or at another mode — is
+/// offered again until it is taken (`submit_admitted_as`). What its first
+/// offer took from the apps goes with every offer to that same agent: the
+/// one taken has them, and they are not reported dropped and then missing
+/// from it. What was held since stays held for the next message.
+#[tokio::test]
+async fn a_message_offered_again_carries_the_contexts_it_took() {
+    let fixture = Fixture::new().await;
+    fixture.idle().await;
+    fixture
+        .update_context(INSTANCE, Some("ctx"), None)
+        .await
+        .unwrap();
+    let live = fixture
+        .service
+        .live_now(&fixture.id, &fixture.caller("live"))
+        .await
+        .unwrap()
+        .expect("the conversation is open");
+    // The first offer took what was held, and was refused for now.
+    let mut took = live.app_reviews.take_held();
+    took.handed_back();
+    let carried = Carried::default();
+    *carried.lock().unwrap() = Some((Arc::downgrade(&live), took));
+    fixture
+        .update_context(INSTANCE, Some("newer"), None)
+        .await
+        .unwrap();
+    offered_again(&fixture, "offered", carried).await;
+    assert_eq!(
+        fixture.contexts_given("offered").await,
+        [Some("ctx".to_owned())]
+    );
+    assert_eq!(fixture.held_now(), ["newer"]);
+    assert!(drops(&fixture).await.is_empty());
+}
+
+/// What a refused offer took from an agent that was then replaced is not
+/// given to the new one: it is reported dropped unsent, and the next offer
+/// carries what the new opening holds.
+#[tokio::test]
+async fn contexts_an_offer_took_from_a_replaced_agent_are_dropped_unsent() {
+    let fixture = Fixture::new().await;
+    fixture.idle().await;
+    fixture
+        .update_context(INSTANCE, Some("ctx"), None)
+        .await
+        .unwrap();
+    let live = fixture
+        .service
+        .live_now(&fixture.id, &fixture.caller("live"))
+        .await
+        .unwrap()
+        .expect("the conversation is open");
+    let mut took = live.app_reviews.take_held();
+    took.handed_back();
+    let carried = Carried::default();
+    *carried.lock().unwrap() = Some((Arc::downgrade(&live), took));
+    drop(live);
+    fixture
+        .service
+        .close(fixture.id.clone(), fixture.caller("close"))
+        .await
+        .unwrap();
+    offered_again(&fixture, "offered", carried).await;
+    assert!(fixture.contexts_given("offered").await.is_empty());
+    assert_eq!(
+        drops(&fixture).await,
+        [(ContextDrop::NotSent, McpAppInitiator::System)]
+    );
+}
+
 #[tokio::test]
 async fn c12_a_retry_of_a_message_the_agent_has_carries_what_its_record_holds() {
     let fixture = Fixture::new().await;
@@ -3031,6 +3128,7 @@ async fn c15c_a_delete_giving_way_before_its_stop_reached_the_apps_drops_once_as
         ready: Notify::new(),
         started: std::sync::atomic::AtomicBool::new(true),
         stopping: std::sync::atomic::AtomicBool::new(false),
+        touched: std::sync::atomic::AtomicU64::new(0),
     });
     let live = fixture
         .service

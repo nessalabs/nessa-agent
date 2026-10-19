@@ -41,6 +41,9 @@ import * as access from "../../application/usecases/access"
 import type { AccessMode } from "../../model/access"
 import * as updates from "../../application/usecases/updates"
 import * as sharing from "../../application/usecases/sharing"
+import * as rowEditing from "../../application/usecases/row-editing"
+import * as window from "../../application/usecases/window"
+import type { WindowArrangement } from "../../model/shown-window"
 import type { ShareDraft, ShareGrant, SharingChoices } from "../../model/sharing"
 import type { ShareChange } from "../../application/workspace-state"
 
@@ -162,6 +165,10 @@ const workspaceSlice = createSlice({
       navigation.toggleChannel(state, payload),
     toggleShowAll: (state, { payload }: Payload<{ channelId: string }>) =>
       navigation.toggleShowAll(state, payload),
+    arrangementShown: (
+      state,
+      { payload }: Payload<{ arrangement: WindowArrangement | null }>,
+    ) => window.arrangementShown(state, payload),
     toggleSidebar: (state, { payload }: Payload<{ open?: boolean } | undefined>) =>
       navigation.toggleSidebar(state, payload ?? {}),
     toggleSessionList: (state, { payload }: Payload<{ open?: boolean } | undefined>) =>
@@ -298,6 +305,17 @@ const workspaceSlice = createSlice({
       sessions.sessionRead(state, payload),
     setComposerText: (state, { payload }: Payload<{ sessionId: string; text: string }>) =>
       sessions.composerTextChanged(state, payload),
+
+    // A row's edits in place
+    renameStarted: (state, { payload }: Payload<{ sessionId: string }>) =>
+      rowEditing.renameStarted(state, payload),
+    renameDrafted: (state, { payload }: Payload<{ sessionId: string; draft: string }>) =>
+      rowEditing.renameDrafted(state, payload),
+    renameEnded: (state, { payload }: Payload<{ sessionId: string }>) =>
+      rowEditing.renameEnded(state, payload),
+    deleteAsked: (state, { payload }: Payload<{ sessionId: string }>) =>
+      rowEditing.deleteAsked(state, payload),
+    deleteClosed: (state) => rowEditing.deleteClosed(state),
 
     // Sharing
     shareOpened: (

@@ -157,7 +157,7 @@ jobs:
           node-version: 24
       - name: Check portable Rust dependency graphs
         run: node scripts/check-runtime-dependencies.mjs --verify-fixture
-      - run: node --test scripts/cargo-test-parallel/e2e.test.mjs
+      - run: node --test scripts/cargo-test-parallel/e2e.test.mjs scripts/cargo-test-parallel/diagnostics.test.mjs
       - run: cargo fmt --all -- --check
       # This pure shared domain is small enough to report denied warnings
       # before its tests without paying a second workspace compile.
@@ -304,6 +304,66 @@ jobs:
       # before the aggregate runs.
       - uses: taiki-e/install-action@just
       - run: pnpm frontend:check
+  # The conversation stress check (verification/desktop/scripts/conversation-stress.mjs):
+  # one conversation talked to for many rounds through the real gateway and
+  # the desktop window, with the scripted agent as the model, while other
+  # conversations run beside it. Every feature a person reaches through a
+  # conversation is flexed here (CODING_STANDARDS.md, "Conversation stress").
+  # The pull request runs its default numbers; the nightly load run in
+  # conversation-stress-load.yml raises them. The chaos check runs after it
+  # in the same job, on the same gateway build.
+  conversation-stress:
+    name: Conversation stress check
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
+    runs-on: ubuntu-latest
+    # Planning bound: a cold gateway build, the browser download, the stress
+    # check, and the chaos check's seeds (with a shrink if one fails).
+    timeout-minutes: 60
+    env:
+      STRESS_EVIDENCE: ${{ github.workspace }}-stress-evidence
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.rust-cache != 'cold' }}
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-on-failure: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: ./.github/actions/pnpm-install
+      - name: Install the pinned Chromium and its runtime dependencies
+        run: pnpm exec playwright install --with-deps chromium
+        timeout-minutes: 15
+      - run: cargo build -p nessa-server
+      - name: Run the conversation stress check
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p "$STRESS_EVIDENCE"
+          pnpm test:e2e:stress -- --channel bundled --evidence "$STRESS_EVIDENCE" 2>&1 | tee "$STRESS_EVIDENCE/stress.log"
+        timeout-minutes: 20
+      # Seeded random actions from several clients at once on the same
+      # gateway build (conversation-chaos.mjs): a few short seeds here, many
+      # long ones nightly. A failure prints its seed and a shrunk action list.
+      - name: Run the conversation chaos check
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p "$STRESS_EVIDENCE/chaos"
+          pnpm test:e2e:chaos -- --evidence "$STRESS_EVIDENCE/chaos" 2>&1 | tee "$STRESS_EVIDENCE/chaos/chaos.log"
+        timeout-minutes: 20
+      - name: Keep the evidence of a failed run
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: conversation-stress-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.STRESS_EVIDENCE }}
+          if-no-files-found: ignore
+          retention-days: 7
   # The long Windows server libtest starts immediately on its own runner.
   # Both jobs compile the complete package group to preserve Cargo feature
   # unification. Only execution is partitioned; remaining owns all doctests.
@@ -618,6 +678,7 @@ jobs:
       - gateway-contract
       - desktop-release-profile
       - frontend
+      - conversation-stress
       - local-auth
       - windows-server-tests
       - sdk-domain-coverage

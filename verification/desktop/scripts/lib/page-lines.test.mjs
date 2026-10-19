@@ -4,6 +4,8 @@ import { dirname, join } from "node:path"
 import { test } from "node:test"
 import { fileURLToPath } from "node:url"
 import ts from "typescript"
+import { EventEmitter } from "node:events"
+import { createHash } from "node:crypto"
 
 import { report } from "./cli.mjs"
 import { noteLiveMountResourceAbort, openPage } from "./browser.mjs"
@@ -17,6 +19,282 @@ import {
 
 const here = dirname(fileURLToPath(import.meta.url))
 const collectors = new WeakMap()
+
+test("close drains ordinary lines after its evidence barrier and reports only once", async () => {
+  const rep = report("cutoff-lines", {})
+  bindReporter(rep)
+  const lines = watchLines()
+  let release
+  const pending = new Promise((resolve) => {
+    release = resolve
+  })
+  let retired = 0
+  const opened = {
+    settleBeforeClose: () => pending,
+    close: async () => {
+      retired++
+    },
+  }
+  attachLines(opened, { engine: "chromium" }, lines)
+  const closing = opened.close()
+  lines.keep("pageerror: while the acknowledged cutoff is pending", false)
+  assert.equal(rep.results.length, 0)
+  release()
+  await closing
+  await opened.close()
+  assert.equal(retired, 1)
+  assert.equal(rep.results.length, 1)
+  assert.deepEqual(rep.results[0].failures, [
+    "pageerror: while the acknowledged cutoff is pending",
+  ])
+})
+
+function resourcePage({
+  canceled = false,
+  openingFailure = false,
+  query = false,
+  late = null,
+  disposalAbort = false,
+} = {}) {
+  const page = new EventEmitter()
+  const frame = {}
+  const bytes = [1, 2, 3]
+  const ticket = "F".repeat(43)
+  let binding
+  let closed = 0
+  let finalized = 0
+  let acknowledgeCutoff
+  const cutoff = new Promise((resolve) => {
+    acknowledgeCutoff = resolve
+  })
+  const request = {
+    method: () => "GET",
+    frame: () => frame,
+    url: () => `http://127.0.0.1:2345/mcp-resources${query ? "?unrelated=1" : ""}`,
+    headers: () => ({ "x-nessa-resource-ticket": ticket }),
+    failure: () => ({ errorText: "net::ERR_ABORTED" }),
+    existingResponse: () => ({
+      status: () => 200,
+      headers: () => ({ "content-length": "3" }),
+    }),
+    sizes: () => {
+      throw new Error("a retained candidate must never consult legacy sizes")
+    },
+  }
+  const unrelated = {
+    ...request,
+    headers: () => ({ "x-nessa-resource-ticket": "U".repeat(43) }),
+  }
+  page.mainFrame = () => frame
+  page.url = () => "http://127.0.0.1:2345/desktop.html"
+  page.exposeBinding = async (_name, callback) => {
+    binding = callback
+  }
+  page.route = async () => {}
+  page.goto = async () => {
+    page.emit("framenavigated", frame)
+    page.emit("request", request)
+    if (!late) page.emit("requestfailed", request)
+    if (late === "unowned") {
+      page.emit("requestfinished", request)
+      page.emit("request", unrelated)
+    }
+  }
+  page.waitForSelector = async () => {
+    if (openingFailure) throw new Error("synthetic opening fault")
+  }
+  page.waitForFunction = async () => {}
+  page.evaluate = async (_fn, url) => {
+    finalized++
+    const generation = url.match(/resource_(.*)\.mjs$/)[1]
+    const events = [
+      {
+        type: "begin",
+        read: 1,
+        owner: 1,
+        ticket,
+        size: bytes.length,
+        digest: createHash("sha256").update(Buffer.from(bytes)).digest("hex"),
+      },
+      { type: "chunk", read: 1, bytes },
+      { type: "eof", read: 1 },
+      { type: "transport", read: 1 },
+      { type: "accepted", read: 1 },
+      { type: "live", read: 1 },
+      ...(canceled ? [{ type: "failed", read: 1 }] : []),
+      { type: "cutoff", failed: false, activation: { bridge: 1, api: 1, transport: 1 } },
+    ]
+    for (const [index, event] of events.entries())
+      binding({ page, frame }, { generation, sequence: index + 1, ...event })
+    if (!late) page.emit("pageerror", new Error("late ordinary fault"))
+    acknowledgeCutoff()
+  }
+  const context = {
+    addInitScript: async () => {},
+    newPage: async () => page,
+    close: async () => {
+      closed++
+      if (disposalAbort) page.emit("requestfailed", unrelated)
+    },
+  }
+  const browser = {
+    browserType: () => ({ name: () => "chromium" }),
+    newContext: async () => context,
+  }
+  return {
+    browser,
+    cutoff,
+    closed: () => closed,
+    finalized: () => finalized,
+    deliverLateFailure: () =>
+      page.emit("requestfailed", late === "unowned" ? unrelated : request),
+  }
+}
+
+for (const late of ["owned", "unowned"])
+  test(`R1: independently delivered ${late} failure after cutoff ACK reaches the final synchronous drain`, async () => {
+    const fixture = resourcePage({ late, disposalAbort: true })
+    const rep = report("late-network-delivery", {})
+    bindReporter(rep)
+    const opened = await openPage(fixture.browser, {
+      url: "http://127.0.0.1:2345/desktop.html",
+      resourceReads: true,
+    })
+    fixture.cutoff.then(() => fixture.deliverLateFailure())
+    await opened.close()
+    await opened.close()
+    const result = rep.results[0]
+    assert.equal(
+      result.ok,
+      late === "owned",
+      "a lost unrelated failure must not leave a success-only report",
+    )
+    assert.equal(
+      result.failures.filter((line) => line.startsWith("requestfailed:")).length,
+      late === "unowned" ? 1 : 0,
+    )
+    assert.equal(
+      (result.harmless ?? []).some((line) => line.includes("#996")),
+      late === "owned",
+    )
+    assert.equal(
+      opened.heldErrorCount,
+      0,
+      "late notifications and disposal-induced aborts cannot enter an abandoned deferred set",
+    )
+    assert.equal(fixture.closed(), 1)
+    assert.equal(fixture.finalized(), 1)
+  })
+
+for (const late of ["owned", "unowned"])
+  test(`R2: ${late} requestfailed in a later event-loop task is reported before retirement`, async () => {
+    const fixture = resourcePage({ late, disposalAbort: true })
+    const rep = report("terminal-network-delivery", {})
+    bindReporter(rep)
+    const opened = await openPage(fixture.browser, {
+      url: "http://127.0.0.1:2345/desktop.html",
+      resourceReads: true,
+    })
+    let delivered = false
+    const delivery = fixture.cutoff.then(
+      () =>
+        new Promise((resolve) => {
+          setImmediate(() => {
+            delivered = true
+            fixture.deliverLateFailure()
+            resolve()
+          })
+        }),
+    )
+    await opened.close()
+    assert.equal(delivered, true, "close must account for the pending actual Request")
+    await delivery
+    assert.equal(rep.results.length, 1)
+    assert.equal(rep.results[0].ok, late === "owned")
+    assert.equal(
+      (rep.results[0].harmless ?? []).some((line) => line.includes("#996")),
+      late === "owned",
+    )
+    assert.equal(
+      rep.results[0].failures.filter((line) => line.startsWith("requestfailed:")).length,
+      late === "unowned" ? 1 : 0,
+    )
+    assert.equal(opened.heldErrorCount, 0)
+    assert.equal(fixture.closed(), 1)
+  })
+
+test("observed endpoint Requests bypass step drains, patterns and size rules until final cutoff", async () => {
+  for (const canceled of [false, true]) {
+    const fixture = resourcePage({ canceled })
+    const rep = report("retained-resource", {})
+    bindReporter(rep)
+    const opened = await openPage(fixture.browser, {
+      url: "http://127.0.0.1:2345/desktop.html",
+      resourceReads: true,
+    })
+    opened.noteHarmless(/mcp-resources/)
+    rep.add({ name: "apps" })
+    assert.deepEqual(rep.results[0].failures, [])
+    assert.equal(rep.results[0].harmless, undefined)
+    assert.equal(opened.heldErrorCount, 1)
+    await opened.close()
+    await opened.close()
+    assert.equal(fixture.closed(), 1)
+    assert.equal(fixture.finalized(), 1)
+    const result = rep.results[1]
+    assert.ok(result.failures.includes("pageerror: late ordinary fault"))
+    assert.equal(
+      result.failures.some((line) => line.startsWith("requestfailed:")),
+      canceled,
+    )
+    assert.equal(
+      (result.harmless ?? []).some((line) => line.includes("#996")),
+      !canceled,
+    )
+  }
+})
+
+test("opening abandonment finalizes evidence before detached reporting and retirement", async () => {
+  const fixture = resourcePage({ openingFailure: true, canceled: true })
+  const rep = report("retained-resource-abandon", {})
+  bindReporter(rep)
+  await assert.rejects(
+    openPage(fixture.browser, {
+      url: "http://127.0.0.1:2345/desktop.html",
+      resourceReads: true,
+    }),
+    /synthetic opening fault/,
+  )
+  assert.equal(fixture.closed(), 1)
+  assert.equal(fixture.finalized(), 1)
+  assert.ok(rep.results[0].failures.some((line) => line.startsWith("requestfailed:")))
+})
+
+test("reporter-absent retirement still finalizes exactly once", async () => {
+  bindReporter(null)
+  const fixture = resourcePage()
+  const opened = await openPage(fixture.browser, {
+    url: "http://127.0.0.1:2345/desktop.html",
+    resourceReads: true,
+  })
+  await opened.close()
+  await opened.close()
+  assert.equal(fixture.closed(), 1)
+  assert.equal(fixture.finalized(), 1)
+})
+
+test("an unrelated query endpoint cannot borrow the old live pattern", async () => {
+  const fixture = resourcePage({ query: true })
+  const rep = report("retained-resource-query", {})
+  bindReporter(rep)
+  const opened = await openPage(fixture.browser, {
+    url: "http://127.0.0.1:2345/desktop.html",
+    resourceReads: true,
+  })
+  opened.noteHarmless(/mcp-resources/)
+  await opened.close()
+  assert.ok(rep.results[0].failures.some((line) => line.includes("?unrelated=1")))
+})
 
 function page() {
   let closed = 0
@@ -375,3 +653,49 @@ test("page consumers and wrappers do not access private queues through any handl
   }
   assert.deepEqual(offenders, [])
 })
+
+test("missing actual Request completion fails within the unchanged settlement budget", async () => {
+  const fixture = resourcePage({ late: "owned", disposalAbort: true })
+  const rep = report("terminal-network-timeout", {})
+  bindReporter(rep)
+  const opened = await openPage(fixture.browser, {
+    url: "http://127.0.0.1:2345/desktop.html",
+    resourceReads: true,
+  })
+  await opened.close()
+  assert.equal(rep.results.length, 1)
+  assert.equal(rep.results[0].ok, false)
+  assert.ok(
+    rep.results[0].failures.includes(
+      "resource-read evidence: no complete verified live read at the acknowledged cutoff",
+    ),
+  )
+  assert.equal(rep.results[0].harmless, undefined)
+  assert.equal(fixture.closed(), 1)
+})
+
+for (const openingFailure of [false, true])
+  test(`later-task terminal delivery precedes ${openingFailure ? "opening abandonment" : "reporter-absent close"}`, async () => {
+    bindReporter(null)
+    const fixture = resourcePage({ late: "owned", openingFailure, disposalAbort: true })
+    let delivered = false
+    fixture.cutoff.then(() =>
+      setImmediate(() => {
+        delivered = true
+        fixture.deliverLateFailure()
+      }),
+    )
+    const opening = openPage(fixture.browser, {
+      url: "http://127.0.0.1:2345/desktop.html",
+      resourceReads: true,
+    })
+    if (openingFailure) await assert.rejects(opening, /synthetic opening fault/)
+    else {
+      const opened = await opening
+      await opened.close()
+      await opened.close()
+      assert.equal(opened.heldErrorCount, 0)
+    }
+    assert.equal(delivered, true)
+    assert.equal(fixture.closed(), 1)
+  })

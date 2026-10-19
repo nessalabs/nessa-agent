@@ -8,11 +8,14 @@ use async_trait::async_trait;
 use nessa_protocol::lease::MAX_ARTIFACT_BYTES;
 
 use crate::backup::application::{
-    ExportClock, ExportFailure, ManifestPublisher, MutationAdmission, PublishedRecord,
+    verify_bundle, ExportClock, ExportFailure, ManifestPublisher, MutationAdmission,
+    PublishedRecord, VerificationLimits,
 };
 use crate::backup::domain::{outbox_watermark, Sensitivity, SkipReason, StoreKind};
+use crate::backup::infrastructure::ExportFormat;
 use crate::backup::infrastructure::{
-    capture_namespace, jsonl_cut, path_sensitivity, DirectoryPublisher, FileDeletionLog,
+    capture_namespace, jsonl_cut, path_sensitivity, DirectoryPublisher,
+    DirectoryVerificationSource, FileDeletionLog,
 };
 use crate::conversation::application::ArtifactBudget;
 
@@ -60,6 +63,100 @@ fn a_secret_path_is_not_public() {
         path_sensitivity(Path::new("environment/pairing/not-a-store")),
         Sensitivity::Secret
     );
+}
+
+#[tokio::test]
+async fn current_writer_omissions_verify_without_publishing_secret_bytes() {
+    const SECRET: &[u8] = b"-----BEGIN EC PRIVATE KEY-----\nSYNTHETIC-OMITTED-CONTENT\n";
+    for mode in ["secret", "unnameable", "jsonl", "mixed-jsonl", "public"] {
+        let namespace = tempfile::tempdir().unwrap();
+        let root = namespace.path();
+        let (store, omissions) = if matches!(mode, "secret" | "public") {
+            let sessions = root.join("conversations/sessions");
+            fs::create_dir_all(&sessions).unwrap();
+            fs::write(
+                sessions.join("records.sqlite3"),
+                if mode == "secret" {
+                    SECRET
+                } else {
+                    b"synthetic public session"
+                },
+            )
+            .unwrap();
+            (
+                StoreKind::CanonicalRecords,
+                if mode == "secret" { 2 } else { 0 },
+            )
+        } else {
+            let mut audit = root.join("conversations/audit/creation");
+            if mode == "unnameable" {
+                for _ in 0..6 {
+                    audit = audit.join("n".repeat(100));
+                }
+                fs::create_dir_all(&audit).unwrap();
+                fs::write(audit.join("a.txt"), b"synthetic a").unwrap();
+                fs::write(audit.join("b.txt"), b"synthetic b").unwrap();
+            } else {
+                for child in ["a", "b"] {
+                    let directory = audit.join(child);
+                    fs::create_dir_all(&directory).unwrap();
+                    let body = if mode == "mixed-jsonl" && child == "a" {
+                        b"{}\n".as_slice()
+                    } else {
+                        b"synthetic-invalid-json\n"
+                    };
+                    fs::write(directory.join("leases.jsonl"), body).unwrap();
+                }
+            }
+            (
+                StoreKind::ConversationAudit,
+                if mode == "mixed-jsonl" { 1 } else { 2 },
+            )
+        };
+        let inventory = FileDeletionLog::open(root.join("backup")).unwrap();
+        let output = tempfile::tempdir().unwrap();
+        let bundle = output.path().join("cut");
+        capture_namespace(
+            root,
+            &OpenAdmission,
+            &inventory,
+            &DirectoryPublisher::new(&bundle),
+            &Clock(8),
+            &inventory.key(),
+        )
+        .await
+        .unwrap();
+        let report = verify_bundle(
+            &ExportFormat,
+            &DirectoryVerificationSource::open(bundle.clone()).unwrap(),
+            &inventory.key(),
+            VerificationLimits::default(),
+        )
+        .unwrap();
+        let rows: Vec<_> = report
+            .omissions
+            .iter()
+            .filter(|row| row.store == store.as_str())
+            .collect();
+        assert_eq!(rows.len(), omissions, "{mode}");
+        if mode == "secret" {
+            assert!(rows.iter().any(|row| row.kind == "redacted"));
+            assert!(rows.iter().any(|row| row.reason == Some("secret")));
+        }
+        if mode == "mixed-jsonl" {
+            assert_eq!(rows[0].identity, "line-1");
+            assert_eq!(
+                fs::read(bundle.join("records/conversation-audit/line-1")).unwrap(),
+                b"{}"
+            );
+        }
+        assert!(!holds(&read_tree(&bundle), SECRET), "{mode}");
+        assert!(
+            !holds(&serde_json::to_vec(&report).unwrap(), SECRET),
+            "{mode}"
+        );
+        assert_eq!(report.restore_readiness, "not_assessed");
+    }
 }
 
 #[tokio::test]

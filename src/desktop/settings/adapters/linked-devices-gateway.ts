@@ -36,6 +36,7 @@ import type {
   EnrollmentPhase,
   Failure,
   FailureKind,
+  LinkingChange,
   Outcome,
   ReadValue,
   TerminalCause,
@@ -60,6 +61,8 @@ export type LinkedDevicesConnection =
 export interface LinkedDevicesGateway {
   /** How often a quiet tab reads again. `0` does not poll. */
   readonly pollMs: number
+  /** How long the switch waits for a restarting gateway to answer again. */
+  readonly switchWaitMs: number
   follow(handler: (connection: LinkedDevicesConnection) => void): () => void
   read(): Promise<Outcome<ReadValue>>
   create(): Promise<Outcome<CreatedCode>>
@@ -70,6 +73,8 @@ export interface LinkedDevicesGateway {
   deny(invitationId: string): Promise<Outcome<Enrollment>>
   status(invitationId: string): Promise<Outcome<Enrollment>>
   revoke(credentialId: string): Promise<Outcome<{ credentialId: string }>>
+  /** Turn native linking on or off; answered whether or not it is on now. */
+  setLinking(enabled: boolean): Promise<Outcome<LinkingChange>>
 }
 
 /** The pairing refusals, each one sentence in the model. */
@@ -82,6 +87,8 @@ const pairingFailure: Record<PairingRefusal, FailureKind> = {
   [PairingRefusalCode.PairingIneligible]: "ineligible",
   [PairingRefusalCode.PairingBusy]: "busy",
   [PairingRefusalCode.PairingUnavailable]: "unavailable",
+  [PairingRefusalCode.PairingAddressInUse]: "addressInUse",
+  [PairingRefusalCode.PairingAuditUnavailable]: "auditUnavailable",
   [PairingRefusalCode.Forbidden]: "refused",
   [PairingRefusalCode.Unauthorized]: "unauthorized",
   [PairingRefusalCode.InvalidRequest]: "invalid",
@@ -219,12 +226,15 @@ export function linkedDevicesGateway(options: {
   readonly after: (ms: number, run: () => void) => () => void
   readonly retryMs?: number
   readonly pollMs?: number
+  readonly switchWaitMs?: number
 }): LinkedDevicesGateway {
   const { connected, after } = options
   const retryMs = options.retryMs ?? 2_000
   const client = () => connected()
   return {
     pollMs: options.pollMs ?? 4_000,
+    // A drain finishes its running turns first, so a restart can take a while.
+    switchWaitMs: options.switchWaitMs ?? 60_000,
     follow(handler) {
       let stopped = false
       let off = () => {}
@@ -305,6 +315,15 @@ export function linkedDevicesGateway(options: {
         return { ok: false, failure: failureOf(error), cancelled: true }
       }
     },
+    setLinking: (enabled) =>
+      client().then(
+        (current) =>
+          outcomeOf(async () => {
+            const changed = await current.pairing.setLinking(enabled)
+            return { enabled: changed.enabled, applies: changed.applies }
+          }),
+        () => unanswered(),
+      ),
     approve: (invitationId, deviceKey) =>
       client().then(
         (current) =>

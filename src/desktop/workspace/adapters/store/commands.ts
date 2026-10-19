@@ -79,6 +79,12 @@ export const {
   transcriptRetried: retryTranscript,
   unsentDiscarded: discardUnsent,
   closeShare,
+  renameStarted,
+  renameDrafted,
+  renameEnded,
+  deleteAsked,
+  deleteClosed,
+  arrangementShown,
 } = workspaceActions
 
 const {
@@ -822,6 +828,61 @@ export function archiveSession({
     } catch (error) {
       const reason = failureReason(error)
       console.warn("Could not archive a session", sessionId, reason)
+      return outcomeOf(reason)
+    }
+  }
+}
+
+/**
+ * Renames a session to what the person typed, saying who asked for the
+ * source's record. The new title shows when the source's update says so;
+ * what it keeps of the typed text, nothing among it, is the source's to say.
+ */
+export function renameSession({
+  sessionId,
+  title,
+  initiator,
+}: {
+  sessionId: string
+  title: string
+  initiator: Initiator
+}): WorkspaceCommand<Promise<ChangeOutcome>> {
+  return async (_dispatch, getState, { workspace }) => {
+    const session = sessionOf(getState().workspace, sessionId)
+    if (!session || !knownToSource(session)) return "not-asked"
+    try {
+      await workspace.rename(sessionId, title, initiator)
+      return "sent"
+    } catch (error) {
+      const reason = failureReason(error)
+      console.warn("Could not rename a session", sessionId, reason)
+      return outcomeOf(reason)
+    }
+  }
+}
+
+/**
+ * Deletes a session for good, saying who asked for the source's record. As
+ * for an archive, the source's removal takes it out of the lists; a session
+ * the source has not spoken of is not asked, and a refusal leaves it where it
+ * is. The person has confirmed it first (`ui/session-row-actions.tsx`).
+ */
+export function deleteSession({
+  sessionId,
+  initiator,
+}: {
+  sessionId: string
+  initiator: Initiator
+}): WorkspaceCommand<Promise<ChangeOutcome>> {
+  return async (_dispatch, getState, { workspace }) => {
+    const session = sessionOf(getState().workspace, sessionId)
+    if (!session || !knownToSource(session)) return "not-asked"
+    try {
+      await workspace.delete(sessionId, initiator)
+      return "sent"
+    } catch (error) {
+      const reason = failureReason(error)
+      console.warn("Could not delete a session", sessionId, reason)
       return outcomeOf(reason)
     }
   }

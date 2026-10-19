@@ -10,7 +10,7 @@ use crate::browser_session::application::{
 };
 use crate::browser_session::domain::value_objects::RemovalReason;
 use crate::conversation::application::{
-    access_refusal, AccessDecision, RecordReadLease, ReviewNoticeAuditFailure,
+    access_refusal, AccessDecision, RecordReadLease, ReviewNoticeAuditFailure, WindowSlot,
 };
 #[cfg(test)]
 use crate::conversation_test_support as conversation_support;
@@ -546,6 +546,7 @@ impl ResponseClass {
             | "conversation.stop"
             | "conversation.archive"
             | "conversation.unarchive"
+            | "conversation.rename"
             | "conversation.answer"
             // A person reads a long review or question before they answer
             // it, so the read is never behind ordinary requests either.
@@ -873,6 +874,29 @@ fn rejected_lane<T>(
     }
 }
 
+/// Queue a refusal, or park it in `waiting` when the lane is full rather than
+/// closing the socket: a client that asks for more than its slots is told so,
+/// frame by frame. While one waits the socket reads no further frame, and
+/// still polls its writer, expiry, shutdown and finished requests; the loop
+/// sends it once the writer takes the one ahead
+/// (`a_waiting_refusal_does_not_stop_the_socket_closing`). Answers whether
+/// the socket must close: the writer is gone, or, never on a path the loop
+/// takes, a second refusal found the place taken.
+fn refuse_or_wait(
+    lane: &tokio::sync::mpsc::Sender<OutgoingMessage>,
+    waiting: &mut Option<OutgoingMessage>,
+    refusal: OutgoingMessage,
+) -> bool {
+    match lane.try_send(refusal) {
+        Ok(()) => false,
+        Err(tokio::sync::mpsc::error::TrySendError::Full(refusal)) => {
+            note_limit("socket.refusal_lane");
+            waiting.replace(refusal).is_some()
+        }
+        Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => true,
+    }
+}
+
 enum AuthenticatedInput {
     Request(RequestFrame),
     Refusal(OutgoingMessage),
@@ -936,6 +960,14 @@ where
             authority_updates,
         ))
     });
+    // This connection's place for its window (`workspace.publish`), withdrawn
+    // when the socket goes and this is dropped.
+    let window = Arc::new(state.conversations.as_ref().map(|conversations| {
+        conversations.workspace_windows().open(
+            session.context().organization_id().clone(),
+            session.context().principal_id().clone(),
+        )
+    }));
     let record_slots = Arc::new(Semaphore::new(RECORD_SLOT));
     let app_slots = Arc::new(Semaphore::new(limits.app_calls_per_socket()));
     let app_mounts = Arc::new(Mutex::new(HashMap::new()));
@@ -953,6 +985,9 @@ where
     // ahead of them, so a stalled refusal cannot hold a release unread.
     // `a_release_is_admitted_while_an_app_refusal_waits`.
     let mut held_input: VecDeque<RequestFrame> = VecDeque::new();
+    // Any other refusal waiting for the refusal lane (`refuse_or_wait`). No
+    // frame is read while it waits, so it never needs a second place.
+    let mut waiting_refusal: Option<OutgoingMessage> = None;
     let mut current_state = interval(state.settings.current_state_interval());
     current_state.set_missed_tick_behavior(MissedTickBehavior::Delay);
     current_state.tick().await;
@@ -982,23 +1017,26 @@ where
         // A held app call is admitted only once the waiting refusal has a
         // place. Until then the socket still reads, and a control frame is
         // admitted ahead of what is held.
-        let staged_record =
-            if app_refusal.is_none() && pending_input.is_none() && input_check.is_none() {
-                held_input.pop_front().and_then(|frame| {
-                    if matches!(
-                        ResponseClass::for_method(&frame.method),
-                        ResponseClass::Record
-                    ) {
-                        Some(frame)
-                    } else {
-                        pending_input = Some(AuthenticatedInput::Request(frame));
-                        input_check = Some(Box::pin(current_session_error(&state, &session)));
-                        None
-                    }
-                })
-            } else {
-                None
-            };
+        let staged_record = if app_refusal.is_none()
+            && waiting_refusal.is_none()
+            && pending_input.is_none()
+            && input_check.is_none()
+        {
+            held_input.pop_front().and_then(|frame| {
+                if matches!(
+                    ResponseClass::for_method(&frame.method),
+                    ResponseClass::Record
+                ) {
+                    Some(frame)
+                } else {
+                    pending_input = Some(AuthenticatedInput::Request(frame));
+                    input_check = Some(Box::pin(current_session_error(&state, &session)));
+                    None
+                }
+            })
+        } else {
+            None
+        };
         // Authority checks suspend only their own admission. Request completion,
         // delivery teardown and expiry retain independently polled owners (R60).
         let admitted = if let Some(frame) = staged_record {
@@ -1099,6 +1137,20 @@ where
                     Err(_) => break,
                 }
             }
+            permit = refusal_send.reserve(), if waiting_refusal.is_some() => {
+                match permit {
+                    Ok(permit) => {
+                        permit.send(
+                            waiting_refusal
+                                .take()
+                                .expect("refusal reserve is gated on a waiting refusal"),
+                        );
+                        None
+                    }
+                    // The writer has dropped the lane.
+                    Err(_) => break,
+                }
+            }
             error = async { input_check.as_mut().expect("input check selected while pending").await }, if input_check.is_some() => {
                 input_check = None;
                 if let Some(error) = error {
@@ -1108,7 +1160,7 @@ where
                 match pending_input.take().expect("input check owns one input") {
                     AuthenticatedInput::Request(frame) => Some((frame, Instant::now())),
                     AuthenticatedInput::Refusal(response) => {
-                        if rejected_lane("socket.refusal_lane", refusal_send.try_send(response)) {
+                        if refuse_or_wait(&refusal_send, &mut waiting_refusal, response) {
                             break;
                         }
                         None
@@ -1116,6 +1168,7 @@ where
                 }
             }
             message = incoming.next(), if pending_input.is_none()
+                && waiting_refusal.is_none()
                 && held_input.len() < HELD_INPUT_WHILE_APP_REFUSAL
                 && (app_refusal.is_some() || held_input.is_empty()) => {
                 let Some(Ok(message)) = message else { break };
@@ -1215,7 +1268,7 @@ where
                     record_send.try_send(QueuedRecordResponse::refusal(response)),
                 )
             } else {
-                rejected_lane("socket.refusal_lane", refusal_send.try_send(response))
+                refuse_or_wait(&refusal_send, &mut waiting_refusal, response)
             };
             if refused {
                 break;
@@ -1239,11 +1292,13 @@ where
             } else {
                 None
             };
+            let method = frame.method.clone();
             let reply = match refused {
                 Some(refused) => Some(refused),
                 None => subscriptions.begin(&state, &session, frame, slot.clone(), received_at),
             };
             if let Some(reply) = reply {
+                super::conversation::trace_refused_command(&method, &reply);
                 let queued = QueuedResponse {
                     message: WireResponse::ordinary(reply),
                     _slot: slot,
@@ -1304,6 +1359,7 @@ where
         };
         let request_state = state.clone();
         let request_session = session.clone();
+        let request_window = std::sync::Arc::downgrade(&window);
         let task = tokio::spawn(async move {
             if matches!(class, ResponseClass::Record) {
                 let (message, record_work) = dispatch_passive_read(
@@ -1322,7 +1378,16 @@ where
                 (message, class, slot, record_work, mount_guard)
             } else {
                 let _permit = permit;
-                let message = dispatch(&request_state, &request_session, frame).await;
+                // Weak: a request still running when the socket goes does not
+                // keep its window published.
+                let window = request_window.upgrade();
+                let message = dispatch_on(
+                    &request_state,
+                    &request_session,
+                    frame,
+                    window.as_deref().and_then(Option::as_ref),
+                )
+                .await;
                 (
                     WireResponse::ordinary(message),
                     class,
@@ -1391,13 +1456,19 @@ async fn forward_review_notices(
     session: AuthenticatedSession,
     mut authority_updates: watch::Receiver<u64>,
 ) -> Result<(), ReviewNoticePublicationFailure> {
+    // Passes spent because access itself moved while selecting: who may see
+    // what, or the authority revision. Those are rare, and each pass writes
+    // audit records, so continuous change closes the socket. Reviews coming
+    // and going on the board are ordinary traffic: under many busy agents the
+    // board can change during every audit, and closing every socket for it
+    // dropped clients mid-command. A pass the board alone outdated is
+    // published, less what settled meanwhile.
     const MAX_SELECTION_PASSES: usize = 3;
     let mut selection_passes = 0;
     'snapshots: loop {
         if selection_passes == MAX_SELECTION_PASSES {
             return Err(ReviewNoticePublicationFailure::Unstable);
         }
-        selection_passes += 1;
         let (generation, reviews) = board.current();
         let visibility = board.visibility();
         // Observe before either await: a later authority update stays pending
@@ -1415,6 +1486,7 @@ async fn forward_review_notices(
                 ReviewNoticeVisibility::Audited(selection) => {
                     let revision = selection.authority_revision();
                     if selected_revision.is_some_and(|earlier| earlier != revision) {
+                        selection_passes += 1;
                         continue 'snapshots;
                     }
                     selected_revision = Some(revision);
@@ -1432,7 +1504,29 @@ async fn forward_review_notices(
             .execute(&session)
             .await
             .map_err(ReviewNoticePublicationFailure::Authority)?;
-            if current.revision != revision || !board.is_current(generation, visibility) {
+            if !board.is_current(generation, visibility) {
+                // A spent counter never matches, so it counts as access moving.
+                let board_moved = current.revision == revision
+                    && board.visibility() == visibility
+                    && generation != u64::MAX
+                    && visibility != u64::MAX;
+                if !board_moved {
+                    selection_passes += 1;
+                    continue 'snapshots;
+                }
+                // Only the board moved, with the same access: this selection
+                // still holds for every review it kept that is still waiting,
+                // so it is published without those that settled, under the
+                // generation it was taken at. The board is past that
+                // generation, so the next pass starts at once and adds what
+                // came since. Redoing it instead never finished while busy
+                // agents changed the board during every audit, and no card
+                // was shown until its review was denied for want of an answer.
+                let (_, waiting) = board.current();
+                visible.retain(|review| waiting.contains(review));
+            }
+            if current.revision != revision {
+                selection_passes += 1;
                 continue 'snapshots;
             }
         }
@@ -1512,6 +1606,21 @@ async fn dispatch_passive_read(
     lease: RecordReadLease,
     deadline: Instant,
 ) -> (WireResponse, Option<RecordReadLease>) {
+    let method = frame.method.clone();
+    let answered = answer_passive_read(state, session, frame, lease, deadline).await;
+    if let WireResponse::Ordinary(response) = &answered.0 {
+        super::conversation::trace_refused_command(&method, response);
+    }
+    answered
+}
+
+async fn answer_passive_read(
+    state: &ProductRouteState,
+    session: &AuthenticatedSession,
+    frame: RequestFrame,
+    lease: RecordReadLease,
+    deadline: Instant,
+) -> (WireResponse, Option<RecordReadLease>) {
     let request_id = frame.id.clone();
     let reading = async move {
         let (current, _) = match current_identity_inner(state, session).await {
@@ -1564,10 +1673,35 @@ fn passive_access_failure(request_id: &str, error: AccessError) -> WireResponse 
     WireResponse::ordinary(failure(request_id, code.as_str()))
 }
 
+/// A request on a connection with no window to publish: the tests' way in.
+#[cfg(test)]
 async fn dispatch(
     state: &ProductRouteState,
     session: &AuthenticatedSession,
     frame: RequestFrame,
+) -> OutgoingMessage {
+    dispatch_on(state, session, frame, None).await
+}
+
+/// [`dispatch`] on a connection that holds `window`, its place to publish
+/// its window in.
+async fn dispatch_on(
+    state: &ProductRouteState,
+    session: &AuthenticatedSession,
+    frame: RequestFrame,
+    window: Option<&WindowSlot>,
+) -> OutgoingMessage {
+    let method = frame.method.clone();
+    let response = answer_request(state, session, frame, window).await;
+    super::conversation::trace_refused_command(&method, &response);
+    response
+}
+
+async fn answer_request(
+    state: &ProductRouteState,
+    session: &AuthenticatedSession,
+    frame: RequestFrame,
+    window: Option<&WindowSlot>,
 ) -> OutgoingMessage {
     let (session, snapshot) = match current_identity(state, session).await {
         Ok(current) => current,
@@ -1595,6 +1729,9 @@ async fn dispatch(
         return success(&frame.id, &session_ready(state, &session, &snapshot));
     }
     match super::read_access::admit_request(state, &session, &frame).await {
+        Ok(_) if frame.method == super::workspace::METHOD => {
+            super::workspace::publish(window, frame)
+        }
         Ok(initiation) => dispatch_authorized(state, &session, frame, initiation).await,
         Err(code) => failure(&frame.id, code),
     }
@@ -1789,6 +1926,7 @@ async fn dispatch_authorized(
         method if method.starts_with("mcpServers.") => {
             super::mcp_servers::dispatch(state, session, frame).await
         }
+        "pairing.setLinking" => super::pairing::set_linking(state, session, frame).await,
         method if method.starts_with("pairing.") => {
             super::pairing::dispatch(state, session, frame).await
         }
@@ -4199,16 +4337,6 @@ mod tests {
         writer
             .save_changes(
                 writer.load().await.unwrap().binding().clone(),
-                SessionSnapshot {
-                    id: session_id.clone(),
-                    provider: provider.clone(),
-                    provider_context: ProviderContext::Absent,
-                    invocations: Vec::new(),
-                    queue_history: Vec::new(),
-                    lease: None,
-                    artifacts: Vec::new(),
-                    notes: Vec::new(),
-                },
                 vec![SessionSaveUnit::new(vec![SessionChange::Opened {
                     id: session_id.clone(),
                     provider,
@@ -7445,6 +7573,101 @@ mod tests {
             assert!(text.contains(limit), "{method} log:\n{text}");
             task.abort();
         }
+    }
+
+    /// A client asking for more than its slots and the refusal lane hold
+    /// while the writer is stalled keeps its socket: reading waits for the
+    /// lane, and every frame is answered.
+    #[tokio::test]
+    async fn a_client_past_its_slots_is_refused_frame_by_frame_not_cut_off() {
+        let (state, _) = fixture(MembershipRole::Member);
+        let session = authenticate(&state).await;
+        let (release, gate) = tokio::sync::oneshot::channel();
+        let (socket, mut peer) = test_socket(Some(gate));
+        let task = tokio::spawn(run_authenticated(socket, state, session));
+        admit(&peer, "server.health", "held-0").await;
+        timeout(Duration::from_secs(1), peer.writing.recv())
+            .await
+            .expect("the stalled writer has taken the first response");
+        for id in 1..16 {
+            admit(&peer, "server.health", &format!("held-{id}")).await;
+        }
+        for id in 0..4 {
+            admit(&peer, "server.health", &format!("over-{id}")).await;
+        }
+        release.send(()).unwrap();
+        let mut refused = Vec::new();
+        let mut answered = 0;
+        while answered < 20 {
+            let Message::Text(text) = peer.message().await else {
+                continue;
+            };
+            let value: Value = serde_json::from_str(&text).unwrap();
+            answered += 1;
+            if value["error"]["code"] == "temporarily_unavailable" {
+                refused.push(value["id"].as_str().unwrap().to_owned());
+            }
+        }
+        // The first two past the slots are refused; later ones may find a
+        // slot the writer gave back by then.
+        assert!(
+            refused.starts_with(&["over-0".to_owned(), "over-1".to_owned()]),
+            "{refused:?}"
+        );
+        assert!(
+            refused.iter().all(|id| id.starts_with("over-")),
+            "{refused:?}"
+        );
+        assert!(!task.is_finished(), "the socket stays open");
+        task.abort();
+    }
+
+    /// A refusal waiting for the lane does not stop the socket's loop: the
+    /// gateway closing the socket is acted on while the writer is stalled, so
+    /// once the writer is free the close follows the frame it was sending.
+    #[tokio::test]
+    async fn a_waiting_refusal_does_not_stop_the_socket_closing() {
+        let (state, _) = fixture(MembershipRole::Member);
+        let session = authenticate(&state).await;
+        let (release, gate) = tokio::sync::oneshot::channel();
+        let (socket, mut peer) = test_socket(Some(gate));
+        let task = tokio::spawn(run_authenticated(socket, state.clone(), session));
+        admit(&peer, "server.health", "held-0").await;
+        timeout(Duration::from_secs(1), peer.writing.recv())
+            .await
+            .expect("the stalled writer has taken the first response");
+        for id in 1..16 {
+            admit(&peer, "server.health", &format!("held-{id}")).await;
+        }
+        // The first refusal takes the lane's place; the second waits.
+        admit(&peer, "server.health", "over-0").await;
+        admit(&peer, "server.health", "over-1").await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        state.close_sockets();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        release.send(()).unwrap();
+        let mut sent = Vec::new();
+        let close = loop {
+            match peer.message().await {
+                Message::Close(close) => break close,
+                Message::Text(text) => {
+                    let value: Value = serde_json::from_str(&text).unwrap();
+                    sent.push(value["id"].as_str().unwrap_or_default().to_owned());
+                }
+                _ => {}
+            }
+        };
+        assert_eq!(
+            close.map(|close| close.code),
+            Some(SessionCloseReason::TemporaryUnavailable.web_socket_code())
+        );
+        // Stuck waiting for the lane, the loop would see the close only once
+        // the writer had sent the queued refusal and every held reply.
+        assert_eq!(sent, ["held-0"], "the close follows the stalled frame");
+        timeout(Duration::from_secs(5), task)
+            .await
+            .expect("the socket ends once closed")
+            .unwrap();
     }
 
     #[tokio::test]

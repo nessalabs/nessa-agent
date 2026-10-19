@@ -544,7 +544,7 @@ mod tests {
     use nessa_auth::application::ports::Clock;
     use nessa_sdk::application::agent_execution::{
         providers::ProviderIdentity,
-        sessions::{SessionChange, SessionSaveUnit, SessionSnapshot, SessionStorage},
+        sessions::{SessionChange, SessionSaveUnit, SessionStorage},
     };
     use nessa_sdk::domain::agent_execution::sessions::{
         ExecutionSessionId, ProviderContext, SessionId,
@@ -607,16 +607,6 @@ mod tests {
         lease
             .save_changes(
                 lease.load().await.unwrap().binding().clone(),
-                SessionSnapshot {
-                    id: session.clone(),
-                    provider: provider.clone(),
-                    provider_context: ProviderContext::Absent,
-                    invocations: vec![],
-                    queue_history: vec![],
-                    lease: None,
-                    artifacts: vec![],
-                    notes: Vec::new(),
-                },
                 vec![SessionSaveUnit::new(vec![SessionChange::Opened {
                     id: session.clone(),
                     provider: provider.clone(),
@@ -638,16 +628,6 @@ mod tests {
         lease
             .save_changes(
                 lease.load().await.unwrap().binding().clone(),
-                SessionSnapshot {
-                    id: session.clone(),
-                    provider,
-                    provider_context: next.clone(),
-                    invocations: vec![],
-                    queue_history: vec![],
-                    lease: None,
-                    artifacts: vec![],
-                    notes: Vec::new(),
-                },
                 vec![SessionSaveUnit::new(vec![SessionChange::ProviderContext {
                     before: ProviderContext::Absent,
                     after: next,

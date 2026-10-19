@@ -127,6 +127,7 @@ fn error(failure: &AgentError) -> Value {
         | AgentError::ImageInputRefused(_)
         | AgentError::MessageTooLarge { .. }
         | AgentError::Busy
+        | AgentError::ApprovalModeChanged
         | AgentError::StalePermission
         | AgentError::Backpressure
         | AgentError::AuditAndCleanupFailure

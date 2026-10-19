@@ -1,0 +1,25 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.01s
+     Running unittests src/lib.rs (/workspace/scratch/nessa-943-unix-probe-target/debug/deps/nessa_unix_ownership_compile_probe-c9d218abc6f0bee6)
+
+running 13 tests
+test gateway::application::host_ownership::tests::bounded_restart_wait_can_acquire_after_predecessor_releases ... ok
+test gateway::application::host_ownership::tests::busy_claim_has_no_resource_and_can_be_retried_after_owner_exit ... ok
+test gateway::application::host_ownership::tests::admitted_worker_retains_lease_after_foreground_owner_disappears ... ok
+test gateway::application::host_ownership::tests::failed_or_panicking_acquisition_does_not_publish_a_lease ... ok
+test gateway::infrastructure::host_ownership::tests::a_shared_service_directory_is_refused_without_repair_or_lock_creation ... ok
+test gateway::infrastructure::host_ownership::tests::a_symlink_lock_is_refused_without_mutating_its_target ... ok
+test gateway::application::host_ownership::tests::acquisition_is_shared_across_concurrent_host_operations ... ok
+test gateway::infrastructure::host_ownership::tests::competing_bundle_cannot_claim_the_same_service_until_final_release ... ok
+test gateway::infrastructure::host_ownership::tests::different_service_labels_do_not_contend ... ok
+test gateway::infrastructure::host_ownership::tests::ownership_process_child ... ok
+test gateway::infrastructure::host_ownership::tests::explicit_unlock_releases_an_inherited_fork_description ... ok
+test gateway::infrastructure::host_ownership::tests::an_exec_child_does_not_keep_the_lease_after_its_parent_releases ... ok
+test gateway::infrastructure::host_ownership::tests::process_death_releases_the_original_stable_lock ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+   Doc-tests nessa_unix_ownership_compile_probe
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s

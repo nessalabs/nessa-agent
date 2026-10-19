@@ -154,6 +154,7 @@ pub fn lease_view(current: &CurrentLease) -> ConversationLeaseView {
                 LeaseEndCause::Revoked => ConversationLeaseCause::Revoked,
                 LeaseEndCause::Expired => ConversationLeaseCause::Expired,
                 LeaseEndCause::Lost => ConversationLeaseCause::Lost,
+                LeaseEndCause::Idle => ConversationLeaseCause::Idle,
             });
             view.cleanup = cleanup.map(|cleanup| match cleanup {
                 LeaseCleanup::Confirmed { forced: false } => ConversationLeaseCleanup::Confirmed,
@@ -236,6 +237,11 @@ pub struct CommittedCursor {
     pub position: u64,
     /// The history's head as that read observed it.
     pub observed_head: u64,
+    /// How far the read this view last answered downloaded: at least
+    /// `position` when that read replaced the view, less when it was behind
+    /// the view and refused. A reader of a stale view compares it, not
+    /// `position`, to tell a read that got further from one that got nowhere.
+    pub read_through: u64,
 }
 
 /// Stored semantic facts are changed through their projection-owned operations.
@@ -252,6 +258,9 @@ pub struct Projection {
     epoch: Uuid,
     revision: u64,
     committed_position: Option<(String, u64, u64, u64)>,
+    /// [`CommittedCursor::read_through`]: how far the last read offered in
+    /// `committed_position`'s history downloaded, accepted or not.
+    read_through: u64,
     resolved_permissions: HashSet<(String, String)>,
     /// Permission ids a request named in this execution, with the deadline
     /// that request published. A deadline notice is shown only when it repeats
@@ -518,6 +527,7 @@ impl Projection {
             epoch,
             revision: 0,
             committed_position: None,
+            read_through: 0,
             resolved_permissions: HashSet::new(),
             requested_permissions: HashMap::new(),
             cancelled_otherwise: HashSet::new(),
@@ -573,11 +583,19 @@ impl Projection {
         };
         if let Some(snapshot) = snapshot {
             projection.view.truncated = snapshot.invocations.len() > MAX_MESSAGES;
+            // The turn running here is listed however many turns came after
+            // it: it is the one a person stops, and a queue longer than the
+            // window would otherwise hide it (`ensure_message` never drops it).
             for record in
                 &snapshot.invocations[..snapshot.invocations.len().saturating_sub(MAX_MESSAGES)]
             {
                 if live_here.contains(record.request.execution_id.as_str()) {
-                    projection.active_interactions(record);
+                    let restarted = projection
+                        .unfinished_at_fold
+                        .contains(record.request.execution_id.as_str());
+                    if record_status(record, restarted) == ConversationMessageStatus::Running {
+                        projection.record(record, restarted);
+                    }
                 }
             }
             for record in snapshot
@@ -636,6 +654,21 @@ impl Projection {
                 || downloaded < *current_downloaded
                 || observed_head < *current_head
             {
+                // Behind this view in its own history: an earlier read got
+                // further (a receiver let go starts over), so this one does
+                // not replace it. What it saw still holds. A head past the
+                // one the view was read at means the view is behind the
+                // history now, and how far it downloaded is how far reading
+                // has got, so a reader reads on rather than waiting for a
+                // commit that already happened
+                // (`a_read_behind_the_view_that_saw_a_newer_head_marks_it_stale`).
+                if current_incarnation == incarnation {
+                    let moved = observed_head > *current_head;
+                    self.read_through = downloaded;
+                    if moved {
+                        self.transcript_state(ConversationTranscriptState::Stale);
+                    }
+                }
                 return false;
             }
         }
@@ -655,6 +688,7 @@ impl Projection {
         next.epoch = self.epoch;
         next.revision = self.revision;
         next.committed_position = Some((incarnation.into(), position, downloaded, observed_head));
+        next.read_through = downloaded;
         next.view.revision = self.view.revision.clone();
         next.view.transcript_state = self.view.transcript_state;
         next.view.selection = self.view.selection.clone();
@@ -850,7 +884,14 @@ impl Projection {
             return index;
         }
         if self.view.messages.len() == MAX_MESSAGES {
-            let evicted = self.view.messages.remove(0);
+            // The oldest, unless it is the turn running here, which stays.
+            let oldest = self
+                .view
+                .messages
+                .iter()
+                .position(|message| !self.live_here.contains(&message.execution_id))
+                .unwrap_or(0);
+            let evicted = self.view.messages.remove(oldest);
             self.tool_parts.remove(&evicted.execution_id);
             self.execution_hooks.remove(&evicted.execution_id);
             self.view.truncated = true;
@@ -934,19 +975,6 @@ impl Projection {
         }
     }
 
-    // The exact active record can precede the recent message window. Read only
-    // its interactions; its prompt, attachments and output are never copied.
-    fn active_interactions(&mut self, record: &InvocationRecord) {
-        let restarted = self
-            .unfinished_at_fold
-            .contains(record.request.execution_id.as_str());
-        if record_status(record, restarted) != ConversationMessageStatus::Running {
-            return;
-        }
-        for event in &record.events {
-            self.observe_interaction(event);
-        }
-    }
     fn observe_interaction(&mut self, event: &ExecutionEvent) {
         let execution = event.execution_id().as_str();
         match event.update() {
@@ -1415,6 +1443,7 @@ impl Projection {
                     incarnation: incarnation.clone(),
                     position: *position,
                     observed_head: *observed_head,
+                    read_through: self.read_through,
                 },
             )
     }
@@ -1637,7 +1666,15 @@ pub fn bound_view_within(
         }
         view.truncated = true;
         if view.messages.len() > 1 {
-            view.messages.remove(0);
+            // The oldest gives way, unless it is the turn running: that one is
+            // what a person stops by its id, so it stays while any other can
+            // go (`the_running_turn_stays_listed_past_the_recent_message_window`).
+            let oldest = view
+                .messages
+                .iter()
+                .position(|message| message.status != ConversationMessageStatus::Running)
+                .unwrap_or(0);
+            view.messages.remove(oldest);
         } else if view
             .messages
             .first()

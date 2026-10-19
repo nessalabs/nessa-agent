@@ -875,10 +875,10 @@ it cannot depend on a successful write. Do not claim a saved cancellation or fin
 outcome when the commit failed or is uncertain. The SDK's ordered command handling
 resolves acceptance and interaction races; duplicate-record detection alone cannot.
 
-Creation needs a record before the conversation's own stream exists. Process
-creation requests one at a time per principal. Save acceptance, allocated IDs,
-and unchanging origin in that principal's **control stream** before initializing
-the provider. Rebuild the conversation index from these records. Later turn and
+Creation needs a record before the conversation's own stream exists. Save
+acceptance, allocated IDs, and unchanging origin in the request's own **control
+stream** (one per principal and request, so requests never wait on each other)
+before initializing the provider; creates of one conversation run one at a time. Rebuild the conversation index from these records. Later turn and
 provider records go in the conversation's **primary stream**.
 
 Save creation progress and outcome too, so retries find the same pending or

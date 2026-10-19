@@ -30,6 +30,7 @@
 import { spawn } from "node:child_process"
 import path from "node:path"
 import { pathToFileURL } from "node:url"
+import { withFailureAnnotations } from "./cargo-test-parallel/diagnostics.mjs"
 
 const PARTITIONS = ["all", "server-lib", "remaining"]
 
@@ -317,7 +318,10 @@ if (invoked) {
       cargoArgs,
       concurrency,
       partition,
-      run: spawnProcess,
+      run:
+        process.env.GITHUB_ACTIONS === "true"
+          ? withFailureAnnotations(spawnProcess, (line) => process.stderr.write(line))
+          : spawnProcess,
       cwd: process.cwd(),
     })
   } catch (error) {

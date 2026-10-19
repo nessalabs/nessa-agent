@@ -1,3 +1,4 @@
+import type { ShownWindow } from "../model/shown-window"
 import type { FailureDiagnostic } from "../model/failure"
 /**
  * What the workspace needs from whoever holds the sessions: the one port a
@@ -218,6 +219,23 @@ export interface WorkspaceSource {
    * removal has one path whoever asked for it.
    */
   archive(sessionId: string, initiator: Initiator): Promise<void>
+  /**
+   * Gives a session a title of the person's own, which later messages keep:
+   * `title` is what they typed, and the source keeps of it what its store
+   * does (the gateway's `conversationTitle`), or nothing when nothing is
+   * left of it. Resolves once the session's
+   * changed summary has reached subscribers: the window shows the new title
+   * from that update alone. A session the source has not spoken of has no
+   * title to change and is refused `unknown-session`.
+   */
+  rename(sessionId: string, title: string, initiator: Initiator): Promise<void>
+  /**
+   * Deletes a session for good: its conversation, uploads and summary are
+   * erased where the source keeps them. Resolves once its `session-removed`
+   * update has reached subscribers, the one path a removal takes, as for an
+   * archive.
+   */
+  delete(sessionId: string, initiator: Initiator): Promise<void>
   markRead(sessionId: string): Promise<void>
 }
 
@@ -353,6 +371,22 @@ export interface WorkspaceDependencies {
    * gateway — and a session's menu then offers no Share.
    */
   readonly sharing?: SharingSource
+  /**
+   * Where what the window shows is told, for the person's agents to read
+   * (`effects.ts`). Absent where nobody could read it: the sample workspace,
+   * or a source composition was handed with no gateway.
+   */
+  readonly windowPublisher?: WindowPublisher
+}
+
+/**
+ * Tells the gateway what the window shows. Fire and forget: the newest word
+ * wins, it is said again whenever the window connects again, and a window
+ * that could not say it shows the person nothing different.
+ */
+export interface WindowPublisher {
+  /** What the window shows now, or `null` when it draws no panes. */
+  publish(window: ShownWindow | null): void
 }
 
 /** A filter kept outside the window's state, between launches. */

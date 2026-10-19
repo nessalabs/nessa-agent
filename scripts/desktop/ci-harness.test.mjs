@@ -115,10 +115,10 @@ function assertCoverageJobSplit(localAuth, coverage, workflow) {
   assert.match(coverage, /prefix-key: sdk-domain-coverage/)
   assert.match(coverage, /cache-workspace-crates: "true"/)
   assert.doesNotMatch(coverage, /prepare\.mjs|desktop:smoke/)
-  assert.equal(workflow.match(/uses: Swatinem\/rust-cache@v2/g)?.length, 5)
+  assert.equal(workflow.match(/uses: Swatinem\/rust-cache@v2/g)?.length, 6)
   assert.equal(
     workflow.match(/github\.event\.inputs\.rust-cache != 'cold'/g)?.length,
-    5,
+    6,
     "a cold measurement skips the cache and nothing else",
   )
   assert.match(workflow, /options:\s+- restore\s+- cold\s+default: restore/)
@@ -260,11 +260,13 @@ test("apt installs and every CI job are bounded", () => {
       "gateway-contract": 45,
       "desktop-release-profile": 45,
       frontend: 30,
+      "conversation-stress": 60,
       "local-auth": 130,
       "windows-server-tests": 60,
       "sdk-domain-coverage": 60,
       "required-checks": 10,
     },
+    "conversation-stress-load.yml": { load: 210 },
     "release.yml": {
       version: 10,
       "updater-key": 30,

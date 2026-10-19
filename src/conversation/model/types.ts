@@ -64,7 +64,7 @@ export type ConversationLease = {
    * more; `none` is nothing beyond the account the environment runs as. */
   sandbox?: "harness_default" | "none"
   /** Why it is ending or ended: the first cause recorded. */
-  cause?: "stopped" | "closed" | "revoked" | "expired" | "lost"
+  cause?: "stopped" | "closed" | "revoked" | "expired" | "lost" | "idle"
   cleanup?: "confirmed" | "forced" | "not_held"
   refusal?:
     | "sandbox_unavailable"

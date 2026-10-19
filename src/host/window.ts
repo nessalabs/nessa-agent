@@ -54,6 +54,7 @@ const HOST_EVENTS = {
   attachmentReadying: "nessa://attachment-readying",
   attachmentBatch: "nessa://attachment-batch",
   gatewayStartup: "nessa://gateway-startup",
+  reviewNoticeOpened: "nessa://review-notice-opened",
 } as const
 
 export interface WebviewConsoleEntry {
@@ -790,6 +791,79 @@ export async function onLinkNotOpened(handler: (link: LinkNotOpened) => void) {
   return listen<LinkNotOpened>(HOST_EVENTS.linkNotOpened, ({ payload }) =>
     handler(payload),
   )
+}
+
+/**
+ * Whether the system lets the host show review notices. The tags are
+ * `AccessWire` in `src-tauri/src/review_notices/infrastructure/commands.rs`;
+ * a Rust test fails if the two lists differ.
+ */
+export const NOTICE_ACCESS = ["unsupported", "not-asked", "allowed", "denied"] as const
+export type NoticeAccess = (typeof NOTICE_ACCESS)[number]
+
+/** Which waiting review a notice is for, as `permission.reviewWaiting` names it. */
+export interface NoticeReview {
+  readonly conversationId: string
+  readonly executionId: string
+  readonly permissionId: string
+}
+
+const noticeAccess = (value: unknown): NoticeAccess =>
+  NOTICE_ACCESS.find((tag) => tag === value) ?? "unsupported"
+
+/** Whether the system lets the host show review notices. A browser has no host. */
+export async function reviewNoticeAccess(): Promise<NoticeAccess> {
+  if (!inTauri) return "unsupported"
+  const { invoke } = await import("@tauri-apps/api/core")
+  return noticeAccess(await invoke("review_notice_access"))
+}
+
+/** Ask the person, through the system, to allow review notices. */
+export async function askReviewNoticeAccess(): Promise<NoticeAccess> {
+  if (!inTauri) return "unsupported"
+  const { invoke } = await import("@tauri-apps/api/core")
+  return noticeAccess(await invoke("review_notice_ask"))
+}
+
+/** A waiting review's notice: which review, and what it says. */
+export interface ReviewNoticeText extends NoticeReview {
+  readonly title: string
+  readonly body: string
+}
+
+/**
+ * Make the system's notices the ones for `reviews`, the whole set still
+ * waiting. The host posts what arrived and takes back what left, so the
+ * empty set takes every notice back.
+ */
+export async function syncReviewNotices(
+  reviews: readonly ReviewNoticeText[],
+): Promise<void> {
+  if (!inTauri) return
+  const { invoke } = await import("@tauri-apps/api/core")
+  await invoke("review_notice_sync", {
+    reviews: reviews.map(
+      ({ conversationId, executionId, permissionId, title, body }) => ({
+        conversationId,
+        executionId,
+        permissionId,
+        title,
+        body,
+      }),
+    ),
+  })
+}
+
+/**
+ * Subscribes to a review notice the person opened. The host has already
+ * brought this window forward; the payload is the conversation to open.
+ */
+export async function onReviewNoticeOpened(handler: (conversationId: string) => void) {
+  if (!inTauri) return () => undefined
+  const { listen } = await import("@tauri-apps/api/event")
+  return listen<unknown>(HOST_EVENTS.reviewNoticeOpened, ({ payload }) => {
+    if (typeof payload === "string" && payload.length > 0) handler(payload)
+  })
 }
 
 export { inTauri }

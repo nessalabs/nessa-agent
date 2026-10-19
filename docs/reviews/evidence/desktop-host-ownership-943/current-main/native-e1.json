@@ -1,0 +1,86 @@
+{
+  "headSha": "e1fadd55cccb631f7a18985a9e22b90c64aa1ab9",
+  "status": "completed",
+  "conclusion": "success",
+  "url": "https://github.com/nessalabs/nessa-agent/actions/runs/39054531039",
+  "base": "e650b901b30b64745cd43920b5b87e82d5442981",
+  "jobs": [
+    {
+      "databaseId": 117459686582,
+      "name": "What this change needs",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/nessalabs/nessa-agent/actions/runs/39054531039/job/117459686582"
+    },
+    {
+      "databaseId": 117459686722,
+      "name": "Workflow files are valid",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/nessalabs/nessa-agent/actions/runs/39054531039/job/117459686722"
+    },
+    {
+      "databaseId": 117460151925,
+      "name": "Desktop app compiles in release profile",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/nessalabs/nessa-agent/actions/runs/39054531039/job/117460151925"
+    },
+    {
+      "databaseId": 117460151929,
+      "name": "SDK domain coverage",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/nessalabs/nessa-agent/actions/runs/39054531039/job/117460151929"
+    },
+    {
+      "databaseId": 117460151949,
+      "name": "local-auth (ubuntu-latest)",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/nessalabs/nessa-agent/actions/runs/39054531039/job/117460151949"
+    },
+    {
+      "databaseId": 117460151960,
+      "name": "Windows server library tests",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/nessalabs/nessa-agent/actions/runs/39054531039/job/117460151960"
+    },
+    {
+      "databaseId": 117460151962,
+      "name": "gateway-contract",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/nessalabs/nessa-agent/actions/runs/39054531039/job/117460151962"
+    },
+    {
+      "databaseId": 117460151968,
+      "name": "local-auth (macos-latest)",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/nessalabs/nessa-agent/actions/runs/39054531039/job/117460151968"
+    },
+    {
+      "databaseId": 117460152004,
+      "name": "frontend",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/nessalabs/nessa-agent/actions/runs/39054531039/job/117460152004"
+    },
+    {
+      "databaseId": 117460152025,
+      "name": "local-auth (windows-latest)",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/nessalabs/nessa-agent/actions/runs/39054531039/job/117460152025"
+    },
+    {
+      "databaseId": 117466224940,
+      "name": "Required checks passed",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/nessalabs/nessa-agent/actions/runs/39054531039/job/117466224940"
+    }
+  ]
+}

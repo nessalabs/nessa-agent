@@ -380,6 +380,9 @@ enum Batch {
         cursor: Cursor,
         /// The history's head as that read observed it.
         head: u64,
+        /// How far the read itself got, which a read behind the view moves
+        /// though `cursor` stays (`CommittedCursor::read_through`).
+        read: Cursor,
     },
     List(ConversationListResult),
     /// The catalog as `agents.list` answers it.
@@ -490,6 +493,10 @@ async fn read_batch(
                     Ok((view, Some(cursor))) => Ok(Batch::View {
                         view: Box::new(view),
                         head: cursor.observed_head,
+                        read: Cursor {
+                            incarnation: cursor.incarnation.clone(),
+                            position: cursor.read_through,
+                        },
                         cursor: cursor_of(cursor),
                     }),
                     Ok((_, None)) => Err(ConversationError::Unavailable),
@@ -578,7 +585,9 @@ struct Sent {
     id: String,
     floor: Option<Cursor>,
     last: Option<(Option<Cursor>, Value)>,
-    /// Where the last read of a view got to, sent or not.
+    /// How far the last read of a view got, sent or not: its own progress,
+    /// not the view's cursor, which a read behind the view leaves where it
+    /// was.
     read_through: Option<Cursor>,
     /// How many catalogue changes a list has been woken by. Part of an
     /// incomplete list's key, with every row the service read, so a change
@@ -659,14 +668,10 @@ impl Sent {
 
     fn frame(&mut self, batch: Batch) -> Framed {
         match batch {
-            Batch::View { view, cursor, .. } => {
-                // A bounded read stopped short of the head it saw: read on at
-                // once, while each read gets further. One that got nowhere
-                // waits for a wake, so a head that cannot be reached now is
-                // not read in a loop.
-                let more =
-                    view.transcript_state == "stale" && self.read_through.as_ref() != Some(&cursor);
-                self.read_through = Some(cursor.clone());
+            Batch::View {
+                view, cursor, read, ..
+            } => {
+                let more = self.reads_on(view.transcript_state == "stale", read);
                 // Never a frame behind what the client has (row S5).
                 if self
                     .floor
@@ -734,6 +739,18 @@ impl Sent {
                 })
             }
         }
+    }
+
+    /// Whether to read again at once. A bounded read stopped short of the
+    /// head it saw, and a read behind the view (its receiver started over)
+    /// left it stale: read on while each read gets further. One that got
+    /// nowhere waits for a wake, so a head that cannot be reached now is not
+    /// read in a loop. Progress is the read's own: a read behind the view
+    /// moves it though the view's cursor does not.
+    fn reads_on(&mut self, stale: bool, read: Cursor) -> bool {
+        let further = self.read_through.as_ref() != Some(&read);
+        self.read_through = Some(read);
+        stale && further
     }
 
     async fn deliver_frame(&mut self, frame: Frame) -> Option<bool> {
@@ -1039,6 +1056,34 @@ mod tests {
             read_through: None,
             catalogue: 0,
         }
+    }
+
+    /// A view read while its committed reader starts over from the
+    /// beginning stays where it was, stale, while each read gets further:
+    /// it is read on until a read reaches it, and not past a read that got
+    /// nowhere (`a_read_behind_the_view_that_saw_a_newer_head_marks_it_stale`).
+    #[test]
+    fn a_stale_view_is_read_on_while_its_reads_get_further() {
+        let deliveries = Arc::new(SubscriptionDeliveries::new(Arc::new(
+            EventSequence::default(),
+        )));
+        let mut sent = sent(&deliveries);
+        let at = |position| Cursor {
+            incarnation: "i".into(),
+            position,
+        };
+        assert!(!sent.reads_on(false, at(1100)), "a complete view waits");
+        // The view's cursor stays at 1100 through each of these.
+        assert!(
+            sent.reads_on(true, at(256)),
+            "behind the view, and got further"
+        );
+        assert!(sent.reads_on(true, at(512)));
+        assert!(
+            !sent.reads_on(true, at(512)),
+            "a read that got nowhere waits"
+        );
+        assert!(!sent.reads_on(false, at(1108)), "caught up");
     }
 
     fn ended(deliveries: &SubscriptionDeliveries) -> Value {

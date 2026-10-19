@@ -282,6 +282,7 @@ export function Composer({
           </span>
           {onStop ? (
             <button
+              key="stop"
               type="button"
               className="desktop-send"
               aria-label="Stop"
@@ -293,6 +294,7 @@ export function Composer({
             </button>
           ) : (
             <button
+              key="send"
               type="submit"
               className="desktop-send"
               aria-label="Send"

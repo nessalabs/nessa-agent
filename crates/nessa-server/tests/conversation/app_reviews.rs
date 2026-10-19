@@ -863,7 +863,8 @@ fn c9_a_take_empties_the_mounts_frees_their_room_and_leaves_a_release_or_an_end_
     assert!(reported.take().is_empty());
     // A message that took some and that the agent refused hands them back:
     // each dropped as not sent, by the system, against its own update.
-    taken.refused();
+    taken.handed_back();
+    drop(taken);
     assert_eq!(
         reported.take(),
         each(&["u6"], ContextDrop::NotSent, &McpAppInitiator::System)
@@ -899,7 +900,8 @@ fn c11_what_a_message_took_is_reported_dropped_as_it_goes_unless_the_agent_was_a
     give(&reviews, "i1", Some(context("u4", "four")));
     let mut taken = reviews.take_held();
     taken.asking();
-    taken.refused();
+    taken.handed_back();
+    drop(taken);
     assert_eq!(
         reported.take(),
         each(&["u4"], ContextDrop::NotSent, &McpAppInitiator::System)

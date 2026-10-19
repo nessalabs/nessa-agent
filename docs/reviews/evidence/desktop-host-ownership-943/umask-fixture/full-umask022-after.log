@@ -1,0 +1,204 @@
+warning: this lint expectation is unfulfilled
+   --> /workspace/nessa-943-desktop-owner/src-tauri/src/gateway/domain/value_objects/reconciliation_evidence.rs:650:13
+    |
+650 |             dead_code,
+    |             ^^^^^^^^^
+    |
+    = note: rejected-report inspection is exercised by domain and application tests; production serializes the enclosing outcome
+    = note: `#[warn(unfulfilled_lint_expectations)]` on by default
+
+warning: this lint expectation is unfulfilled
+   --> /workspace/nessa-943-desktop-owner/src-tauri/src/gateway/domain/value_objects/reconciliation_evidence.rs:661:13
+    |
+661 |             dead_code,
+    |             ^^^^^^^^^
+    |
+    = note: rejected-report inspection is exercised by domain and application tests; production serializes the enclosing outcome
+
+warning: this lint expectation is unfulfilled
+   --> /workspace/nessa-943-desktop-owner/src-tauri/src/gateway/domain/value_objects/reconciliation_evidence.rs:675:13
+    |
+675 |             dead_code,
+    |             ^^^^^^^^^
+    |
+    = note: rejected-report inspection is exercised by domain and application tests; production serializes the enclosing outcome
+
+warning: this lint expectation is unfulfilled
+   --> /workspace/nessa-943-desktop-owner/src-tauri/src/gateway/domain/value_objects/reconciliation_evidence.rs:686:13
+    |
+686 |             dead_code,
+    |             ^^^^^^^^^
+    |
+    = note: rejected-report inspection is exercised by domain and application tests; production serializes the enclosing outcome
+
+warning: `nessa-desktop-host-ownership-proof` (lib) generated 4 warnings
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.02s
+     Running unittests src/lib.rs (/tmp/nessa-943-headless/target/debug/deps/nessa_desktop_host_ownership_proof-65b5a97976207635)
+
+running 158 tests
+test gateway::application::host_ownership::tests::busy_claim_has_no_resource_and_can_be_retried_after_owner_exit ... ok
+test gateway::application::host_ownership::tests::bounded_restart_wait_can_acquire_after_predecessor_releases ... ok
+test gateway::application::host_ownership::tests::failed_or_panicking_acquisition_does_not_publish_a_lease ... ok
+test gateway::application::host_ownership::tests::admitted_worker_retains_lease_after_foreground_owner_disappears ... ok
+test gateway::application::ports::tests::accepted_label_command_keeps_a_replacement_observation_separate ... ok
+test gateway::application::ports::tests::application_mapping_preserves_independent_rejection_facts ... ok
+test gateway::application::ports::tests::application_mapping_cannot_accept_success_after_failed_intent_delivery ... ok
+test gateway::application::ports::tests::claim_and_deadline_use_one_clock_and_lock_in_either_order ... ok
+test gateway::application::ports::tests::deadline_revokes_a_proof_that_finishes_late_without_a_dispatch_claim ... ok
+test gateway::application::ports::tests::outcome_start_uses_the_stop_clock_and_preserves_settled_facts_at_deadline ... ok
+test gateway::application::ports::tests::post_bootstrap_readiness_failure_remains_an_honest_physical_failure ... ok
+test gateway::application::ports::tests::stop_claim_requires_the_proved_identity_and_observation_version ... ok
+test gateway::application::ports::tests::stop_proof_arriving_after_deadline_cannot_claim_dispatch ... ok
+test gateway::application::host_ownership::tests::acquisition_is_shared_across_concurrent_host_operations ... ok
+test gateway::application::ports::tests::stop_proof_tokens_cannot_cross_sessions_for_the_same_incarnation ... ok
+test gateway::application::service::tests::a_deferred_publication_is_journaled_after_the_gateway_is_ready ... ok
+test gateway::application::service::tests::a_failed_directory_change_preserves_rollback_failure_beside_the_native_failure ... ok
+test gateway::application::service::tests::a_changed_identity_advances_ready_even_if_native_progress_was_missed ... ok
+test gateway::application::service::tests::a_failed_registration_does_not_restore_a_newer_directory ... ok
+test gateway::application::service::tests::a_later_credential_load_retries_failed_startup_with_revisioned_events ... ok
+test gateway::application::service::tests::a_failed_registration_restores_the_directory_and_can_be_repeated ... ok
+test gateway::application::service::tests::a_login_shell_that_cannot_be_read_still_registers_the_service ... ok
+test gateway::application::service::tests::a_live_configuration_rollback_failure_is_returned_with_the_original_failure ... ok
+test gateway::application::service::tests::a_login_shell_that_failed_once_is_not_asked_again_this_session ... ok
+test gateway::application::service::tests::a_publication_record_failure_after_ready_keeps_a_newer_revision ... ok
+test gateway::application::service::tests::a_rejected_stage_plan_does_not_start_the_copy_or_publish_ready ... ok
+test gateway::application::service::tests::a_restored_no_effect_attempt_settles_before_the_current_attempt_opens ... ok
+test gateway::application::service::tests::allocator_panic_is_typed_and_a_later_retry_can_own_a_fresh_receipt ... ok
+test gateway::application::service::tests::attempt_and_outcome_constructors_reject_contradictory_correlations_and_targets ... ok
+test gateway::application::service::tests::an_unchanged_directory_save_holds_publication_ownership_until_it_is_durable ... ok
+test gateway::application::service::tests::caller_cancelled_after_admission_but_before_owner_launch_cannot_strand_the_receipt ... ok
+test gateway::application::service::tests::claude_publication::a_different_directory_waits_after_its_predecessor_caller_disappears ... ok
+test gateway::application::service::tests::claude_publication::a_dropped_directory_caller_retains_ownership_through_late_success_and_failure ... ok
+test gateway::application::service::tests::claude_publication::a_panicking_directory_waiter_cannot_end_the_publication_transaction ... ok
+test gateway::application::service::tests::claude_publication::an_equal_save_does_not_claim_recovery_of_an_unconfirmed_native_effect ... ok
+test gateway::application::service::tests::claude_publication::an_unpolled_directory_request_has_no_effects ... ok
+test gateway::application::service::tests::claude_publication::late_physical_success_retains_configuration_when_outcome_delivery_fails_or_panics ... ok
+test gateway::application::service::tests::claude_publication::publication_panics_settle_the_slot_and_preserve_independent_rollback_failures ... ok
+test gateway::application::service::tests::claude_publication::receipt_admission_panic_restores_published_settings_before_a_fresh_retry ... ok
+test gateway::application::service::tests::concurrent_duplicate_intents_are_refused_before_a_second_sink_delivery ... ok
+test gateway::application::service::tests::concurrent_waiters_run_one_registration_and_share_its_ready_identity ... ok
+test gateway::application::service::tests::a_different_directory_waits_until_the_in_flight_attempt_finishes ... ok
+test gateway::application::service::tests::configuration_change_during_an_attempt_owns_exactly_one_successor ... ok
+test gateway::application::service::tests::confirmed_refused_and_partial_effects_are_audited_with_delivery_failures_separate ... ok
+test gateway::application::service::tests::an_identical_in_flight_directory_change_waits_for_that_attempt ... ok
+test gateway::application::service::tests::desktop_start_audits_a_durable_provider_configuration_change ... ok
+test gateway::application::service::tests::every_login_shell_failure_can_be_reported ... ok
+test gateway::application::service::tests::delayed_joiner_returns_exact_attempt_a_after_attempt_c_has_started ... ok
+test gateway::application::service::tests::exact_delivery_retry_recovers_published_intent_and_outcome ... ok
+test gateway::application::service::tests::every_reconciliation_entry_point_preserves_its_cause_and_verified_initiator ... ok
+test gateway::application::service::tests::effects_before_intent_acknowledgement_remain_rejected_after_late_acknowledgement ... ok
+test gateway::application::service::tests::failed_registration_is_retried_and_never_derives_a_service_to_stop ... ok
+test gateway::application::service::tests::failed_intent_delivery_is_terminally_audited_and_cannot_be_replaced ... ok
+test gateway::application::service::tests::gateway_instances_use_only_their_injected_service_and_surface_stop_failure ... ok
+test gateway::application::service::tests::host_ownership_tests::competing_host_is_refused_before_journal_settings_recovery_and_stop ... ok
+test gateway::application::service::tests::host_ownership_tests::first_ownership_clock_panic_settles_the_unopened_journal_waiter ... ok
+test gateway::application::service::tests::host_ownership_tests::failed_registration_keeps_ownership_for_its_original_host_retry ... ok
+test gateway::application::service::tests::id_allocation_can_inspect_the_startup_snapshot_without_holding_lifecycle_state ... ok
+test gateway::application::service::tests::host_ownership_tests::ownership_refusal_releases_callers_waiting_for_the_unopened_journal ... ok
+test gateway::application::service::tests::initial_attempt_id_failure_advances_startup_without_installing_a_receipt ... ok
+test gateway::application::service::tests::initial_request_id_failure_advances_startup_without_calling_the_host ... ok
+test gateway::application::service::tests::invalid_history_cannot_hide_an_ineligible_claimed_identity ... ok
+test gateway::application::service::tests::joined_audit_failure_rejects_only_the_joiner_and_does_not_cancel_the_owner ... ok
+test gateway::application::service::tests::joining_request_id_failure_does_not_replace_the_active_owner_projection ... ok
+test gateway::application::service::tests::malformed_success_is_audited_as_rejected_and_never_projects_ready ... ok
+test gateway::application::service::tests::later_failed_reconciliation_preserves_candidate_for_native_revalidation ... ok
+test gateway::application::service::tests::native_restart_progress_transitions_ready_through_starting ... ok
+test gateway::application::service::tests::panicking_host_and_event_adapters_cannot_strand_startup ... ok
+test gateway::application::service::tests::panicking_outcome_audit_is_reported_without_losing_confirmed_stop_identity ... ok
+test gateway::application::service::tests::panicking_predecessor_settles_and_promotes_the_exact_pending_receipt ... ok
+test gateway::application::service::tests::persistent_completion_failure_never_attempts_a_terminal_outcome ... ok
+test gateway::application::service::tests::partial_outcomes_preserve_each_confirmed_native_boundary ... ok
+test gateway::application::service::tests::quit_during_deferred_publication_stops_the_ready_gateway_without_waiting_for_the_copy ... ok
+test gateway::application::service::tests::receipt_settlement_does_not_wait_for_startup_event_delivery ... ok
+test gateway::application::service::tests::reconciling_again_reuses_the_path_rather_than_asking_the_login_shell_again ... ok
+test gateway::application::service::tests::retained_cleanup_identity_tracks_native_and_audit_facts_separately ... ok
+test gateway::application::service::tests::settings_change_reregisters_once_and_records_the_reason ... ok
+test gateway::application::service::tests::settled_stop_at_deadline_starts_no_success_or_rejection_outcome_delivery ... ok
+test gateway::application::service::tests::starting_projection_names_each_reported_step_and_ready_stays_ready ... ok
+test gateway::application::service::tests::stop_outcome_delivery_preserves_attempt_retry_and_physical_facts ... ok
+test gateway::application::service::tests::stop_outcome_is_audited_after_the_response_receiver_is_dropped ... ok
+test gateway::application::service::tests::stop_outcome_retry_returns_only_the_acknowledged_receipt ... ok
+test gateway::application::service::tests::surface_readiness_returns_while_the_deferred_copy_is_still_running ... ok
+test gateway::domain::value_objects::lifecycle_journal::tests::a_cleanup_owed_only_after_failure_leaves_a_success_settled ... ok
+test gateway::domain::value_objects::lifecycle_journal::tests::a_complete_stale_replacement_chain_accepts_old_and_new_identities_in_their_roles ... ok
+test gateway::domain::value_objects::lifecycle_journal::tests::absence_after_a_plan_cannot_prove_no_effect ... ok
+test gateway::domain::value_objects::lifecycle_journal::tests::accepted_systemd_completion_requires_the_exact_recorded_job_attempt ... ok
+test gateway::domain::value_objects::lifecycle_journal::tests::cross_namespace_observation_rejection_does_not_mutate_live_history ... ok
+test gateway::domain::value_objects::lifecycle_journal::tests::directory_cleanup_requires_the_exact_target_and_a_valid_transaction ... ok
+test gateway::domain::value_objects::lifecycle_journal::tests::effect_completion_is_not_a_physical_observation ... ok
+test gateway::domain::value_objects::lifecycle_journal::tests::effect_plans_reject_cross_field_identity_contradictions ... ok
+test gateway::domain::value_objects::lifecycle_journal::tests::eligible_cleanup_is_the_domain_owned_pending_step_and_blocks_outcome ... ok
+test gateway::domain::value_objects::lifecycle_journal::tests::every_nonterminal_crash_prefix_restores_to_the_same_state ... ok
+test gateway::domain::value_objects::lifecycle_journal::tests::every_systemd_enqueue_and_terminal_publication_prefix_restores ... ok
+test gateway::domain::value_objects::lifecycle_journal::tests::failed_clear_prior_rejection_does_not_mutate_live_history ... ok
+test gateway::domain::value_objects::lifecycle_journal::tests::failed_outcome_accepts_retain_or_clear_after_confirmed_absence ... ok
+test gateway::domain::value_objects::lifecycle_journal::tests::failed_outcome_can_clear_a_retired_prior_when_a_replacement_is_observed ... ok
+test gateway::domain::value_objects::lifecycle_journal::tests::failed_outcome_cannot_settle_a_plan_without_its_primary_completion ... ok
+test gateway::domain::value_objects::lifecycle_journal::tests::intent_rejects_a_prior_incarnation_from_another_namespace ... ok
+test gateway::domain::value_objects::lifecycle_journal::tests::matching_stop_plan_completion_and_observation_can_settle ... ok
+test gateway::domain::value_objects::lifecycle_journal::tests::namespace_and_sequence_disagreement_fail_closed ... ok
+test gateway::domain::value_objects::lifecycle_journal::tests::no_effect_closure_records_whatever_was_found ... ok
+test gateway::domain::value_objects::lifecycle_journal::tests::no_effect_closure_requires_a_fresh_observation ... ok
+test gateway::domain::value_objects::lifecycle_journal::tests::observations_are_accepted_only_with_their_service_managers_evidence ... ok
+test gateway::domain::value_objects::lifecycle_journal::tests::predeclared_bootstrap_cleanup_has_a_valid_chain_at_every_record_boundary ... ok
+test gateway::domain::value_objects::lifecycle_journal::tests::restored_systemd_attempt_rejects_manager_operation_unit_and_job_disagreement ... ok
+test gateway::domain::value_objects::lifecycle_journal::tests::same_namespace_replacement_remains_valid_stop_observation ... ok
+test gateway::domain::value_objects::lifecycle_journal::tests::stop_settlement_cannot_mix_an_older_command_with_the_latest_plan_observation ... ok
+test gateway::domain::value_objects::lifecycle_journal::tests::stop_settlement_command_must_match_the_primary_completion ... ok
+test gateway::domain::value_objects::lifecycle_journal::tests::stop_settlement_requires_an_authorizing_stop_plan ... ok
+test gateway::domain::value_objects::lifecycle_journal::tests::systemd_publication_cleanup_requires_exact_target_and_digest_agreement ... ok
+test gateway::domain::value_objects::lifecycle_journal::tests::systemd_retirement_plan_requires_a_canonical_request_identity ... ok
+test gateway::domain::value_objects::lifecycle_journal::tests::terminal_cleanup_must_agree_with_the_physical_result ... ok
+test gateway::domain::value_objects::lifecycle_journal::tests::unsettled_steps_are_listed_in_the_order_the_journal_accepts ... ok
+test gateway::domain::value_objects::reconciliation_evidence::tests::a_claude_directory_change_keeps_both_paths_and_rejects_a_relative_one ... ok
+test gateway::domain::value_objects::reconciliation_evidence::tests::accepts_healthy_reuse_fresh_install_replacement_and_unknown_unload ... ok
+test gateway::domain::value_objects::reconciliation_evidence::tests::an_unretirable_gateway_is_unloaded_only_after_its_refusal ... ok
+test gateway::domain::value_objects::reconciliation_evidence::tests::correlations_are_canonical_lowercase_uuids ... ok
+test gateway::domain::value_objects::reconciliation_evidence::tests::effect_timing_must_agree_with_reported_history ... ok
+test gateway::domain::value_objects::reconciliation_evidence::tests::every_valid_failed_prefix_remains_a_failure_report ... ok
+test gateway::domain::value_objects::reconciliation_evidence::tests::explicit_actions_require_a_verified_bundled_surface ... ok
+test gateway::domain::value_objects::reconciliation_evidence::tests::failed_intent_delivery_blocks_acceptance_but_preserves_cleanup_authority ... ok
+test gateway::domain::value_objects::reconciliation_evidence::tests::invalid_history_cannot_turn_exact_identity_into_healthy_reuse ... ok
+test gateway::domain::value_objects::reconciliation_evidence::tests::invalid_suffix_is_retained_without_erasing_proven_candidate ... ok
+test gateway::domain::value_objects::reconciliation_evidence::tests::known_incarnation_cannot_be_replaced_without_retirement_and_unload ... ok
+test gateway::domain::value_objects::reconciliation_evidence::tests::malformed_history_does_not_mask_identity_contradictions_or_claim ... ok
+test gateway::domain::value_objects::reconciliation_evidence::tests::request_attempt_and_pending_authority_remain_distinct ... ok
+test gateway::domain::value_objects::reconciliation_evidence::tests::reused_runtime_instance_is_independent_of_malformed_history ... ok
+test gateway::domain::value_objects::reconciliation_evidence::tests::target_and_incarnation_reject_ambiguous_identity ... ok
+test gateway::domain::value_objects::retirement_refusal::tests::every_published_name_is_read_and_only_data_missing_allows_a_stop ... ok
+test gateway::domain::value_objects::search_path::tests::a_login_shell_path_keeps_its_absolute_entries_in_order ... ok
+test gateway::domain::value_objects::search_path::tests::a_path_with_nothing_absolute_left_is_refused ... ok
+test gateway::domain::value_objects::search_path::tests::an_unbounded_value_is_refused_before_it_is_parsed ... ok
+test gateway::domain::value_objects::search_path::tests::control_characters_reject_the_whole_value ... ok
+test gateway::domain::value_objects::search_path::tests::empty_and_relative_entries_are_dropped_rather_than_searched ... ok
+test gateway::domain::value_objects::search_path::tests::every_rejection_says_which_rule_it_broke ... ok
+test gateway::domain::value_objects::search_path::tests::following_a_path_with_itself_changes_nothing ... ok
+test gateway::domain::value_objects::search_path::tests::one_path_followed_by_another_keeps_order_and_adds_what_is_new ... ok
+test gateway::domain::value_objects::search_path::tests::the_system_path_is_the_floor_every_process_gets ... ok
+test gateway::domain::value_objects::search_path::tests::what_is_added_is_added_once ... ok
+test gateway::domain::value_objects::service_configuration::tests::rejects_non_durable_service_inputs ... ok
+test gateway::domain::value_objects::service_configuration::tests::restoring_writes_the_previous_directory_only_while_the_attempt_still_owns_it ... ok
+test gateway::domain::value_objects::systemd::tests::native_runtime_requires_portable_unit_pid_and_enablement_agreement ... ok
+test gateway::domain::value_objects::systemd::tests::returned_job_path_must_derive_the_same_numeric_id ... ok
+test gateway::domain::value_objects::systemd::tests::terminal_classification_requires_the_plan_attempt_and_signal_to_agree ... ok
+test gateway::domain::value_objects::systemd::tests::terminal_rejects_results_outside_systemds_closed_result_set ... ok
+test gateway::domain::value_objects::systemd::tests::unit_and_manager_construction_reject_ambiguous_identity ... ok
+test gateway::infrastructure::host_ownership::tests::a_shared_service_directory_is_refused_without_repair_or_lock_creation ... ok
+test gateway::infrastructure::host_ownership::tests::a_symlink_lock_is_refused_without_mutating_its_target ... ok
+test gateway::infrastructure::host_ownership::tests::an_exec_child_does_not_keep_the_lease_after_its_parent_releases ... ok
+test gateway::infrastructure::host_ownership::tests::competing_bundle_cannot_claim_the_same_service_until_final_release ... ok
+test gateway::infrastructure::host_ownership::tests::different_service_labels_do_not_contend ... ok
+test gateway::infrastructure::host_ownership::tests::explicit_unlock_releases_an_inherited_fork_description ... ok
+test gateway::infrastructure::host_ownership::tests::ownership_process_child ... ok
+test gateway::infrastructure::host_ownership::tests::process_death_releases_the_original_stable_lock ... ok
+test gateway::application::service::tests::claimed_blocked_stop_becomes_indeterminate_and_starts_no_later_cleanup ... ok
+test gateway::application::service::tests::host_ownership_tests::timed_out_stop_worker_retains_ownership_after_the_gateway_is_dropped ... ok
+test gateway::application::service::tests::proof_blocked_across_quit_deadline_never_claims_or_dispatches ... ok
+
+test result: ok. 158 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+
+   Doc-tests nessa_desktop_host_ownership_proof
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s

@@ -37,7 +37,7 @@ use nessa_protocol::conversation::read_scope::ReceiverReadScope;
 use nessa_protocol::pairing::wire::NativePairingStatus;
 use nessa_sdk::application::agent_execution::providers::ProviderIdentity;
 use nessa_sdk::application::agent_execution::sessions::{
-    SessionChange, SessionSaveUnit, SessionSnapshot, SessionStorage,
+    SessionChange, SessionSaveUnit, SessionStorage,
 };
 use nessa_sdk::domain::agent_execution::sessions::{
     ExecutionSessionId, ProviderContext, SessionId,
@@ -47,7 +47,7 @@ use nessa_sync::replication::domain::Id;
 use serde_json::json;
 use std::io::{self, Write};
 use std::net::{SocketAddr, TcpStream};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
@@ -72,6 +72,7 @@ struct GatedRead {
     mode: String,
     pages: AtomicUsize,
     heads: Arc<HeadHold>,
+    budget_head: PathBuf,
 }
 /// Live mode's held head read: the head reads counted so far, the one
 /// `hold` named (zero for none), and the `release` that lets it answer.
@@ -120,6 +121,10 @@ impl RecordReadSource for GatedRead {
                     self.heads.release.notified().await
                 }
                 ("timeout-head", Some(1)) => std::future::pending::<()>().await,
+                ("budget-head", Some(1)) => {
+                    super::private_write(&self.budget_head, b"");
+                    std::future::pending::<()>().await;
+                }
                 // A cold first head read, as a loaded gateway answers it
                 // (row W17); the next head read succeeds.
                 ("preparing-head", Some(1)) => {
@@ -189,7 +194,6 @@ impl RecordReadSource for GatedRead {
                     lease
                         .save_changes(
                             lease.load().await.unwrap().binding().clone(),
-                            snapshot,
                             vec![SessionSaveUnit::new(vec![SessionChange::ProviderContext {
                                 before,
                                 after,
@@ -384,6 +388,7 @@ async fn gateway_child() {
         mode: mode.clone(),
         pages: AtomicUsize::new(0),
         heads: heads.clone(),
+        budget_head: root.join("budget-head-entered"),
     }))
     .with_catalogue_source(Arc::new(NessaCatalogueReadSource::new(
         metadata.clone(),
@@ -534,16 +539,6 @@ async fn gateway_child() {
                 lease
                     .save_changes(
                         lease.load().await.unwrap().binding().clone(),
-                        SessionSnapshot {
-                            id: session,
-                            provider,
-                            provider_context: context,
-                            invocations: vec![],
-                            queue_history: vec![],
-                            lease: None,
-                            artifacts: Vec::new(),
-                            notes: Vec::new(),
-                        },
                         vec![SessionSaveUnit::new(changes).unwrap()],
                     )
                     .await
@@ -621,7 +616,6 @@ async fn live_control(
                 lease
                     .save_changes(
                         binding,
-                        snapshot,
                         vec![SessionSaveUnit::new(vec![SessionChange::ProviderContext {
                             before,
                             after,

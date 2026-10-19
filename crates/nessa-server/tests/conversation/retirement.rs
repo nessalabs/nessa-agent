@@ -504,6 +504,7 @@ async fn an_unsettled_opening_counts_as_holding_resources() {
             ready: Notify::new(),
             started: AtomicBool::new(true),
             stopping: AtomicBool::new(false),
+            touched: std::sync::atomic::AtomicU64::new(0),
         }),
     );
     assert!(service.owns_unreleased_resources().await);
@@ -559,4 +560,88 @@ impl crate::desktop_runtime::application::BackgroundWork for NoBackgroundWork {
     fn may_hold_resources(&self) -> bool {
         false
     }
+}
+
+/// Every stop saves its end through the one record store, so stopping
+/// thousands at once leaves each waiting behind all the others and every one
+/// runs out of its budget. Retirement stops a bounded number at once, and
+/// still stops every owner.
+#[tokio::test]
+async fn retirement_stops_a_bounded_number_of_owners_at_once() {
+    let owners = super::RETIRING_AT_ONCE * 2 + 3;
+    let (service, provider, _, _) = fixture(ConversationLimits {
+        max_conversations: owners,
+        ..ConversationLimits::default()
+    });
+    provider.slow_close.store(true, Ordering::SeqCst);
+    for n in 0..owners {
+        service
+            .create(
+                ConversationId::new(&Uuid::new_v4().to_string()).unwrap(),
+                ConversationCaller {
+                    organization_id: OrganizationId::new("org").unwrap(),
+                    principal_id: PrincipalId::new("person").unwrap(),
+                    surface_id: "panel".into(),
+                    action_id: format!("create-{n}"),
+                },
+                crate::conversation::application::RequestedConversation::default(),
+            )
+            .await
+            .unwrap();
+    }
+    service
+        .retire("gateway_upgrade", "many-owners")
+        .await
+        .unwrap();
+    assert_eq!(provider.close_calls.load(Ordering::SeqCst), owners);
+    let most = provider.most_closing.load(Ordering::SeqCst);
+    assert!(
+        most <= super::RETIRING_AT_ONCE,
+        "{most} closes ran at once, more than {}",
+        super::RETIRING_AT_ONCE
+    );
+    assert!(most > 1, "closes still run beside each other");
+}
+
+#[tokio::test]
+async fn agents_that_will_not_stop_do_not_hold_back_the_other_stops() {
+    // Every place is taken by an agent that will not answer its close; the
+    // owners after them still start stopping long before those run out of
+    // their budgets.
+    let owners = super::RETIRING_AT_ONCE + 3;
+    let (service, provider, _, _) = fixture(ConversationLimits {
+        max_conversations: owners,
+        ..ConversationLimits::default()
+    });
+    *provider.stalled_closes.lock().unwrap() = super::RETIRING_AT_ONCE;
+    for n in 0..owners {
+        service
+            .create(
+                ConversationId::new(&Uuid::new_v4().to_string()).unwrap(),
+                ConversationCaller {
+                    organization_id: OrganizationId::new("org").unwrap(),
+                    principal_id: PrincipalId::new("person").unwrap(),
+                    surface_id: "panel".into(),
+                    action_id: format!("create-{n}"),
+                },
+                crate::conversation::application::RequestedConversation::default(),
+            )
+            .await
+            .unwrap();
+    }
+    let retiring = {
+        let service = service.clone();
+        tokio::spawn(async move { service.retire("gateway_upgrade", "stalled-owners").await })
+    };
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while provider.close_calls.load(Ordering::SeqCst) < owners {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("every owner starts stopping while the stalled ones still wait");
+    provider.closes_released.store(true, Ordering::SeqCst);
+    provider.close_release.notify_waiters();
+    retiring.await.unwrap().unwrap();
+    assert_eq!(provider.close_calls.load(Ordering::SeqCst), owners);
 }

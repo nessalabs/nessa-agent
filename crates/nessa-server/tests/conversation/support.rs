@@ -210,6 +210,8 @@ pub(crate) struct MemoryRepository {
     pub(crate) metadata_load_failure: Mutex<Option<ConversationError>>,
     /// Pauses a metadata reply after reading it, before its caller's policy admission.
     pub(crate) metadata_load_gate: Mutex<Option<(oneshot::Sender<()>, Receiver<()>)>>,
+    /// Pauses one create after it stores the row, before it answers.
+    pub(crate) creation_gate: Mutex<Option<(oneshot::Sender<()>, Receiver<()>)>>,
     /// Override one create acknowledgement after its proposed target is stored.
     pub(crate) creation_reply: Mutex<Option<ConversationCreation>>,
     /// A concurrent creator establishes this row after the initial load, before create.
@@ -586,7 +588,14 @@ impl ConversationRepository for MemoryRepository {
                 conversation,
                 disposition,
             });
-        Box::pin(async move { Ok(reply) })
+        let gate = self.creation_gate.lock().unwrap().take();
+        Box::pin(async move {
+            if let Some((entered, release)) = gate {
+                let _ = entered.send(());
+                let _ = release.await;
+            }
+            Ok(reply)
+        })
     }
     fn record_deletion(
         &self,
@@ -904,6 +913,9 @@ pub(crate) struct ProviderFactory {
     /// The SDK session each open named: what a host keys its MCP grants to.
     pub(crate) opened_sessions:
         Mutex<Vec<Option<nessa_sdk::domain::agent_execution::sessions::SessionId>>>,
+    /// Each successful open's provider session, and the one it was asked to
+    /// restore: `session/resume` of a recorded session, or `None` for new.
+    pub(crate) provider_opens: Mutex<Vec<(ExecutionSessionId, Option<ExecutionSessionId>)>>,
     pub(crate) open_failure: Mutex<Option<AgentError>>,
     pub(crate) opening: Notify,
     pub(crate) open_gate: Mutex<Option<Receiver<()>>>,
@@ -960,6 +972,11 @@ pub(crate) struct ProviderFactory {
     pub(crate) cancel_turns: Mutex<Vec<String>>,
     pub(crate) cancel_started: Notify,
     pub(crate) cancel_gate: Mutex<Option<Receiver<()>>>,
+    /// What the next turn cancel fails with, once its gate lets it go.
+    pub(crate) cancel_failure: Mutex<Option<AgentError>>,
+    /// The cancel failure says its agent is ending (cleanup required), not
+    /// that the session can still be used.
+    pub(crate) cancel_failure_ends: AtomicBool,
     /// When false, an active turn is refused before any cancel is sent.
     pub(crate) turn_cancel: AtomicBool,
     pub(crate) close_failure: Mutex<Option<AgentError>>,
@@ -967,10 +984,23 @@ pub(crate) struct ProviderFactory {
     pub(crate) close_finished: Notify,
     pub(crate) close_gate: Mutex<Option<Receiver<()>>>,
     pub(crate) close_requests: Mutex<Vec<SessionCloseRequest>>,
+    /// Closes running now, and the most that ever ran at once.
+    pub(crate) closing_now: AtomicUsize,
+    pub(crate) most_closing: AtomicUsize,
+    /// When set, a close yields a few times before it answers, so closes
+    /// started together run beside each other.
+    pub(crate) slow_close: AtomicBool,
+    /// This many closes, the first to start, wait for `closes_released`
+    /// before they answer, as an agent that will not stop does.
+    pub(crate) stalled_closes: Mutex<usize>,
+    pub(crate) closes_released: AtomicBool,
+    pub(crate) close_release: Notify,
     /// Whether the agent agreed to take images, and its model can see them.
     pub(crate) image_input: AtomicBool,
     /// Whether the attached agent can inject a steer into the active turn.
     pub(crate) native_steering: AtomicBool,
+    /// Whether the agent can resume a recorded provider session.
+    pub(crate) session_resume: AtomicBool,
     /// Whether a steer is taken into the running turn; otherwise steering
     /// is refused as unsupported.
     pub(crate) inject_steers: AtomicBool,
@@ -1476,7 +1506,13 @@ impl AgentProvider for Provider {
             }
             let (sender, receiver) = mpsc::unbounded_channel();
             let session_id = restore
+                .clone()
                 .unwrap_or_else(|| ExecutionSessionId::new(Uuid::new_v4().to_string()).unwrap());
+            self.factory
+                .provider_opens
+                .lock()
+                .unwrap()
+                .push((session_id.clone(), restore));
             let controller = ExecutionController::new(session_id.clone());
             let authority = controller.permission_authority_source();
             Ok(OpenedProviderSession {
@@ -1557,6 +1593,16 @@ impl ProviderSessionBackend for Backend {
             if let Some(gate) = gate {
                 let _ = gate.await;
             }
+            if let Some(error) = self.factory.cancel_failure.lock().unwrap().take() {
+                return Err(ProviderOperationFailure::new(
+                    error,
+                    if self.factory.cancel_failure_ends.load(Ordering::SeqCst) {
+                        ProviderSessionState::CleanupRequired
+                    } else {
+                        ProviderSessionState::Usable
+                    },
+                ));
+            }
             Ok(())
         })
     }
@@ -1583,6 +1629,7 @@ impl ProviderSessionBackend for Backend {
             negotiated: !self.factory.answer_unknown.load(Ordering::SeqCst),
             native_hooks_allowed: self.factory.native_hooks.load(Ordering::SeqCst),
             native_steering: self.factory.native_steering.load(Ordering::SeqCst),
+            session_resume: self.factory.session_resume.load(Ordering::SeqCst),
             ..ProviderOperationCapabilities::default()
         }
     }
@@ -1931,10 +1978,33 @@ impl ProviderSessionBackend for Backend {
         Box::pin(async move {
             self.factory.close_calls.fetch_add(1, Ordering::SeqCst);
             self.factory.close_requests.lock().unwrap().push(request);
+            let now = self.factory.closing_now.fetch_add(1, Ordering::SeqCst) + 1;
+            self.factory.most_closing.fetch_max(now, Ordering::SeqCst);
             let gate = self.factory.close_gate.lock().unwrap().take();
             if let Some(gate) = gate {
                 let _ = gate.await;
             }
+            let stalled = {
+                let mut left = self.factory.stalled_closes.lock().unwrap();
+                let stalled = *left > 0;
+                *left = left.saturating_sub(1);
+                stalled
+            };
+            while stalled && !self.factory.closes_released.load(Ordering::SeqCst) {
+                let released = self.factory.close_release.notified();
+                tokio::pin!(released);
+                released.as_mut().enable();
+                if self.factory.closes_released.load(Ordering::SeqCst) {
+                    break;
+                }
+                released.await;
+            }
+            if self.factory.slow_close.load(Ordering::SeqCst) {
+                for _ in 0..8 {
+                    tokio::task::yield_now().await;
+                }
+            }
+            self.factory.closing_now.fetch_sub(1, Ordering::SeqCst);
             let report = self
                 .factory
                 .close_reports

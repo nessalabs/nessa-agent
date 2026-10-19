@@ -1527,7 +1527,7 @@ dependencies = [
 [[package]]
 name = "event-stream"
 version = "0.1.0"
-source = "git+https://github.com/nessalabs/event-stream?rev=59624a2#59624a2d00dbb3bbc4be51732d5019ca3ca847a1"
+source = "git+https://github.com/nessalabs/event-stream?rev=e16580f#e16580f3d3602a1ff9966e89d4915be4e752aea0"
 dependencies = [
  "async-trait",
  "fs2",
@@ -3235,6 +3235,7 @@ dependencies = [
  "objc2-core-foundation",
  "objc2-foundation",
  "objc2-uniform-type-identifiers",
+ "objc2-user-notifications",
  "security-framework",
  "serde",
  "serde_json",
@@ -3822,6 +3823,8 @@ version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9df9128cbbfef73cda168416ccf7f837b62737d748333bfe9ab71c245d76613e"
 dependencies = [
+ "bitflags 2.13.1",
+ "block2",
  "objc2",
  "objc2-foundation",
 ]

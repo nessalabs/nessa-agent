@@ -11,6 +11,7 @@ use crate::conversation::application::{
     MAX_ADMITTED_POLICIES, MAX_DRIVE_GRANTS_PER_CONVERSATION, MAX_SHARE_GRANTS_PER_CONVERSATION,
     PUBLISH_CALL_WAIT,
 };
+use crate::conversation::application::{MAX_AGENT_TOOL_ADMISSIONS, MAX_EVENT_READERS};
 use crate::conversation::domain::{CommandHosts, ToolRules};
 use crate::conversation::infrastructure::DISCOVERY_STEPS_PER_READ;
 use crate::mcp_servers::infrastructure::{MAX_BUILT_IN_CALLS, MAX_BUILT_IN_LINE_BYTES};
@@ -103,6 +104,18 @@ fn catalogue() -> &'static [Limit] {
             meaning: "an upload past the gateway's admission is refused",
         },
         Limit {
+            id: "server.live_conversations",
+            tier: "configured",
+            owner: "config.json limits.liveConversations",
+            meaning: "opening a conversation past this many open at once, each with its agent running, parks the idle one used longest ago; it is refused capacity only when none can be parked",
+        },
+        Limit {
+            id: "server.agent_idle_seconds",
+            tier: "configured",
+            owner: "config.json limits.agentIdleSeconds",
+            meaning: "an agent idle this many seconds, nothing queued or waiting and nobody following its conversation, is stopped; the conversation stays open and the next message starts the agent again, resuming its session. 0 never stops one",
+        },
+        Limit {
             id: "socket.ordinary_slots",
             tier: "configured",
             owner: "config.json limits.ordinarySlots",
@@ -154,7 +167,7 @@ fn catalogue() -> &'static [Limit] {
             id: "socket.refusal_lane",
             tier: "fixed",
             owner: "product socket REFUSAL_LANE",
-            meaning: "an app refusal waits while one is queued; a non-app refusal on a full lane closes the socket",
+            meaning: "a refusal waits while one is queued, and the socket reads no further frame until it is",
         },
         Limit {
             id: "socket.write_timeout",
@@ -494,6 +507,18 @@ fn catalogue() -> &'static [Limit] {
             meaning: "a tool call past this many running on one stand-in's connection is answered with an error",
         },
         Limit {
+            id: "agent_tools.waiting_reads",
+            tier: "fixed",
+            owner: "MAX_EVENT_READERS in crates/nessa-server/src/conversation/application/agent_tools.rs",
+            meaning: "a `subscribe` past this many running for one source conversation is refused subscription_capacity; other sources are not counted against it",
+        },
+        Limit {
+            id: "agent_tools.source_admissions",
+            tier: "fixed",
+            owner: "MAX_AGENT_TOOL_ADMISSIONS in crates/nessa-server/src/conversation/application/agent_tools.rs",
+            meaning: "an agent tool call past this many detached admissions retained by one source conversation is refused unavailable; other sources are not counted against it",
+        },
+        Limit {
             id: "mcp.built_in_line_bytes",
             tier: "fixed",
             owner: "built-in MCP server MAX_BUILT_IN_LINE_BYTES",
@@ -537,6 +562,14 @@ pub(crate) fn effective_json(
     put("server.record_reads", count(limits.record_reads()));
     put("server.deletions", count(limits.deletions()));
     put("server.upload_begins", count(limits.upload_begins()));
+    put(
+        "server.live_conversations",
+        count(limits.live_conversations()),
+    );
+    put(
+        "server.agent_idle_seconds",
+        limits.agent_idle().map_or(0, |idle| idle.as_secs()),
+    );
     put("socket.ordinary_slots", count(limits.ordinary_slots()));
     put("socket.control_slots", count(limits.control_slots()));
     put("socket.record_slot", count(RECORD_SLOT));
@@ -672,6 +705,11 @@ pub(crate) fn effective_json(
     put("command.max_cwd_bytes", count(CommandWork::MAX_CWD_BYTES));
     put("mcp.built_in_calls", count(MAX_BUILT_IN_CALLS));
     put("mcp.built_in_line_bytes", count(MAX_BUILT_IN_LINE_BYTES));
+    put("agent_tools.waiting_reads", count(MAX_EVENT_READERS));
+    put(
+        "agent_tools.source_admissions",
+        count(MAX_AGENT_TOOL_ADMISSIONS),
+    );
     serde_json::Value::Object(values.into_iter().collect())
 }
 

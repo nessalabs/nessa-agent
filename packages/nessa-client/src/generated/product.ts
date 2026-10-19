@@ -689,7 +689,7 @@ export interface ConversationView {
   unreadable: ConversationUnreadable[]
   /** True when more records could not be read than the 32 lines in unreadable. Those records were still skipped. The transcript ends with one line: More parts of this conversation couldn't be read. */
   unreadableTruncated: boolean
-  /** Name the gateway derived from the conversation's first message, the same one conversation.list shows; null before anything was said. */
+  /** Name the gateway derived from the conversation's first message, or the one a person renamed it to, the same one conversation.list shows; null before anything was said. */
   title: string | null
   /** Every question the agent is waiting on now, oldest first (the SDK holds at most MAX_OPEN_QUESTIONS open). Each entry is small and of fixed size, and a bounded view gives up everything else before any of them, so none is ever left out. */
   questions: ConversationQuestionEntry[]
@@ -755,7 +755,7 @@ export interface ConversationListParams {
 export interface ConversationSummary {
   /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
   conversationId: string
-  /** Name the gateway derived from the conversation's first message, the same one its view carries; null when none is on record. */
+  /** Name the gateway derived from the conversation's first message, or the one a person renamed it to, the same one its view carries; null when none is on record. */
   title: string | null
   /** The last thing said in the conversation, as one line of plain text, or null when there is none on record. */
   preview: string | null
@@ -1007,6 +1007,15 @@ export interface ConversationArchiveParams {
   /** Stable action identifier retained for retries of one logical command. */
   requestId: string
 }
+/** Rename a conversation: the title conversation.list and a read show from now on. A later message does not rename it back. applied is false when it already has that title, and for a conversation nothing was said in, which has no title to change. */
+export interface ConversationRenameParams {
+  /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
+  conversationId: string
+  /** Stable action identifier retained for retries of one logical command. */
+  requestId: string
+  /** The new title: one line, with no whitespace at either end and no run of more than one whitespace character. Anything else is refused invalid_request; normalize before sending. */
+  title: string
+}
 /** Delete a conversation permanently: stop it, ask its agent to delete the agent's own session, record who deleted it, and erase its history, uploads and summary. Audit evidence is retained. The identity is never reused: its owner's later commands on it answer conversation_deleted, except deleting it again, and anyone else is told conversation_not_found. A repeat of the deciding request — the same principal, surface and requestId — is answered applied true, any other delete by its owner applied false; either repeat first carries on an erasure that has not finished. conversation_erasure_incomplete and audit_unavailable mean the conversation is deleted and its erasure did not finish; deleting again, and each gateway start, tries again. Any other error from a delete means only that it is not known whether the conversation was deleted: list it, or delete again. */
 export interface ConversationDeleteParams {
   /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
@@ -1166,8 +1175,8 @@ export interface ConversationLease {
   host?: string
   /** The sandbox granted, or for a refused lease the one asked for. harness_default: whatever the agent's harness encloses by default, configured by nothing Nessa sets, and nothing more. none: nothing encloses what runs beyond the account the environment runs as. */
   sandbox?: "harness_default" | "none"
-  /** Why the lease is ending or ended: the first cause recorded. lost: the environment no longer held it, for example because the gateway started again or the connection to it was lost. */
-  cause?: "stopped" | "closed" | "revoked" | "expired" | "lost"
+  /** Why the lease is ending or ended: the first cause recorded. lost: the environment no longer held it, for example because the gateway started again or the connection to it was lost. idle: the agent sat idle with nobody following the conversation, past limits.agentIdleSeconds, and the gateway stopped it; the conversation stays open and the next message starts the agent again, resuming its provider session. */
+  cause?: "stopped" | "closed" | "revoked" | "expired" | "lost" | "idle"
   /** What the environment reported releasing, once it has: confirmed, released cooperatively; forced, released by forced termination; not_held, the environment holds nothing for the lease, though whether something started under it before the environment last started outlived it is not known. On an interrupted lease this is the evidence that arrived after its deadline. */
   cleanup?: "confirmed" | "forced" | "not_held"
   /** Why the lease was refused. sandbox_unavailable: the sandbox asked for is not one both the agent's binding and the environment can enforce. environment_unreachable: the environment could not be reached, or did not answer in time. environment_version_mismatch: the copy of this build the environment holds, where the gateway installs it, speaks another lease protocol, so nothing was sent to it. environment_busy: the environment is serving another connection. agent_unavailable: the environment cannot run this conversation's agent. environment_platform_unsupported: the environment had no copy of this build, and runs on a system or processor this build cannot run on, so nothing was installed or sent. environment_install_failed: the environment had no copy of this build, and installing one failed: what arrived did not match what was sent, did not run there, or could not be stored; nothing was sent. */
@@ -2344,7 +2353,26 @@ export interface PairingPendingResult {
   /** The caller's unfinished enrollments, including ended ones still owed cleanup. Bounded by the registry's configured capacity rather than a wire constant. */
   items: PairingOwnerStatus[]
 }
-/** Why the gateway refused a pairing method it dispatched. pairing_not_configured: native pairing is off in this gateway's configuration. pairing_not_found: no such invitation. pairing_slot_occupied: an invitation is already open; cancel it first. pairing_capacity: too many unfinished enrollments. pairing_conflict: the request names a different key or outcome than the one recorded. pairing_ineligible: the enrollment cannot take this step now (expired, ended, or not yet claimed). pairing_busy: another create is running. pairing_unavailable: storage or a worker failed; retry later. */
+/** Turn native linking on or off for this gateway. The gateway saves the choice in its config.json and, when the running gateway does not already match it, restarts itself to apply it. Turning it on keeps a listen address already named there, or names 127.0.0.1:47650; turning it off keeps the native settings and marks them off. */
+export interface PairingSetLinkingParams {
+  /** True turns native linking on; false turns it off. Sending the same value again changes nothing, so a retry is safe. */
+  enabled: boolean
+}
+/** How the choice takes effect. unchanged: the running gateway already matches it. restarting: the gateway is restarting itself now; the connection closes and reconnects to a gateway that matches it. A signal that stops the gateway before it restarts wins: it stays stopped, and the choice applies the next time it starts. */
+export const PairingLinkingApply = {
+  Unchanged: "unchanged",
+  Restarting: "restarting",
+} as const
+export type PairingLinkingApply =
+  (typeof PairingLinkingApply)[keyof typeof PairingLinkingApply]
+/** Result of pairing.setLinking. */
+export interface PairingSetLinkingResult {
+  /** The saved choice. */
+  enabled: boolean
+  /** How the saved choice takes effect. */
+  applies: PairingLinkingApply
+}
+/** Why the gateway refused a pairing method it dispatched. pairing_not_configured: native pairing is off in this gateway's configuration. pairing_not_found: no such invitation. pairing_slot_occupied: an invitation is already open; cancel it first. pairing_capacity: too many unfinished enrollments. pairing_conflict: the request names a different key or outcome than the one recorded. pairing_ineligible: the enrollment cannot take this step now (expired, ended, or not yet claimed). pairing_busy: another create is running; or, for pairing.setLinking, config.json is locked by another change or the gateway is already restarting or stopping, and nothing was saved. pairing_unavailable: storage or a worker failed; retry later. pairing_address_in_use: pairing.setLinking could not turn linking on because its listen address cannot be bound on this machine (another program holds the port, or the address is not one of this machine's); nothing was saved. pairing_audit_unavailable: pairing.setLinking could not keep the change's audit record; if that was before the change nothing was saved, and if after it the choice is saved and the gateway did not restart, so it applies the next time the gateway starts (read the state again to see which). */
 export const PairingErrorCode = {
   PairingNotConfigured: "pairing_not_configured",
   PairingNotFound: "pairing_not_found",
@@ -2354,6 +2382,8 @@ export const PairingErrorCode = {
   PairingIneligible: "pairing_ineligible",
   PairingBusy: "pairing_busy",
   PairingUnavailable: "pairing_unavailable",
+  PairingAddressInUse: "pairing_address_in_use",
+  PairingAuditUnavailable: "pairing_audit_unavailable",
 } as const
 export type PairingErrorCode = (typeof PairingErrorCode)[keyof typeof PairingErrorCode]
 /** Wire input for peer.enroll. This gateway enrolls with its own native key, so the peer knows it as one principal however often it is enrolled. */
@@ -2736,6 +2766,87 @@ export interface ConversationEvents {
   /** Committed semantic events in source order; empty advances filtered progress. */
   events: ConversationEvent[]
 }
+/** How the window lays out its workspace, as chosen in Settings: three columns (sidebar, session list, panes), or sessions listed in the sidebar beside the panes. */
+export const WorkspaceArrangement = { Columns: "columns", Sidebar: "sidebar" } as const
+export type WorkspaceArrangement =
+  (typeof WorkspaceArrangement)[keyof typeof WorkspaceArrangement]
+/** What fills the window's content region: the panes, the Agents overview drawn over them, or a widget drawn over them. */
+export const WorkspaceShowing = {
+  Panes: "panes",
+  Agents: "agents",
+  Widget: "widget",
+} as const
+export type WorkspaceShowing = (typeof WorkspaceShowing)[keyof typeof WorkspaceShowing]
+/** A widget a pane or the window shows, by the plugin that draws it and its id within that plugin. */
+export interface WorkspaceWidget {
+  /** The plugin that draws the widget. */
+  plugin: string
+  /** The widget's id within its plugin. */
+  id: string
+}
+/** What a pane shows: a conversation, a draft (a new conversation the person has not started yet), or a widget. Other kinds, such as an open file, are added here. */
+export const WorkspacePaneKind = {
+  Conversation: "conversation",
+  Draft: "draft",
+  Widget: "widget",
+} as const
+export type WorkspacePaneKind = (typeof WorkspacePaneKind)[keyof typeof WorkspacePaneKind]
+/** What one pane shows. A conversation names its conversationId, a widget its widget, and a draft neither. */
+export interface WorkspacePaneItem {
+  /** What kind of thing the pane shows. */
+  kind: WorkspacePaneKind
+  /** Canonical lowercase hyphenated UUID of the conversation, when kind is conversation. */
+  conversationId?: string
+  /** The widget, when kind is widget. */
+  widget?: WorkspaceWidget
+}
+/** One pane of a column, top to bottom. */
+export interface WorkspacePane {
+  /** The pane's share of its column's height, in whole percent. */
+  heightPercent: number
+  /** Whether this is the window's focused pane. At most one pane is. */
+  focused: boolean
+  /** What the pane shows. */
+  item: WorkspacePaneItem
+}
+/** One column of panes, left to right. */
+export interface WorkspaceColumn {
+  /** The column's share of the panes' width, in whole percent. */
+  widthPercent: number
+  /** The column's panes, top to bottom. */
+  panes: WorkspacePane[]
+}
+/** What one desktop window shows now: its arrangement, which side columns are drawn, what fills its content region, and its panes left to right, each column top to bottom. It names conversations by id only; their titles and agents are the gateway's to say. */
+export interface WorkspaceWindow {
+  /** The window's layout. */
+  arrangement: WorkspaceArrangement
+  /** Whether the sidebar is drawn: open by the person's choice and not folded for room. */
+  sidebar: boolean
+  /** Whether the session list column is drawn. The sidebar arrangement has none and always says false. */
+  sessionList: boolean
+  /** What fills the content region now. */
+  showing: WorkspaceShowing
+  /** The widget drawn over the panes, when showing is widget. */
+  widget?: WorkspaceWidget
+  /** The panes' columns, left to right. */
+  columns: WorkspaceColumn[]
+}
+/** Tell the gateway what this connection's desktop window shows now (workspace.publish), so the person's agents can read it with the read_window tool. Each publication replaces this connection's previous one; one with a lower revision than the one held is not applied. A publication with no window withdraws it. The gateway keeps a window only while its connection is open: a closed connection withdraws it, and a window that connects again publishes again, under the same windowId, which replaces whatever an older connection of that window still holds. */
+export interface WorkspacePublishParams {
+  /** The window's own id, made once when it opens and kept across its connections, so a connection it left behind never reads as a second window. */
+  windowId: string
+  /** The window's publication number, increasing with each change and kept across its connections. */
+  revision: number
+  /** What the window shows. Absent withdraws the window: it shows no workspace now. */
+  window?: WorkspaceWindow
+}
+/** The answer to workspace.publish: the revision the gateway holds for this connection now, and whether this publication was applied. */
+export interface WorkspacePublishResult {
+  /** The revision held now: this one when applied, a later one when this one arrived after it. */
+  revision: number
+  /** False when a later revision was already held, so this one changed nothing. */
+  applied: boolean
+}
 export const subscriptionLimits = {
   conversationTargets: 8,
   listTargets: 2,
@@ -2787,7 +2898,7 @@ export const mcpServerRules = {
 export const bounds = {
   maxOrdinaryResponseBytes: 65536,
   maxRequestFrameBytes: 65536,
-  maxReadyMethods: 74,
+  maxReadyMethods: 77,
   maxAuthCredentialCharacters: 16384,
   maxProductClientIdCharacters: 256,
   maxProductSurfaceInstanceCharacters: 256,
@@ -2818,6 +2929,7 @@ export const bounds = {
     "^(?:/(?!\\.{1,2}(?:/|$))[^/\\u0000-\\u001f\\u007f\\u0080-\\u009f]+)+$",
   conversationIdPattern: "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
   maxConversationTitleBytes: 256,
+  maxConversationRenameCharacters: 48,
   maxConversationPreviewBytes: 512,
   maxSyncIdBytes: 128,
   decimalU64Pattern: "^(0|[1-9][0-9]{0,19})$",
@@ -3030,6 +3142,7 @@ export const ProductMethod = {
   ConversationClose: "conversation.close",
   ConversationArchive: "conversation.archive",
   ConversationUnarchive: "conversation.unarchive",
+  ConversationRename: "conversation.rename",
   ConversationDelete: "conversation.delete",
   ConversationReorder: "conversation.reorder",
   ArtifactRead: "artifact.read",
@@ -3064,6 +3177,7 @@ export const ProductMethod = {
   PairingApprove: "pairing.approve",
   PairingDeny: "pairing.deny",
   PairingCancel: "pairing.cancel",
+  PairingSetLinking: "pairing.setLinking",
   PeerEnroll: "peer.enroll",
   PeerList: "peer.list",
   PeerForget: "peer.forget",
@@ -3076,6 +3190,7 @@ export const ProductMethod = {
   ConversationShares: "conversation.shares",
   ConversationPermissionRules: "conversation.permissionRules",
   ConversationRevokePermissionRule: "conversation.revokePermissionRule",
+  WorkspacePublish: "workspace.publish",
   ConversationSubscribeEvents: "conversation.subscribeEvents",
   ConversationPeek: "conversation.peek",
 } as const
@@ -3117,6 +3232,7 @@ export const productReadyMethods = [
   "conversation.close",
   "conversation.archive",
   "conversation.unarchive",
+  "conversation.rename",
   "conversation.delete",
   "conversation.reorder",
   "artifact.read",
@@ -3151,6 +3267,7 @@ export const productReadyMethods = [
   "pairing.approve",
   "pairing.deny",
   "pairing.cancel",
+  "pairing.setLinking",
   "peer.enroll",
   "peer.list",
   "peer.forget",
@@ -3163,6 +3280,7 @@ export const productReadyMethods = [
   "conversation.shares",
   "conversation.permissionRules",
   "conversation.revokePermissionRule",
+  "workspace.publish",
   "conversation.subscribeEvents",
   "conversation.peek",
 ] as const
@@ -3195,6 +3313,7 @@ export const productMethodGrants = {
   "conversation.close": "conversation.write",
   "conversation.archive": "conversation.write",
   "conversation.unarchive": "conversation.write",
+  "conversation.rename": "conversation.write",
   "conversation.delete": "conversation.write",
   "conversation.reorder": "conversation.write",
   "artifact.read": "conversation.read",
@@ -3229,6 +3348,7 @@ export const productMethodGrants = {
   "pairing.approve": "credential.manage",
   "pairing.deny": "credential.manage",
   "pairing.cancel": "credential.manage",
+  "pairing.setLinking": "credential.manage",
   "peer.enroll": "credential.manage",
   "peer.list": "credential.manage",
   "peer.forget": "credential.manage",
@@ -3241,6 +3361,7 @@ export const productMethodGrants = {
   "conversation.shares": "credential.manage",
   "conversation.permissionRules": "conversation.write",
   "conversation.revokePermissionRule": "conversation.write",
+  "workspace.publish": "conversation.write",
   "conversation.subscribeEvents": "conversation.write",
   "conversation.peek": "conversation.write",
 } as const

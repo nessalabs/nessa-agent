@@ -1,4 +1,4 @@
-//! Durable submit and exact-turn Stop on the principal control stream.
+//! Durable submit and exact-turn Stop on the request control stream.
 use super::creation::{
     CreationFuture, CreationInitializationFailure, CreationStorage, CreationStorageError,
     CreationTaskFault,
@@ -241,7 +241,7 @@ pub struct MutationCoordinator {
     storage: Arc<dyn CreationStorage>,
 }
 impl MutationCoordinator {
-    /// Receive the shared principal control storage.
+    /// Receive the shared request control storage.
     pub fn new(storage: Arc<dyn CreationStorage>) -> Self {
         Self { storage }
     }
@@ -262,7 +262,11 @@ impl MutationCoordinator {
         let storage = self.storage.clone();
         tokio::spawn(async move {
             let lease = storage
-                .open_creation(binding.actor().principal_id().into(), true)
+                .open_creation(
+                    binding.actor().principal_id().into(),
+                    binding.actor().request_id().into(),
+                    true,
+                )
                 .await
                 .map_err(MutationFailure::Storage)?
                 .ok_or_else(|| {
@@ -374,7 +378,11 @@ impl MutationCoordinator {
     ) -> Result<Option<MutationReceipt>, MutationFailure<T::Error>> {
         let lease = self
             .storage
-            .open_creation(binding.actor().principal_id().into(), false)
+            .open_creation(
+                binding.actor().principal_id().into(),
+                binding.actor().request_id().into(),
+                false,
+            )
             .await
             .map_err(MutationFailure::Storage)?;
         let saved = match lease {

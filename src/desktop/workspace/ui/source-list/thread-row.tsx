@@ -15,6 +15,7 @@ import { ListRow } from "../../../ui/list-row"
 import { AgentTile } from "../chrome/agent-tile"
 import { StatusGlyph } from "../chrome/status-glyph"
 import { SessionMenuItems, useOpenFromRow } from "../session-actions"
+import { useSessionRowActions } from "../session-row-actions"
 import { tooltip } from "../../../ui/tooltip"
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "../../../ui/menu"
 import { useOverviewQuiet } from "./overview-quiet"
@@ -47,12 +48,15 @@ export const ThreadRow = memo(function ThreadRow({
     shallowEqual,
   )
   const actions = useOpenFromRow()
+  // Delete only: the row is a button, which holds no field to rename in.
+  const row = useSessionRowActions(sessionId)
   if (!session) return null
   return (
     <li>
-      <ContextMenu>
+      <ContextMenu onOpenChange={row.onMenuOpen}>
         <ContextMenuTrigger asChild>
           <ListRow
+            ref={row.ref}
             as="button"
             className="workspace-thread-row"
             data-row="session"
@@ -89,8 +93,8 @@ export const ThreadRow = memo(function ThreadRow({
             }
           />
         </ContextMenuTrigger>
-        <ContextMenuContent>
-          <SessionMenuItems sessionId={session.id} />
+        <ContextMenuContent onCloseAutoFocus={row.onCloseAutoFocus}>
+          <SessionMenuItems sessionId={session.id} onDelete={row.items.onDelete} />
         </ContextMenuContent>
       </ContextMenu>
     </li>

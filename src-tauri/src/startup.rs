@@ -98,6 +98,8 @@ pub fn restart_nessa(app: AppHandle) {
         "outcome"
     );
     crate::host_log::flush();
+    // A restart skips `RunEvent::Exit`, where notices are taken back.
+    crate::review_notices::infrastructure::leave_before_exit(&app);
     app.restart();
 }
 

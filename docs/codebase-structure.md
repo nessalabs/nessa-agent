@@ -29,6 +29,10 @@ snapshot for retention and preview eviction. The immutable resource value carrie
 byte identity and authoritative metadata together; storage and accounting use
 that value's object identity.
 
+Desktop gateway service-label ownership is described in
+[desktop host ownership](design/desktop-host-ownership.md); its application lease
+precedes macOS recovery and shared writes, separate from registration locking.
+
 ## Today
 
 Nessa has a Rust desktop host (window, tray, settings, OS integration), a React
@@ -269,7 +273,9 @@ against a private scripted gateway.
   that only arrange them; `ui/panes/` a session's pane, a widget's
   (`widget-pane.tsx`) and the window over them (`widget-window.tsx`), which
   share one header bar (`pane-header-frame.tsx`);
-  `ui/overview/` the Agents overview, with its rules in `model/overview/`),
+  `ui/overview/` the Agents overview, with its rules in `model/overview/`;
+  the list uses immediate final placement, while `settling.ts` holds an
+  answered request until the source catches up, following ADR 238),
   with `testing.ts` the fake source, the store, and the animation frames its
   tests share. A failed, cancelled, or unresolved turn keeps the gateway's
   status and diagnostic on the message, including an earlier authentication
@@ -378,6 +384,14 @@ against a private scripted gateway.
   (`SessionAccessory`, drawn by the workspace's slot). Counts live in
   `src/desktop/model/counts.ts`. The preview is the window preference
   `useSubagentsPreview`, offered under Settings › Advanced › Experimental.
+- The desktop composer's Send and Stop controls have separate DOM identities
+  (`src/desktop/ui/composer.tsx`). A gesture that began on one cannot invoke
+  the replacement action after a source phase change; the unsent draft stays.
+  `composer-action-lifetime.test.tsx` checks both directions and activation
+  of the current control under StrictMode. The replayable native-pointer,
+  keyboard and focus regression for Chromium/WebKit lives beside its synthetic
+  evidence in `docs/reviews/evidence/composer-action-identity-1000/` while the
+  shared verification tree is held unchanged.
 - The shared desktop light's fixed grain tile lives in
   `src/desktop/ui/ambient-grain.png`, drawn by `.desktop-grain` in the desktop
   stylesheet. It is pre-rendered to keep SVG turbulence out of runtime raster
@@ -392,7 +406,9 @@ against a private scripted gateway.
   source that reads its layout and carries out every change through its own
   commands, and spreads the grid's `frame` on its own pane root; the
   workspace is that host (`adapters/store/split-panes-source.ts`,
-  `ui/panes/pane-grid.tsx`). Other modules import the barrel, any of the pure
+  `ui/panes/pane-grid.tsx`); its flight duration is composed in `styles.css`.
+  `flip.test.tsx` covers the zero-duration path and interrupted-flight cleanup;
+  `drag.test.tsx` covers preview retirement on that path. Other modules import the barrel, any of the pure
   model's files (a model or use case, which may not import React, must), and
   — from a test — `split-panes/testing`; split panes import no host, only the
   four desktop shared parts the rule names (motion, reduced motion, hold
@@ -618,6 +634,11 @@ acknowledgement checkpoints rather than continuous attachment. Windows `sync` on
 revalidates binding and does not claim directory durability or arbitrary power-loss
 survival. See the [local-storage module map](../crates/nessa-local-storage/README.md#module-map)
 and [retained publication design](design/retained-directory-publication.md).
+`PrivateDirectory::open_root` retains an existing caller-trusted private root;
+`open_directory` carries that captured ancestry into an existing child. Backup
+verification uses these read/search acquisitions for manifest reads, enumeration
+and body access, including cuts without a records directory. Neither acquisition
+creates storage or repairs permissions.
 
 On Unix, `create_private_directory_path` and `PrivateDirectory::open_path` retain an
 absolute private store through ordinary locator ancestry. System and account
@@ -1010,8 +1031,8 @@ A summary holds each conversation's title, last line said and time, derived by
 `domain/value_objects/conversation_summary.rs` — the one
 owner of those rules — when a message is accepted and when a reply completes. A
 summary is a projection, so a failed write is logged and the command stands; the
-`archived` flag it also carries is a person's decision, so `archive`/`unarchive`
-fail visibly instead. `delete` is a consequential transition: a tombstone the
+`archived` flag it also carries, and a title a person renamed it to, are a
+person's decisions, so `archive`/`unarchive` and `rename` fail visibly instead. `delete` is a consequential transition: a tombstone the
 repository owns (a `deletions` row) fences the identity before the agent
 is stopped, a `ConversationDeletionAudit` record (`infrastructure/deletion_audit.rs`,
 `audit/deletion/`) is committed before history is erased, and the SDK record history is
@@ -1610,6 +1631,29 @@ snapshots. `infrastructure/` reads the namespace, including `device/outbox/` and
 `environment/outbox/` under each directory's `outbox.lock`, within the files and bytes one lease may keep, and writes the bundle. After a deletion, unshare, credential revocation, or pairing cancellation commits, the gateway records that fence through `infrastructure/cedar` without taking admission and without publishing a bundle. The Cedar decision is appended to `backup/inventory-decisions.jsonl` before the log is written. The
 mac key stays beside the deletion inventory and is not part of the bundle.
 Restore and quarantine are not in this module.
+
+The separate `nessa-backup-verify` binary enters through `backup_verify_main.rs`
+and `composition/backup_verification.rs`, without gateway bootstrap.
+`backup/entrypoint/arguments.rs` parses explicit input paths; `application/verification.rs`
+authenticates and streams the supplied cut through read-only ports;
+`domain/verification.rs` owns validated cut metadata; `application/verification_format.rs`
+owns the typed decoding port and authentication offsets. `infrastructure/manifest_decode.rs`
+and `deletion_decode.rs` own persisted grammars, shared by live storage and the injected
+`ExportFormat` verification adapter. The directory and
+key readers live in `infrastructure/verification.rs`. Tests follow these owners
+under `tests/backup/verification*.rs`; `tests/backup_verifier.rs` exercises the
+actual binary. [Standalone verification](design/backup-verification.md) defines
+the limits and the remaining restore contracts (#270).
+
+`backup_plan_main.rs` and `composition/restore_planning.rs` expose the separate
+`nessa-backup-plan` inspection command. `application/restore_planning.rs` forwards
+the application's format port to the verifier; composition supplies the shared
+`ExportFormat`. It reports omissions, unresolved prerequisites and unimplemented
+quarantine/import ordering; it acquires no activation or destination capability.
+`composition/backup_output.rs` owns JSON output for both offline commands.
+`tests/backup/restore_planning.rs` and `tests/backup_restore_plan.rs` cover the
+application decoder refusals and actual process. [Offline restore planning](design/offline-restore-planning.md)
+defines the boundary; #324 storage changes remain separately owned.
 
 ## Attachments
 
@@ -2223,8 +2267,8 @@ The client incoming wire admission uses `packages/nessa-client/src/protocol/uniq
 
 SDK `application/agent_execution/commands/creation.rs` owns immutable creation
 bindings, progress and effect order. `commands/mutation.rs` owns the same
-principal stream for submit and exact-turn Stop. `infrastructure/session_storage/creation.rs`
-implements that principal lease with the existing SQLite runtime; it does not
+per-request stream for submit and exact-turn Stop. `infrastructure/session_storage/creation.rs`
+implements that lease, one stream per principal and request, with the existing SQLite runtime; it does not
 modify the conversation semantic record writer. The host consumers live under
 `conversation/application/service/creation.rs` and `service/mutation.rs`, sharing
 the existing creation helper, metadata/deletion authority and admission guard.
@@ -2368,6 +2412,10 @@ reopen/retry and private admission/drain; Auth's TLS adapter owns the shared key
 representation conversion. The server's
 `tests/composition/read_only_online/native_session.rs` drives the actual paired
 gateway and the optional generated Swift probe under `verification/native-device`.
+Its `native_session/clock.rs` holds controlled elapsed time and a failing wall-time
+watchdog for refusal and budget ordering; the contract is in
+`docs/design/native-session-verification-997.md`. `NativeSession::open_with_clock`
+accepts the protocol clock at composition; `open` keeps the production default.
 Core's `retained/active.rs` validates fresh status against the current immutable
 issued record before product selection. Release Apple packaging is verified;
 the actual phone repository remains unfinished under issue 782. This module does not supply native
@@ -2393,11 +2441,16 @@ profile/enrollment and retained history repository remain unfinished.
 
 ## Agent thread tools
 
-`nessa-server/src/composition/conversation_tools.rs` adapts four MCP tools to the
+`nessa-server/src/composition/conversation_tools.rs` adapts five MCP tools to the
 conversation application. `conversation/application/service/agent_tools.rs`
 resolves the source actor and calls the existing Cedar access evaluator before
 using ordinary target command/read paths. `application/agent_tools.rs` owns
 admission evidence and its audit port; `infrastructure/agent_tool_audit.rs`
 persists it. The built-in collection in relay composition keeps these tools
 independent of optional environment commands. See the [ordering and ownership
-contract](design/agent-thread-tools.md).
+contract](design/agent-thread-tools.md). The fifth, `read_window`, reads the
+windows `product/workspace.rs` holds for each connection in
+`application/workspace_windows.rs` (domain shape in
+`domain/value_objects/workspace_window.rs`), through
+`service/workspace_windows.rs`; see [the window an agent
+shares](design/agent-window.md).

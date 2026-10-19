@@ -1,7 +1,7 @@
 //! Authenticated commands resolve one shared Agent owner per conversation.
 //! Service -> metadata_target -> metadata repository.
 //! Shared Agent -> SDK session storage/provider.
-//! Service::create_command -> SDK CreationCoordinator -> principal control lease;
+//! Service::create_command -> SDK CreationCoordinator -> request control lease;
 //! service/creation keeps current target deletion and the existing admission guard.
 //! Service -> ConversationSummaries: what a list shows about each conversation,
 //! written when a message is accepted and when a turn completes.
@@ -150,7 +150,7 @@ mod access_policy;
 mod agent_tools;
 pub use agent_tools::{
     AgentToolAudit, AgentToolAuditRecord, AgentToolRequest, AgentToolSource,
-    MAX_AGENT_TOOL_ADMISSIONS,
+    MAX_AGENT_TOOL_ADMISSIONS, MAX_EVENT_READERS,
 };
 mod app_call_policy;
 mod artifacts;
@@ -186,8 +186,11 @@ mod review_notice_selection;
 pub(crate) use review_notice_selection::{AuditedReviewSelection, SelectReviewNotice};
 mod service;
 mod session_key;
+mod source_permits;
+pub use source_permits::{SourcePermit, SourcePermits};
 mod share_grants;
 mod tool_policy;
+mod workspace_windows;
 pub use crate::conversation::domain::ReceiverBinding;
 pub use access_policy::{
     AccessAction, AccessAsk, AccessDecision, AccessDenial, AccessResource, AccessSubject,
@@ -207,6 +210,7 @@ pub use owner_phone_policy::{
     AdmitOwnerPhoneReader, OwnerPhoneDecision, OwnerPhoneOperation, OwnerPhonePolicyEvaluator,
     OwnerPhonePolicyFacts, OwnerPhoneReader, OwnerPhoneReceiverAuthority,
 };
+pub use workspace_windows::{PublishedWindow, WindowPublished, WindowSlot, WorkspaceWindows};
 // The port itself, which placement and the service use on every host.
 pub(crate) use command_environment::CommandEnvironment;
 pub use command_environment::CommandResult;
@@ -289,20 +293,22 @@ pub use service::{
     event_error_code, project_events, validate_event_cursor, ConversationEventError, EventProgress,
     ThreadEvent,
 };
-pub use service::{CommandAnswer, CommandCall, CommandCallError, EnvironmentListing, HERE};
 pub use service::{
-    ConversationAgent, ConversationAgentFuture, ConversationAgentSource, ConversationAgents,
-    ConversationCaller, ConversationDeletionBudgets, ConversationDependencies, ConversationLimits,
-    ConversationService, DeletionsLeft, FailureBackoff, McpAppCall, McpAppContextUpdate,
-    McpAppMessage, McpAppRead, McpAppResource, PendingReport, QuestionChoiceInput, ReadOpening,
-    ReportRegistration, RequestedAgent, RequestedConversation, SubmissionMode, ThreadReport,
-    ThreadReportStore, MAX_APP_CALLS, MAX_LISTED_CONVERSATIONS, MAX_RESOURCE_META_BYTES,
+    AwaitedTurn, ConversationAgent, ConversationAgentFuture, ConversationAgentSource,
+    ConversationAgents, ConversationCaller, ConversationDeletionBudgets, ConversationDependencies,
+    ConversationLimits, ConversationService, DeletionsLeft, FailureBackoff, McpAppCall,
+    McpAppContextUpdate, McpAppMessage, McpAppRead, McpAppResource, PendingReport,
+    QuestionChoiceInput, ReadOpening, ReportRegistration, RequestedAgent, RequestedConversation,
+    SubmissionMode, ThreadReport, ThreadReportStore, ThreadTurn, MAX_APP_CALLS,
+    MAX_LISTED_CONVERSATIONS, MAX_RESOURCE_META_BYTES,
 };
+pub use service::{CommandAnswer, CommandCall, CommandCallError, EnvironmentListing, HERE};
 pub(crate) use service::{ExportAdmission, ExportHoldFailure};
 pub use service::{
     FetchAnswer, FetchCall, FetchCallRefusal, PublishAnswer, PublishCall, PublishCallRefusal,
     FETCH_BUSY_BACKOFF, FETCH_READS,
 };
+pub use service::{PaneConversation, WindowReading};
 pub(crate) use session_key::conversation_session;
 pub use share_grants::{
     binding_of, note_candidates, paired_facts, GrantedShare, HeldGrant, Reader, ResourceKind,

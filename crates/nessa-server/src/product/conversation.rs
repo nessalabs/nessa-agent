@@ -30,11 +30,12 @@ use nessa_protocol::product::generated::{
     ConversationPermissionRulesParams, ConversationPermissionRulesResult,
     ConversationPermissionSelectionState, ConversationQuestionReviewParams,
     ConversationQuestionReviewResult, ConversationReadParams, ConversationReceiptParams,
-    ConversationReceiptResult, ConversationRemoveParams, ConversationReorderParams,
-    ConversationRevokePermissionRuleParams, ConversationRevokePermissionRuleResult,
-    ConversationSendParams, ConversationSetApprovalModeParams, ConversationSetApprovalModeResult,
-    ConversationStopParams, ConversationSummary, ConversationView as WireConversationView,
-    PermissionRule, PermissionRuleEffect, MAX_REVIEW_RANGE_BYTES,
+    ConversationReceiptResult, ConversationRemoveParams, ConversationRenameParams,
+    ConversationReorderParams, ConversationRevokePermissionRuleParams,
+    ConversationRevokePermissionRuleResult, ConversationSendParams,
+    ConversationSetApprovalModeParams, ConversationSetApprovalModeResult, ConversationStopParams,
+    ConversationSummary, ConversationView as WireConversationView, PermissionRule,
+    PermissionRuleEffect, MAX_REVIEW_RANGE_BYTES,
 };
 use nessa_protocol::product::generated::{
     ConversationMessageDelivery, ConversationMessageParams, ConversationMessageReceipt,
@@ -43,10 +44,10 @@ use nessa_protocol::product::generated::{
 };
 use nessa_protocol::product::passive_read::decimal_u64;
 use nessa_protocol::product_contract::generated::ConversationErrorCode;
-use nessa_protocol::protocol::{OutgoingMessage, RequestFrame};
+use nessa_protocol::protocol::{OutgoingMessage, RequestFrame, ResponseFrame, MAX_PAYLOAD_BYTES};
 use nessa_protocol::{
     agents::AgentId,
-    conversation::domain::{ConversationApprovalMode, ConversationId},
+    conversation::domain::{ConversationApprovalMode, ConversationId, ConversationTitle},
 };
 use nessa_sdk::application::agent_execution::{
     agents::AgentError,
@@ -68,11 +69,35 @@ pub(crate) async fn dispatch(
     frame: RequestFrame,
     initiation: Initiation,
 ) -> OutgoingMessage {
+    let method = frame.method.clone();
+    let request_id = frame.id.clone();
+    match answer(state, session, frame, initiation).await {
+        Ok(response) => response,
+        Err(error) => {
+            trace_refusal_causes(&method, &error);
+            match error {
+                ConversationError::PermissionAnswer { error, selection } => {
+                    permission_answer_failure(&request_id, error, selection)
+                }
+                error => failure(&request_id, error_code(&error).as_str()),
+            }
+        }
+    }
+}
+
+/// The command's answer, or the refusal `dispatch` answers and logs. A
+/// check that answers its own code returns it as a response.
+async fn answer(
+    state: &ProductRouteState,
+    session: &AuthenticatedSession,
+    frame: RequestFrame,
+    initiation: Initiation,
+) -> Result<OutgoingMessage, ConversationError> {
     if matches!(
         frame.method.as_str(),
         "conversation.permissionRules" | "conversation.revokePermissionRule"
     ) {
-        return dispatch_permission_rules(state, session, frame).await;
+        return Ok(dispatch_permission_rules(state, session, frame).await);
     }
     // This build runs no conversations at all, which is not the same fact as a
     // caller naming an agent this one is not configured for. Sharing a code
@@ -82,10 +107,10 @@ pub(crate) async fn dispatch(
         // Not `agent_not_configured`: this gateway runs no conversations at
         // all, and telling a user with a working agent to go configure one
         // sends them to change something that was never the problem.
-        return failure(
+        return Ok(failure(
             &frame.id,
             ConversationErrorCode::ConversationsNotConfigured.as_str(),
-        );
+        ));
     };
     macro_rules! params {
         ($kind:ty) => {
@@ -201,7 +226,7 @@ pub(crate) async fn dispatch(
                 }
                 let listed =
                     read_list(state, service, session, archived.unwrap_or(false), &frame.id).await?;
-                Ok(success(&frame.id, &listed))
+                Ok(success(&frame.id, &fitted_list(listed, &frame.id)))
             }
             "conversation.observe" => {
                 let params = params!(ConversationObserveParams);
@@ -627,6 +652,26 @@ pub(crate) async fn dispatch(
                     },
                 ))
             }
+            "conversation.rename" => {
+                let params = target_params!(ConversationRenameParams);
+                // The domain owns what a title may be; the schema only bounds it.
+                let title = ConversationTitle::new(&params.title)
+                    .map_err(|_| ConversationError::InvalidInput)?;
+                let applied = service
+                    .rename(
+                        conversation_id(&params.conversation_id)?,
+                        caller(params.request_id.clone()),
+                        title,
+                    )
+                    .await?;
+                Ok(success(
+                    &frame.id,
+                    &ConversationMutationResult {
+                        request_id: params.request_id,
+                        applied,
+                    },
+                ))
+            }
             "conversation.delete" => {
                 let params = target_params!(
                     ConversationDeleteParams,
@@ -653,13 +698,43 @@ pub(crate) async fn dispatch(
         }
     }
     .await;
-    match result {
-        Ok(response) => response,
-        Err(ConversationError::PermissionAnswer { error, selection }) => {
-            permission_answer_failure(&frame.id, error, selection)
-        }
-        Err(error) => failure(&frame.id, error_code(&error).as_str()),
+    result
+}
+
+/// A refused conversation command — any method, reads included — as one
+/// warning in the gateway log, at the socket's answer to every request,
+/// passive record reads included: admission, share commands, a check answering its own code, and an error
+/// alike. Only the method and the wire code; the causes a code keeps only
+/// one of are the line `trace_refusal_causes` writes beside it. A read's own
+/// span may also have warned.
+pub(super) fn trace_refused_command(method: &str, response: &OutgoingMessage) {
+    if !method.starts_with("conversation.") {
+        return;
     }
+    let OutgoingMessage::Response(ResponseFrame {
+        ok: false,
+        error: Some(error),
+        ..
+    }) = response
+    else {
+        return;
+    };
+    tracing::warn!(
+        method,
+        code = error.code.as_str(),
+        "conversation command refused",
+    );
+}
+
+/// Every cause behind a refusal answered as an error, beside its
+/// `conversation command refused` line: the wire code keeps only one.
+fn trace_refusal_causes(method: &str, error: &ConversationError) {
+    tracing::warn!(
+        method,
+        code = error_code(error).as_str(),
+        causes = %super::refusal_causes::refusal_causes(error),
+        "conversation command refusal causes",
+    );
 }
 
 /// Refuse a review's or a question's key that is not 32 lowercase hex
@@ -1159,6 +1234,43 @@ fn wire_view(
 /// conversation on the machine, because the panel sends it on all of them.
 fn requested_agent(value: Option<&str>) -> Option<RequestedAgent> {
     value.map(|name| AgentId::parse(name).map_or(RequestedAgent::Unknown, RequestedAgent::Known))
+}
+
+/// The list cut, newest first, to what fits one response frame, and marked
+/// incomplete when anything was cut: the caller walks `conversation.observe`
+/// for the rest, as for any incomplete list. Five hundred rows are more than
+/// one frame holds, and a response past the frame closes the socket, so an
+/// uncut list of a few hundred conversations would take the caller's socket
+/// with it (`a_list_longer_than_a_frame_is_cut_and_says_so`). A list
+/// subscription's frame is cut the same way (`subscription::target::fitted`).
+/// Compact JSON is the sum of its parts, so each row is measured once.
+fn fitted_list(mut list: ConversationListResult, request_id: &str) -> ConversationListResult {
+    let empty = ConversationListResult {
+        conversations: Vec::new(),
+        complete: false,
+    };
+    let Ok(empty) = success(request_id, &empty).to_wire_text() else {
+        return list;
+    };
+    let budget = MAX_PAYLOAD_BYTES as usize;
+    let mut size = empty.len();
+    let mut keep = 0;
+    for (index, row) in list.conversations.iter().enumerate() {
+        let Ok(row) = serde_json::to_string(row) else {
+            break;
+        };
+        // A comma before every row but the first.
+        size += row.len() + usize::from(index > 0);
+        if size > budget {
+            break;
+        }
+        keep += 1;
+    }
+    if keep < list.conversations.len() {
+        list.conversations.truncate(keep);
+        list.complete = false;
+    }
+    list
 }
 
 /// A list as the wire carries it, saying whether the bound left any out

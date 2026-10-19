@@ -81,7 +81,6 @@ async fn checkpoint_fixture() -> TranscriptFold {
     let receipt = lease
         .save_changes(
             first.clone(),
-            snapshot.clone(),
             vec![SessionSaveUnit::new(vec![opening]).unwrap()],
         )
         .await
@@ -94,11 +93,7 @@ async fn checkpoint_fixture() -> TranscriptFold {
     };
     snapshot.provider_context = context;
     lease
-        .save_changes(
-            next,
-            snapshot.clone(),
-            vec![SessionSaveUnit::new(vec![change]).unwrap()],
-        )
+        .save_changes(next, vec![SessionSaveUnit::new(vec![change]).unwrap()])
         .await
         .unwrap();
     let (scope, records) = emitted_records(&storage, &id).await;
@@ -288,7 +283,6 @@ async fn completed_prefix_stays_published_during_same_generation_extension_and_c
     let receipt = lease
         .save_changes(
             original.clone(),
-            snapshot.clone(),
             vec![SessionSaveUnit::new(vec![opening]).unwrap()],
         )
         .await
@@ -308,7 +302,6 @@ async fn completed_prefix_stays_published_during_same_generation_extension_and_c
         lease
             .save_changes(
                 original.clone(),
-                candidate,
                 vec![SessionSaveUnit::new(vec![first.clone()]).unwrap()]
             )
             .await,
@@ -347,7 +340,7 @@ async fn completed_prefix_stays_published_during_same_generation_extension_and_c
         SessionSaveUnit::new(vec![second]).unwrap(),
     ];
     let receipt = lease
-        .save_changes(original.clone(), extended.clone(), units.clone())
+        .save_changes(original.clone(), units.clone())
         .await
         .unwrap();
     assert_eq!(rows(&root), 5);
@@ -357,13 +350,7 @@ async fn completed_prefix_stays_published_during_same_generation_extension_and_c
         Poll::Ready(ChangeWatchState::Dirty)
     );
     drop(wait);
-    assert_eq!(
-        lease
-            .save_changes(original, extended.clone(), units)
-            .await
-            .unwrap(),
-        receipt
-    );
+    assert_eq!(lease.save_changes(original, units).await.unwrap(), receipt);
     assert_eq!(rows(&root), 5);
     let (scope, records) = emitted_records(&storage, &id).await;
     let mut fold = TranscriptFold::new(scope.clone()).unwrap();
@@ -387,7 +374,7 @@ async fn physical_conflict_fences_live_load_and_later_saves() {
     let binding = lease.load().await.unwrap().binding().clone();
     let units = vec![SessionSaveUnit::new(vec![change]).unwrap()];
     let receipt = lease
-        .save_changes(binding.clone(), candidate.clone(), units.clone())
+        .save_changes(binding.clone(), units.clone())
         .await
         .unwrap();
     let database = Connection::open(root.join("records.sqlite3")).unwrap();
@@ -408,9 +395,7 @@ async fn physical_conflict_fences_live_load_and_later_saves() {
         1
     );
     assert!(matches!(
-        lease
-            .save_changes(binding.clone(), candidate.clone(), units.clone())
-            .await,
+        lease.save_changes(binding.clone(), units.clone()).await,
         Err(StorageError::Corrupt(_))
     ));
     assert_eq!(rows(&root), 2);
@@ -425,9 +410,7 @@ async fn physical_conflict_fences_live_load_and_later_saves() {
         1
     );
     assert!(matches!(
-        lease
-            .save_changes(binding.clone(), candidate.clone(), units.clone())
-            .await,
+        lease.save_changes(binding.clone(), units.clone()).await,
         Err(StorageError::Corrupt(_))
     ));
     assert!(matches!(lease.load().await, Err(StorageError::Corrupt(_))));
@@ -435,10 +418,7 @@ async fn physical_conflict_fences_live_load_and_later_saves() {
     drop(lease);
     let lease = storage.open_existing(id).await.unwrap().unwrap();
     assert_eq!(lease.load().await.unwrap().snapshot(), Some(&candidate));
-    assert_eq!(
-        lease.save_changes(binding, candidate, units).await.unwrap(),
-        receipt
-    );
+    assert_eq!(lease.save_changes(binding, units).await.unwrap(), receipt);
     assert_eq!(rows(&root), 2);
     drop(lease);
     storage.shutdown().await.unwrap();
@@ -453,11 +433,7 @@ async fn emitted_record_rejection_preserves_public_projection_and_valid_completi
     let (opening, snapshot) = opened(&id);
     let binding = lease.load().await.unwrap().binding().clone();
     lease
-        .save_changes(
-            binding,
-            snapshot.clone(),
-            vec![SessionSaveUnit::new(vec![opening]).unwrap()],
-        )
+        .save_changes(binding, vec![SessionSaveUnit::new(vec![opening]).unwrap()])
         .await
         .unwrap();
     let (scope, records) = emitted_records(&storage, &id).await;

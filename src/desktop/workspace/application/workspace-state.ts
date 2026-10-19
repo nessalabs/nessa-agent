@@ -24,6 +24,7 @@ import { keptConversations, retention, type Removal } from "../model/retention"
 import { defaultFilter, listsWaiting, type AgentsFilter } from "../model/overview/filter"
 import { inGroup, type AgentsGroup } from "../model/overview/agents-glance"
 import { drawn, type SideColumn } from "../../model/side-column"
+import type { WindowArrangement } from "../model/shown-window"
 import type { SessionView } from "../model/session-groups"
 import { keepShownDrafts, type Draft } from "../model/session-lifecycle"
 import { unconfirmed, type Transcript, type TurnMessage } from "../model/transcript"
@@ -175,6 +176,13 @@ export interface WorkspaceState {
   /** What the Agents overview shows while open: its filter, the group shown alone, and the session chosen. */
   readonly overview: OverviewState
   readonly chrome: Chrome
+  /**
+   * The layout drawing the panes now, as the layout itself says when it is
+   * on screen (`arrangementShown`); `null` while none is, as in the classic
+   * shell. What the window tells the person's agents it shows
+   * (`usecases/window.ts`) is said only while one is.
+   */
+  readonly arrangement: WindowArrangement | null
   readonly tree: Tree
   /**
    * Whether a session can be shared from this window: composition gave it a
@@ -184,6 +192,14 @@ export interface WorkspaceState {
   readonly shareable: boolean
   /** The share dialog, while it is open (`usecases/sharing.ts`). */
   readonly share: ShareDialog | null
+  /**
+   * The title being renamed where it stands, and what is typed so far
+   * (`usecases/row-editing.ts`). The window's, not the row's: a row is drawn
+   * afresh when its session moves group, and the edit outlives that.
+   */
+  readonly renaming: { readonly sessionId: string; readonly draft: string } | null
+  /** The session whose deletion is being asked, while the question is open. */
+  readonly deleteAsked: string | null
   /**
    * The one share or revoke on its way to the gateway, and the session it
    * changes. It belongs to the window, not to a dialog: closing the dialog
@@ -334,9 +350,12 @@ export const initialWorkspace: WorkspaceState = {
     sidebarWidth: null,
     sessionListWidth: 312,
   },
+  arrangement: null,
   tree: { collapsedSections: [], expandedChannels: [], showAllChannels: [] },
   shareable: false,
   share: null,
+  renaming: null,
+  deleteAsked: null,
   shareChange: null,
 }
 
@@ -620,6 +639,10 @@ export function forgetSession(state: WorkspaceState, sessionId: string): Workspa
       state.overview.selected === sessionId
         ? { ...state.overview, selected: null }
         : state.overview,
+    // An edit or a question about a session gone ends with it, and does not
+    // come back if the session does.
+    renaming: state.renaming?.sessionId === sessionId ? null : state.renaming,
+    deleteAsked: state.deleteAsked === sessionId ? null : state.deleteAsked,
   }
 }
 

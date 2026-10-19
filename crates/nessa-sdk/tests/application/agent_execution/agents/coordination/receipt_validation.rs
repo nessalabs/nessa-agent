@@ -4,8 +4,8 @@ use crate::application::agent_execution::{
     executions::{ExecutionEvent, ExecutionUpdate},
     permissions::{ApprovalAttribution, ApprovalBasis, CancellationOrigin},
     sessions::{
-        SessionLoad, SessionSaveGeneration, SessionSaveReceipt, SessionSaveUnit, SessionSnapshot,
-        SessionStorage, SessionStorageLease, StorageFuture,
+        SessionLoad, SessionSaveGeneration, SessionSaveReceipt, SessionSaveUnit, SessionStorage,
+        SessionStorageLease, StorageFuture,
     },
     tools::ToolReviewInput,
 };
@@ -49,7 +49,6 @@ impl SessionStorageLease for Lease {
     fn save_changes(
         &self,
         binding: SessionSaveGeneration,
-        snapshot: SessionSnapshot,
         units: Vec<SessionSaveUnit>,
     ) -> StorageFuture<'_, SessionSaveReceipt> {
         Box::pin(async {
@@ -58,7 +57,7 @@ impl SessionStorageLease for Lease {
                 entered.send(()).unwrap();
                 release.await.unwrap();
             }
-            self.backing.save_changes(binding, snapshot, units).await
+            self.backing.save_changes(binding, units).await
         })
     }
     fn erase(&self) -> StorageFuture<'_, ()> {

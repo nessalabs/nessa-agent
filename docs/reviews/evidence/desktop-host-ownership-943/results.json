@@ -1,0 +1,47 @@
+[
+  {
+    "probe": "native-exclusive-lock",
+    "returncode": 101,
+    "runtime_assertion_failed": true
+  },
+  {
+    "probe": "native-explicit-release",
+    "returncode": 101,
+    "runtime_assertion_failed": true
+  },
+  {
+    "probe": "retain-one-host-lease",
+    "returncode": 101,
+    "runtime_assertion_failed": true
+  },
+  {
+    "probe": "restart-overlap-wait",
+    "returncode": 101,
+    "runtime_assertion_failed": true
+  },
+  {
+    "probe": "prejournal-acquisition",
+    "returncode": 101,
+    "runtime_assertion_failed": true
+  },
+  {
+    "probe": "presettings-acquisition",
+    "returncode": 101,
+    "runtime_assertion_failed": true
+  },
+  {
+    "probe": "prejournal-failure-publication",
+    "returncode": 101,
+    "runtime_assertion_failed": true
+  },
+  {
+    "probe": "initial-clock-supervision",
+    "returncode": 101,
+    "runtime_assertion_failed": true
+  },
+  {
+    "probe": "stop-worker-retention",
+    "returncode": 101,
+    "runtime_assertion_failed": true
+  }
+]

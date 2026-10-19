@@ -1171,6 +1171,15 @@ describe("the view's lease", () => {
         droppedEvents: 3,
       },
       {
+        state: "ended",
+        revision: 3,
+        environment: "here",
+        sandbox: "harness_default",
+        cause: "idle",
+        cleanup: "confirmed",
+        droppedEvents: 0,
+      },
+      {
         state: "interrupted",
         revision: 2,
         environment: "here",

@@ -1,0 +1,5 @@
+    let claim = catch_unwind(AssertUnwindSafe(|| {
+        let deadline = clock.now() + Duration::from_secs(5);
+BECOMES
+    let deadline = clock.now() + Duration::from_secs(5);
+    let claim = catch_unwind(AssertUnwindSafe(|| {

@@ -48,7 +48,7 @@ Usage: node verification/desktop/scripts/widgets.mjs [options]
 Checks, per engine and layout (--only <names> to pick):
   card-pane-window   the trail's card opens a pane beside its conversation, the
                      caret in its body; Open in Window shows it over the panes, the
-                     caret in it; Escape goes back to the panes as they were
+                     caret in it and fully painted from its first frame; Escape goes back to the panes as they were
   window-left        the window is left by its close, ⌘W (no pane closed), a
                      session chosen; ⌘0 from it opens the overview
   escape-steps       a detail open in the window or a pane: Escape closes it, the
@@ -209,6 +209,70 @@ const escape = async (page) => {
   await frames(page)
 }
 
+/** The window replaces the main chat, so its first mounted frames stay painted. */
+async function windowPaint(page, action) {
+  await page.evaluate(
+    ({ win, body, header }) => {
+      const sample = (window.__widgetEntry = { running: true, frames: [] })
+      const tick = () => {
+        if (!sample.running) return
+        const root = document.querySelector(win)
+        let opacity = 1
+        let painted = !!root
+        if (root)
+          for (const target of [root.querySelector(body), root.querySelector(header)]) {
+            painted &&= !!target
+            let cumulative = 1
+            for (let at = target; at; at = at.parentElement) {
+              const style = getComputedStyle(at)
+              cumulative *= Number(style.opacity)
+              painted &&=
+                style.display !== "none" &&
+                style.visibility === "visible" &&
+                style.contentVisibility !== "hidden"
+            }
+            opacity = Math.min(opacity, cumulative)
+          }
+        const unit =
+          root &&
+          [root, root.querySelector(header)].every((target) => {
+            if (!target) return false
+            const transform = getComputedStyle(target).transform
+            return transform === "none" || new DOMMatrixReadOnly(transform).isIdentity
+          })
+        sample.frames.push({ mounted: !!root, opacity, painted, unit })
+        requestAnimationFrame(tick)
+      }
+      requestAnimationFrame(tick)
+    },
+    { win: css.widgetWindow, body: css.widgetBody, header: css.paneHeader },
+  )
+  let samples
+  try {
+    await action()
+    await frames(page, 2)
+  } finally {
+    samples = await page.evaluate(() => {
+      window.__widgetEntry.running = false
+      return window.__widgetEntry.frames
+    })
+  }
+  const first = samples.findIndex((frame) => frame.mounted)
+  const mounted = first < 0 ? [] : samples.slice(first)
+  return {
+    frames: samples.length,
+    mountedFrames: mounted.length,
+    minimumOpacity: mounted.length
+      ? Math.min(...mounted.map((frame) => frame.opacity))
+      : null,
+    held:
+      mounted.length >= 2 &&
+      mounted.every(
+        (frame) => frame.mounted && frame.opacity === 1 && frame.painted && frame.unit,
+      ),
+  }
+}
+
 const checks = {
   "card-pane-window": async (page) => {
     const failures = []
@@ -221,7 +285,11 @@ const checks = {
     if (!trail.includes(names.widgetSession))
       failures.push(`the pane's trail says "${trail}", not its conversation first`)
     const panes = (await order(page)).join(",")
-    await windowFromPane(page, failures)
+    const paint = await windowPaint(page, () => windowFromPane(page, failures))
+    if (!paint.held)
+      failures.push(
+        `main widget window darkened or transformed on entry: ${JSON.stringify(paint)}`,
+      )
     await expectCaret(page, "window body", "Open in Window", failures)
     const window = await page.evaluate(
       ([win, chat, list]) => {
@@ -261,7 +329,7 @@ const checks = {
       "Escape from the window",
       failures,
     )
-    return { rects, window, failures }
+    return { rects, window, paint, failures }
   },
 
   "window-left": async (page) => {

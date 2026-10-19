@@ -59,16 +59,6 @@ impl HostProductFixture {
         writer
             .save_changes(
                 loaded.binding().clone(),
-                SessionSnapshot {
-                    id: session.clone(),
-                    provider: provider.clone(),
-                    provider_context: ProviderContext::Absent,
-                    invocations: Vec::new(),
-                    queue_history: Vec::new(),
-                    lease: None,
-                    artifacts: Vec::new(),
-                    notes: Vec::new(),
-                },
                 vec![SessionSaveUnit::new(vec![SessionChange::Opened {
                     id: session,
                     provider,

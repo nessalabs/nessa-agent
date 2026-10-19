@@ -137,6 +137,10 @@ pub(super) struct LocalProduct {
     /// the root after the browser listener; `None` unless `config.json` names
     /// a native listen address (design row S1).
     pub(super) native: Option<super::native_pairing::PreparedNative>,
+    /// Asked by `pairing.setLinking` once it saved a change this run does
+    /// not match: the root stops this run and starts the gateway again.
+    #[cfg(unix)]
+    pub(super) restart: Arc<crate::core::self_restart::SelfRestart>,
 }
 
 #[cfg(unix)]
@@ -303,6 +307,8 @@ pub(super) async fn product_state(
                     record_origin.clone(),
                     ConversationSettings {
                         read_work_budget: limits.read_work_budget(),
+                        live_conversations: limits.live_conversations(),
+                        agent_idle: limits.agent_idle(),
                         ssh_hosts: settings.ssh_hosts()?,
                         command_policy: settings.command_policy()?,
                         serving,
@@ -401,6 +407,38 @@ pub(super) async fn product_state(
             }));
     }
     product.browser_http_allowed = config.browser_http_allowed();
+    #[cfg(unix)]
+    let restart = Arc::new(crate::core::self_restart::SelfRestart::default());
+    // Composed whether or not native pairing runs: turning it on is how it
+    // comes to run.
+    #[cfg(unix)]
+    {
+        use crate::mcp_servers::infrastructure::{ConfigCheck, ConfigJson, OsConfigFiles};
+        let config = ConfigJson::new(
+            Arc::new(OsConfigFiles::new(super::runtime_config::config_path(
+                namespace,
+            ))),
+            ConfigCheck {
+                limit: super::runtime_config::MAX_CONFIG_BYTES,
+                parses: Box::new(|bytes| {
+                    super::runtime_config::RuntimeConfig::parse(bytes).is_ok()
+                }),
+            },
+            Arc::new(nessa_sdk::infrastructure::clock::RuntimeClock::new()),
+        );
+        let audit = crate::device_pairing::infrastructure::DurableLinkingAudit::new(
+            conversation_root(namespace)
+                .join("audit")
+                .join("native-linking"),
+            Arc::new(SystemClock),
+        );
+        product = product.with_native_linking(Arc::new(super::native_linking::ConfigLinking::new(
+            Arc::new(config),
+            Arc::new(audit),
+            native.is_some(),
+            restart.clone(),
+        )));
+    }
     let (listener_environments, connected_environments) = environment_peers.unzip();
     let native = match native {
         Some((prepared, commands, peers)) => {
@@ -475,6 +513,8 @@ pub(super) async fn product_state(
         warm_ups,
         mcp,
         native,
+        #[cfg(unix)]
+        restart,
     })
 }
 
@@ -576,6 +616,10 @@ type PairedParts = (
 struct ConversationSettings {
     /// How much work one passive read may do.
     read_work_budget: std::time::Duration,
+    /// The most conversations open, each with its agent, at once.
+    live_conversations: usize,
+    /// How long an idle agent nobody watches runs before it is parked.
+    agent_idle: Option<std::time::Duration>,
     /// The SSH hosts a conversation may be created on.
     ssh_hosts: Vec<SshDestination>,
     /// Where the agent may run commands; `None` grants it no environment
@@ -915,6 +959,8 @@ async fn conversations(
 ) -> Result<BuiltConversations, RunError> {
     let ConversationSettings {
         read_work_budget,
+        live_conversations,
+        agent_idle,
         ssh_hosts,
         command_policy,
         serving,
@@ -1258,7 +1304,11 @@ async fn conversations(
         Some(mcp) => {
             let service = ConversationService::with_mcp_apps(
                 dependencies,
-                ConversationLimits::default(),
+                ConversationLimits {
+                    max_conversations: live_conversations,
+                    park_after: agent_idle,
+                    ..ConversationLimits::default()
+                },
                 workspace,
                 tool_uis,
                 mcp_app_ports(mcp, mcp_app_audit.clone()),
@@ -1268,7 +1318,11 @@ async fn conversations(
         None => (
             ConversationService::with_tool_uis(
                 dependencies,
-                ConversationLimits::default(),
+                ConversationLimits {
+                    max_conversations: live_conversations,
+                    park_after: agent_idle,
+                    ..ConversationLimits::default()
+                },
                 workspace,
                 tool_uis,
             ),

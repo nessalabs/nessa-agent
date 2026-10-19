@@ -1,4 +1,6 @@
+use crate::application::agent_execution::agents::AgentError;
 use crate::application::agent_execution::permissions::ActionContext;
+use crate::application::agent_execution::providers::ApprovalMode;
 use crate::domain::agent_execution::executions::Initiation;
 use std::fmt;
 use std::future::Future;
@@ -28,6 +30,9 @@ pub struct Submitter {
     /// after the save and before injection. Absent for a turn the host does
     /// not re-check. Not compared on retry.
     pub(crate) after_save: Option<Arc<dyn AfterSaveCheck>>,
+    /// The approval mode the turn must run at, checked at admission against
+    /// the mode the agent would run it at. Not compared on retry.
+    pub(crate) approval_mode: Option<ApprovalMode>,
 }
 
 /// Host decision after a steered turn's input is saved and before the
@@ -88,6 +93,7 @@ impl Submitter {
             context,
             initiation,
             after_save: None,
+            approval_mode: None,
         }
     }
 
@@ -108,6 +114,30 @@ impl Submitter {
         self.after_save = Some(check);
         self
     }
+
+    /// Admit this turn only where it runs at `mode`.
+    ///
+    /// The mode a turn runs at is the one its attachment holds when it is
+    /// admitted ([`Agent::approval_mode`](crate::application::agent_execution::agents::Agent::approval_mode)).
+    /// A host that checked the mode before submitting cannot know the
+    /// attachment did not fail in between, and a turn admitted while nothing
+    /// is attached runs at the provider's own mode. With this set, a turn the
+    /// agent would run at any other mode is refused with
+    /// [`AgentError::ApprovalModeChanged`](crate::application::agent_execution::agents::AgentError::ApprovalModeChanged)
+    /// before anything is saved.
+    pub fn with_approval_mode(mut self, mode: ApprovalMode) -> Self {
+        self.approval_mode = Some(mode);
+        self
+    }
+
+    /// Whether a turn the agent would run at `mode` is one this submitter
+    /// may be admitted for.
+    pub(crate) fn admits(&self, mode: Option<ApprovalMode>) -> Result<(), AgentError> {
+        match self.approval_mode {
+            Some(required) if mode != Some(required) => Err(AgentError::ApprovalModeChanged),
+            _ => Ok(()),
+        }
+    }
 }
 
 impl PartialEq for Submitter {
@@ -125,6 +155,7 @@ impl fmt::Debug for Submitter {
             .field("context", &self.context)
             .field("initiation", &self.initiation)
             .field("after_save", &self.after_save.is_some())
+            .field("approval_mode", &self.approval_mode)
             .finish()
     }
 }

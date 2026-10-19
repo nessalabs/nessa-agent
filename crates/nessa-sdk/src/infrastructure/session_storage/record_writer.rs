@@ -1,17 +1,18 @@
 //! Exclusive semantic save owner: units remain private until a durable completion.
 
 use super::{
+    record::READ_PAGE,
     record_changes::RecordChanges,
     save_batch::SaveCommits,
     save_group::{GroupProgress, Header, SaveIdentity, EMPTY_CHAIN, HEADER_BYTES},
     snapshot,
-    stream_fact::{self, FactCommitError, FactRead, FramedFact},
+    stream_fact::{self, FactCommitError, FactRead, FactScanner, FramedFact},
 };
 use crate::{
     application::agent_execution::sessions::{
-        records::{continuation::Continuation, FactKey, FactKind},
-        SessionLoad, SessionLoadState, SessionSaveGeneration, SessionSaveReceipt, SessionSaveUnit,
-        SessionSnapshot, StorageError,
+        records::{continuation::Continuation, AppliedUnits, FactKey, FactKind},
+        SessionChange, SessionLoad, SessionLoadState, SessionSaveGeneration, SessionSaveReceipt,
+        SessionSaveUnit, SessionSnapshot, StorageError,
     },
     domain::agent_execution::sessions::{ProviderContext, SessionId},
 };
@@ -24,9 +25,14 @@ pub(super) struct RecordWriter {
     id: SessionId,
     stream: StreamKey,
     cursor: Cursor,
-    committed: Option<SessionSnapshot>,
-    baseline: Option<SessionSnapshot>,
+    /// Every accepted unit, completed or not.
     staged: Continuation,
+    /// The units accepted under the current binding, kept so `staged` can
+    /// return to the state before them (the base a retry is checked against)
+    /// or to the last completed one, without a copy of the whole history.
+    applied: AppliedUnits,
+    /// How many of `applied` the last completion of this binding covers.
+    completed: usize,
     progress: GroupProgress,
     binding: Option<SessionSaveGeneration>,
     next: SessionSaveGeneration,
@@ -54,9 +60,9 @@ impl RecordWriter {
             id,
             stream: stream.clone(),
             cursor: Cursor::new(stream, 0),
-            committed: None,
-            baseline: None,
             staged: Continuation::empty(),
+            applied: AppliedUnits::default(),
+            completed: 0,
             progress: GroupProgress::after(0),
             binding: None,
             next,
@@ -66,24 +72,31 @@ impl RecordWriter {
             receipt: None,
             changes: None,
         };
+        // One pass over the history, a page at a time (#1006).
+        let mut scanner =
+            FactScanner::up_to(&writer.stream, &bounds.tail, READ_PAGE).map_err(fact_error)?;
         loop {
-            match stream_fact::read_next_fact(reader, &writer.stream, &writer.cursor)
+            match scanner
+                .next(reader, &writer.cursor)
                 .await
                 .map_err(fact_error)?
             {
                 FactRead::Absent => break,
                 FactRead::Partial => {
                     // Recovery terminates only the physical attempt, then re-reads
-                    // its retained start identity/digest on the next iteration.
+                    // its retained start identity/digest on the next iteration,
+                    // from the tail the abort left.
                     stream_fact::abort_partial_fact(reader, &writer.stream, &writer.cursor)
                         .await
+                        .map_err(fact_error)?;
+                    let bounds = reader.bounds(&writer.stream).await.map_err(store_error)?;
+                    scanner = FactScanner::up_to(&writer.stream, &bounds.tail, READ_PAGE)
                         .map_err(fact_error)?;
                 }
                 FactRead::Aborted { cursor, key, .. } => {
                     if writer.binding.is_none() || (!writer.unfinished && key.ordinal() == 0) {
                         writer.binding = Some(writer.next.clone());
-                        writer.baseline = writer.committed.clone();
-                        writer.staged = Continuation::restore(writer.baseline.clone())?;
+                        writer.rebase();
                     }
                     writer.unfinished = true;
                     writer.cursor = cursor;
@@ -104,15 +117,30 @@ impl RecordWriter {
     }
 
     #[cfg(test)]
-    pub(super) fn snapshot(&self) -> Option<&SessionSnapshot> {
-        self.committed.as_ref()
+    pub(super) fn snapshot(&mut self) -> Option<SessionSnapshot> {
+        self.committed().unwrap()
     }
-    pub(super) fn readable_snapshot(&self) -> Result<SessionLoad, StorageError> {
+    /// The last completed save's state. Units of an unfinished save are
+    /// taken back for the read and applied again.
+    fn committed(&mut self) -> Result<Option<SessionSnapshot>, StorageError> {
+        self.staged
+            .after_applied(&mut self.applied, self.completed, |state| {
+                state.snapshot.clone()
+            })
+    }
+    /// Start a new binding from the last completed state: units it never
+    /// completed are taken back, and the completed ones become its base.
+    fn rebase(&mut self) {
+        self.staged.revert_after(&mut self.applied, self.completed);
+        self.applied = AppliedUnits::default();
+        self.completed = 0;
+    }
+    pub(super) fn readable_snapshot(&mut self) -> Result<SessionLoad, StorageError> {
         if self.blocked {
             return Err(corrupt("conversation fact conflicts with physical history"));
         }
         Ok(SessionLoad::new(
-            self.committed.clone(),
+            self.committed()?,
             if self.unfinished {
                 self.binding.clone().unwrap_or_else(|| self.next.clone())
             } else {
@@ -142,8 +170,7 @@ impl RecordWriter {
             return Err(StorageError::IdentityMismatch);
         }
         if self.binding.as_ref() != Some(&original) {
-            self.baseline = self.committed.clone();
-            self.staged = Continuation::restore(self.baseline.clone())?;
+            self.rebase();
             self.binding = Some(original.clone());
         }
         self.progress.piece(&fact.body)?;
@@ -159,7 +186,7 @@ impl RecordWriter {
                     });
                 let changes =
                     snapshot::decode_semantic_batch(&fact.body[HEADER_BYTES..], &context)?;
-                self.staged.apply_unit(&changes)?;
+                self.staged.apply_kept(changes, &mut self.applied)?;
                 if self
                     .staged
                     .snapshot
@@ -171,7 +198,8 @@ impl RecordWriter {
                 self.unfinished = true;
             }
             FactKind::SaveComplete => {
-                self.committed = self.staged.snapshot.clone();
+                // `staged` is now the completed state.
+                self.completed = Continuation::applied_len(&self.applied);
                 self.next = binding(
                     &self.stream,
                     cursor.offset,
@@ -207,7 +235,6 @@ impl RecordWriter {
         runtime: &R,
         batch: Option<&Arc<SaveCommits>>,
         original: SessionSaveGeneration,
-        observed: &SessionSnapshot,
         units: &[SessionSaveUnit],
     ) -> Result<SessionSaveReceipt, StorageError> {
         if self.blocked {
@@ -222,14 +249,29 @@ impl RecordWriter {
             .checked_add(1)
             .ok_or_else(|| corrupt("save generation exhausted"))?;
         let identity = SaveIdentity::binding(&original)?;
-        let base = if same {
-            self.baseline.as_ref()
-        } else {
-            self.committed.as_ref()
-        };
-        // One continuation owns validation of every explicit checkpoint; no
-        // append/reconciliation occurs until all units and the final state pass.
-        SessionSaveUnit::validate_plan(base, units, observed)?;
+        if units.is_empty() {
+            return Err(corrupt("semantic save plan is empty"));
+        }
+        // Every unit must apply, in order, before any append or
+        // reconciliation: a retry or extension to the state before its
+        // binding's units, a new save to the last completed state. Units are
+        // taken back for the check and applied again, so it costs what the
+        // units cost.
+        let keep = if same { 0 } else { self.completed };
+        let checked = self
+            .staged
+            .after_applied(&mut self.applied, keep, |state| state.check_units(units));
+        // Units that applied before always apply again; if they do not, this
+        // writer's state is no longer the stream's, so it writes nothing more.
+        self.blocked |= checked.is_err();
+        checked??;
+        let opens_another = units
+            .iter()
+            .flat_map(SessionSaveUnit::changes)
+            .any(|change| matches!(change, SessionChange::Opened { id, .. } if *id != self.id));
+        if opens_another {
+            return Err(corrupt("semantic decisions open another session"));
+        }
         let mut headers = Vec::with_capacity(units.len());
         let mut chain = EMPTY_CHAIN;
         for (index, unit) in units.iter().enumerate() {
@@ -239,9 +281,6 @@ impl RecordWriter {
             let header = Header::unit(identity.clone(), ordinal, chain, payload.as_slice());
             chain = header.chain(payload.len() as u64);
             headers.push(header);
-        }
-        if observed.id != self.id {
-            return Err(corrupt("semantic decisions disagree with observed session"));
         }
         let terminal = completion_for_prefix(&identity, &headers, chain, units.len())?;
         // Compare original committed bytes in one sequential bounded read, not
@@ -330,8 +369,7 @@ impl RecordWriter {
             }
         }
         if !same {
-            self.baseline = self.committed.clone();
-            self.staged = Continuation::restore(self.baseline.clone())?;
+            self.rebase();
             self.binding = Some(original.clone());
         }
         if self.pending.is_some() {
@@ -541,9 +579,14 @@ mod tests {
     };
     use event_stream::{
         infrastructure::{SqliteOptions, SqliteStore},
-        EventConfig, EventReader, PersistenceProfile, Runtime, RuntimeConfig, StreamId,
+        AppendReceipt, Bounds, EventConfig, EventReader, EventSink, Page, PageLimits,
+        PersistenceProfile, Result as StreamResult, Runtime, RuntimeConfig, ShutdownReport,
+        StreamId, SubscriptionOptions,
     };
-    use std::time::Duration;
+    use std::{
+        sync::atomic::{AtomicUsize, Ordering},
+        time::Duration,
+    };
 
     #[test]
     fn retain_next_fact_holds_one_oversized_fact_and_splits_before_a_second() {
@@ -581,12 +624,12 @@ mod tests {
             context: ProviderContext::Absent,
         };
         let first = records::fold_changes(None, std::slice::from_ref(&opened)).unwrap();
+        let binding = writer.readable_snapshot().unwrap().binding().clone();
         writer
             .save(
                 &runtime,
                 None,
-                writer.readable_snapshot().unwrap().binding().clone(),
-                &first,
+                binding,
                 &[SessionSaveUnit::new(vec![opened]).unwrap()],
             )
             .await
@@ -602,12 +645,11 @@ mod tests {
                 &runtime,
                 None,
                 next.clone(),
-                &second,
                 &[SessionSaveUnit::new(vec![context]).unwrap()],
             )
             .await
             .unwrap();
-        assert_eq!(writer.snapshot(), Some(&second));
+        assert_eq!(writer.snapshot(), Some(second.clone()));
         drop(writer);
         assert!(
             runtime
@@ -620,10 +662,10 @@ mod tests {
         let reopened = Runtime::<SqliteStore>::open(options, config).await.unwrap();
         let same_stream = reopened.create_stream(&stream_id).await.unwrap();
         assert_eq!(same_stream, stream);
-        let restored = RecordWriter::replay(&reopened, id, same_stream)
+        let mut restored = RecordWriter::replay(&reopened, id, same_stream)
             .await
             .unwrap();
-        assert_eq!(restored.snapshot(), Some(&second));
+        assert_eq!(restored.snapshot(), Some(second.clone()));
         assert!(
             reopened
                 .shutdown(Duration::from_secs(5))
@@ -631,5 +673,134 @@ mod tests {
                 .unwrap()
                 .closed
         );
+    }
+
+    /// Every store call an opening's replay makes, counted.
+    struct CountedRuntime<'a> {
+        runtime: &'a Runtime<SqliteStore>,
+        calls: AtomicUsize,
+    }
+    #[async_trait::async_trait]
+    impl EventSink for CountedRuntime<'_> {
+        async fn append(&self, stream: &StreamKey, event: NewEvent) -> StreamResult<AppendReceipt> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.runtime.append(stream, event).await
+        }
+    }
+    #[async_trait::async_trait]
+    impl EventReader for CountedRuntime<'_> {
+        async fn create_stream(&self, id: &StreamId) -> StreamResult<StreamKey> {
+            self.runtime.create_stream(id).await
+        }
+        async fn find_stream(&self, id: &StreamId) -> StreamResult<Option<StreamKey>> {
+            self.runtime.find_stream(id).await
+        }
+        async fn bounds(&self, stream: &StreamKey) -> StreamResult<Bounds> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.runtime.bounds(stream).await
+        }
+        async fn read_after(
+            &self,
+            after: &Cursor,
+            limits: PageLimits,
+            through: Option<&Cursor>,
+        ) -> StreamResult<Page> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.runtime.read_after(after, limits, through).await
+        }
+    }
+    #[async_trait::async_trait]
+    impl EventRuntime for CountedRuntime<'_> {
+        type Subscription = <Runtime<SqliteStore> as EventRuntime>::Subscription;
+        async fn try_append(
+            &self,
+            stream: &StreamKey,
+            event: NewEvent,
+        ) -> StreamResult<AppendReceipt> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.runtime.try_append(stream, event).await
+        }
+        async fn subscribe(
+            &self,
+            stream: &StreamKey,
+            options: SubscriptionOptions,
+        ) -> StreamResult<Self::Subscription> {
+            self.runtime.subscribe(stream, options).await
+        }
+        async fn shutdown(&self, deadline: Duration) -> StreamResult<ShutdownReport> {
+            self.runtime.shutdown(deadline).await
+        }
+    }
+
+    // #1006: replay read a long history one fact at a time, a bound and a
+    // page per fact, so opening a long conversation after a restart cost as
+    // many store round trips as it had saves. The condition: a long history.
+    #[tokio::test]
+    async fn opening_a_long_history_reads_it_in_pages_not_once_per_save() {
+        let directory = tempfile::tempdir().unwrap();
+        let options = SqliteOptions::new(directory.path().join("records.sqlite3"));
+        let config = RuntimeConfig {
+            events: EventConfig {
+                max_bytes: 1024 * 1024,
+                minimum_persistence: PersistenceProfile::ProcessRestart,
+            },
+            ..RuntimeConfig::default()
+        };
+        let id = SessionId::new("conversation").unwrap();
+        let runtime = Runtime::<SqliteStore>::open(options, config).await.unwrap();
+        let stream = runtime
+            .create_stream(&StreamId::new("conversation").unwrap())
+            .await
+            .unwrap();
+        let mut writer = RecordWriter::replay(&runtime, id.clone(), stream.clone())
+            .await
+            .unwrap();
+        let mut changes = vec![SessionChange::Opened {
+            id: id.clone(),
+            provider: ProviderIdentity::new("provider", "model", "workspace").unwrap(),
+            context: ProviderContext::Absent,
+        }];
+        let mut context = ProviderContext::Absent;
+        for save in 0..600 {
+            let after = ProviderContext::Recorded(
+                ExecutionSessionId::new(format!("remote-{save}")).unwrap(),
+            );
+            changes.push(SessionChange::ProviderContext {
+                before: context.clone(),
+                after: after.clone(),
+            });
+            context = after;
+        }
+        for change in changes {
+            let binding = writer.readable_snapshot().unwrap().binding().clone();
+            writer
+                .save(
+                    &runtime,
+                    None,
+                    binding,
+                    &[SessionSaveUnit::new(vec![change]).unwrap()],
+                )
+                .await
+                .unwrap();
+        }
+        let saved = writer.snapshot();
+        drop(writer);
+        let records = runtime.bounds(&stream).await.unwrap().tail.offset as usize;
+        assert!(records >= 600, "{records} records");
+
+        let counted = CountedRuntime {
+            runtime: &runtime,
+            calls: Default::default(),
+        };
+        let mut restored = RecordWriter::replay(&counted, id, stream).await.unwrap();
+        assert_eq!(restored.snapshot(), saved);
+        let calls = counted.calls.load(Ordering::SeqCst);
+        let pages = records.div_ceil(READ_PAGE.max_records);
+        assert!(
+            calls <= pages + 4,
+            "replaying {records} records took {calls} store calls, more than {pages} pages + 4"
+        );
+        drop(restored);
+        runtime.shutdown(Duration::from_secs(5)).await.unwrap();
     }
 }
