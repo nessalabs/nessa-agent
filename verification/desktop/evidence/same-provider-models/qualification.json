@@ -340,5 +340,39 @@
     "sdk_doctests": 57,
     "strict_checks": "Exact seven-package all-target Clippy -D warnings/fmt and strict SDK docs pass.",
     "limits": "Terminal audit failure is attempted, not delivered; owning runtime destruction may prevent later polling. No repeated frontend/browser/full6838; prior scopes unchanged. Fresh whole review/current CI required."
+  },
+  "configuration_supervision_correction": {
+    "source": "92b380c8e",
+    "owner": "Existing shared audit_configuration_control supervises prerequisite, operation future, success acknowledgement extraction and explicit future cleanup, then existing bounded terminal audit.",
+    "panic": "Fence captured permit before cleanup; forget hostile panic payload; existing SubmissionUnresolved/CleanupRequired. Preserve recorded ACK, original actor/control and primary error, append terminal audit error. No fabricated verified model ACK or Applied.",
+    "public_before": {
+      "failed": 2,
+      "positive_passed": 2
+    },
+    "existing_post_ack_regression_before_failed": 1,
+    "fixed": 7,
+    "private_sole_poll_supervision_omission": {
+      "failed": 4,
+      "positive_passed": 2,
+      "hostile_case": "Excluded while unguarded"
+    },
+    "private_exact_recompiled_restore": 7,
+    "hostile_payload_destructor_count": 0,
+    "assertion_migration": "First model group65pass/1stale Requested-only expectation failed. Narrow migration now requires original custom actor/target/noACK on Requested+Failed; native0/Closed/cleanup/reopen unchanged. Original failure preserved.",
+    "affected_checks": {
+      "models": 66,
+      "approval": 9,
+      "effort": 15,
+      "native_models": 34,
+      "native_approval": 10,
+      "configuration_relation": 1,
+      "selection_sum": 135,
+      "unique_runtime_passed": 134,
+      "explicit_ignored": 1,
+      "ignore_reason": "Live Codex preset downgrade requires real model/tools"
+    },
+    "sdk_doctests": 57,
+    "strict_checks": "Exact seven-package all-target Clippy -D warnings/fmt and strict SDK docs pass.",
+    "limits": "Private omission proves poll supervision; separate future-drop public ordering not fabricated. Runtime destruction cannot promise audit delivery. No repeated whole frontend/browser/full6838. Fresh whole review/current CI required."
   }
 }

@@ -104,6 +104,29 @@ attempt, not claimed delivery; runtime destruction can prevent future polling.
 Earlier frontend/browser/native evidence retains its source scope. Fresh whole
 review and actual current-head CI remain required.
 
+## R6 shared configuration supervision
+
+Source `92b380c8e` supervises the whole model/preset operation and success ACK
+extraction inside the existing shared audit owner, including protected future
+cleanup. Panics fence the captured permit before cleanup and receive one bounded
+Failed terminal attempt; original control/actor, prior ACK and primary error are
+retained. Incompletely verified model replies do not acquire fabricated ACKs.
+
+Actual public before: **2 failures /2 positives**; strengthened existing post-ACK
+regression also fails before. Fixed **7 pass**. Private sole-poll omission yields
+**4 failures /2 positives**, excluding the hostile payload while unguarded;
+exact restoration recompiles **7 pass**, hostile-payload destructor count0.
+A stale preflight Requested-only assertion was migrated narrowly to original
+actor/target/noACK on Requested+Failed; its native/cleanup/reopen assertions remain.
+The original65pass/1failure record is retained.
+
+Affected checks pass **134 unique runtime tests**, **57 SDK doctests**, exact
+seven-package strict Clippy/format and SDK docs. One live Codex preset test stays
+explicitly ignored. Prior frontend/browser/native scopes remain attributed;
+protected future-drop ordering is not claimed separately browser-reproduced.
+Owning-runtime destruction can prevent future audit delivery. Fresh whole review
+and actual current-head CI remain required.
+
 ## Earlier inspected screenshots
 
 - **Claude/WebKit**, full default run: confirmed Fable5.1,
