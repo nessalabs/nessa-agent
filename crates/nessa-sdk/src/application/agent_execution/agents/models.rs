@@ -15,8 +15,12 @@ use crate::application::agent_execution::{
         ProviderSessionState,
     },
 };
-use std::future::Future;
-use std::sync::Arc;
+use std::{
+    future::{poll_fn, Future},
+    panic::{catch_unwind, AssertUnwindSafe},
+    sync::Arc,
+    task::Poll,
+};
 impl Agent {
     pub(super) fn configuration_control(
         &self,
@@ -56,16 +60,52 @@ impl Agent {
             .record_attachment_audit(ExecutionAuditRecord::ConfigurationControlled(requested))
             .await
             .map_err(ProviderOperationFailure::before_effect)?;
-        let result = match async {
+        // The audit owner supervises callbacks beyond the native operation port,
+        // including factory normalization, retention and final acknowledgement.
+        let mut operation = Box::pin(async {
             if changes_configuration {
                 permit
                     .require_no_unstarted_work()
                     .map_err(ProviderOperationFailure::before_effect)?;
             }
-            operation.await
+            let value = operation.await?;
+            let acknowledged = acknowledgement(&value);
+            Ok::<_, ProviderOperationFailure>((value, acknowledged))
+        });
+        let panicked = || {
+            self.inner
+                .lifecycle
+                .record_control_state(permit, &ProviderSessionState::CleanupRequired);
+            ProviderOperationFailure::new(
+                AgentError::SubmissionUnresolved,
+                ProviderSessionState::CleanupRequired,
+            )
+        };
+        let mut result = poll_fn(|context| {
+            match catch_unwind(AssertUnwindSafe(|| operation.as_mut().poll(context))) {
+                Ok(poll) => poll,
+                Err(payload) => {
+                    std::mem::forget(payload);
+                    // Fence before cleaning up the faulted future's captures.
+                    Poll::Ready(Err(panicked()))
+                }
+            }
+        })
+        .await;
+        if let Err(payload) = catch_unwind(AssertUnwindSafe(|| drop(operation))) {
+            std::mem::forget(payload);
+            let failure = panicked();
+            // Preserve any already-returned primary failure when cleanup also
+            // panics; either way this generation is now uncertain.
+            result = Err(match result {
+                Err(primary) => ProviderOperationFailure::new(
+                    primary.into_error(),
+                    ProviderSessionState::CleanupRequired,
+                ),
+                Ok(_) => failure,
+            });
         }
-        .await
-        {
+        let result = match result {
             Err(failure) if failure.stage() == ProviderOperationStage::EffectUncertain => {
                 self.inner
                     .lifecycle
@@ -78,9 +118,9 @@ impl Agent {
             result => result,
         };
         let (stage, acknowledged) = match &result {
-            Ok(value) => (
+            Ok((_, acknowledged)) => (
                 ConfigurationControlStage::Applied,
-                Some(acknowledgement(value)),
+                Some(acknowledged.clone()),
             ),
             Err(failure) if failure.stage() == ProviderOperationStage::BeforeEffect => {
                 (ConfigurationControlStage::Refused, None)
@@ -110,7 +150,7 @@ impl Agent {
                 ProviderSessionState::CleanupRequired,
             ));
         }
-        result
+        result.map(|(value, _)| value)
     }
     pub(super) async fn acknowledge_configuration(
         &self,

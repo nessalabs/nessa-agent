@@ -3,6 +3,7 @@ use nessa_sdk::application::agent_execution::providers::NativeExecutionHandoff;
 mod admission;
 mod hooks;
 mod steering;
+mod supervision;
 use nessa_sdk::application::agent_execution::traces::LocalTraceStore;
 use nessa_sdk::application::dto::ImageInputLimitsDto;
 use nessa_sdk::domain::common::value_objects::{ImageMediaType, Sha256Digest};
@@ -13,7 +14,7 @@ use crate::application::agent_execution::support::*;
 use nessa_sdk::application::agent_execution::providers::{
     HarnessHost, HarnessHostIdentity, HarnessLaunch, HarnessProcess,
 };
-use std::time::Duration;
+use std::{sync::atomic::AtomicBool, time::Duration};
 use tokio::sync::{mpsc, oneshot, Notify};
 use tokio::time::timeout;
 
@@ -39,6 +40,7 @@ struct Backend {
     effort_calls: AtomicUsize,
     events: Mutex<Option<mpsc::Sender<ExecutionEvent>>>,
     audit: Arc<Mutex<Vec<ExecutionAuditRecord>>>,
+    fail_terminal_audit: Arc<AtomicBool>,
 }
 impl ProviderSessionBackend for Backend {
     fn validate_input(
@@ -221,6 +223,8 @@ enum Normalization {
     Exact,
     PanicAdjusted,
     PanicPreflight,
+    PanicRetained,
+    PanicHostileAdjusted,
     IgnoreMode,
     AskOnly,
     IgnoreEffort,
@@ -237,6 +241,8 @@ struct Provider {
     native_hooks: bool,
     opened_hooks: Arc<Mutex<Vec<bool>>>,
     normalization: Normalization,
+    normalization_calls: Arc<AtomicUsize>,
+    payload_drops: Arc<AtomicUsize>,
     host: Option<Arc<dyn HarnessHost>>,
     normalization_host: Arc<dyn HarnessHost>,
     effort: Option<EffortLevel>,
@@ -280,6 +286,16 @@ impl AgentProvider for Provider {
         effort: Option<EffortLevel>,
         _traces: Option<Arc<LocalTraceStore>>,
     ) -> Result<Arc<dyn AgentProvider>, AgentError> {
+        if matches!(self.normalization, Normalization::PanicRetained)
+            && self.normalization_calls.fetch_add(1, Ordering::SeqCst) == 1
+        {
+            panic!("retention factory panic");
+        }
+        if matches!(self.normalization, Normalization::PanicHostileAdjusted)
+            && mode != self.approval_mode()
+        {
+            supervision::hostile_payload(self.payload_drops.clone());
+        }
         if matches!(self.normalization, Normalization::PanicPreflight) {
             panic!("preflight factory panic");
         }
@@ -473,6 +489,7 @@ async fn prepared_with_capabilities(
         effort_calls: AtomicUsize::new(0),
         events: Mutex::new(None),
         audit: Arc::new(Mutex::new(Vec::new())),
+        fail_terminal_audit: Arc::new(AtomicBool::new(false)),
     });
     let provider = Arc::new(Provider {
         model: "large".into(),
@@ -481,6 +498,8 @@ async fn prepared_with_capabilities(
         native_hooks: false,
         opened_hooks: Arc::new(Mutex::new(Vec::new())),
         normalization,
+        normalization_calls: Arc::new(AtomicUsize::new(0)),
+        payload_drops: Arc::new(AtomicUsize::new(0)),
         host,
         normalization_host: Arc::new(UnstartedHost),
         effort: None,
@@ -490,17 +509,29 @@ async fn prepared_with_capabilities(
         restores: Arc::new(Mutex::new(Vec::new())),
     });
     let storage = MemoryStorage::default();
-    struct Audit(Arc<Mutex<Vec<ExecutionAuditRecord>>>);
+    struct Audit(Arc<Mutex<Vec<ExecutionAuditRecord>>>, Arc<AtomicBool>);
     impl ExecutionAudit for Audit {
         fn record(&self, record: ExecutionAuditRecord) -> AgentFuture<'_, ()> {
+            let fail = matches!(&record, ExecutionAuditRecord::ConfigurationControlled(record)
+                if record.stage() == ConfigurationControlStage::Failed)
+                && self.1.load(Ordering::SeqCst);
             self.0.lock().unwrap().push(record);
-            Box::pin(async { Ok(()) })
+            Box::pin(async move {
+                if fail {
+                    Err(AgentError::AuditFailure)
+                } else {
+                    Ok(())
+                }
+            })
         }
     }
     let agent = Agent::prepare(
         provider.clone(),
         storage.manager().await,
-        Arc::new(Audit(provider.backend.audit.clone())),
+        Arc::new(Audit(
+            provider.backend.audit.clone(),
+            provider.backend.fail_terminal_audit.clone(),
+        )),
     )
     .await
     .unwrap();
@@ -1135,6 +1166,7 @@ async fn post_ack_factory_panic_fences_admission_without_committing_model() {
             .is_err(),
         "post-ACK panic must fence subsequent admission"
     );
+    supervision::assert_model_failed(&prior);
     agent.close(close_action()).await.unwrap();
     assert_eq!(prior.backend.closes.load(Ordering::SeqCst), 1);
 }
@@ -1321,15 +1353,20 @@ async fn preflight_factory_panic_fences_admission_until_cleanup() {
             _ => None,
         })
         .collect();
-    assert_eq!(controls.len(), 1);
-    assert_eq!(controls[0].stage(), ConfigurationControlStage::Requested);
-    assert_eq!(controls[0].actor(), &actor);
-    assert_eq!(controls[0].before(), &prior.identity());
     assert_eq!(
-        controls[0].request(),
-        &ConfigurationControlRequest::Model(expected_target)
+        controls
+            .iter()
+            .map(|record| record.stage())
+            .collect::<Vec<_>>(),
+        [
+            ConfigurationControlStage::Requested,
+            ConfigurationControlStage::Failed
+        ]
     );
-    assert_eq!(controls[0].acknowledged(), None);
+    assert!(controls.iter().all(|record| record.actor() == &actor
+        && record.before() == &prior.identity()
+        && record.request() == &ConfigurationControlRequest::Model(expected_target.clone())
+        && record.acknowledged().is_none()));
     assert!(
         matches!(
             agent

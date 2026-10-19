@@ -645,3 +645,36 @@ failures and three positives. Fixed and private exact-restored runs pass all
 eight. Omitting only the common terminal audit for known ACK plus local failure
 in an isolated archive/target reproduces the same five failures. Native effect
 and local settlement results remain separate; terminal audit is attempted once.
+
+### Shared model and preset supervision (#975 R6)
+
+`audit_configuration_control` owns supervision of its entire operation and
+success acknowledgement extraction, and one bounded terminal audit attempt.
+A panic becomes SubmissionUnresolved / CleanupRequired under the captured
+permit before faulted future cleanup; panic payload destruction cannot bypass
+settlement. It does not prove native effect or turn a panic into BeforeEffect.
+The scheduler and permit remain held through terminal audit.
+
+| Ordering | Required outcome | Public evidence |
+| --- | --- | --- |
+| Model preflight or adjusted-ACK factory panics | Requested then Failed, original actor, no fabricated verified ACK/Applied; native count0 or1, prior model/configuration retained, new admission fenced, cleanup once | Existing post-ACK case fails old production on required Failed; public model/preflight cases included in affected family |
+| Approval native ACK and settings save succeed, retention factory panics | Requested, Acknowledged, Failed; preserve saved native Auto and original actor; uncertain failure and cleanup once | Public before matrix: two intended failures and two exact-clone positives; fixed and private exact restoration pass |
+| Either panic plus terminal audit rejection | Exactly one Failed attempt, primary SubmissionUnresolved before audit error; CleanupRequired retained | Model and approval combined rejection cases pass with primary uncertainty first; attempts are not delivery claims |
+| Exact settings clones or caller drops wait | Existing single Requested/Acknowledged/Applied settlement and attributed owned task remain | Exact-clone positives and existing caller-drop model regressions |
+| Factory panic payload has a hostile destructor | Contain and forget payload; destructor never runs, original Failed settlement still attempted | Public hostile-payload case passes with destructor count0 |
+
+The existing bounded audit observer contains audit sink construction/poll/drop
+faults. No terminal delivery is promised after owning-runtime destruction.
+Effort retains its separate native-outcome/local-result settlement owner.
+
+The guarded public matrix passes all seven cases. Private isolated removal of
+only operation-poll supervision reproduces four model/preset failures while two
+exact-clone positives pass; the hostile payload is deliberately excluded from
+that unguarded run. Exact fresh-mtime restoration recompiles and passes all
+seven, including the hostile payload. No checkout source variant is used.
+
+The original preflight-panic regression required only Requested. Its assertion
+now requires Requested then Failed on both records with its original custom
+actor, target and no acknowledgement. Native dispatch remains0 and physical
+cleanup/reopen assertions remain unchanged; the first stale-assertion failure is
+retained separately.
