@@ -505,10 +505,14 @@ impl SessionLifecycle {
         )
     }
     /// Stopped by itself with no way back but its owner's close (see
-    /// `Agent::awaits_close`). A stop that may still reopen it — cleanup not
-    /// yet started, or under way, or confirmed with work left to drain — is
-    /// not, and neither is an explicit close or a sealed lifetime, which its
-    /// owner is already ending.
+    /// `Agent::awaits_close`). A stop that may still reopen it — cleanup
+    /// under way, or confirmed with work left to drain, or not yet started
+    /// while the work that will start it is still held — is not, and neither
+    /// is an explicit close or a sealed lifetime, which its owner is already
+    /// ending. A provider-state fence whose cleanup nothing is left to start
+    /// is: a failed turn starts its own once it settles, but a review's
+    /// answer or withdrawal only fences, and leaves the agent for its owner's
+    /// close (`provider_controls_latch_every_uncertain_cleanup_wrapper_until_explicit_recovery`).
     pub(super) fn awaits_close(&self) -> bool {
         if self.lifetime_sealed() {
             return false;
@@ -523,7 +527,8 @@ impl SessionLifecycle {
         }
         match stop.recovery {
             RecoveryPolicy::NeedsExplicitClose => true,
-            RecoveryPolicy::CleanupNotStarted | RecoveryPolicy::ExplicitClose => false,
+            RecoveryPolicy::CleanupNotStarted => state.work.is_empty(),
+            RecoveryPolicy::ExplicitClose => false,
             RecoveryPolicy::Automatic => {
                 stop.finalized
                     && !stop

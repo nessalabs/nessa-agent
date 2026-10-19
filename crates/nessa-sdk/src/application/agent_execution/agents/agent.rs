@@ -1127,10 +1127,12 @@ impl Agent {
     }
 
     /// Whether this agent stopped itself and will take no more work until it
-    /// is closed: a failure blocked it for its owner's close, or its own
-    /// cleanup or the evidence of it failed, so it cannot open again by
-    /// itself. A stop it will recover from, and a close already under way,
-    /// are not this. Its owner closes it, and a new agent takes the work.
+    /// is closed: a failure blocked it for its owner's close (a review's
+    /// answer or withdrawal whose provider failure left cleanup required
+    /// among them), or its own cleanup or the evidence of it failed, so it
+    /// cannot open again by itself. A stop it will recover from, and a close
+    /// already under way, are not this. Its owner closes it, and a new agent
+    /// takes the work.
     pub fn awaits_close(&self) -> bool {
         self.inner.lifecycle.awaits_close()
     }
