@@ -29,6 +29,7 @@ use nessa_sdk::domain::agent_execution::subagents::{
     OwnershipSnapshot, SpawnProgress,
 };
 use nessa_sdk::infrastructure::session_storage::SqliteOwnershipStore;
+use sha2::{Digest, Sha256};
 use std::sync::atomic::AtomicBool;
 use std::sync::Mutex;
 use tokio::sync::Notify;
@@ -2811,6 +2812,214 @@ impl ThreadReportStore for PausedPendingReports {
     }
 }
 
+#[tokio::test]
+async fn parent_stop_rejects_a_saved_selection_that_repeats_its_root_turn() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("data");
+    let provider = Arc::new(ProviderFactory::default());
+    provider.turn_cancel.store(true, Ordering::SeqCst);
+    let (service, storage, metadata) = fixture(&root, provider.clone());
+    bind(&service, &storage, &root, true).await;
+    let parent = id();
+    opened(&service, &provider, &parent).await;
+    let work = hold_turn(&service, &provider, &parent, "parent").await;
+    let origin = caller("stop-parent");
+    let base = stop_binding(&parent, &origin, "parent").unwrap();
+    let prefix = format!(
+        "parent-stop-{:x}-",
+        Sha256::digest(
+            serde_json::to_vec(&(
+                base.actor().principal_id(),
+                base.actor().surface_id(),
+                base.actor().request_id(),
+                base.target().as_str(),
+                base.turn_id().as_str(),
+            ))
+            .unwrap()
+        )
+    );
+    let mut prerequisite_caller = origin.clone();
+    prerequisite_caller.action_id = format!("{prefix}0000");
+    let prerequisite = stop_binding(&parent, &prerequisite_caller, "parent").unwrap();
+    let mut hash = Sha256::new();
+    hash.update(b"nessa.gateway.parent-stop\0");
+    hash.update(base.fingerprint());
+    hash.update(
+        serde_json::to_vec(&(
+            prerequisite.actor().principal_id(),
+            prerequisite.actor().surface_id(),
+            prerequisite.actor().request_id(),
+            prerequisite.target().as_str(),
+            prerequisite.turn_id().as_str(),
+            prerequisite.fingerprint(),
+        ))
+        .unwrap(),
+    );
+    let selected = MutationBinding::new(
+        base.actor().clone(),
+        MutationOperation::Stop,
+        base.target().clone(),
+        base.turn_id().as_str(),
+        hash.finalize().into(),
+    )
+    .unwrap();
+    for binding in [prerequisite, selected] {
+        let lease = storage
+            .open_creation(
+                binding.actor().principal_id().into(),
+                binding.actor().request_id().into(),
+                true,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        lease
+            .save_mutation(MutationReceipt::accepted(binding))
+            .await
+            .unwrap();
+    }
+    let before = storage
+        .mutations(origin.principal_id.as_str().into())
+        .await
+        .unwrap();
+    let result = service
+        .stop_command(
+            storage.clone(),
+            parent.clone(),
+            origin.clone(),
+            "parent".into(),
+        )
+        .await;
+    let after = storage
+        .mutations(origin.principal_id.as_str().into())
+        .await
+        .unwrap();
+    let live = service.resolve(&parent, &caller("inspect")).await.unwrap();
+    let active = live.agent.active_execution_id();
+    let cancelled = provider.cancel_turns.lock().unwrap().clone();
+    drop((work, live));
+    retire(service, storage, metadata).await;
+    assert!(matches!(result, Err(MutationFailure::Conflict)));
+    assert_eq!(active, Some(ExecutionId::new("parent").unwrap()));
+    assert!(cancelled.is_empty());
+    assert_eq!(
+        before, after,
+        "invalid acknowledged selections are not rewritten"
+    );
+}
+
+#[tokio::test]
+async fn explicit_report_turn_stop_owns_queued_withdrawal() {
+    explicit_report_turn_stop(false, MutationOutcome::Withdrawn).await;
+}
+
+#[tokio::test]
+async fn explicit_report_turn_stop_owns_active_cancellation() {
+    explicit_report_turn_stop(true, MutationOutcome::Cancelled).await;
+}
+
+async fn explicit_report_turn_stop(active: bool, expected: MutationOutcome) {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("data");
+    let provider = Arc::new(ProviderFactory::default());
+    provider.turn_cancel.store(true, Ordering::SeqCst);
+    let (service, storage, metadata) = fixture(&root, provider.clone());
+    bind(&service, &storage, &root, true).await;
+    let retained = Arc::new(LocalThreadReports::open(&root.join("reports.sqlite3")).unwrap());
+    service.bind_thread_reports(retained.clone());
+    let parent = id();
+    opened(&service, &provider, &parent).await;
+    let mut parent_work = Some(hold_turn(&service, &provider, &parent, "parent").await);
+    let child_id = child(&service, &parent, "parent", "create-reporter").await;
+    let child_work = hold_turn(&service, &provider, &child_id, "child").await;
+    service
+        .report_thread_turn(
+            child_id.clone(),
+            "child".into(),
+            ThreadReport {
+                parent: parent.clone(),
+                caller: caller("report-action"),
+                execution: "requested-report".into(),
+            },
+        )
+        .await;
+    child_work.send(()).unwrap();
+    service.look_for_reports(child_id, false).await;
+    let live = service.resolve(&parent, &caller("inspect")).await.unwrap();
+    let report_id = ExecutionId::new("requested-report").unwrap();
+    tokio::time::timeout(TURN_HOLD_HANG, async {
+        while !live.agent.queued_ids().await.contains(&report_id) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    let (report_work, report_gate) = oneshot::channel();
+    if active {
+        *provider.execution_gate.lock().unwrap() = Some(report_gate);
+        let started = provider.execution_started.notified();
+        parent_work.take().unwrap().send(()).unwrap();
+        tokio::time::timeout(TURN_HOLD_HANG, started).await.unwrap();
+        assert_eq!(live.agent.active_execution_id(), Some(report_id.clone()));
+    } else {
+        drop(report_gate);
+    }
+    let receipt = service
+        .stop_command(
+            storage.clone(),
+            parent.clone(),
+            caller("stop-report"),
+            report_id.as_str().into(),
+        )
+        .await;
+    let retried = service
+        .stop_command(
+            storage.clone(),
+            parent.clone(),
+            caller("stop-report"),
+            report_id.as_str().into(),
+        )
+        .await;
+    let root_stops: Vec<_> = storage
+        .mutations(caller("stop-report").principal_id.as_str().into())
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|receipt| {
+            let binding = receipt.binding();
+            binding.operation() == MutationOperation::Stop
+                && binding.target() == &conversation_session(&parent)
+                && binding.turn_id() == &report_id
+        })
+        .collect();
+    let cancelled = provider.cancel_turns.lock().unwrap().clone();
+    let report_retained = retained.pending().await.unwrap().len();
+    let unrelated_active = live.agent.active_execution_id();
+    drop((parent_work, report_work, live));
+    retire(service, storage, metadata).await;
+    assert_eq!(root_stops.len(), 1, "one binding owns the requested turn");
+    assert_eq!(root_stops[0].binding().actor().request_id(), "stop-report");
+    let receipt = receipt.unwrap();
+    let retried = retried.unwrap();
+    assert_eq!(receipt.outcome(), Some(expected));
+    assert_eq!(retried, receipt, "retry returns the root's actual effect");
+    assert_eq!(
+        cancelled
+            .iter()
+            .filter(|turn| *turn == "requested-report")
+            .count(),
+        usize::from(active)
+    );
+    assert!(!cancelled.iter().any(|turn| turn == "parent"));
+    if !active {
+        assert_eq!(unrelated_active, Some(ExecutionId::new("parent").unwrap()));
+    }
+    assert_eq!(
+        report_retained, 1,
+        "the cancelled report obligation remains durable"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn parent_stop_captures_correlated_report_after_dequeue_active() {
     correlated_report_after_dequeue(ReportPhase::Active).await;
@@ -2823,10 +3032,15 @@ async fn parent_stop_captures_correlated_report_after_dequeue_handoff() {
 async fn parent_stop_captures_correlated_report_owed_after_dequeue() {
     correlated_report_after_dequeue(ReportPhase::Owed).await;
 }
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn parent_stop_bounds_a_captured_reports_stalled_handoff_and_retries_its_selection() {
+    correlated_report_after_dequeue(ReportPhase::StalledHandoff).await;
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ReportPhase {
     Active,
     Handoff,
+    StalledHandoff,
     Owed,
 }
 async fn correlated_report_after_dequeue(phase: ReportPhase) {
@@ -2853,6 +3067,12 @@ async fn correlated_report_after_dequeue(phase: ReportPhase) {
     let p = hold_turn(&service, &provider, &parent, "parent").await;
     let child_id = child(&service, &parent, "parent", "create-reporter").await;
     let c = hold_turn(&service, &provider, &child_id, "child").await;
+    let independent_work = if phase == ReportPhase::StalledHandoff {
+        let independent = child(&service, &parent, "parent", "create-independent").await;
+        Some(hold_turn(&service, &provider, &independent, "independent").await)
+    } else {
+        None
+    };
     service
         .report_thread_turn(
             child_id.clone(),
@@ -2878,7 +3098,7 @@ async fn correlated_report_after_dequeue(phase: ReportPhase) {
     let (entered, waiting) = oneshot::channel();
     let (continue_selection, gate) = oneshot::channel();
     *reports.gate.lock().unwrap() = Some((entered, gate));
-    let stopping = {
+    let mut stopping = {
         let service = service.clone();
         let storage = observed.clone();
         let parent = parent.clone();
@@ -2963,10 +3183,89 @@ async fn correlated_report_after_dequeue(phase: ReportPhase) {
         tokio::time::timeout(TURN_HOLD_HANG, began).await.unwrap();
     }
     allow_control.send(()).unwrap();
-    let stopped = tokio::time::timeout(TURN_HOLD_HANG, stopping)
-        .await
-        .unwrap()
-        .unwrap();
+    let mut stalled = None;
+    let stopped = if phase == ReportPhase::StalledHandoff {
+        // The real observation barrier is after capture, and preparation stays
+        // held until Stop's existing mutation owner must have answered.
+        let first = tokio::time::timeout(
+            super::super::MOVING_TURN_WAIT + Duration::from_secs(2),
+            &mut stopping,
+        )
+        .await;
+        let bounded = matches!(
+            &first,
+            Ok(Ok(Err(MutationFailure::Target(ConversationError::Agent(
+                AgentError::SubmissionUnresolved
+            )))))
+        );
+        let exact_still_owned = live
+            .agent
+            .unsettled_execution_ids()
+            .await
+            .contains(&report_id)
+            && live.agent.active_execution_id().is_none()
+            && !live.agent.queued_ids().await.contains(&report_id);
+        let receipts = storage
+            .mutations(caller("stop-parent").principal_id.as_str().into())
+            .await
+            .unwrap();
+        let original_accepted = receipts.iter().any(|receipt| {
+            receipt.binding().turn_id() == &report_id && receipt.stage() == MutationStage::Accepted
+        });
+        let report_retained = retained.pending().await.unwrap().len() == 1;
+        let independent_attempted = provider
+            .cancel_turns
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|turn| turn == "independent");
+        let admission_free = if bounded {
+            tokio::time::timeout(Duration::from_secs(1), service.hold_for_export())
+                .await
+                .is_ok_and(|hold| hold.is_ok())
+        } else {
+            false
+        };
+        // Release and join even under the original unbounded-loop regression.
+        // Late preparation never authorizes a newly captured Stop selection.
+        let late_began = provider.execution_started.notified();
+        continue_prepare.take().unwrap().send(()).unwrap();
+        tokio::time::timeout(TURN_HOLD_HANG, late_began)
+            .await
+            .unwrap();
+        match first {
+            Ok(joined) => {
+                let _original = joined.unwrap();
+            }
+            Err(_) => {
+                let _late = tokio::time::timeout(TURN_HOLD_HANG, &mut stopping)
+                    .await
+                    .unwrap()
+                    .unwrap();
+            }
+        }
+        stalled = Some((
+            bounded,
+            exact_still_owned,
+            original_accepted,
+            report_retained,
+            admission_free,
+            independent_attempted,
+        ));
+        service
+            .stop_command(
+                observed.clone(),
+                parent.clone(),
+                caller("stop-parent"),
+                "parent".into(),
+            )
+            .await
+    } else {
+        tokio::time::timeout(TURN_HOLD_HANG, stopping)
+            .await
+            .unwrap()
+            .unwrap()
+    };
     assert!(
         stopped.is_ok(),
         "exact report stop must settle: {stopped:?}"
@@ -3001,8 +3300,32 @@ async fn correlated_report_after_dequeue(phase: ReportPhase) {
         "cancelled report remains durable"
     );
     drop(finish_report);
+    drop(independent_work);
     drop(live);
     retire(service, storage, metadata).await;
+    if let Some((bounded, owned, accepted, retained, admission_free, independent)) = stalled {
+        assert!(
+            bounded,
+            "captured handoff bypassed the mutation owner's bound"
+        );
+        assert!(
+            independent,
+            "a stalled report does not skip the independent captured child"
+        );
+        assert!(owned, "a bounded refusal preserves the exact held SDK work");
+        assert!(
+            accepted,
+            "bounded classification cannot authorize an Attempted effect"
+        );
+        assert!(
+            retained,
+            "the durable report obligation survives bounded refusal"
+        );
+        assert!(
+            admission_free,
+            "bounded Stop releases service admission before preparation ends"
+        );
+    }
     if phase == ReportPhase::Owed {
         let provider = Arc::new(ProviderFactory::default());
         let (service, storage, metadata) = fixture(&root, provider.clone());

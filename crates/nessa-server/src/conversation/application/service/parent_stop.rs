@@ -38,6 +38,9 @@ struct Selection {
     root: MutationBinding,
     children: Vec<MutationBinding>,
 }
+fn is_root_turn(root: &MutationBinding, target: &str, turn: &str) -> bool {
+    root.target().as_str() == target && root.turn_id().as_str() == turn
+}
 fn unavailable() -> Failure {
     MutationFailure::Target(ConversationError::Unavailable)
 }
@@ -109,7 +112,8 @@ fn restore(
         .collect();
     children.sort_by(|a, b| a.actor().request_id().cmp(b.actor().request_id()));
     for (index, child) in children.iter().enumerate() {
-        if child.operation() != MutationOperation::Stop
+        if is_root_turn(root, child.target().as_str(), child.turn_id().as_str())
+            || child.operation() != MutationOperation::Stop
             || child.actor().principal_id() != root.actor().principal_id()
             || child.actor().surface_id() != root.actor().surface_id()
             || child.actor().request_id() != format!("{prefix}{index:04}")
@@ -358,7 +362,9 @@ impl ConversationService {
                             continue;
                         }
                         let turn = delivery.current();
-                        if unfinished.contains(turn) {
+                        if unfinished.contains(turn)
+                            && !is_root_turn(&root, &id.to_string(), turn.as_str())
+                        {
                             targets.insert((id.to_string(), turn.as_str().to_owned()));
                         }
                     }
@@ -548,35 +554,6 @@ impl ConversationService {
         ensure_live(self, &id, &target_caller)
             .await
             .map_err(MutationFailure::Target)?;
-        let live = self
-            .resolve(&id, &target_caller)
-            .await
-            .map_err(MutationFailure::Target)?;
-        loop {
-            if live.agent.active_execution_id().as_ref() == Some(binding.turn_id())
-                || live.agent.queued_ids().await.contains(binding.turn_id())
-            {
-                break;
-            }
-            if live
-                .agent
-                .owed_turns()
-                .await
-                .iter()
-                .any(|owed| owed.execution_id() == binding.turn_id())
-                || !live
-                    .agent
-                    .unsettled_execution_ids()
-                    .await
-                    .contains(binding.turn_id())
-            {
-                break;
-            }
-            // A locally owned dequeue-to-dispatch handoff is still the exact
-            // selected execution. Wait for its existing owner; never target the
-            // next active execution or replay an uncertain provider effect.
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
         let target = Arc::new(StopTarget {
             service: self.clone(),
             id,
