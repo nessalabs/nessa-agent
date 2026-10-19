@@ -1,11 +1,13 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
 import { parentRestarted, parentStopCheckpoint } from "./stress-parent-stop.mjs"
+import { record } from "../../../../scripts/mcp-test-server/acp-recorder.mjs"
 
 const prompt = (sessionId, text) =>
   JSON.stringify({
     direction: "to-agent",
     frame: {
+      jsonrpc: "2.0",
       method: "session/prompt",
       params: { sessionId, prompt: [{ type: "text", text }] },
     },
@@ -68,5 +70,56 @@ test("missing, malformed, incomplete, or replaced recordings cannot prove no res
   ])
     assert.throws(() =>
       parentRestarted(checkpoint, recording + JSON.stringify(invalid) + "\n", before, []),
+    )
+  for (const frame of [
+    true,
+    1,
+    "lost frame",
+    [],
+    {},
+    null,
+    { jsonrpc: "2.0", id: [], result: {} },
+    { jsonrpc: "2.0", id: 1, result: {}, error: {} },
+    { jsonrpc: "2.0", method: 1 },
+    { jsonrpc: "2.0", id: 1 },
+  ])
+    assert.throws(() =>
+      parentRestarted(
+        checkpoint,
+        recording + record("to-agent", JSON.stringify(frame)),
+        before,
+        [],
+      ),
+    )
+  for (const sessionId of [undefined, null, "", 42, []])
+    assert.throws(() =>
+      parentRestarted(
+        checkpoint,
+        recording +
+          record(
+            "to-agent",
+            JSON.stringify({
+              jsonrpc: "2.0",
+              method: "session/prompt",
+              params: { sessionId },
+            }),
+          ),
+        before,
+        [],
+      ),
+    )
+  for (const frame of [
+    { jsonrpc: "2.0", method: "session/update", params: {} },
+    { jsonrpc: "2.0", id: 1, result: {} },
+    { jsonrpc: "2.0", id: null, error: { code: -32700, message: "Parse error" } },
+  ])
+    assert.equal(
+      parentRestarted(
+        checkpoint,
+        recording + record("from-agent", JSON.stringify(frame)),
+        before,
+        withdrawn,
+      ),
+      false,
     )
 })
