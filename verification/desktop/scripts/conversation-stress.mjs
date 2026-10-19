@@ -747,8 +747,9 @@ const steps = {
       // Reclassify only held evidence after recovery, never future failures.
       if (cleanBeforeRestart && failures.length === 0) {
         const lost = `console.error: WebSocket connection to '${new URL("/session", run.stack.endpoint).href}' failed: The network connection was lost.`
+        const refused = `console.error: WebSocket connection to '${new URL("/session", run.stack.endpoint).href}' failed: Could not connect to the server.`
         run.opened.reclassifyHeld(
-          (line) => line === lost,
+          (line) => line === lost || line === refused,
           (line) => `${line} (gateway deliberately restarted with ${step.signal})`,
         )
       }
