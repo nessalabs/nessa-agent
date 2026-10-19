@@ -27,6 +27,12 @@
  *   watch       the agent reads a new thread with more reads at once than
  *               one conversation may hold: some wait, the rest are refused,
  *               and a read after them is taken again
+ *   window      the sidebar is hidden with ⌘B, another conversation is
+ *               opened beside the main one with ⌘-click and asks the agent
+ *               what the window shows: it is the focused pane on the right,
+ *               the main conversation on the left, the sidebar closed; that
+ *               pane is closed with ⌘W and the sidebar shown again, and the
+ *               main conversation, asked in its composer, is the whole window
  *   long        another conversation takes `--long` turns of long streamed
  *               answers through the gateway; the last answer is whole, and
  *               still whole after its agent is closed and its history opened
@@ -42,6 +48,11 @@
  *   delete      another conversation is deleted from its row's More menu,
  *               once asked; the gateway refuses it as deleted, and neither
  *               list nor the window holds it
+ *   linking     native linking is turned on, then off, with the switch in
+ *               Settings › Connections › Linked devices; each time the gateway
+ *               saves config.json and starts itself again in the same
+ *               process, the window comes back to the new state, and the
+ *               message sent after it is answered
  *
  * Meanwhile `--parallel` background conversations take turns through the
  * gateway (every third one a watch), and `--followers` other clients follow
@@ -63,7 +74,7 @@
  *   NESSA_STRESS_ROUNDS=60 pnpm test:e2e:stress # the same, from the environment
  */
 import { randomUUID } from "node:crypto"
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { setTimeout as sleep } from "node:timers/promises"
@@ -87,7 +98,8 @@ import {
 } from "./lib/gateway-stack.mjs"
 import { main } from "./lib/run.mjs"
 import { writeView } from "./lib/scripted-evidence.mjs"
-import { composerControls, css, offeredLabel } from "./lib/selectors.mjs"
+import { composerControls, css, keys, names, offeredLabel } from "./lib/selectors.mjs"
+import { freePort } from "./lib/server.mjs"
 import { Follower } from "./lib/stress-followers.mjs"
 import { KNOBS, describe, knobsFrom, plan, random } from "./lib/stress-plan.mjs"
 
@@ -176,6 +188,8 @@ class Run {
     /** Conversations a step deleted: followers let them go, and nothing sweeps them. */
     this.deleted = new Set()
     this.sent = new Map()
+    /** Where native linking listens once the `linking` step turns it on. */
+    this.nativeAddress = stack.nativeAddress
   }
 
   /** Waits while a restart holds the gateway. */
@@ -252,21 +266,29 @@ async function untilTurn(run, conversationId, at, ready, seconds = 60) {
 
 const ended = (turn) => turnEnded(turn.status)
 
-/** Opens `title`'s conversation in the window, and waits for its composer. */
+/**
+ * Opens `title`'s conversation in the window, and waits for its composer.
+ * The row is the one titled `title` exactly: another row's last line can
+ * quote it, as a window turn's does.
+ */
 async function open(page, title) {
-  await page
-    .locator(css.sessionRow, { hasText: title })
-    .first()
-    .click({ timeout: 15_000 })
+  await sessionRow(page, title).click({ timeout: 15_000 })
   await dock(page).locator("textarea").waitFor({ timeout: 15_000 })
 }
+
+/** The row of the conversation titled `title`. */
+const sessionRow = (page, title) =>
+  page
+    .locator(css.sessionRow)
+    .filter({ has: page.getByText(title, { exact: true }) })
+    .first()
 
 /**
  * Chooses `label` in the More menu of the row titled `title`: the pointer
  * over the row shows its buttons, as a person sees them.
  */
 async function choose(page, title, label) {
-  const row = page.locator(css.sessionRow, { hasText: title }).first()
+  const row = sessionRow(page, title)
   await row.hover({ timeout: 15_000 })
   await row.locator('[data-session-action="more"]').click({ timeout: 10_000 })
   await page
@@ -276,9 +298,7 @@ async function choose(page, title, label) {
 
 /** Waits for a row titled `title` in the window's list. */
 async function rowShown(page, title, failures) {
-  const shown = await page
-    .locator(css.sessionRow, { hasText: title })
-    .first()
+  const shown = await sessionRow(page, title)
     .waitFor({ timeout: 15_000 })
     .then(() => true)
     .catch(() => false)
@@ -291,13 +311,14 @@ async function rowShown(page, title, failures) {
  * is one not among them. A read keeps only the latest turns, so a turn is
  * never found by its position. A send the window refuses or keeps is a
  * failure, not a retry. `known`, the turns the caller already read, skips
- * that read, which opens the conversation's agent.
+ * that read, which opens the conversation's agent. `where` is the composer,
+ * when more than one pane shows one.
  */
-async function send(run, conversationId, text, failures, known) {
+async function send(run, conversationId, text, failures, known, where = dock(run.page)) {
   const before = known ?? (await seenTurns(run, conversationId))
-  const box = dock(run.page).locator("textarea")
+  const box = where.locator("textarea")
   await box.fill(text)
-  const button = dock(run.page).getByRole(...composerControls.send)
+  const button = where.getByRole(...composerControls.send)
   await button.click({ timeout: 10_000 })
   const taken = await waitFor(async () => (await box.inputValue()) === "", 10_000)
   if (!taken) failures.push(`the composer kept ${JSON.stringify(text)} after Send`)
@@ -654,6 +675,65 @@ const steps = {
     })
   },
 
+  async linking(run, step, failures) {
+    const gateway = run.stack.gateway
+    const config = join(gateway.directory, "ci", "instances", INSTANCE, "config.json")
+    await run.exclusive(async () => {
+      const pid = gateway.server.pid
+      // The window retries its socket while the gateway restarts.
+      run.opened.noteHarmless(
+        /WebSocket connection to '.+\/session' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED/,
+      )
+      if (!(await run.page.$(css.settings))) await run.page.keyboard.press(keys.settings)
+      await run.page.locator(css.settingsCategory, { hasText: names.connections }).click()
+      await run.page.locator(css.settingsTab, { hasText: names.linkedDevices }).click()
+      for (const enabled of [true, false]) {
+        const want = enabled ? "on" : "off"
+        const before = await waitFor(
+          async () =>
+            (await run.page.locator(css.linked).getAttribute("data-linked")) ===
+            (enabled ? "off" : "on"),
+          30_000,
+        )
+        if (!before) {
+          failures.push(`linking was not ${enabled ? "off" : "on"} before the switch`)
+          return
+        }
+        const old = run.client
+        run.restarts += 1
+        await run.page.locator(`${css.linked} [role='switch']`).click()
+        const shown = await waitFor(
+          async () =>
+            (await run.page.locator(css.linked).getAttribute("data-linked")) === want,
+          60_000,
+        )
+        if (!shown) failures.push(`the window did not come back with linking ${want}`)
+        old.close()
+        run.client = await connectClient(gateway, INSTANCE, "panel")
+        const answered = await run.client.pairing.pending().then(
+          () => "on",
+          (error) =>
+            error?.refusal === "pairing_not_configured" ? "off" : String(error),
+        )
+        if (answered !== want)
+          failures.push(`the gateway answers linking ${answered}, not ${want}`)
+        const saved = JSON.parse(readFileSync(config, "utf8")).native
+        if (
+          (saved?.enabled !== false) !== enabled ||
+          saved?.listenAddress !== run.nativeAddress
+        )
+          failures.push(`config.json holds native ${JSON.stringify(saved)}`)
+        if (gateway.server.pid !== pid || gateway.server.exitCode !== null)
+          failures.push("the gateway did not start again in the same process")
+      }
+      // Esc does not close Settings; its back control returns to the app.
+      await run.page.getByRole("button", { name: "Back to nessa Agent" }).first().click()
+      await run.page.waitForSelector(css.settings, { state: "detached", timeout: 10_000 })
+    })
+    // The restarted gateway still answers the conversation, in the window.
+    if (failures.length === 0) await steps.reply(run, step, failures)
+  },
+
   async delegate(run, step, failures) {
     const text = prompt(run, STRESS.delegate, step)
     const seen = await send(run, run.main.id, text, failures)
@@ -682,6 +762,97 @@ const steps = {
     const seen = await send(run, run.main.id, text, failures)
     const { turn } = await settled(run, run.main.id, seen, text, "completed", failures)
     if (turn) watched(turn, failures)
+  },
+
+  async window(run, step, failures) {
+    const conversationId = randomUUID()
+    const first = prompt(run, STRESS.reply, step, " beside")
+    await run.client.conversation.create({ conversationId, agent: run.stack.agent })
+    run.checked.push(conversationId)
+    await run.client.conversation.submit(
+      run.client.conversation.prepare(conversationId, first),
+    )
+    await settled(run, conversationId, new Set(), first, "completed", failures)
+    if (failures.length) return
+    // ⌘B hides the sidebar, which makes room for a pane beside; ⌘-click on a
+    // row in the session list then opens it there, focused. The page is a Mac's.
+    await run.page.keyboard.press(keys.toggleSidebar)
+    await sessionRow(run.page, await titleOf(run, conversationId)).click({
+      modifiers: ["Meta"],
+      timeout: 15_000,
+    })
+    if (
+      !(await waitFor(
+        async () => (await run.page.locator(css.pane).count()) === 2,
+        10_000,
+      ))
+    ) {
+      failures.push(
+        `opening beside left ${await run.page.locator(css.pane).count()} panes, not 2`,
+      )
+      return
+    }
+    // Asked in the composer of the pane beside, the focused one.
+    const beside = await windowRead(
+      run,
+      conversationId,
+      step,
+      " beside",
+      failures,
+      (said) =>
+        said.you?.position === "right" &&
+        said.you.focused === true &&
+        said.windows?.length === 1 &&
+        said.windows[0].sidebar === "closed" &&
+        said.windows[0].sessionList === "open" &&
+        said.windows[0].panes.some(
+          (pane) =>
+            pane.threadId === run.main.id &&
+            pane.position === "left" &&
+            pane.focused === false,
+        ),
+    )
+    if (beside) {
+      const window = beside.windows[0]
+      if (window.arrangement !== "columns" || window.showing !== "panes")
+        failures.push(
+          `the window reads as ${window.arrangement} showing ${window.showing}`,
+        )
+      const left = window.panes.find((pane) => pane.threadId === run.main.id)
+      if (
+        left?.you !== false ||
+        left?.available === false ||
+        left?.kind !== "conversation"
+      )
+        failures.push(`the main conversation's pane reads ${JSON.stringify(left)}`)
+    }
+    // ⌘W closes the focused pane: the one beside.
+    await run.page.keyboard.press(keys.closePane)
+    if (
+      !(await waitFor(
+        async () => (await run.page.locator(css.pane).count()) === 1,
+        10_000,
+      ))
+    ) {
+      failures.push("⌘W did not close the pane beside")
+      return
+    }
+    await run.page.keyboard.press(keys.toggleSidebar)
+    // The main conversation is the pane left. Not opened from its row: the
+    // row beside it quotes the window, the main conversation's title with it.
+    // Asked from the main conversation's composer: it is the whole window now.
+    await windowRead(
+      run,
+      run.main.id,
+      step,
+      " alone",
+      failures,
+      (said) =>
+        said.you?.position === "full" &&
+        said.you.focused === true &&
+        said.windows?.length === 1 &&
+        said.windows[0].panes.length === 1,
+    )
   },
 
   async aside(run, step, failures) {
@@ -836,7 +1007,7 @@ const steps = {
       failures.push("the gateway's list still holds the deleted conversation")
     const hidden = await waitFor(
       async () =>
-        (await run.page.locator(css.sessionRow, { hasText: title }).count()) === 0,
+        (await sessionRow(run.page, title).count()) === 0,
       15_000,
     )
     if (!hidden) failures.push("the window still lists the deleted conversation")
@@ -925,6 +1096,44 @@ const steps = {
     await expectShown(run.page, `${SAYS.echo}${last}`, failures)
     await open(run.page, run.main.title)
   },
+}
+
+/**
+ * Asks `conversationId`'s agent what the window shows, until what it says
+ * meets `holds`, asked in the focused pane's composer. The window tells the
+ * gateway what it shows on its own request, so the turn can start a moment
+ * before the gateway has the change. Resolves with the answer that met
+ * `holds`, else `null`; the window shows each answer.
+ */
+async function windowRead(run, conversationId, step, extra, failures, holds) {
+  let said
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    const text = prompt(run, STRESS.window, step, `${extra} a${attempt}`)
+    // The pane asking is the focused one: its composer is the one typed in.
+    const seen = await send(
+      run,
+      conversationId,
+      text,
+      failures,
+      undefined,
+      run.page.locator(css.focusedPane).locator(css.conversationDock),
+    )
+    const { turn } = await settled(run, conversationId, seen, text, "completed", failures)
+    if (!turn) return null
+    const reply = (turn.parts ?? []).map((part) => part.text ?? "").join("")
+    const at = reply.indexOf(SAYS.window)
+    try {
+      said = JSON.parse(reply.slice(at + SAYS.window.length))
+    } catch {
+      failures.push(`the window turn did not say what it read: ${reply.slice(0, 120)}`)
+      return null
+    }
+    await expectShown(run.page, `${SAYS.window}{`, failures)
+    if (holds(said)) return said
+    await sleep(500)
+  }
+  failures.push(`${extra.trim()}, the agent read the window as ${JSON.stringify(said)}`)
+  return null
 }
 
 /**
@@ -1129,6 +1338,7 @@ async function atRest(run, ids) {
 
 async function startStack(options) {
   const knobs = knobsFrom(options)
+  const nativeAddress = `127.0.0.1:${await freePort()}`
   const directory = mkdtempSync(join(tmpdir(), "nessa-stress-"))
   const scenario = join(directory, "stress.json")
   writeFileSync(
@@ -1155,6 +1365,8 @@ async function startStack(options) {
       scenario,
       evidence: options.evidence,
       limits: { agentIdleSeconds: knobs.parks > 0 ? PARK_IDLE_SECONDS : 0 },
+      // Off, at a port of its own: the `linking` step turns it on from Settings.
+      native: { enabled: false, listenAddress: nativeAddress },
     })
   } catch (error) {
     rmSync(directory, { recursive: true, force: true })
@@ -1171,6 +1383,7 @@ async function startStack(options) {
   return panelTarget(stack, () => ({
     knobs,
     agent: options.agent,
+    nativeAddress,
     endpoint: stack.gateway.url.replace(/^http/, "ws"),
   }))
 }

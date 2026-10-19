@@ -250,6 +250,10 @@
       "params": "PairingInvitationParams",
       "grant": "credential.manage"
     },
+    "pairing.setLinking": {
+      "params": "PairingSetLinkingParams",
+      "grant": "credential.manage"
+    },
     "peer.enroll": {
       "params": "PeerEnrollParams",
       "grant": "credential.manage"
@@ -296,6 +300,10 @@
     },
     "conversation.revokePermissionRule": {
       "params": "ConversationRevokePermissionRuleParams",
+      "grant": "conversation.write"
+    },
+    "workspace.publish": {
+      "params": "WorkspacePublishParams",
       "grant": "conversation.write"
     },
     "conversation.subscribeEvents": {

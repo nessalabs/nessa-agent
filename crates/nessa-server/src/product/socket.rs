@@ -10,7 +10,7 @@ use crate::browser_session::application::{
 };
 use crate::browser_session::domain::value_objects::RemovalReason;
 use crate::conversation::application::{
-    access_refusal, AccessDecision, RecordReadLease, ReviewNoticeAuditFailure,
+    access_refusal, AccessDecision, RecordReadLease, ReviewNoticeAuditFailure, WindowSlot,
 };
 #[cfg(test)]
 use crate::conversation_test_support as conversation_support;
@@ -960,6 +960,14 @@ where
             authority_updates,
         ))
     });
+    // This connection's place for its window (`workspace.publish`), withdrawn
+    // when the socket goes and this is dropped.
+    let window = Arc::new(state.conversations.as_ref().map(|conversations| {
+        conversations.workspace_windows().open(
+            session.context().organization_id().clone(),
+            session.context().principal_id().clone(),
+        )
+    }));
     let record_slots = Arc::new(Semaphore::new(RECORD_SLOT));
     let app_slots = Arc::new(Semaphore::new(limits.app_calls_per_socket()));
     let app_mounts = Arc::new(Mutex::new(HashMap::new()));
@@ -1349,6 +1357,7 @@ where
         };
         let request_state = state.clone();
         let request_session = session.clone();
+        let request_window = std::sync::Arc::downgrade(&window);
         let task = tokio::spawn(async move {
             if matches!(class, ResponseClass::Record) {
                 let (message, record_work) = dispatch_passive_read(
@@ -1367,7 +1376,16 @@ where
                 (message, class, slot, record_work, mount_guard)
             } else {
                 let _permit = permit;
-                let message = dispatch(&request_state, &request_session, frame).await;
+                // Weak: a request still running when the socket goes does not
+                // keep its window published.
+                let window = request_window.upgrade();
+                let message = dispatch_on(
+                    &request_state,
+                    &request_session,
+                    frame,
+                    window.as_deref().and_then(Option::as_ref),
+                )
+                .await;
                 (
                     WireResponse::ordinary(message),
                     class,
@@ -1638,10 +1656,23 @@ fn passive_access_failure(request_id: &str, error: AccessError) -> WireResponse 
     WireResponse::ordinary(failure(request_id, code.as_str()))
 }
 
+/// A request on a connection with no window to publish: the tests' way in.
+#[cfg(test)]
 async fn dispatch(
     state: &ProductRouteState,
     session: &AuthenticatedSession,
     frame: RequestFrame,
+) -> OutgoingMessage {
+    dispatch_on(state, session, frame, None).await
+}
+
+/// [`dispatch`] on a connection that holds `window`, its place to publish
+/// its window in.
+async fn dispatch_on(
+    state: &ProductRouteState,
+    session: &AuthenticatedSession,
+    frame: RequestFrame,
+    window: Option<&WindowSlot>,
 ) -> OutgoingMessage {
     let (session, snapshot) = match current_identity(state, session).await {
         Ok(current) => current,
@@ -1669,6 +1700,9 @@ async fn dispatch(
         return success(&frame.id, &session_ready(state, &session, &snapshot));
     }
     match super::read_access::admit_request(state, &session, &frame).await {
+        Ok(_) if frame.method == super::workspace::METHOD => {
+            super::workspace::publish(window, frame)
+        }
         Ok(initiation) => dispatch_authorized(state, &session, frame, initiation).await,
         Err(code) => failure(&frame.id, code),
     }
@@ -1863,6 +1897,7 @@ async fn dispatch_authorized(
         method if method.starts_with("mcpServers.") => {
             super::mcp_servers::dispatch(state, session, frame).await
         }
+        "pairing.setLinking" => super::pairing::set_linking(state, session, frame).await,
         method if method.starts_with("pairing.") => {
             super::pairing::dispatch(state, session, frame).await
         }

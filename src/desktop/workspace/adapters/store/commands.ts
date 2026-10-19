@@ -84,6 +84,7 @@ export const {
   renameEnded,
   deleteAsked,
   deleteClosed,
+  arrangementShown,
 } = workspaceActions
 
 const {

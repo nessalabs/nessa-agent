@@ -36,6 +36,7 @@ export type PairingMethod =
   | "pairing.approve"
   | "pairing.deny"
   | "pairing.cancel"
+  | "pairing.setLinking"
 
 /**
  * A pairing method that did not answer with a result.

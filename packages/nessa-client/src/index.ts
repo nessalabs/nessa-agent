@@ -29,6 +29,7 @@ export {
   type IssueCredentialParams,
   type IssueCredentialResult,
   type ServerApi,
+  type WorkspaceApi,
   type AgentsApi,
   type RecordReadApi,
   type AgentsSubscriptionHandlers,
@@ -431,4 +432,15 @@ export type {
   ConversationEventKind,
   ConversationEvents,
   ConversationMessageReceipt,
+} from "./generated/product.js"
+export type {
+  WorkspaceArrangement,
+  WorkspaceColumn,
+  WorkspacePane,
+  WorkspacePaneItem,
+  WorkspacePaneKind,
+  WorkspacePublishResult,
+  WorkspaceShowing,
+  WorkspaceWidget,
+  WorkspaceWindow,
 } from "./generated/product.js"

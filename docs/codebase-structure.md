@@ -1645,6 +1645,16 @@ under `tests/backup/verification*.rs`; `tests/backup_verifier.rs` exercises the
 actual binary. [Standalone verification](design/backup-verification.md) defines
 the limits and the remaining restore contracts (#270).
 
+`backup_plan_main.rs` and `composition/restore_planning.rs` expose the separate
+`nessa-backup-plan` inspection command. `application/restore_planning.rs` forwards
+the application's format port to the verifier; composition supplies the shared
+`ExportFormat`. It reports omissions, unresolved prerequisites and unimplemented
+quarantine/import ordering; it acquires no activation or destination capability.
+`composition/backup_output.rs` owns JSON output for both offline commands.
+`tests/backup/restore_planning.rs` and `tests/backup_restore_plan.rs` cover the
+application decoder refusals and actual process. [Offline restore planning](design/offline-restore-planning.md)
+defines the boundary; #324 storage changes remain separately owned.
+
 ## Attachments
 
 `crates/nessa-server/src/attachments/` owns the files a conversation uploads so
@@ -2431,11 +2441,16 @@ profile/enrollment and retained history repository remain unfinished.
 
 ## Agent thread tools
 
-`nessa-server/src/composition/conversation_tools.rs` adapts four MCP tools to the
+`nessa-server/src/composition/conversation_tools.rs` adapts five MCP tools to the
 conversation application. `conversation/application/service/agent_tools.rs`
 resolves the source actor and calls the existing Cedar access evaluator before
 using ordinary target command/read paths. `application/agent_tools.rs` owns
 admission evidence and its audit port; `infrastructure/agent_tool_audit.rs`
 persists it. The built-in collection in relay composition keeps these tools
 independent of optional environment commands. See the [ordering and ownership
-contract](design/agent-thread-tools.md).
+contract](design/agent-thread-tools.md). The fifth, `read_window`, reads the
+windows `product/workspace.rs` holds for each connection in
+`application/workspace_windows.rs` (domain shape in
+`domain/value_objects/workspace_window.rs`), through
+`service/workspace_windows.rs`; see [the window an agent
+shares](design/agent-window.md).

@@ -883,5 +883,44 @@
     "offset": 0,
     "totalBytes": 2,
     "data": "e30="
-  }
+  },
+  "WorkspacePublishParams": {
+    "windowId": "7d9f2a4e-1b3c-4d5e-8f60-718293a4b5c6",
+    "revision": 3,
+    "window": {
+      "arrangement": "columns",
+      "sidebar": true,
+      "sessionList": true,
+      "showing": "panes",
+      "columns": [
+        {
+          "widthPercent": 50,
+          "panes": [
+            {
+              "heightPercent": 100,
+              "focused": true,
+              "item": {
+                "kind": "conversation",
+                "conversationId": "4f3c8a7e-1b2d-4c5e-8f90-a1b2c3d4e5f6"
+              }
+            }
+          ]
+        },
+        {
+          "widthPercent": 50,
+          "panes": [
+            {
+              "heightPercent": 100,
+              "focused": false,
+              "item": {
+                "kind": "widget",
+                "widget": { "plugin": "files", "id": "recent" }
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "WorkspacePublishResult": { "revision": 3, "applied": true }
 }

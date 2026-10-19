@@ -38,7 +38,10 @@ pub(super) struct RuntimeConfig {
     /// Tier-3 admission and the cold-read budget. Absent keeps the defaults.
     pub limits: LimitsConfig,
     pub agents: Option<AgentsConfig>,
-    /// Native device pairing; absent or `null` keeps it off (design rows S1, S2).
+    /// Native device pairing; absent, `null` or `"enabled": false` keeps it
+    /// off (design rows S1, S2). Settings › Linked devices writes it
+    /// (`native_linking`).
+    #[serde(deserialize_with = "native_section")]
     pub native: Option<NativeConfig>,
     /// The SSH hosts a conversation may be created on, each an OpenSSH
     /// destination (a `~/.ssh/config` alias or `user@host`). Absent or empty
@@ -107,6 +110,42 @@ pub(super) struct NativeConfig {
     #[serde(default)]
     pub advertised_address: Option<IpAddr>,
 }
+
+/// `native` as written: [`NativeConfig`]'s fields and `enabled`. False keeps
+/// native pairing off while keeping the addresses, so turning it back on from
+/// Settings finds them again; absent is on. Off reads as no section.
+fn native_section<'de, D>(deserializer: D) -> Result<Option<NativeConfig>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields, rename_all = "camelCase")]
+    struct Section {
+        #[serde(default = "on")]
+        enabled: bool,
+        listen_address: SocketAddr,
+        #[serde(default)]
+        relay: Option<RelayAddress>,
+        #[serde(default)]
+        advertised_address: Option<IpAddr>,
+    }
+    fn on() -> bool {
+        true
+    }
+    Ok(Option::<Section>::deserialize(deserializer)?
+        .filter(|section| section.enabled)
+        .map(|section| NativeConfig {
+            listen_address: section.listen_address,
+            relay: section.relay,
+            advertised_address: section.advertised_address,
+        }))
+}
+
+/// Where native pairing listens when Settings turns it on and `config.json`
+/// names no address yet.
+#[cfg(unix)]
+pub(super) const DEFAULT_NATIVE_LISTEN: SocketAddr =
+    SocketAddr::new(IpAddr::V4(std::net::Ipv4Addr::LOCALHOST), 47650);
 
 #[derive(Debug, Deserialize)]
 #[serde(default, deny_unknown_fields, rename_all = "camelCase")]
@@ -534,6 +573,19 @@ mod tests {
             .unwrap()
             .native
             .is_none());
+        // Off keeps its addresses in the file, and is no section to startup.
+        assert!(RuntimeConfig::parse(
+            br#"{"native":{"enabled":false,"listenAddress":"127.0.0.1:47650"}}"#
+        )
+        .unwrap()
+        .native
+        .is_none());
+        assert!(RuntimeConfig::parse(
+            br#"{"native":{"enabled":true,"listenAddress":"127.0.0.1:47650"}}"#
+        )
+        .unwrap()
+        .native
+        .is_some());
         for (bytes, address) in [
             (
                 br#"{"native":{"listenAddress":"127.0.0.1:47650"}}"#.as_slice(),
@@ -562,6 +614,11 @@ mod tests {
             br#"{"native":{}}"#,
             br#"{"native":{"listenAddress":"127.0.0.1:1","tls":true}}"#,
             br#"{"native":"127.0.0.1:47650"}"#,
+            // An off section still has to parse: turning it on must not
+            // surface one that never did.
+            br#"{"native":{"enabled":false}}"#,
+            br#"{"native":{"enabled":false,"listenAddress":"localhost:1"}}"#,
+            br#"{"native":{"enabled":"no","listenAddress":"127.0.0.1:1"}}"#,
         ] {
             assert!(
                 RuntimeConfig::parse(bytes).is_err(),

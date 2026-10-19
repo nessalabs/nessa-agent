@@ -2,6 +2,7 @@ mod agent_tools;
 mod creation;
 mod mutation;
 mod thread_reports;
+mod workspace_windows;
 use super::metadata_target::{load_conversation, validate_target};
 use super::session_key::conversation_session;
 use super::source_permits::SourcePermits;
@@ -112,6 +113,7 @@ use std::{
 #[cfg(test)]
 pub(crate) use thread_reports::report_text_for_test;
 pub use thread_reports::{PendingReport, ReportRegistration, ThreadReport, ThreadReportStore};
+pub use workspace_windows::{PaneConversation, WindowReading};
 
 use tokio::{
     sync::{
@@ -820,6 +822,8 @@ struct Inner {
     agent_tool_audit: OnceLock<Arc<dyn AgentToolAudit>>,
     /// Physical source admission owners retain their slot after response loss.
     agent_tool_admissions: Arc<SourcePermits>,
+    /// What each person's open desktop windows show, for their agents.
+    workspace_windows: Arc<super::WorkspaceWindows>,
     /// Agent sends waiting to report their thread's finished turn.
     thread_reports: thread_reports::ThreadReports,
     /// Decides every command's admission to a conversation.
@@ -1339,6 +1343,7 @@ impl ConversationService {
                 agent_tool_admissions: Arc::new(SourcePermits::new(
                     super::MAX_AGENT_TOOL_ADMISSIONS,
                 )),
+                workspace_windows: super::WorkspaceWindows::new(),
                 thread_reports: Default::default(),
                 access_policy,
                 limits,

@@ -125,3 +125,18 @@ when {
     principal.ownerInitiated &&
     !resource.deleted
 };
+
+// The owner's agent reads what the owner's desktop windows show: which
+// panes are open, where, and what each holds. An agent tool acts as the
+// person whose turn admitted it (`conversation.agent_tools`), so the reader
+// here is that person.
+@id("owner.workspace_read")
+permit (
+    principal is NessaConversation::Person,
+    action == NessaConversation::Action::"workspace.read",
+    resource is NessaConversation::Workspace
+)
+when {
+    principal.organization == resource.organization &&
+    principal.id == resource.owner
+};
