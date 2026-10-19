@@ -888,6 +888,9 @@ _ADR 238 › Decision_ (Settings is a typed catalogue; modal; its sidebar folds 
 
 ### Linked devices
 
+The scripted socket also answers the real window's automatic `workspace.publish`
+with its per-connection revision receipt; unknown methods remain failures.
+
 #462, over the owner pairing routes. The code, fingerprint and orbs are the
 UI kit's; this window wires them to `pairing.*` and owns the sentences. The
 phone's scanner is not this screen.

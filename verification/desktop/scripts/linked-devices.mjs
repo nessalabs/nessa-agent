@@ -53,6 +53,7 @@ const sessionReady = {
   methods: [
     "server.health",
     "auth.session",
+    "workspace.publish",
     "conversation.subscribeList",
     "conversation.unsubscribe",
     "credential.list",
@@ -110,6 +111,7 @@ function scriptedGateway(scenario) {
   const unexpected = []
   const known = new Set([
     "server.health",
+    "workspace.publish",
     "conversation.subscribeList",
     "conversation.unsubscribe",
     "auth.session",
@@ -124,11 +126,12 @@ function scriptedGateway(scenario) {
     "pairing.setLinking",
   ])
 
-  function reply(method, params) {
+  function reply(method, params, publish) {
     if (!known.has(method)) {
       unexpected.push(method)
       return { ok: false, error: { code: "invalid_request", message: "not this check" } }
     }
+    if (method === "workspace.publish") return publish(params)
     if (method === "server.health")
       return {
         ok: true,
@@ -198,6 +201,23 @@ function scriptedGateway(scenario) {
   }
 
   function route(socket) {
+    let publication
+    const publish = (params) => {
+      const { windowId, revision } = params ?? {}
+      if (
+        typeof windowId !== "string" ||
+        !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(
+          windowId,
+        ) ||
+        !Number.isSafeInteger(revision) ||
+        revision < 0
+      )
+        return { ok: false, error: { code: "invalid_request", message: "publication" } }
+      const held = publication?.windowId === windowId ? publication.revision : undefined
+      const applied = held === undefined || revision >= held
+      if (applied) publication = { windowId, revision }
+      return { ok: true, payload: { revision: applied ? revision : held, applied } }
+    }
     const nonce = `linked-${Math.random().toString(16).slice(2)}`
     // Events continue the socket's one sequence, after the challenge's.
     let seq = 1
@@ -234,7 +254,7 @@ function scriptedGateway(scenario) {
         )
         return
       }
-      const result = reply(frame.method, frame.params)
+      const result = reply(frame.method, frame.params, publish)
       socket.send(JSON.stringify({ type: "res", id: frame.id, ...result }))
       if (frame.method === "pairing.setLinking" && result.ok)
         setTimeout(() => void socket.close(), 100)
