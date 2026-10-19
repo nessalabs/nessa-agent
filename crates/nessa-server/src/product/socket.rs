@@ -1283,11 +1283,13 @@ where
             } else {
                 None
             };
+            let method = frame.method.clone();
             let reply = match refused {
                 Some(refused) => Some(refused),
                 None => subscriptions.begin(&state, &session, frame, slot.clone(), received_at),
             };
             if let Some(reply) = reply {
+                super::conversation::trace_refused_command(&method, &reply);
                 let queued = QueuedResponse {
                     message: WireResponse::ordinary(reply),
                     _slot: slot,
