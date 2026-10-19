@@ -2739,7 +2739,7 @@ async fn parent_stop_captures_the_last_permitted_running_successor() {
     }
 }
 
-async fn suspend_child_turn(
+pub(super) async fn suspend_child_turn(
     service: &ConversationService,
     provider: &ProviderFactory,
     child: &ConversationId,

@@ -48,6 +48,47 @@ impl ReportDelivery {
     }
 }
 
+/// Iterate continuations established by the SDK's canonical admission owner.
+fn resumed_executions<'history>(
+    original: &ExecutionId,
+    history: &'history [InvocationRecord],
+) -> impl Iterator<Item = ExecutionId> + 'history {
+    std::iter::successors(resumed_turn_id(history, original), move |execution| {
+        resumed_turn_id(history, execution)
+    })
+}
+
+/// Missing source or selected Stop admissions cannot establish an unstopped
+/// source chain. History is observed after the Stop receipts it must cover.
+pub(super) fn source_chain_is_unstopped(
+    source: &str,
+    history: Option<&[InvocationRecord]>,
+    stopped: &HashSet<String>,
+) -> bool {
+    let Some(history) = history else {
+        return false;
+    };
+    let admitted: HashSet<_> = history
+        .iter()
+        .map(|record| record.request.execution_id.as_str())
+        .collect();
+    if !stopped
+        .iter()
+        .all(|execution| admitted.contains(execution.as_str()))
+    {
+        return false;
+    }
+    let Some(record) = history
+        .iter()
+        .find(|record| record.request.execution_id.as_str() == source)
+    else {
+        return false;
+    };
+    !stopped.contains(source)
+        && resumed_executions(&record.request.execution_id, history)
+            .all(|execution| !stopped.contains(execution.as_str()))
+}
+
 /// Admitted execution chains descended from validated report deliveries.
 /// The SDK alone validates each canonical successor; continuation notice text
 /// and caller-chosen ID prefixes cannot confer report provenance.
@@ -68,13 +109,10 @@ pub(super) fn report_deliveries(
         if !candidates.contains(record.request.execution_id.as_str()) || !is_delivery(record) {
             continue;
         }
-        let mut delivery = ReportDelivery {
+        let delivery = ReportDelivery {
             original: record.request.execution_id.clone(),
-            successors: Vec::new(),
+            successors: resumed_executions(&record.request.execution_id, history).collect(),
         };
-        while let Some(next) = resumed_turn_id(history, delivery.current()) {
-            delivery.successors.push(next);
-        }
         deliveries.push(delivery);
     }
     deliveries

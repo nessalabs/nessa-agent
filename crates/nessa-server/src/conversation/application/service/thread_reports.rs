@@ -684,22 +684,35 @@ impl ConversationService {
     }
 
     /// The sender already has `execution`'s reply, read in its own turn:
-    /// its report would only say it again, so it is let go. A stopped source
-    /// execution cannot acknowledge it; unreadable Stop receipts retain it.
+    /// its report would only say it again, so it is let go. Stop of the source
+    /// or its SDK-validated continuation retains it, as does missing evidence.
     pub async fn claim_thread_report(
         &self,
         child: &ConversationId,
         execution: &str,
         source: &AgentToolSource,
     ) {
-        match self
+        let stopped = match self
             .stopped_report_executions(source.conversation(), &source.caller())
             .await
         {
-            Ok(stopped) if !stopped.contains(source.execution()) => {}
-            Ok(_) => return,
+            Ok(stopped) => stopped,
             Err(error) => {
                 tracing::warn!(conversation_id = %source.conversation(), execution = source.execution(), %error, "reply claim retains its report until source Stop receipts can be read");
+                return;
+            }
+        };
+        if !stopped.is_empty() {
+            // Read after receipts: the source and selected Stop admissions must
+            // be present before the SDK can establish an unstopped source chain.
+            let history = self
+                .report_history(source.conversation(), &source.caller())
+                .await;
+            if !super::thread_report_admission::source_chain_is_unstopped(
+                source.execution(),
+                history.as_deref(),
+                &stopped,
+            ) {
                 return;
             }
         }

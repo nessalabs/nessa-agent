@@ -330,12 +330,16 @@ until the relay writes the whole reply, as described above.
 | An injected turn's host is suspended and resumes | Subscribe and the report both follow the SDK's exact successor, remaining unfinished until it settles; `an_injected_report_waits_for_its_suspended_hosts_exact_successor`. |
 | A person stops the parent while a child report becomes ready | Existing durable Stop receipts hold dispatch and cancelled report attempts remain saved for later person input; a report does not restart the stopped parent. |
 | A whole-reply callback from the source turn runs after that turn was stopped | The callback carries its admitted `AgentToolSource`; existing durable Stop receipts refuse that exact execution's claim, retaining the saved report. `a_stopped_source_reply_claim_retains_the_durable_child_report` exercises the application callback after a real Stop. |
+| Source A canonically resumes as B, a person stops B, then the detached A callback runs | The SDK's validated source continuation relates A to B. The claim retains the durable row, including after SQLite reopen; `a_stopped_canonical_successor_retains_the_original_sources_delayed_reply` uses actual same-process SDK suspension/resumption and Stop, then checks later-source eligibility. |
 | A later person turn starts before the old callback runs | The old execution remains stopped; its callback still retains the report. A newly admitted source execution can claim the reply; the same regression checks both identities. |
 | Stop receipt observation fails before a whole-reply claim | The report remains saved; an unreadable receipt does not prove that its source was not stopped. |
+| Source history is unavailable or does not cover an observed Stop identity | Retain the report: a stale or missing source history cannot prove an unstopped canonical continuation. |
 
-The callback checks the source execution rather than the conversation's current
-pause: later person input can release a pause without reviving an earlier
-execution. The receipt observation orders the claim against Stop; a claim whose
+The callback checks the admitted source and the canonical continuations validated
+by the existing SDK, rather than the conversation's current pause: later person
+input can release a pause without reviving an earlier execution. It observes
+Stop receipts first, then reads source history that covers those selected
+identities; missing evidence retains the row. The receipt observation orders the claim against Stop; a claim whose
 observation preceded Stop remains an earlier acknowledgement. This consumes the
 same receipt authority as report delivery, without changing tool authorization.
 
