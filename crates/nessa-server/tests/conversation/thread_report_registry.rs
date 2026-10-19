@@ -175,6 +175,11 @@ async fn an_injected_report_waits_for_its_suspended_hosts_exact_successor() {
         ),
         Found::Continuing
     ));
+    assert_eq!(
+        service.thread_turn_end(&child, &caller, "steer").await,
+        ThreadTurn::Unfinished,
+        "subscribe and the report await the same exact successor"
+    );
     let owed = live
         .agent
         .owed_turns()
@@ -216,6 +221,11 @@ async fn an_injected_report_waits_for_its_suspended_hosts_exact_successor() {
         Found::Finished("completed", Some(reply)) => assert_eq!(reply, "Successor answer."),
         _ => panic!("the report must follow its injected host's exact successful successor"),
     }
+    assert_eq!(
+        service.thread_turn_end(&child, &caller, "steer").await,
+        ThreadTurn::Ended("completed", Some("Successor answer.".into())),
+        "subscribe and the report return the same successor's reply"
+    );
     service.shutdown().await.unwrap();
 }
 
@@ -422,5 +432,86 @@ async fn unavailable_stop_receipts_cannot_acknowledge_a_declined_failed_report()
     .unwrap();
     drop(delivery);
     assert_eq!(store.pending().await.unwrap().len(), 1);
+    service.shutdown().await.unwrap();
+}
+
+/// A sender call waiting on a turn holds its report back; once let go, the
+/// report is taken as usual. A claim while it is being queued calls it off,
+/// and a claim before it is taken leaves nothing to take.
+#[tokio::test]
+async fn an_awaited_report_is_held_and_a_claim_calls_off_one_being_queued() {
+    let (service, _, _, _) = fixture(ConversationLimits::default());
+    let child = ConversationId::new("00000000-0000-4000-8000-000000000001").unwrap();
+    let parent = ConversationId::new("00000000-0000-4000-8000-000000000002").unwrap();
+    let caller = ConversationCaller {
+        organization_id: OrganizationId::new("org").unwrap(),
+        principal_id: PrincipalId::new("person").unwrap(),
+        surface_id: "panel".into(),
+        action_id: "report-action".into(),
+    };
+    let reports = &service.inner.thread_reports;
+    let finished = |_: &str, _: bool| Some("done".to_owned());
+    for (work, report) in [("work", "report"), ("other", "report-2")] {
+        let report = ThreadReport {
+            parent: parent.clone(),
+            caller: caller.clone(),
+            execution: report.into(),
+        };
+        assert_eq!(
+            service
+                .report_thread_turn(child.clone(), work.into(), report)
+                .await,
+            ReportRegistration::Registered
+        );
+    }
+
+    // Held while a call waits on it, taken once that call lets go.
+    reports.await_turn(&child, "work", &parent, 1);
+    let taken = reports.take(
+        &child,
+        std::slice::from_ref(&caller),
+        |execution, restored| {
+            (execution == "work")
+                .then(|| finished(execution, restored))
+                .flatten()
+        },
+    );
+    assert!(taken.is_empty(), "an awaited report is held");
+    reports.await_turn(&child, "work", &parent, -1);
+    let mut taken = reports.take(
+        &child,
+        std::slice::from_ref(&caller),
+        |execution, restored| {
+            (execution == "work")
+                .then(|| finished(execution, restored))
+                .flatten()
+        },
+    );
+    assert_eq!(taken.len(), 1);
+    assert!(!taken[0].delivering.claimed());
+    assert_eq!(reports.delivering.load(Ordering::SeqCst), 1);
+    // Submission/Stop releases live admission, but the same guard still
+    // owns the claim. Releasing twice cannot consume another report's count.
+    taken[0].delivering.release();
+    taken[0].delivering.release();
+    assert_eq!(reports.delivering.load(Ordering::SeqCst), 0);
+    assert_eq!(reports.queuing.lock().unwrap().len(), 1);
+    assert!(!taken[0].delivering.claimed());
+    // The sender read the reply while the report was being queued.
+    assert!(reports.claim(&child, "work", &parent).is_empty());
+    assert!(
+        taken[0].delivering.claimed(),
+        "the queued report is called off"
+    );
+    drop(taken);
+    assert!(reports.queuing.lock().unwrap().is_empty());
+    assert_eq!(reports.delivering.load(Ordering::SeqCst), 0);
+
+    // Claimed before it is taken: no report is left to send.
+    assert_eq!(
+        reports.claim(&child, "other", &parent),
+        vec!["report-2".to_owned()]
+    );
+    assert!(reports.take(&child, &[caller], finished).is_empty());
     service.shutdown().await.unwrap();
 }

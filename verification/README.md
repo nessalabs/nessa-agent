@@ -92,6 +92,10 @@ verification/
         resource-read-evidence.mjs Node incremental hash, exact Request correlation and bounded evidence ownership (#996)
         resource-read-modules.mjs opt-in exact Vite export decoration before navigation
         open-failure-evidence.mjs failure-only animation/RAF and redacted pending HTTP/RPC capture before disposal (#981)
+        stress-conversation.mjs open the exact created conversation, preserving its title constraint
+        stress-conversation.test.mjs duplicate titles and missing identities cannot redirect selection
+        stress-restart.mjs   scope intentional restart console lines to exact socket evidence and verified recovery (#1024)
+        stress-restart.test.mjs temporal, endpoint, occurrence, failed-recovery and cleanup boundaries
         page-lines.mjs      report each collected page event through its step or close owner
         page-lines.test.mjs queue-free page API, classification, once-only reporting and concurrent attribution
         workspace.mjs       open panes and completed tool work, read pane rects and focus, lift a pane, rect containment, a model rule or value read in the page

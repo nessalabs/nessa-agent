@@ -129,9 +129,29 @@ person stops it as they would any turn. Tests:
 `a_long_reply_is_cut_so_the_whole_report_fits_the_input_limit`,
 `waiting_reports_survive_reopening_until_settled`.
 
-For example, call `send_message({threadId, message: "Review the change"})`, then
-`subscribe({threadId, replay: true})`. Continue with the returned `cursor` as
-`after` until `more` is false; use `waitMs` when waiting for later changes.
+For example, call `send_message({threadId, message: "Review the change"})`,
+then either end the turn and let the report wake it, or wait in place with one
+`subscribe({threadId, executionId})` naming the returned execution. That call
+waits up to 30 s (its default) and answers `turn: {finished: true, outcome,
+reply}` as soon as the turn ends, at once if it already had; `finished: false`
+means it still runs. The reply is read as the report reads it
+(`thread_turn_end`), so both always agree. While such a call waits, the turn's
+report holds back (`await_thread_turn`). Once the relay has written an answer
+holding the whole reply, the report is let go (`claim_thread_report`, run from
+the answer's `delivered` hook). A call that gives up, or whose answer is never
+written because it was cancelled or its caller went, looks again so the report
+is sent as usual. Test:
+`one_subscribe_naming_the_sent_turn_returns_its_reply_in_place_of_the_report`.
+
+To read a thread's events instead, call `subscribe({threadId, replay: true})`
+and continue with the returned `cursor` as `after` until `more` is false; use
+`waitMs` when waiting for later changes. A page holding only events the
+projection leaves out (message text, thinking) is read past, never answered
+empty with `more: true`, which once had an agent walk a streamed reply one
+invisible page at a time. An answer ends at the first `turn.ended`, which comes
+with `turn: {outcome, reply}`. That is the turn's settled end, the one its
+report carries, so it can be ahead of the event's own local outcome when
+settlement replaced it; the settlement events follow after the cursor.
 
 ## Source authority
 
@@ -178,7 +198,8 @@ can finish after source cancellation, as ordinary command admission does.
 
 `subscribe` holds one independent committed SDK reader, not an Agent handle. It
 projects execution/tool IDs, kinds, statuses and outcomes; it omits message
-content, thinking and tool arguments. A history gap or invalid/reset/pruned
+content, thinking and tool arguments, except an ended turn's final reply (the
+text after its last tool step), cut to fit the answer. A history gap or invalid/reset/pruned
 cursor is an explicit refusal. A callback does not run inside a transition,
 and receiving events does not cause a model turn or enqueue another message.
 
@@ -247,6 +268,12 @@ is not a claim that an external effect was rolled back.
 | Now/Beginning first Idle then Preparing and another Page/Idle | First Idle establishes continuity; Preparing retains it. Wrong incarnation and backwards progress refuse, while trailing events and nondecreasing Idle remain valid; same tests. |
 | Now returns its first Page without a prior checkpoint | Accept the source's captured starting position; no prior cursor is fabricated; same tests. |
 | Subscribe supplies after together with replay:true or replay:false | Reject invalid_request by field presence before source admission or reader opening; actual Relay regression in `tests/conversation/agent_tools.rs`. |
+| A subscribe naming a turn starts before the turn ends | The turn's report is held while the call waits; a whole reply in an answer that fits claims it, and a call that times out or reads only events lets it go; `one_subscribe_naming_the_sent_turn_returns_its_reply_in_place_of_the_report` in `tests/conversation/agent_tools.rs`, holding in `tests/conversation/thread_report_registry.rs`. |
+| The report was taken for queuing, not yet submitted, when the call claims it | The claim marks it and delivery checks before each submit, so it is called off; `an_awaited_report_is_held_and_a_claim_calls_off_one_being_queued` in `tests/conversation/thread_report_registry.rs`. |
+| The report was already submitted before the call names the turn | The call still answers; the report stays queued, so the reply can come twice, never not at all; same agent_tools test. |
+| Cancellation, disconnect or revoked grant after the answer is built, before it is written | The relay drops the `delivered` hook unrun: no claim, the hold drops, the report is sent; `tests/mcp_servers/built_in.rs`. |
+| Claim settles the saved report and the store write fails, then the gateway restarts | The row stays saved and the next run delivers it, a repeat of the reply; `saved_thread_reports_are_delivered_after_a_restart` in `tests/conversation/agent_tools.rs`. |
+| The awaited turn's history is unreadable, or its end still settling | Looked for again every second; a deadline after an unreadable look answers unavailable, never `finished: false`; unit tests in `composition/conversation_tools.rs`. |
 
 The observation loop previously treated permission to start a read as permission
 to publish its eventual result. Separate return paths for page, idle, and deadline
@@ -285,3 +312,25 @@ owns source admission; the existing Cedar access adapter owns delegation policy;
 `conversation/infrastructure/agent_tool_audit.rs` owns durable delivery. Event
 projection and target admission are shared through the conversation application;
 private record formats stay in SDK infrastructure.
+
+## Claims while a report waits after Stop
+
+A taken report has one delivery guard. Its live-admission count can be released
+when its submitted turn is waiting or was cancelled; its entry in the existing
+queuing map stays owned by that guard until the delivery future ends. This keeps
+an in-turn reply claim visible without counting a paused durable report as live
+work. The durable report store remains the restart authority. No claim is made
+until the relay writes the whole reply, as described above.
+
+| Ordering | Result and regression |
+| --- | --- |
+| Sender awaits before the report is taken | The watch holds delivery; `an_awaited_report_is_held_and_a_claim_calls_off_one_being_queued`. |
+| Live admission is released, then the sender claims its written reply | The same guard observes the claim; releasing twice does not decrement another count, and final drop removes its map entry; the same registry regression checks all three facts. |
+| Sender disconnects or its reply is not written | No claim; existing delivery/restart handling retains the saved report; `one_subscribe_naming_the_sent_turn_returns_its_reply_in_place_of_the_report`. |
+| An injected turn's host is suspended and resumes | Subscribe and the report both follow the SDK's exact successor, remaining unfinished until it settles; `an_injected_report_waits_for_its_suspended_hosts_exact_successor`. |
+| A person stops the parent while a child report becomes ready | Existing durable Stop receipts hold dispatch and cancelled report attempts remain saved for later person input; a report does not restart the stopped parent. |
+
+Claims can suppress a report still waiting to be submitted. A report already
+submitted has the existing duplicate allowance; a failed store settlement leaves
+the durable row available after restart. The claim map is transient coordination,
+not ownership of a child or an alternative durable store.
