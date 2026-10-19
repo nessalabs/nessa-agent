@@ -2020,3 +2020,7 @@ with a typed failure.
   `subagents.stopChildrenOnParentStop:false` and asserts the descendants remain
   running. This runs in `pnpm test:e2e:scripted`; the Rust Stop/report tests own
   controlled races and restart coverage.
+  The repeated `conversation-stress.mjs` step also observes the selected native
+  session's ACP prompts: withdrawing an older queued report can publish empty
+  cancelled history, but a further provider prompt fails even if it produces
+  no output. Missing or damaged recording evidence fails the check.

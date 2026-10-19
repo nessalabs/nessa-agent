@@ -123,6 +123,7 @@ import {
   selectedStressConversation,
 } from "./lib/stress-conversation.mjs"
 import { observeGatewayRestarts } from "./lib/stress-restart.mjs"
+import { parentRestarted, parentStopCheckpoint } from "./lib/stress-parent-stop.mjs"
 import { KNOBS, describe, knobsFrom, plan, random } from "./lib/stress-plan.mjs"
 
 const INSTANCE = "conversation-stress"
@@ -203,6 +204,7 @@ class Run {
   constructor(stack, opened, knobs, restartConsole) {
     this.restartConsole = restartConsole
     this.stack = stack
+    this.acpRecording = stack.acpRecording
     this.opened = opened
     this.page = opened.page
     this.knobs = knobs
@@ -805,6 +807,7 @@ const steps = {
       return
     }
     const beforeStop = await seenTurns(run, run.main.id)
+    const checkpoint = parentStopCheckpoint(readFileSync(run.acpRecording, "utf8"), text)
     await dock(run.page)
       .getByRole(...composerControls.stop)
       .click({ timeout: 10_000 })
@@ -843,7 +846,12 @@ const steps = {
     await sleep(1500)
     const after = await run.client.conversation.read(run.main.id)
     if (
-      after.messages.some((turn) => !beforeStop.has(turn.executionId)) ||
+      parentRestarted(
+        checkpoint,
+        readFileSync(run.acpRecording, "utf8"),
+        beforeStop,
+        after.messages,
+      ) ||
       after.messages.find((turn) => turn.executionId === parent.turn.executionId)
         ?.status !== "cancelled"
     )
@@ -1729,6 +1737,8 @@ async function startStack(options) {
   const knobs = knobsFrom(options)
   const nativeAddress = `127.0.0.1:${await freePort()}`
   const directory = mkdtempSync(join(tmpdir(), "nessa-stress-"))
+  // Stop's dispatch assertion also runs without an exported evidence folder.
+  const recordingDirectory = options.evidence ?? join(directory, "recording")
   const scenario = join(directory, "stress.json")
   writeFileSync(
     scenario,
@@ -1752,7 +1762,7 @@ async function startStack(options) {
     stack = await startGatewayStack(options, INSTANCE, {
       as: "panel",
       scenario,
-      evidence: options.evidence,
+      evidence: recordingDirectory,
       limits: { agentIdleSeconds: knobs.parks > 0 ? PARK_IDLE_SECONDS : 0 },
       // Off, at a port of its own: the `linking` step turns it on from Settings.
       native: { enabled: false, listenAddress: nativeAddress },
@@ -1772,6 +1782,7 @@ async function startStack(options) {
   return panelTarget(stack, () => ({
     knobs,
     agent: options.agent,
+    acpRecording: join(recordingDirectory, "acp.jsonl"),
     nativeAddress,
     endpoint: stack.gateway.url.replace(/^http/, "ws"),
   }))
