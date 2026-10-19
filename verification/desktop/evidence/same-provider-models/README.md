@@ -1,5 +1,16 @@
 # Same-provider model control: current source evidence
 
+Latest SDK correction source `7dcb51d216bb428d6956c36cabe3d2dc44491d2e` (tree `bdb7e1f043ab5a8deb9d770d8e54bb57127b7fb9`)
+supervises the existing effort owner’s whole post-Requested computation and
+protected future cleanup. Native acknowledgement remains distinct from local
+persistence and one terminal audit attempt. Corrected ordinary baseline has
+5 intended failures /11 positives; isolated sole-poll-supervision omission has
+6 failures /10 positives; exact restoration passes16. Final affected qualification
+passes162 unique runtime tests,57 SDK doctests, seven-package strict Clippy/fmt
+and strict SDK docs. Original mixed fixture failures remain separate records.
+R8 was incomplete; a new whole-assembly review and current CI remain required.
+The browser/server/photos below retain their earlier stated source scope.
+
 Runtime source `57b0e0f1b637ea0bac61405b5f237ccf6da4415f`, tree
 `74edc4a8e5eb5efad6540ec23bdeb531f3add572`, assembled immutable main
 `73fabdb883722c9ecd1c64b46f2ec8c76405342c`. UI pin remains
@@ -28,9 +39,10 @@ Claude's subsequent-responses and Codex's next-turn effects remain distinct.
 
 The integration keeps main's written-once/delivered report owner, undelivered
 callbacks, awaited turns, lossless reports/empty pages and original 5-second gate
-capture. The SDK tree is exactly 8e0 (`725049d9936400e112dfe315745119d279dc308a`),
-as are protocol/client/frontend source. Earlier SDK/R7 and frontend evidence
-retain their byte-equivalent scope; no new whole 6,838 or full frontend run is
+capture. At the browser qualification source, the SDK tree was exactly 8e0
+(`725049d9936400e112dfe315745119d279dc308a`). The later effort correction above
+has separate affected SDK qualification. Protocol/client/frontend source remains
+byte-equivalent; earlier SDK/R7 and frontend evidence retains its stated scope; no new whole 6,838 or full frontend run is
 claimed. The current server, canonical and strict checks ran on 66f0dfb; the
 later source delta is only the shared stress observer/test and CHECKLIST.
 The current journeys ran the exact 57b0e0f bytes before the byte-preserving commit.

@@ -408,7 +408,7 @@
       "backend_note": "Original source-qualified union only; not a current repeated full suite.",
       "failed_ci_run": "39208371137",
       "failed_ci_merge": "c38785ae421cc6bc8f824f8c319fcf1a57dac642",
-      "failed_ci_note": "Linux Auto\u2192Fable acknowledged unsupported preset, conservative cancellation/reopen; original exact thrown error uncaptured. Original stress/follower/chaos failures retained, not relabelled."
+      "failed_ci_note": "Linux Auto→Fable acknowledged unsupported preset, conservative cancellation/reopen; original exact thrown error uncaptured. Original stress/follower/chaos failures retained, not relabelled."
     },
     "local_integration_failures_retained": [
       {
@@ -637,5 +637,276 @@
       "strict_checks": "Exact seven-package all-target Clippy -D warnings/fmt and strict SDK docs pass.",
       "limits": "Private omission proves poll supervision; separate future-drop public ordering not fabricated. Runtime destruction cannot promise audit delivery. No repeated whole frontend/browser/full6838. Fresh whole review/current CI required."
     }
+  },
+  "latest_sdk_effort_supervision": {
+    "source_commit": "7dcb51d216bb428d6956c36cabe3d2dc44491d2e",
+    "source_tree": "bdb7e1f043ab5a8deb9d770d8e54bb57127b7fb9",
+    "author_selfgate_sha256": "a1d9b819b6382fc2976e40d7f9f762b36624135c37397044afbffbd210e1bc9e",
+    "source_manifest_sha256": "54751edd7658d6a5dfeb8d6d96f83e5cefb4378734260b5dc8163ff5e7d4c10b",
+    "owned_files": {
+      "crates/nessa-sdk/docs/agent_execution/lifecycle.md": "912e7953b2d9a6c7b538cc3d44a77eb48fe3d1a6c06029d4f02c160bc4f5bef7",
+      "crates/nessa-sdk/src/application/agent_execution/agents/agent.rs": "5cde2b92dcdb8e58270ae6da622c9d5d27bc286e9e1498b93c728e388947280f",
+      "crates/nessa-sdk/tests/application/agent_execution/agents/effort/settlement.rs": "8f7ce9f1249db1590277ca6afa156663ddc1a486f9efac90e3883d0176049775"
+    },
+    "runtime_unique_pass": 162,
+    "runtime_sum_with_overlap": 166,
+    "original_live_codex_ignored": 1,
+    "sdk_doctests": 57,
+    "checks": [
+      {
+        "name": "clippy-seven",
+        "command": [
+          "cargo",
+          "clippy",
+          "-p",
+          "nessa-local-storage",
+          "-p",
+          "nessa-auth",
+          "-p",
+          "nessa-server",
+          "-p",
+          "nessa-protocol",
+          "-p",
+          "nessa-client-core",
+          "-p",
+          "nessa-device-client",
+          "-p",
+          "nessa-sdk",
+          "--all-targets",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        "exit_code": 0,
+        "elapsed_seconds": 80.796742083,
+        "minimum_free_bytes": 6411857920,
+        "disk_stop": false,
+        "log": "/tmp/nessa-975-r8-effort-clippy-seven.log",
+        "log_sha256": "ee00448bd2d2063369e1b48ffd85109486e8a1209c8f865382976e65bc5e0e8d"
+      },
+      {
+        "name": "fmt-seven",
+        "command": [
+          "cargo",
+          "fmt",
+          "--check",
+          "-p",
+          "nessa-local-storage",
+          "-p",
+          "nessa-auth",
+          "-p",
+          "nessa-server",
+          "-p",
+          "nessa-protocol",
+          "-p",
+          "nessa-client-core",
+          "-p",
+          "nessa-device-client",
+          "-p",
+          "nessa-sdk"
+        ],
+        "exit_code": 0,
+        "elapsed_seconds": 4.232092292000004,
+        "minimum_free_bytes": 6412058624,
+        "disk_stop": false,
+        "log": "/tmp/nessa-975-r8-effort-fmt-seven.log",
+        "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "effort",
+        "command": [
+          "cargo",
+          "test",
+          "-p",
+          "nessa-sdk",
+          "--test",
+          "application",
+          "application::agent_execution::agents::effort",
+          "--",
+          "--nocapture"
+        ],
+        "exit_code": 0,
+        "elapsed_seconds": 20.634732625000012,
+        "minimum_free_bytes": 6411988992,
+        "disk_stop": false,
+        "log": "/tmp/nessa-975-r8-effort-effort.log",
+        "log_sha256": "0a0dfb5b5890870b357fcec6ab881e6ac334266fa9e3a2419e5bc18f8c95cf76"
+      },
+      {
+        "name": "models",
+        "command": [
+          "cargo",
+          "test",
+          "-p",
+          "nessa-sdk",
+          "--test",
+          "application",
+          "application::agent_execution::agents::models"
+        ],
+        "exit_code": 0,
+        "elapsed_seconds": 2.2295577080000015,
+        "minimum_free_bytes": 6415101952,
+        "disk_stop": false,
+        "log": "/tmp/nessa-975-r8-effort-models.log",
+        "log_sha256": "4ec3968c78490c78febde2132d97da050afd33efafb0181bcbc63a8c7b390c01"
+      },
+      {
+        "name": "approval",
+        "command": [
+          "cargo",
+          "test",
+          "-p",
+          "nessa-sdk",
+          "--test",
+          "application",
+          "application::agent_execution::agents::approval"
+        ],
+        "exit_code": 0,
+        "elapsed_seconds": 2.2241769999999974,
+        "minimum_free_bytes": 6415040512,
+        "disk_stop": false,
+        "log": "/tmp/nessa-975-r8-effort-approval.log",
+        "log_sha256": "2fbf33944a684529af827585730e6662dd50f3fcace91ad51da3f391cc21993f"
+      },
+      {
+        "name": "native-effort",
+        "command": ["cargo", "test", "-p", "nessa-sdk", "--lib", "effort"],
+        "exit_code": 0,
+        "elapsed_seconds": 26.29956575,
+        "minimum_free_bytes": 5928329216,
+        "disk_stop": false,
+        "log": "/tmp/nessa-975-r8-effort-native-effort.log",
+        "log_sha256": "b67d5212fc841fb80e9d8a50f4fac510067127a5625efea7f14dc47ceba89ecb"
+      },
+      {
+        "name": "native-models",
+        "command": ["cargo", "test", "-p", "nessa-sdk", "--lib", "model_"],
+        "exit_code": 0,
+        "elapsed_seconds": 2.2495187920000035,
+        "minimum_free_bytes": 5928157184,
+        "disk_stop": false,
+        "log": "/tmp/nessa-975-r8-effort-native-models.log",
+        "log_sha256": "e60108e13b13229524beee5944016cc60e2e94affd136d2c9a26e5f4d35bcd06"
+      },
+      {
+        "name": "native-approval",
+        "command": ["cargo", "test", "-p", "nessa-sdk", "--lib", "approval"],
+        "exit_code": 0,
+        "elapsed_seconds": 2.2497073330000035,
+        "minimum_free_bytes": 5928001536,
+        "disk_stop": false,
+        "log": "/tmp/nessa-975-r8-effort-native-approval.log",
+        "log_sha256": "49133c14d907630b2991ffc538fb56fb1c160d94873ab41a39663c29ba174e4b"
+      },
+      {
+        "name": "configuration-relation",
+        "command": [
+          "cargo",
+          "test",
+          "-p",
+          "nessa-sdk",
+          "--lib",
+          "configuration_relationships"
+        ],
+        "exit_code": 0,
+        "elapsed_seconds": 2.2265527090000035,
+        "minimum_free_bytes": 5927366656,
+        "disk_stop": false,
+        "log": "/tmp/nessa-975-r8-effort-configuration-relation.log",
+        "log_sha256": "8feeff5f5ac48fd4504462286fe05f7e58d660d0c37c30a01ab06a99ab728df0"
+      },
+      {
+        "name": "sdk-doc-tests",
+        "command": ["cargo", "test", "-p", "nessa-sdk", "--doc"],
+        "exit_code": 0,
+        "elapsed_seconds": 6.250469207999998,
+        "minimum_free_bytes": 5921792000,
+        "disk_stop": false,
+        "log": "/tmp/nessa-975-r8-effort-sdk-doc-tests.log",
+        "log_sha256": "3f0aa38aae4010205153f0bcde0a33eaf0c4356505a701f7a2fd1b2ec80a3c04"
+      },
+      {
+        "name": "strict-sdk-docs",
+        "command": ["node", "scripts/check-sdk-docs.mjs"],
+        "exit_code": 0,
+        "elapsed_seconds": 4.253496208000001,
+        "minimum_free_bytes": 5924773888,
+        "disk_stop": false,
+        "log": "/tmp/nessa-975-r8-effort-strict-sdk-docs.log",
+        "log_sha256": "6837a590d2d54b9f31d7c3b5c560bde41b6b9f5940e934760c1da3a5387f5774"
+      },
+      {
+        "name": "diff",
+        "command": ["git", "diff", "--check"],
+        "exit_code": 0,
+        "elapsed_seconds": 2.2352438329999984,
+        "minimum_free_bytes": 5861208064,
+        "disk_stop": false,
+        "log": "/tmp/nessa-975-r8-effort-diff.log",
+        "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    ],
+    "proof": {
+      "minimal_before": {
+        "log": "/tmp/nessa-975-r8-effort-getter-before.log",
+        "sha256": "821bc4b88f7600e919350beab89c387f8fc104d0251ca9e77379400d5aaa49a5",
+        "results": [
+          "test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 601 filtered out; finished in 0.01s"
+        ]
+      },
+      "mixed_before": {
+        "log": "/tmp/nessa-975-r8-effort-matrix-before.log",
+        "sha256": "cec1404d6f4f603ee122c43d8dc255e71a20c7c4278d02ef03826272ddf4fdb2",
+        "results": [
+          "test result: FAILED. 9 passed; 6 failed; 0 ignored; 0 measured; 593 filtered out; finished in 0.01s"
+        ]
+      },
+      "first_fixed_with_stale_storage_assertions": {
+        "log": "/tmp/nessa-975-r8-effort-matrix-fixed.log",
+        "sha256": "046f844f0e147b79c801ca5885299cbc05dadba164ecce00a1625a8532f8fbae",
+        "results": [
+          "test result: FAILED. 13 passed; 2 failed; 0 ignored; 0 measured; 593 filtered out; finished in 0.01s"
+        ]
+      },
+      "corrected_live_fixed": {
+        "log": "/tmp/nessa-975-r8-effort-matrix-fixed2.log",
+        "sha256": "af911da134ca925d61f402cc2bdac1bf994f9f640864e15d464516b788f1fb2b",
+        "results": [
+          "test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 593 filtered out; finished in 0.01s"
+        ]
+      },
+      "corrected_private_before": {
+        "log": "/tmp/nessa-975-r8-effort-corrected-private-before.log",
+        "sha256": "529f39b5b62b5293edf266609c7230044b9eddb9ceccc4ecfdcaebd4d0abcece",
+        "results": [
+          "test result: FAILED. 11 passed; 5 failed; 0 ignored; 0 measured; 593 filtered out; finished in 0.01s"
+        ]
+      },
+      "private_sole_supervision_omission": {
+        "log": "/tmp/nessa-975-r8-effort-sole-supervision-omission.log",
+        "sha256": "6da5e2a08562a6f4d5a9c328183f26d12a5d201cd424bffbd85b606be7920fd3",
+        "results": [
+          "test result: FAILED. 10 passed; 6 failed; 0 ignored; 0 measured; 593 filtered out; finished in 0.01s"
+        ]
+      },
+      "private_exact_restored": {
+        "log": "/tmp/nessa-975-r8-effort-private-restored.log",
+        "sha256": "98dce493ea26fbd01210471d99ac85ddf7b05abd4321e04ff3efd35f4e745f82",
+        "results": [
+          "test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 593 filtered out; finished in 0.01s"
+        ]
+      }
+    },
+    "baseline_attribution": "Original 9PASS/6FAIL mixed: four real terminal gaps and two incorrect Storage expectations; corrected baseline11PASS/5terminalFAIL includes added native-cleanup witness. First fixed13PASS/2 stale assertions retained; corrected fixed16PASS.",
+    "persistence_order": "Removed redundant postACK preset getter; captured serialized preset reused; required normalization getter fault now follows save, so exact saved low/original actor survives. Historical minimal before had no saved configuration.",
+    "limits": [
+      "No full6838, server runtime, UI/browser or performance repetition for this SDK-only effort owner; prior whole-source gates remain historical scoped evidence.",
+      "One existing native live-Codex approval test ignored with original reason; not counted PASS.",
+      "No audit-delivery guarantee after runtime destruction.",
+      "New whole assembled review, root checkpoint and current CI still required; no publication/merge by author.",
+      "Old standalone temporary probe never executed; all new executable proofs ordinary repository tests."
+    ],
+    "review": "R8 incomplete; new whole assembled review required before publication/current CI/merge",
+    "older_browser_server_photos": "Retain exact prior source scope; no current SDK browser rerun claimed."
   }
 }
