@@ -287,5 +287,32 @@
     "gateway_prelaunch_and_post_sha256": "47d7ec4c56cebaf485a61ff9751124d048097150a4b94aa14aca5f752f1c629d",
     "P3": "11-file import-only grouping; expanded paths/aliases, cfg(test) regions and non-import behavior equivalent except two short type references. SDK/server all-target Clippy -D warnings and scoped format pass. No repeated runtime/browser claim for import-only delta.",
     "earlier_evidence": "All earlier keys retain their recorded sources and build artifacts; photos below predate P2. Fresh whole R4 and current Linux CI remain required."
+  },
+  "hook_normalization_correction": {
+    "source": "352f59b37",
+    "owner": "Existing ModelConfiguration::configured_provider checks native_hooks_allowed equality alongside other binding facts.",
+    "scope": "Custom factory normalization; built-ins already preserve flag. No new policy/cache/API.",
+    "public_before": {
+      "failed": 5,
+      "positive_passed": 1
+    },
+    "fixed": 6,
+    "private_sole_check_omission": {
+      "failed": 5,
+      "positive_passed": 1
+    },
+    "private_exact_recompiled_restore": 6,
+    "proofs": "Public Agent preflight/postACK/approval/effort/saved restoration; exact denied/allowed clones preserve explicit and automatic attachments.",
+    "selected_runtime": {
+      "models": 59,
+      "native_models": 34,
+      "storage_library": 258,
+      "storage_integration": 58,
+      "unique_passed": 409,
+      "ignored": 7
+    },
+    "sdk_doctests": 57,
+    "strict_checks": "Exact seven-package all-target Clippy -D warnings, fmt and strict SDK docs pass.",
+    "limits": "No new frontend/browser/full6838 run for this SDK-only check. Prior evidence retains source scope. New whole R5/current CI required."
   }
 }

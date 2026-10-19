@@ -64,8 +64,25 @@ store/source seam; no crashed-native browser reproduction is claimed.
 Assembly `f9a1cbf5b` also groups11 Rust import paths, preserving expanded imports,
 aliases, cfg(test) regions and behavior; SDK/server all-target strict Clippy and
 scoped formatting pass. Earlier full journey/native/canonical evidence and the
-photos below keep their original source attribution. Fresh whole R4 and actual
+photos below keep their original source attribution. Fresh whole review and actual
 current-head Linux CI remain required.
+
+## R4 normalization correction
+
+Source `352f59b37` adds one equality check to the existing configuration
+normalization owner, preserving native-hook policy across custom factory clones.
+Public Agent before: **5 failures /1 positive pass**; fixed **6 pass**. A private
+sole-check omission reproduced **5 failures /1 positive pass**; exact restoration
+with fresh compilation passed **6**. Preflight, adjusted native ACK, approval,
+effort and saved restoration retain typed refusal/uncertainty, attributed audit,
+unchanged saved configuration and cleanup/admission behavior. Exact denied and
+allowed hook clones preserve explicit and automatic attachment.
+
+Affected checks passed **409 unique runtime tests /7 ignored**, **57 SDK
+doctests**, exact seven-package all-target strict Clippy/format and strict SDK
+docs. This SDK-only correction does not claim a new frontend/browser/full6838
+run. Built-in factories already preserve the flag; no vendor or installed-app
+failure is claimed. Fresh whole R5 and current-head CI remain required.
 
 ## Earlier inspected screenshots
 
