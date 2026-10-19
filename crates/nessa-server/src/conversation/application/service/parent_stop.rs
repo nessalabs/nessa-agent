@@ -14,10 +14,10 @@
 use super::mutation::{ensure_live, stop_binding, StopTarget};
 use super::{
     conversation_session, ConversationCaller, ConversationError, ConversationId,
-    ConversationService,
+    ConversationService, LiveConversation,
 };
 use nessa_auth::domain::PrincipalId;
-use nessa_sdk::application::agent_execution::agents::owed_turn_ids;
+use nessa_sdk::application::agent_execution::agents::{owed_turn_ids, OwedTurn};
 use nessa_sdk::application::agent_execution::commands::{
     CreationStorage, CreationStorageError, CreationTaskFault, MutationBinding, MutationCoordinator,
     MutationFailure, MutationOperation, MutationOutcome, MutationPlan, MutationReceipt,
@@ -498,6 +498,51 @@ impl ConversationService {
                     && target.turn_id().as_str() == execution)
                     .then(|| root.actor().clone())
             }))
+    }
+
+    /// Finish the saved turn history of a Stop the command owner already
+    /// confirmed. Native cancellation can acknowledge before the turn settles;
+    /// a process loss in between must neither resume it nor resend cancel.
+    /// Unconfirmed receipts retain their existing uncertainty.
+    pub(super) async fn finish_confirmed_stop(
+        &self,
+        id: &ConversationId,
+        live: &LiveConversation,
+        turn: &OwedTurn,
+        caller: &ConversationCaller,
+    ) -> Result<bool, ConversationError> {
+        let captured = self.captured_stops(caller).await?;
+        let receipts = self
+            .commands()
+            .ok_or(ConversationError::Unavailable)?
+            .mutations(caller.principal_id.as_str().into())
+            .await
+            .map_err(|_| ConversationError::Unavailable)?;
+        for (root, target) in captured {
+            if target.target() != &conversation_session(id)
+                || target.turn_id() != turn.execution_id()
+            {
+                continue;
+            }
+            let receipt = receipts
+                .iter()
+                .find(|receipt| receipt.binding() == &target)
+                .ok_or(ConversationError::Unavailable)?;
+            if receipt.stage() == MutationStage::Settled
+                && matches!(
+                    receipt.outcome(),
+                    Some(MutationOutcome::Cancelled | MutationOutcome::Withdrawn)
+                )
+            {
+                live.agent
+                    .decline_turn(turn, root.actor().clone())
+                    .await
+                    .map_err(ConversationError::Agent)?;
+                self.wake_thread_reports(id);
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     pub(super) async fn selected_stop_lookup(

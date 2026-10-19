@@ -2502,7 +2502,8 @@ shares](design/agent-window.md).
 
 Gateway parent/child Stop orchestration lives in
 `conversation/application/service/owned_threads.rs` (ordinary empty-child
-preparation), `parent_stop.rs` (durable exact target selection and supervision),
+preparation), `parent_stop.rs` (durable exact target selection, supervision and confirmed
+Stop history reconciliation after process loss),
 and `thread_report_admission.rs` (validated admitted delivery chains through SDK
 canonical successors, exact Stop receipt facts, and person admission delivery fences).
 Stop checks the existing person Submit receipts across each complete chain before
@@ -2518,4 +2519,6 @@ SDK recovery/quota boundaries live under
 evidence through the ordinary durable audit owner. Namespace
 `composition/runtime_config.rs` owns `subagents.stopChildrenOnParentStop`.
 The real coordinator/SQLite regressions live in `tests/conversation/parent_stop.rs`;
+`tests/conversation/parent_stop/confirmed_recovery.rs` kills a process between
+native cancel acknowledgement and turn settlement, retaining exact command authority.
 `verification/desktop/scripts/parent-stop.mjs` exercises the ordinary Stop button.

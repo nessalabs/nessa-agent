@@ -3906,3 +3906,6 @@ impl commands::CreationStorage for PausedMutationObservation {
         })
     }
 }
+
+#[path = "parent_stop/confirmed_recovery.rs"]
+mod confirmed_recovery;

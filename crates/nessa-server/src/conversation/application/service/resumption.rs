@@ -382,10 +382,20 @@ impl ConversationService {
                 .await
             {
                 Ok(Some(_)) => {
-                    // The admitted exact Stop owns its decline and receipt.
-                    // Resumption waits rather than creating a successor or
-                    // performing an effect outside the mutation owner.
-                    unsettled = true;
+                    // A confirmed command can outlive its unfinished turn
+                    // history after process loss. The Stop owner records that
+                    // exact decision without another provider cancellation;
+                    // an unconfirmed command still waits on its receipt.
+                    match self
+                        .finish_confirmed_stop(id, &live, &turn, &stop_caller)
+                        .await
+                    {
+                        Ok(confirmed) => unsettled |= !confirmed,
+                        Err(error) => {
+                            unsettled = true;
+                            tracing::warn!(conversation_id = %id, %error, "confirmed Stop history could not be finished");
+                        }
+                    }
                     continue;
                 }
                 Ok(None) => {}
