@@ -196,6 +196,7 @@ mod source_permits;
 pub use source_permits::{SourcePermit, SourcePermits};
 mod share_grants;
 mod tool_policy;
+mod workspace_windows;
 pub use crate::conversation::domain::ReceiverBinding;
 pub use access_policy::{
     AccessAction, AccessAsk, AccessDecision, AccessDenial, AccessResource, AccessSubject,
@@ -215,6 +216,7 @@ pub use owner_phone_policy::{
     AdmitOwnerPhoneReader, OwnerPhoneDecision, OwnerPhoneOperation, OwnerPhonePolicyEvaluator,
     OwnerPhonePolicyFacts, OwnerPhoneReader, OwnerPhoneReceiverAuthority,
 };
+pub use workspace_windows::{PublishedWindow, WindowPublished, WindowSlot, WorkspaceWindows};
 // The port itself, which placement and the service use on every host.
 pub(crate) use command_environment::CommandEnvironment;
 pub use command_environment::CommandResult;
@@ -315,6 +317,7 @@ pub use service::{
     FetchAnswer, FetchCall, FetchCallRefusal, PublishAnswer, PublishCall, PublishCallRefusal,
     FETCH_BUSY_BACKOFF, FETCH_READS,
 };
+pub use service::{PaneConversation, WindowReading};
 pub(crate) use session_key::conversation_session;
 pub use share_grants::{
     binding_of, note_candidates, paired_facts, GrantedShare, HeldGrant, Reader, ResourceKind,

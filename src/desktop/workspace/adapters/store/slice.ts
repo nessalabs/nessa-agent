@@ -42,6 +42,8 @@ import * as access from "../../application/usecases/access"
 import type { AccessMode } from "../../model/access"
 import * as updates from "../../application/usecases/updates"
 import * as sharing from "../../application/usecases/sharing"
+import * as window from "../../application/usecases/window"
+import type { WindowArrangement } from "../../model/shown-window"
 import type { ShareDraft, ShareGrant, SharingChoices } from "../../model/sharing"
 import type { ShareChange } from "../../application/workspace-state"
 
@@ -163,6 +165,10 @@ const workspaceSlice = createSlice({
       navigation.toggleChannel(state, payload),
     toggleShowAll: (state, { payload }: Payload<{ channelId: string }>) =>
       navigation.toggleShowAll(state, payload),
+    arrangementShown: (
+      state,
+      { payload }: Payload<{ arrangement: WindowArrangement | null }>,
+    ) => window.arrangementShown(state, payload),
     toggleSidebar: (state, { payload }: Payload<{ open?: boolean } | undefined>) =>
       navigation.toggleSidebar(state, payload ?? {}),
     toggleSessionList: (state, { payload }: Payload<{ open?: boolean } | undefined>) =>

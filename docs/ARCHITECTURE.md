@@ -1054,7 +1054,10 @@ relay. Conversation application admission derives the actor from the live source
 turn, Cedar decides owner delegation, and target commands retain their existing
 durable receipts and permission handling. Observation polls an independent
 committed reader and never opens an Agent. The ownership and ordering table is
-[agent thread tools](design/agent-thread-tools.md).
+[agent thread tools](design/agent-thread-tools.md). `read_window` tells an
+agent what the person's desktop window shows and which pane is its own, from
+what the window last published over `workspace.publish`; see
+[the window an agent shares](design/agent-window.md).
 
 ## Nessa-owned tools over MCP
 

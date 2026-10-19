@@ -24,6 +24,7 @@ export const STRESS = {
   delegate: "stress delegate",
   watch: "stress watch",
   long: "stress long",
+  window: "stress window",
 }
 
 /**
@@ -49,6 +50,7 @@ export const SAYS = {
   report: "Report received.",
   watched: "Watched: ",
   long: "Long answer: ",
+  window: "Window: ",
 }
 
 /**
@@ -194,6 +196,20 @@ export function stressScenario({
             save: "again",
           },
           { do: "text", chunks: [SAYS.watched + "${watched}"] },
+          { do: "end" },
+        ],
+      },
+      {
+        when: STRESS.window,
+        steps: [
+          {
+            do: "tool",
+            server: "nessa-agents",
+            tool: "read_window",
+            arguments: {},
+            save: "window",
+          },
+          { do: "text", chunks: [SAYS.window + "${window}"] },
           { do: "end" },
         ],
       },

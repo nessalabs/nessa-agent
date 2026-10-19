@@ -1,4 +1,5 @@
 import type { ModelReceipt } from "../model/model-choice"
+import type { ShownWindow } from "../model/shown-window"
 import type { FailureDiagnostic } from "../model/failure"
 /**
  * What the workspace needs from whoever holds the sessions: the one port a
@@ -373,6 +374,22 @@ export interface WorkspaceDependencies {
    * gateway — and a session's menu then offers no Share.
    */
   readonly sharing?: SharingSource
+  /**
+   * Where what the window shows is told, for the person's agents to read
+   * (`effects.ts`). Absent where nobody could read it: the sample workspace,
+   * or a source composition was handed with no gateway.
+   */
+  readonly windowPublisher?: WindowPublisher
+}
+
+/**
+ * Tells the gateway what the window shows. Fire and forget: the newest word
+ * wins, it is said again whenever the window connects again, and a window
+ * that could not say it shows the person nothing different.
+ */
+export interface WindowPublisher {
+  /** What the window shows now, or `null` when it draws no panes. */
+  publish(window: ShownWindow | null): void
 }
 
 /** A filter kept outside the window's state, between launches. */

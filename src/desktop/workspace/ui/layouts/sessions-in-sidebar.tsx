@@ -11,6 +11,7 @@ import { WorkspaceShell, type SidebarRegion } from "./workspace-shell"
 const region: SidebarRegion = {
   sidebar: { variant: "tree", defaultWidth: 256, limits: treeSidebarLimits },
   sessionList: false,
+  arrangement: "sidebar",
 }
 
 export function SessionsInSidebar(props: {

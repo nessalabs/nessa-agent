@@ -80,6 +80,7 @@ export const {
   transcriptRetried: retryTranscript,
   unsentDiscarded: discardUnsent,
   closeShare,
+  arrangementShown,
 } = workspaceActions
 
 const {

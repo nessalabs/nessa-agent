@@ -27,6 +27,12 @@
  *   watch       the agent reads a new thread with more reads at once than
  *               one conversation may hold: some wait, the rest are refused,
  *               and a read after them is taken again
+ *   window      the sidebar is hidden with ⌘B, another conversation is
+ *               opened beside the main one with ⌘-click and asks the agent
+ *               what the window shows: it is the focused pane on the right,
+ *               the main conversation on the left, the sidebar closed; that
+ *               pane is closed with ⌘W and the sidebar shown again, and the
+ *               main conversation, asked in its composer, is the whole window
  *   long        another conversation takes `--long` turns of long streamed
  *               answers through the gateway; the last answer is whole, and
  *               still whole after its agent is closed and its history opened
@@ -82,7 +88,13 @@ import {
 } from "./lib/gateway-stack.mjs"
 import { main } from "./lib/run.mjs"
 import { writeView } from "./lib/scripted-evidence.mjs"
-import { composerControls, css, offeredLabel, selectorFor } from "./lib/selectors.mjs"
+import {
+  composerControls,
+  css,
+  keys,
+  offeredLabel,
+  selectorFor,
+} from "./lib/selectors.mjs"
 import { Follower } from "./lib/stress-followers.mjs"
 import { KNOBS, describe, knobsFrom, plan, random } from "./lib/stress-plan.mjs"
 
@@ -259,13 +271,14 @@ async function open(page, conversationId) {
  * is one not among them. A read keeps only the latest turns, so a turn is
  * never found by its position. A send the window refuses or keeps is a
  * failure, not a retry. `known`, the turns the caller already read, skips
- * that read, which opens the conversation's agent.
+ * that read, which opens the conversation's agent. `where` is the composer,
+ * when more than one pane shows one.
  */
-async function send(run, conversationId, text, failures, known) {
+async function send(run, conversationId, text, failures, known, where = dock(run.page)) {
   const before = known ?? (await seenTurns(run, conversationId))
-  const box = dock(run.page).locator("textarea")
+  const box = where.locator("textarea")
   await box.fill(text)
-  const button = dock(run.page).getByRole(...composerControls.send)
+  const button = where.getByRole(...composerControls.send)
   await button.click({ timeout: 10_000 })
   const taken = await waitFor(async () => (await box.inputValue()) === "", 10_000)
   if (!taken) failures.push(`the composer kept ${JSON.stringify(text)} after Send`)
@@ -765,6 +778,97 @@ const steps = {
     if (turn) watched(turn, failures)
   },
 
+  async window(run, step, failures) {
+    const conversationId = randomUUID()
+    const first = prompt(run, STRESS.reply, step, " beside")
+    await run.client.conversation.create({ conversationId, agent: run.stack.agent })
+    run.checked.push(conversationId)
+    await run.client.conversation.submit(
+      run.client.conversation.prepare(conversationId, first),
+    )
+    await settled(run, conversationId, new Set(), first, "completed", failures)
+    if (failures.length) return
+    // ⌘B hides the sidebar, which makes room for a pane beside; ⌘-click on a
+    // row in the session list then opens it there, focused. The page is a Mac's.
+    await run.page.keyboard.press(keys.toggleSidebar)
+    await run.page.locator(selectorFor.sessionListRowFor(conversationId)).click({
+      modifiers: ["Meta"],
+      timeout: 15_000,
+    })
+    if (
+      !(await waitFor(
+        async () => (await run.page.locator(css.pane).count()) === 2,
+        10_000,
+      ))
+    ) {
+      failures.push(
+        `opening beside left ${await run.page.locator(css.pane).count()} panes, not 2`,
+      )
+      return
+    }
+    // Asked in the composer of the pane beside, the focused one.
+    const beside = await windowRead(
+      run,
+      conversationId,
+      step,
+      " beside",
+      failures,
+      (said) =>
+        said.you?.position === "right" &&
+        said.you.focused === true &&
+        said.windows?.length === 1 &&
+        said.windows[0].sidebar === "closed" &&
+        said.windows[0].sessionList === "open" &&
+        said.windows[0].panes.some(
+          (pane) =>
+            pane.threadId === run.main.id &&
+            pane.position === "left" &&
+            pane.focused === false,
+        ),
+    )
+    if (beside) {
+      const window = beside.windows[0]
+      if (window.arrangement !== "columns" || window.showing !== "panes")
+        failures.push(
+          `the window reads as ${window.arrangement} showing ${window.showing}`,
+        )
+      const left = window.panes.find((pane) => pane.threadId === run.main.id)
+      if (
+        left?.you !== false ||
+        left?.available === false ||
+        left?.kind !== "conversation"
+      )
+        failures.push(`the main conversation's pane reads ${JSON.stringify(left)}`)
+    }
+    // ⌘W closes the focused pane: the one beside.
+    await run.page.keyboard.press(keys.closePane)
+    if (
+      !(await waitFor(
+        async () => (await run.page.locator(css.pane).count()) === 1,
+        10_000,
+      ))
+    ) {
+      failures.push("⌘W did not close the pane beside")
+      return
+    }
+    await run.page.keyboard.press(keys.toggleSidebar)
+    // The main conversation is the pane left. Not opened from its row: the
+    // row beside it quotes the window, the main conversation's title with it.
+    // Asked from the main conversation's composer: it is the whole window now.
+    await windowRead(
+      run,
+      run.main.id,
+      step,
+      " alone",
+      failures,
+      (said) =>
+        said.you?.position === "full" &&
+        said.you.focused === true &&
+        said.windows?.length === 1 &&
+        said.windows[0].panes.length === 1,
+    )
+  },
+
   async aside(run, step, failures) {
     const conversationId = randomUUID()
     const first = prompt(run, STRESS.reply, step, " aside")
@@ -919,6 +1023,44 @@ const steps = {
     await expectShown(run.page, `${SAYS.echo}${last}`, failures)
     await open(run.page, run.main.id)
   },
+}
+
+/**
+ * Asks `conversationId`'s agent what the window shows, until what it says
+ * meets `holds`, asked in the focused pane's composer. The window tells the
+ * gateway what it shows on its own request, so the turn can start a moment
+ * before the gateway has the change. Resolves with the answer that met
+ * `holds`, else `null`; the window shows each answer.
+ */
+async function windowRead(run, conversationId, step, extra, failures, holds) {
+  let said
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    const text = prompt(run, STRESS.window, step, `${extra} a${attempt}`)
+    // The pane asking is the focused one: its composer is the one typed in.
+    const seen = await send(
+      run,
+      conversationId,
+      text,
+      failures,
+      undefined,
+      run.page.locator(css.focusedPane).locator(css.conversationDock),
+    )
+    const { turn } = await settled(run, conversationId, seen, text, "completed", failures)
+    if (!turn) return null
+    const reply = (turn.parts ?? []).map((part) => part.text ?? "").join("")
+    const at = reply.indexOf(SAYS.window)
+    try {
+      said = JSON.parse(reply.slice(at + SAYS.window.length))
+    } catch {
+      failures.push(`the window turn did not say what it read: ${reply.slice(0, 120)}`)
+      return null
+    }
+    await expectShown(run.page, `${SAYS.window}{`, failures)
+    if (holds(said)) return said
+    await sleep(500)
+  }
+  failures.push(`${extra.trim()}, the agent read the window as ${JSON.stringify(said)}`)
+  return null
 }
 
 /**
