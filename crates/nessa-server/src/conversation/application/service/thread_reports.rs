@@ -495,6 +495,18 @@ impl ThreadReports {
     }
 }
 
+/// How a sent turn stands, as its report would tell it.
+#[derive(Debug, PartialEq, Eq)]
+pub enum ThreadTurn {
+    /// Settled for good: its outcome and final reply.
+    Ended(&'static str, Option<String>),
+    /// Running, waiting, or settling: a saved result can still turn into a
+    /// failure while it settles, and the report waits for that too.
+    Unfinished,
+    /// Its history cannot be read now; ask again.
+    Unreadable,
+}
+
 /// Holds a turn's report back while a sender call waits on it.
 pub struct AwaitedTurn {
     service: ConversationService,
@@ -611,19 +623,17 @@ impl ConversationService {
         }
     }
 
-    /// How `execution` in `child` ended, as its report would tell it: the
-    /// outcome and the final reply, once it has settled for good. `None` while
-    /// it runs, waits, settles (a saved result can still turn into a failure
-    /// then, and the report waits for that too), or its history cannot be read
-    /// now. A steering message is
-    /// answered by the turn it was delivered into.
+    /// How `execution` in `child` stands, as its report would tell it. A
+    /// steering message is answered by the turn it was delivered into.
     pub async fn thread_turn_end(
         &self,
         child: &ConversationId,
         caller: &ConversationCaller,
         execution: &str,
-    ) -> Option<(&'static str, Option<String>)> {
-        let history = self.report_history(child, caller).await?;
+    ) -> ThreadTurn {
+        let Some(history) = self.report_history(child, caller).await else {
+            return ThreadTurn::Unreadable;
+        };
         let found = match invocation(&history, execution) {
             Some(record) => in_record(&history, record, false),
             None => Found::Waiting(None),
@@ -632,11 +642,12 @@ impl ConversationService {
         // and so does this.
         let restored = self.inner.thread_reports.restored(child, execution);
         match found {
-            Found::Finished(outcome, reply) => Some((outcome, reply)),
+            Found::Finished(outcome, reply) => ThreadTurn::Ended(outcome, reply),
             Found::Settling(saved) | Found::Waiting(saved) if restored => {
-                Some(saved.unwrap_or(("interrupted", None)))
+                let (outcome, reply) = saved.unwrap_or(("interrupted", None));
+                ThreadTurn::Ended(outcome, reply)
             }
-            Found::Settling(_) | Found::Waiting(_) => None,
+            Found::Settling(_) | Found::Waiting(_) => ThreadTurn::Unfinished,
         }
     }
 

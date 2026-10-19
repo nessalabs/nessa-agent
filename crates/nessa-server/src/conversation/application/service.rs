@@ -111,7 +111,7 @@ use std::{
 #[cfg(test)]
 pub(crate) use thread_reports::report_text_for_test;
 pub use thread_reports::{
-    AwaitedTurn, PendingReport, ReportRegistration, ThreadReport, ThreadReportStore,
+    AwaitedTurn, PendingReport, ReportRegistration, ThreadReport, ThreadReportStore, ThreadTurn,
 };
 
 use tokio::{

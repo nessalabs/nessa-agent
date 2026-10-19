@@ -3,7 +3,7 @@ use crate::conversation::application::{
     error_code, event_error_code, project_events, validate_event_cursor, AgentToolRequest,
     ConversationCaller, ConversationError, ConversationEventError, ConversationService,
     EventProgress, ReportRegistration, RequestedAgent, RequestedConversation, SourcePermits,
-    SubmissionMode, SubmittedMessage, ThreadEvent, ThreadReport, MAX_EVENT_READERS,
+    SubmissionMode, SubmittedMessage, ThreadEvent, ThreadReport, ThreadTurn, MAX_EVENT_READERS,
 };
 use crate::mcp_servers::application::{BuiltInFuture, BuiltInServer};
 use nessa_protocol::agents::AgentId;
@@ -792,16 +792,17 @@ async fn observe(
                             .step(service.thread_turn_end(target, caller, &execution))
                             .await
                         {
-                            Ok(Some(end)) => {
+                            Ok(ThreadTurn::Ended(outcome, reply)) => {
                                 return Ok(answered(
                                     target,
                                     &events,
                                     &next,
                                     !caught_up,
-                                    turn_value(&execution, end),
+                                    turn_value(&execution, (outcome, reply)),
                                 ))
                             }
-                            Ok(None) => looks.missed(signal),
+                            Ok(ThreadTurn::Unfinished) => looks.missed(signal, true),
+                            Ok(ThreadTurn::Unreadable) => looks.missed(signal, false),
                             Err(ended) => return control.finish(target, ended),
                         }
                     }
@@ -851,12 +852,13 @@ async fn observe(
                         return Err(code(ConversationError::Unavailable))
                     }
                 };
-                // An ended turn whose history cannot be read now is not a
-                // turn without a reply: the caller asks again from its cursor.
-                let Some(end) = reply else {
+                // An ended turn whose history cannot be read now, or that is
+                // still settling, is not a turn without a reply: the caller
+                // asks again from its cursor.
+                let ThreadTurn::Ended(outcome, reply) = reply else {
                     return Err(code(ConversationError::Unavailable));
                 };
-                let turn = turn_value(&execution, end);
+                let turn = turn_value(&execution, (outcome, reply));
                 return Ok(
                     json!({"threadId":target.to_string(),"events":events,"cursor":ended.cursor,"more":more,"timedOut":false,"turn":turn}),
                 );
@@ -870,16 +872,17 @@ async fn observe(
                             .step(service.thread_turn_end(target, caller, &execution))
                             .await
                         {
-                            Ok(Some(end)) => {
+                            Ok(ThreadTurn::Ended(outcome, reply)) => {
                                 return Ok(answered(
                                     target,
                                     &[],
                                     &cursor,
                                     false,
-                                    turn_value(&execution, end),
+                                    turn_value(&execution, (outcome, reply)),
                                 ))
                             }
-                            Ok(None) => looks.missed(false),
+                            Ok(ThreadTurn::Unfinished) => looks.missed(false, true),
+                            Ok(ThreadTurn::Unreadable) => looks.missed(false, false),
                             Err(ended) => return control.finish(target, ended),
                         }
                     }
@@ -897,12 +900,13 @@ async fn observe(
 }
 
 /// When a call naming a turn looks in the thread's history for its end: at
-/// once, again whenever a page shows a turn ending or settling, and, while an
-/// end it saw cannot be read yet (still settling, or the history unreadable
-/// for a moment), again every `LOOK_RETRY` until it can.
+/// once, again whenever a page shows a turn ending or settling, and again
+/// every `LOOK_RETRY` while the history cannot be read, or while an end the
+/// call saw is still settling.
 #[derive(Default)]
 struct TurnLooks {
     looked: bool,
+    end_seen: bool,
     retry_at: Option<Instant>,
 }
 
@@ -913,11 +917,12 @@ impl TurnLooks {
         !self.looked || signal || self.retry_at.is_some_and(|at| Instant::now() >= at)
     }
 
-    fn missed(&mut self, signal: bool) {
+    /// A look did not find the end: `readable` says whether the history
+    /// could be read at all.
+    fn missed(&mut self, signal: bool, readable: bool) {
         self.looked = true;
-        if signal || self.retry_at.is_some() {
-            self.retry_at = Some(Instant::now() + LOOK_RETRY);
-        }
+        self.end_seen |= signal;
+        self.retry_at = (!readable || self.end_seen).then(|| Instant::now() + LOOK_RETRY);
     }
 }
 
@@ -959,21 +964,35 @@ mod tests {
     use serde_json::Map;
 
     #[tokio::test(start_paused = true)]
-    async fn an_end_seen_but_not_yet_readable_is_looked_for_again_until_it_is() {
+    async fn an_end_not_yet_readable_is_looked_for_again_until_it_is() {
         let mut looks = TurnLooks::default();
         assert!(looks.due(false), "the first look is at once");
-        looks.missed(false);
+        looks.missed(false, true);
         assert!(!looks.due(false), "a turn still running waits for a sign");
         tokio::time::advance(LOOK_RETRY * 3).await;
         assert!(!looks.due(false), "and only for a sign");
         assert!(looks.due(true));
-        looks.missed(true);
-        assert!(!looks.due(false), "an unreadable end is not hammered");
+        looks.missed(true, true);
+        assert!(!looks.due(false), "a settling end is not hammered");
         tokio::time::advance(LOOK_RETRY).await;
         assert!(looks.due(false), "but looked for again with no new sign");
-        looks.missed(false);
+        looks.missed(false, true);
         tokio::time::advance(LOOK_RETRY).await;
-        assert!(looks.due(false), "until it can be read");
+        assert!(looks.due(false), "until it has settled");
+
+        // A turn that ended before the call, whose history could not be read
+        // at the first look, is looked for again with no sign at all.
+        let mut looks = TurnLooks::default();
+        looks.missed(false, false);
+        assert!(!looks.due(false));
+        tokio::time::advance(LOOK_RETRY).await;
+        assert!(looks.due(false), "an unreadable history is asked again");
+        looks.missed(false, true);
+        tokio::time::advance(LOOK_RETRY * 3).await;
+        assert!(
+            !looks.due(false),
+            "once readable and running, it waits for a sign"
+        );
     }
 
     #[test]
