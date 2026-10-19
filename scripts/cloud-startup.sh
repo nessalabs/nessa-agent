@@ -111,7 +111,7 @@ root = pathlib.Path(sys.argv[1])
 helper = root / 'env.sh'
 # Cloud browsers are Playwright's own: no Google Chrome is installed for the
 # checks' default `chrome` channel (verification/desktop/scripts/lib/cli.mjs).
-helper.write_text('export PATH=' + shlex.quote(str(root / 'node/bin')) + ':' + shlex.quote(str(root / 'just/bin')) + ':"$HOME/.cargo/bin:$PATH"\nexport RUSTUP_TOOLCHAIN=stable\nexport CARGO_NET_GIT_FETCH_WITH_CLI=true\nexport NESSA_BROWSER_CHANNEL=bundled\n')
+helper.write_text('export PATH=' + shlex.quote(str(root / 'node/bin')) + ':' + shlex.quote(str(root / 'just/bin')) + ':"$HOME/.cargo/bin:$PATH"\nexport RUSTUP_TOOLCHAIN=stable\nexport CARGO_NET_GIT_FETCH_WITH_CLI=true\nexport NESSA_BROWSER_CHANNEL=bundled\n' + 'if [ -f ' + shlex.quote(str(root / 'browsers.sh')) + ' ]; then . ' + shlex.quote(str(root / 'browsers.sh')) + '; fi\n')
 line = '. ' + shlex.quote(str(helper)) + '\n'
 for name in ('.bashrc', '.bash_profile', '.profile'):
     path = pathlib.Path.home() / name
@@ -255,11 +255,12 @@ JS
 # its own Playwright browsers (PLAYWRIGHT_BROWSERS_PATH). The fallback links
 # that Chromium under the revision this checkout's Playwright expects, in an
 # owned directory, and records the sandbox's original path so a rerun starts
-# from it rather than from the links. WebKit has no such stand-in.
+# from it rather than from the links. WebKit has no such stand-in. The links
+# reach shells through browsers.sh, which only a fallback writes and only a
+# real Chromium-and-WebKit readiness removes, so a failed rerun keeps them.
 browser_links=$cloud_root/browsers
 if [ "${PLAYWRIGHT_BROWSERS_PATH:-}" = "$browser_links" ] && [ -f "$cloud_root/browsers-source" ]; then
   PLAYWRIGHT_BROWSERS_PATH=$(cat "$cloud_root/browsers-source")
-  if [ -z "$PLAYWRIGHT_BROWSERS_PATH" ]; then unset PLAYWRIGHT_BROWSERS_PATH; fi
 fi
 browser_source=${PLAYWRIGHT_BROWSERS_PATH:-}
 link_sandbox_chromium() {
@@ -270,12 +271,17 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { chromium } from 'playwright'
 const [source, staging, links] = process.argv.slice(2)
+// Newest revision first; each build directory's name varies by platform.
 const find = (prefix, names) => {
-  for (const entry of fs.readdirSync(source).filter(name => name.startsWith(prefix)).sort().reverse())
-    for (const name of names) {
-      const candidate = path.join(source, entry, name)
-      if (fs.existsSync(candidate)) return candidate
-    }
+  const revisions = fs.readdirSync(source)
+    .filter(name => name.startsWith(prefix) && /^\d+$/.test(name.slice(prefix.length)))
+    .sort((a, b) => Number(b.slice(prefix.length)) - Number(a.slice(prefix.length)))
+  for (const entry of revisions)
+    for (const build of fs.readdirSync(path.join(source, entry)))
+      for (const name of names) {
+        const candidate = path.join(source, entry, build, name)
+        if (fs.existsSync(candidate)) return candidate
+      }
   throw new Error(`No ${prefix}* browser under ${source}`)
 }
 const link = (target, relative) => {
@@ -285,26 +291,35 @@ const link = (target, relative) => {
 }
 const expected = path.relative(links, chromium.executablePath())
 if (expected.startsWith('..')) throw new Error('Playwright ignored PLAYWRIGHT_BROWSERS_PATH.')
-const revision = expected.split(path.sep)[0].split('-').at(-1)
-link(find('chromium-', ['chrome-linux64/chrome', 'chrome-linux/chrome']), expected)
+// chromium-<revision>/chrome-<platform>/chrome; Playwright names the headless
+// shell chromium_headless_shell-<revision>/chrome-headless-shell-<platform>.
+const [directory, build] = expected.split(path.sep)
+const revision = directory.slice('chromium-'.length)
+link(find('chromium-', ['chrome']), expected)
 link(
-  find('chromium_headless_shell-', ['chrome-headless-shell-linux64/chrome-headless-shell', 'chrome-linux/headless_shell']),
-  `chromium_headless_shell-${revision}/chrome-headless-shell-linux64/chrome-headless-shell`,
+  find('chromium_headless_shell-', ['chrome-headless-shell', 'headless_shell']),
+  path.join(`chromium_headless_shell-${revision}`, build.replace(/^chrome-/, 'chrome-headless-shell-'), 'chrome-headless-shell'),
 )
 JS
   rm -rf "$browser_links"
   mv "$browser_links.tmp" "$browser_links"
   printf '%s' "$browser_source" > "$cloud_root/browsers-source"
   export PLAYWRIGHT_BROWSERS_PATH=$browser_links
-  printf 'export PLAYWRIGHT_BROWSERS_PATH=%q\n' "$browser_links" >> "$cloud_root/env.sh"
+  printf 'export PLAYWRIGHT_BROWSERS_PATH=%q\n' "$browser_links" > "$cloud_root/browsers.sh.tmp"
+  mv "$cloud_root/browsers.sh.tmp" "$cloud_root/browsers.sh"
 }
+install_log=$(mktemp)
+trap 'rm -f "$state" "$install_log"; if [ -n "$node_download" ]; then rm -rf "$node_download"; fi' EXIT
 if ! browsers_ready chromium webkit; then
   browser_status=installed
   install_status=0
-  timeout --kill-after=30s 45m pnpm exec playwright install --with-deps chromium webkit || install_status=$?
+  timeout --kill-after=30s 45m pnpm exec playwright install --with-deps chromium webkit 2>&1 | tee "$install_log" || install_status=${PIPESTATUS[0]}
   if [ "$install_status" -ne 0 ]; then
-    # A stall (124) is not a refused download; only a refusal falls back.
-    if [ "$install_status" -eq 124 ] || [ -z "$browser_source" ] || [ ! -d "$browser_source" ]; then
+    # Only a download the network refused falls back: not a stall (124, or
+    # 137 after the forced stop), an apt failure or an unwritable directory.
+    if [ "$install_status" -eq 124 ] || [ "$install_status" -eq 137 ] ||
+      ! grep -q 'Download failed: server returned code 403' "$install_log" ||
+      [ -z "$browser_source" ] || [ ! -d "$browser_source" ]; then
       exit "$install_status"
     fi
     echo "Playwright could not download its browsers; using the sandbox's Chromium from $browser_source. WebKit checks cannot run until the network allows Playwright's download hosts." >&2
@@ -316,6 +331,7 @@ if [ "$browser_status" = sandbox-chromium ]; then
   browsers_ready chromium
 else
   browsers_ready chromium webkit
+  rm -rf "$cloud_root/browsers.sh" "$cloud_root/browsers-source" "$browser_links"
 fi
 ui_workspace check
 node --version

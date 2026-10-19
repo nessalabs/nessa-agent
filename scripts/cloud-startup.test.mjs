@@ -129,7 +129,10 @@ else if (tool === 'cargo') {
     fs.writeFileSync(path.join(mod, 'index.js'), 'import fs from \'node:fs\';import path from \'node:path\';const engine=(file,linked)=>{const executablePath=()=>process.env.PLAYWRIGHT_BROWSERS_PATH?path.join(process.env.PLAYWRIGHT_BROWSERS_PATH,linked):file;return{executablePath,launch:async()=>{if(!fs.existsSync(executablePath()))throw new Error(\'missing browser\');if(!fs.existsSync('+JSON.stringify(marker('browser-libraries'))+'))throw new Error(\'missing browser runtime libraries\');return{newPage:async()=>({setContent:async()=>{},textContent:async()=>\'Nessa cloud startup\'}),close:async()=>{}}}}};export const chromium=engine('+JSON.stringify(marker('chromium'))+',\'chromium-1243/chrome-linux64/chrome\');export const webkit=engine('+JSON.stringify(marker('webkit'))+',\'webkit-2359/pw_run.sh\');')
   } else if (args.includes('playwright')) {
     if(args.includes('--with-deps')) touch('browser-libraries')
-    if (exists('refuse-browser-download')) process.exit(1)
+    if (exists('refuse-browser-download')) { console.log("Error: Download failed: server returned code 403 body 'request blocked'"); process.exit(1) }
+    if (exists('fail-browser-install')) process.exit(1)
+    const browsers = process.env.PLAYWRIGHT_BROWSERS_PATH
+    if (browsers) for (const file of ['chromium-1243/chrome-linux64/chrome', 'webkit-2359/pw_run.sh']) { fs.mkdirSync(path.dirname(path.join(browsers, file)), {recursive:true}); fs.writeFileSync(path.join(browsers, file), '', {mode:0o755}) }
     for (const name of ['chromium','webkit']) { touch(name); fs.chmodSync(marker(name),0o755) }
   }
 } else if (tool === 'git') console.log('1111111111111111111111111111111111111111')
@@ -519,9 +522,21 @@ test("a refused browser download falls back to the sandbox's own Chromium", (t) 
     ),
     shell,
   )
-  const helper = readFileSync(join(f.env.NESSA_CLOUD_ROOT, "env.sh"), "utf8")
-  assert.ok(helper.includes(`export PLAYWRIGHT_BROWSERS_PATH=${links}\n`), helper)
-  assert.ok(helper.includes("export NESSA_BROWSER_CHANNEL=bundled\n"), helper)
+  const loginShell = (environment) =>
+    spawnSync(
+      "env",
+      [
+        "-i",
+        `HOME=${f.home}`,
+        ...environment,
+        "PATH=/usr/bin:/bin",
+        "bash",
+        "-lc",
+        'printf "%s %s" "$PLAYWRIGHT_BROWSERS_PATH" "$NESSA_BROWSER_CHANNEL"',
+      ],
+      { encoding: "utf8" },
+    ).stdout
+  assert.equal(loginShell([]), `${links} bundled`)
 
   // A shell that sourced the helper hands the links back; the rerun still
   // starts from the sandbox's own browsers.
@@ -534,6 +549,32 @@ test("a refused browser download falls back to the sandbox's own Chromium", (t) 
     readFileSync(join(f.env.NESSA_CLOUD_ROOT, "browsers-source"), "utf8"),
     sandbox,
   )
+
+  // A failed rerun keeps the links the earlier receipt describes.
+  writeFileSync(join(f.root, "fail-just-install"), "")
+  rmSync(join(f.env.NESSA_CLOUD_ROOT, "just"), { recursive: true })
+  assert.notEqual(f.prepare("maintenance").status, 0)
+  assert.equal(loginShell([]), `${links} bundled`)
+  rmSync(join(f.root, "fail-just-install"))
+
+  // Once the download works, Playwright's own browsers replace the links.
+  rmSync(join(f.root, "refuse-browser-download"))
+  const repaired = f.prepare("maintenance")
+  assert.equal(repaired.status, 0, repaired.stderr)
+  assert.equal(f.receipt().steps.browsers, "installed")
+  assert.equal(existsSync(links), false)
+  assert.equal(loginShell([`PLAYWRIGHT_BROWSERS_PATH=${sandbox}`]), `${sandbox} bundled`)
+})
+
+test("a browser install that fails for another reason does not fall back", (t) => {
+  const f = bootstrapFixture(t)
+  const { sandbox } = sandboxBrowsers(f)
+  writeFileSync(join(f.root, "fail-browser-install"), "")
+  f.env.PLAYWRIGHT_BROWSERS_PATH = sandbox
+  const result = f.prepare("setup")
+  assert.equal(result.status, 1, result.stderr)
+  assert.equal(existsSync(join(f.env.NESSA_CLOUD_ROOT, "browsers")), false)
+  assert.equal(existsSync(join(f.env.NESSA_CLOUD_ROOT, "preparation.json")), false)
 })
 
 test("a refused browser download with no sandbox browsers publishes nothing", (t) => {

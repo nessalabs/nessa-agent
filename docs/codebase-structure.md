@@ -1124,9 +1124,12 @@ Where the network refuses Playwright's download hosts (`cdn.playwright.dev`,
 `playwright.download.prss.microsoft.com`), the recipe falls back to the Chromium
 the sandbox already ships in `PLAYWRIGHT_BROWSERS_PATH`: it links that build under
 the revision this checkout's Playwright expects in `<cloud root>/browsers`,
-points `PLAYWRIGHT_BROWSERS_PATH` there and records `browsers=sandbox-chromium`.
-WebKit has no stand-in, so WebKit checks (and `pnpm test:e2e:scripted`, which
-runs both engines) need those hosts allowed. A stalled download never falls back.
+points `PLAYWRIGHT_BROWSERS_PATH` there through `<cloud root>/browsers.sh` and
+records `browsers=sandbox-chromium`. WebKit has no stand-in, so WebKit checks
+(and `pnpm test:e2e:scripted`, which runs both engines) need those hosts
+allowed. Only a download refused with a 403 falls back; a stall, an apt failure
+or any other install error fails preparation. Once a run gets both of
+Playwright's browsers, it removes the links and `browsers.sh`.
 
 Claude Code cloud sessions with only this repository run the recipe from the
 SessionStart hook in `.claude/settings.json` (`.claude/hooks/session-start.sh`),
