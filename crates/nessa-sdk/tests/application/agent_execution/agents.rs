@@ -1,3 +1,4 @@
+use nessa_sdk::application::agent_execution::providers::NativeExecutionHandoff;
 mod approval;
 mod conformance;
 mod effort;
@@ -540,8 +541,16 @@ impl ProviderSessionBackend for TestBackend {
     fn prepare_invocation(&self) -> ProviderOperationFuture<'_, ()> {
         Box::pin(async { Ok(()) })
     }
-    fn execute(&self, input: ExecutionRequest) -> ProviderExecutionFuture<'_> {
+    fn execute(
+        &self,
+        input: ExecutionRequest,
+        handoff: NativeExecutionHandoff,
+    ) -> ProviderExecutionFuture<'_> {
         Box::pin(async move {
+            if let Err(error) = handoff() {
+                return ProviderExecutionReply::Rejected(error);
+            }
+
             let result: Result<ExecutionOutcome, AgentError> = {
                 async move {
                     self.calls.executions.fetch_add(1, Ordering::SeqCst);

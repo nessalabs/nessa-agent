@@ -18,8 +18,9 @@ use crate::application::agent_execution::{
     executions::{AttachmentAuditCause, AttachmentAuditStage, ExecutionAuditRecord},
     permissions::ActionContext,
     providers::{
-        AgentProvider, CleanupReport, ModelChangeTiming, OperationCapabilities,
-        ProviderOpenControl, ProviderOperationFailure, ProviderSessionState, SessionCloseRequest,
+        AgentProvider, CleanupReport, ModelChangeTiming, NativeExecutionHandoff,
+        OperationCapabilities, ProviderOpenControl, ProviderOperationFailure, ProviderSessionState,
+        SessionCloseRequest,
     },
     sessions::{
         attachment::AttachmentLease, AttachedProvider, InvocationCancellationEvent,
@@ -156,7 +157,7 @@ enum WorkPhase {
     // Automatic attachment failure owns final settlement for this queued input.
     Settling,
     Active,
-    // The execute future was entered; provider dispatch may still be rejected.
+    // The serialized native executor accepted the input after preparation.
     Executing,
 }
 struct OwnedWork {
@@ -309,13 +310,31 @@ impl WorkPermit {
             Ok(())
         }
     }
-    pub(super) fn mark_execution_started(&self) {
-        let mut state = self.owner.state.lock().expect("session lifecycle");
-        state
-            .work
-            .get_mut(&self.id)
-            .expect("owned work permit")
-            .phase = WorkPhase::Executing;
+    pub(super) fn native_handoff(&self) -> NativeExecutionHandoff {
+        let owner = Arc::downgrade(&self.owner);
+        let id = self.id;
+        let (generation, provider_generation) = self.generations();
+        Arc::new(move || {
+            let owner = owner.upgrade().ok_or(AgentError::Closed)?;
+            let mut state = owner.state.lock().expect("session lifecycle");
+            if state.work_generation != generation
+                || state.provider_generation != provider_generation
+                || !matches!(state.work_status, WorkStatus::Open)
+            {
+                return Err(AgentError::Closed);
+            }
+            let work = state.work.get_mut(&id).ok_or(AgentError::Closed)?;
+            if work.work_generation != generation || work.cancellation.borrow().is_some() {
+                return Err(AgentError::Closed);
+            }
+            match work.phase {
+                WorkPhase::Active | WorkPhase::Executing => {
+                    work.phase = WorkPhase::Executing;
+                    Ok(())
+                }
+                WorkPhase::Waiting | WorkPhase::Settling => Err(AgentError::Closed),
+            }
+        })
     }
     pub(super) fn execution_started(&self) -> bool {
         let state = self.owner.state.lock().expect("session lifecycle");

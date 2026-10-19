@@ -453,8 +453,11 @@ async fn an_execution_write_is_armed_with_what_the_read_left() {
     assert!(remaining < configured);
     let began = clock.now();
     let (reply, _result) = oneshot::channel();
-    let command =
-        Command::ExecutionRequest(dispatched(request("next"), Some(began + remaining)), reply);
+    let command = Command::ExecutionRequest(
+        dispatched(request("next"), Some(began + remaining)),
+        Arc::new(|| Ok(())),
+        reply,
+    );
     let result = ending_at(
         &clock,
         began + remaining,
@@ -855,7 +858,7 @@ async fn a_held_prompt_waits_until_the_active_turn_is_gone() {
     };
     worker
         .held_prompts
-        .push_back((super::dispatched(input, None), reply));
+        .push_back((super::dispatched(input, None), Arc::new(|| Ok(())), reply));
     worker
         .flush_held_prompts(&mut execution)
         .await

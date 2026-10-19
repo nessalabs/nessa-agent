@@ -456,7 +456,9 @@ async fn cancelled_generation_is_sealed_while_terminal_audit_is_pending() {
         .unwrap();
     let first = start(&opened, "cancelled-first").await;
     waiting.await.unwrap();
-    let mut second = opened.session.execute(prompt("next-after-cancellation"));
+    let mut second = opened
+        .session
+        .execute(prompt("next-after-cancellation"), Arc::new(|| Ok(())));
     // Poll all the way through admission before releasing the worker's final audit.
     // Previously this queued into a receiver no longer running its drive loop.
     assert!(second

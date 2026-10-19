@@ -2,6 +2,7 @@ use crate::application::agent_execution::permissions::PermissionCaller;
 use crate::application::agent_execution::permissions::RememberError;
 use crate::application::agent_execution::providers::ModelChange;
 use crate::application::agent_execution::providers::ModelChangeEffect;
+use crate::application::agent_execution::providers::NativeExecutionHandoff;
 use crate::domain::model_metadata::value_objects::EffortLevel;
 
 use super::super::{
@@ -503,7 +504,7 @@ struct Worker<P> {
     /// Stopped prompts already settled because their reply grace expired.
     expired_stops: Vec<ExpiredStop>,
     /// Prompts accepted while a stop is still waiting on its provider reply.
-    held_prompts: VecDeque<(DispatchedPrompt, ExecutionReply)>,
+    held_prompts: VecDeque<(DispatchedPrompt, NativeExecutionHandoff, ExecutionReply)>,
     /// When an unanswered stopped prompt must be settled.
     ///
     /// This is the same instant `finish_turn_wire` used for that stop. A later
@@ -1036,7 +1037,7 @@ impl<P: AcpProfile> Worker<P> {
         let held = self
             .held_prompts
             .iter()
-            .filter_map(|(prompt, _)| prompt.deadline)
+            .filter_map(|(prompt, _, _)| prompt.deadline)
             .min();
         [
             self.stop_reply_deadline,
@@ -1576,7 +1577,7 @@ impl<P: AcpProfile> Worker<P> {
                         });
                     }
                 }
-                Command::ExecutionRequest(_, reply) => {
+                Command::ExecutionRequest(_, _, reply) => {
                     let _ = reply.send(ProviderExecutionReply::Rejected(AgentError::Closed));
                 }
                 Command::Steer(_, _, _, reply) => {
@@ -1724,8 +1725,9 @@ impl<P: AcpProfile> Worker<P> {
             Command::SetApprovalMode(mode, reply) => {
                 self.set_approval_mode(execution, mode, reply).await
             }
-            Command::ExecutionRequest(prompt, reply) => {
-                self.dispatch_execution(execution, prompt, reply).await
+            Command::ExecutionRequest(prompt, handoff, reply) => {
+                self.dispatch_execution(execution, prompt, handoff, reply)
+                    .await
             }
             Command::Steer(target, prompt, capabilities, reply) => {
                 self.dispatch_steering(execution, target, prompt, *capabilities, reply)
@@ -1931,6 +1933,7 @@ impl<P: AcpProfile> Worker<P> {
         &mut self,
         execution: &mut ExecutionController,
         prompt: DispatchedPrompt,
+        handoff: NativeExecutionHandoff,
         reply: ExecutionReply,
     ) -> Result<(), WorkerFailure> {
         if self.stop_cleanup != StopCleanup::None {
@@ -1938,7 +1941,7 @@ impl<P: AcpProfile> Worker<P> {
             return Ok(());
         }
         if !self.stopped_prompts.is_empty() {
-            self.held_prompts.push_back((prompt, reply));
+            self.held_prompts.push_back((prompt, handoff, reply));
             return Ok(());
         }
         let deadline = prompt.deadline;
@@ -2018,6 +2021,11 @@ impl<P: AcpProfile> Worker<P> {
         } else {
             String::new()
         };
+        if let Err(error) = handoff() {
+            let _ = reply.send(ProviderExecutionReply::Rejected(error));
+            self.traces.release_usage_before_turn();
+            return Ok(());
+        }
         let execution_id = input.execution_id;
         if let Err(error) = execution.begin_execution(execution_id.clone()) {
             let _ = reply.send(ProviderExecutionReply::Rejected(error));
@@ -3616,7 +3624,7 @@ impl<P: AcpProfile> Worker<P> {
         }
         if self.stop_cleanup != StopCleanup::None {
             let report = self.cleanup_refusal();
-            for (_, reply) in std::mem::take(&mut self.held_prompts) {
+            for (_, _, reply) in std::mem::take(&mut self.held_prompts) {
                 let _ = reply.send(ProviderExecutionReply::Finished(report.clone()));
             }
             return Ok(());
@@ -3626,8 +3634,9 @@ impl<P: AcpProfile> Worker<P> {
         if self.active.is_some() || self.steering.is_some() {
             return Ok(());
         }
-        if let Some((prompt, reply)) = self.held_prompts.pop_front() {
-            self.dispatch_execution(execution, prompt, reply).await?;
+        if let Some((prompt, handoff, reply)) = self.held_prompts.pop_front() {
+            self.dispatch_execution(execution, prompt, handoff, reply)
+                .await?;
         }
         Ok(())
     }
@@ -3690,7 +3699,7 @@ impl<P: AcpProfile> Worker<P> {
             .reply
             .send(ProviderExecutionReply::Finished(report.clone()));
         if !closes_session {
-            for (_, reply) in std::mem::take(&mut self.held_prompts) {
+            for (_, _, reply) in std::mem::take(&mut self.held_prompts) {
                 let _ = reply.send(ProviderExecutionReply::Finished(report.clone()));
             }
         }
@@ -3698,7 +3707,7 @@ impl<P: AcpProfile> Worker<P> {
             self.stop_reply_deadline = None;
             if closes_session {
                 let report = self.cleanup_refusal();
-                for (_, reply) in std::mem::take(&mut self.held_prompts) {
+                for (_, _, reply) in std::mem::take(&mut self.held_prompts) {
                     let _ = reply.send(ProviderExecutionReply::Finished(report.clone()));
                 }
             }
@@ -3711,7 +3720,7 @@ impl<P: AcpProfile> Worker<P> {
     fn refuse_expired_held_prompts(&mut self) {
         let now = self.config.clock.now();
         let mut kept = VecDeque::new();
-        for (prompt, reply) in std::mem::take(&mut self.held_prompts) {
+        for (prompt, handoff, reply) in std::mem::take(&mut self.held_prompts) {
             if prompt.deadline.is_some_and(|deadline| now >= deadline) {
                 let _ = reply.send(ProviderExecutionReply::Finished(ExecutionReport::new(
                     None,
@@ -3719,7 +3728,7 @@ impl<P: AcpProfile> Worker<P> {
                     ProviderSessionState::CleanupRequired,
                 )));
             } else {
-                kept.push_back((prompt, reply));
+                kept.push_back((prompt, handoff, reply));
             }
         }
         self.held_prompts = kept;
@@ -3764,7 +3773,7 @@ impl<P: AcpProfile> Worker<P> {
         replies.extend(
             std::mem::take(&mut self.held_prompts)
                 .into_iter()
-                .map(|(_, reply)| reply),
+                .map(|(_, _, reply)| reply),
         );
         replies
     }

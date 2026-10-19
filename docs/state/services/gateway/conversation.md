@@ -223,3 +223,10 @@ a damaged dataset and left intact. The shape regressions capture a fresh
 dataset's version before corruption and verify that refusal leaves that version
 unchanged, without recreating the missing model journal. Opening does not add the
 new table to an existing dataset or reset user data.
+
+### Model-control refusal certainty
+
+| Returned code | Client meaning | Evidence |
+| --- | --- | --- |
+| ModelChangeNotApplied | Definite refusal; uncertain is false and the original request identity is retained | Public setModel before fails with uncertain=true; fixed passes. Sole classification omission fails again, exact restoration passes |
+| ModelChangeUncertain | Native or durable outcome remains uncertain; uncertain is true | Positive counterpart remains uncertain=true before/fixed/omitted/restored; current full client package: 1,018 tests pass |

@@ -20,7 +20,12 @@ async fn turn(opened: &mut OpenedProviderSession, text: String, id: &str) -> Val
         reserved_output_tokens: 4096,
     };
     let session = opened.session.clone();
-    let mut running = tokio::spawn(async move { session.execute(input).await.into_result() });
+    let mut running = tokio::spawn(async move {
+        session
+            .execute(input, Arc::new(|| Ok(())))
+            .await
+            .into_result()
+    });
     let mut observations = Vec::new();
     let mut permissions = Vec::new();
     let (result, outcome_consumed) = loop {

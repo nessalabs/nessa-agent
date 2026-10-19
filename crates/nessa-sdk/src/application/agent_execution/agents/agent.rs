@@ -1894,8 +1894,10 @@ impl Agent {
                     return (ProviderExecutionReply::Rejected(error), work.cancellation());
                 }
             };
-            work.mark_execution_started();
-            let outcome = attached.session.execute(dispatched).await;
+            let outcome = attached
+                .session
+                .execute(dispatched, work.native_handoff())
+                .await;
             // Capture the existing stop authority with the reply. A later Stop
             // cannot retroactively authorize an earlier cancellation report.
             let cancellation_at_reply = work.cancellation();

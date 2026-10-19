@@ -6,6 +6,7 @@ use super::MemoryStorage;
 use crate::application::agent_execution::support::*;
 use nessa_sdk::application::agent_execution::executions::EffortChangeStage;
 use nessa_sdk::application::agent_execution::providers::HarnessHostIdentity;
+use nessa_sdk::application::agent_execution::providers::NativeExecutionHandoff;
 use nessa_sdk::application::agent_execution::traces::LocalTraceStore;
 use nessa_sdk::application::dto::ReasoningDto;
 use nessa_sdk::domain::model_metadata::value_objects::{EffortLevel, EffortLevels};
@@ -93,8 +94,12 @@ impl ProviderSessionBackend for Backend {
     fn prepare_invocation(&self) -> ProviderOperationFuture<'_, ()> {
         self.inner.prepare_invocation()
     }
-    fn execute(&self, input: ExecutionRequest) -> ProviderExecutionFuture<'_> {
-        self.inner.execute(input)
+    fn execute(
+        &self,
+        input: ExecutionRequest,
+        handoff: NativeExecutionHandoff,
+    ) -> ProviderExecutionFuture<'_> {
+        self.inner.execute(input, handoff)
     }
     fn answer_question(&self, answer: QuestionAnswer) -> ProviderOperationFuture<'_, ()> {
         self.inner.answer_question(answer)

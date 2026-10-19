@@ -29,7 +29,6 @@ use nessa_sdk::application::agent_execution::permissions::{
     ActionContext, PermissionAnswer, PermissionCancellation, PermissionCancellationRequest,
     PermissionResolution, PermissionSelectionState, QuestionAnswer,
 };
-use nessa_sdk::application::agent_execution::providers::HarnessHostIdentity;
 use nessa_sdk::application::agent_execution::providers::{
     AgentProvider, ApprovalMode, CleanupFuture, CleanupReport, CloseOutcome, ExecutionEventStream,
     ExecutionReport, ModelChange, ModelChangeEffect, ModelChangeTiming, ObservationFailure,
@@ -38,6 +37,9 @@ use nessa_sdk::application::agent_execution::providers::{
     ProviderOperationCapabilities, ProviderOperationFailure, ProviderOperationFuture,
     ProviderSession, ProviderSessionBackend, ProviderSessionState, SessionCloseRequest,
     SteeringOutcome,
+};
+use nessa_sdk::application::agent_execution::providers::{
+    HarnessHostIdentity, NativeExecutionHandoff,
 };
 use nessa_sdk::application::agent_execution::tools::ToolReviewInput;
 use nessa_sdk::application::agent_execution::traces::LocalTraceStore;
@@ -1871,8 +1873,16 @@ impl ProviderSessionBackend for Backend {
             ))
         })
     }
-    fn execute(&self, request: ExecutionRequest) -> ProviderExecutionFuture<'_> {
+    fn execute(
+        &self,
+        request: ExecutionRequest,
+        handoff: NativeExecutionHandoff,
+    ) -> ProviderExecutionFuture<'_> {
         Box::pin(async move {
+            if let Err(error) = handoff() {
+                return ProviderExecutionReply::Rejected(error);
+            }
+
             self.controller
                 .lock()
                 .unwrap()

@@ -351,7 +351,11 @@ async fn the_same_session_reopened_selects_the_live_level_again() {
         .unwrap();
     // The next execution restores this same context in a new process.
     assert_eq!(
-        opened.session.execute(prompt("again")).await.into_result(),
+        opened
+            .session
+            .execute(prompt("again"), Arc::new(|| Ok(())))
+            .await
+            .into_result(),
         Ok(ExecutionOutcome::Completed)
     );
     let sent: Vec<_> = lines(&root, "effort-steps")
@@ -528,7 +532,8 @@ async fn the_connection_refuses_a_change_during_a_turn_and_stays_usable() {
         .await
         .unwrap();
     let session = opened.session.clone();
-    let turn = tokio::spawn(async move { session.execute(prompt("held")).await });
+    let turn =
+        tokio::spawn(async move { session.execute(prompt("held"), Arc::new(|| Ok(()))).await });
     let sent = || {
         lines(&root, "effort-steps")
             .iter()

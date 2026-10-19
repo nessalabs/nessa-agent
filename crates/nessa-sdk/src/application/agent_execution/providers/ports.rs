@@ -26,6 +26,17 @@ use crate::domain::agent_execution::executions::ExecutionId;
 use crate::domain::effective_capabilities::value_objects::EffectiveCapabilities;
 use std::sync::Arc;
 
+/// Operation-owned permission to hand an admitted input to its native executor.
+///
+/// Call after all asynchronous preparation and refusal checks, immediately before
+/// the serialized native owner starts the input. A refusal forbids native dispatch.
+/// The callback does not retain the admitted work: Stop, retirement or an obsolete
+/// generation makes a late call fail. Never call merely because a future is polled.
+/// Repeated calls succeed while the same work remains current; retirement makes
+/// a later call refuse. After success, serialize configuration commands after
+/// this input's handoff.
+pub type NativeExecutionHandoff = Arc<dyn Fn() -> Result<(), AgentError> + Send + Sync>;
+
 /// Confirmed cleanup of the provider attachment, independent of saved history.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CloseOutcome {
@@ -156,7 +167,9 @@ pub trait ProviderSessionBackend: Send + Sync {
             ))
         })
     }
-    /// Run `input` in this context. Return Rejected(Busy) for overlap; never attach input to
+    /// Run `input` in this context. Honor `handoff` at the actual native boundary;
+    /// see [`NativeExecutionHandoff`]. Preparation refusals do not call it.
+    /// Return Rejected(Busy) for overlap; never attach input to
     /// an unrelated invocation. Tag every observation with its execution identity.
     /// Successful completion requires a matching Finished observation or stream
     /// exhaustion; Agent waits for both settlement and that observation boundary.
@@ -171,7 +184,11 @@ pub trait ProviderSessionBackend: Send + Sync {
     /// settlement; Agent captures an already-ready result without waiting indefinitely.
     /// It retains accepted observations but stops polling further chunks after
     /// unconfirmed cleanup, so ready output cannot delay settlement or close.
-    fn execute(&self, input: ExecutionRequest) -> ProviderExecutionFuture<'_>;
+    fn execute(
+        &self,
+        input: ExecutionRequest,
+        handoff: NativeExecutionHandoff,
+    ) -> ProviderExecutionFuture<'_>;
     /// Answer one question the agent asked, or decline it.
     ///
     /// Success is that the answer was written, never that the agent acted on

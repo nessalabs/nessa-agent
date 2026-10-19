@@ -551,3 +551,26 @@ compatibility, not historical host identity across process restarts.
 | Provider implementation omits its host assertion | Compilation fails with E0046; adding a default invalidates the compile-fail example | `AgentProvider::harness_host_identity` compile-fail example |
 | LeaseFence wraps a hosted factory, including configured clones | Delegate live host identity and retain the same lease/fence owner; foreign host with equal attributes is refused | `hosted_lease_fence_and_normalization_delegate_the_captured_host_owner` |
 | SSH lease adapts a model target after grant | Reuse the original grant-created host Arc; target normalization and reopen retain that owner; grant/end once | `model_targets_and_normalization_retain_the_granted_host` |
+
+### Native handoff and admitted configuration
+
+An entered backend future is not a native handoff. Existing Active work must
+retain its admitted configuration through image reads and worker preparation.
+The existing permit owns the fallible transition to Executing; an adapter must
+invoke its handoff only after readiness, profile and frame checks, immediately
+before its serialized native owner begins the effect. Stop or retirement makes a
+late handoff refuse. Executing work continues to permit supported live controls.
+
+| Ordering | Required ownership and result | Evidence |
+| --- | --- | --- |
+| Direct or queued A waits for image bytes; model B requested | Active A returns Busy BeforeEffect for B, no native model command; releasing bytes dispatches A once with original receipt and identity | Real ACP UserImageSource barrier; NextTurn and SubsequentResponses, equal and unequal ceilings; actual before eight failures; fixed ten pass (including Stop). Eager-transition omission reproduces eight failures/two Stop positives; omitted worker transition reproduces eight native-live failures/two Stop positives; exact restoration ten pass |
+| A has crossed serialized native handoff; model B requested | Existing supported live control remains allowed; subsequent queued input uses B | Same public ACP journeys: one native model change after A starts, fresh B prompt, both traces and original saved identities; ten pass |
+| Ready policy drift or profile/frame refusal precedes handoff | Existing worker refuses without calling the permit transition or beginning a native turn | Existing ready-policy refusal leaves count zero; worker frame refusal count zero and fallible Closed handoff forbids native begin; actual regressions pass. Profile check remains immediately before frame construction, with actual ACP unequal-ceiling validation evidence |
+| Stop retires A while image preparation is pending | A late adapter handoff refuses and sends no native prompt | Direct/queued image-read Stop tests pass with zero native prompts/model commands; dropped-work, replaced-attachment and stopped-generation handoff refusal is tested at the existing permit owner |
+
+The model-control test backend's held turn owns its simulated native invocation at
+its `started` notification, before its release wait. Its required port migration
+must invoke handoff there, then forward the same idempotent callback when its
+inner backend settles. Merely forwarding at the end incorrectly labels an
+already native fixture turn as preparing; the existing 52-case model suite caught
+that migration error (39 passed, 13 Busy failures).

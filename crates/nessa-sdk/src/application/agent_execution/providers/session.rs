@@ -172,12 +172,16 @@ impl ProviderSession {
     /// Dispatch `input` after checking actual message bytes and caller-estimated tokens.
     /// This adapter operation does not persist evidence or run Agent hooks.
     /// Poll the paired event reader concurrently and await backend settlement.
-    pub(crate) fn execute(&self, input: ExecutionRequest) -> ProviderExecutionFuture<'_> {
+    pub(crate) fn execute(
+        &self,
+        input: ExecutionRequest,
+        handoff: super::NativeExecutionHandoff,
+    ) -> ProviderExecutionFuture<'_> {
         Box::pin(async move {
             if let Err(error) = self.validate(&input) {
                 return ProviderExecutionReply::Rejected(error);
             }
-            match self.backend.execute(input).await {
+            match self.backend.execute(input, handoff).await {
                 ProviderExecutionReply::Rejected(error) => {
                     ProviderExecutionReply::Rejected(error.bounded())
                 }

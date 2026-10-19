@@ -247,7 +247,7 @@ stateDiagram-v2
             [*] --> Waiting
             Waiting --> Active: selected
             Waiting --> Settling: withdrawal / stop / close / attachment or admission failure
-            Active --> Executing: invocation entered
+            Active --> Executing: serialized native handoff accepted
             Executing --> Settling: result / Stop / panic
             Settling --> Retired: original persistence and recovery finish
         }

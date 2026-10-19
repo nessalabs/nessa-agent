@@ -1,4 +1,5 @@
 //! Provider-substitution regressions for review-discovered lifecycle boundaries.
+use nessa_sdk::application::agent_execution::providers::NativeExecutionHandoff;
 mod admission_error_limits;
 mod bulk_cancellation_panics;
 mod caller_wakers;
@@ -133,12 +134,20 @@ impl ProviderSessionBackend for Probe {
                 .map_err(|error| ProviderOperationFailure::new(error, ProviderSessionState::Usable))
         })
     }
-    fn execute(&self, input: ExecutionRequest) -> ProviderExecutionFuture<'_> {
+    fn execute(
+        &self,
+        input: ExecutionRequest,
+        handoff: NativeExecutionHandoff,
+    ) -> ProviderExecutionFuture<'_> {
         // Each operation retains the output generation current when the provider
         // accepted it. A later recovery cannot redirect delayed old output into
         // the replacement attachment's stream.
         let sender = self.sender.lock().unwrap().clone();
         Box::pin(async move {
+            if let Err(error) = handoff() {
+                return ProviderExecutionReply::Rejected(error);
+            }
+
             let result: Result<ExecutionOutcome, AgentError> = {
                 async move {
                     self.executions.fetch_add(1, Ordering::SeqCst);

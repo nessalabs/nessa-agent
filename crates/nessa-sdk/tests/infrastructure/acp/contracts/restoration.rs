@@ -21,7 +21,11 @@ async fn undrained_restored_generations_cannot_each_allocate_a_fresh_byte_budget
         .unwrap();
     for id in ["first", "second"] {
         assert_eq!(
-            opened.session.execute(prompt(id)).await.into_result(),
+            opened
+                .session
+                .execute(prompt(id), Arc::new(|| Ok(())))
+                .await
+                .into_result(),
             Ok(ExecutionOutcome::Completed)
         );
         opened
@@ -35,7 +39,11 @@ async fn undrained_restored_generations_cannot_each_allocate_a_fresh_byte_budget
     // worker shares that charge even though each individual channel has room.
     // Its first two chunks fit; the third crosses the shared 32 MiB ceiling.
     assert_eq!(
-        opened.session.execute(prompt("third")).await.into_result(),
+        opened
+            .session
+            .execute(prompt("third"), Arc::new(|| Ok(())))
+            .await
+            .into_result(),
         Err(AgentError::Backpressure)
     );
     opened
@@ -65,7 +73,11 @@ async fn undrained_restored_generations_cannot_each_allocate_a_fresh_byte_budget
     assert_eq!(completed, 2);
     // Draining releases the budget while the same context remains recoverable.
     assert_eq!(
-        opened.session.execute(prompt("fourth")).await.into_result(),
+        opened
+            .session
+            .execute(prompt("fourth"), Arc::new(|| Ok(())))
+            .await
+            .into_result(),
         Ok(ExecutionOutcome::Completed)
     );
     opened
@@ -89,7 +101,11 @@ async fn execute_reopens_the_same_context_and_revives_an_exhausted_event_reader(
             .unwrap();
         let id = opened.session.id().clone();
         assert_eq!(
-            opened.session.execute(prompt("first")).await.into_result(),
+            opened
+                .session
+                .execute(prompt("first"), Arc::new(|| Ok(())))
+                .await
+                .into_result(),
             Ok(ExecutionOutcome::Completed)
         );
         assert_eq!(
@@ -117,7 +133,11 @@ async fn execute_reopens_the_same_context_and_revives_an_exhausted_event_reader(
             None
         );
         assert_eq!(
-            opened.session.execute(prompt("second")).await.into_result(),
+            opened
+                .session
+                .execute(prompt("second"), Arc::new(|| Ok(())))
+                .await
+                .into_result(),
             Ok(ExecutionOutcome::Completed)
         );
         assert_eq!(opened.session.id(), &id);
@@ -211,7 +231,11 @@ async fn a_relaunch_inside_one_provider_session_keeps_its_grant() {
         .unwrap();
     assert_gone(&root, "pid");
     assert_eq!(
-        opened.session.execute(prompt("again")).await.into_result(),
+        opened
+            .session
+            .execute(prompt("again"), Arc::new(|| Ok(())))
+            .await
+            .into_result(),
         Ok(ExecutionOutcome::Completed)
     );
     let launches: Vec<u32> =
@@ -246,7 +270,11 @@ async fn restore_failures_never_create_a_replacement_conversation() {
             .await
             .into_result()
             .unwrap();
-        let result = opened.session.execute(prompt("later")).await.into_result();
+        let result = opened
+            .session
+            .execute(prompt("later"), Arc::new(|| Ok(())))
+            .await
+            .into_result();
         match mode {
             "resume-unsupported" => assert!(matches!(result, Err(AgentError::Unsupported(_)))),
             "resume-failure" => assert_eq!(
@@ -272,7 +300,7 @@ async fn restore_failures_never_create_a_replacement_conversation() {
         assert_gone(&root, "pid");
         assert!(opened
             .session
-            .execute(prompt("retry"))
+            .execute(prompt("retry"), Arc::new(|| Ok(())))
             .await
             .into_result()
             .is_err());
@@ -324,7 +352,11 @@ async fn audit_failure_prevents_automatic_process_restart() {
     );
     assert_eq!(active.await.unwrap(), Err(rejected_audits(3)));
     assert_eq!(
-        opened.session.execute(prompt("later")).await.into_result(),
+        opened
+            .session
+            .execute(prompt("later"), Arc::new(|| Ok(())))
+            .await
+            .into_result(),
         Err(rejected_audits(3))
     );
     let launches: Vec<u32> =
@@ -471,7 +503,7 @@ async fn reopened_execution_remains_interruptible_and_does_not_start_parallel_wo
     assert_eq!(
         opened
             .session
-            .execute(prompt("competing"))
+            .execute(prompt("competing"), Arc::new(|| Ok(())))
             .await
             .into_result(),
         Err(AgentError::Busy)
@@ -505,7 +537,7 @@ async fn restoration_drains_old_evidence_without_replaying_its_reported_failure(
     assert_eq!(
         opened
             .session
-            .execute(prompt("old-input"))
+            .execute(prompt("old-input"), Arc::new(|| Ok(())))
             .await
             .into_result(),
         Err(AgentError::Provider {
@@ -520,7 +552,7 @@ async fn restoration_drains_old_evidence_without_replaying_its_reported_failure(
     assert_eq!(
         opened
             .session
-            .execute(prompt("new-input"))
+            .execute(prompt("new-input"), Arc::new(|| Ok(())))
             .await
             .into_result(),
         Ok(ExecutionOutcome::Completed)
@@ -613,7 +645,7 @@ async fn cancelled_preparation_keeps_its_worker_and_publishes_events_when_ready(
     assert_eq!(
         opened
             .session
-            .execute(prompt("after-cancellation"))
+            .execute(prompt("after-cancellation"), Arc::new(|| Ok(())))
             .await
             .into_result(),
         Ok(ExecutionOutcome::Completed)

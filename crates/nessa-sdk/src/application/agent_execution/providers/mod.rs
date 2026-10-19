@@ -4,6 +4,7 @@
 //! Agent -> AgentProvider -> OpenedProviderSession
 //!                           |-> ProviderSession -> ProviderSessionBackend
 //!                           |-> ExecutionEventStream
+//! WorkPermit -> NativeExecutionHandoff -> serialized native dispatch (after preparation)
 //! active ExecutionId -> steer -> Injected / PromptRequired
 //! ModelChange::between -> validated factory target -> ModelChangeEffect
 //!                         -> durable ModelChangeRecord / current configuration
@@ -93,8 +94,8 @@ pub use operations::{
     ProviderPermissionDeferralCapability, SessionCloseOwnership, TurnStopCleanup,
 };
 pub use ports::{
-    AgentProvider, CloseOutcome, ExecutionEventStream, OpenedProviderSession,
-    ProviderSessionBackend,
+    AgentProvider, CloseOutcome, ExecutionEventStream, NativeExecutionHandoff,
+    OpenedProviderSession, ProviderSessionBackend,
 };
 pub use reports::{
     CleanupFuture, CleanupReport, ExecutionReport, ExecutionReportSource, ObservationFailure,

@@ -323,6 +323,7 @@ async fn a_rejected_tool_update_is_not_traced() {
         .dispatch_execution(
             &mut execution,
             dispatched(dispatch_policy::request(), None),
+            Arc::new(|| Ok(())),
             reply,
         )
         .await
@@ -374,6 +375,7 @@ async fn usage_after_the_turn_closes_is_not_applied_to_the_next_turn() {
         .dispatch_execution(
             &mut execution,
             dispatched(dispatch_policy::request(), None),
+            Arc::new(|| Ok(())),
             reply,
         )
         .await
@@ -454,6 +456,7 @@ async fn usage_read_before_a_rejected_dispatch_does_not_land_on_the_next_turn() 
         .dispatch_execution(
             &mut execution,
             dispatched(dispatch_policy::request(), None),
+            Arc::new(|| Ok(())),
             reply,
         )
         .await
@@ -469,6 +472,7 @@ async fn usage_read_before_a_rejected_dispatch_does_not_land_on_the_next_turn() 
         .dispatch_execution(
             &mut execution,
             dispatched(dispatch_policy::request(), None),
+            Arc::new(|| Ok(())),
             reply,
         )
         .await

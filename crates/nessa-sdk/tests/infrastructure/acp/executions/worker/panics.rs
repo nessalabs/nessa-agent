@@ -157,6 +157,7 @@ async fn begin(
                 },
                 None,
             ),
+            Arc::new(|| Ok(())),
             reply,
         ))
         .await
@@ -487,6 +488,7 @@ async fn worker_phase_panics_preserve_scope_and_startup_or_execution_receipt() {
                         },
                         None,
                     ),
+                    Arc::new(|| Ok(())),
                     reply,
                 ))
                 .await

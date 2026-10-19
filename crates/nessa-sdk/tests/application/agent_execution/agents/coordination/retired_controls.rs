@@ -205,7 +205,7 @@ async fn permit_unwind_fences_current_but_not_retired_attachment_or_ordinary_dro
         let (agent, backend) = agent_with_backend().await;
         let permit = agent.accept_control().unwrap();
         if execution_started {
-            permit.mark_execution_started();
+            permit.native_handoff()().unwrap();
         }
         if replacement {
             restore_attachment(&agent, &permit).await;
@@ -232,5 +232,33 @@ async fn permit_unwind_fences_current_but_not_retired_attachment_or_ordinary_dro
         assert!(backend.closes.lock().unwrap().is_empty());
         agent.close(actor()).await.unwrap();
         assert_eq!(backend.closes.lock().unwrap().len(), 1);
+    }
+}
+
+#[tokio::test]
+async fn native_handoff_does_not_keep_retired_work_or_attachment_alive() {
+    for retired in ["work", "attachment", "stop"] {
+        let (agent, backend) = agent_with_backend().await;
+        let permit = agent.accept_control().unwrap();
+        let handoff = permit.native_handoff();
+        match retired {
+            "work" => {}
+            "attachment" => {
+                restore_attachment(&agent, &permit).await;
+                assert_eq!(handoff(), Err(AgentError::Closed));
+            }
+            "stop" => {
+                agent
+                    .inner
+                    .lifecycle
+                    .start_stop(SessionCloseRequest::Explicit(actor()));
+                assert_eq!(handoff(), Err(AgentError::Closed));
+            }
+            _ => unreachable!(),
+        }
+        drop(permit);
+        assert_eq!(handoff(), Err(AgentError::Closed));
+        assert_eq!(backend.executions.load(Ordering::SeqCst), 0);
+        agent.close(actor()).await.unwrap();
     }
 }

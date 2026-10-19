@@ -1,6 +1,7 @@
 pub(super) use nessa_sdk::application::agent_execution::agents::*;
 pub(super) use nessa_sdk::application::agent_execution::executions::*;
 pub(super) use nessa_sdk::application::agent_execution::permissions::*;
+use nessa_sdk::application::agent_execution::providers::NativeExecutionHandoff;
 pub(super) use nessa_sdk::application::agent_execution::providers::*;
 pub(super) use nessa_sdk::application::agent_execution::sessions::*;
 pub(super) use nessa_sdk::application::agent_execution::tools::*;
@@ -48,8 +49,16 @@ impl ProviderSessionBackend for RecordingSession {
     fn prepare_invocation(&self) -> ProviderOperationFuture<'_, ()> {
         Box::pin(async { Ok(()) })
     }
-    fn execute(&self, _input: ExecutionRequest) -> ProviderExecutionFuture<'_> {
+    fn execute(
+        &self,
+        _input: ExecutionRequest,
+        handoff: NativeExecutionHandoff,
+    ) -> ProviderExecutionFuture<'_> {
         Box::pin(async move {
+            if let Err(error) = handoff() {
+                return ProviderExecutionReply::Rejected(error);
+            }
+
             let result: Result<ExecutionOutcome, AgentError> = {
                 async move {
                     self.prompts.fetch_add(1, Ordering::SeqCst);
@@ -104,8 +113,16 @@ impl ProviderSessionBackend for OfflineSession {
     fn prepare_invocation(&self) -> ProviderOperationFuture<'_, ()> {
         Box::pin(async { Ok(()) })
     }
-    fn execute(&self, _input: ExecutionRequest) -> ProviderExecutionFuture<'_> {
+    fn execute(
+        &self,
+        _input: ExecutionRequest,
+        handoff: NativeExecutionHandoff,
+    ) -> ProviderExecutionFuture<'_> {
         Box::pin(async move {
+            if let Err(error) = handoff() {
+                return ProviderExecutionReply::Rejected(error);
+            }
+
             let result: Result<ExecutionOutcome, AgentError> =
                 { async { Err(AgentError::Closed) } }.await;
             ProviderExecutionReply::Finished(ExecutionReport::new(
@@ -252,7 +269,11 @@ impl ProviderSessionBackend for InMemoryPermissionBackend {
     fn prepare_invocation(&self) -> ProviderOperationFuture<'_, ()> {
         Box::pin(async { Ok(()) })
     }
-    fn execute(&self, _: ExecutionRequest) -> ProviderExecutionFuture<'_> {
+    fn execute(
+        &self,
+        _: ExecutionRequest,
+        _handoff: NativeExecutionHandoff,
+    ) -> ProviderExecutionFuture<'_> {
         Box::pin(async move {
             let result: Result<ExecutionOutcome, AgentError> =
                 { async { Err(AgentError::Unsupported("permission-only fixture".into())) } }.await;

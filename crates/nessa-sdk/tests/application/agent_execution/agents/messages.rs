@@ -2,6 +2,7 @@
 //! and a message's images are refused by type before anything is accepted.
 use super::*;
 use nessa_sdk::application::agent_execution::providers::HarnessHostIdentity;
+use nessa_sdk::application::agent_execution::providers::NativeExecutionHandoff;
 use nessa_sdk::application::dto::ImageInputLimitsDto;
 use nessa_sdk::domain::common::value_objects::{ImageMediaType, Sha256Digest};
 use nessa_sdk::domain::model_metadata::value_objects::OfferedEffortLevels;
@@ -294,8 +295,16 @@ impl ProviderSessionBackend for ImageBackend {
     fn prepare_invocation(&self) -> ProviderOperationFuture<'_, ()> {
         Box::pin(async { Ok(()) })
     }
-    fn execute(&self, input: ExecutionRequest) -> ProviderExecutionFuture<'_> {
+    fn execute(
+        &self,
+        input: ExecutionRequest,
+        handoff: NativeExecutionHandoff,
+    ) -> ProviderExecutionFuture<'_> {
         Box::pin(async move {
+            if let Err(error) = handoff() {
+                return ProviderExecutionReply::Rejected(error);
+            }
+
             self.executions.fetch_add(1, Ordering::SeqCst);
             let finished = ExecutionEvent::new(
                 input.execution_id,

@@ -1,6 +1,7 @@
 //! Prepared construction and attachment ownership use separate observable phases.
 use super::*;
 use nessa_sdk::application::agent_execution::providers::HarnessHostIdentity;
+use nessa_sdk::application::agent_execution::providers::NativeExecutionHandoff;
 use nessa_sdk::application::agent_execution::{
     hooks::{AfterInvocation, AfterInvocationEvent},
     sessions::{
@@ -350,7 +351,11 @@ impl ProviderSessionBackend for PanickingCleanupBackend {
     fn prepare_invocation(&self) -> ProviderOperationFuture<'_, ()> {
         Box::pin(async { Ok(()) })
     }
-    fn execute(&self, _input: ExecutionRequest) -> ProviderExecutionFuture<'_> {
+    fn execute(
+        &self,
+        _input: ExecutionRequest,
+        _handoff: NativeExecutionHandoff,
+    ) -> ProviderExecutionFuture<'_> {
         Box::pin(async { ProviderExecutionReply::Rejected(AgentError::Closed) })
     }
     fn answer_question(&self, _: QuestionAnswer) -> ProviderOperationFuture<'_, ()> {

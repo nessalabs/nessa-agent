@@ -1,6 +1,7 @@
 use crate::application::agent_execution::providers::ApprovalMode;
 use crate::application::agent_execution::providers::ModelChange;
 use crate::application::agent_execution::providers::ModelChangeEffect;
+use crate::application::agent_execution::providers::NativeExecutionHandoff;
 use crate::domain::model_metadata::value_objects::EffortLevel;
 
 use super::super::{
@@ -978,7 +979,11 @@ impl<P: AcpProfile + Clone + Sync> ProviderSessionBackend for AcpSession<P> {
             }
         })
     }
-    fn execute(&self, input: ExecutionRequest) -> ProviderExecutionFuture<'_> {
+    fn execute(
+        &self,
+        input: ExecutionRequest,
+        handoff: NativeExecutionHandoff,
+    ) -> ProviderExecutionFuture<'_> {
         Box::pin(async move {
             let (sender, receiver) = oneshot::channel();
             // Subscribed before the context is made live, so a close at any
@@ -1022,7 +1027,10 @@ impl<P: AcpProfile + Clone + Sync> ProviderSessionBackend for AcpSession<P> {
             };
             // A generation that stopped meanwhile has closed this queue, so the
             // request is refused rather than handed to a different process.
-            if let Err(error) = enqueue(&commands, Command::ExecutionRequest(prompt, sender)) {
+            if let Err(error) = enqueue(
+                &commands,
+                Command::ExecutionRequest(prompt, handoff, sender),
+            ) {
                 return ProviderExecutionReply::Rejected(error);
             }
             let result = receiver.await.unwrap_or_else(|_| {
@@ -1371,7 +1379,11 @@ pub(crate) enum Command {
         oneshot::Sender<ProviderOperationResult<SteeringOutcome>>,
     ),
     /// One prompt.
-    ExecutionRequest(DispatchedPrompt, oneshot::Sender<ProviderExecutionReply>),
+    ExecutionRequest(
+        DispatchedPrompt,
+        NativeExecutionHandoff,
+        oneshot::Sender<ProviderExecutionReply>,
+    ),
     CancelPermission(
         PermissionCancellationRequest,
         oneshot::Sender<ProviderOperationResult<PermissionCancellation>>,

@@ -2234,3 +2234,27 @@ it("reads what a waiting review shows range by range, and refuses one that does 
   ).rejects.toThrow()
   expect(unasked).not.toHaveBeenCalled()
 })
+
+it.each([
+  [ConversationErrorCode.ModelChangeNotApplied, false],
+  [ConversationErrorCode.ModelChangeUncertain, true],
+])("retains model refusal certainty for %s", async (code, uncertain) => {
+  const cause = new NessaRpcError(code, code)
+  const request = vi.fn().mockRejectedValue(cause)
+  const api = createConversationApi({ request }, () => "model-control")
+  const error = await api
+    .setModel(conversationId, "selected-model", { requestId: "original-model-control" })
+    .catch((error: unknown) => error)
+  expect(error).toBeInstanceOf(NessaConversationControlError)
+  expect(error).toMatchObject({
+    code,
+    uncertain,
+    requestId: "original-model-control",
+    cause,
+  })
+  expect(request).toHaveBeenCalledExactlyOnceWith("conversation.setModel", {
+    conversationId,
+    requestId: "original-model-control",
+    model: "selected-model",
+  })
+})

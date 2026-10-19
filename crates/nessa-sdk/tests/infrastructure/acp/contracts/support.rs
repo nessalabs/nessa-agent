@@ -541,7 +541,12 @@ pub(super) async fn start(
 ) -> tokio::task::JoinHandle<Result<ExecutionOutcome, AgentError>> {
     let session = opened.session.clone();
     let input = prompt(text);
-    tokio::spawn(async move { session.execute(input).await.into_result() })
+    tokio::spawn(async move {
+        session
+            .execute(input, Arc::new(|| Ok(())))
+            .await
+            .into_result()
+    })
 }
 pub(super) async fn next(opened: &mut OpenedProviderSession) -> ExecutionUpdate {
     timeout(Duration::from_secs(3), opened.events.next())

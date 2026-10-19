@@ -1,4 +1,5 @@
 //! Public same-provider control preserves an active execution and exact saved context.
+use nessa_sdk::application::agent_execution::providers::NativeExecutionHandoff;
 mod admission;
 mod steering;
 use nessa_sdk::application::agent_execution::traces::LocalTraceStore;
@@ -127,8 +128,17 @@ impl ProviderSessionBackend for Backend {
             self.inner.prepare_invocation().await
         })
     }
-    fn execute(&self, input: ExecutionRequest) -> ProviderExecutionFuture<'_> {
+    fn execute(
+        &self,
+        input: ExecutionRequest,
+        handoff: NativeExecutionHandoff,
+    ) -> ProviderExecutionFuture<'_> {
         Box::pin(async move {
+            // This fixture owns its native turn before announcing started;
+            // the inner backend below supplies its terminal result.
+            if let Err(error) = handoff() {
+                return ProviderExecutionReply::Rejected(error);
+            }
             let hold = self.hold.lock().unwrap().take();
             self.started.notify_one();
             if let Some(hold) = hold {
@@ -144,7 +154,7 @@ impl ProviderSessionBackend for Backend {
                     .await
                     .unwrap();
             }
-            self.inner.execute(input).await
+            self.inner.execute(input, handoff).await
         })
     }
     fn steer<'a>(

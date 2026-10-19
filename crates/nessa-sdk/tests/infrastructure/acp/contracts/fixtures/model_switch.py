@@ -13,6 +13,9 @@ prompts = 0
 adjust = "adjust" in sys.argv[2:]
 steering = "steer" in sys.argv[2:]
 steers = 0
+handoff = "handoff" in sys.argv[2:]
+prompt_models = []
+model_changes = []
 effort = "high" if adjust else None
 
 def send(value):
@@ -28,9 +31,9 @@ def options():
     return {"configOptions": values}
 
 def observed():
-    if steering:
+    if steering or handoff:
         with open("model-steering-observed", "w") as record:
-            json.dump({"steers": steers, "prompts": prompts}, record)
+            json.dump({"steers": steers, "prompts": prompts, "promptModels": prompt_models, "modelChanges": model_changes}, record)
 
 def text(value):
     send({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": session, "update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": value}}}})
@@ -41,14 +44,17 @@ for line in sys.stdin:
     params = message.get("params", {})
     id = message.get("id")
     if method == "initialize":
-        result(id, {"_meta": {"steering": {"supported": steering}}, "protocolVersion": 1, "agentInfo": {"name": "claude-code-acp" if profile == "claude" else "@agentclientprotocol/codex-acp", "version": version}, "agentCapabilities": {"sessionCapabilities": {"resume": {}}}})
+        result(id, {"_meta": {"steering": {"supported": steering}}, "protocolVersion": 1, "agentInfo": {"name": "claude-code-acp" if profile == "claude" else "@agentclientprotocol/codex-acp", "version": version}, "agentCapabilities": {"promptCapabilities": {"image": handoff}, "sessionCapabilities": {"resume": {}}}})
     elif method in ("session/new", "session/resume"):
         session = params.get("sessionId", session)
+        observed()
         result(id, {"sessionId": session, **options()})
     elif method == "session/set_config_option":
         assert params["sessionId"] == session
         if params["configId"] == "model":
             model = params["value"]
+            model_changes.append(model)
+            observed()
             if adjust and model in ("claude-haiku-4-5-20251001", "gpt-5.6-terra"):
                 mode = "default" if profile == "claude" else "read-only"
                 effort = None if profile == "claude" else "medium"
@@ -66,6 +72,7 @@ for line in sys.stdin:
             active = None
     elif method == "session/prompt":
         prompts += 1
+        prompt_models.append(model)
         observed()
         text("native turn running")
         if prompts == 1:

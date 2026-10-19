@@ -1,6 +1,7 @@
 //! A rejected invocation must not drain a continuously ready invalid stream.
 use super::*;
 use nessa_sdk::application::agent_execution::providers::HarnessHostIdentity;
+use nessa_sdk::application::agent_execution::providers::NativeExecutionHandoff;
 
 struct ReadyProvider {
     backend: Arc<ReadyBackend>,
@@ -56,7 +57,11 @@ impl ProviderSessionBackend for ReadyBackend {
     fn prepare_invocation(&self) -> ProviderOperationFuture<'_, ()> {
         Box::pin(async { Ok(()) })
     }
-    fn execute(&self, _: ExecutionRequest) -> ProviderExecutionFuture<'_> {
+    fn execute(
+        &self,
+        _: ExecutionRequest,
+        _handoff: NativeExecutionHandoff,
+    ) -> ProviderExecutionFuture<'_> {
         Box::pin(async {
             self.1.fetch_add(1, Ordering::SeqCst);
             ProviderExecutionReply::Rejected(AgentError::InvalidInput("not admitted".into()))

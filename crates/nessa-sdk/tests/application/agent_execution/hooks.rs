@@ -1,3 +1,4 @@
+use nessa_sdk::application::agent_execution::providers::NativeExecutionHandoff;
 mod observation_window;
 
 use super::agents::MemoryStorage;
@@ -268,8 +269,16 @@ impl ProviderSessionBackend for FailingBackend {
     fn prepare_invocation(&self) -> ProviderOperationFuture<'_, ()> {
         Box::pin(async { Ok(()) })
     }
-    fn execute(&self, _: ExecutionRequest) -> ProviderExecutionFuture<'_> {
+    fn execute(
+        &self,
+        _: ExecutionRequest,
+        handoff: NativeExecutionHandoff,
+    ) -> ProviderExecutionFuture<'_> {
         Box::pin(async move {
+            if let Err(error) = handoff() {
+                return ProviderExecutionReply::Rejected(error);
+            }
+
             let result: Result<ExecutionOutcome, AgentError> =
                 { async { Err(self.0.clone()) } }.await;
             ProviderExecutionReply::Finished(ExecutionReport::new(
@@ -372,8 +381,16 @@ impl ProviderSessionBackend for CloseSettledBackend {
     fn prepare_invocation(&self) -> ProviderOperationFuture<'_, ()> {
         Box::pin(async { Ok(()) })
     }
-    fn execute(&self, _: ExecutionRequest) -> ProviderExecutionFuture<'_> {
+    fn execute(
+        &self,
+        _: ExecutionRequest,
+        handoff: NativeExecutionHandoff,
+    ) -> ProviderExecutionFuture<'_> {
         Box::pin(async move {
+            if let Err(error) = handoff() {
+                return ProviderExecutionReply::Rejected(error);
+            }
+
             let result: Result<ExecutionOutcome, AgentError> = {
                 async {
                     let mut closed = self.closed.subscribe();

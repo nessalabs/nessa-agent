@@ -2,6 +2,7 @@
 use super::{actor, capabilities, request, MemoryStorage};
 use crate::application::agent_execution::support::*;
 use nessa_sdk::application::agent_execution::providers::HarnessHostIdentity;
+use nessa_sdk::application::agent_execution::providers::NativeExecutionHandoff;
 use nessa_sdk::domain::agent_execution::{
     sessions::ExecutionSession,
     tools::{FileLocation, FilePath, ToolContent, ToolObservation},
@@ -50,8 +51,16 @@ impl ProviderSessionBackend for PayloadBackend {
     fn prepare_invocation(&self) -> ProviderOperationFuture<'_, ()> {
         Box::pin(async { Ok(()) })
     }
-    fn execute(&self, _: ExecutionRequest) -> ProviderExecutionFuture<'_> {
+    fn execute(
+        &self,
+        _: ExecutionRequest,
+        handoff: NativeExecutionHandoff,
+    ) -> ProviderExecutionFuture<'_> {
         Box::pin(async move {
+            if let Err(error) = handoff() {
+                return ProviderExecutionReply::Rejected(error);
+            }
+
             self.0.fetch_add(1, Ordering::SeqCst);
             let result: Result<ExecutionOutcome, AgentError> =
                 { async { Ok(ExecutionOutcome::Completed) } }.await;

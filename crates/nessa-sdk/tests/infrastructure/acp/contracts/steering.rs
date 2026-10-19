@@ -244,7 +244,11 @@ async fn pending_steering_blocks_new_prompts_and_close_settles_the_reply() {
     });
     wait_for_file(&root, "steering-observed").await;
     assert_eq!(
-        opened.session.execute(prompt("newer")).await.into_result(),
+        opened
+            .session
+            .execute(prompt("newer"), Arc::new(|| Ok(())))
+            .await
+            .into_result(),
         Err(AgentError::Busy)
     );
     assert_eq!(
@@ -534,7 +538,7 @@ async fn failed_restoration_clears_previously_negotiated_operation_support() {
     assert!(matches!(
         opened
             .session
-            .execute(prompt("restore"))
+            .execute(prompt("restore"), Arc::new(|| Ok(())))
             .await
             .into_result(),
         Err(AgentError::Unsupported(_))
