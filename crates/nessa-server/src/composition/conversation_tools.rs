@@ -94,7 +94,7 @@ impl BuiltInServer for ConversationTools {
             }),
             json!({
                 "name": "send_message",
-                "description": "Send plain text in another thread of the same owner. queued (default) starts a queued turn; steering uses the existing steering semantics; passive records a note without starting or steering a turn. When a queued or steering message's turn ends, a report with the thread's outcome and final reply is queued into this conversation as a new turn (reportsBack: true), so there is no need to poll for it: end your turn and the report wakes you. To wait for the reply inside this turn instead, call subscribe once with this threadId and the returned executionId; the report is then not sent, unless it was already queued before that call. Retry with identical thread, text and mode using the same requestId. Passive notes and active submissions retain separate existing operation namespaces.",
+                "description": "Send plain text in another thread of the same owner. queued (default) starts a queued turn; steering uses the existing steering semantics; passive records a note without starting or steering a turn. When a queued or steering message's turn ends, a report with the thread's outcome and final reply is queued into this conversation as a new turn (reportsBack: true), so there is no need to poll for it: end your turn and the report wakes you. To wait for the reply inside this turn instead, call subscribe once with this threadId and the returned executionId; the report is then not sent, unless the reply came back cut (replyCut: true) or the report was already queued before that call. Retry with identical thread, text and mode using the same requestId. Passive notes and active submissions retain separate existing operation namespaces.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -110,7 +110,7 @@ impl BuiltInServer for ConversationTools {
             }),
             json!({
                 "name": "subscribe",
-                "description": "Wait for a thread's turn, or read its events. To get the reply to a message you sent, pass the executionId send_message returned: the call waits (up to waitMs, default and most 30000) and returns turn: {finished: true, outcome, reply} as soon as that turn ends, even if it already had. If turn.finished is false it is still running: call again the same way, or end your turn and its report wakes you. While waiting it reads past the thread's other events; its cursor continues after everything it read. Without executionId it returns the next committed events (metadata only; an empty answer means nothing new yet when more is false, or, with timedOut: true and more: true, that the read ran out of time before reaching an event: call again with its cursor) and a cursor; repeat with after to continue, omit after to start from now, or use replay:true to start from the beginning. A turn.ended event comes with turn: {outcome, reply}. This call does not send a message, run an agent, or arrange a future model turn.",
+                "description": "Wait for a thread's turn, or read its events. To get the reply to a message you sent, pass the executionId send_message returned: the call waits (up to waitMs, default and most 30000) and returns turn: {finished: true, outcome, reply} as soon as that turn ends, even if it already had. turn.replyCut: true means the reply was cut to fit, and the turn's report still comes with the whole reply. If turn.finished is false it is still running: call again the same way, or end your turn and its report wakes you. While waiting it reads past the thread's other events; its cursor continues after everything it read. Without executionId it returns the next committed events (metadata only; an empty answer means nothing new yet when more is false, or, with timedOut: true and more: true, that the read ran out of time before reaching an event: call again with its cursor) and a cursor; repeat with after to continue, omit after to start from now, or use replay:true to start from the beginning. A turn.ended event comes with turn: {outcome, reply}. This call does not send a message, run an agent, or arrange a future model turn.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -791,6 +791,8 @@ struct SubscriptionControl {
     behind: bool,
     /// The turn this call waits on, if it names one.
     execution: Option<String>,
+    /// The last look at that turn could not read its history.
+    unreadable: bool,
 }
 impl SubscriptionControl {
     fn new(stop: watch::Receiver<bool>, wait_ms: u64, execution: Option<String>) -> Self {
@@ -802,6 +804,7 @@ impl SubscriptionControl {
             checkpoint: None,
             behind: false,
             execution,
+            unreadable: false,
         }
     }
     async fn step<T>(&mut self, work: impl Future<Output = T>) -> Result<T, SubscriptionEnd> {
@@ -842,6 +845,11 @@ impl SubscriptionControl {
     fn finish(&self, target: &ConversationId, ended: SubscriptionEnd) -> Result<Value, String> {
         match ended {
             SubscriptionEnd::Cancelled => Err("cancelled".into()),
+            // A history unreadable to the last look says nothing about the
+            // turn: an unfinished answer would be a guess.
+            SubscriptionEnd::Deadline if self.execution.is_some() && self.unreadable => {
+                Err(code(ConversationError::Unavailable))
+            }
             SubscriptionEnd::Deadline => match &self.checkpoint {
                 Some(cursor) => {
                     let mut value = json!({"threadId":target.to_string(),"events":[],"cursor":cursor.encode(),"more":self.behind,"timedOut":self.wait_ms>0 || self.behind});
@@ -969,8 +977,14 @@ async fn observe(
                                     turn_value(&execution, (outcome, reply)),
                                 ))
                             }
-                            Ok(ThreadTurn::Unfinished) => looks.missed(signal, true),
-                            Ok(ThreadTurn::Unreadable) => looks.missed(signal, false),
+                            Ok(ThreadTurn::Unfinished) => {
+                                control.unreadable = false;
+                                looks.missed(signal, true)
+                            }
+                            Ok(ThreadTurn::Unreadable) => {
+                                control.unreadable = true;
+                                looks.missed(signal, false)
+                            }
                             Err(ended) => return control.finish(target, ended),
                         }
                     }
@@ -1049,8 +1063,14 @@ async fn observe(
                                     turn_value(&execution, (outcome, reply)),
                                 ))
                             }
-                            Ok(ThreadTurn::Unfinished) => looks.missed(false, true),
-                            Ok(ThreadTurn::Unreadable) => looks.missed(false, false),
+                            Ok(ThreadTurn::Unfinished) => {
+                                control.unreadable = false;
+                                looks.missed(false, true)
+                            }
+                            Ok(ThreadTurn::Unreadable) => {
+                                control.unreadable = true;
+                                looks.missed(false, false)
+                            }
                             Err(ended) => return control.finish(target, ended),
                         }
                     }
@@ -1161,6 +1181,27 @@ mod tests {
             !looks.due(false),
             "once readable and running, it waits for a sign"
         );
+    }
+
+    #[test]
+    fn a_deadline_after_an_unreadable_look_is_unavailable_not_unfinished() {
+        let (_stop, stop) = watch::channel(false);
+        let target = thread("00000000-0000-4000-8000-000000000001").unwrap();
+        let mut control = SubscriptionControl::new(stop, 1_000, Some("run".into()));
+        control.idle(CommittedEventCursor::new(
+            SessionId::new(target.to_string()).unwrap(),
+            nessa_sync::replication::domain::Id::new("incarnation").unwrap(),
+            0,
+            None,
+        ));
+        control.unreadable = true;
+        assert_eq!(
+            control.finish(&target, SubscriptionEnd::Deadline),
+            Err(code(ConversationError::Unavailable))
+        );
+        control.unreadable = false;
+        let answer = control.finish(&target, SubscriptionEnd::Deadline).unwrap();
+        assert_eq!(answer["turn"]["finished"], false);
     }
 
     #[test]
