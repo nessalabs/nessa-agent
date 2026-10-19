@@ -615,8 +615,24 @@ impl AgentProvider for LeaseFence {
         self.inner.traces()
     }
     fn open(&self, request: ProviderOpenRequest) -> ProviderOpenFuture<'_> {
-        if self.state().phase != FencePhase::Live {
-            return Box::pin(async { Err(ProviderOpenError::no_resources(AgentError::Closed)) });
+        match self.state().phase {
+            FencePhase::Live => {}
+            // The lease ends before its Agent is told to close. An opening
+            // asked in between (a recovery for queued work) waits for that
+            // close to stop it, so the work waiting on it ends as closed by
+            // it, not as failed by a refusal the Agent cannot place.
+            FencePhase::Ending => {
+                let (_, _, mut control) = request.into_parts();
+                return Box::pin(async move {
+                    control.wait().await;
+                    Err(ProviderOpenError::no_resources(AgentError::Closed))
+                });
+            }
+            FencePhase::Closed => {
+                return Box::pin(async {
+                    Err(ProviderOpenError::no_resources(AgentError::Closed))
+                });
+            }
         }
         let state = self.state.clone();
         self.inner

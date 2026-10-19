@@ -230,3 +230,12 @@ new table to an existing dataset or reset user data.
 | --- | --- | --- |
 | ModelChangeNotApplied | Definite refusal; uncertain is false and the original request identity is retained | Public setModel before fails with uncertain=true; fixed passes. Sole classification omission fails again, exact restoration passes |
 | ModelChangeUncertain | Native or durable outcome remains uncertain; uncertain is true | Positive counterpart remains uncertain=true before/fixed/omitted/restored; current full client package: 1,018 tests pass |
+
+### Current-main recovery integration
+
+| Relationship | Existing owner retained | Qualification |
+| --- | --- | --- |
+| A pending model/mode control and an old review answer | The no-open held-review resolver keeps the current pending owner; an absent owner is stale. It neither opens a replacement nor bypasses keyed review identity | Pending control review + incoming stale/no-capacity review tests; assembled571 unfiltered server: 3,291 passed, 12 ignored; browser/stress pending |
+| A marked owed turn and concurrent close/control | Existing holds_open/stuck barrier and pending model/mode journal fence all precede resume; marked work stays with its normal reconciliation owner | Current-main resumption and model journal regressions; assembled571 unfiltered server: 3,291 passed, 12 ignored; browser/stress pending |
+| A message offered again after opening failure | Main's once-only reopen and Carried contexts remain; saved retries use the original complete request with its old reservation/context rather than current model limits | Incoming retry/contexts and model-aware saved retry regressions; assembled571 unfiltered server: 3,291 passed, 12 ignored; browser/stress pending |
+| Automatic SDK recovery after a confirmed approval change | The SDK reopens its normalized current factory at the confirmed setting; the gateway does not require a second native mode command. Keep real reopening, the queued-behind turn and a further admission while it runs as the behavioral assertions | Initial assembled571 full run: only this stale `[Full, Full]` command counter failed (actual `[Full]`); 3290 server tests passed. One confirmed command plus unchanged reopen/queued-behind/further admission assertions pass; restored unfiltered server 3,291 passed, 12 ignored |

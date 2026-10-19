@@ -94,17 +94,15 @@ body {
    * radii, type and inks from here; a component that needs another value is a
    * change to this list, not a local token.
    */
-  /* Motion: base and slow, beside fast and medium above; two more for the workspace's travel. */
+  /* Independent surface motion, beside fast and medium above. */
   --desktop-base: 180ms;
   --desktop-slow: 240ms;
   /*
-   * A pane travelling to its new place when the layout changes. Opening and
-   * closing the sidebar or the session list is seen many times a day, and
-   * still moves: the frequency rule's "none" does not apply to it. Only
-   * reduced motion (below) makes it, and `--desktop-slow`, instant
-   * (`styles.test.ts`).
+   * Workspace bounds land immediately with content painted. The zero path
+   * skips FLIP snapshots and counter-scaling; sidebar and session-list CSS
+   * motion still use their independent base and slow tokens.
    */
-  --desktop-flight: 220ms;
+  --desktop-flight: 0ms;
   /* A first message's composer gliding from a new session's home. */
   --desktop-arrival: 420ms;
   /* The pause before a second thing follows the first. */

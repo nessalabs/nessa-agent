@@ -26,6 +26,7 @@ use crate::application::agent_execution::{
         ExecutionAuditRecord, ExecutionRequest, Submitter, TurnResumption, TurnResumptionRecord,
     },
     permissions::ActionContext,
+    providers::ApprovalMode,
     sessions::{InvocationRecord, InvocationSchedulingEvent, NoteCandidates},
 };
 use crate::domain::agent_execution::{
@@ -390,6 +391,32 @@ impl Agent {
         turn: &OwedTurn,
         actor: ActionContext,
     ) -> Result<Resumed, AgentError> {
+        self.resume_turn_at(turn, actor, None).await
+    }
+
+    /// [`Self::resume_turn`], with the successor admitted only where it runs
+    /// at `mode` ([`Submitter::with_approval_mode`]). Refused with
+    /// [`AgentError::ApprovalModeChanged`] where it would run at another, and
+    /// then nothing is recorded, or only the turn's stop: either way it is
+    /// still owed.
+    ///
+    /// # Errors
+    /// As [`Self::resume_turn`], and [`AgentError::ApprovalModeChanged`].
+    pub async fn resume_turn_at(
+        &self,
+        turn: &OwedTurn,
+        actor: ActionContext,
+        mode: Option<ApprovalMode>,
+    ) -> Result<Resumed, AgentError> {
+        let submitter_mode = |submitter: Submitter| match mode {
+            Some(mode) => submitter.with_approval_mode(mode),
+            None => submitter,
+        };
+        // Asked first, so a successor that would be refused does not record
+        // the turn's stop for nothing.
+        if mode.is_some() && mode != self.approval_mode() {
+            return Err(AgentError::ApprovalModeChanged);
+        }
         let successor = Resumption::of(&turn.execution_id).successor();
         // A spent chain is ended by this decision, so it is no longer owed.
         let end = successor.is_none().then(|| actor.clone());
@@ -416,7 +443,10 @@ impl Agent {
         let admission = self
             .accept_work(
                 request,
-                Submitter::new(record.actor.clone(), record.initiation.clone()),
+                submitter_mode(Submitter::new(
+                    record.actor.clone(),
+                    record.initiation.clone(),
+                )),
                 InvocationKind::Queued,
                 NoteCandidates::default(),
             )

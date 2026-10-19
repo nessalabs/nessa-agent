@@ -580,27 +580,6 @@ impl ConversationService {
         Ok((view, cursor))
     }
 
-    pub(super) async fn resolve_review(
-        &self,
-        id: &ConversationId,
-        caller: &ConversationCaller,
-    ) -> Result<Arc<LiveConversation>, ConversationError> {
-        if self.inner.metadata.pending_mode_change(id).await?.is_some()
-            || self
-                .inner
-                .metadata
-                .pending_model_change(id)
-                .await?
-                .is_some()
-        {
-            self.live_now(id, caller)
-                .await?
-                .ok_or(ConversationError::Agent(AgentError::Closed))
-        } else {
-            self.resolve(id, caller).await
-        }
-    }
-
     pub(super) async fn refuse_pending_model_change(
         &self,
         id: &ConversationId,

@@ -71,7 +71,7 @@ Usage: node verification/desktop/scripts/columns.mjs [options]
 
 Checks, per engine, layout and size:
   pane-level      focus changes only the rim, not pane fill or elevation, in both themes
-  content-visible pane bodies and fill stay visible through sidebar/list toggles
+  content-visible pane bodies and fill stay visible through toggles and a new pane mounts fully opaque at unit scale
   no-overlap       every combination of the rail, the sidebar, the session list
                    (columns layout) and the overview leaves the drawn columns in
                    order, none overlapping the next, none past the window's edges
@@ -384,10 +384,12 @@ const body = {
     const failures = []
     const actions = [keys.toggleSidebar, keys.toggleSidebar]
     if (layout === "columns") actions.push(keys.toggleSessionList, keys.toggleSessionList)
+    actions.push("mount filled pane")
     for (const key of actions) {
+      const mounting = key === "mount filled pane"
       await settled(page)
       await page.evaluate(
-        ({ pane, body }) => {
+        ({ pane, body, header, flight, mounting }) => {
           // Each pane with the opacity of every box from its body up to it, so a
           // partial dim fails as surely as a blackout.
           const observed = [...document.querySelectorAll(pane)].map((element) => {
@@ -400,6 +402,7 @@ const body = {
               chain.push({ at, opacity: Number(getComputedStyle(at).opacity) })
             return { element, fill: getComputedStyle(element).backgroundColor, chain }
           })
+          const initialPanes = new Set(observed.map(({ element }) => element))
           const chrome = document.querySelector("[data-sidebar]")
           window.__contentFrames = {
             running: true,
@@ -407,11 +410,16 @@ const body = {
             failures: [],
             before: `${chrome?.dataset.sidebar}/${document.querySelector("[data-list]")?.dataset.list}`,
             geometry: new Set(),
+            flights: 0,
+            mounted: new Set(),
+            mountedFrames: 0,
+            minimumMountedOpacity: 1,
           }
           const sample = () => {
             const result = window.__contentFrames
             if (!result.running) return
             result.frames++
+            if (document.querySelector(flight)) result.flights++
             const first = observed[0]?.element.getBoundingClientRect()
             if (first)
               result.geometry.add(`${first.left.toFixed(1)},${first.width.toFixed(1)}`)
@@ -449,14 +457,62 @@ const body = {
               if (getComputedStyle(element).backgroundColor !== fill)
                 result.failures.push("pane fill changed during transition")
             }
+            if (mounting)
+              for (const element of document.querySelectorAll(pane)) {
+                if (initialPanes.has(element)) continue
+                result.mounted.add(element.dataset.paneKey)
+                result.mountedFrames++
+                for (const target of [
+                  element.querySelector(body),
+                  element.querySelector(header),
+                ]) {
+                  if (!target) {
+                    result.failures.push("mounted pane body or header is missing")
+                    continue
+                  }
+                  let opacity = 1
+                  for (let at = target; at; at = at.parentElement) {
+                    const style = getComputedStyle(at)
+                    opacity *= Number(style.opacity)
+                    if (
+                      style.display === "none" ||
+                      style.visibility !== "visible" ||
+                      style.contentVisibility === "hidden"
+                    )
+                      result.failures.push("mounted pane body or header is hidden")
+                  }
+                  result.minimumMountedOpacity = Math.min(
+                    result.minimumMountedOpacity,
+                    opacity,
+                  )
+                  if (opacity !== 1)
+                    result.failures.push("mounted pane body or header is dimmed")
+                }
+                for (const target of [element, element.querySelector(header)]) {
+                  if (!target) continue
+                  const transform = getComputedStyle(target).transform
+                  if (
+                    transform !== "none" &&
+                    !new DOMMatrixReadOnly(transform).isIdentity
+                  )
+                    result.failures.push("mounted pane root or header is transformed")
+                }
+              }
             requestAnimationFrame(sample)
           }
           sample()
         },
-        { pane: css.pane, body: css.paneBody },
+        {
+          pane: css.pane,
+          body: css.paneBody,
+          header: css.paneHeader,
+          flight: css.workspaceFlight,
+          mounting,
+        },
       )
       try {
-        await page.keyboard.press(key)
+        if (mounting) await openPanes(page, 2)
+        else await page.keyboard.press(key)
         await settled(page)
         await frames(page)
         const result = await page.evaluate(() => {
@@ -469,16 +525,31 @@ const body = {
             before: result.before,
             after: `${chrome?.dataset.sidebar}/${document.querySelector("[data-list]")?.dataset.list}`,
             positions: result.geometry.size,
+            flights: result.flights,
+            mounted: [...result.mounted],
+            mountedFrames: result.mountedFrames,
+            minimumMountedOpacity: result.minimumMountedOpacity,
           }
         })
-        runs.push({ key, frames: result.frames, positions: result.positions })
+        runs.push({
+          key,
+          frames: result.frames,
+          positions: result.positions,
+          flights: result.flights,
+          mounted: result.mounted,
+          mountedFrames: result.mountedFrames,
+          minimumMountedOpacity: result.minimumMountedOpacity,
+        })
+        if (mounting && (result.mounted.length !== 1 || result.mountedFrames < 2))
+          failures.push("split did not mount and sample one new filled pane")
         if (result.frames < 2) failures.push(`${key}: no transition frames sampled`)
-        // The toggle took effect and the pane travelled through at least one
-        // place between where it was and where it ended.
-        if (result.before === result.after)
+        // The toggle changes the bounds directly; no workspace FLIP owns an
+        // intermediate transform. Keep observing every independent CSS frame.
+        if (!mounting && result.before === result.after)
           failures.push(`${key}: the toggle changed nothing`)
-        else if (result.positions < 3)
-          failures.push(`${key}: the pane jumped to its new place without moving`)
+        else if (!mounting && result.positions < 2)
+          failures.push(`${key}: the pane bounds changed nothing`)
+        if (result.flights > 0) failures.push(`${key}: workspace bounds started a FLIP`)
         failures.push(
           ...[...new Set(result.failures)].map((message) => `${key}: ${message}`),
         )

@@ -82,6 +82,9 @@ production build at 4× CPU throttling.
   _Check:_ `perf-budget.mjs` (defaults: `--mode prod --throttle 4 --runs 3`).
   Read max and median per row; every over-budget frame carries its Long
   Animation Frame attribution (scripts, forced layout, style-and-layout time).
+  The JSON also retains the original sample origin, raw rAF gaps and trusted
+  input timestamps/targets to distinguish preparation from the interaction;
+  that evidence does not filter frames or change the budget decision.
 - [ ] **Frame gaps use callback execution time.** Sampling `performance.now()`
   inside rAF keeps delayed callbacks, the interaction origin and attribution
   on one clock. A nominal frame timestamp must not shorten known blocking work.
@@ -139,13 +142,14 @@ controls — text, icons, images, code, or decorative art — in any frame.
   the next paint, with no ResizeObserver loop error (#693).
   _Check:_ `responsive.mjs --only column-title`; drag a column edge slowly
   across the flip point by hand and watch for a flicker (the 12px hold).
-- [ ] **A column's titlebar action hides at once as it folds, shows once it
-  has slid in; a pane's header hides while it flies.** _Check:_ manual, with
+- [ ] **A column's titlebar action hides at once as it folds and shows once it
+  has slid in; a pane's header stays painted as workspace bounds land.**
+  _Check:_ manual, with
   `--headed` and a slowed animation (DevTools › Animations at 10%).
 - _Harmless (exempt by design):_ titlebar rows themselves, tooltips and the
   hidden title sizer. Decorative art is **not** exempt: the picture band
   (`[data-sliver]`) and the night scene begin after the controls in the corner
-  pane and wait out of sight while panes travel. Nor is the drag's copy: its
+  pane, including as workspace bounds change. Nor is the drag's copy: its
   layer clips it below the titlebar row (`drag.mjs`, `copy-under-controls`).
 
 ## Drag and drop
@@ -230,11 +234,12 @@ and WebKit, both layouts, 1440 × 900 and 1000 × 700:
   and the highlight marks the hovered half or whole pane. Release commits the
   split; cancellation leaves the layout unchanged and removes owned resources.
   _Check:_ `drag.mjs` (`stationary-drag-target`; every drag check's residue).
-- [ ] **A layout flight leaves stationary chats live.** Closing or swapping panes keeps
-  unchanged panes' bodies and material visible. A temporary measurement hold
-  never reaches paint; only moving panes restore one body per frame.
+- [ ] **Workspace bounds land immediately and leave chats live.** Closing or swapping
+  panes keeps their bodies and material visible. The zero-duration workspace
+  flight skips geometry snapshots, releases drag previews, and cancels any
+  prior flight without delayed body restoration.
   _Check:_ `drag.mjs` (`stationary-layout-flight`, `stationary-drop-commit`),
-  `split-panes/adapters/dom/flip.test.tsx` (interrupted subsets).
+  `split-panes/adapters/dom/flip.test.tsx` (zero-duration and interrupted flights).
 - _Harmless, and not a failure:_ a single read of a title's transforms in
   WebKit that mixes two moments. How the two stretch checks read a title is
   `recordShapeFrames` (`scripts/lib/shape-sampler.mjs`), and why, with the runs and probes, is #365.
@@ -286,10 +291,14 @@ Experimental turns it on; the rail stands beside the workspace in
 
 - [ ] **Focused panes keep the same fill and elevation as their neighbors.**
   A subtle rim identifies focus in both themes. _Check:_ `columns.mjs --only pane-level`.
-- [ ] **Conversation content stays visible during sidebar and session-list toggles.**
+- [ ] **Conversation content stays visible during toggles and when a pane mounts.**
   Pane bodies, including the composer, do not disappear and their fill does not
-  darken during motion. _Check:_ `columns.mjs --only content-visible` in both engines
-  and layouts. Drag previews and split flights must also retain content; verify
+  darken as bounds land immediately, without a workspace FLIP. Independent
+  sidebar and session-list motion remains. _Check:_ `columns.mjs --only content-visible`
+  in both engines and layouts. Its split action opens a filled conversation and
+  samples the new pane's body and header from their first mounted frame: full
+  cumulative ancestor opacity, visible content and unit root/header transform.
+  Drag previews must also retain content; verify
   these with the drag and focus checks when changing their motion.
 - [ ] **No two columns overlap**, and nothing sits under the rail, in any
   combination of the rail, the sidebar, the session list and the Agents
@@ -365,33 +374,36 @@ _ADR 238 › What fills the content region_ (the overview is workspace state).
 - [ ] **The keyboard walks its items; ⌘↩ allows, ⌘⌫ denies, ⌘R replies**, and
   the caret stays in the overview after an answer. _Check:_ `focus.mjs`
   (`focus-overview`, the walk); `perf-budget.mjs --only overview-answer` (answer lands); ⌘⌫ and ⌘R by hand.
-- [ ] **One row at a time shows its answers, and only when pointed at or
-  reached by the keyboard**: at rest a request row shows its title and time,
+- [ ] **Each request shows its answers when pointed at or reached by the
+  keyboard**: at rest a request row shows its title and time,
   its why and its command, and no answers — nor room kept for them: the why
   and the command run on to the time (the row's 12px gap before it, ±4).
   Pointed at, or with the keyboard visibly on it (`:focus-visible`), Deny and
   Allow Once (⌥ turns it into Always Allow where offered) take the time's
   place at its end, sliding in (at once with less motion); the row's height
-  and the list do not change. A row clicked and chosen (its peek beside the
-  list) shows none while the pointer is on another row or off the list. The
+  and the list do not change. A keyboard-focused row or answer button keeps
+  its controls visible and its time hidden while the pointer explores another
+  row; both rows can show controls. A row clicked and chosen without visible
+  keyboard focus (its peek beside the list) shows none while the pointer is
+  on another row or off the list. The
   answers carry no tooltip; each names its chord (`aria-keyshortcuts`);
   labels ≥ 4.5:1. _Check:_ `responsive.mjs --only overview-row-answers`
   (Chromium and WebKit); unit tests `overview.test.tsx`.
-- [ ] **An answered request moves to where it now belongs in one beat**: no
-  label on the row and nothing drawn around it — no ring, box or line — in
-  any frame. Taken, the row waits, quiet, until the source moves its session
-  on (at most 2s; then it shows as the workspace holds it), so it never
-  springs back into Needs you. Then it dematerializes where it stood (a copy
-  that fades, scales to 0.97 and blurs over `--desktop-slow`) while the
-  session's row materializes in its new group (from 0.98 and a blur) — the
-  arrival's first visible frame within one frame of the departure's — and
-  the rows after it close the gap by transform; the copy is gone within
-  400ms and the next row ends where the answered one stood. Deny leaves the
-  same way. The live region says "Allowed: <title>" / "Denied: <title>".
-  With less motion: no copy, no blur or scale — the row is simply where it
-  now belongs. _Check:_ `responsive.mjs --only overview-leave` (Chromium and
-  WebKit), with its revert probe; unit tests `overview.test.tsx`,
-  `overview-reflow.test.tsx`.
+- [ ] **An answered request lands where the source now puts it**: no
+  label on the row and no ring, box or line around it. Taken, the row waits
+  quietly until the source moves its session on (at most 2s; then it shows
+  as the workspace holds it). The final group and gap are placed immediately,
+  without departing copies, blur, scale or list-item travel; unrelated row
+  identities and visibility stay intact. Group changes and inline expansion
+  use the same immediate list placement. A mounted conversation stays fully
+  opaque through its ancestors from its first frame on opening, answering
+  into another session, and inline expansion. Non-conversation affordances
+  retain their own motion. Deny follows the same lifecycle. The live
+  region says "Allowed: <title>" / "Denied: <title>". Normal and reduced
+  motion preserve focus, selection, held/source-delay, refused/new-request,
+  and unmount cleanup semantics. _Check:_ `responsive.mjs --only overview-leave`
+  (Chromium and WebKit), with its old-owner omission; public unit tests
+  `overview.test.tsx`.
 - [ ] **The edge between the list and the peek resizes, as the window's
   other edges do**: at rest nothing of it shows — no fill, shadow, border or
   glow over the peek's hairline; near the pointer, or with the keyboard on
@@ -409,7 +421,11 @@ _ADR 238 › What fills the content region_ (the overview is workspace state).
   clear of it. _Check:_ `responsive.mjs --only
   overview-edge` (Chromium and WebKit); its place in the tab order, by hand.
 - [ ] **One press answers one request** (_ADR 238 › What fills the content
-  region_): a held ⌘↩ answers one; two presses 80ms apart answer one; a held ↩
+  region_): a held ⌘↩ answers one; two queued ⌘↩ events stamped within
+  250ms answer one, even as the first moves focus to the next request. The
+  queued pair uses synthetic DOM events (`isTrusted: false`), records its actual
+  timestamps and targets, and tests browser routing and the guard; the held-key
+  check keeps real browser input coverage. A held ↩
   on a pane card's Allow Once answers one and sends nothing typed; a double
   click on Deny or Always Allow answers one. _Check:_ `focus.mjs`
   (`focus-answers-overview`, `focus-answers-card`); unit tests `walk.test.ts`,
@@ -493,7 +509,9 @@ scripts drive the sample plugin the sample workspace registers
 - [ ] **A card opens its widget in a pane beside its conversation, and the
   window over the panes, and Escape goes back** — the pane's rect beside the
   conversation's, the caret in its body; the window inside the chat area and
-  clear of the session list, the caret in its body; the panes as they were
+  clear of the session list, the caret in its body; its body and header fully
+  opaque and its root/header at unit transform from the first mounted frame,
+  because it covers the main chat; the panes as they were
   after Escape, the caret back in the focused pane's body.
   _Check:_ `widgets.mjs --only card-pane-window`.
 - [ ] **The window is left as the overview is, with ⌘W its own**: its close,
@@ -834,6 +852,8 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   home replaces it without overlapping composer instances; the reply receives
   the caret and keeps the next draft. The composer glides into its dock and
   the sent words rise into their bubble; reduced motion performs neither flight.
+  The native home field's focusout precedes that Enter's pane DOM mutations
+  while the original home and field are still connected (ADR 238's handoff order).
   _Check:_ `focus.mjs` (`focus-home-handoff`, `focus-home-handoff-reduced`).
 - [ ] **Focus on Customize survives the home becoming small.** Customize
   focused in a new session's home, the window shortened until the home takes
@@ -1185,8 +1205,8 @@ menu near the window's right edge, a pane header on hover).
 
 _ADR 238 › Decision_, last paragraph ("Motion animates transform and opacity only").
 
-- [ ] **Only transform and opacity animate**; layout changes are applied at
-  once and played back with FLIP. _Check:_ DevTools › Performance: no
+- [ ] **Only transform and opacity animate**; workspace bounds land immediately,
+  while independent surface and first-message motion keep their own durations. _Check:_ DevTools › Performance: no
   layout-inducing properties in the animation; `perf-budget.mjs` attribution
   shows forced layout per script.
 - [ ] **Calm, no jitter**: nothing moves one way then the other within a

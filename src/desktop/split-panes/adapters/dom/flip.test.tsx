@@ -276,6 +276,62 @@ it("retires interrupted flights without delayed body restoration, including a re
   }
 })
 
+it("lands a zero-duration shape without geometry reads and cancels an earlier flight", async () => {
+  const style = globalThis.getComputedStyle
+  let duration = "0ms"
+  globalThis.getComputedStyle = () =>
+    ({ getPropertyValue: () => duration }) as unknown as CSSStyleDeclaration
+  const rect = vi.spyOn(Element.prototype, "getBoundingClientRect")
+  const cancel = vi.fn()
+  const finish: (() => void)[] = []
+  Element.prototype.animate = () =>
+    ({
+      cancel,
+      finished: new Promise<void>((resolve) => finish.push(resolve)),
+    }) as unknown as Animation
+  function Pane({ phase }: { phase: number }) {
+    const scope = useRef<HTMLDivElement>(null)
+    return (
+      <FlipScope shape={String(phase)} root={scope}>
+        <div ref={scope}>
+          <article data-flip="pane" data-flip-id="a" data-left={phase * 100}>
+            <div>Conversation stays mounted</div>
+          </article>
+        </div>
+      </FlipScope>
+    )
+  }
+  const root = createRoot(host)
+  try {
+    await act(async () => root.render(<Pane phase={0} />))
+    const body = host.querySelector("article > div")
+    await act(async () => root.render(<Pane phase={1} />))
+    expect(rect).not.toHaveBeenCalled()
+    expect(finish).toHaveLength(0)
+    duration = "300ms"
+    await act(async () => root.render(<Pane phase={2} />))
+    expect(finish.length).toBeGreaterThan(0)
+    expect(host.firstElementChild?.hasAttribute(marks.flipping)).toBe(true)
+    const flying = finish.length
+    duration = "0ms"
+    rect.mockClear()
+    await act(async () => root.render(<Pane phase={3} />))
+    expect(rect).not.toHaveBeenCalled()
+    expect(finish).toHaveLength(flying)
+    expect(cancel).toHaveBeenCalledTimes(flying)
+    expect(host.querySelector("article > div")).toBe(body)
+    expect(host.firstElementChild?.hasAttribute(marks.flipping)).toBe(false)
+    expect(host.querySelector(`[${marks.flying}], [${marks.measuring}]`)).toBeNull()
+    await act(async () => finish.forEach((resolve) => resolve()))
+    expect(host.firstElementChild?.hasAttribute(marks.flipping)).toBe(false)
+    expect(host.querySelector("article > div")).toBe(body)
+  } finally {
+    await act(async () => root.unmount())
+    rect.mockRestore()
+    globalThis.getComputedStyle = style
+  }
+})
+
 it("resizes a pane and its header by transform without fading its content", () => {
   const pane = document.createElement("article")
   const header = document.createElement("header")

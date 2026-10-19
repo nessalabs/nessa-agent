@@ -335,6 +335,8 @@ async fn measure_save_cost_as_history_grows() {
             .collect();
         invocations.push(active);
         let snapshot = SessionSnapshot {
+            model_change: None,
+            current_configuration: None,
             queue_history: Vec::new(),
             lease: None,
             artifacts: Vec::new(),

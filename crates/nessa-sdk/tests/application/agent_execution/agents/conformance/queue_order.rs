@@ -390,7 +390,7 @@ async fn caller_loss_during_save_does_not_abandon_the_order_transaction() {
 }
 
 #[tokio::test]
-async fn close_interrupts_stalled_reorder_persistence_and_settles_pending_work() {
+async fn close_interrupts_stalled_reorder_persistence_answers_closed_and_settles_pending_work() {
     let (agent, _, storage, _release, receipts) = waiting().await;
     let (started, waiting) = oneshot::channel();
     let (_never_commit, stalled) = oneshot::channel();
@@ -403,7 +403,7 @@ async fn close_interrupts_stalled_reorder_persistence_and_settles_pending_work()
     assert!(!bounded(agent.close(actor())).await.unwrap().forced);
     assert!(matches!(
         bounded(reordering).await.unwrap(),
-        Err(AgentError::Storage(_))
+        Err(AgentError::Closed)
     ));
     for (index, receipt) in receipts.into_iter().enumerate() {
         let result = bounded(receipt.wait()).await;

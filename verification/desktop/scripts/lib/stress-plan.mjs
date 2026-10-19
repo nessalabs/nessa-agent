@@ -45,6 +45,14 @@ export const KNOBS = {
     default: 1,
     what: "turns that hand work to another thread and wait for its report",
   },
+  watches: {
+    default: 1,
+    what: "turns where the agent follows a thread with more reads at once than one conversation may hold",
+  },
+  followers: {
+    default: 2,
+    what: "other clients following every conversation's events, view and list, stopping and following again as they go",
+  },
   parks: {
     default: 1,
     what: "conversations left idle until the gateway parks their agent, then talked to again",
@@ -104,6 +112,7 @@ export function plan(knobs) {
   add(knobs.fails, () => ({ kind: "fail" }))
   add(knobs.restarts, () => ({ kind: "restart" }))
   add(knobs.threads, () => ({ kind: "delegate" }))
+  add(knobs.watches, () => ({ kind: "watch" }))
   add(knobs.switches, () => ({ kind: "switch" }))
   add(knobs.asides, () => ({ kind: "aside" }))
   add(knobs.large, () => ({ kind: "large" }))

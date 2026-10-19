@@ -21,6 +21,8 @@ struct Backend {
     started: Notify,
     closes: AtomicUsize,
     panic_before_future: AtomicBool,
+    /// When set, the next turn ends this way instead of as the inner one.
+    next_reply: Mutex<Option<ProviderExecutionReply>>,
 }
 impl ProviderSessionBackend for Backend {
     fn set_approval_mode(&self, mode: ApprovalMode) -> ProviderOperationFuture<'_, ()> {
@@ -46,7 +48,17 @@ impl ProviderSessionBackend for Backend {
         input: ExecutionRequest,
         handoff: NativeExecutionHandoff,
     ) -> ProviderExecutionFuture<'_> {
-        self.inner.execute(input, handoff)
+        match self.next_reply.lock().unwrap().take() {
+            Some(reply) => Box::pin(async move {
+                if matches!(&reply, ProviderExecutionReply::Finished(_)) {
+                    if let Err(error) = handoff() {
+                        return ProviderExecutionReply::Rejected(error);
+                    }
+                }
+                reply
+            }),
+            None => self.inner.execute(input, handoff),
+        }
     }
     fn answer_question(&self, answer: QuestionAnswer) -> ProviderOperationFuture<'_, ()> {
         self.inner.answer_question(answer)
@@ -158,6 +170,7 @@ async fn prepared() -> Prepared {
         started: Notify::new(),
         closes: AtomicUsize::new(0),
         panic_before_future: AtomicBool::new(false),
+        next_reply: Mutex::new(None),
         inner: RecordingSession {
             prompts: AtomicUsize::new(0),
         },
@@ -277,6 +290,46 @@ async fn a_verified_approval_change_is_retained_by_later_attachments_and_admissi
         [ApprovalMode::Ask, ApprovalMode::Auto]
     );
     assert_eq!(*backend.applied.lock().unwrap(), [ApprovalMode::Auto]);
+    agent.close(close_action()).await.unwrap();
+}
+
+/// Automatic recovery opens the same normalized configuration as an explicit
+/// attachment. The acknowledged preset is applied by that factory before
+/// publication, without replaying a second native approval command.
+#[tokio::test]
+async fn an_attachment_the_agent_recovers_by_itself_keeps_the_live_mode() {
+    let Prepared {
+        agent,
+        provider,
+        backend,
+        audit,
+        ..
+    } = prepared().await;
+    agent
+        .set_approval_mode(ApprovalMode::Auto, close_action())
+        .await
+        .unwrap();
+    *backend.next_reply.lock().unwrap() =
+        Some(ProviderExecutionReply::Finished(ExecutionReport::new(
+            Some(Ok(ExecutionOutcome::Completed)),
+            None,
+            ProviderSessionState::CleanupReported(CleanupReport::confirmed(CloseOutcome {
+                forced: false,
+            })),
+        )));
+    finish(&agent, "lets-go").await;
+    finish(&agent, "recovered").await;
+    assert_eq!(
+        *provider.opened.lock().unwrap(),
+        [ApprovalMode::Ask, ApprovalMode::Auto],
+        "automatic recovery opened the confirmed configuration"
+    );
+    assert_eq!(*backend.applied.lock().unwrap(), [ApprovalMode::Auto]);
+    assert_eq!(agent.approval_mode(), Some(ApprovalMode::Auto));
+    assert_eq!(
+        *audit.0.lock().unwrap(),
+        [Some(ApprovalMode::Auto), Some(ApprovalMode::Auto)]
+    );
     agent.close(close_action()).await.unwrap();
 }
 
@@ -502,5 +555,74 @@ async fn a_backend_panic_before_returning_the_approval_future_fences_its_generat
         .is_err());
     assert_eq!(backend.inner.prompts.load(Ordering::SeqCst), 0);
     assert_eq!(agent.approval_mode(), Some(ApprovalMode::Ask));
+    agent.close(close_action()).await.unwrap();
+}
+
+/// A host that checked the mode before submitting cannot know the attachment
+/// that held it did not go in between. A turn that asks for a mode is
+/// admitted only where it runs at that mode, and is refused with nothing
+/// saved where it would run at another.
+#[tokio::test]
+async fn a_turn_that_asks_for_a_mode_is_refused_where_it_would_run_at_another() {
+    let Prepared { agent, audit, .. } = prepared().await;
+    agent
+        .set_approval_mode(ApprovalMode::Auto, close_action())
+        .await
+        .unwrap();
+    let at = |mode| Submitter::owner(close_action()).with_approval_mode(mode);
+    assert_eq!(
+        agent
+            .enqueue(request("refused-attached"), at(ApprovalMode::Ask))
+            .await
+            .err(),
+        Some(AgentError::ApprovalModeChanged)
+    );
+    assert_eq!(
+        agent
+            .enqueue(request("live"), at(ApprovalMode::Auto))
+            .await
+            .unwrap()
+            .wait()
+            .await,
+        Ok(ExecutionOutcome::Completed)
+    );
+
+    // Detached admissions still use the durably confirmed preset. A stale
+    // caller expectation is refused before any new record or queue effect.
+    agent.close(close_action()).await.unwrap();
+    assert_eq!(
+        agent
+            .enqueue(request("refused-detached"), at(ApprovalMode::Ask))
+            .await
+            .err(),
+        Some(AgentError::ApprovalModeChanged)
+    );
+    assert!(matches!(
+        agent
+            .steer(request("refused-steer"), at(ApprovalMode::Ask))
+            .await
+            .err(),
+        Some(AgentError::ApprovalModeChanged)
+    ));
+    let detached = agent
+        .enqueue(request("detached"), at(ApprovalMode::Auto))
+        .await
+        .unwrap();
+    // Only the admitted turns were recorded or saved.
+    assert_eq!(
+        *audit.0.lock().unwrap(),
+        [Some(ApprovalMode::Auto), Some(ApprovalMode::Auto)]
+    );
+    let saved = agent
+        .session_manager()
+        .snapshot()
+        .await
+        .unwrap()
+        .invocations
+        .iter()
+        .map(|record| record.request.execution_id.as_str().to_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(saved, ["live", "detached"]);
+    drop(detached);
     agent.close(close_action()).await.unwrap();
 }

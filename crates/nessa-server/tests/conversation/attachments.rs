@@ -400,9 +400,10 @@ async fn a_release_that_fails_is_reported_without_hiding_an_agent_that_did_not_c
 
 #[tokio::test]
 async fn a_close_that_never_reached_the_agent_keeps_the_uploads_its_queue_may_still_need() {
-    // Room for one live conversation, and it is taken. The second conversation
-    // exists and is owned, but no agent can be opened for it, so nothing is
-    // known about what it has queued.
+    // Room for one live conversation, and it is taken by one at work, which
+    // is never let go to make room. The second conversation exists and is
+    // owned, but no agent can be opened for it, so nothing is known about
+    // what it has queued.
     let attachments = Arc::new(MemoryAttachments::default());
     let provider = Arc::new(ProviderFactory::default());
     let repository = Arc::new(MemoryRepository::default());
@@ -435,14 +436,20 @@ async fn a_close_that_never_reached_the_agent_keeps_the_uploads_its_queue_may_st
         None,
     )
     .unwrap();
+    let busy = new_id();
     service
         .create(
-            new_id(),
+            busy.clone(),
             caller("panel", "create"),
             crate::conversation::application::RequestedConversation::default(),
         )
         .await
         .unwrap();
+    let (_release, held) = tokio::sync::oneshot::channel::<()>();
+    *provider.execution_gate.lock().unwrap() = Some(held);
+    let running = provider.execution_started.notified();
+    send(&service, &busy, "busy", "Hold on", &[]).await.unwrap();
+    running.await;
     let unreachable = new_id();
     repository
         .create(

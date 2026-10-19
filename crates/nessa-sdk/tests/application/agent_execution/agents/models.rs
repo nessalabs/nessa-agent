@@ -1299,14 +1299,12 @@ async fn custom_storage_cannot_restore_model_fact_without_its_current_configurat
         } else {
             malformed.current_configuration = None;
         }
-        let mut candidate = malformed.clone();
-        candidate.current_configuration = Some(later.clone());
         let units = vec![
             SessionSaveUnit::new(vec![SessionChange::ConfigurationChanged(later.clone())]).unwrap(),
         ];
         assert!(
             matches!(
-                SessionSaveUnit::validate_plan(Some(&malformed), &units, &candidate),
+                SessionSaveUnit::fold(Some(malformed.clone()), &units),
                 Err(StorageError::Corrupt(_))
             ),
             "a later valid control cannot hide malformed prior settings"

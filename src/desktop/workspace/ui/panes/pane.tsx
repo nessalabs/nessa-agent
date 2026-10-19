@@ -1,6 +1,10 @@
 import { memo, useCallback, useLayoutEffect, useRef, useState } from "react"
 import { sendMessage } from "../../adapters/store/commands"
-import { useWorkspaceDispatch, useWorkspaceSelector } from "../../adapters/store/hooks"
+import {
+  useWorkspaceDispatch,
+  useWorkspaceSelector,
+  useWorkspaceStore,
+} from "../../adapters/store/hooks"
 import {
   selectDraft,
   selectFocusedPaneKey,
@@ -8,7 +12,7 @@ import {
   selectSession,
 } from "../../adapters/store/selectors"
 import { settleOnReshape } from "../../adapters/dom/home-shape"
-import { focusedPaneAttribute } from "../../adapters/dom/focus"
+import { focusedPaneAttribute, retireHomeFocus } from "../../adapters/dom/focus"
 import { captureArrival, type Arrival } from "../../adapters/dom/arrival"
 import { usePictureInConversationsPreference } from "../../../adapters/window-preferences"
 import { HeaderSliver } from "../../../ui/header-art"
@@ -42,6 +46,7 @@ export const Pane = memo(function Pane({
 }) {
   const key = placement.key
   const dispatch = useWorkspaceDispatch()
+  const store = useWorkspaceStore()
   const focusHandlers = usePaneFocus(key)
   const sessionId = useWorkspaceSelector((state) => selectPaneSession(state, key)) ?? ""
   const focused = useWorkspaceSelector((state) => selectFocusedPaneKey(state) === key)
@@ -71,16 +76,26 @@ export const Pane = memo(function Pane({
   const sendFromHome = useCallback(
     (text: string) => {
       const shown = shownRef.current
-      const from = captureArrival(homeRef.current)
+      const home = homeRef.current
+      const from = captureArrival(home)
+      const restoreFocus = retireHomeFocus(
+        home,
+        () =>
+          shownRef.current === shown &&
+          homeRef.current === home &&
+          selectPaneSession(store.getState(), key) === shown,
+      )
       setArriving(from ? { sessionId: shown, from } : null)
       void dispatch(sendMessage({ sessionId: shown, text, initiator: "person" })).then(
         (outcome) => {
-          if (outcome === "not-asked")
+          if (outcome === "not-asked") {
+            restoreFocus()
             setArriving((current) => (current?.from === from ? null : current))
+          }
         },
       )
     },
-    [dispatch],
+    [dispatch, key, store],
   )
   const showHome = draft
   // A new session's home settles when its pane changes its shape, not as it appears.

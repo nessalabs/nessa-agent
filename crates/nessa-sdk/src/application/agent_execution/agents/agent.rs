@@ -1172,10 +1172,12 @@ impl Agent {
     }
 
     /// Whether this agent stopped itself and will take no more work until it
-    /// is closed: a failure blocked it for its owner's close, or its own
-    /// cleanup or the evidence of it failed, so it cannot open again by
-    /// itself. A stop it will recover from, and a close already under way,
-    /// are not this. Its owner closes it, and a new agent takes the work.
+    /// is closed: a failure blocked it for its owner's close (a review's
+    /// answer or withdrawal whose provider failure left cleanup required
+    /// among them), or its own cleanup or the evidence of it failed, so it
+    /// cannot open again by itself. A stop it will recover from, and a close
+    /// already under way, are not this. Its owner closes it, and a new agent
+    /// takes the work.
     pub fn awaits_close(&self) -> bool {
         self.inner.lifecycle.awaits_close()
     }
@@ -1257,6 +1259,8 @@ impl Agent {
                                     };
                                     AttachmentAttemptFailure::new(failure.cause, source)
                                 })?;
+                            // The current normalized factory opens this attachment at
+                            // persisted settings before it is published.
                             let (published, published_evidence) = lifecycle
                                 .publish_attachment(start.generation, attached)
                                 .map_err(|_| AttachmentAttemptFailure::from(AgentError::Closed))?;
@@ -2756,14 +2760,20 @@ impl Agent {
         let agent = self.clone();
         Box::pin(async move {
             let admission = agent.accept_control().map_err(|error| {
-                PermissionAnswerFailure::new(error, PermissionSelectionState::Pending)
+                PermissionAnswerFailure::new(
+                    without_review(error),
+                    PermissionSelectionState::Pending,
+                )
             })?;
             let attached = agent
                 .inner
                 .lifecycle
                 .attached_provider(&admission)
                 .map_err(|error| {
-                    PermissionAnswerFailure::new(error, PermissionSelectionState::Pending)
+                    PermissionAnswerFailure::new(
+                        without_review(error),
+                        PermissionSelectionState::Pending,
+                    )
                 })?;
             let supervisor = agent.clone();
             let control_origin = admission.control_origin();
@@ -2832,8 +2842,12 @@ impl Agent {
     ) -> AgentFuture<'_, PermissionCancellation> {
         let agent = self.clone();
         Box::pin(async move {
-            let admission = agent.accept_control()?;
-            let attached = agent.inner.lifecycle.attached_provider(&admission)?;
+            let admission = agent.accept_control().map_err(without_review)?;
+            let attached = agent
+                .inner
+                .lifecycle
+                .attached_provider(&admission)
+                .map_err(without_review)?;
             let supervisor = agent.clone();
             let control_origin = admission.control_origin();
             let waiter = CallerWaiter::PermissionCancellation(agent.inner.manager.id().clone());
@@ -2987,6 +3001,19 @@ impl AgentEvents {
             Err(broadcast::error::RecvError::Closed) => Ok(None),
             Err(broadcast::error::RecvError::Lagged(_)) => Err(AgentError::Backpressure),
         }
+    }
+}
+
+/// A review lives on the attachment that asked it: with none usable (absent,
+/// or failed), no review is live, so an answer or a withdrawal names one that
+/// is gone, as a read of it already says. One still opening keeps its own
+/// answer, which says to try again.
+fn without_review(error: AgentError) -> AgentError {
+    match error {
+        AgentError::AttachmentUnavailable(AttachmentPhase::Absent | AttachmentPhase::Failed(_)) => {
+            AgentError::StalePermission
+        }
+        other => other,
     }
 }
 

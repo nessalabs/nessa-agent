@@ -10,6 +10,7 @@ use crate::conversation_test_support::{
     RecordingFileLinkAudit, TestClock, DELETION_BUDGETS,
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
+use nessa_protocol::conversation::view::ConversationMessageStatus;
 use nessa_sdk::application::agent_execution::providers::{
     CleanupReport, ExecutionReport, ObservationFailure, ObservationFailureCause,
     ProviderExecutionReply, ProviderSessionState,
@@ -575,3 +576,168 @@ async fn a_retry_whose_agent_cannot_attach_yet_is_tried_again() {
 
 #[path = "resumption/model_controls.rs"]
 mod model_controls;
+
+/// A close that lands while the agent of a conversation a restart left owed
+/// is still opening lets its history go: the next command opens it again
+/// instead of finding the history still held (`storage: Busy`) until the
+/// gateway restarts.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_close_while_a_resumed_agent_opens_lets_its_history_go() {
+    let durable = Durable::new();
+    let first = durable.start();
+    let (id, release) = running_turn(&first, &durable).await;
+    let stopping = {
+        let first = first.clone();
+        tokio::spawn(async move { first.shutdown().await })
+    };
+    detaching(&first, &id).await;
+    release.send(()).unwrap();
+    tokio::time::timeout(BOUND, stopping)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    drop(first);
+
+    let second = durable.start();
+    let (open, gate) = oneshot::channel();
+    *durable.provider.open_gate.lock().unwrap() = Some(gate);
+    let opened = durable.provider.open_calls.load(Ordering::SeqCst);
+    let resuming = {
+        let second = second.clone();
+        tokio::spawn(async move { second.resume_unfinished().await })
+    };
+    until(|| durable.provider.open_calls.load(Ordering::SeqCst) > opened).await;
+    let closing = {
+        let second = second.clone();
+        let id = id.clone();
+        tokio::spawn(async move { second.close(id, caller("close")).await })
+    };
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    open.send(()).unwrap();
+    let closed = tokio::time::timeout(BOUND, closing).await.unwrap().unwrap();
+    let _ = tokio::time::timeout(BOUND, resuming)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(closed.is_ok(), "{closed:?}");
+    let read = tokio::time::timeout(BOUND, second.read(id.clone(), caller("read")))
+        .await
+        .expect("the read answers");
+    assert!(read.is_ok(), "{read:?}");
+    second.shutdown().await.unwrap();
+}
+
+/// The same close, with a read already waiting behind it: the read opens
+/// the conversation again while the opening the close stopped is still
+/// deciding whether to resume. That opening must not keep the closed agent,
+/// and its history, while it waits for the read to finish: the read would
+/// wait out the history's lease and answer `storage: Busy`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_read_behind_a_close_of_an_opening_agent_opens_it_again() {
+    let durable = Durable::new();
+    let first = durable.start();
+    let (id, release) = running_turn(&first, &durable).await;
+    let stopping = {
+        let first = first.clone();
+        tokio::spawn(async move { first.shutdown().await })
+    };
+    detaching(&first, &id).await;
+    release.send(()).unwrap();
+    tokio::time::timeout(BOUND, stopping)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    drop(first);
+
+    let second = durable.start();
+    let (open, gate) = oneshot::channel();
+    *durable.provider.open_gate.lock().unwrap() = Some(gate);
+    let opened = durable.provider.open_calls.load(Ordering::SeqCst);
+    let resuming = {
+        let second = second.clone();
+        tokio::spawn(async move { second.resume_unfinished().await })
+    };
+    until(|| durable.provider.open_calls.load(Ordering::SeqCst) > opened).await;
+    let closing = {
+        let second = second.clone();
+        let id = id.clone();
+        tokio::spawn(async move { second.close(id, caller("close")).await })
+    };
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let reading = {
+        let second = second.clone();
+        let id = id.clone();
+        tokio::spawn(async move { second.read(id, caller("read")).await })
+    };
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    open.send(()).unwrap();
+    let closed = tokio::time::timeout(BOUND, closing).await.unwrap().unwrap();
+    assert!(closed.is_ok(), "{closed:?}");
+    let read = tokio::time::timeout(BOUND, reading).await.unwrap().unwrap();
+    assert!(read.is_ok(), "{read:?}");
+    let _ = tokio::time::timeout(BOUND, resuming)
+        .await
+        .unwrap()
+        .unwrap();
+    second.shutdown().await.unwrap();
+}
+
+/// A close ends what a restart cut off. The conversation is closed for good
+/// and its mark let go, so nothing will resume the cut turn: it is recorded
+/// ended with the close, and owes nothing even where a mark outlives it.
+/// Found by the conversation chaos check, where a close met a turn a crash
+/// left unresolved and it stayed unresolved for good.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_close_ends_the_turns_a_restart_cut_off() {
+    let durable = Durable::new();
+    let first = durable.start();
+    let (id, release) = running_turn(&first, &durable).await;
+    let stopping = {
+        let first = first.clone();
+        tokio::spawn(async move { first.shutdown().await })
+    };
+    detaching(&first, &id).await;
+    release.send(()).unwrap();
+    tokio::time::timeout(BOUND, stopping)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    drop(first);
+
+    // Opened by a read before the start's resume reaches it, then closed.
+    let second = durable.start();
+    let before = second.read(id.clone(), caller("read")).await.unwrap();
+    let closed = tokio::time::timeout(BOUND, second.close(id.clone(), caller("close")))
+        .await
+        .unwrap();
+    assert!(closed.is_ok(), "{closed:?}");
+    second.shutdown().await.unwrap();
+    drop(second);
+
+    // Even marked again, the next start finds nothing owed.
+    durable.marks.mark(&id).await.unwrap();
+    let third = durable.start();
+    tokio::time::timeout(BOUND, third.resume_unfinished())
+        .await
+        .unwrap()
+        .unwrap();
+    let after = third.read(id.clone(), caller("read")).await.unwrap();
+    assert_eq!(
+        after.messages.len(),
+        before.messages.len(),
+        "{:?}",
+        after.messages
+    );
+    assert!(
+        after.messages.iter().all(|message| !matches!(
+            message.status,
+            ConversationMessageStatus::Unresolved | ConversationMessageStatus::Running
+        )),
+        "{:?}",
+        after.messages
+    );
+    third.shutdown().await.unwrap();
+}

@@ -16,6 +16,7 @@ use crate::application::agent_execution::providers::{ExecutionReport, ExecutionR
 use crate::domain::agent_execution::{
     executions::{
         ExecutionOutcome, InvocationHistory, InvocationObservation, InvocationStage, QueueMutation,
+        SchedulingCause,
     },
     tools::{McpTool, ToolCallId},
 };
@@ -440,12 +441,17 @@ pub(super) fn record_report(
 
 /// Domain transitions validate cause and initiator kind; verified actor identity
 /// remains an application fact and must match both views of the same local stop.
+/// A host's later decision not to resume the stopped turn
+/// ([`SchedulingCause::NotResumed`]) is not that stop, and names whoever
+/// decided it.
 pub(super) fn validate_stop_actor(
     cancellation: Option<&InvocationCancellationEvent>,
     scheduling: Option<&InvocationSchedulingEvent>,
 ) -> Result<(), StorageError> {
     if let (Some(cancellation), Some(scheduling)) = (cancellation, scheduling) {
-        if scheduling.stage == InvocationStage::Cancelled && cancellation.actor != scheduling.actor
+        if scheduling.stage == InvocationStage::Cancelled
+            && scheduling.cause != SchedulingCause::NotResumed
+            && cancellation.actor != scheduling.actor
         {
             return Err(corrupt(
                 "scheduling cancellation names a different invocation stop actor",

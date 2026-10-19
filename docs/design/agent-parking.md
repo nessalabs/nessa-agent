@@ -15,7 +15,7 @@ The gateway looks at every live conversation every few seconds
 (`service/parking.rs`). It parks one when all of these hold:
 
 - `limits.agentIdleSeconds` is not 0, and that long has passed since the
-  conversation was last touched: opened, sent a message, or seen busy, watched
+  conversation was last touched: opened, read or sent a message, or seen busy, watched
   or with an app call waiting. Time is read from the service's clock port, so
   tests move it by hand.
 - Its agent can resume a provider session (`session_resume`). One that cannot
@@ -28,6 +28,13 @@ The gateway looks at every live conversation every few seconds
   live capabilities and never pays a start.
 - No MCP App call of it waits on a review.
 - The gateway is not retiring, and nothing else is stopping the conversation.
+
+An opening past `limits.liveConversations` parks too, rather than being
+refused: of the conversations that could be parked now, the one touched
+longest ago is parked at once, however recently, and the opening is refused
+`conversation_capacity` only when none can be (`make_room`). It never waits for
+another conversation's submission lock, since two openings at the bound would
+each wait for the other's; a conversation whose lock is held is in use.
 
 Parking is the stop that already exists for an agent that stopped itself
 (`AgentEnd::Suspend`): the process stops, anything owed stays owed, and the
@@ -78,6 +85,8 @@ conversation again, instead of being refused as a desktop stop refuses it.
 | A window opens the parked conversation | | Its view says images may be sent when the gateway takes them, so a pasted image is not refused; a send to an agent that takes none is refused at submission | `a_parked_conversations_view_takes_images_when_the_gateway_does`, `a_parked_conversations_view_refuses_images_the_gateway_does_not_take` |
 | A delete wrote its tombstone and let the lock go | Not parked: the record says deleted, and the delete stops the agent under its own cause | | the check in `park` (the window between the tombstone and the delete's stop is not reachable from a test) |
 | The suspend's close fails or runs past its budget | The slot stays, marked stopping, as after any failed stop; parking goes through the same `stop_and_release` | Refused as closed until the close confirms | covered by `a_stop_that_runs_past_its_budget_carries_on_and_lets_the_agent_go` |
+| An opening past `liveConversations` while an agent could be parked | The parkable one touched longest ago is parked now | The opening goes ahead | `past_the_bound_an_opening_parks_the_idle_agent_used_longest_ago` |
+| An opening past `liveConversations` while every agent is at work | Nothing | Refused `conversation_capacity` | `past_the_bound_an_agent_at_work_is_not_parked` |
 | The gateway starts retiring | The sweep ends; retirement suspends what is left | | `parking_stops_when_the_gateway_retires` |
 
 ## What parking does not change
