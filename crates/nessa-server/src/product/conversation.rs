@@ -43,7 +43,7 @@ use nessa_protocol::product::generated::{
 };
 use nessa_protocol::product::passive_read::decimal_u64;
 use nessa_protocol::product_contract::generated::ConversationErrorCode;
-use nessa_protocol::protocol::{OutgoingMessage, RequestFrame, MAX_PAYLOAD_BYTES};
+use nessa_protocol::protocol::{OutgoingMessage, RequestFrame, ResponseFrame, MAX_PAYLOAD_BYTES};
 use nessa_protocol::{
     agents::AgentId,
     conversation::domain::{ConversationApprovalMode, ConversationId},
@@ -68,11 +68,38 @@ pub(crate) async fn dispatch(
     frame: RequestFrame,
     initiation: Initiation,
 ) -> OutgoingMessage {
+    let method = frame.method.clone();
+    let request_id = frame.id.clone();
+    match answer(state, session, frame, initiation).await {
+        Ok(response) => {
+            trace_answered_refusal(&method, &response);
+            response
+        }
+        Err(error) => {
+            trace_command_refusal(&method, &error);
+            match error {
+                ConversationError::PermissionAnswer { error, selection } => {
+                    permission_answer_failure(&request_id, error, selection)
+                }
+                error => failure(&request_id, error_code(&error).as_str()),
+            }
+        }
+    }
+}
+
+/// The command's answer, or the refusal `dispatch` answers and logs. A
+/// check that answers its own code returns it as a response.
+async fn answer(
+    state: &ProductRouteState,
+    session: &AuthenticatedSession,
+    frame: RequestFrame,
+    initiation: Initiation,
+) -> Result<OutgoingMessage, ConversationError> {
     if matches!(
         frame.method.as_str(),
         "conversation.permissionRules" | "conversation.revokePermissionRule"
     ) {
-        return dispatch_permission_rules(state, session, frame).await;
+        return Ok(dispatch_permission_rules(state, session, frame).await);
     }
     // This build runs no conversations at all, which is not the same fact as a
     // caller naming an agent this one is not configured for. Sharing a code
@@ -82,10 +109,10 @@ pub(crate) async fn dispatch(
         // Not `agent_not_configured`: this gateway runs no conversations at
         // all, and telling a user with a working agent to go configure one
         // sends them to change something that was never the problem.
-        return failure(
+        return Ok(failure(
             &frame.id,
             ConversationErrorCode::ConversationsNotConfigured.as_str(),
-        );
+        ));
     };
     macro_rules! params {
         ($kind:ty) => {
@@ -653,32 +680,38 @@ pub(crate) async fn dispatch(
         }
     }
     .await;
-    match result {
-        Ok(response) => response,
-        Err(error) => {
-            trace_command_refusal(&frame.method, &error);
-            match error {
-                ConversationError::PermissionAnswer { error, selection } => {
-                    permission_answer_failure(&frame.id, error, selection)
-                }
-                error => failure(&frame.id, error_code(&error).as_str()),
-            }
-        }
-    }
+    result
 }
 
 /// A refused conversation command — any method, reads included — as a
-/// warning in the gateway log at the one place every refusal answered as an
-/// error passes: the method, the wire code, and every cause behind it, since
-/// the code keeps only one. A read's own span may also have warned; this
-/// line is the boundary's, so a refusal before or after that span is not
-/// lost. An access or admission check that answers its own code before the
-/// command runs is not here.
+/// warning in the gateway log at `dispatch`, the one place every answer
+/// passes: the method, the wire code, and every cause behind it, since the
+/// code keeps only one. A read's own span may also have warned; this line
+/// is the boundary's, so a refusal before or after that span is not lost.
 fn trace_command_refusal(method: &str, error: &ConversationError) {
     tracing::warn!(
         method,
         code = error_code(error).as_str(),
         causes = %super::refusal_causes::refusal_causes(error),
+        "conversation command refused",
+    );
+}
+
+/// A refusal a check answered with its own code before the command ran —
+/// access, admission, a gateway with no conversations — on the same log
+/// line. Its code is the whole cause it kept.
+fn trace_answered_refusal(method: &str, response: &OutgoingMessage) {
+    let OutgoingMessage::Response(ResponseFrame {
+        ok: false,
+        error: Some(error),
+        ..
+    }) = response
+    else {
+        return;
+    };
+    tracing::warn!(
+        method,
+        code = error.code.as_str(),
         "conversation command refused",
     );
 }

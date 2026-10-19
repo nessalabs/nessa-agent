@@ -61,7 +61,19 @@ fn conversation(out: &mut String, error: &ConversationError) {
             conversation(group.cause(""), inner);
             return group.end();
         }
-        E::AttachmentCleanup { .. } => "attachment-cleanup",
+        E::AttachmentCleanup {
+            storage_failures,
+            audit_failures,
+        } => {
+            let mut group = Group::new(out, "attachment-cleanup");
+            if *storage_failures > 0 {
+                group.cause("").push_str("storage");
+            }
+            if *audit_failures > 0 {
+                group.cause("").push_str("audit");
+            }
+            return group.end();
+        }
         E::CloseIncomplete { agent, release } => {
             let mut group = Group::new(out, "close-incomplete");
             conversation(group.cause("agent"), agent);
@@ -105,7 +117,7 @@ fn conversation(out: &mut String, error: &ConversationError) {
                 agent(group.cause("audit"), error);
             }
             if let Some(error) = storage {
-                group.cause("storage").push_str(storage_name(error));
+                storage_cause(group.cause("storage"), error);
             }
             return group.end();
         }
@@ -129,7 +141,7 @@ fn conversation(out: &mut String, error: &ConversationError) {
             agent(group.cause(""), error);
             return group.end();
         }
-        E::Storage(error) => storage_name(error),
+        E::Storage(error) => return storage_cause(out, error),
         E::McpApp(_) => "mcp-app",
     };
     out.push_str(name);
@@ -232,7 +244,7 @@ fn agent(out: &mut String, error: &AgentError) {
             let then = failed(cleanup_result);
             return storage_then(out, "storage-during-close", error, "cleanup", then);
         }
-        A::Storage(error) => storage_name(error),
+        A::Storage(error) => return storage_cause(out, error),
         A::StorageInitialization {
             error,
             cleanup_result,
@@ -298,12 +310,12 @@ fn agent(out: &mut String, error: &AgentError) {
 fn storage_then(
     out: &mut String,
     name: &str,
-    storage: &StorageError,
+    error: &StorageError,
     label: &str,
     then: Option<&AgentError>,
 ) {
     let mut group = Group::new(out, name);
-    group.cause("").push_str(storage_name(storage));
+    storage_cause(group.cause(""), error);
     if let Some(then) = then {
         agent(group.cause(label), then);
     }
@@ -312,14 +324,20 @@ fn storage_then(
 
 /// Which storage failure `conversation_storage_unavailable` stood for: `busy`
 /// is a lease or owner someone else holds, `io` the store refusing or failing
-/// the work.
-pub(super) fn storage_name(error: &StorageError) -> &'static str {
-    match error {
+/// the work. A shutdown keeps both of its failures, bounded by the storage
+/// diagnostic tree limits.
+fn storage_cause(out: &mut String, error: &StorageError) {
+    let name = match error {
         StorageError::Closed => "storage-closed",
         StorageError::ReadCapacity => "storage-read-capacity",
         StorageError::ReadWorkerPanicked => "storage-read-worker",
         StorageError::DiagnosticLimit => "storage-diagnostic-limit",
-        StorageError::ShutdownFailures(_) => "storage-shutdown",
+        StorageError::ShutdownFailures(failure) => {
+            let mut group = Group::new(out, "storage-shutdown");
+            storage_cause(group.cause("read"), failure.read());
+            storage_cause(group.cause("runtime"), failure.runtime());
+            return group.end();
+        }
         StorageError::Busy => "storage-busy",
         StorageError::Io(_) => "storage-io",
         StorageError::Corrupt(_) => "storage-corrupt",
@@ -330,12 +348,14 @@ pub(super) fn storage_name(error: &StorageError) -> &'static str {
         StorageError::Unresolved => "storage-unresolved",
         StorageError::TooLarge => "storage-too-large",
         StorageError::CommittedReadUnavailable => "storage-committed-read",
-    }
+    };
+    out.push_str(name);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use nessa_sdk::application::agent_execution::sessions::StorageShutdownFailure;
 
     #[test]
     fn a_close_keeps_the_release_failure_its_code_drops() {
@@ -360,6 +380,26 @@ mod tests {
         assert_eq!(
             refusal_causes(&error),
             "admission-evidence(audit: audit, storage: storage-busy)"
+        );
+    }
+
+    #[test]
+    fn attachment_cleanup_keeps_both_channels() {
+        let error = ConversationError::AttachmentCleanup {
+            storage_failures: 1,
+            audit_failures: 2,
+        };
+        assert_eq!(refusal_causes(&error), "attachment-cleanup(storage, audit)");
+    }
+
+    #[test]
+    fn a_shutdown_keeps_both_of_its_failures() {
+        let failure = StorageShutdownFailure::new(StorageError::Busy, StorageError::Closed)
+            .expect("a small shutdown failure is within the diagnostic limits");
+        let error = ConversationError::Storage(StorageError::ShutdownFailures(Box::new(failure)));
+        assert_eq!(
+            refusal_causes(&error),
+            "storage-shutdown(read: storage-busy, runtime: storage-closed)"
         );
     }
 
