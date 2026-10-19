@@ -210,7 +210,7 @@
         "methods": {
           "type": "array",
           "items": { "type": "string" },
-          "maxItems": 74,
+          "maxItems": 75,
           "description": "Registered product methods; permission is checked for every command."
         }
       },
@@ -6784,6 +6784,187 @@
       },
       "required": ["subscriptionId", "cursor", "events"],
       "description": "An ordered bounded semantic event batch. An empty batch advances the checkpoint past filtered facts. Application checkpoints belong to the consumer."
+    },
+    "WorkspaceArrangement": {
+      "type": "string",
+      "enum": ["columns", "sidebar"],
+      "description": "How the window lays out its workspace, as chosen in Settings: three columns (sidebar, session list, panes), or sessions listed in the sidebar beside the panes."
+    },
+    "WorkspaceShowing": {
+      "type": "string",
+      "enum": ["panes", "agents", "widget"],
+      "description": "What fills the window's content region: the panes, the Agents overview drawn over them, or a widget drawn over them."
+    },
+    "WorkspaceWidget": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "A widget a pane or the window shows, by the plugin that draws it and its id within that plugin.",
+      "properties": {
+        "plugin": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "The plugin that draws the widget."
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "The widget's id within its plugin."
+        }
+      },
+      "required": ["plugin", "id"]
+    },
+    "WorkspacePaneKind": {
+      "type": "string",
+      "enum": ["conversation", "draft", "widget"],
+      "description": "What a pane shows: a conversation, a draft (a new conversation the person has not started yet), or a widget. Other kinds, such as an open file, are added here."
+    },
+    "WorkspacePaneItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "What one pane shows. A conversation names its conversationId, a widget its widget, and a draft neither.",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/WorkspacePaneKind",
+          "description": "What kind of thing the pane shows."
+        },
+        "conversationId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "Canonical lowercase hyphenated UUID of the conversation, when kind is conversation."
+        },
+        "widget": {
+          "$ref": "#/$defs/WorkspaceWidget",
+          "description": "The widget, when kind is widget."
+        }
+      },
+      "required": ["kind"]
+    },
+    "WorkspacePane": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One pane of a column, top to bottom.",
+      "properties": {
+        "heightPercent": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100,
+          "description": "The pane's share of its column's height, in whole percent."
+        },
+        "focused": {
+          "type": "boolean",
+          "description": "Whether this is the window's focused pane. At most one pane is."
+        },
+        "item": {
+          "$ref": "#/$defs/WorkspacePaneItem",
+          "description": "What the pane shows."
+        }
+      },
+      "required": ["heightPercent", "focused", "item"]
+    },
+    "WorkspaceColumn": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One column of panes, left to right.",
+      "properties": {
+        "widthPercent": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100,
+          "description": "The column's share of the panes' width, in whole percent."
+        },
+        "panes": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "items": { "$ref": "#/$defs/WorkspacePane" },
+          "description": "The column's panes, top to bottom."
+        }
+      },
+      "required": ["widthPercent", "panes"]
+    },
+    "WorkspaceWindow": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "What one desktop window shows now: its arrangement, which side columns are drawn, what fills its content region, and its panes left to right, each column top to bottom. It names conversations by id only; their titles and agents are the gateway's to say.",
+      "properties": {
+        "arrangement": {
+          "$ref": "#/$defs/WorkspaceArrangement",
+          "description": "The window's layout."
+        },
+        "sidebar": {
+          "type": "boolean",
+          "description": "Whether the sidebar is drawn: open by the person's choice and not folded for room."
+        },
+        "sessionList": {
+          "type": "boolean",
+          "description": "Whether the session list column is drawn. The sidebar arrangement has none and always says false."
+        },
+        "showing": {
+          "$ref": "#/$defs/WorkspaceShowing",
+          "description": "What fills the content region now."
+        },
+        "widget": {
+          "$ref": "#/$defs/WorkspaceWidget",
+          "description": "The widget drawn over the panes, when showing is widget."
+        },
+        "columns": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "items": { "$ref": "#/$defs/WorkspaceColumn" },
+          "description": "The panes' columns, left to right."
+        }
+      },
+      "required": ["arrangement", "sidebar", "sessionList", "showing", "columns"]
+    },
+    "WorkspacePublishParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Tell the gateway what this connection's desktop window shows now (workspace.publish), so the person's agents can read it with the read_window tool. Each publication replaces this connection's previous one; one with a lower revision than the one held is not applied. A publication with no window withdraws it. The gateway keeps a window only while its connection is open: a closed connection withdraws it, and a window that connects again publishes again, under the same windowId, which replaces whatever an older connection of that window still holds.",
+      "properties": {
+        "windowId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "The window's own id, made once when it opens and kept across its connections, so a connection it left behind never reads as a second window."
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "The window's publication number, increasing with each change and kept across its connections."
+        },
+        "window": {
+          "$ref": "#/$defs/WorkspaceWindow",
+          "description": "What the window shows. Absent withdraws the window: it shows no workspace now."
+        }
+      },
+      "required": ["windowId", "revision"]
+    },
+    "WorkspacePublishResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The answer to workspace.publish: the revision the gateway holds for this connection now, and whether this publication was applied.",
+      "properties": {
+        "revision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "The revision held now: this one when applied, a later one when this one arrived after it."
+        },
+        "applied": {
+          "type": "boolean",
+          "description": "False when a later revision was already held, so this one changed nothing."
+        }
+      },
+      "required": ["revision", "applied"]
     }
   }
 }

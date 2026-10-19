@@ -85,6 +85,7 @@ import {
 } from "./subagents"
 import {
   createQuestionFlights,
+  defaultGatewayTiming,
   gatewaySource,
   inMemorySource,
   measureWorkspace,
@@ -92,11 +93,13 @@ import {
   rememberedFilter,
   inMemorySharing,
   sharingGateway,
+  windowPublisher,
   sampleAppSession,
   sampleWidgetSession,
   type GatewayClient,
   type GatewaySource,
   type SharingClient,
+  type WindowPublishClient,
   type WorkspaceDependencies,
   type WorkspaceSource,
 } from "./workspace"
@@ -225,6 +228,15 @@ export function createDesktopDependencies(
       : samples
         ? inMemorySharing({ now })
         : options.sharing,
+    // What the window shows, for the person's agents: only a gateway has any.
+    windowPublisher: source
+      ? windowPublisher({
+          connected: () => source.connected(),
+          after,
+          // A window that could not say what it shows says it again on the source's own retry.
+          retryMs: defaultGatewayTiming.retryMs,
+        })
+      : undefined,
     now,
     newId,
     // The page's own layout: every command that changes the panes is held to it.
@@ -249,7 +261,8 @@ type WindowGatewayClient = GatewayClient &
   LinkedDevicesClient &
   NativeHooksClient &
   PermissionRulesClient &
-  SharingClient & {
+  SharingClient &
+  WindowPublishClient & {
     readonly agents: AgentsApi
     readonly mcpApps: McpAppsApi
     readonly attachments: AttachmentApi

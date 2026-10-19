@@ -23,6 +23,7 @@ import { applyPendingAccess } from "./access-commands"
 import { entry, sessionOf, type WorkspaceState } from "../../application/workspace-state"
 import { fromSource } from "../../model/revision"
 import { workspaceActions } from "./slice"
+import { shownWindow } from "../../application/usecases/window"
 
 type Root = { workspace: WorkspaceState }
 /** The store's own dispatch: thunks run with the window's dependencies (`store.ts`). */
@@ -109,6 +110,30 @@ export function workspaceEffects(
           continue
         read(sessionId, api.dispatch)
       }
+    },
+  })
+
+  // What the window shows is told whenever it changes, whoever changed it,
+  // for the person's agents to read. Built from state each time, so the same
+  // window is said once however many actions arrive before it changes. The
+  // gateway holds no window until one is said, so no panes is said only after some.
+  let told = JSON.stringify(null)
+  listener.startListening({
+    predicate: (_action: UnknownAction, current, previous) =>
+      current.workspace.panes !== previous.workspace.panes ||
+      current.workspace.arrangement !== previous.workspace.arrangement ||
+      current.workspace.chrome !== previous.workspace.chrome ||
+      current.workspace.content !== previous.workspace.content ||
+      current.workspace.sessions !== previous.workspace.sessions ||
+      current.workspace.drafts !== previous.workspace.drafts,
+    effect: (_action, api) => {
+      const publisher = dependencies.windowPublisher
+      if (!publisher) return
+      const window = shownWindow(api.getState().workspace)
+      const said = JSON.stringify(window)
+      if (said === told) return
+      told = said
+      publisher.publish(window)
     },
   })
 
