@@ -24,6 +24,7 @@ import { keptConversations, retention, type Removal } from "../model/retention"
 import { defaultFilter, listsWaiting, type AgentsFilter } from "../model/overview/filter"
 import { inGroup, type AgentsGroup } from "../model/overview/agents-glance"
 import { drawn, type SideColumn } from "../../model/side-column"
+import type { WindowArrangement } from "../model/shown-window"
 import type { SessionView } from "../model/session-groups"
 import { keepShownDrafts, type Draft } from "../model/session-lifecycle"
 import { unconfirmed, type Transcript, type TurnMessage } from "../model/transcript"
@@ -175,6 +176,13 @@ export interface WorkspaceState {
   /** What the Agents overview shows while open: its filter, the group shown alone, and the session chosen. */
   readonly overview: OverviewState
   readonly chrome: Chrome
+  /**
+   * The layout drawing the panes now, as the layout itself says when it is
+   * on screen (`arrangementShown`); `null` while none is, as in the classic
+   * shell. What the window tells the person's agents it shows
+   * (`usecases/window.ts`) is said only while one is.
+   */
+  readonly arrangement: WindowArrangement | null
   readonly tree: Tree
   /**
    * Whether a session can be shared from this window: composition gave it a
@@ -334,6 +342,7 @@ export const initialWorkspace: WorkspaceState = {
     sidebarWidth: null,
     sessionListWidth: 312,
   },
+  arrangement: null,
   tree: { collapsedSections: [], expandedChannels: [], showAllChannels: [] },
   shareable: false,
   share: null,

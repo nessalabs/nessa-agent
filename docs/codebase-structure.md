@@ -2441,14 +2441,19 @@ profile/enrollment and retained history repository remain unfinished.
 
 ## Agent thread tools
 
-`nessa-server/src/composition/conversation_tools.rs` adapts four MCP tools to the
+`nessa-server/src/composition/conversation_tools.rs` adapts five MCP tools to the
 conversation application. `conversation/application/service/agent_tools.rs`
 resolves the source actor and calls the existing Cedar access evaluator before
 using ordinary target command/read paths. `application/agent_tools.rs` owns
 admission evidence and its audit port; `infrastructure/agent_tool_audit.rs`
 persists it. The built-in collection in relay composition keeps these tools
 independent of optional environment commands. See the [ordering and ownership
-contract](design/agent-thread-tools.md).
+contract](design/agent-thread-tools.md). The fifth, `read_window`, reads the
+windows `product/workspace.rs` holds for each connection in
+`application/workspace_windows.rs` (domain shape in
+`domain/value_objects/workspace_window.rs`), through
+`service/workspace_windows.rs`; see [the window an agent
+shares](design/agent-window.md).
 
 Gateway parent/child Stop orchestration lives in
 `conversation/application/service/owned_threads.rs` (ordinary empty-child

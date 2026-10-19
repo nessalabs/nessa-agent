@@ -182,6 +182,10 @@ fn the_checked_in_bundle_validates_and_names_every_action() {
                 organization: &org,
                 owner: &owner,
             },
+            AccessAction::WorkspaceRead => AccessResource::Workspace {
+                organization: &org,
+                owner: &owner,
+            },
             _ => on(&live),
         };
         let subject = match action {
@@ -365,6 +369,50 @@ fn owner_list_is_the_owners_own_catalogue_and_never_a_paired_readers() {
         &policy,
         AccessAction::List,
         catalogue,
+        &Paired::default()
+    )));
+}
+
+#[test]
+fn owner_workspace_read_is_the_owners_own_windows_and_nobody_elses() {
+    let policy = policy();
+    let (org, elsewhere, owner, other) = (
+        organization("org"),
+        organization("elsewhere"),
+        principal("owner"),
+        principal("other"),
+    );
+    let read = |organization: &OrganizationId, principal: &PrincipalId| {
+        policy.evaluate(&AccessAsk {
+            subject: AccessSubject::Person {
+                organization,
+                principal,
+            },
+            action: AccessAction::WorkspaceRead,
+            resource: AccessResource::Workspace {
+                organization: &org,
+                owner: &owner,
+            },
+            held: None,
+            request: RequestShape::default(),
+            target: None,
+        })
+    };
+    assert_eq!(
+        allowed_by(&read(&org, &owner)),
+        Some(&["owner.workspace_read".to_owned()][..])
+    );
+    assert!(!allowed(&read(&org, &other)));
+    assert!(!allowed(&read(&elsewhere, &owner)));
+    // A paired device signs in as its owner and still reads no window: only
+    // a person's own turn does.
+    assert!(!allowed(&paired(
+        &policy,
+        AccessAction::WorkspaceRead,
+        AccessResource::Workspace {
+            organization: &org,
+            owner: &owner,
+        },
         &Paired::default()
     )));
 }

@@ -2,9 +2,11 @@
 use crate::conversation::application::{
     error_code, event_error_code, project_events, validate_event_cursor, AgentToolRequest,
     ConversationCaller, ConversationError, ConversationEventError, ConversationService,
-    EventProgress, ReportRegistration, RequestedAgent, RequestedConversation, SourcePermits,
-    SubmissionMode, SubmittedMessage, ThreadReport, MAX_EVENT_READERS,
+    EventProgress, PaneConversation, ReportRegistration, RequestedAgent, RequestedConversation,
+    SourcePermits, SubmissionMode, SubmittedMessage, ThreadReport, WindowReading,
+    MAX_EVENT_READERS,
 };
+use crate::conversation::domain::{PaneContent, WindowShowing};
 use crate::mcp_servers::application::{BuiltInFuture, BuiltInServer};
 use nessa_protocol::agents::AgentId;
 use nessa_protocol::conversation::domain::ConversationId;
@@ -131,6 +133,16 @@ impl BuiltInServer for ConversationTools {
                 },
                 "annotations": {"readOnlyHint": false, "destructiveHint": true, "openWorldHint": false},
             }),
+            json!({
+                "name": "read_window",
+                "description": "Read what the person's Nessa desktop windows show right now, as the window last said: whether the sidebar and session list are open, what fills the content region, and every pane left to right and top to bottom with its position in words (\"left\", \"right\", \"top left\"...), its share of the width and height, whether it is focused, and what it shows. A conversation pane gives its threadId with its title, agent and model, so \"the session on the right\" can be found and used with send_message or subscribe. The pane showing this conversation is marked you: true, and `you` says where this conversation is shown, if anywhere. No windows means no desktop window is open and publishing now.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": false,
+                },
+                "annotations": {"readOnlyHint": true, "openWorldHint": false},
+            }),
         ]
     }
     fn call(
@@ -224,6 +236,10 @@ struct Stop {
     #[serde(default, deserialize_with = "supplied")]
     request_id: Option<String>,
 }
+/// `read_window` takes nothing; an object with any field is refused.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Window {}
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Follow {
@@ -543,7 +559,146 @@ async fn run(
             };
             follow(&service, target, source.caller(), args, control).await
         }
+        "read_window" => {
+            let _: Window = parse(arguments)?;
+            let action = identity(&source, &call, "window");
+            let source = service
+                .admit_agent_tool(
+                    source,
+                    call.clone(),
+                    tool,
+                    None,
+                    AgentToolRequest {
+                        logical: call,
+                        command: action,
+                    },
+                    stop,
+                )
+                .await
+                .map_err(code)?;
+            let reading = service.read_windows(&source.caller()).await.map_err(code)?;
+            Ok(window_view(source.conversation(), &reading))
+        }
         _ => Err("unknown_tool".into()),
+    }
+}
+
+/// `read_window`, as the agent reads it: every window, the most recently
+/// published first, every pane with its place in words, and where the asking
+/// conversation is shown. Where it is shown more than once, `you` names the
+/// focused pane if one is, else the first. A window showing the overview or a
+/// widget over its panes has them `covered`, and so is `you` there. Windows
+/// past what one tool result holds are left out and counted in `more`, the
+/// ones showing the asking conversation kept first.
+fn window_view(source: &ConversationId, reading: &WindowReading) -> Value {
+    let mut you: Option<Value> = None;
+    let mut views: Vec<(bool, Value)> = Vec::new();
+    for (index, published) in reading.windows.iter().enumerate() {
+        let window = &published.window;
+        let covered = !matches!(window.showing(), WindowShowing::Panes);
+        let mut mine_here = false;
+        let panes: Vec<Value> = window
+            .places()
+            .into_iter()
+            .map(|place| {
+                let mut pane = json!({
+                    "pane": place.number,
+                    "position": place.position,
+                    "column": place.column,
+                    "row": place.row,
+                    "widthPercent": place.column_width_percent,
+                    "heightPercent": place.pane.height_percent(),
+                    "focused": place.pane.focused(),
+                    "kind": place.pane.content().kind(),
+                });
+                match place.pane.content() {
+                    PaneContent::Conversation(id) => {
+                        pane["threadId"] = json!(id.to_string());
+                        let mine = id == source;
+                        pane["you"] = json!(mine);
+                        match reading.conversations.get(id) {
+                            Some(PaneConversation::Shown {
+                                title,
+                                agent,
+                                model,
+                            }) => {
+                                pane["title"] = json!(title);
+                                pane["agent"] = json!(agent);
+                                pane["model"] = json!(model);
+                            }
+                            _ => pane["available"] = json!(false),
+                        }
+                        let better = you
+                            .as_ref()
+                            .is_none_or(|held| held["focused"] == false && place.pane.focused());
+                        if mine && better {
+                            you = Some(json!({
+                                "threadId": source.to_string(),
+                                "shown": true,
+                                "window": index + 1,
+                                "pane": place.number,
+                                "position": place.position,
+                                "focused": place.pane.focused(),
+                                "covered": covered,
+                            }));
+                        }
+                        mine_here |= mine;
+                    }
+                    PaneContent::Draft => {}
+                    PaneContent::Widget(widget) => {
+                        pane["widget"] = json!({"plugin": widget.plugin(), "id": widget.id()});
+                    }
+                }
+                pane
+            })
+            .collect();
+        let mut view = json!({
+            "window": index + 1,
+            "arrangement": window.arrangement().name(),
+            "sidebar": open(window.sidebar()),
+            "sessionList": open(window.session_list()),
+            "showing": window.showing().name(),
+            "covered": covered,
+            "panes": panes,
+        });
+        if let WindowShowing::Widget(widget) = window.showing() {
+            view["widget"] = json!({"plugin": widget.plugin(), "id": widget.id()});
+        }
+        views.push((mine_here, view));
+    }
+    let you = you.unwrap_or_else(|| json!({"threadId": source.to_string(), "shown": false}));
+    // Kept in order, the asking conversation's windows first, while they fit.
+    let total = views.len();
+    let mut windows = Vec::new();
+    let mut room = WINDOW_BYTES.saturating_sub(you.to_string().len());
+    for (_, view) in views
+        .iter()
+        .filter(|(mine, _)| *mine)
+        .chain(views.iter().filter(|(mine, _)| !*mine))
+    {
+        let size = view.to_string().len() + 1;
+        if size > room {
+            continue;
+        }
+        room -= size;
+        windows.push(view.clone());
+    }
+    windows.sort_by_key(|view| view["window"].as_u64());
+    let more = total - windows.len();
+    let mut value = json!({"you": you, "windows": windows});
+    if more > 0 {
+        value["more"] = json!(more);
+    }
+    value
+}
+/// What `read_window` lists, in bytes of JSON: room under the 32 KiB of text
+/// a tool result may be (`answer`).
+const WINDOW_BYTES: usize = 30 * 1024;
+fn open(drawn: bool) -> &'static str {
+    if drawn {
+        "open"
+    } else {
+        "closed"
     }
 }
 fn answer(value: Value) -> Value {
@@ -735,6 +890,7 @@ mod tests {
                 "send_message" => parse::<Send>(arguments).map(|_| ()),
                 "stop_thread" => parse::<Stop>(arguments).map(|_| ()),
                 "subscribe" => parse::<Follow>(arguments).map(|_| ()),
+                "read_window" => parse::<Window>(arguments).map(|_| ()),
                 _ => panic!("uncovered published tool: {tool}"),
             }
         }
@@ -840,7 +996,13 @@ mod tests {
                 .iter()
                 .map(|tool| tool["name"].as_str().unwrap())
                 .collect::<Vec<_>>(),
-            ["create_thread", "send_message", "subscribe", "stop_thread"]
+            [
+                "create_thread",
+                "send_message",
+                "subscribe",
+                "stop_thread",
+                "read_window"
+            ]
         );
         for tool in tools {
             assert_eq!(tool["inputSchema"]["additionalProperties"], false);
@@ -869,6 +1031,197 @@ mod tests {
         assert_eq!(value["isError"], true);
         assert_eq!(value["structuredContent"]["error"], "tool_result_too_large");
         assert_eq!(answer(json!({"value":"small"}))["isError"], false);
+    }
+
+    #[test]
+    fn read_window_says_each_pane_in_words_and_where_the_caller_is() {
+        use crate::conversation::application::PublishedWindow;
+        use crate::conversation::domain::{
+            WidgetRef, WindowArrangement, WindowColumn, WindowPane, WorkspaceWindow,
+        };
+        let me = ConversationId::new("0b3b8f0e-6f43-4a51-9d55-0e7e4f7f8a11").unwrap();
+        let other = ConversationId::new("1c4c9f1f-7054-4b62-8e66-1f8f5f8f9b22").unwrap();
+        let hidden = ConversationId::new("2d5daf2f-8165-4c73-9f77-2f9f6f9fac33").unwrap();
+        let window = WorkspaceWindow::new(
+            WindowArrangement::Columns,
+            false,
+            true,
+            WindowShowing::Panes,
+            vec![
+                WindowColumn::new(
+                    40,
+                    vec![
+                        WindowPane::new(100, false, PaneContent::Conversation(other.clone()))
+                            .unwrap(),
+                    ],
+                )
+                .unwrap(),
+                WindowColumn::new(
+                    60,
+                    vec![
+                        WindowPane::new(50, true, PaneContent::Conversation(me.clone())).unwrap(),
+                        WindowPane::new(25, false, PaneContent::Conversation(hidden.clone()))
+                            .unwrap(),
+                        WindowPane::new(
+                            25,
+                            false,
+                            PaneContent::Widget(
+                                WidgetRef::new("files".into(), "readme".into()).unwrap(),
+                            ),
+                        )
+                        .unwrap(),
+                    ],
+                )
+                .unwrap(),
+            ],
+        )
+        .unwrap();
+        let reading = WindowReading {
+            windows: vec![PublishedWindow {
+                id: "7d9f2a4e-1b3c-4d5e-8f60-718293a4b5c6".into(),
+                revision: 3,
+                window: Arc::new(window),
+            }],
+            conversations: std::collections::HashMap::from([
+                (
+                    me.clone(),
+                    PaneConversation::Shown {
+                        title: Some("hi".into()),
+                        agent: Some("claude"),
+                        model: "claude-opus-5".into(),
+                    },
+                ),
+                (
+                    other.clone(),
+                    PaneConversation::Shown {
+                        title: Some("Hey".into()),
+                        agent: Some("codex"),
+                        model: "gpt-6-astra".into(),
+                    },
+                ),
+                (hidden.clone(), PaneConversation::Unavailable),
+            ]),
+        };
+        let view = window_view(&me, &reading);
+        assert_eq!(
+            view["you"],
+            json!({"threadId": me.to_string(), "shown": true, "window": 1, "pane": 2,
+                   "position": "top right", "focused": true, "covered": false})
+        );
+        let window = &view["windows"][0];
+        assert_eq!(window["sidebar"], "closed");
+        assert_eq!(window["sessionList"], "open");
+        assert_eq!(window["showing"], "panes");
+        let panes = window["panes"].as_array().unwrap();
+        assert_eq!(panes[0]["position"], "left");
+        assert_eq!(panes[0]["title"], "Hey");
+        assert_eq!(panes[0]["agent"], "codex");
+        assert_eq!(panes[0]["you"], false);
+        assert_eq!(panes[0]["widthPercent"], 40);
+        assert_eq!(panes[1]["you"], true);
+        assert_eq!(panes[2]["position"], "middle right");
+        assert_eq!(panes[2]["available"], false);
+        assert!(panes[2].get("title").is_none());
+        assert_eq!(panes[3]["kind"], "widget");
+        assert_eq!(
+            panes[3]["widget"],
+            json!({"plugin": "files", "id": "readme"})
+        );
+
+        let elsewhere = window_view(
+            &ConversationId::new("3e6ebf3f-9276-4d84-8f88-3fafafafbd44").unwrap(),
+            &reading,
+        );
+        assert_eq!(elsewhere["you"]["shown"], false);
+    }
+
+    #[test]
+    fn read_window_names_the_focused_pane_says_what_is_covered_and_fits_one_result() {
+        use crate::conversation::application::PublishedWindow;
+        use crate::conversation::domain::{
+            WindowArrangement, WindowColumn, WindowPane, WorkspaceWindow,
+        };
+        let me = ConversationId::new("0b3b8f0e-6f43-4a51-9d55-0e7e4f7f8a11").unwrap();
+        let shown = |showing, focused| {
+            Arc::new(
+                WorkspaceWindow::new(
+                    WindowArrangement::Columns,
+                    true,
+                    true,
+                    showing,
+                    vec![WindowColumn::new(
+                        100,
+                        vec![
+                            WindowPane::new(100, focused, PaneContent::Conversation(me.clone()))
+                                .unwrap(),
+                        ],
+                    )
+                    .unwrap()],
+                )
+                .unwrap(),
+            )
+        };
+        let published = |window| PublishedWindow {
+            id: "7d9f2a4e-1b3c-4d5e-8f60-718293a4b5c6".into(),
+            revision: 1,
+            window,
+        };
+        // Shown unfocused in the first window, focused under the overview in the second.
+        let reading = WindowReading {
+            windows: vec![
+                published(shown(WindowShowing::Panes, false)),
+                published(shown(WindowShowing::Agents, true)),
+            ],
+            conversations: Default::default(),
+        };
+        let view = window_view(&me, &reading);
+        assert_eq!(view["you"]["window"], 2);
+        assert_eq!(view["you"]["covered"], true);
+        assert_eq!(view["windows"][1]["covered"], true);
+        assert!(view.get("more").is_none());
+
+        // More windows than one result holds: the rest are counted, and the
+        // window showing the caller is kept.
+        let other = ConversationId::new("1c4c9f1f-7054-4b62-8e66-1f8f5f8f9b22").unwrap();
+        let full = |content: &dyn Fn() -> PaneContent| {
+            published(Arc::new(
+                WorkspaceWindow::new(
+                    WindowArrangement::Columns,
+                    true,
+                    true,
+                    WindowShowing::Panes,
+                    (0..8)
+                        .map(|_| {
+                            WindowColumn::new(
+                                12,
+                                (0..8)
+                                    .map(|_| WindowPane::new(12, false, content()).unwrap())
+                                    .collect(),
+                            )
+                            .unwrap()
+                        })
+                        .collect(),
+                )
+                .unwrap(),
+            ))
+        };
+        let mut windows: Vec<_> = (0..6)
+            .map(|_| full(&|| PaneContent::Conversation(other.clone())))
+            .collect();
+        windows.push(full(&|| PaneContent::Conversation(me.clone())));
+        let view = window_view(
+            &me,
+            &WindowReading {
+                windows,
+                conversations: Default::default(),
+            },
+        );
+        let listed = view["windows"].as_array().unwrap();
+        assert!(view["more"].as_u64().unwrap() > 0);
+        assert_eq!(listed.len() + view["more"].as_u64().unwrap() as usize, 7);
+        assert_eq!(view["you"]["window"], 7);
+        assert!(listed.iter().any(|window| window["window"] == 7));
+        assert_eq!(answer(view)["isError"], false);
     }
 
     #[tokio::test]

@@ -80,11 +80,16 @@ export type {
   SeededWorkspaceSpec,
 } from "./adapters/in-memory/seeded-workspace"
 export {
+  defaultGatewayTiming,
   gatewaySource,
   type GatewayClient,
   type GatewaySource,
 } from "./adapters/gateway/gateway-source"
 export { sharingGateway, type SharingClient } from "./adapters/gateway/sharing-gateway"
+export {
+  windowPublisher,
+  type WindowPublishClient,
+} from "./adapters/gateway/window-publisher"
 export {
   inMemorySharing,
   type InMemorySharing,
