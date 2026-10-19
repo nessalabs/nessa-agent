@@ -2,14 +2,13 @@
 #![deny(missing_docs)]
 
 use super::ConfigurationControlRecord;
-use crate::application::agent_execution::providers::ProviderIdentity;
 
 use crate::application::agent_execution::agents::{AgentError, AgentFuture};
 use crate::application::agent_execution::permissions::{
     ActionContext, CancellationOrigin, PermissionAnswerRecord, PermissionCancellation,
     QuestionAnswerRecord, QuestionRefusalRecord, ReviewDeclineRecord,
 };
-use crate::application::agent_execution::providers::ApprovalMode;
+use crate::application::agent_execution::providers::{ApprovalMode, ProviderIdentity};
 use crate::domain::agent_execution::executions::{
     ExecutionId, ExecutionOutcome, InvocationKind, InvocationStage, QueueOrderChange,
     SchedulingCause, SchedulingInitiator, SchedulingTransition, SchedulingTransitionError,

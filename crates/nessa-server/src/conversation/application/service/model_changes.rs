@@ -1,11 +1,9 @@
 //! A native acknowledgement and a correlated metadata commit select one model.
 use super::{
-    agent_question_entries, agent_review_entries, lifecycle_view, ActionContext, AgentError,
-};
-use super::{
-    contain_mode_terminal, load_conversation, provider_approval_mode, supervised, AttachmentPhase,
-    Conversation, ConversationCaller, ConversationError, ConversationId, ConversationModelId,
-    ConversationService, LiveConversation, ModelBudget, SessionSnapshot,
+    agent_question_entries, agent_review_entries, contain_mode_terminal, lifecycle_view,
+    load_conversation, provider_approval_mode, supervised, ActionContext, AgentError,
+    AttachmentPhase, Conversation, ConversationCaller, ConversationError, ConversationId,
+    ConversationModelId, ConversationService, LiveConversation, ModelBudget, SessionSnapshot,
 };
 use crate::conversation::application::{
     ConversationModelApplication, ConversationModelRequest, ConversationModelRequestState,

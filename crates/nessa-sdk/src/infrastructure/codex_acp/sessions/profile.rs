@@ -1,10 +1,9 @@
-use crate::application::agent_execution::providers::ModelChangeTiming;
-
 use super::super::tools::wire::{self, ObservedTools};
 use crate::application::agent_execution::agents::AgentError;
 use crate::application::agent_execution::executions::ExecutionRequest;
 use crate::application::agent_execution::providers::{
-    ApprovalMode, ApprovalModeChoice, NativeHookSuppressionCapability, NativeHooksSwitch,
+    ApprovalMode, ApprovalModeChoice, ModelChangeTiming, NativeHookSuppressionCapability,
+    NativeHooksSwitch,
 };
 use crate::application::agent_execution::tools::ToolReviewInput;
 use crate::domain::agent_execution::permissions::DeadlineDenyPreference;

@@ -1,13 +1,11 @@
 #![deny(missing_docs)]
 
-use crate::application::agent_execution::providers::ApprovalModeChoice;
-
 use super::profile::ClaudeProfile;
 use crate::application::agent_execution::agents::AgentError;
 use crate::application::agent_execution::executions::ExecutionAudit;
 use crate::application::agent_execution::providers::{
-    AgentProvider, ApprovalMode, HarnessHost, HarnessHostIdentity, HarnessLaunch,
-    NativeHooksSwitch, ProviderIdentity, ProviderOpenFuture, ProviderOpenRequest,
+    AgentProvider, ApprovalMode, ApprovalModeChoice, HarnessHost, HarnessHostIdentity,
+    HarnessLaunch, NativeHooksSwitch, ProviderIdentity, ProviderOpenFuture, ProviderOpenRequest,
 };
 use crate::application::agent_execution::traces::LocalTraceStore;
 use crate::domain::agent_execution::permissions::PermissionScope;

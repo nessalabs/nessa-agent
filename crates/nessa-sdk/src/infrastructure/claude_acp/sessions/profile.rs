@@ -1,11 +1,9 @@
-use crate::application::agent_execution::providers::ModelChangeTiming;
-
 use super::super::tools::wire;
 use super::configuration;
 use crate::application::agent_execution::agents::AgentError;
 use crate::application::agent_execution::executions::ExecutionRequest;
 use crate::application::agent_execution::providers::{
-    ApprovalMode, ApprovalModeChoice, NativeHooksSwitch,
+    ApprovalMode, ApprovalModeChoice, ModelChangeTiming, NativeHooksSwitch,
 };
 use crate::application::agent_execution::tools::ToolReviewInput;
 use crate::domain::agent_execution::prompts::SystemPrompt;

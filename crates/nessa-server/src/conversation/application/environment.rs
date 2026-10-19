@@ -40,14 +40,13 @@
 use futures_util::FutureExt;
 use nessa_auth::application::ports::Clock;
 use nessa_protocol::lease::{CollectionRefusal, FetchRefusal, PublishRefusal};
-use nessa_sdk::application::agent_execution::providers::HarnessHostIdentity;
 use nessa_sdk::application::agent_execution::{
     agents::{Agent, AgentError},
     permissions::ActionContext,
     providers::{
-        AgentProvider, ApprovalMode, CloseOutcome, ExecutionEventStream, OpenedProviderSession,
-        ProviderIdentity, ProviderObservationFuture, ProviderOpenError, ProviderOpenFuture,
-        ProviderOpenRequest,
+        AgentProvider, ApprovalMode, CloseOutcome, ExecutionEventStream, HarnessHostIdentity,
+        OpenedProviderSession, ProviderIdentity, ProviderObservationFuture, ProviderOpenError,
+        ProviderOpenFuture, ProviderOpenRequest,
     },
     sessions::{
         CurrentLease, CurrentLeaseState, LeaseCommit, LeaseRecord, LeaseRecordError, PublishedFile,

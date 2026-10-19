@@ -7,8 +7,8 @@ use crate::domain::agent_execution::permissions::{
 };
 
 use super::{
-    ApprovalMode, CleanupFuture, HarnessHost, HarnessHostIdentity, ProviderExecutionFuture,
-    ProviderIdentity, ProviderObservationFuture, ProviderOpenRequest,
+    ApprovalMode, CleanupFuture, HarnessHost, HarnessHostIdentity, ModelChange, ModelChangeEffect,
+    ProviderExecutionFuture, ProviderIdentity, ProviderObservationFuture, ProviderOpenRequest,
     ProviderOperationCapabilities, ProviderOperationFailure, ProviderOperationFuture,
     ProviderSession, ProviderSessionState, SessionCloseRequest, SteeringOutcome,
 };
@@ -65,9 +65,9 @@ pub trait ProviderSessionBackend: Send + Sync {
     /// A successful reply includes every native adjustment to mode and effort.
     fn set_model(
         &self,
-        _change: super::ModelChange,
+        _change: ModelChange,
         _capabilities: EffectiveCapabilities,
-    ) -> ProviderOperationFuture<'_, super::ModelChangeEffect> {
+    ) -> ProviderOperationFuture<'_, ModelChangeEffect> {
         Box::pin(async {
             Err(ProviderOperationFailure::before_effect(
                 AgentError::Unsupported("live model change".into()),

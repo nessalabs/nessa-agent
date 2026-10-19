@@ -19,8 +19,8 @@ use super::{
 use crate::{
     application::agent_execution::{
         providers::{
-            ExecutionReport, ModelChangeRecord, ModelChangeTiming, ModelConfiguration,
-            SessionConfigurationKind, SessionConfigurationRecord,
+            ApprovalMode, ExecutionReport, ModelChange, ModelChangeRecord, ModelChangeTiming,
+            ModelConfiguration, SessionConfigurationKind, SessionConfigurationRecord,
         },
         sessions::{ProviderContext, SessionChange, SessionSaveUnit, StorageError},
     },
@@ -59,9 +59,6 @@ impl From<&SessionConfigurationRecord> for SavedConfigurationChange {
 }
 impl SavedConfigurationChange {
     pub(super) fn decode(self) -> Result<SessionConfigurationRecord, StorageError> {
-        use crate::application::agent_execution::providers::{
-            SessionConfigurationKind, SessionConfigurationRecord,
-        };
         let kind = match self.kind.as_str() {
             "model" => SessionConfigurationKind::Model,
             "approvalMode" => SessionConfigurationKind::ApprovalMode,
@@ -122,7 +119,6 @@ impl From<&ModelChangeRecord> for SavedModelChange {
 }
 impl SavedModelChange {
     pub(super) fn decode(self) -> Result<ModelChangeRecord, StorageError> {
-        use crate::application::agent_execution::providers::{ModelChange, ModelChangeRecord};
         Ok(ModelChangeRecord::new(
             ModelChange::restore(
                 self.before.decode()?,
@@ -161,7 +157,6 @@ impl From<&ModelConfiguration> for SavedModelConfiguration {
 }
 impl SavedModelConfiguration {
     pub(super) fn decode(self) -> Result<ModelConfiguration, StorageError> {
-        use crate::application::agent_execution::providers::ApprovalMode;
         let mode = self
             .approval_mode
             .map(|mode| match mode.as_str() {

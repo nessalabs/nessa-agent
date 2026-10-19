@@ -3,9 +3,8 @@
 use super::profile::OpencodeProfile;
 use crate::application::agent_execution::agents::AgentError;
 use crate::application::agent_execution::executions::ExecutionAudit;
-use crate::application::agent_execution::providers::HarnessHostIdentity;
 use crate::application::agent_execution::providers::{
-    AgentProvider, ProviderIdentity, ProviderOpenFuture, ProviderOpenRequest,
+    AgentProvider, HarnessHostIdentity, ProviderIdentity, ProviderOpenFuture, ProviderOpenRequest,
 };
 use crate::application::agent_execution::traces::LocalTraceStore;
 use crate::domain::agent_execution::permissions::PermissionScope;

@@ -1,10 +1,8 @@
-use crate::application::agent_execution::providers::ModelChangeTiming;
-
 use super::sessions::AcpConfig;
 use crate::application::agent_execution::agents::AgentError;
 use crate::application::agent_execution::executions::ExecutionRequest;
 use crate::application::agent_execution::providers::{
-    ApprovalMode, NativeHookSuppressionCapability, PermissionDenialCapability,
+    ApprovalMode, ModelChangeTiming, NativeHookSuppressionCapability, PermissionDenialCapability,
     ProviderOperationCapabilities, ProviderPermissionDeferralCapability,
 };
 use crate::application::agent_execution::tools::ToolReviewInput;
