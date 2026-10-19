@@ -205,7 +205,7 @@ test("the Windows split preserves full build flags, platform coverage, guards, c
     )
     assert.match(
       blocks.find((block) => block.id === "gateway-contract").text,
-      /node --test scripts\/cargo-test-parallel\/e2e\.test\.mjs/,
+      /node --test scripts\/cargo-test-parallel\/e2e\.test\.mjs scripts\/cargo-test-parallel\/diagnostics\.test\.mjs/,
     )
     assert.doesNotMatch(
       server,

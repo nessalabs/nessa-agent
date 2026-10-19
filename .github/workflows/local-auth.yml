@@ -157,7 +157,7 @@ jobs:
           node-version: 24
       - name: Check portable Rust dependency graphs
         run: node scripts/check-runtime-dependencies.mjs --verify-fixture
-      - run: node --test scripts/cargo-test-parallel/e2e.test.mjs
+      - run: node --test scripts/cargo-test-parallel/e2e.test.mjs scripts/cargo-test-parallel/diagnostics.test.mjs
       - run: cargo fmt --all -- --check
       # This pure shared domain is small enough to report denied warnings
       # before its tests without paying a second workspace compile.

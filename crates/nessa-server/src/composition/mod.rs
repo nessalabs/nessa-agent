@@ -23,10 +23,13 @@
 //! where the conversation process stack can run. Configuration parsing and
 //! desktop defaults remain portable; non-Unix composition refuses conversations.
 
+mod backup_output;
 mod backup_verification;
+mod restore_planning;
 mod root;
 
 pub use backup_verification::run_backup_verifier;
+pub use restore_planning::run_restore_planner;
 
 pub use root::CompositionRoot;
 
