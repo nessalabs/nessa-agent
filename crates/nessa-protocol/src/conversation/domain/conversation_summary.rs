@@ -1,7 +1,8 @@
 /// What a conversation is called in a list of conversations.
 ///
 /// Derived from the first message a person sends, and then kept: a later
-/// message does not rename the conversation.
+/// message does not rename the conversation, and a person who renames it
+/// replaces it ([`ConversationSummary::after_renaming`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ConversationTitle(String);
 impl ConversationTitle {
@@ -13,9 +14,10 @@ impl ConversationTitle {
     /// What a message of images alone is called, when it names no file either.
     const IMAGE: &'static str = "Image";
 
-    /// Accept a title read back from storage. It must be exactly what
-    /// [`Self::for_message`] could have produced: one line, no surrounding or
-    /// doubled whitespace, and no longer than [`Self::MAX_CHARS`].
+    /// Accept a title read back from storage, or one a person chose. It must
+    /// be exactly what [`Self::for_message`] could have produced: one line, no
+    /// surrounding or doubled whitespace, and no longer than
+    /// [`Self::MAX_CHARS`].
     pub fn new(value: &str) -> Result<Self, &'static str> {
         if value.is_empty() || one_line(value) != value || value.chars().count() > Self::MAX_CHARS {
             return Err("invalid conversation title");
@@ -193,6 +195,18 @@ impl ConversationSummary {
     pub fn after_archiving(&self, archived: bool) -> Self {
         Self {
             archived,
+            ..self.clone()
+        }
+    }
+    /// After somebody renamed the conversation. Nothing else changes, and
+    /// nothing was said, so the time does not move; and since a message only
+    /// titles a conversation that has no title, the new one sticks
+    /// (`a_renamed_title_sticks_through_later_messages`).
+    ///
+    /// Only of a summary, for the reason [`Self::after_archiving`] gives.
+    pub fn after_renaming(&self, title: ConversationTitle) -> Self {
+        Self {
+            title: Some(title),
             ..self.clone()
         }
     }

@@ -1655,6 +1655,55 @@ async fn a_list_subscription_follows_the_catalogue() {
     client.close().await;
 }
 
+/// A rename reaches the list and the conversation's own followers: the
+/// store's write wakes the list, and the view, which shows the same title, is
+/// told too.
+#[tokio::test]
+async fn a_rename_reaches_the_list_and_the_view_subscriptions() {
+    let fixture = SubscriptionFixture::new().await;
+    fixture.turn("turn-1").await;
+    fixture.settled_read(1).await;
+    let mut client = fixture.connect();
+    client.send("list", "conversation.subscribeList", json!({}));
+    let (reply, _) = client.reply("list").await;
+    let list = reply["payload"]["subscriptionId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let first = client.next().await;
+    assert_eq!(first["event"], "conversation.listed");
+    assert_ne!(
+        first["payload"]["list"]["conversations"][0]["title"],
+        "Lisbon in May"
+    );
+    let view = client.subscribe("view", &fixture.id).await;
+    let renamed = fixture
+        .call(
+            "conversation.rename",
+            json!({
+                "conversationId": fixture.id.to_string(),
+                "requestId": "rename",
+                "title": "Lisbon in May",
+            }),
+        )
+        .await;
+    assert_eq!(renamed["ok"], true, "{renamed}");
+    assert_eq!(renamed["payload"]["applied"], true, "{renamed}");
+    // Both frames, in whichever order they come: `until` passes over the
+    // other subscription's frames, so it cannot wait on each in turn.
+    let (mut listed, mut viewed) = (false, false);
+    while !(listed && viewed) {
+        let frame = client.next().await;
+        let subscription = &frame["payload"]["subscriptionId"];
+        if *subscription == list.as_str() {
+            listed |= frame["payload"]["list"]["conversations"][0]["title"] == "Lisbon in May";
+        } else if *subscription == view.as_str() {
+            viewed |= frame["payload"]["view"]["title"] == "Lisbon in May";
+        }
+    }
+    client.close().await;
+}
+
 /// Row L2: a turn running is a list fact that follows its commits.
 #[tokio::test]
 async fn a_turn_without_a_summary_change_updates_the_list() {

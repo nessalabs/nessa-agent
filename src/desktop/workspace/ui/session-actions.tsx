@@ -56,8 +56,24 @@ export function useOpenFromRow() {
   }
 }
 
-/** A session row's context menu; its content mounts only while the menu is open. */
-export function SessionMenuItems({ sessionId }: { sessionId: string }) {
+/**
+ * A session row's menu — its context menu, or what its "More" button opens —
+ * whose content mounts only while the menu is open. `navigation` adds the
+ * ways to open it, which a row's own menu button leaves to the row. Rename
+ * and Delete are the row's to carry out (`session-row-actions.tsx`): the
+ * field and the confirmation outlive the menu.
+ */
+export function SessionMenuItems({
+  sessionId,
+  navigation = true,
+  onRename,
+  onDelete,
+}: {
+  sessionId: string
+  navigation?: boolean
+  onRename?: () => void
+  onDelete?: () => void
+}) {
   const dispatch = useWorkspaceDispatch()
   const { open, beside, besideKey } = useOpenFromRow()
   const { pinned, begun } = useWorkspaceSelector((state) => {
@@ -79,22 +95,34 @@ export function SessionMenuItems({ sessionId }: { sessionId: string }) {
   const shown = pane !== undefined
   return (
     <>
-      <MenuItem onSelect={() => open(sessionId)}>
-        Open
-        <MenuShortcut>↩</MenuShortcut>
-      </MenuItem>
-      {/* As ⌘-click does: beside when there is room, in the focused pane's place when not. */}
-      <MenuItem onSelect={() => beside(sessionId)}>
-        Open Beside
-        {besideKey.on ? <MenuShortcut>{commandLabel(isMac)}Click</MenuShortcut> : null}
-      </MenuItem>
-      {/* Only among several: from a session's row, closing its pane is taking the
-          session away, never putting a new session's home in its place, which
-          closing the last pane does (`canClosePane`). */}
-      {shown && count > 1 ? (
-        <MenuItem onSelect={() => dispatch(closePane({ pane }))}>Close Pane</MenuItem>
+      {navigation ? (
+        <>
+          <MenuItem onSelect={() => open(sessionId)}>
+            Open
+            <MenuShortcut>↩</MenuShortcut>
+          </MenuItem>
+          {/* As ⌘-click does: beside when there is room, in the focused pane's place when not. */}
+          <MenuItem onSelect={() => beside(sessionId)}>
+            Open Beside
+            {besideKey.on ? (
+              <MenuShortcut>{commandLabel(isMac)}Click</MenuShortcut>
+            ) : null}
+          </MenuItem>
+          {/* Only among several: from a session's row, closing its pane is taking the
+              session away, never putting a new session's home in its place, which
+              closing the last pane does (`canClosePane`). */}
+          {shown && count > 1 ? (
+            <MenuItem onSelect={() => dispatch(closePane({ pane }))}>Close Pane</MenuItem>
+          ) : null}
+          <MenuSeparator />
+        </>
       ) : null}
-      <MenuSeparator />
+      {/* A title is the source's, as a pin is: none to change before it has spoken. */}
+      {onRename ? (
+        <MenuItem disabled={!begun} onSelect={onRename}>
+          Rename
+        </MenuItem>
+      ) : null}
       <MenuItem
         disabled={!begun}
         onSelect={() =>
@@ -103,24 +131,27 @@ export function SessionMenuItems({ sessionId }: { sessionId: string }) {
       >
         {pinned ? "Unpin from Sidebar" : "Pin to Sidebar"}
       </MenuItem>
+      {/* Sharing is the gateway's: a window without one offers none, and a
+          session it has not spoken of has no conversation to share yet. */}
+      {shareable ? (
+        <MenuItem
+          disabled={!begun}
+          onSelect={() => void dispatch(openShare({ sessionId }))}
+        >
+          Share…
+        </MenuItem>
+      ) : null}
+      <MenuSeparator />
       <MenuItem
         disabled={!begun}
         onSelect={() => void dispatch(archiveSession({ sessionId, initiator: "person" }))}
       >
         Archive
       </MenuItem>
-      {/* Sharing is the gateway's: a window without one offers none, and a
-          session it has not spoken of has no conversation to share yet. */}
-      {shareable ? (
-        <>
-          <MenuSeparator />
-          <MenuItem
-            disabled={!begun}
-            onSelect={() => void dispatch(openShare({ sessionId }))}
-          >
-            Share…
-          </MenuItem>
-        </>
+      {onDelete ? (
+        <MenuItem disabled={!begun} onSelect={onDelete}>
+          Delete…
+        </MenuItem>
       ) : null}
     </>
   )

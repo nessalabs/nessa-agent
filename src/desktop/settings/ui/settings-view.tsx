@@ -29,6 +29,7 @@ import {
   searchSettings,
   settingsCategories,
   settingsCategory,
+  settingsTab,
   showsTabs,
   tabsOf,
   type SettingId,
@@ -61,9 +62,14 @@ import { tooltip } from "../../ui/tooltip"
  */
 const openEvent = "nessa:open-settings"
 
-/** Opens Settings from anywhere in the window. */
-export function openSettings() {
-  window.dispatchEvent(new Event(openEvent))
+/**
+ * Opens Settings from anywhere in the window: on `tab` when one is named, as
+ * where a sentence elsewhere sends the person ("Settings › Linked devices").
+ */
+export function openSettings(tab?: SettingsTabId) {
+  window.dispatchEvent(
+    new CustomEvent<SettingsTabId | undefined>(openEvent, { detail: tab }),
+  )
 }
 
 /** ⌘B shows and hides Settings' sidebar, as it does the window's. */
@@ -94,13 +100,27 @@ interface SettingsHostProps {
  * from anywhere, or ⌘,. The window holds this, so what lies under Settings
  * can be made inert while it is open.
  */
-export function useSettingsOpening(): { open: boolean; close: () => void } {
+export function useSettingsOpening(): {
+  open: boolean
+  /** The tab it was opened on, when one was named. */
+  tab: SettingsTabId | undefined
+  close: () => void
+} {
   const [open, setOpen] = useState(false)
+  const [tab, setTab] = useState<SettingsTabId | undefined>(undefined)
   useEffect(() => {
-    const show = () => setOpen(true)
+    const show = (event: Event) => {
+      setTab(
+        event instanceof CustomEvent
+          ? (event.detail as SettingsTabId | undefined)
+          : undefined,
+      )
+      setOpen(true)
+    }
     const onKeyDown = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key === ",") {
         event.preventDefault()
+        setTab(undefined)
         setOpen(true)
       }
     }
@@ -112,7 +132,7 @@ export function useSettingsOpening(): { open: boolean; close: () => void } {
     }
   }, [])
   const close = useCallback(() => setOpen(false), [])
-  return { open, close }
+  return { open, tab, close }
 }
 
 /**
@@ -125,15 +145,16 @@ export function SettingsHost({
   open,
   onClose,
   ...props
-}: SettingsHostProps & { open: boolean; onClose: () => void }) {
+}: SettingsHostProps & { open: boolean; tab?: SettingsTabId; onClose: () => void }) {
   return open ? <SettingsView {...props} onClose={onClose} /> : null
 }
 
 function SettingsView({
   hostKind,
   browserSurface,
+  tab: openedOn,
   onClose,
-}: SettingsHostProps & { onClose: () => void }) {
+}: SettingsHostProps & { tab?: SettingsTabId; onClose: () => void }) {
   const [theme] = useThemePreference()
   // Shown or hidden by the person; folded by the window when a page would be
   // squeezed beside it, and back once there is room (`side-column.ts`).
@@ -169,11 +190,13 @@ function SettingsView({
   // Settings is a dialog itself: its own reveal is not under one.
   const peek = useEdgePeek(!sidebarOpen, sidebarOpen, rootRef)
   const revealed = peek.shown && !peek.handingOff
-  const [category, setCategory] = useState<SettingsCategoryId>("appearance")
+  const [category, setCategory] = useState<SettingsCategoryId>(() =>
+    openedOn ? settingsTab(openedOn).category : "appearance",
+  )
   // The tab last shown in each category, kept while Settings is open.
   const [chosenTabs, setChosenTabs] = useState<
     Partial<Record<SettingsCategoryId, SettingsTabId>>
-  >({})
+  >(() => (openedOn ? { [settingsTab(openedOn).category]: openedOn } : {}))
   const [query, setQuery] = useState("")
   // The setting a search just jumped to, shown briefly on its row.
   const [found, setFound] = useState<SettingId | null>(null)

@@ -112,6 +112,7 @@ import {
   subscriptionLimits,
   type ConnectionState,
   type ConversationApi,
+  conversationTitle,
   type ConversationListResult,
   type ConversationObserveCursor,
   type ConversationSummary,
@@ -168,6 +169,8 @@ export interface GatewayClient {
     | "setModel"
     | "read"
     | "archive"
+    | "rename"
+    | "delete"
   >
   readonly subscriptions: Pick<SubscriptionApi, "view" | "list">
   /** Stops the active execution, which the gateway names from its own peek. */
@@ -738,9 +741,16 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
   // The conversations followed, least recently opened first (D7).
   const views = new Map<string, Followed<Transcript>>()
   const list: Followed<void> = followed()
-  // Sessions whose archive is on its way: a list frame that arrives meanwhile
-  // may have been read before it, and does not list them again (W6).
+  // Sessions whose archive or delete is on its way: a list frame that arrives
+  // meanwhile may have been read before it, and does not list them again (W6).
   const archiving = new Set<string>()
+  // Renames on their way, each with the title it asks for and whether the
+  // gateway stored it. A list frame that arrives meanwhile may have been read
+  // before it was stored, so once it is, that frame says the new title (W6).
+  const renaming = new Map<
+    string,
+    { title: string; stored: boolean; before: ReadonlySet<string | null> }
+  >()
   // The subscribes of conversations let go past the limit while on their
   // way: the gateway counts one against the limit until it is answered and
   // closed, so the next open waits for them (D25).
@@ -844,8 +854,11 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     connected: GatewayClient,
     result: ConversationListResult,
     current: () => boolean,
+    // What was on its way as the frame came; a walk owed again keeps them,
+    // since the frame was read no later than then.
+    crossed = new Set(archiving),
+    crossedRenames = new Map(renaming),
   ) => {
-    const crossed = new Set(archiving)
     const mine = ++listFrames
     const { settled } = inTurn(listing, async () => {
       // A frame is a replacement: one queued behind a walk gives way to the
@@ -856,9 +869,32 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
       const apply = (applied: ConversationListResult) =>
         applyList({
           ...applied,
-          conversations: applied.conversations.filter(
-            (row) => !(crossed.has(row.conversationId) && takenOut(row.conversationId)),
-          ),
+          conversations: applied.conversations
+            .filter(
+              (row) => !(crossed.has(row.conversationId) && takenOut(row.conversationId)),
+            )
+            .map((row) => {
+              const renamed = crossedRenames.get(row.conversationId)
+              // Only while it is still the newest title: a walk owed again
+              // may come after a later rename, here or elsewhere.
+              const newest =
+                renaming.get(row.conversationId) === renamed ||
+                (!renaming.has(row.conversationId) &&
+                  rows.get(row.conversationId)?.title === renamed?.title)
+              if (!renamed?.stored) return row
+              // A frame cannot be ordered against the rename's answer. One
+              // that says a title from before the rename was read before it
+              // was stored; any other title came after it was asked, from
+              // the gateway or another client, and is the gateway's.
+              if (!renamed.before.has(row.title)) return row
+              if (newest) return { ...row, title: renamed.title }
+              // A later title is known: the newest stored here, else the row's.
+              const later = renaming.get(row.conversationId)
+              const title = later?.stored
+                ? later.title
+                : rows.get(row.conversationId)?.title
+              return title === undefined ? row : { ...row, title }
+            }),
         })
       let applied = result
       if (!result.complete) {
@@ -874,7 +910,7 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
           // unapplied, a gap, and the walk is owed to the retry clock, as an
           // open that failed is (D18, D17).
           apply(result)
-          unwalked = () => listFrame(connected, result, current)
+          unwalked = () => listFrame(connected, result, current, crossed, crossedRenames)
           gap = true
           settle(list, { error })
           scheduleRetry()
@@ -1617,6 +1653,71 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
         void settled.then(() => archiving.delete(sessionId))
         await turn
       }),
+    // The gateway keeps the title (`conversationTitle` is its rule) and
+    // answers once it is stored. In the list's turn, as an archive (W6); a
+    // list frame that arrives while it is on its way may have been read
+    // before it was stored, so it says the new title too. The row is said
+    // again with the new one at once, and the frames after it agree.
+    rename: (sessionId, typed) =>
+      within(async (live) => {
+        // Nothing left to call it, or what it is called already, or will be
+        // once the rename on its way is stored: nobody is asked.
+        const title = conversationTitle(typed)
+        const called = renaming.get(sessionId)?.title ?? rows.get(sessionId)?.title
+        if (title === null || title === called) return
+        const asked = {
+          title,
+          stored: false,
+          before: new Set([rows.get(sessionId)?.title ?? null, called ?? null]),
+        }
+        renaming.set(sessionId, asked)
+        const { turn, settled } = inTurn(listing, async () => {
+          held(sessionId)
+          await within(() =>
+            dispatch(live, (connected) => {
+              held(sessionId)
+              return connected.conversation.rename(sessionId, title)
+            }),
+          )
+          asked.stored = true
+          const row = rows.get(sessionId)
+          if (row && !takenOut(sessionId)) {
+            rows.set(sessionId, { ...row, title })
+            publish(sessionId)
+          }
+        })
+        listing = settled
+        void settled.then(() => {
+          if (renaming.get(sessionId) === asked) renaming.delete(sessionId)
+        })
+        await turn
+      }),
+    // As an archive, in the list's turn (W6), and the window's apps forget it.
+    delete: (sessionId) =>
+      within(async (live) => {
+        archiving.add(sessionId)
+        const gone = () => {
+          remove(sessionId)
+          tellApps(() => options.apps?.forget(sessionId))
+        }
+        const { turn, settled } = inTurn(listing, async () => {
+          held(sessionId)
+          await within(() =>
+            dispatch(live, (connected) => connected.conversation.delete(sessionId)).catch(
+              (error: unknown) => {
+                // Deleted, with only its erasure or its record unfinished:
+                // gone all the same, and the failure still says so.
+                if (deletedAnyway(error)) gone()
+                throw error
+              },
+            ),
+          )
+          gone()
+        })
+        listing = settled
+        void settled.then(() => archiving.delete(sessionId))
+        await turn
+      }),
     // The gateway keeps no unread mark: every summary is read already.
     markRead: () => within(() => Promise.resolve()),
     // An app calls on its own schedule, not a person's: in the background.
@@ -1785,6 +1886,19 @@ function readTrace(subject: "index" | "conversation", sessionId?: string) {
     method: subject === "index" ? "conversation.subscribeList" : "conversation.subscribe",
     ...(sessionId === undefined ? {} : { sessionId }),
   }
+}
+
+/**
+ * A delete refused with one of the two codes that say it happened anyway
+ * (`conversation.delete`): its stored data, or the record of it, did not
+ * finish.
+ */
+function deletedAnyway(error: unknown): boolean {
+  const { code } = readHint(error)
+  return (
+    code === ConversationErrorCode.ConversationErasureIncomplete ||
+    code === ConversationErrorCode.AuditUnavailable
+  )
 }
 
 /** The gateway or socket fact already on the error, and nothing it says in prose. */

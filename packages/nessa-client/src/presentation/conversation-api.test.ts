@@ -3,7 +3,7 @@ import { NessaRpcError } from "../application/rpc-error.js"
 import { expect, it, vi } from "vitest"
 import { executionTargets } from "../application/execution-target.js"
 import { permissionTargets } from "../application/permission-target.js"
-import { createConversationApi } from "./conversation-api.js"
+import { conversationTitle, createConversationApi } from "./conversation-api.js"
 import { conversationDeleteTimeoutMs } from "../application/agent-budgets.js"
 import {
   NessaConversationMutationError,
@@ -354,6 +354,46 @@ it("routes every control with stable action and target identities", async () => 
     permissionId: "review",
     optionId: "allow",
   })
+})
+it("makes a typed title one the gateway keeps", () => {
+  expect(conversationTitle("  Rain \n  plan\t ")).toBe("Rain plan")
+  expect(conversationTitle(" \n\t ")).toBeNull()
+  // Control characters, and U+0085, which JavaScript's \s leaves and the gateway folds.
+  expect(conversationTitle("Plan\u0007trip\u0085now")).toBe("Plan trip now")
+  expect(conversationTitle("\u0000\u001f")).toBeNull()
+  // Cut by code point, at the published maximum, and never ending in a space.
+  const long = conversationTitle(`${"🌧".repeat(48)} more`)
+  expect(Array.from(long ?? "")).toHaveLength(48)
+  expect(conversationTitle(`${"a".repeat(47)} b`)).toBe("a".repeat(47))
+})
+
+it("renames a conversation with the title as given and its own request identity", async () => {
+  const request = vi.fn(async (_method: string, params: unknown) => ({
+    requestId: (params as { requestId: string }).requestId,
+    applied: true,
+  }))
+  const api = createConversationApi({ request }, () => "rename")
+  await expect(api.rename(conversationId, "Lisbon in May")).resolves.toEqual({
+    requestId: "rename",
+    applied: true,
+  })
+  expect(request).toHaveBeenCalledWith("conversation.rename", {
+    conversationId,
+    requestId: "rename",
+    title: "Lisbon in May",
+  })
+  // The gateway decides what a title may be: the client sends it unaltered.
+  await api.rename(conversationId, " two  spaces ", { requestId: "again" })
+  expect(request.mock.calls.at(-1)![1]).toEqual({
+    conversationId,
+    requestId: "again",
+    title: " two  spaces ",
+  })
+  // Refused before anything is sent, as every control's target is.
+  expect(() => api.rename("not-a-uuid", "Lisbon")).toThrow(TypeError)
+  // An answer for another request is not this rename's.
+  request.mockResolvedValueOnce({ requestId: "other", applied: true })
+  await expect(api.rename(conversationId, "Lisbon")).rejects.toThrow()
 })
 it("stops the named turn without closing the attachment", async () => {
   const request = vi.fn(async () => ({

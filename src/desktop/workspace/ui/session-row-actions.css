@@ -1,0 +1,21 @@
+/*
+ * The title being renamed (`session-row-actions.tsx`): the kit's Input held
+ * to the title's own line and type, so the row does not move when it opens.
+ * It reaches a few pixels past the words on each side for its edge.
+ */
+.workspace-rename {
+  height: 22px;
+  margin: -2px -6px;
+  padding: 0 5px;
+  border-radius: 6px;
+  background: var(--background);
+  font: inherit;
+  letter-spacing: inherit;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+/* The title's line clips its words; the field's edge and ring reach past it. */
+.desktop-list-row-label:has(> .workspace-rename) {
+  overflow: visible;
+}

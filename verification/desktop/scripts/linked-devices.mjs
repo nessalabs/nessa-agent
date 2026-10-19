@@ -124,6 +124,7 @@ function scriptedGateway(scenario) {
     "pairing.approve",
     "pairing.deny",
     "pairing.setLinking",
+    "workspace.publish",
   ])
 
   function reply(method, params, publish) {
@@ -137,6 +138,9 @@ function scriptedGateway(scenario) {
         ok: true,
         payload: { ok: true, runtimeStatus: "ready", uptimeMs: 1 },
       }
+    // The window tells the gateway what it shows; held as sent.
+    if (method === "workspace.publish")
+      return { ok: true, payload: { revision: params.revision, applied: true } }
     // The workspace follows the (empty) list; its frame is sent by `route`.
     if (method === "conversation.subscribeList") {
       subscriptions += 1

@@ -3,8 +3,8 @@ import { test } from "node:test"
 
 import { css, selectorFor } from "./selectors.mjs"
 import {
-  createdStressConversation,
   openStressConversation,
+  selectedStressConversation,
 } from "./stress-conversation.mjs"
 
 const title = "stress reply r1 aside s1"
@@ -76,26 +76,64 @@ test("an absent identity cannot open another conversation with the same title", 
   assert.deepEqual(window.waits, [])
 })
 
-test("a retained title cannot satisfy creation before the new frame arrives", () => {
-  const prior = { conversationId: earlier, title }
-  const fresh = { conversationId: intended, title }
-  const previousIds = new Set([earlier])
-  assert.equal(createdStressConversation([prior], title, previousIds), undefined)
+/** The selected row reflects the focused pane, independent of list order/title. */
+function listedWindow(rows) {
+  return {
+    locator(selector, options = {}) {
+      return {
+        async evaluateAll(read) {
+          const matching = rows.filter(
+            (row) =>
+              (selector === css.sessionListRow ||
+                (selector === css.selectedSessionListRow && row.selected)) &&
+              (!options.hasText || row.title.includes(options.hasText)),
+          )
+          return read(
+            matching.map((row) => ({
+              getAttribute(name) {
+                assert.equal(name, "data-session-row")
+                return row.id
+              },
+            })),
+          )
+        },
+      }
+    },
+  }
+}
+
+test("Home's focused selected identity wins over another engine's same title", async () => {
   for (const rows of [
-    [prior, fresh],
-    [fresh, prior],
+    [
+      { id: earlier, title },
+      { id: intended, title, selected: true },
+    ],
+    [
+      { id: intended, title, selected: true },
+      { id: earlier, title },
+    ],
   ])
-    assert.equal(createdStressConversation(rows, title, previousIds), intended)
-  assert.equal(
-    createdStressConversation(
-      [fresh, { conversationId: "another", title }],
-      title,
-      previousIds,
-    ),
-    undefined,
-  )
-  assert.equal(
-    createdStressConversation([fresh], "another title", previousIds),
-    undefined,
-  )
+    assert.equal(await selectedStressConversation(listedWindow(rows), title), intended)
+})
+
+test("delayed Home publication cannot use the previously listed same-title row", async () => {
+  const rows = [{ id: earlier, title }]
+  const page = listedWindow(rows)
+  assert.equal(await selectedStressConversation(page, title), null)
+  rows.push({ id: intended, title, selected: true })
+  assert.equal(await selectedStressConversation(page, title), intended)
+})
+
+test("missing, ambiguous or differently titled Home selection supplies no identity", async () => {
+  for (const rows of [
+    [],
+    [{ id: earlier, title }],
+    [{ id: intended, title: "another conversation", selected: true }],
+    [{ id: null, title, selected: true }],
+    [
+      { id: earlier, title, selected: true },
+      { id: intended, title, selected: true },
+    ],
+  ])
+    assert.equal(await selectedStressConversation(listedWindow(rows), title), null)
 })

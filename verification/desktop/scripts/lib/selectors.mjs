@@ -165,6 +165,7 @@ export const css = {
   listScroll: ".workspace-list-scroll", // class: the session list's scroller
   listEmptyAction: ".workspace-list-empty button", // the empty list's New Session, the kit's tinted pill
   sessionListRow: ".workspace-list [data-session-row]", // a row of the session list, not a sidebar thread
+  selectedSessionListRow: '.workspace-list [data-session-row][aria-selected="true"]', // the conversation the focused pane actually shows
   sessionRow: "[data-drag-item]", // a session a drag can carry to a pane
   sidebarEdge: '[role="separator"][aria-label="Resize Sidebar"]',
 
@@ -253,6 +254,7 @@ export const css = {
   settingsHeading: "#settings-heading", // the open category's name
   settingsTab: '.settings-tabs [role="tab"]',
   settingsPanel: "#settings-panel", // the open tab's page
+  settingsLinkedDevices: '#settings-panel [data-setting="linked-devices"]', // Linked devices, as its tab draws it
   settingsCard: '[data-slot="settings-group-card"]', // the UI kit's card on a Settings page, which what it holds must lie inside
   settingsFormCard: ".settings-card", // class: a card Settings draws itself (Integrations' form and inspection), there only while open
   settingsGroupHeading: ".settings-group > h2", // class: a group's heading on a Settings page
@@ -294,6 +296,8 @@ export const css = {
   shareHosts: "[data-share-hosts]", // the Drive grant's host list
   shareHostCount: '[data-share-hosts] [data-slot="checkbox-list-count"]',
   shareNotes: "[data-share-notes]", // what a tool policy does not stop
+  shareEmpty: '[data-share-targets="none"]', // the one line drawn when no device is linked
+  shareLinkDevice: '[data-share-action="link-device"]', // that line's link to Settings › Linked devices
   shareReason: "[data-share-reason]", // why Share cannot send yet: this-session | another-session, or the draft's reason (changed, …)
   mcpServers: "[data-mcp-servers]", // the tab; its value: loading | listed | not-configured | failed | too-large | not-admin
   mcpRow: "[data-mcp-server]", // a server's row; its value is the server's name

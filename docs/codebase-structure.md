@@ -1037,8 +1037,8 @@ A summary holds each conversation's title, last line said and time, derived by
 `domain/value_objects/conversation_summary.rs` — the one
 owner of those rules — when a message is accepted and when a reply completes. A
 summary is a projection, so a failed write is logged and the command stands; the
-`archived` flag it also carries is a person's decision, so `archive`/`unarchive`
-fail visibly instead. `delete` is a consequential transition: a tombstone the
+`archived` flag it also carries, and a title a person renamed it to, are a
+person's decisions, so `archive`/`unarchive` and `rename` fail visibly instead. `delete` is a consequential transition: a tombstone the
 repository owns (a `deletions` row) fences the identity before the agent
 is stopped, a `ConversationDeletionAudit` record (`infrastructure/deletion_audit.rs`,
 `audit/deletion/`) is committed before history is erased, and the SDK record history is

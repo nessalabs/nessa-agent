@@ -578,6 +578,9 @@ const bounds = {
     schema.$defs.ConversationSummary.properties.title["x-utf8MaxBytes"],
     schema.$defs.ConversationView.properties.title["x-utf8MaxBytes"],
   ]),
+  // What a person may rename a conversation to, counted in code points.
+  maxConversationRenameCharacters:
+    schema.$defs.ConversationRenameParams.properties.title.maxLength,
   maxConversationPreviewBytes:
     schema.$defs.ConversationSummary.properties.preview["x-utf8MaxBytes"],
   maxSyncIdBytes: schema.$defs.RecordScope.properties.receiver["x-utf8MaxBytes"],

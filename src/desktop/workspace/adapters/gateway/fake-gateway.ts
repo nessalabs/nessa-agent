@@ -79,6 +79,8 @@ type Method =
   | "setModel"
   | "read"
   | "archive"
+  | "rename"
+  | "delete"
   | "permissionRules"
   | "revokePermissionRule"
 
@@ -680,6 +682,23 @@ export function fakeGateway(
         answer("archive", args, () => {
           rows.delete(args[0])
           return { requestId: "archive", applied: true }
+        }) as never,
+      // As the gateway: the row and the open view take the title, and the
+      // title it already had is not applied.
+      rename: (...args) =>
+        answer("rename", args, () => {
+          const [conversationId, title] = args
+          const row = rows.get(conversationId)
+          if (!row || row.title === title) return { requestId: "rename", applied: false }
+          rows.set(conversationId, { ...row, title })
+          const view = views.get(conversationId)
+          if (view) views.set(conversationId, { ...view, title })
+          return { requestId: "rename", applied: true }
+        }) as never,
+      delete: (...args) =>
+        answer("delete", args, () => {
+          rows.delete(args[0])
+          return { requestId: "delete", applied: true }
         }) as never,
       permissionRules: () =>
         answer("permissionRules", [], () => ({ requestId: "rules", rules: [] })) as never,

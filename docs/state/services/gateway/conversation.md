@@ -270,3 +270,23 @@ The legacy seeded-order assertion explicitly disables incoming await/fresh work,
 just as it already disabled newer window/linking work; it retains the exact old
 non-model sequence. Initial assembled helper run:41 passed, this one stale
 assertion failed; production planner defaults remain awaits1/fresh2.
+
+### Immutable c011 integration (#975)
+
+| Relationship / ordering | Existing owner and required agreement | Evidence |
+| --- | --- | --- |
+| Home send followed by row publication | Incoming selectedStressConversation reads the focused window's one selected matching row. It supersedes the earlier list/title-created helper; engine-specific intent remains a caller hint. Keep the selected ID for settlement and the rest sweep, with the original30-second discovery and three-client/24-create load | Incoming selected/delayed/same-title/ambiguous helper controls; current assembled browser qualification pending |
+| Rename and model control share the product contract | Union both manifest methods; the existing generator derives78ready methods from79manifest entries minus handshake. Preserve rename48-codepoint/192-byte bound, exact model effect/receipt types and current enum serialization | Owner regeneration, protocol/client checks and current assembled gateway qualification pending |
+| Rename/delete source updates beside retained configuration | Incoming summary/row-editing/list-frame/deletion owners remain authoritative; model/preset journal, recovery and SDK effort/native configuration owners remain unchanged | Source equivalence and affected server/frontend qualification pending |
+| Stress runs current defaults and followers | Preserve renames1/deletes1/awaits1/fresh2/windows1/linkings1 and modelSwitches1, model-last Ask, original review/draft/Stop and strict shared restart ownership. Only confirmed UI deletion lets the existing follower owner forget that conversation | Current helper/planner checks and finite both-engine default/raised/chaos qualification pending |
+
+The73fab integration above is historical: its completed author qualification is
+retained at74ba and reviewed at5bdd. Its fresh-title discovery is superseded by
+the incoming selected-row owner here. This integration has no runtime evidence
+until its exact merged source, new UI pin and rebuilt gateway are qualified.
+
+The first c011 pure helper run passes68 and fails the single legacy seeded-order
+fixture: that fixture excludes newer default work to hold the old exact sequence
+but had not excluded incoming rename/delete work. Its setup now names renames0
+and deletes0 alongside awaits/fresh/windows/linkings0; the exact order assertion
+and production rename/delete defaults remain unchanged.

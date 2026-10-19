@@ -110,6 +110,10 @@
       "params": "ConversationArchiveParams",
       "grant": "conversation.write"
     },
+    "conversation.rename": {
+      "params": "ConversationRenameParams",
+      "grant": "conversation.write"
+    },
     "conversation.delete": {
       "params": "ConversationDeleteParams",
       "grant": "conversation.write"

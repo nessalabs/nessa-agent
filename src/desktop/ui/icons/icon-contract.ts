@@ -57,6 +57,8 @@ const desktopRoles = [
   "channel",
   "privateChannel",
   "needsYou",
+  "archive",
+  "delete",
   // Composer
   "send",
   "stop",

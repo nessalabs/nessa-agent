@@ -1,4 +1,5 @@
 import {
+  Archive,
   ArrowLeft,
   ArrowRight,
   ArrowUp,
@@ -43,6 +44,7 @@ import {
   Square,
   SquarePen,
   SquareTerminal,
+  Trash2,
   X,
   Zap,
   type LucideIcon,
@@ -87,6 +89,8 @@ export const lucideIcons: DesktopIconFamily = {
   channel: lucide(Hash),
   privateChannel: lucide(Lock),
   needsYou: lucide(ShieldAlert),
+  archive: lucide(Archive),
+  delete: lucide(Trash2),
 
   send: lucide(ArrowUp),
   stop: lucide(Square),
