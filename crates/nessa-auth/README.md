@@ -129,10 +129,14 @@ consumer owns its application framing, listener and action admission.
 Private acknowledgement compares bytes and named identity against the original
 published file. Restart uses a writable existing-file handle, reflushes and
 reconciles under the original directory/lock. No acknowledgement manufactures a
-missing canonical file. Public adapter tests cover exact intent, same-save retry and restart. Direct
-original-handle failed acknowledgement and writable-helper reflush evidence are
-withdrawn; their source contracts remain with the shared storage owner. Supported
-platform consumer gates are required independently of shared storage tests.
+missing canonical file. Public adapter tests cover exact intent, same-save retry
+and restart. The synthetic `private_state/recovery_tests.rs` cases retain real
+published handles to test live identity/byte refusal and writable restart reflush;
+decomposed failure observations also exercise consumer dispatch with those real
+published handles. They do not inject a failed native acknowledgement through a
+public save. Shared storage tests own the native post-rename failure fact. The
+C324 table in the design records these boundaries.
+Supported platform consumer gates are required independently of shared storage tests.
 
 Target and current producer disposition: [device pairing](../../docs/design/auth/device-pairing.md).
 
