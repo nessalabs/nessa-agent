@@ -412,4 +412,108 @@ describe("same-provider model choices", () => {
     expect(modelChanging(store.getState().workspace, "a")).toBe(false)
     expect(store.getState().workspace.composerText.a).toBe("still mine")
   })
+
+  it("permits deliberate recovery after uncertainty with a retained Changing journal", async () => {
+    const { source, store } = await ready()
+    let calls = 0
+    source.setModel = async (_id, model, id) => {
+      calls++
+      if (calls === 1) {
+        source.emit({
+          kind: "transcript",
+          transcript: {
+            ...emptyTranscript("a"),
+            revision: 2,
+            modelControl: {
+              pending: {
+                requestId: id,
+                requestedModel: model.modelId,
+                status: "changing",
+              },
+            },
+          },
+        })
+        throw new WorkspaceModelError("unavailable", true)
+      }
+      return { ...receipt(id), sourceReconciled: false }
+    }
+    store.dispatch(setComposerText({ sessionId: "a", text: "keep draft" }))
+    await store.dispatch(changeModel({ sessionId: "a", model: next }))
+    await settle()
+    expect(store.getState().workspace.modelChoices.a?.state).toBe("recovery_required")
+    expect(modelChanging(store.getState().workspace, "a")).toBe(true)
+    expect(
+      await store.dispatch(
+        sendMessage({ sessionId: "a", text: "keep draft", initiator: "person" }),
+      ),
+    ).toBe("not-asked")
+    await store.dispatch(changeModel({ sessionId: "a", model: next }))
+    expect(calls).toBe(2)
+    expect(store.getState().workspace.composerText.a).toBe("keep draft")
+    expect(modelChanging(store.getState().workspace, "a")).toBe(true)
+  })
+
+  it("keeps an outstanding local call disabled under a Changing frame", async () => {
+    const { source, store } = await ready()
+    let done!: (value: ModelReceipt) => void
+    let id = ""
+    let calls = 0
+    source.setModel = async (_session, model, requestId) => {
+      calls++
+      id = requestId
+      source.emit({
+        kind: "transcript",
+        transcript: {
+          ...emptyTranscript("a"),
+          revision: 2,
+          modelControl: {
+            pending: { requestId, requestedModel: model.modelId, status: "changing" },
+          },
+        },
+      })
+      return new Promise<ModelReceipt>((resolve) => {
+        done = resolve
+      })
+    }
+    const first = store.dispatch(changeModel({ sessionId: "a", model: next }))
+    await settle()
+    expect(modelRequesting(store.getState().workspace, "a")).toBe(true)
+    await store.dispatch(changeModel({ sessionId: "a", model: next }))
+    expect(calls).toBe(1)
+    done(receipt(id))
+    await first
+  })
+
+  it.each([next, opus])(
+    "permits a deliberate %j check in a fresh window with retained Changing",
+    async (target) => {
+      const { source, store } = await ready()
+      let calls = 0
+      source.setModel = async (_id, _model, id) => {
+        calls++
+        return receipt(id)
+      }
+      source.emit({
+        kind: "transcript",
+        transcript: {
+          ...emptyTranscript("a"),
+          revision: 2,
+          modelControl: {
+            pending: {
+              requestId: "retained-request",
+              requestedModel: next.modelId,
+              status: "changing",
+            },
+          },
+        },
+      })
+      await settle()
+      expect(store.getState().workspace.modelChoices.a).toBeUndefined()
+      expect(modelRequesting(store.getState().workspace, "a")).toBe(false)
+      expect(modelChanging(store.getState().workspace, "a")).toBe(true)
+      await store.dispatch(changeModel({ sessionId: "a", model: target }))
+      expect(calls).toBe(1)
+      expect(modelChanging(store.getState().workspace, "a")).toBe(true)
+    },
+  )
 })

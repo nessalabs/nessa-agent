@@ -111,6 +111,15 @@ describe("same-provider gateway control", () => {
     expect(gateway.count("setModel")).toBe(0)
     source.dispose()
   })
+  it("does not dispatch a native setting without a fresh applied source frame", async () => {
+    const { gateway, source } = await ready()
+    gateway.once("subscribe", () =>
+      Promise.reject(new NessaRpcError("unavailable", "no frame")),
+    )
+    await expect(source.setModel("a", next, "request", "person")).rejects.toBeDefined()
+    expect(gateway.count("setModel")).toBe(0)
+    source.dispose()
+  })
   it("preserves an uncertain control when its final reconciliation read also fails", async () => {
     const { gateway, source } = await ready()
     gateway.once("setModel", () => {
@@ -133,25 +142,30 @@ describe("same-provider gateway control", () => {
     expect(gateway.count("setModel")).toBe(1)
     source.dispose()
   })
-  it("does not ask native while an authoritative reconciliation still requires recovery", async () => {
-    const { gateway, source } = await ready()
-    gateway.views.set(
-      "a",
-      view("a", {
-        runtime,
-        modelChange: {
-          requestId: "prior",
-          requestedModel: next.modelId,
-          status: "recovery_required",
+  it.each(["changing", "recovery_required"] as const)(
+    "does not ask native while authoritative reconciliation retains %s",
+    async (status) => {
+      const { gateway, source } = await ready()
+      gateway.views.set(
+        "a",
+        view("a", {
+          runtime,
+          modelChange: {
+            requestId: "prior",
+            requestedModel: next.modelId,
+            status,
+          },
+        }),
+      )
+      await expect(source.setModel("a", next, "request", "person")).rejects.toMatchObject(
+        {
+          uncertain: true,
         },
-      }),
-    )
-    await expect(source.setModel("a", next, "request", "person")).rejects.toMatchObject({
-      uncertain: true,
-    })
-    expect(gateway.count("setModel")).toBe(0)
-    source.dispose()
-  })
+      )
+      expect(gateway.count("setModel")).toBe(0)
+      source.dispose()
+    },
+  )
   it("reports a reconciled receipt only after the fresh source frame, including a newer controller model", async () => {
     const { gateway, source } = await ready()
     const other = "claude-fable-5-1"

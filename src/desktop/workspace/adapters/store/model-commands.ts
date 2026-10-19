@@ -25,17 +25,13 @@ export function modelChanging(state: WorkspaceState, sessionId: string): boolean
   )
 }
 
-/** Only an active call or live changing frame holds another deliberate pick.
+/** Only an active local call or access change holds another deliberate pick.
  * Recovery-required picks first reconcile in the source; Send stays fenced.
  */
 export function modelRequesting(state: WorkspaceState, sessionId: string): boolean {
   const choice = entry(state.modelChoices, sessionId)
   const source = entry(state.transcripts, sessionId)
-  return (
-    choice?.state === "asking" ||
-    source?.modelControl?.pending?.status === "changing" ||
-    !!source?.access?.changing
-  )
+  return choice?.state === "asking" || !!source?.access?.changing
 }
 
 export function changeModel({
