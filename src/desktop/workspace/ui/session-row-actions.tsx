@@ -21,15 +21,20 @@ import {
 } from "../adapters/store/commands"
 import { useWorkspaceDispatch, useWorkspaceSelector } from "../adapters/store/hooks"
 import { selectDeleteAsked, selectRenameDraft } from "../adapters/store/selectors"
+import { focusRowPlace, rowPlace, type RowPlace } from "./row-focus"
 import "./session-row-actions.css"
 
 export interface SessionRowActions {
+  /** On the row itself: where its menus give focus back to. */
+  readonly ref: (node: HTMLElement | null) => void
   /** For the row's `SessionMenuItems`. */
   readonly items: { readonly onRename: () => void; readonly onDelete: () => void }
+  /** For each menu the row opens (`onOpenChange`). */
+  readonly onMenuOpen: (open: boolean) => void
   /**
    * For each menu the row opens (`onCloseAutoFocus`): a menu closing on
-   * Rename or Delete leaves focus to the field or the confirmation rather
-   * than handing it back to the row.
+   * Rename or Delete leaves focus to the field or the confirmation; one
+   * whose row went while it was open gives focus past it (`row-focus.ts`).
    */
   readonly onCloseAutoFocus: (event: Event) => void
   /** Whether the title is being edited: the row then answers no click or key of its own. */
@@ -38,6 +43,10 @@ export interface SessionRowActions {
   readonly title: (title: string) => ReactNode
 }
 
+// The place of the row the delete question was asked from: focus goes back
+// there, or past it once deleted, when the question closes.
+let deleteFrom: RowPlace | null = null
+
 export function useSessionRowActions(sessionId: string): SessionRowActions {
   const dispatch = useWorkspaceDispatch()
   const draft = useWorkspaceSelector((state) => selectRenameDraft(state, sessionId))
@@ -45,7 +54,13 @@ export function useSessionRowActions(sessionId: string): SessionRowActions {
   // confirmation's trap take focus themselves, and the menu handing it back
   // to its button would take it from them.
   const handOff = useRef(false)
+  const node = useRef<HTMLElement | null>(null)
+  // As a menu opens: the row's place, and where focus was.
+  const opened = useRef<{ place: RowPlace | null; from: Element | null } | null>(null)
   return {
+    ref: (next) => {
+      node.current = next
+    },
     items: {
       onRename: () => {
         handOff.current = true
@@ -53,13 +68,35 @@ export function useSessionRowActions(sessionId: string): SessionRowActions {
       },
       onDelete: () => {
         handOff.current = true
+        deleteFrom = opened.current?.place ?? rowPlace(node.current)
         dispatch(deleteAsked({ sessionId }))
       },
     },
+    onMenuOpen: (open) => {
+      if (open)
+        opened.current = {
+          place: rowPlace(node.current),
+          from: node.current?.ownerDocument.activeElement ?? null,
+        }
+    },
     onCloseAutoFocus: (event) => {
-      if (!handOff.current) return
-      handOff.current = false
+      const asked = opened.current
+      opened.current = null
+      if (handOff.current) {
+        handOff.current = false
+        event.preventDefault()
+        return
+      }
+      // The row went while its menu was open: focus that was elsewhere goes
+      // back there, and focus that was in the row goes past it.
+      if (!asked || asked.place?.node.isConnected !== false) return
+      const elsewhere =
+        asked.from?.isConnected === true &&
+        asked.from !== asked.from.ownerDocument.body &&
+        !asked.place.list.contains(asked.from)
+      if (elsewhere) return
       event.preventDefault()
+      focusRowPlace(asked.place)
     },
     renaming: draft !== null,
     title: (title) =>
@@ -152,9 +189,6 @@ function RenameField({
 export function DeleteSessionHost() {
   const dispatch = useWorkspaceDispatch()
   const sessionId = useWorkspaceSelector(selectDeleteAsked)
-  // Where focus goes once the question closes on Delete: the row beside the
-  // one deleted, chosen as Delete is pressed, while that row is still drawn.
-  const after = useRef<string | null>(null)
   if (sessionId === null) return null
   const close = () => dispatch(deleteClosed())
   return (
@@ -164,13 +198,13 @@ export function DeleteSessionHost() {
         if (!next) close()
       }}
       // It was asked from a menu that is gone, whose opener may be a
-      // pointer's button the keys cannot use: focus goes to the row asked
-      // about instead, or past it once deleted, so the list keeps its keys.
+      // pointer's button the keys cannot use: focus goes to the row it was
+      // asked from instead, or past it once deleted, so the list keeps its keys.
       onCloseAutoFocus={(event) => {
         event.preventDefault()
-        const row = rowOf(after.current ?? sessionId)
-        after.current = null
-        row?.focus({ preventScroll: true })
+        const place = deleteFrom
+        deleteFrom = null
+        focusRowPlace(place)
       }}
       size="sm"
       title="Delete this session?"
@@ -186,7 +220,6 @@ export function DeleteSessionHost() {
             variant="destructive"
             data-delete-action="confirm"
             onClick={() => {
-              after.current = neighbourOf(sessionId)
               close()
               void dispatch(deleteSession({ sessionId, initiator: "person" }))
             }}
@@ -197,33 +230,4 @@ export function DeleteSessionHost() {
       }
     />
   )
-}
-
-/** A session's row, wherever a list shows it first. */
-function rowOf(sessionId: string): HTMLElement | null {
-  return document.querySelector<HTMLElement>(
-    `[data-session-row="${CSS.escape(sessionId)}"]`,
-  )
-}
-
-/**
- * The session whose row takes focus when this one's goes: the row after it,
- * or the one before when it was the last, so the keys keep their place.
- */
-function neighbourOf(sessionId: string): string | null {
-  const row = rowOf(sessionId)
-  const rows = [
-    ...(row
-      ?.closest('[role="listbox"]')
-      ?.querySelectorAll<HTMLElement>("[data-session-row]") ?? []),
-  ]
-  const at = row ? rows.indexOf(row) : -1
-  if (at === -1) return null
-  return (rows[at + 1] ?? rows[at - 1])?.getAttribute("data-session-row") ?? null
-}
-
-/** Focus was in a row that is about to go: it moves to its neighbour (`neighbourOf`). */
-export function focusNeighbour(sessionId: string) {
-  const next = neighbourOf(sessionId)
-  if (next !== null) rowOf(next)?.focus()
 }

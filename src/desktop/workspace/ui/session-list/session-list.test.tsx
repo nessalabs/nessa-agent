@@ -10,7 +10,6 @@ import { Provider } from "react-redux"
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import { ClockProvider } from "../../../../clock"
 import {
-  deleteAsked,
   followWorkspace,
   loadWorkspace,
   renameStarted,
@@ -238,11 +237,7 @@ it("a More menu closed on an item that asks nothing more gives focus to its row,
   await shown(source)
   const { row, id } = quietRow()
   await more(row)
-  await press(
-    [...document.querySelectorAll("[role=menuitem]")].find(
-      (item) => item.textContent?.trim() === "Pin to Sidebar",
-    ) ?? null,
-  )
+  await choose("Pin to Sidebar")
   expect(menuWords()).toEqual([])
   await focusSettled((row) => expect(row).toBe(id))
 })
@@ -288,13 +283,29 @@ it("a rename outlives its row being drawn again in another group", async () => {
   expect(source.calls.some((call) => call[0] === "rename")).toBe(false)
 })
 
+/** Chooses `name` in the open menu. */
+async function choose(name: string) {
+  await press(
+    [...document.querySelectorAll("[role=menuitem]")].find(
+      (item) => item.textContent?.trim() === name,
+    ) ?? null,
+  )
+}
+
+/** The row focus is on, if it is one of this list's. */
+const focusedHere = () =>
+  host.contains(document.activeElement)
+    ? document.activeElement?.getAttribute("data-session-row")
+    : undefined
+
 it("Delete asks first: Cancel deletes nothing, Delete deletes, and keys in it stay in it", async () => {
   const source = fakeSource()
   const store = await shown(source)
-  const { id } = quietRow()
+  const { row, id } = quietRow()
   const focused = selectFocusedSessionId(store.getState())
   const dialog = () => document.querySelector("[data-delete-session]")
-  await act(async () => store.dispatch(deleteAsked({ sessionId: id })))
+  await more(row)
+  await choose("Delete…")
   expect(dialog()?.textContent).toContain("Delete this session?")
   // ↓ in the question walks nothing in the list behind it.
   await act(async () => {
@@ -314,7 +325,8 @@ it("Delete asks first: Cancel deletes nothing, Delete deletes, and keys in it st
   // Focus comes back to the row asked about, where the list's keys work.
   await focusSettled((row) => expect(row).toBe(id))
 
-  await act(async () => store.dispatch(deleteAsked({ sessionId: id })))
+  await more(row)
+  await choose("Delete…")
   await press(dialog()?.querySelector('[data-delete-action="confirm"]') ?? null)
   expect(dialog()).toBeNull()
   expect(source.calls).toContainEqual(["delete", id, "person"])
@@ -324,4 +336,52 @@ it("Delete asks first: Cancel deletes nothing, Delete deletes, and keys in it st
     expect(now).toBeTruthy()
     expect(now).not.toBe(id)
   })
+})
+
+it("Archive from the More menu hands focus to the row that takes its place", async () => {
+  const source = fakeSource()
+  await shown(source)
+  const { row, id } = quietRow()
+  const rows = [...host.querySelectorAll<HTMLElement>("[data-session-row]")]
+  const after = rows[rows.indexOf(row) + 1] ?? rows[rows.indexOf(row) - 1]
+  const next = after?.getAttribute("data-session-row")
+  await more(row)
+  await choose("Archive")
+  expect(source.calls).toContainEqual(["archive", id, "person"])
+  await focusSettled(() => expect(focusedHere()).toBe(next))
+})
+
+it("a focused row archived by its button hands focus to the row that takes its place", async () => {
+  const source = fakeSource()
+  await shown(source)
+  const { row, id } = quietRow()
+  const rows = [...host.querySelectorAll<HTMLElement>("[data-session-row]")]
+  const next = (rows[rows.indexOf(row) + 1] ?? rows[rows.indexOf(row) - 1])?.getAttribute(
+    "data-session-row",
+  )
+  await act(async () => row.focus())
+  await press(row.querySelector('[data-session-action="archive"]'))
+  expect(source.calls).toContainEqual(["archive", id, "person"])
+  await focusSettled(() => expect(focusedHere()).toBe(next))
+})
+
+it("focus given back after a delete stays in the list it was asked from, though another list shows the same session", async () => {
+  const source = fakeSource()
+  await shown(source)
+  const { row, id } = quietRow()
+  // The sidebar's row for the same session, earlier in the document.
+  const elsewhere = document.createElement("button")
+  elsewhere.setAttribute("data-session-row", id)
+  document.body.prepend(elsewhere)
+  try {
+    await more(row)
+    await choose("Delete…")
+    await press(document.querySelector('[data-delete-action="confirm"]'))
+    await focusSettled(() => {
+      expect(focusedHere()).toBeTruthy()
+      expect(focusedHere()).not.toBe(id)
+    })
+  } finally {
+    elsewhere.remove()
+  }
 })

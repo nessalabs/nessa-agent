@@ -848,9 +848,11 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     connected: GatewayClient,
     result: ConversationListResult,
     current: () => boolean,
+    // What was on its way as the frame came; a walk owed again keeps them,
+    // since the frame was read no later than then.
+    crossed = new Set(archiving),
+    crossedRenames = new Map(renaming),
   ) => {
-    const crossed = new Set(archiving)
-    const crossedRenames = new Map(renaming)
     const mine = ++listFrames
     const { settled } = inTurn(listing, async () => {
       // A frame is a replacement: one queued behind a walk gives way to the
@@ -884,7 +886,7 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
           // unapplied, a gap, and the walk is owed to the retry clock, as an
           // open that failed is (D18, D17).
           apply(result)
-          unwalked = () => listFrame(connected, result, current)
+          unwalked = () => listFrame(connected, result, current, crossed, crossedRenames)
           gap = true
           settle(list, { error })
           scheduleRetry()
@@ -1583,10 +1585,11 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     // again with the new one at once, and the frames after it agree.
     rename: (sessionId, typed) =>
       within(async (live) => {
-        // Nothing left to call it, or what it is called already: the title
-        // stays as it was, and nobody is asked.
+        // Nothing left to call it, or what it is called already, or will be
+        // once the rename on its way is stored: nobody is asked.
         const title = conversationTitle(typed)
-        if (title === null || title === rows.get(sessionId)?.title) return
+        const called = renaming.get(sessionId)?.title ?? rows.get(sessionId)?.title
+        if (title === null || title === called) return
         const asked = { title, stored: false }
         renaming.set(sessionId, asked)
         const { turn, settled } = inTurn(listing, async () => {

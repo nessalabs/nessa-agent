@@ -27,7 +27,8 @@ Checks, per engine:
             keeps it
   delete    Delete… asks first; Cancel deletes nothing and the menu opens
             again after it; Delete removes the row
-  archive   the Archive button archives the row and does not open it
+  archive   the Archive button archives the row and does not open it; Archive
+            from the menu hands focus to the row in its place
   swipe     two fingers left uncover Archive and Delete without opening the
             row; Delete asks once more in place, then removes the row; a long
             swipe archives; a mouse drag moves nothing and right-click is the
@@ -162,11 +163,22 @@ Checks, per engine:
         await row.locator('[data-session-action="archive"]').click()
         await rowById(page, id).waitFor({ state: "detached", timeout: 3_000 })
         const after = await openId(page)
-        return {
-          failures: [after === before ? null : `the open session became ${after}`].filter(
-            Boolean,
-          ),
-        }
+        const failures = [after === before ? null : `the open session became ${after}`]
+
+        // Archived from its menu, the row hands focus to the one now in its
+        // place, in this list, so the keys go on from there.
+        const next = await quietRow(page)
+        const nextId = await next.getAttribute("data-session-row")
+        await openMore(page, next)
+        await page.getByRole("menuitem", { name: "Archive" }).click()
+        await rowById(page, nextId).waitFor({ state: "detached", timeout: 3_000 })
+        const focused = await waitFocusedRow(
+          page,
+          (now) => now !== null && now !== nextId,
+        )
+        if (focused === null || focused === nextId)
+          failures.push(`after Archive from the menu, focus was on ${focused}, not a row`)
+        return { failures: failures.filter(Boolean) }
       })
 
       await check("swipe", async (page) => {
@@ -355,10 +367,12 @@ async function waitText(locator, want) {
   }
 }
 
-/** The session whose row holds focus, or `null`. */
+/** The session whose row in the session list holds focus, or `null`. */
 function focusedRow(page) {
-  return page.evaluate(
-    () => document.activeElement?.getAttribute("data-session-row") ?? null,
+  return page.evaluate(() =>
+    document.activeElement?.closest(".workspace-list")
+      ? document.activeElement.getAttribute("data-session-row")
+      : null,
   )
 }
 

@@ -53,9 +53,10 @@ export const ThreadRow = memo(function ThreadRow({
   if (!session) return null
   return (
     <li>
-      <ContextMenu>
+      <ContextMenu onOpenChange={row.onMenuOpen}>
         <ContextMenuTrigger asChild>
           <ListRow
+            ref={row.ref}
             as="button"
             className="workspace-thread-row"
             data-row="session"

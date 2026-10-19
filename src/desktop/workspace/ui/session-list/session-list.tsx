@@ -51,11 +51,8 @@ import {
   DropdownMenuTrigger,
 } from "../../../ui/menu"
 import { knownToSource } from "../../model/revision"
-import {
-  focusNeighbour,
-  useSessionRowActions,
-  type SessionRowActions,
-} from "../session-row-actions"
+import { useRowFocusKept } from "../row-focus"
+import { useSessionRowActions, type SessionRowActions } from "../session-row-actions"
 
 /**
  * The middle column: what the sidebar chose — a channel's sessions, or every
@@ -80,6 +77,7 @@ export const SessionList = memo(function SessionList() {
     sameListGroups,
   )
   const listRef = useRef<HTMLDivElement>(null)
+  useRowFocusKept(listRef, "[data-session-row]")
   const title = channel?.name ?? ""
   const ordered = groups.flatMap((group) => group.ids)
   // One row takes Tab: the open one, or the first when none here is open.
@@ -240,7 +238,7 @@ const SessionRow = memo(function SessionRow({
   const [more, setMore] = useState(false)
   if (!session) return null
   return (
-    <ContextMenu>
+    <ContextMenu onOpenChange={row.onMenuOpen}>
       {/* A two-finger swipe left uncovers Archive and Delete, as Mail's rows
           do. The pointer's drag stays the drag to a pane, and right-click
           stays the row's menu, which holds the same two. */}
@@ -251,14 +249,14 @@ const SessionRow = memo(function SessionRow({
         actions={begun && !row.renaming ? swipeActions : noSwipe}
         mouseDrag={false}
         openOnContextMenu={false}
-        onAction={(id, details) => {
-          if (details.hadFocus) focusNeighbour(session.id)
+        onAction={(id) => {
           const change = { sessionId: session.id, initiator: "person" } as const
           void dispatch(id === "delete" ? deleteSession(change) : archiveSession(change))
         }}
       >
         <ContextMenuTrigger asChild>
           <ListRow
+            ref={row.ref}
             role="option"
             tabIndex={tabStop ? 0 : -1}
             aria-selected={selected}
@@ -290,7 +288,10 @@ const SessionRow = memo(function SessionRow({
                     sessionId={session.id}
                     title={session.title}
                     more={more}
-                    onMore={setMore}
+                    onMore={(next) => {
+                      setMore(next)
+                      row.onMenuOpen(next)
+                    }}
                     items={row.items}
                     onCloseAutoFocus={row.onCloseAutoFocus}
                   />

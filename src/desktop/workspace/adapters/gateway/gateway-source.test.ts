@@ -2779,6 +2779,70 @@ describe("writes", () => {
     expect(titles.slice(titles.indexOf("Rain plan"))).toEqual(["Rain plan"])
   })
 
+  it("a rename back to the title it had, asked while the first is on its way, is asked too", async () => {
+    const { gateway, source, updates, follow } = started()
+    gateway.rows.set(conversationA, row(conversationA))
+    follow()
+    await source.index()
+    const before = (await source.index()).sessions.find(
+      (session) => session.id === conversationA,
+    )?.title
+    updates.length = 0
+    const renamed = deferred<void>()
+    gateway.once("rename", (normal) => renamed.promise.then(normal))
+    const first = source.rename(conversationA, "Rain plan", "person")
+    await flush()
+    const back = source.rename(conversationA, before ?? "", "person")
+    await flush()
+    renamed.resolve()
+    await Promise.all([first, back])
+    await flush()
+    expect(gateway.count("rename")).toBe(2)
+    const titles = updates.flatMap((update) =>
+      update.kind === "session" && update.session.id === conversationA
+        ? [update.session.title]
+        : [],
+    )
+    expect(titles.at(-1)).toBe(before)
+  })
+
+  it("D18: a walk owed again keeps what was on its way as its frame came", async () => {
+    const { gateway, source, updates, follow, advance } = started()
+    for (const id of [conversationA, conversationB, "c", "d"])
+      gateway.rows.set(id, row(id, { updatedAtMs: id.charCodeAt(0) * 1_000 }))
+    gateway.listLimit = 2
+    gateway.observePageSize = 10
+    follow()
+    await source.index()
+    // Listed first of all, so every frame read before its archive names it.
+    const newest = [...gateway.rows.values()].sort(
+      (one, other) => other.updatedAtMs - one.updatedAtMs,
+    )[0].conversationId
+    const archived = deferred<void>()
+    gateway.once("archive", (normal) => archived.promise.then(normal))
+    const archiving = source.archive(newest, "person")
+    await flush()
+    // A frame read before the archive was stored, whose walk fails.
+    gateway.once("observe", () => Promise.reject(rpcCode("unavailable")))
+    gateway.publishList()
+    await flush()
+    archived.resolve()
+    await archiving
+    await flush()
+    updates.length = 0
+    // Walked again once the archive is stored: a page that cannot resume
+    // keeps the frame's rows, which still name it.
+    gateway.once("observe", () => Promise.resolve({ conversations: [], complete: false }))
+    await advance(timing.retryMs)
+    await flush()
+    expect(
+      updates.some((update) => update.kind === "session" && update.session.id === newest),
+    ).toBe(false)
+    expect((await source.index()).sessions.map((session) => session.id)).not.toContain(
+      newest,
+    )
+  })
+
   it("a rename of a session taken out is refused as unknown and asks nobody", async () => {
     const { gateway, source, follow } = started()
     gateway.rows.set(conversationA, row(conversationA))
