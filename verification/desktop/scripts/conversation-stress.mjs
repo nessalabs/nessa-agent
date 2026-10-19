@@ -468,16 +468,18 @@ const prompt = (run, phrase, step, extra = "") =>
 async function startedBeside(run, client, step, n, failures) {
   const conversationId = randomUUID()
   const first = prompt(run, STRESS.reply, step, ` burst ${n}`)
-  run.checked.push(conversationId)
   try {
     await client.conversation.create({ conversationId, agent: run.stack.agent })
     await client.conversation.submit(client.conversation.prepare(conversationId, first))
   } catch (error) {
+    // Already a failure; a refused start has no turn for the rest check to
+    // wait a minute on.
     failures.push(
       `a conversation started beside the window's was refused: ${explain(error)}`,
     )
     return
   }
+  run.checked.push(conversationId)
   await settled(
     { ...run, client },
     conversationId,

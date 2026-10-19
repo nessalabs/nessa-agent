@@ -10,7 +10,9 @@
 //! and protocol text, provider diagnostics, hook messages, paths, policy and
 //! agent ids — only names, typed reasons and numbers.
 
-use crate::conversation::application::{ConversationError, DeletionFailures, StopFailure};
+use crate::conversation::application::{
+    ConversationError, DeletionFailures, McpAppError, StopFailure,
+};
 use nessa_sdk::application::agent_execution::{
     agents::AgentError,
     hooks::{HookError, HookFailure},
@@ -151,6 +153,10 @@ fn conversation(out: &mut String, error: &ConversationError) {
         E::McpApp(error) => {
             let mut group = Group::new(out, "mcp-app");
             group.cause("").push_str(error.code().as_str());
+            // The server's JSON-RPC code, never its message.
+            if let McpAppError::Remote(Some((code, _))) = error {
+                let _ = write!(group.cause("remote"), "{code}");
+            }
             return group.end();
         }
     };
