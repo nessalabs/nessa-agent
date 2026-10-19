@@ -146,7 +146,9 @@ impl CreationStorage for RecordStorage {
 }
 
 const OBSERVED_COMMANDS_SQL: &str = "WITH observed AS (
-             SELECT s.public_id,r.offset,r.event_id,r.schema_id,r.schema_version,r.payload,a.admitted,
+             SELECT s.public_id,r.offset,r.event_id,r.schema_id,r.schema_version,r.payload,
+                (SELECT MIN(first.rowid) FROM event_records first
+                 WHERE first.stream_key=s.stream_key) AS admitted,
                 typeof(s.public_id)='text' AND octet_length(s.public_id)<=?2
                 AND typeof(r.offset)='blob' AND length(r.offset)=8
                 AND typeof(r.event_id)='text' AND octet_length(r.event_id) BETWEEN 1 AND ?2
@@ -156,8 +158,6 @@ const OBSERVED_COMMANDS_SQL: &str = "WITH observed AS (
              FROM event_stream_names n
              JOIN event_streams s ON n.active_stream_key=s.stream_key
              JOIN event_records r ON r.stream_key=s.stream_key
-             JOIN (SELECT stream_key,MIN(rowid) AS admitted FROM event_records GROUP BY stream_key) a
-                  ON a.stream_key=s.stream_key
              WHERE s.public_id GLOB ?1 AND s.retired=0
          ) SELECT CASE WHEN bounded THEN public_id END,
                   CASE WHEN bounded THEN offset END,
@@ -168,7 +168,9 @@ const OBSERVED_COMMANDS_SQL: &str = "WITH observed AS (
            FROM observed ORDER BY admitted,CASE WHEN bounded THEN offset END";
 
 // SQLite's existing physical Accepted row supplies the observation order. No
-// index or additional command publication is written by this read.
+// index or additional command publication is written by this read. The first
+// row lookup stays within the matched command stream, so unrelated history
+// records do not participate in admission ordering.
 fn read_commands<T>(
     path: PathBuf,
     principal: &str,

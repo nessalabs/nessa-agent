@@ -6,7 +6,11 @@ use crate::application::agent_execution::{
     },
     sessions::SessionStorage,
 };
-use nessa_local_database::rusqlite::{params, types::ValueRef, Connection};
+use nessa_local_database::rusqlite::{
+    params,
+    types::{Value, ValueRef},
+    Connection, StatementStatus,
+};
 
 fn binding(request: &str) -> CreationBinding {
     CreationBinding::new(
@@ -735,4 +739,119 @@ async fn mutation_observation_sql_bounds_fields_before_driver_materialization() 
         ));
         storage.shutdown().await.unwrap();
     }
+}
+
+#[tokio::test]
+async fn command_observation_work_excludes_unrelated_history_records() {
+    fn observe(connection: &Connection) -> (Vec<Vec<Value>>, i32) {
+        let mut statement = connection.prepare(OBSERVED_COMMANDS_SQL).unwrap();
+        let records = statement
+            .query_map(
+                params![
+                    format!("{CONTROL_STREAM_PREFIX}*"),
+                    i64::try_from(MAX_IDENTIFIER_BYTES).unwrap(),
+                    i64::try_from(MAX_COMMAND_BYTES.max(MAX_RECORD_BYTES)).unwrap()
+                ],
+                |row| (0..6).map(|field| row.get(field)).collect(),
+            )
+            .unwrap()
+            .collect::<Result<Vec<Vec<Value>>, _>>()
+            .unwrap();
+        (records, statement.get_status(StatementStatus::VmStep))
+    }
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("records");
+    let storage = RecordStorage::new(&root).unwrap();
+    let lease = storage
+        .open_creation("person".into(), "create".into(), true)
+        .await
+        .unwrap()
+        .unwrap();
+    let accepted = CreationReceipt::accepted(binding("create"));
+    lease.save(accepted.clone()).await.unwrap();
+    let histories = (0..8)
+        .map(|index| StreamId::new(format!("unrelated-conversation-history-{index}")).unwrap())
+        .collect::<Vec<_>>();
+    for history in &histories {
+        storage
+            .runtime()
+            .await
+            .unwrap()
+            .create_stream(history)
+            .await
+            .unwrap();
+    }
+    let mut connection = Connection::open(root.join("records.sqlite3")).unwrap();
+    let (before, baseline_steps) = observe(&connection);
+    assert_eq!(before.len(), 1);
+    // Keep commands and stream count fixed; grow only unrelated history.
+    // VM work is deterministic evidence, independent of wall-clock speed.
+    let mut measurements = Vec::new();
+    for histories in [&histories[..1], &histories[1..]] {
+        let transaction = connection.transaction().unwrap();
+        {
+            let mut insert = transaction.prepare(
+                "INSERT INTO event_records(stream_key,offset,event_id,schema_id,schema_version,payload)
+                 SELECT stream_key,?1,?2,'history',1,x'00' FROM event_streams WHERE public_id=?3"
+            ).unwrap();
+            for history in histories {
+                for offset in 1_u64..=4096 {
+                    assert_eq!(
+                        insert
+                            .execute(params![
+                                offset.to_be_bytes(),
+                                format!("history-{offset}"),
+                                history.as_str()
+                            ])
+                            .unwrap(),
+                        1
+                    );
+                }
+            }
+        }
+        transaction.commit().unwrap();
+        measurements.push(observe(&connection));
+    }
+    // Public observers must remain read-only, including the physical WAL.
+    let paths = [
+        root.join("records.sqlite3"),
+        root.join("records.sqlite3-wal"),
+    ];
+    let bytes = paths
+        .iter()
+        .map(|path| match std::fs::read(path) {
+            Ok(bytes) => Some(bytes),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => panic!("read database evidence: {error}"),
+        })
+        .collect::<Vec<_>>();
+    let observed = storage.creations("person".into()).await.unwrap();
+    let after_observation = paths
+        .iter()
+        .map(|path| match std::fs::read(path) {
+            Ok(bytes) => Some(bytes),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => panic!("read database evidence: {error}"),
+        })
+        .collect::<Vec<_>>();
+    drop(connection);
+    drop(lease);
+    storage.shutdown().await.unwrap();
+    assert_eq!(
+        bytes, after_observation,
+        "observation must not write command/history evidence"
+    );
+    assert_eq!(observed, [accepted]);
+    for (after, _) in &measurements {
+        assert_eq!(
+            *after, before,
+            "history must not change command bytes/order"
+        );
+    }
+    let history_steps = measurements
+        .iter()
+        .map(|(_, steps)| *steps)
+        .collect::<Vec<_>>();
+    assert!(history_steps.iter().all(|steps| *steps <= baseline_steps + 256),
+        "unrelated history increased command observation work: {baseline_steps} -> {history_steps:?}");
 }
