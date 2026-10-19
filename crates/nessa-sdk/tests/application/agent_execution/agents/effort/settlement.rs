@@ -8,6 +8,11 @@ enum Fault {
     Storage,
     Retain,
     RetainPanic,
+    PostAckGetter,
+    BeforeGetter,
+    NativeConstructor,
+    NativeCleanup,
+    SaveDrop,
     Native,
     NativePanic,
 }
@@ -15,12 +20,21 @@ struct Native {
     inner: Backend,
     fault: Fault,
     closes: AtomicUsize,
+    acknowledged: AtomicBool,
+    requested: Arc<AtomicBool>,
+    cleanup_drops: Arc<AtomicUsize>,
 }
 impl ProviderSessionBackend for Native {
     fn operation_capabilities(&self) -> ProviderOperationCapabilities {
         self.inner.operation_capabilities()
     }
     fn set_effort_level(&self, effort: EffortLevel) -> ProviderOperationFuture<'_, ()> {
+        if matches!(self.fault, Fault::NativeConstructor) {
+            panic!("native future construction");
+        }
+        if matches!(self.fault, Fault::NativeCleanup) {
+            return Box::pin(RefusalDrop(self.cleanup_drops.clone()));
+        }
         let result = self.inner.set_effort_level(effort);
         Box::pin(async move {
             result.await?;
@@ -30,7 +44,10 @@ impl ProviderSessionBackend for Native {
                     ProviderSessionState::CleanupRequired,
                 )),
                 Fault::NativePanic => panic!("native control panic"),
-                _ => Ok(()),
+                _ => {
+                    self.acknowledged.store(true, Ordering::SeqCst);
+                    Ok(())
+                }
             }
         })
     }
@@ -80,6 +97,19 @@ impl AgentProvider for Factory {
     fn capabilities(&self) -> &EffectiveCapabilities {
         &self.native.inner.capabilities
     }
+    fn approval_mode(&self) -> Option<ApprovalMode> {
+        if matches!(self.native.fault, Fault::BeforeGetter)
+            && self.native.requested.load(Ordering::SeqCst)
+        {
+            panic!("factory getter after Requested");
+        }
+        if matches!(self.native.fault, Fault::PostAckGetter)
+            && self.native.acknowledged.load(Ordering::SeqCst)
+        {
+            panic!("factory getter after native acknowledgement");
+        }
+        None
+    }
     fn effort_level(&self) -> Option<EffortLevel> {
         self.effort.clone()
     }
@@ -119,10 +149,14 @@ impl AgentProvider for Factory {
 struct Store {
     inner: InMemoryStorage,
     fail: Arc<AtomicBool>,
+    drop_save: Arc<AtomicBool>,
+    drops: Arc<AtomicUsize>,
 }
 struct Lease {
     inner: Box<dyn SessionStorageLease>,
     fail: Arc<AtomicBool>,
+    drop_save: Arc<AtomicBool>,
+    drops: Arc<AtomicUsize>,
 }
 impl SessionStorage for Store {
     fn open(&self, id: SessionId) -> StorageFuture<'_, Box<dyn SessionStorageLease>> {
@@ -130,6 +164,8 @@ impl SessionStorage for Store {
             Ok(Box::new(Lease {
                 inner: self.inner.open(id).await?,
                 fail: self.fail.clone(),
+                drop_save: self.drop_save.clone(),
+                drops: self.drops.clone(),
             }) as Box<dyn SessionStorageLease>)
         })
     }
@@ -146,25 +182,62 @@ impl SessionStorageLease for Lease {
         binding: SessionSaveGeneration,
         units: Vec<SessionSaveUnit>,
     ) -> StorageFuture<'_, SessionSaveReceipt> {
-        if units
+        let configuration = units
             .iter()
             .flat_map(SessionSaveUnit::changes)
-            .any(|c| matches!(c, SessionChange::ConfigurationChanged(_)))
-            && self.fail.swap(false, Ordering::SeqCst)
-        {
+            .any(|c| matches!(c, SessionChange::ConfigurationChanged(_)));
+        if configuration && self.fail.swap(false, Ordering::SeqCst) {
             return Box::pin(async { Err(StorageError::Io("configuration save refused".into())) });
         }
+        if configuration && self.drop_save.swap(false, Ordering::SeqCst) {
+            return Box::pin(SaveDrop(self.drops.clone()));
+        }
         self.inner.save_changes(binding, units)
+    }
+}
+struct RefusalDrop(Arc<AtomicUsize>);
+impl Future for RefusalDrop {
+    type Output = ProviderOperationResult<()>;
+    fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Self::Output> {
+        Poll::Ready(Err(ProviderOperationFailure::new(
+            AgentError::Busy,
+            ProviderSessionState::Usable,
+        )))
+    }
+}
+impl Drop for RefusalDrop {
+    fn drop(&mut self) {
+        if self.0.fetch_add(1, Ordering::SeqCst) == 0 {
+            panic!("native control future cleanup");
+        }
+    }
+}
+struct SaveDrop(Arc<AtomicUsize>);
+impl Future for SaveDrop {
+    type Output = Result<SessionSaveReceipt, StorageError>;
+    fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Self::Output> {
+        Poll::Ready(Err(StorageError::Io("save rejected".into())))
+    }
+}
+impl Drop for SaveDrop {
+    fn drop(&mut self) {
+        if self.0.fetch_add(1, Ordering::SeqCst) == 0 {
+            panic!("configuration save future cleanup");
+        }
     }
 }
 struct Audit {
     attempts: Mutex<Vec<EffortLevelChangeRecord>>,
     fail_terminal: bool,
+    requested: Arc<AtomicBool>,
 }
 impl ExecutionAudit for Audit {
     fn record(&self, record: ExecutionAuditRecord) -> AgentFuture<'_, ()> {
         let fail = if let ExecutionAuditRecord::EffortLevelChanged(change) = record {
             let terminal = change.stage() != EffortChangeStage::Requested;
+            if !terminal {
+                self.requested.store(true, Ordering::SeqCst);
+            }
             self.attempts.lock().unwrap().push(change);
             terminal && self.fail_terminal
         } else {
@@ -180,6 +253,8 @@ impl ExecutionAudit for Audit {
     }
 }
 async fn check(fault: Fault, audit_fails: bool) {
+    let requested = Arc::new(AtomicBool::new(false));
+    let drops = Arc::new(AtomicUsize::new(0));
     let native = Arc::new(Native {
         inner: Backend {
             negotiated: AtomicBool::new(true),
@@ -192,12 +267,17 @@ async fn check(fault: Fault, audit_fails: bool) {
         },
         fault,
         closes: AtomicUsize::new(0),
+        acknowledged: AtomicBool::new(false),
+        requested: requested.clone(),
+        cleanup_drops: drops.clone(),
     });
     let manager = SessionManager::open(
         None,
         Arc::new(Store {
             inner: InMemoryStorage::new(),
             fail: Arc::new(AtomicBool::new(matches!(fault, Fault::Storage))),
+            drop_save: Arc::new(AtomicBool::new(matches!(fault, Fault::SaveDrop))),
+            drops: drops.clone(),
         }),
         Arc::new(RuntimeMessageCommitClock::new()),
     )
@@ -206,6 +286,7 @@ async fn check(fault: Fault, audit_fails: bool) {
     let audit = Arc::new(Audit {
         attempts: Mutex::new(Vec::new()),
         fail_terminal: audit_fails,
+        requested,
     });
     let agent = Agent::prepare(
         Arc::new(Factory {
@@ -227,10 +308,28 @@ async fn check(fault: Fault, audit_fails: bool) {
         .wait()
         .await
         .unwrap();
-    let result = agent.set_effort_level(level("low"), close_action()).await;
-    assert_eq!(*native.inner.sent.lock().unwrap(), vec!["low"]);
+    let actor = ActionContext::new("effort-person", "effort-window", "choose-low").unwrap();
+    let result = agent.set_effort_level(level("low"), actor.clone()).await;
+    assert_eq!(
+        *native.inner.sent.lock().unwrap(),
+        if matches!(
+            fault,
+            Fault::BeforeGetter | Fault::NativeConstructor | Fault::NativeCleanup
+        ) {
+            vec![]
+        } else {
+            vec!["low"]
+        }
+    );
     let snapshot = agent.session_manager().snapshot().await.unwrap();
-    let acknowledged = !matches!(fault, Fault::Native | Fault::NativePanic);
+    let acknowledged = !matches!(
+        fault,
+        Fault::Native
+            | Fault::NativePanic
+            | Fault::BeforeGetter
+            | Fault::NativeConstructor
+            | Fault::NativeCleanup
+    );
     let failed = !matches!(fault, Fault::None) || audit_fails;
     if failed {
         let failure = result.unwrap_err();
@@ -243,9 +342,14 @@ async fn check(fault: Fault, audit_fails: bool) {
                 AgentError::Storage(StorageError::Io("configuration save refused".into()))
             }
             Fault::Retain => AgentError::Protocol("retention refused".into()),
-            Fault::RetainPanic => {
-                AgentError::Protocol("effort configuration retention panicked".into())
-            }
+            Fault::RetainPanic => AgentError::SubmissionUnresolved,
+            Fault::PostAckGetter
+            | Fault::BeforeGetter
+            | Fault::NativeConstructor
+            | Fault::NativeCleanup => AgentError::SubmissionUnresolved,
+            Fault::SaveDrop => AgentError::Storage(StorageError::Io(
+                "session storage operation panicked".into(),
+            )),
             Fault::Native => AgentError::Protocol("native unverified".into()),
             Fault::NativePanic => AgentError::Protocol("provider control panicked".into()),
             Fault::None => AgentError::AuditFailure,
@@ -279,15 +383,12 @@ async fn check(fault: Fault, audit_fails: bool) {
         result.unwrap();
         assert_eq!(agent.effort_level(), Some(level("low")));
     }
-    if matches!(fault, Fault::None | Fault::Retain | Fault::RetainPanic) {
-        let saved = snapshot.current_configuration.unwrap();
-        assert_eq!(saved.after().effort_level(), Some(&level("low")));
-        assert_eq!(saved.actor(), &close_action());
-    } else {
-        assert!(snapshot.current_configuration.is_none());
-    }
     agent.close(close_action()).await.unwrap();
     assert_eq!(native.closes.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        drops.load(Ordering::SeqCst),
+        usize::from(matches!(fault, Fault::SaveDrop | Fault::NativeCleanup))
+    );
     let attempts = audit.attempts.lock().unwrap();
     assert_eq!(
         attempts.iter().map(|r| r.stage()).collect::<Vec<_>>(),
@@ -300,14 +401,24 @@ async fn check(fault: Fault, audit_fails: bool) {
             }
         ]
     );
-    assert!(attempts.iter().all(|r| r.actor() == &close_action()
-        && r.before().is_none()
-        && r.after() == &level("low")));
+    assert!(attempts
+        .iter()
+        .all(|r| r.actor() == &actor && r.before().is_none() && r.after() == &level("low")));
     assert_eq!(attempts[0].session_id(), attempts[1].session_id());
     assert_eq!(
         attempts[0].attachment_generation(),
         attempts[1].attachment_generation()
     );
+    if matches!(
+        fault,
+        Fault::None | Fault::Retain | Fault::RetainPanic | Fault::PostAckGetter
+    ) {
+        let saved = snapshot.current_configuration.unwrap();
+        assert_eq!(saved.after().effort_level(), Some(&level("low")));
+        assert_eq!(saved.actor(), &actor);
+    } else {
+        assert!(snapshot.current_configuration.is_none());
+    }
 }
 #[tokio::test]
 async fn effort_settlement_storage_failure_keeps_ack() {
@@ -340,4 +451,40 @@ async fn effort_settlement_unverified_native_is_failed() {
 #[tokio::test]
 async fn effort_settlement_native_panic_is_failed() {
     check(Fault::NativePanic, false).await;
+}
+
+#[tokio::test]
+async fn effort_settlement_post_ack_getter_panic_keeps_terminal_ack() {
+    check(Fault::PostAckGetter, false).await;
+}
+
+#[tokio::test]
+async fn effort_settlement_post_ack_getter_positive_keeps_terminal_ack() {
+    check(Fault::None, false).await;
+}
+
+#[tokio::test]
+async fn effort_settlement_before_native_getter_panic_is_failed() {
+    check(Fault::BeforeGetter, false).await;
+}
+#[tokio::test]
+async fn effort_settlement_native_constructor_panic_is_failed() {
+    check(Fault::NativeConstructor, false).await;
+}
+#[tokio::test]
+async fn effort_settlement_save_future_drop_keeps_ack() {
+    check(Fault::SaveDrop, false).await;
+}
+#[tokio::test]
+async fn effort_settlement_post_ack_getter_and_audit_preserve_primary() {
+    check(Fault::PostAckGetter, true).await;
+}
+#[tokio::test]
+async fn effort_settlement_save_future_drop_and_audit_preserve_primary() {
+    check(Fault::SaveDrop, true).await;
+}
+
+#[tokio::test]
+async fn effort_settlement_native_future_cleanup_is_failed() {
+    check(Fault::NativeCleanup, false).await;
 }

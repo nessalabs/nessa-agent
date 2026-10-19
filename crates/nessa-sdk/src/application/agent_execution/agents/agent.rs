@@ -932,67 +932,88 @@ impl Agent {
         record(change.requested())
             .await
             .map_err(|error| ProviderOperationFailure::new(error, ProviderSessionState::Usable))?;
-        // Interruptible by close, and a failure that leaves the connection
-        // uncertain retires this generation, as for any provider control.
-        let before = ModelConfiguration::new(self.approval_mode(), self.effort_level());
-        let sent = self
-            .inner
-            .lifecycle
-            .run_control_observed(&permit, attached.session.set_effort_level(level.clone()))
-            .await;
-        // Native verification is a distinct fact from retaining its configuration.
-        // Keep both results under this owner until its one terminal audit attempt.
-        let (outcome, result) = match sent {
-            Ok(()) => {
-                let configuration =
-                    ModelConfiguration::new(self.approval_mode(), Some(level.clone()));
-                let retained = async {
-                    self.inner
-                        .manager
-                        .record_configuration(
-                            before,
-                            configuration.clone(),
-                            actor,
-                            SessionConfigurationKind::EffortLevel,
-                        )
-                        .await
-                        .map_err(AgentError::Storage)?;
-                    match catch_unwind(AssertUnwindSafe(|| {
+        // Native verification survives later local failures; all callbacks after
+        // Requested share this owner and its single terminal audit attempt.
+        let mut outcome = EffortChangeOutcome::Failed;
+        let mut operation = Box::pin(async {
+            let before = ModelConfiguration::new(self.approval_mode(), self.effort_level());
+            let sent = self
+                .inner
+                .lifecycle
+                .run_control_observed(&permit, attached.session.set_effort_level(level.clone()))
+                .await;
+            match sent {
+                Ok(()) => {
+                    outcome = EffortChangeOutcome::Applied;
+                    // Effort cannot change the serialized preset; retain its
+                    // captured value instead of asking the factory again.
+                    let configuration =
+                        ModelConfiguration::new(before.approval_mode(), Some(level.clone()));
+                    async {
+                        self.inner
+                            .manager
+                            .record_configuration(
+                                before,
+                                configuration.clone(),
+                                actor,
+                                SessionConfigurationKind::EffortLevel,
+                            )
+                            .await
+                            .map_err(AgentError::Storage)?;
                         self.retain_configuration(&configuration)
-                    })) {
-                        Ok(result) => result,
-                        Err(payload) => {
-                            std::mem::forget(payload);
-                            Err(AgentError::Protocol(
-                                "effort configuration retention panicked".into(),
-                            ))
-                        }
                     }
+                    .await
+                    .map_err(|error| {
+                        self.inner
+                            .lifecycle
+                            .record_control_state(&permit, &ProviderSessionState::CleanupRequired);
+                        ProviderOperationFailure::new(error, ProviderSessionState::CleanupRequired)
+                    })
                 }
-                .await
-                .map_err(|error| {
-                    self.inner
-                        .lifecycle
-                        .record_control_state(&permit, &ProviderSessionState::CleanupRequired);
-                    ProviderOperationFailure::new(error, ProviderSessionState::CleanupRequired)
-                });
-                (EffortChangeOutcome::Applied, retained)
+                Err(failure) => {
+                    // Only a typed unsent refusal on a usable connection proves
+                    // the old level remains in force.
+                    if matches!(
+                        failure.error(),
+                        AgentError::Busy | AgentError::Unsupported(_)
+                    ) && failure.session_state() == &ProviderSessionState::Usable
+                    {
+                        outcome = EffortChangeOutcome::Refused;
+                    }
+                    Err(failure)
+                }
             }
-            Err(failure) => {
-                // Busy and Unsupported on a usable connection are the backend's
-                // existing unsent-refusal contract. Other answers are unverified.
-                let unsent = matches!(
-                    failure.error(),
-                    AgentError::Busy | AgentError::Unsupported(_)
-                ) && failure.session_state() == &ProviderSessionState::Usable;
-                let outcome = if unsent {
-                    EffortChangeOutcome::Refused
-                } else {
-                    EffortChangeOutcome::Failed
-                };
-                (outcome, Err(failure))
-            }
+        });
+        let panicked = || {
+            self.inner
+                .lifecycle
+                .record_control_state(&permit, &ProviderSessionState::CleanupRequired);
+            ProviderOperationFailure::new(
+                AgentError::SubmissionUnresolved,
+                ProviderSessionState::CleanupRequired,
+            )
         };
+        let mut result = poll_fn(|context| {
+            match catch_unwind(AssertUnwindSafe(|| operation.as_mut().poll(context))) {
+                Ok(poll) => poll,
+                Err(payload) => {
+                    std::mem::forget(payload);
+                    Poll::Ready(Err(panicked()))
+                }
+            }
+        })
+        .await;
+        if let Err(payload) = catch_unwind(AssertUnwindSafe(|| drop(operation))) {
+            std::mem::forget(payload);
+            let failure = panicked();
+            result = Err(match result {
+                Err(primary) => ProviderOperationFailure::new(
+                    primary.into_error(),
+                    ProviderSessionState::CleanupRequired,
+                ),
+                Ok(()) => failure,
+            });
+        }
         let result = match record(change.settled(outcome)).await {
             Ok(()) => result,
             Err(audit) => {

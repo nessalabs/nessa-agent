@@ -678,3 +678,49 @@ now requires Requested then Failed on both records with its original custom
 actor, target and no acknowledgement. Native dispatch remains0 and physical
 cleanup/reopen assertions remain unchanged; the first stale-assertion failure is
 retained separately.
+
+### Effort owned computation supervision (#975 R8 follow-up)
+
+After successful Requested, the existing effort settlement owner must retain
+its original change/actor, scheduler and permit through all configuration
+callbacks, native future construction/poll, local settlement and future cleanup.
+Native outcome stays separate from local errors: an observed native Ok is
+Applied even when a later callback unwinds; an earlier unwind is Failed, never
+an invented ACK. Every such exit reaches the same bounded terminal attempt.
+Ordinary repository before evidence confirms the gap: the getter pair gives
+one intended missing-terminal failure and one exact-getter positive; the wider
+initial matrix gives four missing-terminal failures, nine positives and two
+incorrect storage-error expectations. The latter are fixture mistakes: the
+existing storage owner already contains future cleanup and returns typed
+Storage, which must stay primary. All original logs remain distinct.
+The serialized effort contract reuses the captured before preset after ACK;
+it does not call an equivalent getter again merely to construct the new value.
+A required later normalization getter can still fail after configuration save;
+that case retains the exact saved low level and original actor, plus Applied
+native evidence, while returning uncertainty and fencing admission.
+
+| Ordering | Required evidence and failure | Repository evidence |
+| --- | --- | --- |
+| Getter after Requested, before native dispatch, unwinds | Requested then Failed; no native call or durable change; uncertain typed failure/CleanupRequired, admission fenced and cleanup once | Ordinary public Agent before failure; fixed matrix passes |
+| Getter after verified native effort ACK unwinds | Requested then Applied with original actor and levels; native count1, primary uncertain typed failure/CleanupRequired; exact storage state retained, admission fenced and cleanup once | Ordinary public Agent before failure; fixed matrix passes |
+| Native construction/poll, retention or owned future drop unwinds | Same computation supervisor retains known native outcome, fences before cleanup and forgets panic payload; no per-getter or per-retain audit alternative | Ordinary public Agent constructor, retention and native-cleanup matrix; existing caller-drop/audit fixtures |
+| Exact getters, unsent refusal, storage error or combined terminal audit error | Preserve normal success/Refused, primary-first errors and one bounded terminal attempt | Existing public effort positives and affected settlement matrix |
+
+A native future that returns an unsent refusal but unwinds during cleanup has
+not delivered that verified reply to the effort owner. Its terminal is Failed,
+with no invented ACK, no native effect/save and cleanup once. A storage future
+cleanup fault is already contained by the storage owner: after known native ACK
+it retains Applied and the exact typed Storage primary (before any audit error).
+Neither case adds another cleanup or error-policy owner.
+
+The corrected ordinary repository baseline preserves the old retention-panic
+error type and yields five missing-terminal failures and eleven positives,
+including both exact typed Storage cleanup cases. Private isolated removal of
+only operation-poll supervision yields six failures and ten positives; its
+additional retention-panic failure confirms that the narrow callback catch is
+now replaced by the common computation supervisor. Exact fresh-mtime source
+restoration recompiles and passes all sixteen. Protected drop and the single
+terminal attempt remain present in the omission. The original mixed baseline
+and the first fixed run's two stale storage assertions remain separate records.
+This evidence covers executable task completion, not audit delivery after
+runtime destruction.
