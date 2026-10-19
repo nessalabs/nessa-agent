@@ -100,6 +100,19 @@ async fn answer(
     ) {
         return Ok(dispatch_permission_rules(state, session, frame).await);
     }
+    // Catalogue refusal precedes service availability (row L12). Retain the
+    // admitted scope for the read rather than resolving the binding again.
+    let list_scope = if matches!(
+        frame.method.as_str(),
+        "conversation.list" | "conversation.observe"
+    ) {
+        match super::read_access::admit_list(state, session).await {
+            Ok(scope) => Some(scope),
+            Err(code) => return Ok(failure(&frame.id, code)),
+        }
+    } else {
+        None
+    };
     // This build runs no conversations at all, which is not the same fact as a
     // caller naming an agent this one is not configured for. Sharing a code
     // between them made the panel tell someone with a working Claude that the
@@ -222,20 +235,14 @@ async fn answer(
             }
             "conversation.list" => {
                 let ConversationListParams { archived } = params!(ConversationListParams);
-                let scope = match super::read_access::admit_list(state, session).await {
-                    Ok(scope) => scope,
-                    Err(code) => return Ok(failure(&frame.id, code)),
-                };
+                let scope = list_scope.as_ref().ok_or(ConversationError::Metadata)?;
                 let (listed, _) =
-                    read_list(state, service, session, archived.unwrap_or(false), &frame.id, &scope).await?;
+                    read_list(state, service, session, archived.unwrap_or(false), &frame.id, scope).await?;
                 Ok(success(&frame.id, &fitted_list(listed, &frame.id)))
             }
             "conversation.observe" => {
                 let params = params!(ConversationObserveParams);
-                let scope = match super::read_access::admit_list(state, session).await {
-                    Ok(scope) => scope,
-                    Err(code) => return Ok(failure(&frame.id, code)),
-                };
+                let scope = list_scope.as_ref().ok_or(ConversationError::Metadata)?;
                 let cursor = match params.cursor {
                     Some(cursor) => Some(observation_cursor(cursor)?),
                     None => None,

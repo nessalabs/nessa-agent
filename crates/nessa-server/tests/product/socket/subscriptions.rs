@@ -2167,7 +2167,7 @@ async fn a_paired_reader_follows_a_granted_conversation_with_the_read_grant() {
 /// grantor's conversations. Ungranted, both answer `conversation_not_found`.
 /// Granted, a conversation that is not the binding owner's still answers
 /// `conversation_not_found`: a grant reads only its grantor's conversations
-/// (`grant.read`). Its lists are refused, as a device's are. A paired
+/// (`grant.read`). Its lists are refused by the peer catalogue policy. A paired
 /// reader is admitted on `conversation.read` before that share check.
 #[tokio::test]
 async fn a_binding_owned_by_another_principal_reads_only_its_grantors_grants() {

@@ -300,3 +300,22 @@ async fn a_paired_list_observation_keeps_its_scoped_cursor() {
     assert!(expected.remove(rows[0]["conversationId"].as_str().unwrap()));
     assert!(expected.is_empty());
 }
+
+#[tokio::test]
+async fn a_paired_list_admits_its_scope_before_service_availability() {
+    for (owner, expected) in [
+        ("grantor", "forbidden"),
+        ("principal", "conversations_not_configured"),
+    ] {
+        let mut fixture = SubscriptionFixture::new()
+            .await
+            .with_devices(Devices::new(&[("credential", "receiver", owner, true)]));
+        grants(&fixture.authority, &["conversation.read", "server.read"]);
+        fixture.state.conversations = None;
+        for method in ["conversation.list", "conversation.observe"] {
+            let reply = fixture.call(method, json!({})).await;
+            assert_eq!(reply["error"]["code"], expected, "{method}: {reply}");
+            assert!(reply.get("payload").is_none(), "{reply}");
+        }
+    }
+}
