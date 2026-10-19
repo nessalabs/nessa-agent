@@ -7,10 +7,11 @@ use crate::{
     domain::agent_execution::executions::ExecutionId,
 };
 use event_stream::{
-    Cursor, EventId, EventReader, EventRuntime, NewEvent, PageLimits, Payload, SchemaId, SchemaRef,
-    StreamKey,
+    Cursor, EventId, EventReader, EventRuntime, NewEvent, PageLimits, Payload, Record, SchemaId,
+    SchemaRef, StreamKey,
 };
 use sha2::{Digest, Sha256};
+use std::{collections::VecDeque, sync::Arc};
 
 const VERSION: u8 = 1;
 const START_SCHEMA: &str = "nessa.fact-start";
@@ -598,44 +599,109 @@ pub(crate) async fn read_next_fact(
     stream: &StreamKey,
     after: &Cursor,
 ) -> Result<FactRead, FactCommitError> {
-    let bounds = reader.bounds(stream).await?;
-    if after.stream != *stream
-        || bounds.floor.stream != *stream
-        || bounds.tail.stream != *stream
-        || after.offset < bounds.floor.offset
-        || after.offset > bounds.tail.offset
-    {
-        return Err(FactCommitError::InvalidStream);
-    }
-    read_next_fact_through(reader, stream, after, &bounds.tail).await
+    FactScanner::start(reader, stream, after, PAGE)
+        .await?
+        .next(reader, after)
+        .await
 }
 
-/// Read a fact without following records appended after `through` was captured.
-/// The caller must obtain a current bound and reject pruned or replaced streams.
-pub(crate) async fn read_next_fact_through(
-    reader: &dyn EventReader,
-    stream: &StreamKey,
-    after: &Cursor,
-    through: &Cursor,
-) -> Result<FactRead, FactCommitError> {
-    if after.stream != *stream || through.stream != *stream || after.offset > through.offset {
-        return Err(FactCommitError::InvalidStream);
-    }
-    if after.offset == through.offset {
-        return Ok(FactRead::Absent);
-    }
-    let mut cursor = after.clone();
-    let mut expected_count = None;
-    let mut events = Vec::new();
-    while cursor.offset < through.offset {
-        let page = reader.read_after(&cursor, PAGE, Some(through)).await?;
-        if page.records.is_empty() {
+/// Reads the facts of a stream one after another, up to a tail captured
+/// before it starts, a page of records at a time. Records read past one fact
+/// are kept for the next, so a whole history is read once, in pages: read
+/// fact by fact, each fact would cost a bound and a page of its own, and a
+/// long history as many store round trips as it has facts (#1006).
+///
+/// It holds only for a stream nothing appends to while it reads, as one
+/// open's replay under its writer reservation; a caller that changes the
+/// stream (an abort of a partial fact) starts a new one.
+pub(crate) struct FactScanner {
+    stream: StreamKey,
+    through: Cursor,
+    page: PageLimits,
+    /// Records read and not yet taken, in order, from just after `taken`.
+    buffered: VecDeque<Arc<Record>>,
+    taken: Cursor,
+}
+impl FactScanner {
+    async fn start(
+        reader: &dyn EventReader,
+        stream: &StreamKey,
+        after: &Cursor,
+        page: PageLimits,
+    ) -> Result<Self, FactCommitError> {
+        let bounds = reader.bounds(stream).await?;
+        if after.stream != *stream
+            || bounds.floor.stream != *stream
+            || after.offset < bounds.floor.offset
+            || after.offset > bounds.tail.offset
+        {
             return Err(FactCommitError::InvalidStream);
         }
-        for record in page.records {
-            if record.cursor.stream != *stream || record.cursor.offset != cursor.offset + 1 {
-                return Err(FactCommitError::InvalidStream);
-            }
+        Self::up_to(stream, &bounds.tail, page)
+    }
+    /// A scanner for `stream` that reads no record past `through`, a bound
+    /// the caller has just read and checked, in pages of `page`.
+    pub(crate) fn up_to(
+        stream: &StreamKey,
+        through: &Cursor,
+        page: PageLimits,
+    ) -> Result<Self, FactCommitError> {
+        if through.stream != *stream {
+            return Err(FactCommitError::InvalidStream);
+        }
+        Ok(Self {
+            stream: stream.clone(),
+            through: through.clone(),
+            page,
+            buffered: VecDeque::new(),
+            taken: through.clone(),
+        })
+    }
+    /// The record just after `cursor`: from what was read already when it
+    /// follows on from there, else from the store.
+    async fn record_after(
+        &mut self,
+        reader: &dyn EventReader,
+        cursor: &Cursor,
+    ) -> Result<Arc<Record>, FactCommitError> {
+        if self.taken != *cursor {
+            self.buffered.clear();
+            self.taken = cursor.clone();
+        }
+        if self.buffered.is_empty() {
+            let page = reader
+                .read_after(cursor, self.page, Some(&self.through))
+                .await?;
+            self.buffered.extend(page.records);
+        }
+        let record = self
+            .buffered
+            .pop_front()
+            .ok_or(FactCommitError::InvalidStream)?;
+        if record.cursor.stream != self.stream || record.cursor.offset != cursor.offset + 1 {
+            return Err(FactCommitError::InvalidStream);
+        }
+        self.taken = record.cursor.clone();
+        Ok(record)
+    }
+    /// One complete logical fact after `after`, or an unfinished tail. Stops
+    /// at the first fact seal; what was read past it is kept for the next.
+    pub(crate) async fn next(
+        &mut self,
+        reader: &dyn EventReader,
+        after: &Cursor,
+    ) -> Result<FactRead, FactCommitError> {
+        if after.stream != self.stream || after.offset > self.through.offset {
+            return Err(FactCommitError::InvalidStream);
+        }
+        if after.offset == self.through.offset {
+            return Ok(FactRead::Absent);
+        }
+        let mut cursor = after.clone();
+        let mut expected_count = None;
+        let mut events = Vec::new();
+        while cursor.offset < self.through.offset {
+            let record = self.record_after(reader, &cursor).await?;
             if expected_count.is_none() {
                 let start = parse_start(&record.event).map_err(FactCommitError::Frame)?;
                 if start.attempt_start != record.cursor.offset {
@@ -668,14 +734,14 @@ pub(crate) async fn read_next_fact_through(
                 return Ok(FactRead::Complete { fact, cursor });
             }
         }
+        if !matches!(
+            decode_first(&events).map_err(FactCommitError::Frame)?,
+            FactDecode::Partial
+        ) {
+            return Err(FactCommitError::InvalidStream);
+        }
+        Ok(FactRead::Partial)
     }
-    if !matches!(
-        decode_first(&events).map_err(FactCommitError::Frame)?,
-        FactDecode::Partial
-    ) {
-        return Err(FactCommitError::InvalidStream);
-    }
-    Ok(FactRead::Partial)
 }
 
 /// End a fully validated incomplete physical attempt after exclusive reopen.
@@ -808,11 +874,15 @@ pub(crate) async fn commit_expected<R: EventRuntime>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use async_trait::async_trait;
     use event_stream::{
         infrastructure::{SqliteFailureInjection, SqliteOptions, SqliteStore},
-        EventConfig, EventSink, PersistenceProfile, Runtime, RuntimeConfig, StreamId,
+        Bounds, EventConfig, EventSink, Page, PersistenceProfile, Runtime, RuntimeConfig, StreamId,
     };
+    use std::future::Future;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
+    use tokio::sync::Mutex;
 
     fn key() -> FactKey {
         FactKey::new(FactKind::SaveUnit, None, 0).unwrap()
@@ -1227,5 +1297,155 @@ mod tests {
                 .unwrap()
                 .closed
         );
+    }
+
+    /// Counts the store calls a reader makes.
+    struct Counted<'a> {
+        runtime: &'a Runtime<SqliteStore>,
+        calls: AtomicUsize,
+    }
+    #[async_trait]
+    impl EventReader for Counted<'_> {
+        async fn create_stream(&self, id: &StreamId) -> event_stream::Result<StreamKey> {
+            self.runtime.create_stream(id).await
+        }
+        async fn find_stream(&self, id: &StreamId) -> event_stream::Result<Option<StreamKey>> {
+            self.runtime.find_stream(id).await
+        }
+        async fn bounds(&self, stream: &StreamKey) -> event_stream::Result<Bounds> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.runtime.bounds(stream).await
+        }
+        async fn read_after(
+            &self,
+            after: &Cursor,
+            limits: PageLimits,
+            through: Option<&Cursor>,
+        ) -> event_stream::Result<Page> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.runtime.read_after(after, limits, through).await
+        }
+    }
+
+    /// Every fact of `stream` after its start, read by `read`, as what each
+    /// was and where it ended.
+    async fn every_fact<F, R>(
+        stream: &StreamKey,
+        mut read: F,
+    ) -> Vec<(FactKey, Option<FramedFact>, Cursor)>
+    where
+        F: FnMut(Cursor) -> R,
+        R: Future<Output = FactRead>,
+    {
+        let mut found = Vec::new();
+        let mut at = Cursor::new(stream.clone(), 0);
+        loop {
+            match read(at.clone()).await {
+                FactRead::Absent => return found,
+                FactRead::Complete { fact, cursor } => {
+                    found.push((fact.key.clone(), Some(fact), cursor.clone()));
+                    at = cursor;
+                }
+                FactRead::Aborted { cursor, key, .. } => {
+                    found.push((key, None, cursor.clone()));
+                    at = cursor;
+                }
+                FactRead::Partial => panic!("nothing is left unfinished"),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_replay_reads_a_long_history_once_in_pages_and_finds_what_fact_by_fact_reads_find() {
+        let directory = tempfile::tempdir().unwrap();
+        let options = SqliteOptions::new(directory.path().join("scan.sqlite3"));
+        let config = RuntimeConfig {
+            events: EventConfig {
+                max_bytes: 1024 * 1024,
+                minimum_persistence: PersistenceProfile::ProcessRestart,
+            },
+            ..RuntimeConfig::default()
+        };
+        let page = config.reads.page;
+        let runtime = Runtime::<SqliteStore>::open(options, config).await.unwrap();
+        let stream = runtime
+            .create_stream(&StreamId::new("conversation").unwrap())
+            .await
+            .unwrap();
+        // A history as long as a busy conversation's, with each kind of
+        // physical fact in it, placed so pages end inside facts: one framed
+        // over records that cross a page's record count, one larger than a
+        // page's bytes, an attempt aborted partway, and inline facts around
+        // them.
+        let mut cursor = Cursor::new(stream.clone(), 0);
+        let mut ordinal = 0;
+        let mut commit = async |cursor: &Cursor, body: Vec<u8>| {
+            let fact = FramedFact {
+                key: FactKey::new(FactKind::SaveUnit, None, ordinal).unwrap(),
+                body,
+            };
+            ordinal += 1;
+            commit_fact(&runtime, &stream, cursor, &fact).await.unwrap()
+        };
+        for turn in 0..250 {
+            cursor = commit(
+                &cursor,
+                format!(r#"{{"input":"turn {turn}"}}"#).into_bytes(),
+            )
+            .await;
+        }
+        let crossing = cursor.offset;
+        cursor = commit(&cursor, vec![b'x'; 300_000]).await;
+        assert!(crossing < page.max_records as u64 && cursor.offset > page.max_records as u64);
+        for turn in 250..1_000 {
+            cursor = commit(
+                &cursor,
+                format!(r#"{{"input":"turn {turn}"}}"#).into_bytes(),
+            )
+            .await;
+        }
+        cursor = commit(&cursor, vec![b'z'; 3 * page.max_bytes / 2]).await;
+        let cut = FramedFact {
+            key: FactKey::new(FactKind::SaveUnit, None, 2_000).unwrap(),
+            body: vec![b'y'; 200_000],
+        };
+        let frames = frame_fact(&cut, cursor.offset + 1).unwrap();
+        for event in frames.iter().take(2) {
+            runtime.append(&stream, event.clone()).await.unwrap();
+        }
+        let abort_from = cursor.clone();
+        cursor = abort_partial_fact(&runtime, &stream, &abort_from)
+            .await
+            .unwrap();
+        let tail = commit(&cursor, br#"{"done":true}"#.to_vec()).await;
+
+        // Fact by fact. That read now uses the scanner too, one fact per
+        // scanner; the earlier tests of `read_next_fact` hold it to the
+        // physical format on their own.
+        let (reader, key) = (&runtime, &stream);
+        let expected = every_fact(&stream, |at| async move {
+            read_next_fact(reader, key, &at).await.unwrap()
+        })
+        .await;
+        assert_eq!(expected.len(), 1_004);
+        assert_eq!(expected.last().unwrap().2, tail);
+
+        let counted = Counted {
+            runtime: &runtime,
+            calls: AtomicUsize::new(0),
+        };
+        let scanner = Mutex::new(FactScanner::up_to(&stream, &tail, page).unwrap());
+        let found = every_fact(&stream, |at| {
+            let (counted, scanner) = (&counted, &scanner);
+            async move { scanner.lock().await.next(counted, &at).await.unwrap() }
+        })
+        .await;
+        assert_eq!(found, expected);
+        // Pages of the store's size, and one more for each page its bytes
+        // cut short; fact by fact this was a bound and a page for each of
+        // the 1,004 facts.
+        let pages = tail.offset.div_ceil(page.max_records as u64) as usize;
+        let calls = counted.calls.load(Ordering::SeqCst);
+        assert!(calls <= pages + 4, "{calls} store calls for {pages} pages");
     }
 }

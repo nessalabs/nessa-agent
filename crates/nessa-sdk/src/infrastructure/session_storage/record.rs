@@ -28,8 +28,8 @@ use crate::{
 use event_stream::EventSink;
 use event_stream::{
     infrastructure::SqliteOptions, AppendConfig, EventConfig, EventReader, EventRuntime,
-    LifecycleAction, LifecycleOperationId, LifecycleRequest, PersistenceProfile, ReadConfig,
-    RuntimeConfig, SchedulingConfig, StreamId,
+    LifecycleAction, LifecycleOperationId, LifecycleRequest, PageLimits, PersistenceProfile,
+    ReadConfig, RuntimeConfig, SchedulingConfig, StreamId,
 };
 use nessa_sync::replication::domain::Scope;
 use sha2::{Digest, Sha256};
@@ -451,6 +451,14 @@ impl SessionStorage for RecordStorage {
     }
 }
 
+/// The largest page one read of the records takes, and what an open's
+/// replay reads its history in. Its bytes are one record's largest
+/// (`MAX_STORED_RECORD_BYTES`), the least the runtime takes for a page.
+pub(super) const READ_PAGE: PageLimits = PageLimits {
+    max_records: 256,
+    max_bytes: MAX_STORED_RECORD_BYTES,
+};
+
 /// The runtime every conversation's records share.
 ///
 /// Its own defaults admit 1024 streams and 1024 queued appends at once and
@@ -481,6 +489,7 @@ fn scaled_config() -> RuntimeConfig {
             max_concurrent: 64,
             max_waiters: ENTRIES,
             admission_timeout: WAIT,
+            page: READ_PAGE,
             ..defaults.reads
         },
         scheduling: SchedulingConfig {
