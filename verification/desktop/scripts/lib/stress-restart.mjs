@@ -25,8 +25,11 @@ export function observeGatewayRestarts(page, endpoint) {
       return
     }
     const born = active
+    let failed = false
     const error = (text) => {
+      failed = true
       if (!active) return
+      active.recovery = null
       const cause = causes.get(text)
       if (cause) {
         if (active.errors.length === MAX_EVENTS) active.invalid = true
@@ -34,7 +37,7 @@ export function observeGatewayRestarts(page, endpoint) {
       }
     }
     const received = () => {
-      if (active && active === born) active.reconnected = true
+      if (!failed && active && active === born) active.recovery = socket
     }
     const close = () => {
       socket.off("socketerror", error)
@@ -68,7 +71,7 @@ export function observeGatewayRestarts(page, endpoint) {
       const scope = {
         errors: [],
         lines: [],
-        reconnected: false,
+        recovery: null,
         invalid: overflow || priorOverflow,
       }
       const consoleError = (message) => {
@@ -77,6 +80,7 @@ export function observeGatewayRestarts(page, endpoint) {
         if (!text.startsWith(prefix)) return
         const cause = causes.get(text.slice(prefix.length))
         if (!cause) return
+        scope.recovery = null
         const location = message.location()?.url ?? ""
         if (scope.lines.length === MAX_EVENTS) {
           scope.invalid = true
@@ -100,7 +104,7 @@ export function observeGatewayRestarts(page, endpoint) {
         disposed ||
         overflow ||
         verified !== true ||
-        !scope.reconnected ||
+        !sockets.has(scope.recovery) ||
         scope.invalid
       )
         return

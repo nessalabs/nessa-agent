@@ -1413,7 +1413,8 @@ says why where the conversations would be.
 - [ ] **Stress restart errors belong to the planned gateway outage.** Install
   socket observation before navigation. Only exact owned `/session` refusal/reset
   console occurrences during the action, corroborated by actual socket errors,
-  a new receiving connection and successful existing recovery assertions, may be
+  a new receiving connection after the latest observed error that remains live
+  through successful existing recovery assertions, may be
   retained as harmless. Older duplicates, later errors, another endpoint or cause,
   missing evidence, failed recovery and overflow stay failures. No permanent
   pattern is installed. _Check:_ `lib/stress-restart.test.mjs` and the default

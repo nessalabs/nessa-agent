@@ -201,7 +201,7 @@ test("an earlier connection receiving another frame is not a new connection", as
   const f = fixture()
   const ws = f.socket()
   await f.observer.during(f.opened, async () => {
-    f.fail(ws)
+    f.fail(f.socket())
     ws.emit("framereceived", {})
     return true
   })
@@ -312,4 +312,123 @@ test("more than64 earlier distinct lines conservatively forbid reclassification"
   assert.equal(f.lines.errors.length, 66)
   assert.equal(f.lines.harmless.length, 0)
   f.observer.dispose()
+})
+
+for (const [name, body] of [
+  [
+    "receiving socket resets and closes",
+    (f) => {
+      const socket = f.socket()
+      socket.emit("framereceived", {})
+      f.fail(socket, RESET)
+      socket.emit("close")
+    },
+  ],
+  [
+    "first recovery fails again",
+    (f) => {
+      f.fail(f.socket())
+      const socket = f.socket()
+      socket.emit("framereceived", {})
+      f.fail(socket, RESET)
+      socket.emit("close")
+    },
+  ],
+  [
+    "receiving socket closes without another error",
+    (f) => {
+      f.fail(f.socket())
+      const socket = f.socket()
+      socket.emit("framereceived", {})
+      socket.emit("close")
+    },
+  ],
+  [
+    "failed socket emits a buffered receiving frame",
+    (f) => {
+      const socket = f.socket()
+      f.fail(socket)
+      socket.emit("framereceived", {})
+    },
+  ],
+  [
+    "console failure arrives after receiving proof",
+    (f) => {
+      f.socket().emit("socketerror", REFUSED)
+      f.recover()
+      f.consoleError()
+    },
+  ],
+  [
+    "later unknown socket error invalidates earlier recovery",
+    (f) => {
+      f.fail(f.socket())
+      const socket = f.socket()
+      socket.emit("framereceived", {})
+      socket.emit("socketerror", "TLS certificate expired")
+    },
+  ],
+]) {
+  test(name + " needs a later live receiving connection", async () => {
+    const f = fixture()
+    await f.observer.during(f.opened, async () => {
+      body(f)
+      return true
+    })
+    assert.ok(f.lines.errors.length > 0)
+    assert.equal(f.lines.harmless.length, 0)
+    f.observer.dispose()
+  })
+}
+
+test("a later distinct live receiving socket recovers both outages", async () => {
+  const f = fixture()
+  await f.observer.during(f.opened, async () => {
+    f.fail(f.socket())
+    const first = f.socket()
+    first.emit("framereceived", {})
+    f.fail(first, RESET)
+    first.emit("close")
+    f.recover()
+    return true
+  })
+  assert.equal(f.lines.errors.length, 0)
+  assert.equal(f.lines.harmless.length, 2)
+  f.observer.dispose()
+})
+
+test("closing an older failed socket preserves the distinct live recovery", async () => {
+  const f = fixture()
+  await f.observer.during(f.opened, async () => {
+    const old = f.socket()
+    f.fail(old)
+    f.recover()
+    old.emit("close")
+    return true
+  })
+  assert.equal(f.lines.errors.length, 0)
+  assert.equal(f.lines.harmless.length, 1)
+  f.observer.dispose()
+})
+
+test("retired observation cannot exempt a retained socket after listener cleanup fails", async () => {
+  const f = fixture()
+  let recovered
+  let originalOff
+  await f.observer.during(f.opened, async () => {
+    f.fail(f.socket())
+    recovered = f.socket()
+    recovered.emit("framereceived", {})
+    originalOff = recovered.off
+    recovered.off = () => {
+      throw new Error("listener cleanup failed")
+    }
+    assert.throws(() => f.observer.dispose(), /listener cleanup failed/)
+    return true
+  })
+  assert.equal(f.lines.errors.length, 1)
+  assert.equal(f.lines.harmless.length, 0)
+  recovered.off = originalOff
+  f.observer.dispose()
+  assert.equal(recovered.listenerCount("socketerror"), 0)
 })
