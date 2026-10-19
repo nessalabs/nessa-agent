@@ -1669,7 +1669,10 @@ async fn dispatch(
     }
     match super::read_access::admit_request(state, &session, &frame).await {
         Ok(initiation) => dispatch_authorized(state, &session, frame, initiation).await,
-        Err(code) => failure(&frame.id, code),
+        Err(code) => {
+            super::conversation::trace_admission_refusal(&frame.method, code);
+            failure(&frame.id, code)
+        }
     }
 }
 

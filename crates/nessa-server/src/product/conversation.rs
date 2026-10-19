@@ -716,6 +716,15 @@ fn trace_answered_refusal(method: &str, response: &OutgoingMessage) {
     );
 }
 
+/// A conversation command the socket's admission refused before dispatch —
+/// its grant under current policy, or browser presence — on the same line.
+/// Lane and capacity refusals keep their own limit warnings.
+pub(super) fn trace_admission_refusal(method: &str, code: &str) {
+    if method.starts_with("conversation.") {
+        tracing::warn!(method, code, "conversation command refused");
+    }
+}
+
 /// Refuse a review's or a question's key that is not 32 lowercase hex
 /// digits, as the view lists it.
 fn interaction_key(key: &str) -> Result<(), ConversationError> {
