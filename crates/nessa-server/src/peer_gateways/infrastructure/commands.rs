@@ -373,6 +373,17 @@ impl PeerCommands {
     pub fn records(&self) -> &Arc<PeerRecords> {
         &self.records
     }
+    /// Observe the current cycle's stop flag without retaining its turn.
+    #[cfg(test)]
+    pub(crate) fn active_read_stop(&self, key: &DeviceKey) -> Option<Arc<ReadStop>> {
+        let turns = self.peers.lock().unwrap_or_else(PoisonError::into_inner);
+        turns
+            .peers
+            .get(key)?
+            .cycle
+            .as_ref()
+            .map(|cycle| Arc::clone(cycle.read()))
+    }
     /// `key`'s turn for `cycle`, if no one holds it. The poller asks again
     /// later rather than queue, so an owner command never waits behind a
     /// cycle. `None` once the commands are closed.
