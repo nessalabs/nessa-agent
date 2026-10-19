@@ -27,7 +27,9 @@
  *   aside       another conversation is opened in the window and talked to
  *   long        another conversation takes `--long` turns of long streamed
  *               answers through the gateway; the last answer is whole, and
- *               the message sent in the window after them is answered
+ *               still whole after its agent is closed and its history opened
+ *               again, no slower for its length than `reopenGrowthMs`
+ *               allows; the message sent in the window after them is answered
  *   park        another conversation is left idle, unwatched, until the
  *               gateway parks its agent (its lease ends `idle`); it is opened
  *               in the window and the message sent there starts the agent
@@ -124,6 +126,15 @@ const PARK_IDLE_SECONDS = 3
  */
 const LONG_CHUNKS = 40
 const LONG_CHUNK_BYTES = 300
+/**
+ * How much longer opening the `long` conversation again may take than
+ * opening one of a single long turn, both closed first so their whole saved
+ * history is replayed: half a second of noise, and a little for each turn.
+ * Measured against the short one in the same run, so a loaded machine slows
+ * both. On a 4-core machine, replayed in pages each turn adds about 15 ms;
+ * replayed fact by fact (#1006) each added about 60 ms, past this.
+ */
+const reopenGrowthMs = (turns) => 500 + 20 * turns
 
 const fold = (text) =>
   String(text ?? "")
@@ -843,6 +854,37 @@ const steps = {
       failures.push(
         `the last long answer came back with ${chunks.length} of ${LONG_CHUNKS} chunks: ${JSON.stringify(said.slice(0, 80))}`,
       )
+    // Its agent is closed, so the next opening replays the whole saved
+    // history: that takes no longer for its length than the budget allows,
+    // and the answer read back after it is still whole.
+    const short = randomUUID()
+    await run.client.conversation.create({
+      conversationId: short,
+      agent: run.stack.agent,
+    })
+    run.checked.push(short)
+    const one = prompt(run, STRESS.long, step, " alone")
+    await run.client.conversation.submit(run.client.conversation.prepare(short, one))
+    await settled(run, short, new Set(), one, "completed", failures)
+    const alone = await reopened(run, short)
+    const again = await reopened(run, conversationId)
+    log(`long conversation reopened in ${again.ms} ms; one turn in ${alone.ms} ms`)
+    const growth = reopenGrowthMs(step.turns)
+    if (again.ms - alone.ms > growth)
+      failures.push(
+        `reopening ${step.turns} turns took ${again.ms} ms, one turn ${alone.ms} ms: over ${growth} ms more`,
+      )
+    if (again.view.transcriptState !== "complete")
+      failures.push(
+        `the reopened long conversation was read ${again.reads} times and is still ${again.view.transcriptState}`,
+      )
+    else {
+      const kept = again.view.messages.find((each) => each.userText === text)
+      if ((kept?.parts ?? []).map((part) => part.text ?? "").join("") !== said)
+        failures.push(
+          "the last long answer changed when the conversation was opened again",
+        )
+    }
     // A person opens the long conversation and writes in it.
     await openStressConversation(
       run.page,
@@ -855,6 +897,24 @@ const steps = {
     await expectShown(run.page, `${SAYS.echo}${last}`, failures)
     await openStressConversation(run.page, run.main.id, run.main.title)
   },
+}
+
+/**
+ * Close `conversationId`'s agent, then open it again with a read, timed;
+ * the view is read on to the head, as one read takes a bounded number of
+ * records.
+ */
+async function reopened(run, conversationId) {
+  await run.client.conversation.close(conversationId)
+  const started = Date.now()
+  let view = await run.client.conversation.read(conversationId)
+  const ms = Date.now() - started
+  let reads = 1
+  for (; view.transcriptState !== "complete" && reads < 20; reads += 1) {
+    await sleep(100)
+    view = await run.client.conversation.read(conversationId)
+  }
+  return { ms, view, reads }
 }
 
 /**
