@@ -712,7 +712,7 @@ export function inMemorySource(
       audited({ sessionId, action: "rename", title: typed, initiator }, () => {
         const title = conversationTitle(typed)
         const session = known(sessionId)
-        return title === null
+        return title === null || title === session.title
           ? session.revision
           : putSession({ ...session, title }).revision
       }),

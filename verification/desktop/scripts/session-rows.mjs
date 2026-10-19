@@ -66,6 +66,7 @@ Checks, per engine:
 
       await check("more", async (page) => {
         const row = await quietRow(page)
+        const id = await row.getAttribute("data-session-row")
         const failures = []
         await openMore(page, row)
         const words = await page.locator(css.menuItem).allInnerTexts()
@@ -85,9 +86,27 @@ Checks, per engine:
         const renameShot = await shot(page, options, engine, "rename", row)
         await page.keyboard.press("Enter")
         await field.waitFor({ state: "detached", timeout: 3_000 })
-        const title = await row.locator(".desktop-list-row-label").innerText()
-        if (title !== "Rain plan")
-          failures.push(`the title read ${JSON.stringify(title)}`)
+        // The title the source keeps, once it says so, and still after the
+        // list has been said again.
+        const label = rowById(page, id).locator(".desktop-list-row-label")
+        const said = await waitText(label, "Rain plan")
+        if (said !== "Rain plan") failures.push(`the title read ${JSON.stringify(said)}`)
+        await page.waitForTimeout(1_000)
+        const kept = await label.innerText()
+        if (kept !== "Rain plan")
+          failures.push(`the title went back to ${JSON.stringify(kept)}`)
+        if ((await focusedRow(page)) !== id)
+          failures.push("↩ did not give focus back to the row")
+
+        // An item that asks nothing more hands focus to the row, not to the
+        // pointer's button that opened the menu.
+        await openMore(page, rowById(page, id))
+        await page
+          .getByRole("menuitem", { name: /^(Pin to|Unpin from) Sidebar$/ })
+          .click()
+        await page.locator(css.menuItem).first().waitFor({ state: "detached" })
+        if ((await focusedRow(page)) !== id)
+          failures.push(`after Pin, focus was on ${await focusedRow(page)}, not the row`)
         return { failures, evidence: [menuShot, renameShot].filter(Boolean) }
       })
 
@@ -106,6 +125,10 @@ Checks, per engine:
         await page.locator("[data-delete-session]").waitFor({ state: "detached" })
         if ((await rowById(page, id).count()) !== 1)
           failures.push("Cancel deleted the row")
+        if ((await waitFocusedRow(page, (now) => now === id)) !== id)
+          failures.push(
+            `after Cancel, focus was on ${await focusedRow(page)}, not the row`,
+          )
         // The menu opens again after the question, and stays open: still
         // there once its own opening has settled, past every frame of it.
         await openMore(page, row)
@@ -125,6 +148,9 @@ Checks, per engine:
         await ask()
         await page.locator('[data-delete-action="confirm"]').click()
         await rowById(page, id).waitFor({ state: "detached", timeout: 3_000 })
+        const after = await waitFocusedRow(page, (now) => now !== null && now !== id)
+        if (after === null || after === id)
+          failures.push(`after Delete, focus was on ${after}, not the row beside it`)
         return { failures, evidence }
       })
 
@@ -310,8 +336,38 @@ async function settledOffset(wrapper, closed) {
     }, closed)
     if (last && now.offset === last.offset && now.tray === last.tray && now.offset !== 0)
       return now
-    if (Date.now() > deadline) return now
+    if (Date.now() > deadline)
+      throw new Error(
+        `the open row never held still (${now.offset} px, tray ${now.tray} px)`,
+      )
     last = now
+    await new Promise((resolve) => setTimeout(resolve, 50))
+  }
+}
+
+/** The label's text once it reads `want`, or what it reads at the deadline. */
+async function waitText(locator, want) {
+  const deadline = Date.now() + 3_000
+  for (;;) {
+    const now = await locator.innerText()
+    if (now === want || Date.now() > deadline) return now
+    await new Promise((resolve) => setTimeout(resolve, 50))
+  }
+}
+
+/** The session whose row holds focus, or `null`. */
+function focusedRow(page) {
+  return page.evaluate(
+    () => document.activeElement?.getAttribute("data-session-row") ?? null,
+  )
+}
+
+/** The focused row once `holds` says so, or the one focused at the deadline. */
+async function waitFocusedRow(page, holds) {
+  const deadline = Date.now() + 3_000
+  for (;;) {
+    const now = await focusedRow(page)
+    if (holds(now) || Date.now() > deadline) return now
     await new Promise((resolve) => setTimeout(resolve, 50))
   }
 }

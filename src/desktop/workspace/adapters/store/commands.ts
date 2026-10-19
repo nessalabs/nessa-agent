@@ -834,8 +834,8 @@ export function archiveSession({
 
 /**
  * Renames a session to what the person typed, saying who asked for the
- * source's record. The new title shows when the source's update says so; a
- * title that folds to nothing, or is the one it has, is not asked.
+ * source's record. The new title shows when the source's update says so;
+ * what it keeps of the typed text, nothing among it, is the source's to say.
  */
 export function renameSession({
   sessionId,
@@ -848,9 +848,7 @@ export function renameSession({
 }): WorkspaceCommand<Promise<ChangeOutcome>> {
   return async (_dispatch, getState, { workspace }) => {
     const session = sessionOf(getState().workspace, sessionId)
-    // What the gateway keeps of it is the source's to say (`rename`).
-    if (!session || !knownToSource(session) || !title.trim() || title === session.title)
-      return "not-asked"
+    if (!session || !knownToSource(session)) return "not-asked"
     try {
       await workspace.rename(sessionId, title, initiator)
       return "sent"

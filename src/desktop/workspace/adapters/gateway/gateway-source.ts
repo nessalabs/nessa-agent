@@ -741,6 +741,10 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
   // Sessions whose archive or delete is on its way: a list frame that arrives
   // meanwhile may have been read before it, and does not list them again (W6).
   const archiving = new Set<string>()
+  // Renames on their way, each with the title it asks for and whether the
+  // gateway stored it. A list frame that arrives meanwhile may have been read
+  // before it was stored, so once it is, that frame says the new title (W6).
+  const renaming = new Map<string, { title: string; stored: boolean }>()
   // The subscribes of conversations let go past the limit while on their
   // way: the gateway counts one against the limit until it is answered and
   // closed, so the next open waits for them (D25).
@@ -846,6 +850,7 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     current: () => boolean,
   ) => {
     const crossed = new Set(archiving)
+    const crossedRenames = new Map(renaming)
     const mine = ++listFrames
     const { settled } = inTurn(listing, async () => {
       // A frame is a replacement: one queued behind a walk gives way to the
@@ -856,9 +861,14 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
       const apply = (applied: ConversationListResult) =>
         applyList({
           ...applied,
-          conversations: applied.conversations.filter(
-            (row) => !(crossed.has(row.conversationId) && takenOut(row.conversationId)),
-          ),
+          conversations: applied.conversations
+            .filter(
+              (row) => !(crossed.has(row.conversationId) && takenOut(row.conversationId)),
+            )
+            .map((row) => {
+              const renamed = crossedRenames.get(row.conversationId)
+              return renamed?.stored ? { ...row, title: renamed.title } : row
+            }),
         })
       let applied = result
       if (!result.complete) {
@@ -1567,14 +1577,18 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
         await turn
       }),
     // The gateway keeps the title (`conversationTitle` is its rule) and
-    // answers once it is stored. In the list's turn, as an archive (W6), so a
-    // list frame read before it cannot say the old title after it; the row is
-    // said again with the new one at once, and the frames after it agree.
+    // answers once it is stored. In the list's turn, as an archive (W6); a
+    // list frame that arrives while it is on its way may have been read
+    // before it was stored, so it says the new title too. The row is said
+    // again with the new one at once, and the frames after it agree.
     rename: (sessionId, typed) =>
       within(async (live) => {
-        // Nothing left to call it: the title stays as it was.
+        // Nothing left to call it, or what it is called already: the title
+        // stays as it was, and nobody is asked.
         const title = conversationTitle(typed)
-        if (title === null) return
+        if (title === null || title === rows.get(sessionId)?.title) return
+        const asked = { title, stored: false }
+        renaming.set(sessionId, asked)
         const { turn, settled } = inTurn(listing, async () => {
           held(sessionId)
           await within(() =>
@@ -1583,6 +1597,7 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
               return connected.conversation.rename(sessionId, title)
             }),
           )
+          asked.stored = true
           const row = rows.get(sessionId)
           if (row && !takenOut(sessionId)) {
             rows.set(sessionId, { ...row, title })
@@ -1590,6 +1605,9 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
           }
         })
         listing = settled
+        void settled.then(() => {
+          if (renaming.get(sessionId) === asked) renaming.delete(sessionId)
+        })
         await turn
       }),
     // As an archive, in the list's turn (W6), and the window's apps forget it.

@@ -152,6 +152,9 @@ function RenameField({
 export function DeleteSessionHost() {
   const dispatch = useWorkspaceDispatch()
   const sessionId = useWorkspaceSelector(selectDeleteAsked)
+  // Where focus goes once the question closes on Delete: the row beside the
+  // one deleted, chosen as Delete is pressed, while that row is still drawn.
+  const after = useRef<string | null>(null)
   if (sessionId === null) return null
   const close = () => dispatch(deleteClosed())
   return (
@@ -159,6 +162,15 @@ export function DeleteSessionHost() {
       open
       onOpenChange={(next) => {
         if (!next) close()
+      }}
+      // It was asked from a menu that is gone, whose opener may be a
+      // pointer's button the keys cannot use: focus goes to the row asked
+      // about instead, or past it once deleted, so the list keeps its keys.
+      onCloseAutoFocus={(event) => {
+        event.preventDefault()
+        const row = rowOf(after.current ?? sessionId)
+        after.current = null
+        row?.focus({ preventScroll: true })
       }}
       size="sm"
       title="Delete this session?"
@@ -174,6 +186,7 @@ export function DeleteSessionHost() {
             variant="destructive"
             data-delete-action="confirm"
             onClick={() => {
+              after.current = neighbourOf(sessionId)
               close()
               void dispatch(deleteSession({ sessionId, initiator: "person" }))
             }}
@@ -184,4 +197,33 @@ export function DeleteSessionHost() {
       }
     />
   )
+}
+
+/** A session's row, wherever a list shows it first. */
+function rowOf(sessionId: string): HTMLElement | null {
+  return document.querySelector<HTMLElement>(
+    `[data-session-row="${CSS.escape(sessionId)}"]`,
+  )
+}
+
+/**
+ * The session whose row takes focus when this one's goes: the row after it,
+ * or the one before when it was the last, so the keys keep their place.
+ */
+function neighbourOf(sessionId: string): string | null {
+  const row = rowOf(sessionId)
+  const rows = [
+    ...(row
+      ?.closest('[role="listbox"]')
+      ?.querySelectorAll<HTMLElement>("[data-session-row]") ?? []),
+  ]
+  const at = row ? rows.indexOf(row) : -1
+  if (at === -1) return null
+  return (rows[at + 1] ?? rows[at - 1])?.getAttribute("data-session-row") ?? null
+}
+
+/** Focus was in a row that is about to go: it moves to its neighbour (`neighbourOf`). */
+export function focusNeighbour(sessionId: string) {
+  const next = neighbourOf(sessionId)
+  if (next !== null) rowOf(next)?.focus()
 }

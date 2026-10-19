@@ -7,7 +7,7 @@
 import { act } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { Provider } from "react-redux"
-import { afterEach, beforeEach, expect, it } from "vitest"
+import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import { ClockProvider } from "../../../../clock"
 import {
   deleteAsked,
@@ -40,8 +40,28 @@ beforeEach(() => {
 afterEach(async () => {
   unfollow()
   await act(async () => root.unmount())
+  // A menu or dialog open at unmount hands focus back from a timer of its
+  // own (see `focusSettled`); it runs here, not in the next test.
+  await act(async () => new Promise((resolve) => setTimeout(resolve, 0)))
   host.remove()
+  letFocusGo()
 })
+
+/**
+ * Leaves the document with nothing focused, as a fresh one starts. When the
+ * focused element is removed, jsdom keeps the Document itself as the focused
+ * area (its focus fixup), and the next `focus()` then fires `blur` at the
+ * window: an open Radix menu closes on that, and the next test's menu would
+ * close as it opens. Focusing an element and letting it go clears it.
+ */
+function letFocusGo() {
+  const holder = document.createElement("div")
+  holder.tabIndex = -1
+  document.body.append(holder)
+  holder.focus()
+  holder.blur()
+  holder.remove()
+}
 
 async function shown(source = fakeSource()) {
   const store = testStore(source)
@@ -114,6 +134,20 @@ it("a query that matches nothing shows the kit's empty state, and clearing it br
   expect(host.querySelector("[data-slot=empty-state]")).toBeNull()
   expect(host.querySelectorAll(".desktop-list-row").length).toBeGreaterThan(0)
 })
+
+/**
+ * Waits for where focus lands once a menu or dialog has closed. Radix's focus
+ * scope hands focus back (`onCloseAutoFocus`) from a `setTimeout(0)` after
+ * unmounting, and `act` ends on a `setImmediate`, which may run before or
+ * after it: read at once, focus is wherever the race left it.
+ */
+async function focusSettled(check: (row: string | null | undefined) => void) {
+  await act(async () => {
+    await vi.waitFor(() =>
+      check(document.activeElement?.getAttribute("data-session-row")),
+    )
+  })
+}
 
 /** The first row that is not the open one, and its id. */
 function quietRow() {
@@ -199,6 +233,20 @@ it("a row's More menu holds what the row can do, less the ways to open it, and R
   expect(selectSession(store.getState(), id)?.title).toBe("Rain plan")
 })
 
+it("a More menu closed on an item that asks nothing more gives focus to its row, not to the pointer's button", async () => {
+  const source = fakeSource()
+  await shown(source)
+  const { row, id } = quietRow()
+  await more(row)
+  await press(
+    [...document.querySelectorAll("[role=menuitem]")].find(
+      (item) => item.textContent?.trim() === "Pin to Sidebar",
+    ) ?? null,
+  )
+  expect(menuWords()).toEqual([])
+  await focusSettled((row) => expect(row).toBe(id))
+})
+
 const field = (row: HTMLElement) =>
   row.ownerDocument.querySelector<HTMLInputElement>(
     `[data-session-row="${row.getAttribute("data-session-row")}"] [data-session-rename]`,
@@ -263,10 +311,17 @@ it("Delete asks first: Cancel deletes nothing, Delete deletes, and keys in it st
   expect(dialog()).toBeNull()
   expect(source.calls.some((call) => call[0] === "delete")).toBe(false)
   expect(host.querySelector(`[data-session-row="${id}"]`)).not.toBeNull()
+  // Focus comes back to the row asked about, where the list's keys work.
+  await focusSettled((row) => expect(row).toBe(id))
 
   await act(async () => store.dispatch(deleteAsked({ sessionId: id })))
   await press(dialog()?.querySelector('[data-delete-action="confirm"]') ?? null)
   expect(dialog()).toBeNull()
   expect(source.calls).toContainEqual(["delete", id, "person"])
   expect(host.querySelector(`[data-session-row="${id}"]`)).toBeNull()
+  // Deleted, it hands focus to the row beside it.
+  await focusSettled((now) => {
+    expect(now).toBeTruthy()
+    expect(now).not.toBe(id)
+  })
 })

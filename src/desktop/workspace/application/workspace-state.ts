@@ -630,6 +630,10 @@ export function forgetSession(state: WorkspaceState, sessionId: string): Workspa
       state.overview.selected === sessionId
         ? { ...state.overview, selected: null }
         : state.overview,
+    // An edit or a question about a session gone ends with it, and does not
+    // come back if the session does.
+    renaming: state.renaming?.sessionId === sessionId ? null : state.renaming,
+    deleteAsked: state.deleteAsked === sessionId ? null : state.deleteAsked,
   }
 }
 

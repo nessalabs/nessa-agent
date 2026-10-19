@@ -2754,6 +2754,31 @@ describe("writes", () => {
     expect(updates).toHaveLength(1)
   })
 
+  it("a list frame read before a rename was stored does not say the old title after it", async () => {
+    const { gateway, source, updates, follow } = started()
+    gateway.rows.set(conversationA, row(conversationA))
+    follow()
+    await source.index()
+    updates.length = 0
+    const renamed = deferred<void>()
+    gateway.once("rename", (normal) => renamed.promise.then(normal))
+    const renaming = source.rename(conversationA, "Rain plan", "person")
+    await flush()
+    // Read before the rename is stored: it still carries the old title.
+    gateway.publishList()
+    await flush()
+    renamed.resolve()
+    await renaming
+    await flush()
+    const titles = updates.flatMap((update) =>
+      update.kind === "session" && update.session.id === conversationA
+        ? [update.session.title]
+        : [],
+    )
+    expect(titles.at(-1)).toBe("Rain plan")
+    expect(titles.slice(titles.indexOf("Rain plan"))).toEqual(["Rain plan"])
+  })
+
   it("a rename of a session taken out is refused as unknown and asks nobody", async () => {
     const { gateway, source, follow } = started()
     gateway.rows.set(conversationA, row(conversationA))

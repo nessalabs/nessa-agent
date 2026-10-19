@@ -51,7 +51,11 @@ import {
   DropdownMenuTrigger,
 } from "../../../ui/menu"
 import { knownToSource } from "../../model/revision"
-import { useSessionRowActions, type SessionRowActions } from "../session-row-actions"
+import {
+  focusNeighbour,
+  useSessionRowActions,
+  type SessionRowActions,
+} from "../session-row-actions"
 
 /**
  * The middle column: what the sidebar chose — a channel's sessions, or every
@@ -323,24 +327,6 @@ const swipeActions: readonly SwipeRowAction[] = [
 const noSwipe: readonly SwipeRowAction[] = []
 
 /**
- * Focus was in a row that is about to go: it moves to the row after it, or
- * the one before when it was the last, so the keys keep their place.
- */
-function focusNeighbour(sessionId: string) {
-  const row = document.querySelector<HTMLElement>(
-    `[data-session-row="${CSS.escape(sessionId)}"]`,
-  )
-  const rows = [
-    ...(row
-      ?.closest('[role="listbox"]')
-      ?.querySelectorAll<HTMLElement>("[data-session-row]") ?? []),
-  ]
-  const at = row ? rows.indexOf(row) : -1
-  if (at === -1) return
-  ;(rows[at + 1] ?? rows[at - 1])?.focus()
-}
-
-/**
  * What a row shows under the pointer, in its time's place: Archive, and "More",
  * which opens the row's menu less the ways to open it. Pointer conveniences:
  * out of the Tab order, since the context-menu key opens the same menu from
@@ -368,8 +354,10 @@ function SessionRowButtons({
     return session !== undefined && knownToSource(session)
   })
   const stop = (event: { stopPropagation: () => void }) => event.stopPropagation()
+  const span = useRef<HTMLSpanElement>(null)
   return (
     <span
+      ref={span}
       className="workspace-session-actions"
       // The row's menu (right-click, the context-menu key) holds the same,
       // for the keys and assistive technology; these are the pointer's.
@@ -400,7 +388,20 @@ function SessionRowButtons({
             data-session-action="more"
           />
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" onCloseAutoFocus={onCloseAutoFocus}>
+        <DropdownMenuContent
+          align="end"
+          onCloseAutoFocus={(event) => {
+            onCloseAutoFocus(event)
+            if (event.defaultPrevented) return
+            // Not to the button that opened it: it is the pointer's, hidden
+            // from assistive technology and gone with the pointer. The row
+            // holds the keys.
+            event.preventDefault()
+            span.current
+              ?.closest<HTMLElement>("[data-session-row]")
+              ?.focus({ preventScroll: true })
+          }}
+        >
           <SessionMenuItems sessionId={sessionId} navigation={false} {...items} />
         </DropdownMenuContent>
       </DropdownMenu>

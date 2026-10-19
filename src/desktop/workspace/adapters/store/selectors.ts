@@ -113,11 +113,8 @@ export const selectRenameDraft = (state: Root, sessionId: string) =>
     ? state.workspace.renaming.draft
     : null
 
-/** The session whose deletion is being asked, while it is still held. */
-export const selectDeleteAsked = (state: Root) => {
-  const asked = state.workspace.deleteAsked
-  return asked !== null && selectSession(state, asked) ? asked : null
-}
+/** The session whose deletion is being asked, or `null` (it ends with its session). */
+export const selectDeleteAsked = (state: Root) => state.workspace.deleteAsked
 /** Whether the share dialog's list and form are held: the one rule for it (`formHeld`, D10). */
 export const selectShareHeld = (state: Root) => formHeld(state.workspace)
 /** Whether the open share dialog could begin a change now (`canChange`, D6). */
