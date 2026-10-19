@@ -1232,6 +1232,251 @@ async fn a_thread_turn_reports_its_outcome_and_reply_back_to_the_sender() {
     retire(service, storage, metadata).await;
 }
 
+/// One subscribe call naming the sent turn waits for it and returns its
+/// reply, and the turn's report is then not sent; a turn that already ended
+/// answers at once. Read as events, pages of message text are read past, never
+/// answered as an empty page, and the ended turn carries its reply.
+#[cfg(unix)]
+#[tokio::test]
+async fn one_subscribe_naming_the_sent_turn_returns_its_reply_in_place_of_the_report() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("data");
+    let provider = Arc::new(ProviderFactory::default());
+    provider.turn_cancel.store(true, Ordering::SeqCst);
+    let (service, storage, metadata) = fixture(&root, provider.clone());
+    service.bind_commands(storage.clone());
+    service.bind_agent_tool_audit(Arc::new(Audit::default()));
+    let source = id();
+    opened(&service, &provider, &source).await;
+    let release = hold_turn(&service, &provider, &source, "source-turn").await;
+    let tools = ConversationTools::new();
+    tools.attach(service.clone());
+    let servers = McpServers::new(Vec::new(), Arc::new(RuntimeClock::new())).unwrap();
+    let grants = ConversationGrants::new(servers.clone(), Arc::new(OsTokens));
+    let grant = grants.grant(&SessionId::new(source.to_string()).unwrap());
+    let key = ConfigurationKey::new([9; 32]);
+    let digest = built_in_digest(&key, tools.as_ref());
+    let relay = Arc::new(Relay::new(servers, grants.clone(), key).with_built_in(tools));
+    let (mut client, serving) =
+        McpClient::connect(relay, digest, grant.environment()[0].1.clone()).await;
+    let created = client
+        .call("create_thread", json!({"requestId":"await-create"}))
+        .await;
+    assert_eq!(created["isError"], false, "{created}");
+    let worker = created["structuredContent"]["threadId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    // Many more streamed chunks than one read takes, none of them an event.
+    let mut updates: Vec<ExecutionUpdate> = (0..60)
+        .map(|index| ExecutionUpdate::Message(MessageChunk::text(format!("chunk {index} "))))
+        .collect();
+    updates.push(ExecutionUpdate::Tool(ToolCallUpdate::new(
+        ToolCallId::new("lookup").unwrap(),
+        None,
+        None,
+        Some(ToolStatus::Completed),
+        None,
+        None,
+    )));
+    updates.push(ExecutionUpdate::Message(MessageChunk::text("Hello back.")));
+    provider.execution_updates.lock().unwrap().extend(updates);
+    let (finish, gate) = oneshot::channel();
+    *provider.execution_gate.lock().unwrap() = Some(gate);
+    let sent = client
+        .call(
+            "send_message",
+            json!({"threadId":worker,"message":"say hi","requestId":"await-send"}),
+        )
+        .await;
+    assert_eq!(sent["isError"], false, "{sent}");
+    let execution = sent["structuredContent"]["executionId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    // The provider's own text follows the last chunk; the chunks before
+    // the tool step are not the answer.
+    let said = |turn: &Value| {
+        turn["reply"]
+            .as_str()
+            .is_some_and(|reply| reply.starts_with("Hello back.") && !reply.contains("chunk"))
+    };
+    // The call starts while the turn is held, and returns once it ends.
+    let (waited, ()) = tokio::join!(
+        client.call(
+            "subscribe",
+            json!({"threadId":worker,"executionId":execution}),
+        ),
+        async {
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            let _ = finish.send(());
+        }
+    );
+    assert_eq!(waited["isError"], false, "{waited}");
+    let turn = &waited["structuredContent"]["turn"];
+    assert_eq!(turn["executionId"], execution.as_str(), "{waited}");
+    assert_eq!(turn["finished"], true, "{waited}");
+    assert_eq!(turn["outcome"], "completed", "{waited}");
+    assert!(said(turn), "{waited}");
+    assert_eq!(waited["structuredContent"]["timedOut"], false, "{waited}");
+    // The reply reached the sender in its turn: no report follows.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(reports_in(&service, &source, 0).await.is_empty());
+
+    // Asked again after it ended, the same call answers at once.
+    let started = std::time::Instant::now();
+    let again = client
+        .call(
+            "subscribe",
+            json!({"threadId":worker,"executionId":execution}),
+        )
+        .await;
+    assert!(said(&again["structuredContent"]["turn"]), "{again}");
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "{:?}",
+        started.elapsed()
+    );
+
+    // Read as events from the start: no empty page says more is waiting, and
+    // the ended turn comes with its reply.
+    let mut after: Option<String> = None;
+    let mut ended = None;
+    for _ in 0..20 {
+        let args = match &after {
+            None => json!({"threadId":worker,"replay":true}),
+            Some(cursor) => json!({"threadId":worker,"after":cursor}),
+        };
+        let batch = client.call("subscribe", args).await;
+        assert_eq!(batch["isError"], false, "{batch}");
+        let batch = &batch["structuredContent"];
+        let events = batch["events"].as_array().unwrap();
+        assert!(
+            !(events.is_empty() && batch["more"] == true),
+            "an empty page while more waits: {batch}"
+        );
+        if events.iter().any(|event| event["kind"] == "turn.ended") {
+            ended = Some(batch["turn"].clone());
+        }
+        after = Some(batch["cursor"].as_str().unwrap().into());
+        if batch["more"] == false {
+            break;
+        }
+    }
+    let ended = ended.expect("the turn's end was read");
+    assert!(said(&ended), "{ended}");
+    assert_eq!(ended["outcome"], "completed", "{ended}");
+
+    // A call that gives up before the turn ends leaves the report to come.
+    let (finish, gate) = oneshot::channel();
+    *provider.execution_gate.lock().unwrap() = Some(gate);
+    provider
+        .execution_updates
+        .lock()
+        .unwrap()
+        .push(ExecutionUpdate::Message(MessageChunk::text("Later.")));
+    let later = client
+        .call(
+            "send_message",
+            json!({"threadId":worker,"message":"later","requestId":"await-later"}),
+        )
+        .await;
+    let later_execution = later["structuredContent"]["executionId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let short = client
+        .call(
+            "subscribe",
+            json!({"threadId":worker,"executionId":later_execution,"waitMs":200}),
+        )
+        .await;
+    assert_eq!(short["structuredContent"]["timedOut"], true, "{short}");
+    assert_eq!(
+        short["structuredContent"]["turn"]["finished"], false,
+        "{short}"
+    );
+    let _ = finish.send(());
+    let reports = reports_in(&service, &source, 1).await;
+    assert_eq!(reports.len(), 1, "{reports:?}");
+    assert!(reports[0].contains("Its reply:\nLater."), "{}", reports[0]);
+    // Named after its report was already queued, the call still answers;
+    // the report stays, so the reply comes twice, never not at all.
+    let late = client
+        .call(
+            "subscribe",
+            json!({"threadId":worker,"executionId":later_execution}),
+        )
+        .await;
+    assert_eq!(
+        late["structuredContent"]["turn"]["finished"], true,
+        "{late}"
+    );
+    assert_eq!(reports_in(&service, &source, 1).await.len(), 1);
+
+    // Reading the thread's events past a turn's end leaves its report to
+    // come: only a call naming the turn takes the reply in its place.
+    provider
+        .execution_updates
+        .lock()
+        .unwrap()
+        .push(ExecutionUpdate::Message(MessageChunk::text("Streamed.")));
+    let streamed = client
+        .call(
+            "send_message",
+            json!({"threadId":worker,"message":"streamed","requestId":"await-streamed"}),
+        )
+        .await;
+    let streamed_execution = streamed["structuredContent"]["executionId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let mut after: Option<String> = None;
+    let mut seen_end = false;
+    for _ in 0..40 {
+        let args = match &after {
+            None => json!({"threadId":worker,"replay":true,"waitMs":2000}),
+            Some(cursor) => json!({"threadId":worker,"after":cursor,"waitMs":2000}),
+        };
+        let batch = client.call("subscribe", args).await;
+        let batch = &batch["structuredContent"];
+        if batch["turn"]["executionId"] == streamed_execution.as_str() {
+            assert!(
+                batch["turn"]["reply"]
+                    .as_str()
+                    .unwrap()
+                    .starts_with("Streamed."),
+                "{batch}"
+            );
+            seen_end = true;
+            break;
+        }
+        after = Some(batch["cursor"].as_str().unwrap().into());
+    }
+    assert!(seen_end, "the streamed turn's end was read");
+    let reports = reports_in(&service, &source, 2).await;
+    assert!(
+        reports[1].contains("Its reply:\nStreamed."),
+        "{}",
+        reports[1]
+    );
+
+    // executionId and replay do not go together.
+    let both = client
+        .call(
+            "subscribe",
+            json!({"threadId":worker,"executionId":execution,"replay":true}),
+        )
+        .await;
+    assert_eq!(both["structuredContent"]["error"], "invalid_request");
+
+    drop(client);
+    drop(grant);
+    serving.await.unwrap();
+    drop(release);
+    retire(service, storage, metadata).await;
+}
+
 /// Reports saved by one run of the gateway are delivered by the next: a turn
 /// that finished before the restart reports its outcome, and one the earlier
 /// run never finished reports that it was interrupted. Each leaves the store
