@@ -5,12 +5,18 @@
 //! upload release both failed answers with the agent's code, and admission
 //! evidence that lost audit and storage answers `audit_unavailable`. The
 //! log is where the others stay, so this names each variant and walks into
-//! every nested failure. Each match names every variant, so a new one is
-//! named here too. Never a `Display` string: those carry transport text,
-//! provider messages and paths.
+//! every nested failure and typed reason. Each match names every variant,
+//! so a new one is named here too. Free text is never written — transport
+//! and protocol text, provider diagnostics, hook messages, paths, policy and
+//! agent ids — only names, typed reasons and numbers.
 
 use crate::conversation::application::{ConversationError, DeletionFailures, StopFailure};
-use nessa_sdk::application::agent_execution::{agents::AgentError, sessions::StorageError};
+use nessa_sdk::application::agent_execution::{
+    agents::AgentError,
+    hooks::{HookError, HookFailure},
+    sessions::StorageError,
+};
+use std::fmt::Write as _;
 
 /// `close-incomplete(agent: closed, release: attachment-release(storage-io))`.
 pub(super) fn refusal_causes(error: &ConversationError) -> String {
@@ -94,7 +100,7 @@ fn conversation(out: &mut String, error: &ConversationError) {
         E::DeletionIncomplete(failures) => return deletion(out, failures),
         E::AgentNotConfigured => "agent-not-configured",
         E::AgentUnsupported => "agent-unsupported",
-        E::LeaseRefused(_) => "lease-refused",
+        E::LeaseRefused(refusal) => return typed(out, "lease-refused", refusal),
         E::LeaseUnreadable => "lease-unreadable",
         E::EnvironmentNotConfigured => "environment-not-configured",
         E::LinkedFileUnreachable => "linked-file-unreachable",
@@ -142,7 +148,11 @@ fn conversation(out: &mut String, error: &ConversationError) {
             return group.end();
         }
         E::Storage(error) => return storage_cause(out, error),
-        E::McpApp(_) => "mcp-app",
+        E::McpApp(error) => {
+            let mut group = Group::new(out, "mcp-app");
+            group.cause("").push_str(error.code().as_str());
+            return group.end();
+        }
     };
     out.push_str(name);
 }
@@ -200,7 +210,7 @@ fn failed<T>(result: &Result<T, AgentError>) -> Option<&AgentError> {
 fn agent(out: &mut String, error: &AgentError) {
     use AgentError as A;
     let name = match error {
-        A::AttachmentUnavailable(_) => "attachment",
+        A::AttachmentUnavailable(phase) => return typed(out, "attachment", phase),
         A::AttachmentAuthorizationStale => "attachment-authorization-stale",
         A::OutputRetentionLimit => "output-retention-limit",
         A::DiagnosticLimit => "diagnostic-limit",
@@ -236,7 +246,7 @@ fn agent(out: &mut String, error: &AgentError) {
             agent(group.cause("cleanup"), cleanup_error);
             return group.end();
         }
-        A::Scheduling(_) => "scheduling",
+        A::Scheduling(error) => return typed(out, "scheduling", error),
         A::StorageDuringClose {
             error,
             cleanup_result,
@@ -263,20 +273,36 @@ fn agent(out: &mut String, error: &AgentError) {
         A::InvalidInput(_) => "invalid-input",
         A::RefusedAfterSave => "refused-after-save",
         A::AfterSaveUnavailable => "after-save-unavailable",
-        A::UnknownApp(_) => "unknown-app",
-        A::UserImage(_) => "user-image",
-        A::ImageInputRefused(_) => "image-input-refused",
-        A::MessageTooLarge { .. } => "message-too-large",
+        A::UnknownApp(error) => return typed(out, "unknown-app", error),
+        A::UserImage(error) => return typed(out, "user-image", error),
+        A::ImageInputRefused(refusal) => return typed(out, "image-input-refused", refusal),
+        A::MessageTooLarge {
+            encoded_bytes,
+            max_bytes,
+        } => {
+            let mut group = Group::new(out, "message-too-large");
+            let _ = write!(group.cause("bytes"), "{encoded_bytes}");
+            let _ = write!(group.cause("max"), "{max_bytes}");
+            return group.end();
+        }
         A::Busy => "busy",
         A::ApprovalModeChanged => "approval-mode-changed",
         A::Closed => "closed",
         A::StalePermission => "stale-permission",
         A::Protocol(_) => "protocol",
         A::AuthenticationRequired { .. } => "authentication-required",
-        A::Provider { .. } => "provider",
+        A::Provider { code, .. } => {
+            let mut group = Group::new(out, "provider");
+            let _ = write!(group.cause("code"), "{code}");
+            return group.end();
+        }
         A::Transport(_) => "socket",
         A::Deadline => "deadline",
-        A::StartupDeadline(_) => "startup-deadline",
+        A::StartupDeadline(step) => {
+            let mut group = Group::new(out, "startup-deadline");
+            group.cause("").push_str(step.as_str());
+            return group.end();
+        }
         A::Backpressure => "backpressure",
         A::CleanupUncertain => "cleanup-uncertain",
         A::AuditFailure => "audit",
@@ -292,11 +318,19 @@ fn agent(out: &mut String, error: &AgentError) {
             }
             return group.end();
         }
-        A::BeforeInvocationHook(_) => "before-invocation-hook",
+        A::BeforeInvocationHook(failure) => {
+            let mut group = Group::new(out, "before-invocation-hook");
+            hook(group.cause(""), failure);
+            return group.end();
+        }
         A::AfterInvocationHooks {
-            execution_result, ..
+            failures,
+            execution_result,
         } => {
             let mut group = Group::new(out, "after-invocation-hooks");
+            for failure in failures {
+                hook(group.cause(""), failure);
+            }
             if let Some(execution) = failed(execution_result) {
                 agent(group.cause("execution"), execution);
             }
@@ -304,6 +338,23 @@ fn agent(out: &mut String, error: &AgentError) {
         }
     };
     out.push_str(name);
+}
+
+/// A cause whose payload is a typed reason with no free text — fieldless
+/// enums and sizes — written as its `Debug` form.
+fn typed(out: &mut String, name: &str, reason: &impl std::fmt::Debug) {
+    let mut group = Group::new(out, name);
+    let _ = write!(group.cause(""), "{reason:?}");
+    group.end();
+}
+
+/// A hook by its registration index, never its failure text.
+fn hook(out: &mut String, failure: &HookFailure) {
+    let kind = match failure.error {
+        HookError::Failed(_) => "failed",
+        HookError::Panicked => "panicked",
+    };
+    let _ = write!(out, "hook-{}-{kind}", failure.index);
 }
 
 /// A storage failure, then what the operation it interrupted ended in.
@@ -342,7 +393,13 @@ fn storage_cause(out: &mut String, error: &StorageError) {
         StorageError::Io(_) => "storage-io",
         StorageError::Corrupt(_) => "storage-corrupt",
         StorageError::Store(_) => "storage-store",
-        StorageError::AnotherVersion { .. } => "storage-another-version",
+        StorageError::AnotherVersion { found } => {
+            let mut group = Group::new(out, "storage-another-version");
+            if let Some(found) = found {
+                let _ = write!(group.cause("found"), "{found}");
+            }
+            return group.end();
+        }
         StorageError::IdentityMismatch => "storage-identity",
         StorageError::ChangesRequired => "storage-changes-required",
         StorageError::Unresolved => "storage-unresolved",
@@ -401,6 +458,31 @@ mod tests {
             refusal_causes(&error),
             "storage-shutdown(read: storage-busy, runtime: storage-closed)"
         );
+    }
+
+    #[test]
+    fn a_typed_reason_is_kept_and_hook_text_is_not() {
+        let error = ConversationError::Agent(AgentError::AfterInvocationHooks {
+            failures: vec![
+                HookFailure {
+                    index: 0,
+                    error: HookError::Failed("/home/someone/secret".into()),
+                },
+                HookFailure {
+                    index: 2,
+                    error: HookError::Panicked,
+                },
+            ],
+            execution_result: Box::new(Err(AgentError::Busy)),
+        });
+        assert_eq!(
+            refusal_causes(&error),
+            "after-invocation-hooks(hook-0-failed, hook-2-panicked, execution: busy)"
+        );
+        let lease = ConversationError::LeaseRefused(
+            nessa_sdk::domain::agent_execution::leases::LeaseRefusal::EnvironmentBusy,
+        );
+        assert_eq!(refusal_causes(&lease), "lease-refused(EnvironmentBusy)");
     }
 
     #[test]
