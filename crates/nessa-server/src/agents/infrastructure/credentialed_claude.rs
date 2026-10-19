@@ -8,6 +8,7 @@
 //! the credential read at that launch, over the binding's own deletion
 //! exchange; every binding it launched for that is kept until it settles.
 
+use nessa_sdk::application::agent_execution::providers::HarnessHostIdentity;
 use std::{
     collections::BTreeMap, ffi::OsString, future::Future, mem, pin::Pin, sync::Arc, time::Duration,
 };
@@ -27,7 +28,7 @@ use nessa_sdk::{
         agent_execution::{prompts::SystemPrompt, sessions::ExecutionSessionId},
         common::value_objects::TokenLimits,
         effective_capabilities::value_objects::EffectiveCapabilities,
-        model_metadata::entities::ModelMetadata,
+        model_metadata::{entities::ModelMetadata, value_objects::EffortLevel},
     },
     infrastructure::{acp::sessions::AcpConfig, claude_acp::sessions::ClaudeAcpProvider},
 };
@@ -41,6 +42,7 @@ use nessa_protocol::agents::AgentId;
 const CREDENTIAL_READ_DEADLINE: Duration = Duration::from_secs(3);
 
 /// A Claude ACP factory that reads the current credential for every open.
+#[derive(Clone)]
 pub struct CredentialedClaudeProvider {
     config: AcpConfig,
     model: ModelMetadata,
@@ -48,6 +50,7 @@ pub struct CredentialedClaudeProvider {
     audit: Arc<dyn ExecutionAudit>,
     prompt: SystemPrompt,
     approval_mode: ApprovalMode,
+    effort_level: Option<EffortLevel>,
     native_hooks: NativeHooksSwitch,
     credentials: Arc<dyn AgentCredentialSource>,
     identity: ProviderIdentity,
@@ -55,7 +58,7 @@ pub struct CredentialedClaudeProvider {
     /// The store every binding this factory builds records into.
     traces: Arc<LocalTraceStore>,
     /// Every binding a deletion launched, kept until it has settled.
-    deleting: LaunchedDeletions<ClaudeAcpProvider>,
+    deleting: Arc<LaunchedDeletions<ClaudeAcpProvider>>,
 }
 
 impl CredentialedClaudeProvider {
@@ -83,12 +86,13 @@ impl CredentialedClaudeProvider {
             audit,
             prompt,
             approval_mode: ApprovalMode::Ask,
+            effort_level: None,
             native_hooks: NativeHooksSwitch::off(),
             credentials,
             identity,
             capabilities,
             traces: LocalTraceStore::new(),
-            deleting: LaunchedDeletions::default(),
+            deleting: Arc::new(LaunchedDeletions::default()),
         })
     }
 
@@ -128,13 +132,21 @@ impl CredentialedClaudeProvider {
             CREDENTIAL_READ_DEADLINE,
         )
         .await?;
-        ClaudeAcpProvider::new(config, &self.model, self.limits, self.audit.clone())
-            .map_err(ProviderOpenError::no_resources)?
-            .with_system_prompt(self.prompt.clone())
-            .with_native_hooks(self.native_hooks.clone())
-            .with_traces(self.traces.clone())
-            .with_approval_mode(self.approval_mode)
+        self.configured(config)
             .map_err(ProviderOpenError::no_resources)
+    }
+
+    fn configured(&self, config: AcpConfig) -> Result<ClaudeAcpProvider, AgentError> {
+        let provider =
+            ClaudeAcpProvider::new(config, &self.model, self.limits, self.audit.clone())?
+                .with_system_prompt(self.prompt.clone())
+                .with_native_hooks(self.native_hooks.clone())
+                .with_traces(self.traces.clone())
+                .with_approval_mode(self.approval_mode)?;
+        match self.effort_level.clone() {
+            Some(level) => provider.with_effort_level(level),
+            None => Ok(provider),
+        }
     }
 }
 
@@ -159,6 +171,35 @@ impl ProviderSessionDeleter for CredentialedClaudeProvider {
 }
 
 impl AgentProvider for CredentialedClaudeProvider {
+    fn harness_host_identity(&self) -> HarnessHostIdentity<'_> {
+        HarnessHostIdentity::local()
+    }
+    fn effort_level(&self) -> Option<EffortLevel> {
+        self.effort_level.clone()
+    }
+    fn model_change_context(&self) -> Option<String> {
+        self.configured(self.config.clone())
+            .ok()?
+            .model_change_context()
+    }
+    fn with_model_configuration(
+        &self,
+        mode: Option<ApprovalMode>,
+        effort: Option<EffortLevel>,
+        traces: Option<Arc<LocalTraceStore>>,
+    ) -> Result<Arc<dyn AgentProvider>, AgentError> {
+        let mode = mode.ok_or_else(|| {
+            AgentError::Configuration("model change omitted approval mode".into())
+        })?;
+        let mut configured = self.clone().with_approval_mode(mode)?;
+        configured.effort_level = effort;
+        if let Some(traces) = traces {
+            configured.traces = traces;
+        }
+        configured.configured(configured.config.clone())?;
+        Ok(Arc::new(configured))
+    }
+
     fn approval_mode(&self) -> Option<ApprovalMode> {
         Some(self.approval_mode)
     }
@@ -342,6 +383,19 @@ mod tests {
         .with_approval_mode(ApprovalMode::Auto)
         .unwrap();
         assert_eq!(provider.approval_mode(), Some(ApprovalMode::Auto));
+        let context = provider
+            .model_change_context()
+            .expect("credential wrapper publishes the native context proof");
+        let traces = LocalTraceStore::new();
+        let normalized = provider
+            .with_model_configuration(Some(ApprovalMode::Ask), None, Some(traces.clone()))
+            .unwrap();
+        assert_eq!(normalized.identity(), provider.identity());
+        assert_eq!(normalized.model_change_context().as_ref(), Some(&context));
+        assert_eq!(normalized.approval_mode(), Some(ApprovalMode::Ask));
+        assert_eq!(normalized.capabilities(), provider.capabilities());
+        assert!(Arc::ptr_eq(&normalized.traces().unwrap(), &traces));
+
         let first = provider.current().await.unwrap();
         let second = provider.current().await.unwrap();
         assert_eq!(first.approval_mode(), Some(ApprovalMode::Auto));

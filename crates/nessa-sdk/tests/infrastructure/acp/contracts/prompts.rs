@@ -28,7 +28,7 @@ async fn system_instructions_are_configured_once_and_each_execution_sends_only_n
         assert_eq!(
             opened
                 .session
-                .execute(prompt(message))
+                .execute(prompt(message), Arc::new(|| Ok(())))
                 .await
                 .into_result()
                 .unwrap(),

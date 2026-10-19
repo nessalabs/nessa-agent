@@ -117,14 +117,17 @@ impl Submitter {
 
     /// Admit this turn only where it runs at `mode`.
     ///
-    /// The mode a turn runs at is the one its attachment holds when it is
-    /// admitted ([`Agent::approval_mode`](crate::application::agent_execution::agents::Agent::approval_mode)).
-    /// A host that checked the mode before submitting cannot know the
-    /// attachment did not fail in between, and a turn admitted while nothing
-    /// is attached runs at the provider's own mode. With this set, a turn the
-    /// agent would run at any other mode is refused with
-    /// [`AgentError::ApprovalModeChanged`](crate::application::agent_execution::agents::AgentError::ApprovalModeChanged)
-    /// before anything is saved.
+    /// Require the preset of the configuration that accepts this input.
+    /// Native steering uses the active invocation's configured provider; after
+    /// a NextTurn model change this can differ from
+    /// [`Agent::approval_mode`](crate::application::agent_execution::agents::Agent::approval_mode).
+    /// A new queued invocation uses the current configured provider instead.
+    /// A mismatch returns
+    /// [`AgentError::ApprovalModeChanged`](crate::application::agent_execution::agents::AgentError::ApprovalModeChanged).
+    /// Fresh admission refuses before saving. If native steering explicitly
+    /// requires an independent prompt, the attempted steering record can already
+    /// be saved, but the current preset is checked before queue ownership or its
+    /// admission audit. Exact saved retries recover their original receipt first.
     pub fn with_approval_mode(mut self, mode: ApprovalMode) -> Self {
         self.approval_mode = Some(mode);
         self

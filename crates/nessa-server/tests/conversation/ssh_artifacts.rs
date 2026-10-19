@@ -38,6 +38,7 @@ use crate::env_serve::application::{
 };
 use crate::env_serve::domain::{Peer, PeerGrant};
 use crate::env_serve::infrastructure::{FileInbox, FileLedger, FileOutbox};
+use nessa_sdk::application::agent_execution::providers::HarnessHostIdentity;
 
 use crate::env_serve::install::Platform;
 use crate::timer::TokioTimer;
@@ -453,10 +454,16 @@ impl EnvironmentAudit for Audit {
 // ---- the gateway ----
 
 struct Binding {
+    captured_host: Option<Arc<dyn HarnessHost>>,
     capabilities: EffectiveCapabilities,
     host: Arc<Mutex<Option<Arc<dyn HarnessHost>>>>,
 }
 impl AgentProvider for Binding {
+    fn harness_host_identity(&self) -> HarnessHostIdentity<'_> {
+        self.captured_host
+            .as_ref()
+            .map_or_else(HarnessHostIdentity::local, HarnessHostIdentity::hosted)
+    }
     fn identity(&self) -> ProviderIdentity {
         ProviderIdentity::new("fixture", "model", "context").expect("a fixed identity is valid")
     }
@@ -473,8 +480,9 @@ impl AgentProvider for Binding {
         })
     }
     fn on_host(&self, host: Arc<dyn HarnessHost>) -> Result<Arc<dyn AgentProvider>, AgentError> {
-        *self.host.lock().unwrap() = Some(host);
+        *self.host.lock().unwrap() = Some(host.clone());
         Ok(Arc::new(Binding {
+            captured_host: Some(host),
             capabilities: self.capabilities.clone(),
             host: self.host.clone(),
         }))
@@ -532,6 +540,7 @@ async fn leased_pausing(
     .capabilities()
     .clone();
     let binding = Arc::new(Binding {
+        captured_host: None,
         capabilities,
         host: given.clone(),
     });

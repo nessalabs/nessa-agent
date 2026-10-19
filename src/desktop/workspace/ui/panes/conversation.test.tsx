@@ -104,9 +104,7 @@ describe("a pane's composer shows the model the next message is sent with", () =
     })
     expect(field()).toBe(mounted)
     expect(shownModel()).toContain("Claude Opus 5")
-    expect(
-      host.querySelector(".desktop-chip-model")?.getAttribute("disabled"),
-    ).not.toBeNull()
+    expect(host.querySelector(".desktop-chip-model")?.getAttribute("disabled")).toBeNull()
     expect(await sentWith(store, source, "a")).toEqual(
       store.getState().workspace.sessions.a.model,
     )

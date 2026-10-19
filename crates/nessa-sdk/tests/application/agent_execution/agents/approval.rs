@@ -1,10 +1,12 @@
-//! A live approval change belongs to the attachment it was verified on.
-//! A later attachment a caller opens starts at the binding's preset; one the
-//! agent recovers by itself keeps the change. The mode the agent reports is
-//! the mode its admissions record.
+//! Confirmed approval settings survive attachment retirement.
+//! The mode reported by Agent is the mode saved on subsequent admissions.
 
 use super::MemoryStorage;
 use crate::application::agent_execution::support::*;
+use nessa_sdk::application::agent_execution::providers::HarnessHostIdentity;
+use nessa_sdk::application::agent_execution::providers::NativeExecutionHandoff;
+use nessa_sdk::application::agent_execution::traces::LocalTraceStore;
+use nessa_sdk::domain::model_metadata::value_objects::EffortLevel;
 use std::{sync::atomic::AtomicBool, time::Duration};
 use tokio::sync::{
     oneshot::{self, Receiver},
@@ -41,10 +43,21 @@ impl ProviderSessionBackend for Backend {
     fn prepare_invocation(&self) -> ProviderOperationFuture<'_, ()> {
         self.inner.prepare_invocation()
     }
-    fn execute(&self, input: ExecutionRequest) -> ProviderExecutionFuture<'_> {
+    fn execute(
+        &self,
+        input: ExecutionRequest,
+        handoff: NativeExecutionHandoff,
+    ) -> ProviderExecutionFuture<'_> {
         match self.next_reply.lock().unwrap().take() {
-            Some(reply) => Box::pin(async move { reply }),
-            None => self.inner.execute(input),
+            Some(reply) => Box::pin(async move {
+                if matches!(&reply, ProviderExecutionReply::Finished(_)) {
+                    if let Err(error) = handoff() {
+                        return ProviderExecutionReply::Rejected(error);
+                    }
+                }
+                reply
+            }),
+            None => self.inner.execute(input, handoff),
         }
     }
     fn answer_question(&self, answer: QuestionAnswer) -> ProviderOperationFuture<'_, ()> {
@@ -78,10 +91,27 @@ impl ExecutionEventStream for Events {
 struct Provider {
     /// The preset every context this binding opens is configured with.
     initial: ApprovalMode,
-    opened: Mutex<Vec<ApprovalMode>>,
+    opened: Arc<Mutex<Vec<ApprovalMode>>>,
     backend: Arc<Backend>,
 }
 impl AgentProvider for Provider {
+    fn harness_host_identity(&self) -> HarnessHostIdentity<'_> {
+        HarnessHostIdentity::local()
+    }
+    fn with_model_configuration(
+        &self,
+        mode: Option<ApprovalMode>,
+        effort: Option<EffortLevel>,
+        _traces: Option<Arc<LocalTraceStore>>,
+    ) -> Result<Arc<dyn AgentProvider>, AgentError> {
+        assert_eq!(effort, None);
+        Ok(Arc::new(Self {
+            initial: mode.unwrap(),
+            opened: self.opened.clone(),
+            backend: self.backend.clone(),
+        }))
+    }
+
     fn approval_mode(&self) -> Option<ApprovalMode> {
         Some(self.initial)
     }
@@ -147,7 +177,7 @@ async fn prepared() -> Prepared {
     });
     let provider = Arc::new(Provider {
         initial: ApprovalMode::Ask,
-        opened: Mutex::new(Vec::new()),
+        opened: Arc::new(Mutex::new(Vec::new())),
         backend: backend.clone(),
     });
     let audit = Arc::new(AdmissionAudit::default());
@@ -198,8 +228,7 @@ async fn finish_steering(agent: &Agent, id: &str) {
 }
 
 #[tokio::test]
-async fn a_live_approval_change_is_what_its_attachment_admits_and_a_new_attachment_admits_the_binding_mode(
-) {
+async fn a_verified_approval_change_is_retained_by_later_attachments_and_admissions() {
     let Prepared {
         agent,
         provider,
@@ -209,17 +238,18 @@ async fn a_live_approval_change_is_what_its_attachment_admits_and_a_new_attachme
     } = prepared().await;
 
     assert_eq!(agent.approval_mode(), Some(ApprovalMode::Ask));
-    agent.set_approval_mode(ApprovalMode::Auto).await.unwrap();
+    agent
+        .set_approval_mode(ApprovalMode::Auto, close_action())
+        .await
+        .unwrap();
     assert_eq!(agent.approval_mode(), Some(ApprovalMode::Auto));
     finish(&agent, "queued-live").await;
     finish_steering(&agent, "steered-live").await;
     assert_eq!(agent.approval_mode(), Some(ApprovalMode::Auto));
 
     agent.close(close_action()).await.unwrap();
-    // Detached: the next attachment will open at the binding's preset.
-    // Work accepted now records that preset, not the live change, whose
-    // provider generation is still the one close left behind.
-    assert_eq!(agent.approval_mode(), Some(ApprovalMode::Ask));
+    // Detached admissions retain the durably confirmed configuration.
+    assert_eq!(agent.approval_mode(), Some(ApprovalMode::Auto));
     let detached = agent
         .enqueue(request("queued-detached"), Submitter::owner(close_action()))
         .await
@@ -234,7 +264,7 @@ async fn a_live_approval_change_is_what_its_attachment_admits_and_a_new_attachme
         .await
         .unwrap();
 
-    assert_eq!(agent.approval_mode(), Some(ApprovalMode::Ask));
+    assert_eq!(agent.approval_mode(), Some(ApprovalMode::Auto));
     assert_eq!(
         tokio::time::timeout(Duration::from_secs(5), detached.wait())
             .await
@@ -243,30 +273,29 @@ async fn a_live_approval_change_is_what_its_attachment_admits_and_a_new_attachme
     );
     finish(&agent, "queued-next").await;
     finish_steering(&agent, "steered-next").await;
-    assert_eq!(agent.approval_mode(), Some(ApprovalMode::Ask));
+    assert_eq!(agent.approval_mode(), Some(ApprovalMode::Auto));
     assert_eq!(
         *audit.0.lock().unwrap(),
         [
             Some(ApprovalMode::Auto),
             Some(ApprovalMode::Auto),
-            Some(ApprovalMode::Ask),
-            Some(ApprovalMode::Ask),
-            Some(ApprovalMode::Ask),
+            Some(ApprovalMode::Auto),
+            Some(ApprovalMode::Auto),
+            Some(ApprovalMode::Auto),
         ]
     );
-    // The new context was opened at the binding's preset, not the live change.
+    // The same factory retains the confirmed setting for the next attachment.
     assert_eq!(
         *provider.opened.lock().unwrap(),
-        [ApprovalMode::Ask, ApprovalMode::Ask]
+        [ApprovalMode::Ask, ApprovalMode::Auto]
     );
     assert_eq!(*backend.applied.lock().unwrap(), [ApprovalMode::Auto]);
     agent.close(close_action()).await.unwrap();
 }
 
-/// An attachment the agent opens by itself, after its provider let the last
-/// one go, is the agent's own doing: a mode changed live on the attachment it
-/// replaces is applied to it before the next turn runs, where a caller's new
-/// attachment opens at the binding's preset (above).
+/// Automatic recovery opens the same normalized configuration as an explicit
+/// attachment. The acknowledged preset is applied by that factory before
+/// publication, without replaying a second native approval command.
 #[tokio::test]
 async fn an_attachment_the_agent_recovers_by_itself_keeps_the_live_mode() {
     let Prepared {
@@ -276,7 +305,10 @@ async fn an_attachment_the_agent_recovers_by_itself_keeps_the_live_mode() {
         audit,
         ..
     } = prepared().await;
-    agent.set_approval_mode(ApprovalMode::Auto).await.unwrap();
+    agent
+        .set_approval_mode(ApprovalMode::Auto, close_action())
+        .await
+        .unwrap();
     *backend.next_reply.lock().unwrap() =
         Some(ProviderExecutionReply::Finished(ExecutionReport::new(
             Some(Ok(ExecutionOutcome::Completed)),
@@ -289,13 +321,10 @@ async fn an_attachment_the_agent_recovers_by_itself_keeps_the_live_mode() {
     finish(&agent, "recovered").await;
     assert_eq!(
         *provider.opened.lock().unwrap(),
-        [ApprovalMode::Ask, ApprovalMode::Ask],
-        "the agent opened a second attachment by itself"
+        [ApprovalMode::Ask, ApprovalMode::Auto],
+        "automatic recovery opened the confirmed configuration"
     );
-    assert_eq!(
-        *backend.applied.lock().unwrap(),
-        [ApprovalMode::Auto, ApprovalMode::Auto]
-    );
+    assert_eq!(*backend.applied.lock().unwrap(), [ApprovalMode::Auto]);
     assert_eq!(agent.approval_mode(), Some(ApprovalMode::Auto));
     assert_eq!(
         *audit.0.lock().unwrap(),
@@ -314,7 +343,10 @@ async fn admit_across_close(steer: bool) -> (Result<(), AgentError>, Vec<Option<
         storage,
         ..
     } = prepared().await;
-    agent.set_approval_mode(ApprovalMode::Auto).await.unwrap();
+    agent
+        .set_approval_mode(ApprovalMode::Auto, close_action())
+        .await
+        .unwrap();
     assert_eq!(agent.approval_mode(), Some(ApprovalMode::Auto));
     let (saving, release) = storage.pause_invocation_save("across-close");
     let runner = agent.clone();
@@ -335,7 +367,7 @@ async fn admit_across_close(steer: bool) -> (Result<(), AgentError>, Vec<Option<
     let closer = agent.clone();
     let closing = tokio::spawn(async move { closer.close(close_action()).await });
     tokio::time::timeout(Duration::from_secs(5), async {
-        while agent.approval_mode() != Some(ApprovalMode::Ask) {
+        while agent.attachment_status().phase() == AttachmentPhase::Attached {
             tokio::task::yield_now().await;
         }
     })
@@ -374,7 +406,7 @@ async fn a_pending_approval_change_is_interrupted_by_concurrent_close() {
     let Prepared { agent, backend, .. } = prepared().await;
     let (_release, response) = oneshot::channel();
     *backend.response.lock().unwrap() = Some(response);
-    let changing = agent.set_approval_mode(ApprovalMode::Auto);
+    let changing = agent.set_approval_mode(ApprovalMode::Auto, close_action());
     tokio::pin!(changing);
     tokio::select! {
         _ = backend.started.notified() => {},
@@ -406,7 +438,7 @@ async fn a_dropped_approval_caller_still_publishes_its_acknowledged_mode_for_adm
     let (release, response) = oneshot::channel();
     *backend.response.lock().unwrap() = Some(response);
     {
-        let changing = agent.set_approval_mode(ApprovalMode::Auto);
+        let changing = agent.set_approval_mode(ApprovalMode::Auto, close_action());
         tokio::pin!(changing);
         tokio::select! {
             _ = backend.started.notified() => {},
@@ -422,7 +454,10 @@ async fn a_dropped_approval_caller_still_publishes_its_acknowledged_mode_for_adm
     assert_eq!(agent.approval_mode(), Some(ApprovalMode::Auto));
     assert_eq!(*backend.applied.lock().unwrap(), [ApprovalMode::Auto]);
     assert_eq!(*audit.0.lock().unwrap(), [Some(ApprovalMode::Auto)]);
-    agent.set_approval_mode(ApprovalMode::Ask).await.unwrap();
+    agent
+        .set_approval_mode(ApprovalMode::Ask, close_action())
+        .await
+        .unwrap();
     finish(&agent, "after-repeated-change").await;
     assert_eq!(
         *audit.0.lock().unwrap(),
@@ -437,7 +472,7 @@ async fn close_after_approval_caller_loss_retires_a_late_response_without_revivi
     let (release, response) = oneshot::channel();
     *backend.response.lock().unwrap() = Some(response);
     {
-        let changing = agent.set_approval_mode(ApprovalMode::Auto);
+        let changing = agent.set_approval_mode(ApprovalMode::Auto, close_action());
         tokio::pin!(changing);
         tokio::select! {
             _ = backend.started.notified() => {},
@@ -470,7 +505,7 @@ async fn an_uncertain_approval_response_fences_its_generation_without_publishing
     let Prepared { agent, backend, .. } = prepared().await;
     let (release, response) = oneshot::channel();
     *backend.response.lock().unwrap() = Some(response);
-    let changing = agent.set_approval_mode(ApprovalMode::Auto);
+    let changing = agent.set_approval_mode(ApprovalMode::Auto, close_action());
     tokio::pin!(changing);
     tokio::select! {
         _ = backend.started.notified() => {},
@@ -503,7 +538,7 @@ async fn a_backend_panic_before_returning_the_approval_future_fences_its_generat
     let Prepared { agent, backend, .. } = prepared().await;
     backend.panic_before_future.store(true, Ordering::SeqCst);
     let failure = agent
-        .set_approval_mode(ApprovalMode::Auto)
+        .set_approval_mode(ApprovalMode::Auto, close_action())
         .await
         .unwrap_err();
     assert!(matches!(failure.error(), AgentError::Protocol(_)));
@@ -530,7 +565,10 @@ async fn a_backend_panic_before_returning_the_approval_future_fences_its_generat
 #[tokio::test]
 async fn a_turn_that_asks_for_a_mode_is_refused_where_it_would_run_at_another() {
     let Prepared { agent, audit, .. } = prepared().await;
-    agent.set_approval_mode(ApprovalMode::Auto).await.unwrap();
+    agent
+        .set_approval_mode(ApprovalMode::Auto, close_action())
+        .await
+        .unwrap();
     let at = |mode| Submitter::owner(close_action()).with_approval_mode(mode);
     assert_eq!(
         agent
@@ -549,31 +587,31 @@ async fn a_turn_that_asks_for_a_mode_is_refused_where_it_would_run_at_another() 
         Ok(ExecutionOutcome::Completed)
     );
 
-    // Detached, the next attachment opens at the binding's preset: work that
-    // asks for the live change would run at another mode.
+    // Detached admissions still use the durably confirmed preset. A stale
+    // caller expectation is refused before any new record or queue effect.
     agent.close(close_action()).await.unwrap();
     assert_eq!(
         agent
-            .enqueue(request("refused-detached"), at(ApprovalMode::Auto))
+            .enqueue(request("refused-detached"), at(ApprovalMode::Ask))
             .await
             .err(),
         Some(AgentError::ApprovalModeChanged)
     );
     assert!(matches!(
         agent
-            .steer(request("refused-steer"), at(ApprovalMode::Auto))
+            .steer(request("refused-steer"), at(ApprovalMode::Ask))
             .await
             .err(),
         Some(AgentError::ApprovalModeChanged)
     ));
     let detached = agent
-        .enqueue(request("detached"), at(ApprovalMode::Ask))
+        .enqueue(request("detached"), at(ApprovalMode::Auto))
         .await
         .unwrap();
     // Only the admitted turns were recorded or saved.
     assert_eq!(
         *audit.0.lock().unwrap(),
-        [Some(ApprovalMode::Auto), Some(ApprovalMode::Ask)]
+        [Some(ApprovalMode::Auto), Some(ApprovalMode::Auto)]
     );
     let saved = agent
         .session_manager()

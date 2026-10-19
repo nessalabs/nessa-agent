@@ -390,6 +390,12 @@ against a private scripted gateway.
   (`SessionAccessory`, drawn by the workspace's slot). Counts live in
   `src/desktop/model/counts.ts`. The preview is the window preference
   `useSubagentsPreview`, offered under Settings › Advanced › Experimental.
+- Same-provider model changes use the existing desktop picker and workspace
+  source. `model/model-choice.ts` owns the correlated choice value;
+  `adapters/store/model-commands.ts` owns capture and request settlement. Source
+  model/pending facts remain in the gateway transcript; access stays with its
+  existing owner. `model-commands.test.ts` and the real-window stress model step
+  exercise both acknowledgement/frame orders and retained drafts/reviews.
 - The desktop composer's Send and Stop controls have separate DOM identities
   (`src/desktop/ui/composer.tsx`). A gesture that began on one cannot invoke
   the replacement action after a source phase change; the unsent draft stays.
@@ -961,7 +967,7 @@ source permission or socket capacity. Its lifecycle tests live under
 `tests/core/read_workers.rs`; record-specific admission tests stay with their
 source adapter. Attachment adapters consume this owner when activated.
 
-`conversation/application/metadata_target.rs` correlates existing metadata loads and creation acknowledgements with the requested identity before ownership, selection, grant admission or effects. Created receipts additionally match the admitted full immutable proposal; Existing retains original creator evidence. Current mode intent/terminal/retirement tests live in `tests/conversation/approval_mode.rs`; creation receipt tests in `tests/conversation/creation_metadata.rs`. Projection owns selection/runtime replacements and their revision; no display-history or paging API is added.
+`conversation/application/metadata_target.rs` correlates existing metadata loads and creation acknowledgements with the requested identity before ownership, selection, grant admission or effects. Created receipts additionally match the admitted full immutable proposal; Existing retains original creator evidence. Current mode intent/terminal/retirement tests live in `tests/conversation/approval_mode.rs`, with unchanged-preset publication/recovery in `tests/conversation/approval_mode/unchanged.rs`; creation receipt tests in `tests/conversation/creation_metadata.rs`. Projection owns selection/runtime replacements and their revision; no display-history or paging API is added.
 
 Named record-read owners: `conversation/application/record_read/read.rs` owns passive read orchestration and its port/types; `conversation/infrastructure/record_read/source.rs` owns tracked read lifecycle, `operation.rs` owns SDK physical execution; `product/record_read/dispatch.rs` owns routing and typed outcome presentation, with `wire.rs` the codec. Their mod.rs files contain module documentation/declarations/reexports. Infrastructure tests live under `tests/conversation/record_read/`.
 `product/subscription/` owns replay-to-live view and list subscriptions on the product socket ([record subscriptions](design/record-subscriptions.md)): `connection.rs` a connection's subscriptions and their limits, `target.rs` one task per subscription — wake sources registered before each read, every batch admitted in `authorize_batch`, read through the same fold as `conversation.read` and `conversation.list`, `lagging` when a frame is not taken in time — and `delivery.rs` the frames the single writer in `socket.rs` takes, one in flight per subscription. `conversation/application/live_changes.rs` wakes a reader on live facts that are not records. The client side is `packages/nessa-client/src/presentation/subscription-api.ts` and `protocol/subscription-validate.ts`; socket tests are `tests/product/socket/subscriptions.rs`. The desktop workspace's gateway source (`src/desktop/workspace/adapters/gateway/gateway-source.ts`) follows these subscriptions and polls nothing.

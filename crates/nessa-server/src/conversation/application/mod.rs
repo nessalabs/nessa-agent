@@ -40,6 +40,11 @@
 //! repository intent -> attached Agent verification (or deferred cold choice)
 //! -> ConversationModeAudit -> atomic repository result. Uncertain application
 //! retires the old session and restores the last committed choice before a turn.
+//! `service/model_changes` serializes a live same-provider choice through the
+//! same admission lock: model_requests intent -> SDK attributed ModelChanged
+//! -> observed native configuration -> atomic model and approval selection.
+//! The SDK owns native context/history; model_requests owns publication and
+//! retries. Recovery correlates both records before admitting another message.
 //! A retirement, or a close while a mode change is pending, whose stop runs past
 //! its budget carries on until that slot is released
 //! (`a_mode_retirement_past_its_budget_lets_the_agent_go`,
@@ -167,6 +172,7 @@ mod locks;
 mod mcp_apps;
 mod metadata_target;
 pub(crate) use metadata_target::load_conversation;
+mod model_changes;
 mod owner_phone_policy;
 pub(crate) use metadata_target::ConversationMetadataReader;
 mod passive_read;
@@ -260,6 +266,10 @@ pub(crate) use placement::{ConversationPlacements, PlacementError};
 // For the paired environment adapter, which lives with the Unix-only SSH one.
 pub(crate) use drive_tools::MAX_ADMITTED_POLICIES;
 pub use drive_tools::{DriveToolAudit, DriveToolAuditRecord, DriveTools};
+pub use model_changes::{
+    ConversationModelApplication, ConversationModelRequest, ConversationModelRequestState,
+    ConversationModelSelection,
+};
 pub use permission_rules::{
     rule_principal, ListedPermissionRule, PermissionRuleCatalog, PermissionRulePolicyEvaluator,
     PermissionRuleUnavailable, RuleCatalogError, RuleChange, RulePrincipal, RuleSettlement,

@@ -366,6 +366,8 @@ mod retained_tests {
     #[test]
     fn publication_materializes_independent_immutable_snapshot() {
         let snapshot = SessionSnapshot {
+            model_change: None,
+            current_configuration: None,
             id: SessionId::new("session").unwrap(),
             provider: ProviderIdentity::new("provider", "model", "workspace").unwrap(),
             provider_context: ProviderContext::Absent,

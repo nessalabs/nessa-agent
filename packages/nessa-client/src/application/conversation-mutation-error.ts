@@ -126,6 +126,7 @@ export function rejectedBeforeDispatch(code: ConversationErrorCode): boolean {
     case ConversationErrorCode.ModelUnavailable:
     case ConversationErrorCode.ApprovalModeUnavailable:
     case ConversationErrorCode.ApprovalRequestConflict:
+    case ConversationErrorCode.ModelChangeNotApplied:
     case ConversationErrorCode.TurnRunning:
       return true
     // No lease was granted for the agent's run, so the gateway never opened a
@@ -216,6 +217,7 @@ export function rejectedBeforeDispatch(code: ConversationErrorCode): boolean {
     case ConversationErrorCode.ConversationErasureIncomplete:
     case ConversationErrorCode.ApprovalModeNotApplied:
     case ConversationErrorCode.ApprovalModeUncertain:
+    case ConversationErrorCode.ModelChangeUncertain:
       return false
     // An MCP App's request refused before it took effect: for a call
     // (mcp.callTool, mcp.readResource), before anything reached its server;

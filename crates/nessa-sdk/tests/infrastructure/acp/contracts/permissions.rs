@@ -2004,7 +2004,11 @@ async fn a_malformed_stopped_reply_fails_the_worker_and_refuses_the_held_prompt(
     );
     let mut opened = open_that_stops(&binding, audit.clone()).await;
     let session = opened.session.clone();
-    let first = tokio::spawn(async move { session.execute(prompt("stop-this")).await });
+    let first = tokio::spawn(async move {
+        session
+            .execute(prompt("stop-this"), Arc::new(|| Ok(())))
+            .await
+    });
     assert!(matches!(next(&mut opened).await, ExecutionUpdate::Tool(_)));
     assert!(matches!(
         next(&mut opened).await,
@@ -2015,7 +2019,11 @@ async fn a_malformed_stopped_reply_fails_the_worker_and_refuses_the_held_prompt(
         ExecutionUpdate::Finished(ExecutionOutcome::Cancelled)
     ));
     let session = opened.session.clone();
-    let second = tokio::spawn(async move { session.execute(prompt("held-after-malformed")).await });
+    let second = tokio::spawn(async move {
+        session
+            .execute(prompt("held-after-malformed"), Arc::new(|| Ok(())))
+            .await
+    });
     tokio::time::sleep(Duration::from_millis(50)).await;
     std::fs::write(root.path().join("release-stopped-result"), "yes").unwrap();
     let first = timeout(Duration::from_secs(3), first)
@@ -2101,7 +2109,11 @@ async fn a_held_prompt_expires_before_the_stop_grace() {
     .unwrap();
     let mut opened = open_that_stops(&binding, audit.clone()).await;
     let session = opened.session.clone();
-    let first = tokio::spawn(async move { session.execute(prompt("stop-this")).await });
+    let first = tokio::spawn(async move {
+        session
+            .execute(prompt("stop-this"), Arc::new(|| Ok(())))
+            .await
+    });
     assert!(matches!(next(&mut opened).await, ExecutionUpdate::Tool(_)));
     assert!(matches!(
         next(&mut opened).await,
@@ -2113,7 +2125,11 @@ async fn a_held_prompt_expires_before_the_stop_grace() {
     ));
     let waits_before_hold = clock.waits().len();
     let session = opened.session.clone();
-    let second = tokio::spawn(async move { session.execute(prompt("held-timeout")).await });
+    let second = tokio::spawn(async move {
+        session
+            .execute(prompt("held-timeout"), Arc::new(|| Ok(())))
+            .await
+    });
     timeout(Duration::from_secs(10), async {
         loop {
             if let Some(wait) = clock
@@ -2180,14 +2196,16 @@ async fn an_unanswered_stop_expires_into_cleanup_required() {
     let (_root, binding) = binding_that_stops("refusal-silent", StopKind::EndTurn, audit.clone());
     let mut opened = open_that_stops(&binding, audit.clone()).await;
     let session = opened.session.clone();
-    let first = tokio::spawn(async move { session.execute(prompt("silent")).await });
+    let first =
+        tokio::spawn(async move { session.execute(prompt("silent"), Arc::new(|| Ok(()))).await });
     assert!(matches!(next(&mut opened).await, ExecutionUpdate::Tool(_)));
     assert!(matches!(
         next(&mut opened).await,
         ExecutionUpdate::ReviewDeclined(_)
     ));
     let session = opened.session.clone();
-    let second = tokio::spawn(async move { session.execute(prompt("next")).await });
+    let second =
+        tokio::spawn(async move { session.execute(prompt("next"), Arc::new(|| Ok(()))).await });
     let first = timeout(Duration::from_secs(3), first)
         .await
         .unwrap()

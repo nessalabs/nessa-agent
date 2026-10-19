@@ -23,6 +23,8 @@ fn params(after: Option<ConversationViewCursor>) -> ConversationSubscribeParams 
 }
 fn blank(text: &str) -> ConversationView {
     ConversationView {
+        model_change: None,
+        model_change_effect: None,
         conversation_id: "conversation".into(),
         revision: "rev".into(),
         server_now_ms: 1,

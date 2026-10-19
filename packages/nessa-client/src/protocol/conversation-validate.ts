@@ -13,6 +13,7 @@ import type {
   ConversationMutationResult,
   ConversationReorderResult,
   ConversationSetApprovalModeResult,
+  ConversationSetModelResult,
   ConversationShareResult,
   ConversationSharesResult,
   ApprovalMode,
@@ -409,6 +410,20 @@ export function conversationApprovalMode(
     throw new Error("Conversation mode result contradicts the requested change")
   return item as unknown as ConversationSetApprovalModeResult
 }
+/** Correlate the model reply before a caller can display its selection. */
+export function conversationModel(
+  value: unknown,
+  requestId: string,
+  requested: string,
+): ConversationSetModelResult {
+  const item = record(value)
+  exact(item, ["requestId", "model", "approvalMode", "effect"])
+  if (identity(item, "requestId") !== requestId || text(item, "model") !== requested)
+    throw new Error("Conversation model result contradicts the requested change")
+  oneOf(text(item, "approvalMode"), ["ask", "auto", "full"])
+  oneOf(text(item, "effect"), ["subsequentResponses", "nextTurn"])
+  return item as unknown as ConversationSetModelResult
+}
 export function conversationView(value: unknown, expected: string): ConversationView {
   const item = record(value)
   exact(item, [
@@ -436,6 +451,8 @@ export function conversationView(value: unknown, expected: string): Conversation
     "approvalMode",
     "approvalModes",
     "approvalModeChange",
+    "modelChange",
+    "modelChangeEffect",
   ])
   if (identity(item, "conversationId") !== expected)
     throw new Error("Conversation response belongs to another conversation")
@@ -466,6 +483,15 @@ export function conversationView(value: unknown, expected: string): Conversation
       throw new Error("Conversation requested mode is unavailable")
     oneOf(text(change, "status"), ["changing", "recovery_required"])
   }
+  if (item.modelChange !== undefined) {
+    const change = record(item.modelChange)
+    exact(change, ["requestId", "requestedModel", "status"])
+    identity(change, "requestId")
+    text(change, "requestedModel", 256, false)
+    oneOf(text(change, "status"), ["changing", "recovery_required"])
+  }
+  if (item.modelChangeEffect !== undefined)
+    oneOf(text(item, "modelChangeEffect"), ["subsequentResponses", "nextTurn"])
   if (item.interactionViewError !== undefined)
     text(item, "interactionViewError", 2048, false)
   const messages = items(item, "messages", 128)

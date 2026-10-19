@@ -540,6 +540,10 @@ export function transcriptFrom(
       cause: view.lease.cause,
       refusal: view.lease.refusal,
     },
+    modelControl: {
+      ...(view.modelChange ? { pending: { ...view.modelChange } } : {}),
+      ...(view.modelChangeEffect ? { effect: view.modelChangeEffect } : {}),
+    },
     access: {
       mode: view.approvalMode,
       modes: view.approvalModes.map((choice) => choice.id),

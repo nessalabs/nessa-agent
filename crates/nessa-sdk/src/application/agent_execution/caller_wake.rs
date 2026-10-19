@@ -55,6 +55,8 @@ pub(crate) enum CallerWaiter {
     Close(SessionId),
     /// `Agent::set_effort_level` on this session's Agent.
     EffortLevelChange(SessionId),
+    /// `Agent::set_model` on this session.
+    ModelChange(SessionId),
     /// `Agent::answer_permission` on this session's Agent.
     PermissionAnswer(SessionId),
     /// `Agent::cancel_permission` on this session's Agent.
@@ -119,6 +121,9 @@ impl fmt::Display for CallerWaiter {
             }
             Self::QueueRemoval(id) => write!(formatter, "removal of queued {}", id.as_str()),
             Self::Close(session) => write!(formatter, "close of session {}", session.as_str()),
+            Self::ModelChange(session) => {
+                write!(formatter, "model change of session {}", session.as_str())
+            }
             Self::EffortLevelChange(session) => {
                 write!(
                     formatter,

@@ -208,8 +208,10 @@ settlement of accepted work are separate completion boundaries.
 Its owned task holds the scheduler lock and work permit through acknowledgement
 and generation-correlated publication, independently of the caller's waiter.
 The backend owns verified native application; the SDK owns admission's mode.
-No new durable approval-change record is introduced: queue admission audit owns
-its existing generation-correlated mode, and cleanup keeps its existing audit.
+The SDK records attributed native configuration intent, verified acknowledgement,
+and settlement through its audit port. Queue admission separately records the
+configuration captured for that input; the current configuration fact owns restore.
+The host's metadata journal is a separate commit boundary.
 `agents::approval` checks the approval-specific orderings. The common runner's
 `agents::coordination::ready_results` and
 `control_admitted_before_provider_reply_cannot_first_poll_after_unusable_state`
@@ -407,3 +409,318 @@ Not covered:
   `caller_wakes` in `tests/infrastructure/session_storage/` shows the worker
   still answers. A payload whose drop panics is the same Tokio-task exposure
   as a `JoinHandle`, not a second owner of this rule.
+
+## Live model and permission configuration
+
+`Agent::set_model(target, actor)` retains the existing native provider session and
+any active execution. `ModelChange::between` checks the exact prior/target model
+identities and provider-owned stable execution-context proof. Normal preparation
+still refuses an arbitrary identity mismatch; only an explicit model-change fact
+can rebind stored history. Claude applies a confirmed choice to subsequent
+responses; Codex applies it to the next native turn. The returned
+`ModelChangeEffect` reports this boundary and the complete confirmed model
+capabilities, permission preset and effort. A target model may change the latter
+two settings; the SDK validates the acknowledgement together rather than retaining
+an old effort under a new model name. Claude's output ceiling is a launch setting:
+changing that ceiling requires another launch and is refused before a live model
+request. Changing its model with the same ceiling is supported.
+
+The scheduler serializes model/settings controls with admission. Live model and
+changing approval-preset controls preserve the configuration of unstarted admitted
+input, including queued, selected and preparing work. The common audited control wrapper asks its existing
+work permit whether another owner remains Waiting or selected/preparing Active,
+and returns Busy before native effect. It does not reinterpret waiting input against a new selection.
+The control permit excludes its own identity. Existing lifecycle retirement
+requires retired non-waiting owners to drain before reopening; waiting owners
+survive automatic recovery and remain blockers until execution or retirement.
+Failed-attachment settlement retains the scheduler lock until its Settling owners
+retire, and failed-provider readiness refuses control admission. Public controls
+therefore do not independently reach the guard with a Settling owner; the
+exhaustive match conservatively retains that phase without a separate public
+omission-coverage claim.
+An Executing turn alone still permits supported native model control and keeps its
+original execution and trace identity; later admission records the current
+configured model. The trace store belongs to the Agent
+lifetime, so replacing a model factory cannot orphan a span started earlier.
+`Agent::set_approval_mode(mode, actor)` also permits an active owner turn. Neither
+control answers, replaces or cancels existing permission requests. A checked grant
+must continue to use Ask with native hooks disabled: relaxing it is refused before
+dispatch, and a model acknowledgement that unexpectedly relaxes it fences the
+uncertain generation. `agents::models` tests these active-turn relationships.
+
+`SessionSnapshot::current_configuration` is the latest attributed settings owner,
+including its exact before/after configuration and typed change kind. Historical
+`model_change` separately identifies the original model operation for host-journal
+recovery; a later permission choice does not rewrite that operation. Both facts
+are saved before success is published. `SessionManager::saved_configuration` and
+`saved_model_change` read committed evidence without opening a provider. A cold
+`SessionManager::change_model` requires settled history and preserves its native
+context; it is not a live-control shortcut. An unfinished save remains unresolved
+until the storage owner reconciles it.
+
+Factories with live settings controls must implement `with_model_configuration`
+as a pure, validated clone retaining their host/lease/credential authority and
+trace store. A changed setting is preflighted through that port before native
+mutation. Restore needs no clone when the supplied factory already has the exact
+saved configuration; otherwise unsupported normalization fails before opening.
+`Agent::capabilities` returns an owned current snapshot, not a lifetime-long model
+promise. Keep identity/capabilities from one control result together when applying
+host projections.
+
+`ProviderOperationFailure::stage()` distinguishes SDK-owned `BeforeEffect`
+refusals from `EffectUncertain`; `Usable` alone does not prove no native mutation.
+After backend dispatch, failures are always uncertain: an adapter cannot reuse
+a `BeforeEffect` failure obtained from another SDK operation. Only this operation's
+local preflight branches retain that proof. `ConfigurationControlled`
+audit keeps the original requested model/preset separately from the native
+acknowledgement and SDK persistence outcome. A verified native acknowledgement is
+recorded before saving current configuration, so a subsequent storage failure does
+not erase the already observed native settings. Before-effect refusals and uncertain
+failures retain the same actor and attachment identity as their request.
+Uncertain model replies,
+contradictory acknowledgements and failed durable saves fence further work rather
+than publishing the requested configuration. The owned control task settles after
+a caller drops its wait, and concurrent close retains the existing generation
+fence. Scripted `acp::contracts::model_switch` tests exercise both actual profiles
+through the process boundary, including original/new trace provenance.
+
+
+The configuration settlement order is designed around the existing work permit,
+not another control lifetime. The accepted #922 recovery contract conservatively
+fences its captured current attachment on any admitted-owner unwind, including preflight, before retiring
+work. This matches the public `CleanupRequired` result without claiming native
+application. Ordinary drop and caller loss do not imply unwind; the native poll
+boundary still owns native stop/receipt ordering.
+`ModelConfiguration` owns cloning and validating a configured factory, shared by
+model preflight, native acknowledgement and restore. The retained configuration
+record owns its relationship to the historical model record; semantic folding and
+snapshot validation both ask that owner.
+
+| State and event/order | Settlement and retained evidence | Regression |
+| --- | --- | --- |
+| Saved completed A submission, then B narrows context/output/image support, then exact Queue/Boundary/Steer retry | Saved request identity and receipt resolve before fresh CURRENT-configuration validation; no extra dispatch, save or admission audit. All nine before-probes rejected the exact receipt against B | `models::admission::saved_*_retry_after_*` (nine cases) |
+| Same-ID changed request after B, or fresh invalid request under B | Saved identity mismatch remains SubmissionConflict; genuinely new input still uses current configured validation. Before-probes incorrectly validated conflicts against B while fresh-invalid refusals remained correct | same nine public retry cases; `scheduling_retry_rejects_changed_content_attribution_or_delivery_mode` includes a changed image under the same identity |
+| Sole queued checked input selected and blocked in attached provider preparation; queue empty and active identity absent; changing model/preset requested | The common audited wrapper asks its own WorkPermit before polling a changing control: Waiting and selected/preparing Active other owners return Busy BeforeEffect; Executing owners remain allowed. Both before-probes applied the control and lost the checked turn | `selected_model_retains_admission_authority`; `selected_preset_retains_admission_authority` |
+| Same selected preparation ordering with unchanged Ask preset | The wrapper uses captured before_configuration to exempt an unchanged preset; native control and checked input complete. Public before-positive passed | `selected_unchanged_preset_remains_supported` |
+| Active A plus ordinary/boundary/PromptRequired input admitted under A; target B has smaller limits | Busy BeforeEffect, Requested/Refused audit, zero native model calls and no Applied/model fact; all admitted inputs complete under A | `queued_limits_keep_the_admitted_configuration_authority` |
+| Same ordering, target B removes the admitted image modality | Same refusal and preserved receipts; no dispatch-time reinterpretation | `queued_images_keep_the_admitted_configuration_authority` |
+| Same ordering, checked-grant input needs Ask and B would relax it | Same refusal and preserved checked grant; no queued tool-policy invalidation | `queued_checked_grants_keep_the_admitted_configuration_authority` |
+| Owner A active plus queued checked-grant Ask input; direct preset would relax Ask | Shared work-permit prerequisite returns Busy BeforeEffect for a changing preset and preserves all receipts. Before correction, Full succeeded and queued checked input failed Unsupported; active-only control remains allowed | `queued_preset_keeps_the_admitted_configuration_authority` |
+| Queued checked-grant Ask input and an unchanged Ask preset request | Existing same-value native control and audit behavior remains allowed; the pending-work prerequisite exempts an unchanged preset. Public before-probe passed | `queued_unchanged_preset_keeps_the_admitted_configuration_authority` |
+| Only a native-executing active input, no queued or retained pending owner | Supported native model control remains allowed; original active/review identities persist | `a_live_model_change_keeps_the_active_turn_and_context_and_changes_later_admission`; active checked-turn tests |
+| Native model ACK, then configured factory panics | Work-permit unwind fences admission; no Applied or committed model is published; explicit close owns physical cleanup | `post_ack_factory_panic_fences_admission_without_committing_model` |
+| Factory panics during preflight, before native entry | Zero native dispatch and no Applied/committed model; `CleanupRequired` fences subsequent admission until explicit close and restoration | `preflight_factory_panic_fences_admission_until_cleanup` |
+| Ordinary permit drop after completed settlement | No unwind and no fence; later model/settings controls remain usable | adjusted-ACK restore test |
+| Old admitted permit unwinds after its captured generation is replaced | Existing `apply_control_state` generation check prevents fencing the replacement | `permit_unwind_fences_current_but_not_retired_attachment_or_ordinary_drop` |
+| Caller drops wait after dispatch | Owned control continues through acknowledgement and persistence; caller loss does not interrupt settlement | `dropped_model_caller_keeps_owned_settlement_and_original_actor` |
+| Native ACK adjusts mode or effort, factory retains the adjusted settings | Save exact acknowledged settings and install that configured factory | `adjusted_acknowledgements_install_and_restore_complete_configuration` |
+| Native ACK adjusts mode or effort, factory ignores the adjustment | Refuse uncertain, fence admission, and keep prior committed model and settings | `ignored_acknowledged_settings_fence_without_committing_model` |
+| Malformed retained configuration precedes a valid later semantic control | Canonical continuation restore rejects the prior fact before the later control can replace it; checkpoint and custom-store reads ask the same owner | `configuration_relationships_match_semantic_fold_and_checkpoint_restore`; `custom_storage_cannot_restore_model_fact_without_its_current_configuration` |
+| Checkpoint/custom store has an approval change that changes effort, or effort change that changes mode | Reject before opening; semantic application uses the same relationship rule | `configuration_relationships_match_semantic_fold_and_checkpoint_restore` |
+| Latest configuration says Model but its before/after/actor disagrees with retained model, or either fact is missing | Reject before opening and preserve existing committed evidence | same relationship matrix |
+| A valid later permission or effort choice follows a model change | Preserve historical model actor/settings separately; restore latest settings | same relationship matrix and adjusted-ACK restore test |
+
+
+The #922 R2 structural correction separates compatible saved configuration from
+live harness-host ownership. A configuration fingerprint describes launch inputs;
+it cannot prove that equal workspace paths name the same host. The accepted
+contract compares the captured host owner separately: local factories agree with
+local factories, and hosted factories agree only when they borrow the same host
+`Arc`. The provider port supplies an opaque borrowed `HarnessHostIdentity`; it
+exposes no start-capable handle and is never persisted. The existing
+`ModelConfiguration::configured_provider` owner also checks that normalization
+retains this identity, so a settings clone cannot bypass the model-change check.
+Every provider must explicitly report its live host identity: local factories
+assert local execution, hosted factories borrow their captured host owner, and
+wrappers delegate to the wrapped factory. There is no default assertion. This
+supersedes the earlier default-local design: a forgotten wrapper must fail to
+compile rather than silently discard the wrapped authority. An SSH lease retains
+the one host Arc created at grant and reuses it for every target factory.
+On cold restore composition supplies the host, and normalization must preserve
+that supplied owner before opening. Saved fingerprints establish configuration
+compatibility, not historical host identity across process restarts.
+
+| State and event/order | Result and retained authority | Regression |
+| --- | --- | --- |
+| Claude/Codex factories use different host Arcs with equal workspace/configuration | Refuse model change before native dispatch; keep original factory and history | `model_choices_require_the_same_captured_host_owner` |
+| Factories share one host Arc, or both are local | Permit compatible model choice; hosted native change and close/reattach remain on the captured host | same owner matrix; hosted model-switch journey |
+| Local/hosted crossing in either direction with matching configuration | Refuse before native dispatch | same owner matrix |
+| Preflight normalization returns a different host with matching fingerprint | Refuse before native dispatch | `normalization_cannot_replace_the_captured_host_owner` |
+| Adjusted native model ACK requires a clone that replaces its host | Return CleanupRequired and fence; do not install clone or commit model/Applied; original owner retains cleanup | same normalization matrix |
+| Approval/effort normalization replaces the host | Refuse in existing preflight before native settings dispatch; same-host settings remain usable | same normalization matrix |
+| Cold restore settings require a clone that replaces the supplied host | Refuse before provider open; same-host normalization preserves supplied owner and restores once | same normalization matrix |
+
+| Provider implementation omits its host assertion | Compilation fails with E0046; adding a default invalidates the compile-fail example | `AgentProvider::harness_host_identity` compile-fail example |
+| LeaseFence wraps a hosted factory, including configured clones | Delegate live host identity and retain the same lease/fence owner; foreign host with equal attributes is refused | `hosted_lease_fence_and_normalization_delegate_the_captured_host_owner` |
+| SSH lease adapts a model target after grant | Reuse the original grant-created host Arc; target normalization and reopen retain that owner; grant/end once | `model_targets_and_normalization_retain_the_granted_host` |
+
+### Native handoff and admitted configuration
+
+An entered backend future is not a native handoff. Existing Active work must
+retain its admitted configuration through image reads and worker preparation.
+The existing permit owns the fallible transition to Executing; an adapter must
+invoke its handoff only after readiness, profile and frame checks, immediately
+before its serialized native owner begins the effect. Stop or retirement makes a
+late handoff refuse. Executing work continues to permit supported live controls.
+
+| Ordering | Required ownership and result | Evidence |
+| --- | --- | --- |
+| Direct or queued A waits for image bytes; model B requested | Active A returns Busy BeforeEffect for B, no native model command; releasing bytes dispatches A once with original receipt and identity | Real ACP UserImageSource barrier; NextTurn and SubsequentResponses, equal and unequal ceilings; actual before eight failures; fixed ten pass (including Stop). Eager-transition omission reproduces eight failures/two Stop positives; omitted worker transition reproduces eight native-live failures/two Stop positives; exact restoration ten pass |
+| A has crossed serialized native handoff; model B requested | Existing supported live control remains allowed; subsequent queued input uses B | Same public ACP journeys: one native model change after A starts, fresh B prompt, both traces and original saved identities; ten pass |
+| Ready policy drift or profile/frame refusal precedes handoff | Existing worker refuses without calling the permit transition or beginning a native turn | Existing ready-policy refusal leaves count zero; worker frame refusal count zero and fallible Closed handoff forbids native begin; actual regressions pass. Profile check remains immediately before frame construction, with actual ACP unequal-ceiling validation evidence |
+| Stop retires A while image preparation is pending | A late adapter handoff refuses and sends no native prompt | Direct/queued image-read Stop tests pass with zero native prompts/model commands; dropped-work, replaced-attachment and stopped-generation handoff refusal is tested at the existing permit owner |
+
+The model-control test backend's held turn owns its simulated native invocation at
+its `started` notification, before its release wait. Its required port migration
+must invoke handoff there, then forward the same idempotent callback when its
+inner backend settles. Merely forwarding at the end incorrectly labels an
+already native fixture turn as preparing; the existing 52-case model suite caught
+that migration error (39 passed, 13 Busy failures).
+
+### daf57 current-main integration
+
+| Relationship | Existing owner retained by integration | Qualification |
+| --- | --- | --- |
+| Model/preset settings and committed snapshot after a failed save | Main's Continuation applies ConfigurationChanged/ModelChanged units through evidence.record; their existing forward and undo arms retain provider, model-change record and current configuration together. SDK setters do not mutate a second expected snapshot | Assembled571 full SDK runtime: 2,396 passed, 23 ignored; storage/configuration/model suites included |
+| Cold model selection before attachment | Existing complete saved-history validation, exact prior identity and no pending work; storage derives the replacement snapshot from the single ModelChanged unit | Assembled571 cold model-change and persistence suites included in 2,396 SDK passes |
+| Required native handoff and incoming resumption/records | WorkPermit and serialized ACP callback remain unchanged; incoming record continuation, resumption readiness, exact Stop identity and fresh unit save contract are preserved | Focused handoff rules and adapter bodies are checkpoint-identical; assembled571 SDK 2,396/server 3,291 runtime tests pass. Window/gate19 stress remains pending |
+
+### Persistent settings on current-main recovery
+
+| Ordering / relationship | Single owner and intentional contract | Qualification |
+| --- | --- | --- |
+| A verified model/preset choice, then explicit or automatic reattachment | The normalized current_provider and durable current_configuration retain the choice. Opening that factory configures native settings before publication. This intentionally supersedes main's former caller-attachment reset to the original factory preset; no live_approval_mode or carry cache is reintroduced | Preserve automatic-recovery, admission, Stop and failure negatives; migrate only reset assertions. Assembled571 SDK 2,396/server 3,291 runtime tests pass; browser/stress pending |
+| Admission saved while an attachment closes or recovers | Scheduler holds configuration controls and each unstarted WorkPermit blocks changing controls. Capture the preset before the admission save from the current immutable factory; WorkPermit retains its exact work/provider generations for Stop and late handoff. Detached recovery does not reset the factory | Incoming approval/admission and public handoff regressions; assembled571 SDK runtime passes; browser/stress pending |
+| Exact saved retry after a later selection | Recover the saved receipt before fresh required-mode or capability checks; keep its full ExecutionRequest and initiation, including reservation and app contexts | Existing saved queue/boundary/native retries and incoming carried-context/reopen regressions; assembled571 SDK runtime passes; browser/stress pending |
+| Malformed custom snapshot followed by a valid configuration unit | Main owns unit validation through `SessionSaveUnit::fold(prior, units)`, which validates the prior before applying a later unit. Replace the removed candidate-validation test API without weakening malformed-prior or zero-provider-open assertions | First assembled compile failed E0599 at models.rs1309; the incoming save-cost snapshot also requires explicit absent model/configuration fields (E0063). Current public fold regression and unchanged save-cost fixture with no model control pass in the assembled suite |
+
+### Unsupported preset in a model acknowledgement
+
+| Relationship | Existing owner and expected result | Evidence |
+| --- | --- | --- |
+| Target factory accepts Ask only; preflight requests Ask; native model ACK reports Auto | The same target factory validates the complete acknowledged settings. Its Unsupported is post-effect uncertainty: CleanupRequired, one native call, no durable model/configuration commit, new admission fenced until cleanup. Do not relax profile capabilities to accommodate an invalid scripted ACK | Unchanged production passes the new public assertion. Isolated sole post-ACK target-normalization omission wrongly returns success and fails that assertion; source-preserving fresh guarded rebuild passes all 53 model tests. Exact seven-package all-target Clippy passes. This covers an existing guard, not a new production fix |
+
+### Normalized native-hook agreement (#975 R4)
+
+`ModelConfiguration::configured_provider` must preserve the supplied factory's
+`native_hooks_allowed` fact alongside identity, capabilities, settings, context
+and live host owner. Model, approval, effort and saved-setting restoration share
+this owner. A settings clone cannot grant hooks that its supplied factory denies.
+
+| Ordering | Required outcome | Evidence |
+| --- | --- | --- |
+| Model preflight or approval/effort preflight returns a clone with different native-hook policy | BeforeEffect refusal, zero native calls, unchanged durable configuration; admitted work remains usable | Public Agent model/approval/effort preflight cases: old production accepts hook-changing clones; fixed refuses; private sole-check omission reproduces |
+| Native ACK adjustment returns a clone with different native-hook policy | EffectUncertain / CleanupRequired, one native call, no new durable configuration or Applied audit, original actor retained; admission fenced until once-only cleanup | Public Agent adjusted-ACK case: old production accepts; fixed fences; private sole-check omission reproduces |
+| Saved settings need a clone with different native-hook policy | Refuse before opening; exact clone still restores original settings and hook policy | Public Agent saved-setting case: old production opens wrong policy; fixed refuses before open; exact clone restores |
+| Exact clones preserve denied or allowed native hooks through explicit or automatic reattachment | Both opens retain the supplied policy; checked-turn admission keeps its existing contract | Public Agent exact-clone matrix covers false/true policy × caller-requested/automatic recovery, with two policy-preserving opens. Existing active checked-turn control regressions remain required |
+
+The six public hook-normalization tests produce five intended old-production
+failures and one positive matrix. Fixed and private exact-restored runs pass all
+six; omitting only native-hook equality in an isolated archive/target restores
+the five failures while the exact-clone positive passes. Earlier incomplete
+reattachment fixture setup runs remain excluded from that evidence.
+
+### Effort acknowledgement and terminal settlement (#975 R5)
+
+The existing `change_effort_level` owner derives the native outcome before local
+configuration persistence and retention, then attempts one bounded terminal audit
+with its original `EffortLevelChange` while holding the scheduler and permit.
+`Applied` means the native level was verified, not that configuration storage
+succeeded. A later local failure is still returned and fences this generation.
+
+| Ordering | Required outcome | Public evidence |
+| --- | --- | --- |
+| Native ACK, configuration save succeeds and settings retained | Requested then Applied, exact durable settings, admission usable | Existing effort positives plus forwarding-store success; new public positive passes |
+| Native ACK, configuration save refuses | Requested then Applied; primary Storage error / CleanupRequired; no committed configuration at failed return, admission fenced, cleanup once | Forwarding real storage regression; old production fails, fixed and private exact restoration pass |
+| Native ACK, retention clone refuses or panics | Requested then Applied; original normalization error or typed panic failure / CleanupRequired; saved native settings retained, admission fenced, cleanup once | Public returned-refusal and panic cases; old production fails, fixed and private restoration pass |
+| Native ACK, local settlement error and terminal audit error | One terminal attempt, primary local error first and audit error second; CleanupRequired | Storage+audit and retention+audit cases preserve primary-first; fixed and private restoration pass |
+| Native refusal or unverified failure, or caller drops wait | Existing Refused/Failed semantics and owned settlement remain; backend/audit panic containment does not invent an ACK | Existing effort family plus native unverified/panic positives; scoped qualification below |
+
+Runtime teardown may prevent any future polling; no terminal audit delivery is
+claimed after the owning runtime has been destroyed. Model/approval terminal
+records remain owned by their existing outer `audit_configuration_control`.
+
+The eight new public settlement cases produce five intended old-production
+failures and three positives. Fixed and private exact-restored runs pass all
+eight. Omitting only the common terminal audit for known ACK plus local failure
+in an isolated archive/target reproduces the same five failures. Native effect
+and local settlement results remain separate; terminal audit is attempted once.
+
+### Shared model and preset supervision (#975 R6)
+
+`audit_configuration_control` owns supervision of its entire operation and
+success acknowledgement extraction, and one bounded terminal audit attempt.
+A panic becomes SubmissionUnresolved / CleanupRequired under the captured
+permit before faulted future cleanup; panic payload destruction cannot bypass
+settlement. It does not prove native effect or turn a panic into BeforeEffect.
+The scheduler and permit remain held through terminal audit.
+
+| Ordering | Required outcome | Public evidence |
+| --- | --- | --- |
+| Model preflight or adjusted-ACK factory panics | Requested then Failed, original actor, no fabricated verified ACK/Applied; native count0 or1, prior model/configuration retained, new admission fenced, cleanup once | Existing post-ACK case fails old production on required Failed; public model/preflight cases included in affected family |
+| Approval native ACK and settings save succeed, retention factory panics | Requested, Acknowledged, Failed; preserve saved native Auto and original actor; uncertain failure and cleanup once | Public before matrix: two intended failures and two exact-clone positives; fixed and private exact restoration pass |
+| Either panic plus terminal audit rejection | Exactly one Failed attempt, primary SubmissionUnresolved before audit error; CleanupRequired retained | Model and approval combined rejection cases pass with primary uncertainty first; attempts are not delivery claims |
+| Exact settings clones or caller drops wait | Existing single Requested/Acknowledged/Applied settlement and attributed owned task remain | Exact-clone positives and existing caller-drop model regressions |
+| Factory panic payload has a hostile destructor | Contain and forget payload; destructor never runs, original Failed settlement still attempted | Public hostile-payload case passes with destructor count0 |
+
+The existing bounded audit observer contains audit sink construction/poll/drop
+faults. No terminal delivery is promised after owning-runtime destruction.
+Effort retains its separate native-outcome/local-result settlement owner.
+
+The guarded public matrix passes all seven cases. Private isolated removal of
+only operation-poll supervision reproduces four model/preset failures while two
+exact-clone positives pass; the hostile payload is deliberately excluded from
+that unguarded run. Exact fresh-mtime restoration recompiles and passes all
+seven, including the hostile payload. No checkout source variant is used.
+
+The original preflight-panic regression required only Requested. Its assertion
+now requires Requested then Failed on both records with its original custom
+actor, target and no acknowledgement. Native dispatch remains0 and physical
+cleanup/reopen assertions remain unchanged; the first stale-assertion failure is
+retained separately.
+
+### Effort owned computation supervision (#975 R8 follow-up)
+
+After successful Requested, the existing effort settlement owner must retain
+its original change/actor, scheduler and permit through all configuration
+callbacks, native future construction/poll, local settlement and future cleanup.
+Native outcome stays separate from local errors: an observed native Ok is
+Applied even when a later callback unwinds; an earlier unwind is Failed, never
+an invented ACK. Every such exit reaches the same bounded terminal attempt.
+Ordinary repository before evidence confirms the gap: the getter pair gives
+one intended missing-terminal failure and one exact-getter positive; the wider
+initial matrix gives four missing-terminal failures, nine positives and two
+incorrect storage-error expectations. The latter are fixture mistakes: the
+existing storage owner already contains future cleanup and returns typed
+Storage, which must stay primary. All original logs remain distinct.
+The serialized effort contract reuses the captured before preset after ACK;
+it does not call an equivalent getter again merely to construct the new value.
+A required later normalization getter can still fail after configuration save;
+that case retains the exact saved low level and original actor, plus Applied
+native evidence, while returning uncertainty and fencing admission.
+
+| Ordering | Required evidence and failure | Repository evidence |
+| --- | --- | --- |
+| Getter after Requested, before native dispatch, unwinds | Requested then Failed; no native call or durable change; uncertain typed failure/CleanupRequired, admission fenced and cleanup once | Ordinary public Agent before failure; fixed matrix passes |
+| Getter after verified native effort ACK unwinds | Requested then Applied with original actor and levels; native count1, primary uncertain typed failure/CleanupRequired; exact storage state retained, admission fenced and cleanup once | Ordinary public Agent before failure; fixed matrix passes |
+| Native construction/poll, retention or owned future drop unwinds | Same computation supervisor retains known native outcome, fences before cleanup and forgets panic payload; no per-getter or per-retain audit alternative | Ordinary public Agent constructor, retention and native-cleanup matrix; existing caller-drop/audit fixtures |
+| Exact getters, unsent refusal, storage error or combined terminal audit error | Preserve normal success/Refused, primary-first errors and one bounded terminal attempt | Existing public effort positives and affected settlement matrix |
+
+A native future that returns an unsent refusal but unwinds during cleanup has
+not delivered that verified reply to the effort owner. Its terminal is Failed,
+with no invented ACK, no native effect/save and cleanup once. A storage future
+cleanup fault is already contained by the storage owner: after known native ACK
+it retains Applied and the exact typed Storage primary (before any audit error).
+Neither case adds another cleanup or error-policy owner.
+
+The corrected ordinary repository baseline preserves the old retention-panic
+error type and yields five missing-terminal failures and eleven positives,
+including both exact typed Storage cleanup cases. Private isolated removal of
+only operation-poll supervision yields six failures and ten positives; its
+additional retention-panic failure confirms that the narrow callback catch is
+now replaced by the common computation supervisor. Exact fresh-mtime source
+restoration recompiles and passes all sixteen. Protected drop and the single
+terminal attempt remain present in the omission. The original mixed baseline
+and the first fixed run's two stale storage assertions remain separate records.
+This evidence covers executable task completion, not audit delivery after
+runtime destruction.

@@ -17,7 +17,6 @@ import { startSession } from "../../model/session-lifecycle"
 import { messageText, type TurnMessage } from "../../model/transcript"
 import {
   draftOf,
-  canChooseModel,
   entry,
   forgetSession,
   modelForNextTurn,
@@ -228,20 +227,16 @@ export function unsentDiscarded(
 }
 
 /**
- * The model the session's next turn runs on, chosen in its composer. Kept
- * beside the session, not in its summary, which is the source's: the next
- * message is sent with it.
+ * A draft's local creation model. Established conversation choices go through
+ * the source command; this local operation never overrides their summary.
  */
 export function chooseModel(
   state: WorkspaceState,
   { sessionId, model }: { sessionId: string; model: ModelRef },
 ): WorkspaceState {
-  if (!canChooseModel(state, sessionId)) return state
   const draft = draftOf(state, sessionId)
-  if (draft)
-    return { ...state, drafts: { ...state.drafts, [sessionId]: { ...draft, model } } }
-  if (!sessionOf(state, sessionId)) return state
-  return { ...state, chosenModels: { ...state.chosenModels, [sessionId]: model } }
+  if (!draft) return state
+  return { ...state, drafts: { ...state.drafts, [sessionId]: { ...draft, model } } }
 }
 
 /** An answer to an approval is on its way; it cannot be given twice meanwhile. */

@@ -296,7 +296,7 @@ async fn a_session_is_opened_configured_and_prompted_through_the_shared_runtime(
     assert_eq!(
         opened
             .session
-            .execute(prompt("first"))
+            .execute(prompt("first"), Arc::new(|| Ok(())))
             .await
             .into_result()
             .unwrap(),
@@ -336,7 +336,7 @@ async fn a_session_is_in_the_configured_mode_before_it_can_be_prompted() {
     assert_eq!(
         opened
             .session
-            .execute(prompt("first"))
+            .execute(prompt("first"), Arc::new(|| Ok(())))
             .await
             .into_result()
             .unwrap(),
@@ -355,7 +355,11 @@ async fn a_session_that_leaves_its_mode_afterwards_fails_the_execution() {
         .open(ProviderOpenRequest::without_startup_control(None))
         .await
         .unwrap();
-    let outcome = opened.session.execute(prompt("first")).await.into_result();
+    let outcome = opened
+        .session
+        .execute(prompt("first"), Arc::new(|| Ok(())))
+        .await
+        .into_result();
     assert!(outcome.is_err(), "{outcome:?}");
 }
 

@@ -157,6 +157,13 @@ impl Environment for Substitute {
 /// dropped.
 struct CountedHold(Arc<AtomicUsize>);
 impl LeaseHold for CountedHold {
+    fn model_provider(
+        &self,
+        binding: Arc<dyn AgentProvider>,
+    ) -> Result<Arc<dyn AgentProvider>, AgentError> {
+        Ok(binding)
+    }
+
     fn ends(&self) -> Option<EnvironmentFuture<'static, LeaseEndCause>> {
         None
     }
@@ -1733,6 +1740,15 @@ struct HostHold {
     fetching: Arc<Fetching>,
 }
 impl LeaseHold for HostHold {
+    fn model_provider(
+        &self,
+        _binding: Arc<dyn AgentProvider>,
+    ) -> Result<Arc<dyn AgentProvider>, AgentError> {
+        Err(AgentError::Unsupported(
+            "test host has no model-target adapter".into(),
+        ))
+    }
+
     fn fetch(
         &self,
         ask: FetchAsk,

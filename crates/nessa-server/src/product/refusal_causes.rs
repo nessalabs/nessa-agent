@@ -113,6 +113,8 @@ fn conversation(out: &mut String, error: &ConversationError) {
         E::TurnRunning => "turn-running",
         E::ApprovalModeNotApplied => "approval-mode-not-applied",
         E::ApprovalModeUncertain => "approval-mode-uncertain",
+        E::ModelChangeNotApplied => "model-change-not-applied",
+        E::ModelChangeUncertain => "model-change-uncertain",
         E::Capacity => "capacity",
         E::Unavailable => "unavailable",
         E::Metadata => "metadata",
@@ -419,6 +421,18 @@ fn storage_cause(out: &mut String, error: &StorageError) {
 mod tests {
     use super::*;
     use nessa_sdk::application::agent_execution::sessions::StorageShutdownFailure;
+
+    #[test]
+    fn a_model_refusal_is_distinct_from_an_uncertain_change() {
+        assert_eq!(
+            refusal_causes(&ConversationError::ModelChangeNotApplied),
+            "model-change-not-applied"
+        );
+        assert_eq!(
+            refusal_causes(&ConversationError::ModelChangeUncertain),
+            "model-change-uncertain"
+        );
+    }
 
     #[test]
     fn a_close_keeps_the_release_failure_its_code_drops() {

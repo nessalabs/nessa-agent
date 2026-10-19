@@ -390,12 +390,15 @@ async fn a_non_claude_profile_uses_shared_sessions_permissions_and_transport() {
         let user_message = UserMessage::text_only(PromptText::new("read").unwrap());
         let pending = tokio::spawn(async move {
             session
-                .execute(ExecutionRequest {
-                    execution_id: ExecutionId::new(id).unwrap(),
-                    user_message,
-                    estimated_input_tokens: 1,
-                    reserved_output_tokens: 10,
-                })
+                .execute(
+                    ExecutionRequest {
+                        execution_id: ExecutionId::new(id).unwrap(),
+                        user_message,
+                        estimated_input_tokens: 1,
+                        reserved_output_tokens: 10,
+                    },
+                    Arc::new(|| Ok(())),
+                )
                 .await
                 .into_result()
         });

@@ -128,6 +128,8 @@ async fn confirmed_producer_snapshot_changes_only_after_successful_save() {
         id: id.clone(),
         provider: provider.clone(),
         provider_context: ProviderContext::Absent,
+        model_change: None,
+        current_configuration: None,
         invocations: vec![],
         queue_history: vec![],
         lease: None,

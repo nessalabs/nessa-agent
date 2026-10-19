@@ -1068,6 +1068,8 @@ fn seed(
         let context =
             ProviderContext::Recorded(ExecutionSessionId::new("bench-provider-session").unwrap());
         let mut snapshot = SessionSnapshot {
+            model_change: None,
+            current_configuration: None,
             id: id.clone(),
             provider: provider.clone(),
             provider_context: context.clone(),

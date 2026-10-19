@@ -14,6 +14,7 @@
 //!                 +--> ExecutionEvent
 //! Agent / adapter --> ExecutionAudit --> host-owned durable sink
 //! SessionLifecycle --> immutable AttachmentAuditRecord --> ExecutionAudit
+//! Agent native controls --> ConfigurationControlRecord --> ExecutionAudit
 //! ```
 //!
 //! Arrows mean calling the controller or domain, and constructing an event from
@@ -26,10 +27,15 @@ mod controller;
 pub(crate) use controller::{
     HistoricalReviewCost, RetentionControllerUndo, MAX_EXECUTION_PERMISSIONS,
 };
+mod configuration;
 mod events;
 pub(crate) mod limits;
 mod permission_authority;
 mod question;
+pub(crate) use configuration::ConfigurationControl;
+pub use configuration::{
+    ConfigurationControlRecord, ConfigurationControlRequest, ConfigurationControlStage,
+};
 mod request;
 mod submitter;
 pub use audit::{

@@ -1,5 +1,6 @@
 //! Live text is provisional until the cadence or a lifecycle boundary saves it.
 use super::*;
+use nessa_sdk::application::agent_execution::providers::HarnessHostIdentity;
 use nessa_sdk::application::agent_execution::sessions::{MessageCommitClock, MessageCommitSleep};
 use std::{
     future::{poll_fn, Future},
@@ -69,6 +70,9 @@ struct TextProvider {
     ended: watch::Sender<bool>,
 }
 impl AgentProvider for TextProvider {
+    fn harness_host_identity(&self) -> HarnessHostIdentity<'_> {
+        HarnessHostIdentity::local()
+    }
     fn identity(&self) -> ProviderIdentity {
         ProviderIdentity::new("batch", "batch", "test").unwrap()
     }

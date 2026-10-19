@@ -42,7 +42,12 @@ async fn first_response_timing_ignores_thoughts_empty_and_rejected_text_and_logs
     let mut execution = ExecutionController::new(ExecutionSessionId::new("context").unwrap());
     let (reply, _result) = oneshot::channel();
     worker
-        .dispatch_execution(&mut execution, dispatched(request(), None), reply)
+        .dispatch_execution(
+            &mut execution,
+            dispatched(request(), None),
+            Arc::new(|| Ok(())),
+            reply,
+        )
         .await
         .unwrap_or_else(|failure| panic!("{}", failure.error()));
     let captured = TimingLog::default();

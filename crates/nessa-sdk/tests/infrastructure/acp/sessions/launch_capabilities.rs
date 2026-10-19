@@ -179,7 +179,7 @@ fn published_when_start_fails(allowed: bool) -> ProviderOperationCapabilities {
         permission_authority: PermissionAuthoritySource::default(),
         process,
         config: config(),
-        capabilities: capabilities(),
+        capabilities: capabilities().into(),
         profile: ControlMutex::new(HooksProfile { allowed }),
         audit: Arc::new(QuietAudit),
         session_key: Some("conversation".into()),

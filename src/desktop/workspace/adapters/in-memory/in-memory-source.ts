@@ -30,6 +30,7 @@ import {
 import {
   failureReason,
   WorkspaceSourceError,
+  WorkspaceModelError,
   type ApprovalScope,
   type Initiator,
   type OutgoingMessage,
@@ -682,6 +683,7 @@ export function inMemorySource(
         }).revision
       }),
     // As the gateway: changed only while no turn runs, and said by the conversation.
+    setModel: () => Promise.reject(new WorkspaceModelError("not-supported", false)),
     setAccess: (sessionId, mode, initiator) =>
       audited({ sessionId, action: "set-access", access: mode, initiator }, () => {
         known(sessionId)

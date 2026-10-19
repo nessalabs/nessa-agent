@@ -36,7 +36,7 @@ async fn prompt_restores_and_prompts_again(binding: &impl AgentProvider) -> Exec
     assert_eq!(
         opened
             .session
-            .execute(prompt("with the hook request"))
+            .execute(prompt("with the hook request"), Arc::new(|| Ok(())))
             .await
             .into_result()
             .expect("a prompt must run while suppression is unknown"),
@@ -65,7 +65,10 @@ async fn prompt_restores_and_prompts_again(binding: &impl AgentProvider) -> Exec
     assert_eq!(
         restored
             .session
-            .execute(prompt("restored with the hook request"))
+            .execute(
+                prompt("restored with the hook request"),
+                Arc::new(|| Ok(()))
+            )
             .await
             .into_result()
             .expect("a restored prompt must run while suppression is unknown"),

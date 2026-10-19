@@ -1,5 +1,6 @@
 //! Every command field must agree with independently valid adapter evidence.
 use super::*;
+use nessa_sdk::application::agent_execution::providers::NativeExecutionHandoff;
 
 struct ReturnedEvidence {
     answer: Option<PermissionResolution>,
@@ -9,7 +10,11 @@ impl ProviderSessionBackend for ReturnedEvidence {
     fn prepare_invocation(&self) -> ProviderOperationFuture<'_, ()> {
         Box::pin(async { Ok(()) })
     }
-    fn execute(&self, _: ExecutionRequest) -> ProviderExecutionFuture<'_> {
+    fn execute(
+        &self,
+        _: ExecutionRequest,
+        _handoff: NativeExecutionHandoff,
+    ) -> ProviderExecutionFuture<'_> {
         Box::pin(async move {
             let result: Result<ExecutionOutcome, AgentError> =
                 { async { Err(AgentError::Unsupported("evidence fixture".into())) } }.await;

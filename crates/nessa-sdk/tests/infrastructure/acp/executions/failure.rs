@@ -314,6 +314,8 @@ async fn finalized_provider_and_local_recipes_survive_storage_reload_exactly() {
         let execution_id = ExecutionId::new("execution").unwrap();
         let actor = ActionContext::new("user", "test", "invoke").unwrap();
         let snapshot = SessionSnapshot {
+            model_change: None,
+            current_configuration: None,
             queue_history: Vec::new(),
             id: session_id.clone(),
             provider: ProviderIdentity::new("fixture", "model", "workspace").unwrap(),

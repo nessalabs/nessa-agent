@@ -1,12 +1,14 @@
 //! Mandatory execution lifecycle evidence, independent of live event consumers.
 #![deny(missing_docs)]
 
+use super::ConfigurationControlRecord;
+
 use crate::application::agent_execution::agents::{AgentError, AgentFuture};
 use crate::application::agent_execution::permissions::{
     ActionContext, CancellationOrigin, PermissionAnswerRecord, PermissionCancellation,
     QuestionAnswerRecord, QuestionRefusalRecord, ReviewDeclineRecord,
 };
-use crate::application::agent_execution::providers::ApprovalMode;
+use crate::application::agent_execution::providers::{ApprovalMode, ProviderIdentity};
 use crate::domain::agent_execution::executions::{
     ExecutionId, ExecutionOutcome, InvocationKind, InvocationStage, QueueOrderChange,
     SchedulingCause, SchedulingInitiator, SchedulingTransition, SchedulingTransitionError,
@@ -282,6 +284,7 @@ pub struct QueueAdmissionRecord {
     approval_mode: Option<ApprovalMode>,
     effort_level: Option<EffortLevel>,
     admission_generation: Option<String>,
+    model: Option<ProviderIdentity>,
 }
 impl QueueAdmissionRecord {
     /// Describe caller-attributed ownership after the receipt has been installed.
@@ -302,6 +305,7 @@ impl QueueAdmissionRecord {
             approval_mode: None,
             effort_level: None,
             admission_generation: None,
+            model: None,
         }
     }
     /// Attach the provider preset and Agent-instance generation that governed
@@ -313,6 +317,15 @@ impl QueueAdmissionRecord {
     ) -> Self {
         self.approval_mode = approval_mode;
         self.admission_generation = Some(admission_generation);
+        self
+    }
+    /// Exact configured provider/model identity captured at input admission.
+    /// This remains the admitted choice even if native configuration changes later.
+    pub fn model(&self) -> Option<&ProviderIdentity> {
+        self.model.as_ref()
+    }
+    pub(crate) fn with_model(mut self, model: ProviderIdentity) -> Self {
+        self.model = Some(model);
         self
     }
     /// Attach the reasoning effort level in force at admission.
@@ -428,6 +441,8 @@ pub enum EffortChangeStage {
     /// Recorded before the request is sent. Nothing has reached the agent.
     Requested,
     /// The agent reported the requested level back: it is the level in force.
+    /// This verifies native effect, not durable configuration storage; a later
+    /// settlement failure is returned separately by the operation.
     Applied,
     /// The connection refused the change without sending it (a turn or a
     /// permission still open, or a backend that cannot change it live): the
@@ -618,6 +633,8 @@ pub enum ExecutionAuditRecord {
     QueueReordered(QueueOrderRecord),
     /// A caller's live reasoning effort change, asked for and then settled.
     EffortLevelChanged(EffortLevelChangeRecord),
+    /// Native model/permission intent and observed settlement.
+    ConfigurationControlled(ConfigurationControlRecord),
     /// Once-only release of an active execution, including runs with no permissions.
     /// The runtime initiates this release after observing a terminal result; explicit
     /// shutdown attribution remains on the preceding SessionClosed record.
