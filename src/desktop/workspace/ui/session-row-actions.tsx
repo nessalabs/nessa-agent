@@ -32,9 +32,10 @@ export interface SessionRowActions {
   /** For each menu the row opens (`onOpenChange`). */
   readonly onMenuOpen: (open: boolean) => void
   /**
-   * For each menu the row opens (`onCloseAutoFocus`): a menu closing on
-   * Rename or Delete leaves focus to the field or the confirmation; one
-   * whose row went while it was open gives focus past it (`row-focus.ts`).
+   * For each menu the row opens (`onCloseAutoFocus`), and the only say in
+   * where focus goes as it closes: on Rename or Delete, to the field or the
+   * confirmation; otherwise back where it was as the menu opened, or to the
+   * row, or past it if the row went (`row-focus.ts`).
    */
   readonly onCloseAutoFocus: (event: Event) => void
   /** Whether the title is being edited: the row then answers no click or key of its own. */
@@ -82,21 +83,22 @@ export function useSessionRowActions(sessionId: string): SessionRowActions {
     onCloseAutoFocus: (event) => {
       const asked = opened.current
       opened.current = null
+      // Never to the menu's opener, which may be the pointer's button.
+      event.preventDefault()
       if (handOff.current) {
         handOff.current = false
-        event.preventDefault()
         return
       }
-      // The row went while its menu was open: focus that was elsewhere goes
-      // back there, and focus that was in the row goes past it.
-      if (!asked || asked.place?.node.isConnected !== false) return
-      const elsewhere =
-        asked.from?.isConnected === true &&
-        asked.from !== asked.from.ownerDocument.body &&
-        !asked.place.list.contains(asked.from)
-      if (elsewhere) return
-      event.preventDefault()
-      focusRowPlace(asked.place)
+      // Back where focus was as the menu opened, if that is still there;
+      // else to the row asked from, or past it if it went (`row-focus.ts`).
+      const from = asked?.from
+      if (
+        from instanceof HTMLElement &&
+        from.isConnected &&
+        from !== from.ownerDocument.body
+      )
+        from.focus({ preventScroll: true })
+      else focusRowPlace(asked?.place ?? rowPlace(node.current))
     },
     renaming: draft !== null,
     title: (title) =>

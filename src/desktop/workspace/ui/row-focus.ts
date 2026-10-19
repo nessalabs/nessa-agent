@@ -89,10 +89,10 @@ export function useRowFocusKept(list: RefObject<HTMLElement | null>, rows: strin
         held = rowPlace(held.node)
         return
       }
-      const active = ownerDocument.activeElement
-      if (active && active !== ownerDocument.body && active.isConnected) return
       const place = held
       held = null
+      const active = ownerDocument.activeElement
+      if (active && active !== ownerDocument.body && active.isConnected) return
       focusRowPlace(place)
     })
     element.addEventListener("focusin", onFocusIn)

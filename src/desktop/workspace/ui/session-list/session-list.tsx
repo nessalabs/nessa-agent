@@ -355,10 +355,8 @@ function SessionRowButtons({
     return session !== undefined && knownToSource(session)
   })
   const stop = (event: { stopPropagation: () => void }) => event.stopPropagation()
-  const span = useRef<HTMLSpanElement>(null)
   return (
     <span
-      ref={span}
       className="workspace-session-actions"
       // The row's menu (right-click, the context-menu key) holds the same,
       // for the keys and assistive technology; these are the pointer's.
@@ -389,20 +387,7 @@ function SessionRowButtons({
             data-session-action="more"
           />
         </DropdownMenuTrigger>
-        <DropdownMenuContent
-          align="end"
-          onCloseAutoFocus={(event) => {
-            onCloseAutoFocus(event)
-            if (event.defaultPrevented) return
-            // Not to the button that opened it: it is the pointer's, hidden
-            // from assistive technology and gone with the pointer. The row
-            // holds the keys.
-            event.preventDefault()
-            span.current
-              ?.closest<HTMLElement>("[data-session-row]")
-              ?.focus({ preventScroll: true })
-          }}
-        >
+        <DropdownMenuContent align="end" onCloseAutoFocus={onCloseAutoFocus}>
           <SessionMenuItems sessionId={sessionId} navigation={false} {...items} />
         </DropdownMenuContent>
       </DropdownMenu>

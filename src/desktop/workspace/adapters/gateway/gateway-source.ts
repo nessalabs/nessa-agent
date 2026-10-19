@@ -869,7 +869,13 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
             )
             .map((row) => {
               const renamed = crossedRenames.get(row.conversationId)
-              return renamed?.stored ? { ...row, title: renamed.title } : row
+              // Only while it is still the newest title: a walk owed again
+              // may come after a later rename, here or elsewhere.
+              const newest =
+                renaming.get(row.conversationId) === renamed ||
+                (!renaming.has(row.conversationId) &&
+                  rows.get(row.conversationId)?.title === renamed?.title)
+              return renamed?.stored && newest ? { ...row, title: renamed.title } : row
             }),
         })
       let applied = result

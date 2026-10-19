@@ -168,13 +168,16 @@ async function press(element: Element | null) {
   })
 }
 
-/** Opens a row's "More" menu, as the pointer does. */
-async function more(row: HTMLElement) {
+/**
+ * Opens a row's "More" menu, as the pointer does. A pointer press does not
+ * focus the button, and focus stays where it was; `keep` leaves it there
+ * (in jsdom a menu opened from a focused trigger closes as it opens).
+ */
+async function more(row: HTMLElement, keep = false) {
   const trigger = row.querySelector<HTMLElement>('[data-session-action="more"]')
   if (!trigger) throw new Error("no More button")
-  // A pointer press does not focus the button; in jsdom a menu opened from a
-  // focused trigger closes as it opens, so focus is let go first.
-  if (document.activeElement instanceof HTMLElement) document.activeElement.blur()
+  if (!keep && document.activeElement instanceof HTMLElement)
+    document.activeElement.blur()
   await act(async () => {
     trigger.dispatchEvent(
       new MouseEvent("pointerdown", { bubbles: true, cancelable: true, button: 0 }),
@@ -383,5 +386,31 @@ it("focus given back after a delete stays in the list it was asked from, though 
     })
   } finally {
     elsewhere.remove()
+  }
+})
+
+it("a More menu gives focus back where it was as it opened: another row, or a field outside the list", async () => {
+  const source = fakeSource()
+  await shown(source)
+  const [first, second, third] = [
+    ...host.querySelectorAll<HTMLElement>("[data-session-row]"),
+  ]
+  const firstId = first.getAttribute("data-session-row")
+  await act(async () => first.focus())
+  await more(second, true)
+  await choose("Pin to Sidebar")
+  await focusSettled(() => expect(focusedHere()).toBe(firstId))
+
+  const field = document.createElement("input")
+  document.body.append(field)
+  try {
+    await act(async () => field.focus())
+    await more(third, true)
+    await choose("Archive")
+    await act(async () => {
+      await vi.waitFor(() => expect(document.activeElement).toBe(field))
+    })
+  } finally {
+    field.remove()
   }
 })
