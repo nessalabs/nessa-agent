@@ -113,7 +113,9 @@ use std::{
 };
 #[cfg(test)]
 pub(crate) use thread_reports::report_text_for_test;
-pub use thread_reports::{PendingReport, ReportRegistration, ThreadReport, ThreadReportStore};
+pub use thread_reports::{
+    AwaitedTurn, PendingReport, ReportRegistration, ThreadReport, ThreadReportStore, ThreadTurn,
+};
 pub use workspace_windows::{PaneConversation, WindowReading};
 
 use tokio::{

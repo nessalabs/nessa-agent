@@ -49,6 +49,10 @@ export const KNOBS = {
     default: 1,
     what: "turns that hand work to another thread and wait for its report",
   },
+  awaits: {
+    default: 1,
+    what: "turns that hand work to another thread and wait for its reply in one subscribe call",
+  },
   watches: {
     default: 1,
     what: "turns where the agent follows a thread with more reads at once than one conversation may hold",
@@ -60,6 +64,10 @@ export const KNOBS = {
   parks: {
     default: 1,
     what: "conversations left idle until the gateway parks their agent, then talked to again",
+  },
+  fresh: {
+    default: 2,
+    what: "conversations started from a new session's home in the window, their first message sent there",
   },
   windows: {
     default: 1,
@@ -124,12 +132,14 @@ export function plan(knobs) {
   add(knobs.fails, () => ({ kind: "fail" }))
   add(knobs.restarts, () => ({ kind: "restart" }))
   add(knobs.threads, () => ({ kind: "delegate" }))
+  add(knobs.awaits, () => ({ kind: "await" }))
   add(knobs.watches, () => ({ kind: "watch" }))
   add(knobs.switches, () => ({ kind: "switch" }))
   add(knobs.modelSwitches, () => ({ kind: "model" }))
   add(knobs.asides, () => ({ kind: "aside" }))
   add(knobs.large, () => ({ kind: "large" }))
   add(knobs.parks, () => ({ kind: "park" }))
+  add(knobs.fresh, () => ({ kind: "fresh" }))
   add(knobs.windows, () => ({ kind: "window" }))
   add(knobs.linkings, () => ({ kind: "linking" }))
   if (knobs.long > 0) steps.push({ kind: "long", turns: knobs.long })

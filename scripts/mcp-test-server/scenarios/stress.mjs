@@ -22,6 +22,7 @@ export const STRESS = {
   cut: "stress cut",
   fail: "stress fail",
   delegate: "stress delegate",
+  await: "stress await",
   watch: "stress watch",
   long: "stress long",
   window: "stress window",
@@ -47,6 +48,7 @@ export const SAYS = {
   beforeFailure: "Before the failure.",
   failure: "the stress scenario failed this turn",
   delegated: "Delegated to ",
+  awaited: "Awaited ",
   report: "Report received.",
   watched: "Watched: ",
   long: "Long answer: ",
@@ -241,6 +243,46 @@ export function stressScenario({
             save: "sent",
           },
           { do: "text", chunks: [SAYS.delegated, "${thread.threadId}"] },
+          { do: "end" },
+        ],
+      },
+      // Sends to a thread and waits for its reply with one subscribe call,
+      // as an agent is told to: the reply comes back in that call, and the
+      // thread's report is then not sent.
+      {
+        when: STRESS.await,
+        steps: [
+          {
+            do: "tool",
+            server: "nessa-agents",
+            tool: "create_thread",
+            arguments: {},
+            save: "thread",
+          },
+          {
+            do: "tool",
+            server: "nessa-agents",
+            tool: "send_message",
+            arguments: {
+              threadId: "${thread.threadId}",
+              message: `${STRESS.reply} awaited by the parent`,
+            },
+            save: "sent",
+          },
+          {
+            do: "tool",
+            server: "nessa-agents",
+            tool: "subscribe",
+            arguments: {
+              threadId: "${thread.threadId}",
+              executionId: "${sent.executionId}",
+            },
+            save: "waited",
+          },
+          {
+            do: "text",
+            chunks: [SAYS.awaited, "${thread.threadId}", ": ", "${waited.turn.reply}"],
+          },
           { do: "end" },
         ],
       },

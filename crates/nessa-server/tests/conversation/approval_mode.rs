@@ -1716,9 +1716,17 @@ async fn an_agent_that_recovers_by_itself_keeps_the_mode_chosen_live() {
         )
         .await
         .unwrap();
-    tokio::time::timeout(Duration::from_secs(5), started)
-        .await
-        .expect("the first turn reaches the provider");
+    tokio::time::timeout(Duration::from_secs(5), async {
+        started.await;
+        // The start notification precedes the fixture's gate capture. Keep
+        // its first receiver alive until that execution has taken it, before
+        // installing the queued turn's receiver below.
+        while provider.execution_gate.lock().unwrap().is_some() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the first turn captures its provider gate");
     service
         .submit(
             id.clone(),

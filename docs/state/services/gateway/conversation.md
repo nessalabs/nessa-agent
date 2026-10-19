@@ -247,3 +247,26 @@ new table to an existing dataset or reset user data.
 | Saved live preset or model configuration; close/restart; cold changing preset; reopen/admit | Saved SDK current_configuration owns restoration. Before acknowledging a changing cold preset with that retained owner, open the normal existing agent and use its native configuration transition, then persist the same preset in metadata. No metadata-only Deferred may supersede older SDK settings | Actual branch before: original witness fails plus four saved-preset/model × close/restart cases fail; fixed seven pass; sole native-owner-selection omission five fail/two positives pass; exact restoration seven pass. Full affected server: 3,442 runtime passes, 13 ignored, four doctests; exact seven-package all-target Clippy passes |
 | No retained SDK configuration, or unchanged cold preset | Preserve existing legitimate Deferred/no-open behavior; no invented native effect or duplicate settings cache | Both no-retained-config Deferred and closed unchanged positives pass before/fixed/omitted/restored |
 | Native/SDK persistence or metadata/audit interruption | Existing intent/application/terminal journal and recovery retain exact actor, before/after and applied/refused/uncertain facts; cold control reuses these owners | Existing partial-write, lost-caller, recovery and no-op suites pass in the unfiltered affected server run. The cold path uses their unchanged intent/native/application/terminal owners |
+
+### Immutable73fab integration (#975)
+
+The incoming server thread-report owner retains written-once BuiltInAnswer
+delivery hooks, undelivered-drop release, awaited reply holds and settled/empty
+history semantics. Report submission still uses the existing selection lock and
+recovery-first model/preset admission; SDK configuration/lifecycle bytes remain
+unchanged by this integration. The recovery
+fixture captures its receiver under the original5-second budget.
+
+Stress uses the incoming exact-ID/title helper and one event-correlated restart
+observer. The current resumed request text and completion share one60-second UI
+poll. New awaits1/fresh2 defaults precede model-last Ask; window/linking stay1.
+Fresh Home intent includes engine identity and confirms one newly-created
+conversation, so a retained earlier-engine title cannot satisfy it. Model
+refusal diagnostics explicitly name both feature variants without a wildcard.
+All integration/runtime qualification remains pending until exact assembled
+source and gateway checks complete; earlier8e0/5813 review is historical.
+
+The legacy seeded-order assertion explicitly disables incoming await/fresh work,
+just as it already disabled newer window/linking work; it retains the exact old
+non-model sequence. Initial assembled helper run:41 passed, this one stale
+assertion failed; production planner defaults remain awaits1/fresh2.
