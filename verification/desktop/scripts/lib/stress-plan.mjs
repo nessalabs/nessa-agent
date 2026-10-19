@@ -65,6 +65,10 @@ export const KNOBS = {
     default: 1,
     what: "turns where an agent reads the window: beside another pane, then alone",
   },
+  linkings: {
+    default: 1,
+    what: "times native linking is turned on and off again from Settings, each restarting the gateway",
+  },
   long: {
     default: 30,
     what: "turns of long streamed answers one conversation takes before it is talked to in the window",
@@ -127,6 +131,7 @@ export function plan(knobs) {
   add(knobs.large, () => ({ kind: "large" }))
   add(knobs.parks, () => ({ kind: "park" }))
   add(knobs.windows, () => ({ kind: "window" }))
+  add(knobs.linkings, () => ({ kind: "linking" }))
   if (knobs.long > 0) steps.push({ kind: "long", turns: knobs.long })
   if (knobs.reviews > 0) steps.push({ kind: "reviews" })
   while (steps.length < knobs.rounds)

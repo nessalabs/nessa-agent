@@ -23,6 +23,7 @@ test("every required step appears as often as its number says", () => {
   assert.equal(count("large"), knobs.large)
   assert.equal(count("park"), knobs.parks)
   assert.equal(count("window"), knobs.windows)
+  assert.equal(count("linking"), knobs.linkings)
   assert.equal(count("reviews"), 1)
   assert.equal(count("long"), 1)
   assert.equal(steps.find((step) => step.kind === "long").turns, knobs.long)
@@ -91,7 +92,7 @@ test("positive model steps retain default and raised counts, run last, and enter
 })
 
 test("the legacy seed preserves the existing non-model work's relative order", () => {
-  const steps = plan(knobsFrom({ windows: "0" }, {}))
+  const steps = plan(knobsFrom({ windows: "0", linkings: "0" }, {}))
   // A forced Ask before a card has no following switch-witness permission.
   // Keep the original seed's required work and its existing witness turns.
   const original = steps.filter(

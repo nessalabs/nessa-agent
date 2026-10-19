@@ -246,6 +246,10 @@
       "params": "PairingInvitationParams",
       "grant": "credential.manage"
     },
+    "pairing.setLinking": {
+      "params": "PairingSetLinkingParams",
+      "grant": "credential.manage"
+    },
     "peer.enroll": {
       "params": "PeerEnrollParams",
       "grant": "credential.manage"
