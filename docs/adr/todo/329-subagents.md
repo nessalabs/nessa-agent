@@ -73,6 +73,48 @@ requires the matching original child receipt and metadata origin, including afte
 restart. A closed reservation with validated absence never acquired the session
 and does not prevent that unrelated conversation from opening later.
 
+Startup can also prove that the original child initializer was never authorized.
+The command store observes creation receipts within the retained parent owner's
+principal. Observation is discovery only: the gateway correlates the receipt's
+actual actor, child session, spawn request and preparation fingerprint, then
+reopens that exact original request and requires its current stage still be
+Accepted. Its lease excludes a later Attempted publication until the SDK has
+recorded the rejection. Missing child metadata alone is never an absence proof.
+The graph's existing preparation-rejection absence, seal, first close owner,
+audit and capacity authorities do the reconciliation; no factory/provider effect
+or synthetic provider acknowledgement is introduced. Recovery of a failed
+preparation does not change ordinary Stop or conversation Close policy.
+
+| Original creation evidence | Recovery meaning and ordering | Enforcer |
+| --- | --- | --- |
+| Accepted before Attempted, no child metadata | Hold the original command lease; verify all bindings; seal the retained child, record preparation-rejection absence, release quota once and follow existing Draining/Ended and close audit | `accepted_child_without_metadata_releases_its_original_reservation_after_restart`; `verified_unstarted_preparation_releases_once_and_survives_retry_and_restart` |
+| Attempted without metadata, including a stale Accepted observation | Original request load wins; retain uncertainty and quota without initializing or closing a target | `child_recovery_does_not_promote_uncertain_or_mismatched_creation_evidence` |
+| Foreign principal, request, child target or preparation fingerprint | Refuse that observation as authority; do not infer an owner or absence | Same gateway matrix; `unstarted_recovery_refuses_foreign_identity_later_progress_and_bound_resources` |
+| A live factory flight or later preparation milestone | No pre-initialization absence can be asserted; preserve the actual owner | `unstarted_recovery_refuses_an_actual_live_factory_flight`; later-progress refusal above |
+| Audit/store rejection or lost acknowledgement after verified absence | Keep the first operation/cause/initiator and proof; physical absence may free quota independently of acknowledgement; retry without another release or factory effect | `unstarted_recovery_retries_original_absence_after_audit_or_store_failure` |
+| An ancestor already owns a held close | Record this child's absence under that original operation; do not join or replace the held ancestor during startup | `unstarted_recovery_does_not_join_or_replace_an_ancestors_held_close` |
+| Completed absence is restored again | Existing graph proof needs no new receipt observation; the never-acquired target can open as a distinct ordinary root | Gateway Accepted crash regression above |
+| Refused restored history contains a formerly valid absence | Refuse reconciliation before any quota release or rewrite | `refused_restored_absence_cannot_release_a_previously_retained_reservation` |
+
+```mermaid
+sequenceDiagram
+  participant Gateway as Gateway startup
+  participant Commands as Original creation owner
+  participant SDK as Ownership coordinator
+  participant Graph as Existing graph/store/audit
+  Gateway->>Commands: Observe parent principal's retained creations
+  Commands-->>Gateway: Candidate original receipt
+  Gateway->>Commands: Reopen exact request, retain exclusion
+  Commands-->>Gateway: Current Accepted + exact binding
+  Gateway->>SDK: Confirm unstarted original preparation
+  SDK->>Graph: Seal child, retain first owner and absence
+  SDK->>SDK: Release retained quota once
+  SDK->>Graph: Draining/Ended and owned close audit
+  SDK-->>Gateway: Confirmed or typed retained failure
+  Gateway->>Commands: Release original request exclusion
+  Note over Gateway,SDK: Attempted or mismatched evidence grants no absence
+```
+
 Existing mutation receipts persist each exact child Stop before the root complete
 selection marker. The marker fingerprints that immutable selection. Retry and
 startup recovery use those original targets even after settings change; an

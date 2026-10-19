@@ -2444,6 +2444,12 @@ canonical successors, exact Stop receipt facts, and person admission delivery fe
 Stop checks the existing person Submit receipts across each complete chain before
 selecting its current execution; report settlement consumes that same chain view.
 They reuse the SDK ownership graph and existing command receipts.
+Creation recovery observes principal-scoped receipts through the same joined
+command reader, then holds the original command lease while the coordinator
+records verified pre-initialization absence. `owned_recovery.rs` exercises the
+actual Accepted/Attempted crash prefixes and rejected discovery evidence.
+SDK recovery/quota boundaries live under
+`nessa-sdk/tests/application/agent_execution/subagents/capacity/preparation_recovery.rs`.
 `conversation/infrastructure/ownership_audit.rs` persists coordinator transition
 evidence through the ordinary durable audit owner. Namespace
 `composition/runtime_config.rs` owns `subagents.stopChildrenOnParentStop`.

@@ -3,6 +3,11 @@
 use super::*;
 use crate::conversation::application::environment::{LeaseHold, LeaseRelease};
 use crate::conversation::infrastructure::DurableOwnershipAudit;
+use nessa_sdk::application::agent_execution::commands::{
+    CreationBinding, CreationFuture, CreationReceipt, CreationStage, CreationStorage,
+    CreationStorageLease, MutationReceipt,
+};
+use nessa_sdk::application::agent_execution::permissions::ActionContext;
 use nessa_sdk::application::agent_execution::subagents::{
     CloseCommand, LiveRoom, OwnershipFailure, OwnershipStore,
 };
@@ -11,8 +16,381 @@ use nessa_sdk::domain::agent_execution::subagents::{
     HostActor, Initiator, LifetimeCause, LifetimeState,
 };
 use std::collections::HashSet;
+use std::process::{Child, Command, Stdio};
 use std::sync::atomic::AtomicUsize;
 use std::sync::Mutex;
+
+struct BeforeChildInitialization {
+    storage: Arc<RecordStorage>,
+    marker: std::path::PathBuf,
+    attempted: bool,
+}
+struct BeforeChildInitializationLease {
+    original: Arc<dyn CreationStorageLease>,
+    marker: std::path::PathBuf,
+    attempted: bool,
+}
+impl CreationStorage for BeforeChildInitialization {
+    fn open_creation(
+        &self,
+        principal: String,
+        request: String,
+        create: bool,
+    ) -> CreationFuture<'_, Option<Arc<dyn CreationStorageLease>>> {
+        Box::pin(async move {
+            Ok(self
+                .storage
+                .open_creation(principal, request, create)
+                .await?
+                .map(|original| {
+                    Arc::new(BeforeChildInitializationLease {
+                        original,
+                        marker: self.marker.clone(),
+                        attempted: self.attempted,
+                    }) as Arc<dyn CreationStorageLease>
+                }))
+        })
+    }
+    fn mutations(&self, principal: String) -> CreationFuture<'_, Vec<MutationReceipt>> {
+        self.storage.mutations(principal)
+    }
+    fn creations(&self, principal: String) -> CreationFuture<'_, Vec<CreationReceipt>> {
+        self.storage.creations(principal)
+    }
+}
+impl CreationStorageLease for BeforeChildInitializationLease {
+    fn load(&self, request: &str) -> CreationFuture<'_, Option<CreationReceipt>> {
+        self.original.load(request)
+    }
+    fn save(&self, receipt: CreationReceipt) -> CreationFuture<'_, ()> {
+        Box::pin(async move {
+            if receipt.binding().actor().request_id() == "accepted-child"
+                && receipt.stage() == CreationStage::Attempted
+            {
+                assert_eq!(
+                    self.original.load("accepted-child").await?.unwrap().stage(),
+                    CreationStage::Accepted
+                );
+                if self.attempted {
+                    self.original.save(receipt.clone()).await?;
+                }
+                let pending = self.marker.with_extension("pending");
+                std::fs::write(&pending, b"creation-before-initialization").unwrap();
+                std::fs::rename(pending, &self.marker).unwrap();
+                std::future::pending::<()>().await;
+            }
+            self.original.save(receipt).await
+        })
+    }
+    fn load_mutation(&self, request: &str) -> CreationFuture<'_, Option<MutationReceipt>> {
+        self.original.load_mutation(request)
+    }
+    fn save_mutation(&self, receipt: MutationReceipt) -> CreationFuture<'_, ()> {
+        self.original.save_mutation(receipt)
+    }
+}
+
+struct AcceptedCrashChild(Child);
+impl Drop for AcceptedCrashChild {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+#[test]
+#[ignore = "invoked only by the Accepted recovery crash-window fixture"]
+fn accepted_child_crash_probe() {
+    let root = std::path::PathBuf::from(
+        std::env::var_os("NESSA_ACCEPTED_CHILD_CRASH_ROOT").expect("child fixture root"),
+    );
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async {
+            let provider = Arc::new(ProviderFactory::default());
+            let (service, storage, metadata) = fixture(&root, provider.clone());
+            service.bind_commands(Arc::new(BeforeChildInitialization {
+                storage: storage.clone(),
+                marker: root.join("creation-before-initialization"),
+                attempted: std::env::var("NESSA_CHILD_CRASH_PREFIX").unwrap() == "attempted",
+            }));
+            bind_with_capacity(&service, &storage, &root, true, 1).await;
+            let parent = ConversationId::new("00000000-0000-4000-8000-000000000001").unwrap();
+            opened(&service, &provider, &parent).await;
+            let _hold = hold_turn(&service, &provider, &parent, "parent").await;
+            assert!(metadata
+                .load(&ConversationId::new("00000000-0000-4000-8000-000000000002").unwrap())
+                .await
+                .unwrap()
+                .is_none());
+            service
+                .create_owned_thread(
+                    source(&parent, "parent", "accepted-child"),
+                    ConversationId::new("00000000-0000-4000-8000-000000000002").unwrap(),
+                    RequestedConversation::default(),
+                )
+                .await
+                .unwrap();
+            panic!("crash fixture escaped its pre-initialization gate");
+        });
+}
+
+#[tokio::test]
+async fn accepted_child_without_metadata_releases_its_original_reservation_after_restart() {
+    child_crash_recovery(false, RecoveryObservation::Current).await;
+}
+
+#[derive(Clone, Copy, Debug)]
+enum RecoveryObservation {
+    Current,
+    StaleAccepted,
+    ForeignPrincipal,
+    WrongTarget,
+    WrongFingerprint,
+    WrongRequest,
+}
+struct PreloadedCreationObservation {
+    storage: Arc<RecordStorage>,
+    commands: Arc<RecordStorage>,
+    receipt: CreationReceipt,
+}
+struct CreationLookupOnly(Arc<RecordStorage>);
+impl CreationStorage for CreationLookupOnly {
+    fn open_creation(
+        &self,
+        principal: String,
+        request: String,
+        create: bool,
+    ) -> CreationFuture<'_, Option<Arc<dyn CreationStorageLease>>> {
+        self.0.open_creation(principal, request, create)
+    }
+    fn mutations(&self, principal: String) -> CreationFuture<'_, Vec<MutationReceipt>> {
+        self.0.mutations(principal)
+    }
+    // No discovery capability: a completed graph proof needs no new observation.
+}
+impl CreationStorage for PreloadedCreationObservation {
+    fn open_creation(
+        &self,
+        principal: String,
+        request: String,
+        create: bool,
+    ) -> CreationFuture<'_, Option<Arc<dyn CreationStorageLease>>> {
+        self.commands.open_creation(principal, request, create)
+    }
+    fn mutations(&self, principal: String) -> CreationFuture<'_, Vec<MutationReceipt>> {
+        self.storage.mutations(principal)
+    }
+    fn creations(&self, _: String) -> CreationFuture<'_, Vec<CreationReceipt>> {
+        Box::pin(async { Ok(vec![self.receipt.clone()]) })
+    }
+}
+
+#[tokio::test]
+async fn child_recovery_does_not_promote_uncertain_or_mismatched_creation_evidence() {
+    for (attempted, observation) in [
+        (true, RecoveryObservation::Current),
+        (true, RecoveryObservation::StaleAccepted),
+        (false, RecoveryObservation::ForeignPrincipal),
+        (false, RecoveryObservation::WrongTarget),
+        (false, RecoveryObservation::WrongFingerprint),
+        (false, RecoveryObservation::WrongRequest),
+    ] {
+        child_crash_recovery(attempted, observation).await;
+    }
+}
+
+async fn child_crash_recovery(attempted: bool, observation: RecoveryObservation) {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("data");
+    let log = directory.path().join("accepted-crash.log");
+    let output = std::fs::File::create(&log).unwrap();
+    let error = output.try_clone().unwrap();
+    let mut process = AcceptedCrashChild(Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "conversation::application::service::mutation::tests::parent_stop::owned_recovery::accepted_child_crash_probe", "--ignored", "--nocapture"])
+        .env("NESSA_ACCEPTED_CHILD_CRASH_ROOT", &root)
+        .env("NESSA_CHILD_CRASH_PREFIX", if attempted { "attempted" } else { "accepted" })
+        .stdout(Stdio::from(output)).stderr(Stdio::from(error)).spawn().unwrap());
+    tokio::time::timeout(TURN_HOLD_HANG, async {
+        loop {
+            match std::fs::read(root.join("creation-before-initialization")) {
+                Ok(bytes) => {
+                    assert_eq!(bytes, b"creation-before-initialization");
+                    break;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => panic!("cannot observe Accepted prefix: {error}"),
+            }
+            assert!(
+                process.0.try_wait().unwrap().is_none(),
+                "fixture exited: {}",
+                std::fs::read_to_string(&log).unwrap_or_default()
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    process.0.kill().unwrap();
+    assert!(!process.0.wait().unwrap().success());
+    drop(process);
+
+    let owned = SqliteOwnershipStore::open(&root.join("ownership.sqlite3")).unwrap();
+    let prefix = owned.read().await.unwrap();
+    let original = prefix
+        .spawns
+        .iter()
+        .find(|row| row.child_session.as_str() == "00000000-0000-4000-8000-000000000002")
+        .unwrap();
+    assert_eq!(original.progress, SpawnProgress::Reserved);
+    let lifetime = original.child_lifetime.clone();
+    let provider = Arc::new(ProviderFactory::default());
+    let (service, storage, metadata) = fixture(&root, provider.clone());
+    let target = ConversationId::new("00000000-0000-4000-8000-000000000002").unwrap();
+    assert!(metadata.load(&target).await.unwrap().is_none());
+    let receipt = storage
+        .open_creation("person".into(), "accepted-child".into(), false)
+        .await
+        .unwrap()
+        .unwrap();
+    let original = receipt.load("accepted-child").await.unwrap().unwrap();
+    assert_eq!(
+        original.stage(),
+        if attempted {
+            CreationStage::Attempted
+        } else {
+            CreationStage::Accepted
+        }
+    );
+    drop(receipt);
+    let mut alternate_commands = None;
+    if !matches!(observation, RecoveryObservation::Current) {
+        let actual = original.binding();
+        let actor = actual.actor();
+        let observed = CreationBinding::new(
+            ActionContext::new(
+                if matches!(observation, RecoveryObservation::ForeignPrincipal) {
+                    "foreign"
+                } else {
+                    actor.principal_id()
+                },
+                actor.surface_id(),
+                if matches!(observation, RecoveryObservation::WrongRequest) {
+                    "different-request"
+                } else {
+                    actor.request_id()
+                },
+            )
+            .unwrap(),
+            if matches!(observation, RecoveryObservation::WrongTarget) {
+                conversation_session(&id())
+            } else {
+                actual.target().clone()
+            },
+            if matches!(observation, RecoveryObservation::WrongFingerprint) {
+                [9; 32]
+            } else {
+                *actual.fingerprint()
+            },
+        );
+        let observed = CreationReceipt::accepted(observed);
+        let commands = if matches!(observation, RecoveryObservation::StaleAccepted) {
+            storage.clone()
+        } else {
+            // These are valid stored command records from a mismatched owner
+            // or binding, not merely a stale observation rejected by reload.
+            // Recovery must correlate the graph before trusting that lease.
+            let commands = Arc::new(RecordStorage::new(root.join("mismatched-commands")).unwrap());
+            let actor = observed.binding().actor();
+            let lease = commands
+                .open_creation(actor.principal_id().into(), actor.request_id().into(), true)
+                .await
+                .unwrap()
+                .unwrap();
+            lease.save(observed.clone()).await.unwrap();
+            drop(lease);
+            alternate_commands = Some(commands.clone());
+            commands
+        };
+        service.bind_commands(Arc::new(PreloadedCreationObservation {
+            storage: storage.clone(),
+            commands,
+            receipt: observed,
+        }));
+    }
+    // The injected child quota is one; ordinary live-map admission keeps its
+    // normal fixture limit. This isolates the retained child reservation.
+    let coordinator = bind_with_capacity(&service, &storage, &root, true, 1).await;
+    let recovered = coordinator.lifetime_state(&lifetime);
+    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 0);
+    let parent = ConversationId::new("00000000-0000-4000-8000-000000000003").unwrap();
+    opened(&service, &provider, &parent).await;
+    let hold = hold_turn(&service, &provider, &parent, "after-recovery").await;
+    let fresh = service
+        .create_owned_thread(
+            source(&parent, "after-recovery", "fresh-child"),
+            id(),
+            RequestedConversation::default(),
+        )
+        .await;
+    drop(hold);
+    let opens = provider.open_calls.load(Ordering::SeqCst);
+    retire(service, storage, metadata).await;
+    if let Some(commands) = alternate_commands {
+        commands.shutdown().await.unwrap();
+    }
+    if !attempted && matches!(observation, RecoveryObservation::Current) {
+        assert_eq!(
+            recovered,
+            Some(LifetimeState::Closed),
+            "Accepted proves no initializer was authorized"
+        );
+        assert!(
+            fresh.is_ok(),
+            "the original child reservation was not released: {fresh:?}"
+        );
+        assert_eq!(
+            opens, 2,
+            "only the new parent and legitimate new child open"
+        );
+        let provider = Arc::new(ProviderFactory::default());
+        let (service, storage, metadata) = fixture(&root, provider.clone());
+        service.bind_commands(Arc::new(CreationLookupOnly(storage.clone())));
+        let restored = bind_with_capacity(&service, &storage, &root, true, 1).await;
+        assert_eq!(
+            restored.lifetime_state(&lifetime),
+            Some(LifetimeState::Closed)
+        );
+        assert_eq!(provider.open_calls.load(Ordering::SeqCst), 0);
+        // The failed reservation never acquired this target. Ordinary opening
+        // gets a new root rather than reopening its historical child lifetime.
+        opened(&service, &provider, &target).await;
+        let root_lifetime = restored
+            .active_root_for_session(&conversation_session(&target))
+            .unwrap();
+        assert_ne!(root_lifetime, lifetime);
+        assert_eq!(provider.open_calls.load(Ordering::SeqCst), 1);
+        retire(service, storage, metadata).await;
+    } else {
+        assert_eq!(
+            recovered,
+            Some(LifetimeState::Open),
+            "{attempted}/{observation:?}"
+        );
+        assert!(
+            matches!(
+                &fresh,
+                Err(commands::CreationFailure::Target(
+                    ConversationError::Unavailable
+                ))
+            ),
+            "uncertain or mismatched evidence cannot free quota: {fresh:?}"
+        );
+        assert_eq!(opens, 1, "no child initializer dispatched");
+    }
+}
 #[tokio::test]
 async fn startup_retries_a_completed_closing_generation_after_rebinding_its_owner() {
     closing_recovery_after_rebind(false).await;

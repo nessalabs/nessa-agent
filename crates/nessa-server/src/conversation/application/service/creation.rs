@@ -7,9 +7,9 @@ use super::{
 use nessa_sdk::application::agent_execution::commands::{
     CreationBinding, CreationCoordinator, CreationFailure, CreationFuture,
     CreationInitializationFailure, CreationReceipt, CreationStage, CreationStorage,
-    CreationStorageError, CreationTarget, CreationTaskFault,
+    CreationStorageError, CreationStorageLease, CreationTarget, CreationTaskFault,
 };
-use nessa_sdk::domain::agent_execution::subagents::TaskDigest;
+use nessa_sdk::domain::agent_execution::subagents::{SpawnBinding, TaskDigest};
 use sha2::{Digest, Sha256};
 use std::sync::{Arc, Mutex};
 
@@ -193,6 +193,76 @@ impl ConversationService {
             Err(CreationStorageError::Storage(error)) => Err(error.into()),
             Err(CreationStorageError::TaskFault(_)) => Err(ConversationError::Unavailable),
         }
+    }
+
+    /// Discover the original command without guessing an actor from a digest.
+    /// Parent ownership scopes observation; the actual receipt supplies the actor.
+    /// Keep its request exclusion until the caller records ownership absence.
+    pub(super) async fn unstarted_child_creation(
+        &self,
+        id: &ConversationId,
+        binding: &SpawnBinding,
+    ) -> Result<Option<Arc<dyn CreationStorageLease>>, ConversationError> {
+        let parent = ConversationId::new(binding.parent_session.as_str())
+            .map_err(|_| ConversationError::InvalidInput)?;
+        let Some(parent) = load_conversation(self.inner.metadata.as_ref(), &parent).await? else {
+            return Ok(None);
+        };
+        let storage = self.commands().ok_or(ConversationError::Unavailable)?;
+        let failure = |error| match error {
+            CreationStorageError::Storage(error) => ConversationError::from(error),
+            CreationStorageError::TaskFault(_) | CreationStorageError::ForeignRequest => {
+                ConversationError::Unavailable
+            }
+        };
+        for observed in storage
+            .creations(parent.owner().as_str().into())
+            .await
+            .map_err(failure)?
+        {
+            let actor = observed.binding().actor();
+            if observed.stage() != CreationStage::Accepted
+                || super::owned_threads::creation_request(
+                    actor.principal_id(),
+                    actor.surface_id(),
+                    actor.request_id(),
+                ) != binding.request_id
+            {
+                continue;
+            }
+            let caller = ConversationCaller {
+                organization_id: parent.organization().clone(),
+                principal_id: parent.owner().clone(),
+                surface_id: actor.surface_id().into(),
+                action_id: actor.request_id().into(),
+            };
+            if observed.binding() != &child_binding(id, &caller, &binding.task_digest)? {
+                continue;
+            }
+            let Some(lease) = storage
+                .open_creation(
+                    actor.principal_id().into(),
+                    actor.request_id().into(),
+                    false,
+                )
+                .await
+                .map_err(failure)?
+            else {
+                continue;
+            };
+            // Observation alone can be stale. The original command owner must
+            // still prove no authorization; this lease excludes later Attempted.
+            if lease
+                .load(actor.request_id())
+                .await
+                .map_err(failure)?
+                .as_ref()
+                == Some(&observed)
+            {
+                return Ok(Some(lease));
+            }
+        }
+        Ok(None)
     }
 
     /// A new request for a conversation that already exists is the existing

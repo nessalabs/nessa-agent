@@ -96,6 +96,9 @@ fn restore_with(store: Arc<MemoryOwnershipStore>, room: Arc<CountedRoom>) -> Wor
     }
 }
 
+#[path = "capacity/preparation_recovery.rs"]
+mod preparation_recovery;
+
 async fn child(world: &World, root: &AgentLifetimeId, request: &str) -> AgentLifetimeId {
     world
         .coordinator

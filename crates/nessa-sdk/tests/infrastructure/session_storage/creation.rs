@@ -602,6 +602,73 @@ async fn mutation_enumeration_is_principal_scoped_read_only_and_keeps_latest_pro
 }
 
 #[tokio::test]
+async fn creation_enumeration_keeps_principal_original_admission_and_current_stage() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("records");
+    let storage = RecordStorage::new(&root).unwrap();
+    let later = storage
+        .open_creation("person".into(), "later".into(), true)
+        .await
+        .unwrap()
+        .unwrap();
+    let first = storage
+        .open_creation("person".into(), "first".into(), true)
+        .await
+        .unwrap()
+        .unwrap();
+    let accepted = CreationReceipt::accepted(binding("first"));
+    first.save(accepted.clone()).await.unwrap();
+    let last = CreationReceipt::accepted(binding("later"));
+    later.save(last.clone()).await.unwrap();
+    let foreign = storage
+        .open_creation("foreign".into(), "first".into(), true)
+        .await
+        .unwrap()
+        .unwrap();
+    foreign
+        .save(CreationReceipt::accepted(CreationBinding::new(
+            ActionContext::new("foreign", "panel", "first").unwrap(),
+            SessionId::new("target").unwrap(),
+            [7; 32],
+        )))
+        .await
+        .unwrap();
+    // An observation neither acquires the already-held request nor appends a
+    // command. Its old Accepted prefix cannot override a later authorized stage.
+    let observed = storage.creations("person".into()).await.unwrap();
+    assert_eq!(observed, [accepted.clone(), last.clone()]);
+    let attempted = accepted.advance(CreationStage::Attempted).unwrap();
+    first.save(attempted.clone()).await.unwrap();
+    assert_ne!(
+        first.load("first").await.unwrap().as_ref(),
+        observed.first()
+    );
+    assert_eq!(
+        storage.creations("person".into()).await.unwrap(),
+        [attempted.clone(), last.clone()]
+    );
+    assert!(storage
+        .creations("missing".into())
+        .await
+        .unwrap()
+        .is_empty());
+    assert!(storage
+        .open_creation("missing".into(), "observe".into(), false)
+        .await
+        .unwrap()
+        .is_none());
+    drop((first, later, foreign));
+    storage.shutdown().await.unwrap();
+    drop(storage);
+    let storage = RecordStorage::new(root).unwrap();
+    assert_eq!(
+        storage.creations("person".into()).await.unwrap(),
+        [attempted, last]
+    );
+    storage.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn mutation_observation_sql_bounds_fields_before_driver_materialization() {
     // Query the real persistence statement as well as the public observer:
     // typed corruption alone cannot prove it refused before allocating data.
@@ -637,7 +704,7 @@ async fn mutation_observation_sql_bounds_fields_before_driver_materialization() 
                 [],
             )
             .unwrap();
-        let mut statement = connection.prepare(OBSERVED_MUTATIONS_SQL).unwrap();
+        let mut statement = connection.prepare(OBSERVED_COMMANDS_SQL).unwrap();
         let mut rows = statement
             .query(params![
                 format!("{CONTROL_STREAM_PREFIX}*"),
@@ -660,6 +727,10 @@ async fn mutation_observation_sql_bounds_fields_before_driver_materialization() 
         // than allocate it before filtering. The read cannot repair the row.
         assert!(matches!(
             storage.mutations("other".into()).await,
+            Err(CreationStorageError::Storage(StorageError::Corrupt(_)))
+        ));
+        assert!(matches!(
+            storage.creations("other".into()).await,
             Err(CreationStorageError::Storage(StorageError::Corrupt(_)))
         ));
         storage.shutdown().await.unwrap();

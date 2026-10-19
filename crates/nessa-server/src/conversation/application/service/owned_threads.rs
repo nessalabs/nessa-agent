@@ -28,9 +28,9 @@ use nessa_sdk::application::agent_execution::subagents::{
 use nessa_sdk::domain::agent_execution::executions::{ExecutionId, Initiation};
 use nessa_sdk::domain::agent_execution::leases::{LeaseCleanup, LeaseEndCause, LeasePhase};
 use nessa_sdk::domain::agent_execution::subagents::{
-    AgentLifetimeId, ApprovalPolicy, EvidenceFact, HostActor, Initiator, LifetimeCause,
-    LifetimeState, OwnershipSnapshot, PhysicalFact, PolicyRead, SpawnBinding, SpawnOrigin,
-    SpawnProgress, SpawnRequestId, TaskReceiptId,
+    AgentLifetimeId, ApprovalPolicy, EvidenceFact, HostActor, Initiator, KnownMilestone,
+    LifetimeCause, LifetimeState, OwnershipSnapshot, PhysicalFact, PolicyRead, SpawnBinding,
+    SpawnOrigin, SpawnProgress, SpawnRequestId, TaskReceiptId,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -249,7 +249,38 @@ impl ConversationService {
                 .map_err(|_| ConversationError::InvalidInput)?;
             match self.confirm_child_creation(&id, &row.lifetime_id).await {
                 Ok(true) => {}
-                Ok(false) => continue,
+                Ok(false) => {
+                    if let Some(binding) = ownership
+                        .coordinator
+                        .spawn_binding_for_lifetime(&row.lifetime_id)
+                    {
+                        // A completed absence already belongs to the graph.
+                        // Only an unsettled reservation needs command discovery.
+                        if !matches!(
+                            ownership.coordinator.spawn_progress(&binding.request_id),
+                            Some(
+                                SpawnProgress::Unconfirmed {
+                                    known: KnownMilestone::Reserved
+                                } | SpawnProgress::Draining {
+                                    known: KnownMilestone::Reserved
+                                }
+                            )
+                        ) {
+                            continue;
+                        }
+                        if let Some(original_command) =
+                            self.unstarted_child_creation(&id, &binding).await?
+                        {
+                            ownership
+                                .coordinator
+                                .reject_unstarted_preparation(&binding.request_id, &row.lifetime_id)
+                                .await
+                                .map_err(|_| ConversationError::Unavailable)?;
+                            drop(original_command);
+                        }
+                    }
+                    continue;
+                }
                 Err(ConversationError::Unavailable) => {
                     // Attempted does not prove acquisition. Keep the original
                     // lifetime unsettled without binding an inferred owner or
@@ -791,7 +822,7 @@ fn creation_policy() -> ApprovalPolicy {
         .expect("static ordinary creation policy")
 }
 
-fn creation_request(principal: &str, surface: &str, action: &str) -> SpawnRequestId {
+pub(super) fn creation_request(principal: &str, surface: &str, action: &str) -> SpawnRequestId {
     let bytes = serde_json::to_vec(&(principal, surface, action)).expect("strings serialize");
     SpawnRequestId::new(format!("create-{:x}", Sha256::digest(bytes))).expect("digest identity")
 }

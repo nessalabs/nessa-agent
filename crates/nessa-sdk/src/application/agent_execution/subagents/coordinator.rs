@@ -596,6 +596,127 @@ impl OwnershipCoordinator {
         Arc::clone(&self.inner).resume_from_store().await
     }
 
+    /// Reject an original preparation proven never to have initialized resources.
+    ///
+    /// This is a host recovery assertion, not an inference from a restored
+    /// reservation. During quiescent startup the host must hold the original
+    /// initialization command's exclusion and verify its immutable binding and
+    /// acknowledged pre-initialization stage. Missing metadata, an interrupted
+    /// initializer, or an absent terminal receipt cannot establish this promise.
+    /// The existing graph records preparation rejection/absence, seals only this
+    /// child subtree, and retains its original close owner and audit obligations.
+    /// No factory or provider effect is repeated or synthetically acknowledged.
+    /// Repeating the same confirmed absence does not release capacity twice.
+    ///
+    /// # Errors
+    /// Refuses an unrelated identity, later preparation milestone, refused
+    /// history, live factory flight or bound cleanup owner. Audit/store failures
+    /// retain cleanup evidence; physically absent capacity may already be free.
+    /// An ancestor's existing close remains separately owned and is not joined.
+    ///
+    /// # Cancellation
+    /// A sealed child's absence and first close remain retained. Retry recovery
+    /// with the same verified original command; cancellation permits no factory replay.
+    pub async fn reject_unstarted_preparation(
+        &self,
+        request: &SpawnRequestId,
+        child: &AgentLifetimeId,
+    ) -> Result<(), OwnershipFailure> {
+        let (closing, owner, ended) = self.inner.with_graph(|graph| {
+            let stale = || OwnershipFailure::Domain(OwnershipError::StaleOutcome);
+            if graph.refusal().is_some()
+                || graph.child_lifetime(request) != Some(child)
+                || self
+                    .inner
+                    .inflight
+                    .lock()
+                    .expect("inflight spawns")
+                    .contains(child)
+                || self
+                    .inner
+                    .resources
+                    .lock()
+                    .expect("child resources")
+                    .contains_key(child)
+            {
+                return Err(stale());
+            }
+            let progress = graph.spawn_progress(request).ok_or_else(stale)?;
+            let absent = graph.has_absence(child);
+            if !matches!(
+                progress,
+                SpawnProgress::Unconfirmed {
+                    known: KnownMilestone::Reserved
+                }
+            ) && !(absent && progress.known() == KnownMilestone::Reserved)
+            {
+                return Err(stale());
+            }
+            let ended = matches!(progress, SpawnProgress::Ended { .. });
+            let closing = if absent {
+                None
+            } else {
+                self.inner.revoke_child_in_graph(graph, child)
+            };
+            let owner = graph.close_owner(child).ok_or_else(stale)?;
+            if !absent {
+                let operation = graph.close_operation(&owner).cloned().ok_or_else(stale)?;
+                let _retained = graph
+                    .note_absence(
+                        &owner,
+                        &operation,
+                        child,
+                        AbsenceProof::PreparationRejectedWithoutOwner(request.clone()),
+                    )
+                    .map_err(OwnershipFailure::Domain)?;
+            }
+            Ok((closing, owner, ended))
+        })?;
+        self.inner.release_slot(child);
+        if let Some(closing) = closing {
+            self.inner.persist_evidence(&closing).await?;
+        } else {
+            self.inner
+                .commit_snapshot()
+                .await
+                .map_err(OwnershipFailure::Store)?;
+        }
+        if !ended {
+            if self.inner.with_graph(|graph| {
+                matches!(
+                    graph.spawn_progress(request),
+                    Some(SpawnProgress::Unconfirmed { .. })
+                )
+            }) {
+                self.inner
+                    .advance(
+                        request,
+                        SpawnProgress::Draining {
+                            known: KnownMilestone::Reserved,
+                        },
+                    )
+                    .await?;
+            }
+            self.inner
+                .advance(
+                    request,
+                    SpawnProgress::Ended {
+                        known: KnownMilestone::Reserved,
+                    },
+                )
+                .await?;
+        }
+        let generation = self
+            .inner
+            .start_drain(owner.clone(), false)
+            .ok_or(OwnershipFailure::Incomplete)?;
+        if owner == *child {
+            wait_generation(generation).await
+        } else {
+            Ok(())
+        }
+    }
+
     /// Read one page of children. Illegal restored history stays readable.
     pub fn children(
         &self,

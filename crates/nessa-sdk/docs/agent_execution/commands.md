@@ -45,13 +45,22 @@ a busy principal is never refused for its history or for its other work.
 Bindings remain after target deletion and are not collected by
 this slice. No transaction orders control and target streams together.
 
-`CreationStorage::mutations` observes one principal's latest retained mutation
-receipts in first durable acceptance order without opening a request lease or
-writing an observation stream. Progress does not change that order. The SQLite
+`CreationStorage::creations` and `CreationStorage::mutations` observe one
+principal's latest retained creation or mutation receipts in first durable
+acceptance order without opening a request lease or writing an observation
+stream. Progress does not change that order. The SQLite
 adapter reads the existing physical command records on its joined read worker;
 per-request writers retain their independent exclusion. The returned history
 has the same retention as commands, so observation costs grow with that history.
 The host still checks current authorization before using these receipts.
+
+An observation may omit concurrent progress. To prove a retained child never
+initialized, startup reopens the exact original command, verifies its binding
+and current Accepted stage, and retains that lease through ownership recovery.
+`OwnershipCoordinator::reject_unstarted_preparation` consumes that host promise
+using the existing graph's preparation-rejection absence and close owner. It
+does not infer absence from metadata or replay the initializer. A current
+Attempted stage retains uncertainty even when discovery returned older Accepted.
 
 The owning state/order table and regression fixture mapping are in
 [command creation](../../../../docs/design/command-creation.md).

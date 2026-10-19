@@ -651,12 +651,14 @@ pub struct OwnershipSnapshot {
     pub reports: Vec<ReportRow>,
 }
 
-/// Actual absence observed by the live transaction, never inferred during restoration.
+/// Actual absence established by the preparation owner, never inferred merely
+/// from restoration or missing resource metadata.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AbsenceProof {
     /// A root that has never transferred resources or a gate.
     NeverTransferredRoot,
-    /// Actual Ready preparation rejection promised no outstanding cleanup owner.
+    /// Preparation rejection promised no outstanding cleanup owner, including
+    /// recovery under the original command's verified pre-initialization exclusion.
     PreparationRejectedWithoutOwner(SpawnRequestId),
     /// This admitted invocation failed publication before its factory handoff.
     AdmissionFailedBeforeFactory(SpawnRequestId),

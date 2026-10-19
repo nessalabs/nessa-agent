@@ -64,8 +64,12 @@ pub(super) fn control_stream_id(principal: &str, request: &str) -> String {
     digest.update(request.as_bytes());
     format!("{CONTROL_STREAM_PREFIX}{:x}", digest.finalize())
 }
-impl CreationStorage for RecordStorage {
-    fn mutations(&self, principal: String) -> CreationFuture<'_, Vec<MutationReceipt>> {
+impl RecordStorage {
+    fn observed_commands<T: Send + 'static>(
+        &self,
+        principal: String,
+        project: fn(Held) -> Option<T>,
+    ) -> CreationFuture<'_, Vec<T>> {
         Box::pin(async move {
             ActionContext::new(&principal, "control", "observe")
                 .map_err(|_| corrupt("invalid command principal"))?;
@@ -73,12 +77,26 @@ impl CreationStorage for RecordStorage {
             let path = self.command_path();
             let received = self
                 .owner
-                .read(move || read_mutations(path, &principal))
+                .read(move || read_commands(path, &principal, project))
                 .await?;
             received
                 .await
                 .map_err(|_| StorageError::ReadWorkerPanicked)?
                 .map_err(Into::into)
+        })
+    }
+}
+impl CreationStorage for RecordStorage {
+    fn creations(&self, principal: String) -> CreationFuture<'_, Vec<CreationReceipt>> {
+        self.observed_commands(principal, |held| match held {
+            Held::Creation(receipt) => Some(receipt),
+            Held::Mutation(_) => None,
+        })
+    }
+    fn mutations(&self, principal: String) -> CreationFuture<'_, Vec<MutationReceipt>> {
+        self.observed_commands(principal, |held| match held {
+            Held::Mutation(receipt) => Some(receipt),
+            Held::Creation(_) => None,
         })
     }
     fn open_creation(
@@ -127,7 +145,7 @@ impl CreationStorage for RecordStorage {
     }
 }
 
-const OBSERVED_MUTATIONS_SQL: &str = "WITH observed AS (
+const OBSERVED_COMMANDS_SQL: &str = "WITH observed AS (
              SELECT s.public_id,r.offset,r.event_id,r.schema_id,r.schema_version,r.payload,a.admitted,
                 typeof(s.public_id)='text' AND octet_length(s.public_id)<=?2
                 AND typeof(r.offset)='blob' AND length(r.offset)=8
@@ -151,14 +169,18 @@ const OBSERVED_MUTATIONS_SQL: &str = "WITH observed AS (
 
 // SQLite's existing physical Accepted row supplies the observation order. No
 // index or additional command publication is written by this read.
-fn read_mutations(path: PathBuf, principal: &str) -> Result<Vec<MutationReceipt>, StorageError> {
+fn read_commands<T>(
+    path: PathBuf,
+    principal: &str,
+    project: fn(Held) -> Option<T>,
+) -> Result<Vec<T>, StorageError> {
     let connection =
         Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(query_error)?;
     connection
         .busy_timeout(Duration::from_secs(5))
         .map_err(query_error)?;
     let mut statement = connection
-        .prepare(OBSERVED_MUTATIONS_SQL)
+        .prepare(OBSERVED_COMMANDS_SQL)
         .map_err(query_error)?;
     let mut rows = statement
         .query(rusqlite::params![
@@ -180,7 +202,7 @@ fn read_mutations(path: PathBuf, principal: &str) -> Result<Vec<MutationReceipt>
             .map_err(query_error)?
             .ok_or_else(|| corrupt("command observation record exceeds field bounds"))?;
         if stream != current {
-            collect_mutation(&mut held, principal, &mut result)?;
+            collect_commands(&mut held, principal, &mut result, project);
             current = stream;
             offset = 0;
         }
@@ -238,23 +260,27 @@ fn read_mutations(path: PathBuf, principal: &str) -> Result<Vec<MutationReceipt>
         }
         held.insert(request, next);
     }
-    collect_mutation(&mut held, principal, &mut result)?;
+    collect_commands(&mut held, principal, &mut result, project);
     Ok(result)
 }
 
-fn collect_mutation(
+fn collect_commands<T>(
     held: &mut HashMap<String, Held>,
     principal: &str,
-    result: &mut Vec<MutationReceipt>,
-) -> Result<(), StorageError> {
+    result: &mut Vec<T>,
+    project: fn(Held) -> Option<T>,
+) {
     for (_, receipt) in held.drain() {
-        if let Held::Mutation(receipt) = receipt {
-            if receipt.binding().actor().principal_id() == principal {
+        let actor = match &receipt {
+            Held::Creation(receipt) => receipt.binding().actor(),
+            Held::Mutation(receipt) => receipt.binding().actor(),
+        };
+        if actor.principal_id() == principal {
+            if let Some(receipt) = project(receipt) {
                 result.push(receipt);
             }
         }
     }
-    Ok(())
 }
 
 fn query_error(error: rusqlite::Error) -> StorageError {
