@@ -1410,6 +1410,13 @@ says why where the conversations would be.
   selector with the title constraint; a missing ID fails rather than opening
   another same-title row. Preserve the15-second opening/composer deadlines.
   _Check:_ `lib/stress-conversation.test.mjs`, default and raised stress runs.
+- [ ] **Home stress settles the conversation created in its focused window.**
+  Read its existing selected list row's identity after the UI send; a prior
+  same-title row cannot substitute while publication is pending. Require one
+  selected matching row, retain its ID for settlement and the final rest sweep,
+  and preserve the30-second discovery deadline and three-client/24-create load.
+  _Check:_ `lib/stress-conversation.test.mjs` and both-engine default and raised
+  `conversation-stress.mjs` runs (#1026).
 - [ ] **Stress restart errors belong to the planned gateway outage.** Install
   socket observation before navigation. Only exact owned `/session` refusal/reset
   console occurrences during the action, corroborated by actual socket errors,
