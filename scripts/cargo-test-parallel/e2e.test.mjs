@@ -46,7 +46,7 @@ test("real Cargo partitions keep coverage and propagate build, harness, and doct
     `fn main() {}\n#[test]\nfn executes() { ${body("server-bin")} }\n`,
   )
   const packages = ["-p", "nessa-server", "-p", "helper"]
-  function run(partition, fail = "", args = packages) {
+  function run(partition, fail = "", args = packages, actions = true) {
     rmSync(trace, { force: true })
     const result = spawnSync(
       process.execPath,
@@ -55,7 +55,12 @@ test("real Cargo partitions keep coverage and propagate build, harness, and doct
         cwd: root,
         encoding: "utf8",
         timeout: 120_000,
-        env: { ...process.env, NESSA_FIXTURE_TRACE: trace, NESSA_FIXTURE_FAIL: fail },
+        env: {
+          ...process.env,
+          GITHUB_ACTIONS: String(actions),
+          NESSA_FIXTURE_TRACE: trace,
+          NESSA_FIXTURE_FAIL: fail,
+        },
       },
     )
     assert.ifError(result.error)
@@ -97,6 +102,20 @@ test("real Cargo partitions keep coverage and propagate build, harness, and doct
     )
     const failedServer = run("server-lib", "server-lib")
     check(failedServer, ["server-lib"], 1)
+    assert.doesNotMatch(server.stderr, /::error /)
+    const annotations = failedServer.stderr
+      .split("\n")
+      .filter((line) => line.startsWith("::error "))
+    assert.equal(annotations.length, 1, failedServer.stderr)
+    const message = decodeURIComponent(annotations[0].split("::").slice(2).join("::"))
+    assert.match(message, /nessa_server/)
+    assert.match(message, /exited with 101/)
+    assert.match(message, /executes.*panicked/)
+    assert.match(message, /assertion.*left != right.*failed/)
+    assert.match(message, /server-lib/)
+    const localFailure = run("server-lib", "server-lib", packages, false)
+    check(localFailure, ["server-lib"], 1)
+    assert.doesNotMatch(localFailure.stderr, /::error /)
     const failedRemaining = run("remaining", "server-bin")
     assert.equal(failedRemaining.status, 1)
     assert.ok(failedRemaining.executed.includes("server-bin"))
