@@ -1401,6 +1401,53 @@ async fn one_subscribe_naming_the_sent_turn_returns_its_reply_in_place_of_the_re
     assert_eq!(reports.len(), 1, "{reports:?}");
     assert!(reports[0].contains("Its reply:\nLater."), "{}", reports[0]);
 
+    // Reading the thread's events past a turn's end leaves its report to
+    // come: only a call naming the turn takes the reply in its place.
+    provider
+        .execution_updates
+        .lock()
+        .unwrap()
+        .push(ExecutionUpdate::Message(MessageChunk::text("Streamed.")));
+    let streamed = client
+        .call(
+            "send_message",
+            json!({"threadId":worker,"message":"streamed","requestId":"await-streamed"}),
+        )
+        .await;
+    let streamed_execution = streamed["structuredContent"]["executionId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let mut after: Option<String> = None;
+    let mut seen_end = false;
+    for _ in 0..40 {
+        let args = match &after {
+            None => json!({"threadId":worker,"replay":true,"waitMs":2000}),
+            Some(cursor) => json!({"threadId":worker,"after":cursor,"waitMs":2000}),
+        };
+        let batch = client.call("subscribe", args).await;
+        let batch = &batch["structuredContent"];
+        if batch["turn"]["executionId"] == streamed_execution.as_str() {
+            assert!(
+                batch["turn"]["reply"]
+                    .as_str()
+                    .unwrap()
+                    .starts_with("Streamed."),
+                "{batch}"
+            );
+            seen_end = true;
+            break;
+        }
+        after = Some(batch["cursor"].as_str().unwrap().into());
+    }
+    assert!(seen_end, "the streamed turn's end was read");
+    let reports = reports_in(&service, &source, 2).await;
+    assert!(
+        reports[1].contains("Its reply:\nStreamed."),
+        "{}",
+        reports[1]
+    );
+
     // executionId and replay do not go together.
     let both = client
         .call(

@@ -261,6 +261,14 @@ impl ThreadReports {
         }
     }
 
+    /// Whether a report on `execution` in `child` was saved by an earlier run.
+    fn restored(&self, child: &ConversationId, execution: &str) -> bool {
+        self.lock().get(child).is_some_and(|list| {
+            list.iter()
+                .any(|watch| watch.execution == execution && watch.restored)
+        })
+    }
+
     /// Count one more, or one fewer (`by` -1), sender call waiting on
     /// `execution` in `child` for `parent`.
     fn await_turn(
@@ -614,8 +622,18 @@ impl ConversationService {
         execution: &str,
     ) -> Option<(&'static str, Option<String>)> {
         let history = self.report_history(child, caller).await?;
-        match in_record(&history, invocation(&history, execution)?, false) {
+        let found = match invocation(&history, execution) {
+            Some(record) => in_record(&history, record, false),
+            None => Found::Waiting(None),
+        };
+        // An earlier run left it unfinished: its report says how it ended,
+        // and so does this.
+        let restored = self.inner.thread_reports.restored(child, execution);
+        match found {
             Found::Finished(outcome, reply) => Some((outcome, reply)),
+            Found::Settling(saved) | Found::Waiting(saved) if restored => {
+                Some(saved.unwrap_or(("interrupted", None)))
+            }
             Found::Settling(saved) => saved,
             Found::Waiting(_) => None,
         }

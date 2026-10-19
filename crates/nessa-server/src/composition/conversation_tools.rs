@@ -108,7 +108,7 @@ impl BuiltInServer for ConversationTools {
             }),
             json!({
                 "name": "subscribe",
-                "description": "Wait for a thread's turn, or read its events. To get the reply to a message you sent, pass the executionId send_message returned: the call waits (up to waitMs, default and most 30000) and returns turn: {finished: true, outcome, reply} as soon as that turn ends, even if it already had. If turn.finished is false it is still running: call again the same way, or end your turn and its report wakes you. Without executionId it returns the next committed events (metadata only, never empty while more are waiting) and a cursor; repeat with after to continue, omit after to start from now, or use replay:true to start from the beginning. A turn.ended event comes with turn: {outcome, reply}. This call does not send a message, run an agent, or arrange a future model turn.",
+                "description": "Wait for a thread's turn, or read its events. To get the reply to a message you sent, pass the executionId send_message returned: the call waits (up to waitMs, default and most 30000) and returns turn: {finished: true, outcome, reply} as soon as that turn ends, even if it already had. If turn.finished is false it is still running: call again the same way, or end your turn and its report wakes you. While waiting it reads past the thread's other events; its cursor continues after everything it read. Without executionId it returns the next committed events (metadata only, never empty while more are waiting) and a cursor; repeat with after to continue, omit after to start from now, or use replay:true to start from the beginning. A turn.ended event comes with turn: {outcome, reply}. This call does not send a message, run an agent, or arrange a future model turn.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -582,9 +582,14 @@ async fn run(
         _ => Err("unknown_tool".into()),
     }
 }
+/// The most one tool answer's JSON text may take.
+const MAX_ANSWER_BYTES: usize = 32 * 1024;
+fn fits(value: &Value) -> bool {
+    serde_json::to_string(value).is_ok_and(|text| text.len() <= MAX_ANSWER_BYTES)
+}
 fn answer(value: Value) -> Value {
     let text = serde_json::to_string(&value).expect("JSON serializes");
-    if text.len() > 32 * 1024 {
+    if text.len() > MAX_ANSWER_BYTES {
         return failed("tool_result_too_large");
     }
     json!({"content":[{"type":"text","text":text}],"structuredContent":value,"isError":false})
@@ -609,6 +614,8 @@ struct SubscriptionControl {
     wait_ms: u64,
     /// The furthest point read, where a call ended by its deadline resumes.
     checkpoint: Option<CommittedEventCursor>,
+    /// The checkpoint is short of the head: more is waiting.
+    behind: bool,
     /// The turn this call waits on, if it names one.
     execution: Option<String>,
 }
@@ -620,6 +627,7 @@ impl SubscriptionControl {
             wait_by: None,
             wait_ms,
             checkpoint: None,
+            behind: false,
             execution,
         }
     }
@@ -645,9 +653,15 @@ impl SubscriptionControl {
     /// Everything up to `cursor` is read, and the wait for more begins.
     fn idle(&mut self, cursor: CommittedEventCursor) {
         self.checkpoint = Some(cursor);
+        self.behind = false;
         let wait_ms = self.wait_ms;
         self.wait_by
             .get_or_insert_with(|| Instant::now() + Duration::from_millis(wait_ms));
+    }
+    /// Everything up to `cursor` is read, and more is waiting after it.
+    fn read_to(&mut self, cursor: CommittedEventCursor) {
+        self.checkpoint = Some(cursor);
+        self.behind = true;
     }
     fn waited_out(&self) -> bool {
         self.wait_by.is_some_and(|by| Instant::now() >= by)
@@ -657,7 +671,7 @@ impl SubscriptionControl {
             SubscriptionEnd::Cancelled => Err("cancelled".into()),
             SubscriptionEnd::Deadline => match &self.checkpoint {
                 Some(cursor) => {
-                    let mut value = json!({"threadId":target.to_string(),"events":[],"cursor":cursor.encode(),"more":false,"timedOut":self.wait_ms>0});
+                    let mut value = json!({"threadId":target.to_string(),"events":[],"cursor":cursor.encode(),"more":self.behind,"timedOut":self.wait_ms>0});
                     if let Some(execution) = &self.execution {
                         value["turn"] = json!({"executionId":execution,"finished":false});
                     }
@@ -694,9 +708,11 @@ async fn follow(
         Err(SubscriptionEnd::Cancelled) => return Err("cancelled".into()),
         Err(SubscriptionEnd::Deadline) => return Err(code(ConversationError::Unavailable)),
     }
-    // This turn now holds the reply; a report would only repeat it.
-    if value["turn"]["finished"] == true {
-        if let Some(execution) = value["turn"]["executionId"].as_str() {
+    // A call waiting on the turn now holds its whole reply, in an answer
+    // that will be sent: a report would only repeat it.
+    if let Some(execution) = &control.execution {
+        let turn = &value["turn"];
+        if turn["finished"] == true && turn["replyCut"] == false && fits(&value) {
             service
                 .claim_thread_report(&target, execution, &source)
                 .await;
@@ -768,7 +784,11 @@ async fn observe(
                     // after that, only when a turn ends or is withdrawn.
                     let ends = !looked
                         || events.iter().any(|event| {
-                            event.kind == "turn.ended" || event.status == Some("cancelled")
+                            event.kind == "turn.ended"
+                                || matches!(
+                                    event.status,
+                                    Some("cancelled" | "settled" | "settlement_updated")
+                                )
                         });
                     looked = true;
                     if ends {
@@ -789,21 +809,23 @@ async fn observe(
                             Err(ended) => return control.finish(target, ended),
                         }
                     }
-                    control.checkpoint = Some(next.clone());
                     if caught_up {
                         control.idle(next);
+                    } else {
+                        control.read_to(next);
                     }
                     continue;
                 }
                 // A page of events this projection keeps out (message text,
                 // thinking) is read past, never answered as an empty page.
                 if events.is_empty() {
-                    control.checkpoint = Some(next.clone());
-                    if caught_up {
-                        control.idle(next);
-                        if control.waited_out() {
-                            return control.finish(target, SubscriptionEnd::Deadline);
-                        }
+                    if !caught_up {
+                        control.read_to(next);
+                        continue;
+                    }
+                    control.idle(next);
+                    if control.waited_out() {
+                        return control.finish(target, SubscriptionEnd::Deadline);
                     }
                     continue;
                 }
