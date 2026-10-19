@@ -528,8 +528,8 @@ impl NativeFollow {
     /// Why no view was delivered, when a reader was selected.
     /// [`NativeReadFailure::CursorAhead`] means `after` is past the gateway
     /// head: follow again with no cursor.
-    /// [`NativeReadFailure::SubscriptionCapacity`] means the gateway's watch
-    /// capacity is full: follow again. Neither is an ungranted conversation,
+    /// [`NativeReadFailure::SubscriptionCapacity`] means this connection's
+    /// subscription limit is full: stop following something first. Neither is an ungranted conversation,
     /// and neither asks pinned status.
     pub fn failure(&self) -> Option<NativeReadFailure> {
         self.value

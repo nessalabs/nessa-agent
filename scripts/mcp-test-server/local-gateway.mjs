@@ -175,8 +175,14 @@ export async function exited(child, ms) {
  *   `verification/desktop/scripts/mcp-servers-gateway.mjs`, adds its own).
  * @param {boolean} [o.signedOut] start the gateway with no sign-in to hand an
  *   agent (`signedOutEnvironment`), for an agent that needs none
- * @returns the gateway: `{ directory, token, url, log, server, stop }`. `token`
- *   is the owner token file's path; `log()` the gateway's output so far; `stop()`
+ * @param {object} [o.limits] the config's `limits`, as `docs/limits.md` names
+ *   them (`{ agentIdleSeconds: 3 }`); the gateway's defaults when absent
+ * @param {object} [o.native] the config's `native` section
+ *   (`{ enabled: false, listenAddress: "127.0.0.1:0" }`); absent is none
+ * @returns the gateway: `{ directory, token, url, log, server, stop, restart }`.
+ *   `token` is the owner token file's path; `log()` the gateway's output so
+ *   far; `restart(signal)` kills it (a crash by default) and starts it again
+ *   on the same directory and port; `server` the process running now; `stop()`
  *   stops it, waits for it and for the rest of its output (up to 2 s more), and
  *   removes its directory, and says whether it exited. On a failed start, the
  *   error carries the gateway's output as `gatewayLog`.
@@ -251,25 +257,59 @@ export async function startLocalGateway(o) {
             },
           },
         },
+        ...(o.limits ? { limits: o.limits } : {}),
+        ...(o.native ? { native: o.native } : {}),
       }),
     )
     chmodSync(configPath, 0o600)
-    server = spawn(nessa, ["server"], { env, stdio: ["ignore", "pipe", "pipe"] })
-    closed = new Promise((done) => server.once("close", done))
-    for (const stream of [server.stdout, server.stderr])
-      stream.on("data", (chunk) => output.push(chunk.toString()))
     const log = () => output.join("")
-    for (let i = 0; ; i += 1) {
-      // A gateway that already exited is not the one answering on the port.
-      if (server.exitCode !== null)
-        throw new Error(`gateway exited (${server.exitCode}):\n${log().slice(-4000)}`)
-      try {
-        if ((await fetch(`http://127.0.0.1:${o.port}/health`)).ok) break
-      } catch {}
-      if (i > 240) throw new Error(`gateway never became healthy:\n${log().slice(-4000)}`)
-      await sleep(250)
+    const launch = async () => {
+      server = spawn(nessa, ["server"], { env, stdio: ["ignore", "pipe", "pipe"] })
+      const running = server
+      closed = new Promise((done) => running.once("close", done))
+      for (const stream of [running.stdout, running.stderr])
+        stream.on("data", (chunk) => output.push(chunk.toString()))
+      for (let i = 0; ; i += 1) {
+        // A gateway that already exited is not the one answering on the port.
+        if (running.exitCode !== null)
+          throw new Error(`gateway exited (${running.exitCode}):\n${log().slice(-4000)}`)
+        try {
+          if ((await fetch(`http://127.0.0.1:${o.port}/health`)).ok) break
+        } catch {}
+        if (i > 240)
+          throw new Error(`gateway never became healthy:\n${log().slice(-4000)}`)
+        await sleep(250)
+      }
     }
-    return { directory, token, url: `http://127.0.0.1:${o.port}`, log, server, stop }
+    /**
+     * Stops the gateway and starts it again on the same directory and port:
+     * `SIGKILL` is a crash, `SIGTERM` its own shutdown. Resolves once the new
+     * one is healthy. Its output joins the same log.
+     */
+    const restart = async (signal = "SIGKILL") => {
+      const previous = server
+      previous.kill(signal)
+      if (!(await exited(previous, 10_000))) {
+        previous.kill("SIGKILL")
+        if (!(await exited(previous, 5_000)))
+          throw new Error(`the gateway (pid ${previous.pid}) did not exit`)
+      }
+      await Promise.race([closed, sleep(2_000, undefined, { ref: false })])
+      output.push(`\n--- restarted after ${signal} ---\n`)
+      await launch()
+    }
+    await launch()
+    return {
+      directory,
+      token,
+      url: `http://127.0.0.1:${o.port}`,
+      log,
+      get server() {
+        return server
+      },
+      stop,
+      restart,
+    }
   } catch (error) {
     await stop()
     error.gatewayLog = output.join("")

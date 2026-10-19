@@ -13,6 +13,7 @@ import { createMcpServersApi, type McpServersApi } from "./mcp-servers-api.js"
 import { createConversationApi, type ConversationApi } from "./conversation-api.js"
 import { createAgentsApi, type AgentsApi } from "./agents-api.js"
 import { createServerApi, type ServerApi } from "./server-api.js"
+import { createWorkspaceApi, type WorkspaceApi } from "./workspace-api.js"
 import { createCredentialApi, type CredentialApi } from "./credential-api.js"
 import { createPairingApi, type PairingApi } from "./pairing-api.js"
 import { createAuthApi, type AuthApi } from "./auth-api.js"
@@ -101,6 +102,8 @@ export class NessaClient {
   readonly pairing: PairingApi
   /** Fetch a fresh snapshot of the authenticated product identity and restrictions. */
   readonly auth: AuthApi
+  /** Tell the gateway what this window shows, for the person's agents to read. */
+  readonly workspace: WorkspaceApi
 
   private constructor(
     private readonly wire: ManagedSession,
@@ -124,6 +127,7 @@ export class NessaClient {
     this.credentials = createCredentialApi(wire, newRequestId)
     this.pairing = createPairingApi(wire)
     this.auth = createAuthApi(wire)
+    this.workspace = createWorkspaceApi(wire)
   }
 
   /** Validate options, authenticate, and resolve only when a session is ready.

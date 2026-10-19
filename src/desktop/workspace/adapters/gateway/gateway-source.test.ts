@@ -2727,6 +2727,237 @@ describe("writes", () => {
     ])
   })
 
+  it("a rename is the gateway's: the summary says the new title, at its next revision, before it resolves", async () => {
+    const { gateway, source, updates, follow } = started()
+    gateway.rows.set(conversationA, row(conversationA))
+    follow()
+    await source.index()
+    updates.length = 0
+    await source.rename(conversationA, "Rain plan", "person")
+    expect(gateway.calls).toContainEqual({
+      method: "rename",
+      args: [conversationA, "Rain plan"],
+    })
+    expect(updates).toEqual([
+      {
+        kind: "session",
+        session: expect.objectContaining({
+          id: conversationA,
+          title: "Rain plan",
+          revision: 2,
+        }),
+      },
+    ])
+    // The list frame that follows says the same, and nothing more.
+    gateway.publishList()
+    await flush()
+    expect(updates).toHaveLength(1)
+  })
+
+  it("a list frame read before a rename was stored does not say the old title after it", async () => {
+    const { gateway, source, updates, follow } = started()
+    gateway.rows.set(conversationA, row(conversationA))
+    follow()
+    await source.index()
+    updates.length = 0
+    const renamed = deferred<void>()
+    gateway.once("rename", (normal) => renamed.promise.then(normal))
+    const renaming = source.rename(conversationA, "Rain plan", "person")
+    await flush()
+    // Read before the rename is stored: it still carries the old title.
+    gateway.publishList()
+    await flush()
+    renamed.resolve()
+    await renaming
+    await flush()
+    const titles = updates.flatMap((update) =>
+      update.kind === "session" && update.session.id === conversationA
+        ? [update.session.title]
+        : [],
+    )
+    expect(titles.at(-1)).toBe("Rain plan")
+    expect(titles.slice(titles.indexOf("Rain plan"))).toEqual(["Rain plan"])
+  })
+
+  it("a list frame that crosses a rename and says another client's later title keeps it", async () => {
+    const { gateway, source, updates, follow } = started()
+    gateway.rows.set(conversationA, row(conversationA))
+    follow()
+    await source.index()
+    updates.length = 0
+    // Stored at once, answered later: the frames in between may come after it.
+    const answered = deferred<void>()
+    gateway.once("rename", (normal) => {
+      const result = normal()
+      return answered.promise.then(() => result)
+    })
+    const renaming = source.rename(conversationA, "Rain plan", "person")
+    await flush()
+    // Another client renames it after this rename was stored; that frame is
+    // the only one its rename sends.
+    const stored = gateway.rows.get(conversationA)
+    if (stored) gateway.rows.set(conversationA, { ...stored, title: "Snow plan" })
+    gateway.publishList()
+    await flush()
+    answered.resolve()
+    await renaming
+    await flush()
+    expect(
+      (await source.index()).sessions.find((session) => session.id === conversationA)
+        ?.title,
+    ).toBe("Snow plan")
+  })
+
+  it("a rename back to the title it had, asked while the first is on its way, is asked too", async () => {
+    const { gateway, source, updates, follow } = started()
+    gateway.rows.set(conversationA, row(conversationA))
+    follow()
+    await source.index()
+    const before = (await source.index()).sessions.find(
+      (session) => session.id === conversationA,
+    )?.title
+    updates.length = 0
+    const renamed = deferred<void>()
+    gateway.once("rename", (normal) => renamed.promise.then(normal))
+    const first = source.rename(conversationA, "Rain plan", "person")
+    await flush()
+    const back = source.rename(conversationA, before ?? "", "person")
+    await flush()
+    renamed.resolve()
+    await Promise.all([first, back])
+    await flush()
+    expect(gateway.count("rename")).toBe(2)
+    const titles = updates.flatMap((update) =>
+      update.kind === "session" && update.session.id === conversationA
+        ? [update.session.title]
+        : [],
+    )
+    expect(titles.at(-1)).toBe(before)
+  })
+
+  it("D18: a walk owed again keeps what was on its way as its frame came", async () => {
+    const { gateway, source, updates, follow, advance } = started()
+    for (const id of [conversationA, conversationB, "c", "d"])
+      gateway.rows.set(id, row(id, { updatedAtMs: id.charCodeAt(0) * 1_000 }))
+    gateway.listLimit = 2
+    gateway.observePageSize = 10
+    follow()
+    await source.index()
+    // Listed first of all, so every frame read before its archive names it.
+    const newest = [...gateway.rows.values()].sort(
+      (one, other) => other.updatedAtMs - one.updatedAtMs,
+    )[0].conversationId
+    const archived = deferred<void>()
+    gateway.once("archive", (normal) => archived.promise.then(normal))
+    const archiving = source.archive(newest, "person")
+    await flush()
+    // A frame read before the archive was stored, whose walk fails.
+    gateway.once("observe", () => Promise.reject(rpcCode("unavailable")))
+    gateway.publishList()
+    await flush()
+    archived.resolve()
+    await archiving
+    await flush()
+    updates.length = 0
+    // Walked again once the archive is stored: a page that cannot resume
+    // keeps the frame's rows, which still name it.
+    gateway.once("observe", () => Promise.resolve({ conversations: [], complete: false }))
+    await advance(timing.retryMs)
+    await flush()
+    expect(
+      updates.some((update) => update.kind === "session" && update.session.id === newest),
+    ).toBe(false)
+    expect((await source.index()).sessions.map((session) => session.id)).not.toContain(
+      newest,
+    )
+  })
+
+  it("D18: a walk owed again after a later rename says the later title", async () => {
+    const { gateway, source, updates, follow, advance } = started()
+    for (const id of [conversationA, conversationB, "c", "d"])
+      gateway.rows.set(id, row(id, { updatedAtMs: id.charCodeAt(0) * 1_000 }))
+    gateway.listLimit = 2
+    gateway.observePageSize = 10
+    follow()
+    await source.index()
+    const newest = [...gateway.rows.values()].sort(
+      (one, other) => other.updatedAtMs - one.updatedAtMs,
+    )[0].conversationId
+    // A frame read before the first rename was stored, whose walk fails.
+    const renamed = deferred<void>()
+    gateway.once("rename", (normal) => renamed.promise.then(normal))
+    const first = source.rename(newest, "Rain plan", "person")
+    await flush()
+    gateway.once("observe", () => Promise.reject(rpcCode("unavailable")))
+    gateway.publishList()
+    await flush()
+    renamed.resolve()
+    await first
+    await flush()
+    // A second rename, stored while that walk is still owed.
+    const second = deferred<void>()
+    gateway.once("rename", (normal) => second.promise.then(normal))
+    const later = source.rename(newest, "Snow plan", "person")
+    await flush()
+    second.resolve()
+    await later
+    await flush()
+    updates.length = 0
+    gateway.once("observe", () => Promise.resolve({ conversations: [], complete: false }))
+    await advance(timing.retryMs)
+    await flush()
+    const titles = updates.flatMap((update) =>
+      update.kind === "session" && update.session.id === newest
+        ? [update.session.title]
+        : [],
+    )
+    expect(titles.filter((title) => title !== "Snow plan")).toEqual([])
+    expect(
+      (await source.index()).sessions.find((session) => session.id === newest)?.title,
+    ).toBe("Snow plan")
+  })
+
+  it("a rename of a session taken out is refused as unknown and asks nobody", async () => {
+    const { gateway, source, follow } = started()
+    gateway.rows.set(conversationA, row(conversationA))
+    follow()
+    await source.index()
+    await source.archive(conversationA, "person")
+    await expect(
+      source.rename(conversationA, "Rain plan", "person"),
+    ).rejects.toMatchObject({
+      reason: "unknown-session",
+    })
+    expect(gateway.count("rename")).toBe(0)
+  })
+
+  it("a delete says the removal before it resolves, as an archive does, and a list frame on its way cannot list it again", async () => {
+    const { gateway, source, updates, follow } = started()
+    gateway.rows.set(conversationA, row(conversationA))
+    gateway.rows.set(conversationB, row(conversationB))
+    follow()
+    await source.index()
+    updates.length = 0
+    const deleted = deferred<void>()
+    gateway.once("delete", (normal) => deleted.promise.then(normal))
+    const deleting = source.delete(conversationA, "person")
+    await flush()
+    gateway.rows.set(conversationA, row(conversationA))
+    gateway.publishList()
+    await flush()
+    deleted.resolve()
+    await deleting
+    await flush()
+    expect(updates).toContainEqual({
+      kind: "session-removed",
+      sessionId: conversationA,
+      revision: 2,
+    })
+    expect((await source.index()).sessions.map((session) => session.id)).toEqual([
+      conversationB,
+    ])
+  })
+
   it("W7: marking read asks nothing of the gateway; pinning is not supported", async () => {
     const { gateway, source } = started()
     await source.markRead(conversationA)
@@ -3419,6 +3650,41 @@ describe("MCP Apps (#384)", () => {
     expect(a).toBeDefined()
     expect(b).toBeDefined()
     expect(a).not.toEqual(b)
+  })
+
+  it.each(["conversation_erasure_incomplete", "audit_unavailable"])(
+    "a delete refused with %s happened all the same: the row goes and the apps forget it, and the failure still says so",
+    async (code) => {
+      const { gateway, source, told, updates, follow } = withApps()
+      gateway.rows.set(conversationA, row(conversationA))
+      gateway.rows.set(conversationB, row(conversationB))
+      follow()
+      await source.index()
+      updates.length = 0
+      gateway.once("delete", () => Promise.reject(rpcCode(code)))
+      await expect(source.delete(conversationA, "person")).rejects.toBeDefined()
+      await flush()
+      expect(kinds(updates)).toContain("session-removed")
+      expect(told).toContainEqual(["forget", conversationA])
+      expect((await source.index()).sessions.map((session) => session.id)).toEqual([
+        conversationB,
+      ])
+    },
+  )
+
+  it("a delete refused otherwise may not have happened: the row stays", async () => {
+    const { gateway, source, updates, follow } = withApps()
+    gateway.rows.set(conversationA, row(conversationA))
+    follow()
+    await source.index()
+    updates.length = 0
+    gateway.once("delete", () => Promise.reject(rpcCode("temporarily_unavailable")))
+    await expect(source.delete(conversationA, "person")).rejects.toBeDefined()
+    await flush()
+    expect(kinds(updates)).not.toContain("session-removed")
+    expect((await source.index()).sessions.map((session) => session.id)).toEqual([
+      conversationA,
+    ])
   })
 
   it("D4: a conversation the gateway says was deleted is forgotten by the apps, after it is taken out", async () => {

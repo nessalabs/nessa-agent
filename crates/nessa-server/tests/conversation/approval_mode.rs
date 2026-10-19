@@ -1369,3 +1369,495 @@ async fn terminal_panic_payload_ownership_preserves_settlement() {
         "terminal panic escaped owned settlement: {violations:?}"
     );
 }
+
+/// A mode changed while the agent was attached is held by that attachment.
+/// A failed turn that ends the attachment leaves an agent whose next one
+/// would open at the mode it was first opened with, so the message after the
+/// failure was refused as `approval_mode_not_applied` for as long as the
+/// gateway ran, and a retry could run under the old mode. The next message
+/// closes that agent and opens the conversation again at its record's mode.
+/// Found by the conversation stress check (`verification/desktop/scripts/conversation-stress.mjs`).
+#[tokio::test]
+async fn a_message_after_a_failed_turn_runs_at_the_mode_chosen_live() {
+    use nessa_sdk::application::agent_execution::providers::{
+        ExecutionReport, ObservationFailure, ObservationFailureCause, ProviderExecutionReply,
+        ProviderSessionState,
+    };
+    let (service, provider, _repository, id, _, actor) = ready_mode_case().await;
+    service
+        .set_approval_mode(id.clone(), actor, ConversationApprovalMode::Full)
+        .await
+        .unwrap();
+    assert_eq!(
+        *provider.mode_updates.lock().unwrap(),
+        vec![nessa_sdk::application::agent_execution::providers::ApprovalMode::Full]
+    );
+    let failure = AgentError::Protocol("the provider refused the prompt".into());
+    *provider.execution_reply.lock().unwrap() =
+        Some(ProviderExecutionReply::Finished(ExecutionReport::new(
+            Some(Err(failure.clone())),
+            None,
+            ProviderSessionState::CleanupRequired,
+        )));
+    *provider.execution_observation_failure.lock().unwrap() = Some(ObservationFailure::new(
+        failure,
+        ObservationFailureCause::ExecutionFailed,
+    ));
+    let message = |text: &str| SubmittedMessage {
+        text: text.into(),
+        ..SubmittedMessage::default()
+    };
+    service
+        .submit(
+            id.clone(),
+            caller(),
+            "fails".into(),
+            message("This one fails"),
+            SubmissionMode::Queue,
+        )
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let view = service.read(id.clone(), caller()).await.unwrap();
+            if view.messages.first().is_some_and(|message| {
+                message.status
+                    == nessa_protocol::conversation::view::ConversationMessageStatus::Failed
+            }) && provider.close_calls.load(Ordering::SeqCst) >= 1
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the failed turn ends the attachment");
+    let opened = provider.open_calls.load(Ordering::SeqCst);
+
+    service
+        .submit(
+            id.clone(),
+            caller(),
+            "after".into(),
+            message("And now?"),
+            SubmissionMode::Queue,
+        )
+        .await
+        .expect("the message after a failed turn is sent at the chosen mode");
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !provider
+            .executions
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|execution| execution == "after")
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the message reaches the provider");
+    assert!(provider.open_calls.load(Ordering::SeqCst) > opened);
+    let view = service.read(id.clone(), caller()).await.unwrap();
+    assert_eq!(
+        view.selection.as_ref().unwrap().approval_mode,
+        ConversationApprovalMode::Full
+    );
+    service.shutdown().await.unwrap();
+}
+
+/// The same failure, with messages sent while it is still settling: one
+/// queued behind the failing turn, and more sent the moment it fails. None
+/// is refused as `approval_mode_not_applied`, or as closed: each waits for
+/// the failed agent to settle, which closes it and opens the conversation
+/// again at its record's mode, and a message the stopping agent or one at
+/// another mode refused is offered again. Found by the conversation chaos check
+/// (`verification/desktop/scripts/conversation-chaos.mjs`).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn messages_sent_while_a_failed_turn_settles_are_not_refused_for_the_mode() {
+    use nessa_sdk::application::agent_execution::providers::{
+        ExecutionReport, ObservationFailure, ObservationFailureCause, ProviderExecutionReply,
+        ProviderSessionState,
+    };
+    let (service, provider, _repository, _, _) = mode_fixture();
+    let id = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
+    service
+        .create(id.clone(), caller(), RequestedConversation::default())
+        .await
+        .unwrap();
+    // Changed live, so a new attachment would open at the agent's first mode.
+    // The agent opening the conversation may still be busy for a moment.
+    let changed = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            match service
+                .set_approval_mode(id.clone(), caller(), ConversationApprovalMode::Full)
+                .await
+            {
+                Err(ConversationError::TurnRunning) => {
+                    tokio::time::sleep(Duration::from_millis(10)).await
+                }
+                other => break other,
+            }
+        }
+    })
+    .await
+    .expect("the opening agent settles");
+    changed.unwrap();
+    let failure = AgentError::Protocol("the provider refused the prompt".into());
+    *provider.execution_reply.lock().unwrap() =
+        Some(ProviderExecutionReply::Finished(ExecutionReport::new(
+            Some(Err(failure.clone())),
+            None,
+            ProviderSessionState::CleanupRequired,
+        )));
+    *provider.execution_observation_failure.lock().unwrap() = Some(ObservationFailure::new(
+        failure,
+        ObservationFailureCause::ExecutionFailed,
+    ));
+    let (release, gate) = oneshot::channel();
+    *provider.execution_gate.lock().unwrap() = Some(gate);
+    let message = |text: &str| SubmittedMessage {
+        text: text.into(),
+        ..SubmittedMessage::default()
+    };
+    service
+        .submit(
+            id.clone(),
+            caller(),
+            "fails".into(),
+            message("This one fails"),
+            SubmissionMode::Queue,
+        )
+        .await
+        .unwrap();
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        provider.execution_started.notified(),
+    )
+    .await
+    .expect("the failing turn reaches the provider");
+    service
+        .submit(
+            id.clone(),
+            caller(),
+            "behind".into(),
+            message("Queued behind it"),
+            SubmissionMode::Queue,
+        )
+        .await
+        .unwrap();
+    release.send(()).unwrap();
+    for n in 0..20 {
+        let sent = service
+            .submit(
+                id.clone(),
+                caller(),
+                format!("after-{n}"),
+                message("And now?"),
+                SubmissionMode::Queue,
+            )
+            .await;
+        // Nor for the agent stopping after its failed turn: the message
+        // waits for it to recover, or for the conversation to open again.
+        assert!(
+            !matches!(
+                sent,
+                Err(ConversationError::ApprovalModeNotApplied
+                    | ConversationError::Agent(AgentError::Closed))
+            ),
+            "message {n} was refused: {sent:?}"
+        );
+    }
+    service.shutdown().await.unwrap();
+}
+
+/// An agent that let its own process go after a turn opens a new attachment
+/// by itself when the turn queued behind is due. That attachment opened at
+/// the mode the agent was first opened with, not the one chosen live, so the
+/// turn behind ran at a mode the conversation does not have, and a message
+/// sent while it ran was refused as `approval_mode_not_applied` for as long
+/// as a person left it running. The mode in force is applied to the new
+/// attachment before any turn runs on it. Found by the conversation chaos
+/// check (`verification/desktop/scripts/conversation-chaos.mjs`).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_agent_that_recovers_by_itself_keeps_the_mode_chosen_live() {
+    use nessa_sdk::application::agent_execution::executions::ExecutionUpdate;
+    use nessa_sdk::application::agent_execution::providers::{
+        ApprovalMode, CleanupReport, CloseOutcome, ExecutionReport, ProviderExecutionReply,
+        ProviderSessionState,
+    };
+    use nessa_sdk::domain::agent_execution::executions::ExecutionOutcome;
+    let (service, provider, _repository, _, _) = mode_fixture();
+    provider.session_resume.store(true, Ordering::SeqCst);
+    let id = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
+    service
+        .create(id.clone(), caller(), RequestedConversation::default())
+        .await
+        .unwrap();
+    let changed = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            match service
+                .set_approval_mode(id.clone(), caller(), ConversationApprovalMode::Full)
+                .await
+            {
+                Err(ConversationError::TurnRunning) => {
+                    tokio::time::sleep(Duration::from_millis(10)).await
+                }
+                other => break other,
+            }
+        }
+    })
+    .await
+    .expect("the opening agent settles");
+    changed.unwrap();
+    assert_eq!(*provider.mode_updates.lock().unwrap(), [ApprovalMode::Full]);
+    // The agent finishes its turn and reports that it let its own process
+    // go, so its next turn needs a new attachment.
+    *provider.execution_updates.lock().unwrap() =
+        vec![ExecutionUpdate::Finished(ExecutionOutcome::Completed)];
+    *provider.execution_reply.lock().unwrap() =
+        Some(ProviderExecutionReply::Finished(ExecutionReport::new(
+            Some(Ok(ExecutionOutcome::Completed)),
+            None,
+            ProviderSessionState::CleanupReported(CleanupReport::confirmed(CloseOutcome {
+                forced: false,
+            })),
+        )));
+    let message = |text: &str| SubmittedMessage {
+        text: text.into(),
+        ..SubmittedMessage::default()
+    };
+    let (release, gate) = oneshot::channel();
+    *provider.execution_gate.lock().unwrap() = Some(gate);
+    let started = provider.execution_started.notified();
+    service
+        .submit(
+            id.clone(),
+            caller(),
+            "first".into(),
+            message("The first turn"),
+            SubmissionMode::Queue,
+        )
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        started.await;
+        // The start notification precedes the fixture's gate capture. Keep
+        // its first receiver alive until that execution has taken it, before
+        // installing the queued turn's receiver below.
+        while provider.execution_gate.lock().unwrap().is_some() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the first turn captures its provider gate");
+    service
+        .submit(
+            id.clone(),
+            caller(),
+            "behind".into(),
+            message("Queued behind it"),
+            SubmissionMode::Queue,
+        )
+        .await
+        .unwrap();
+    // The turn behind waits, once started, until the test lets it go: a turn
+    // a person has not finished with.
+    let (release_behind, behind_gate) = oneshot::channel::<()>();
+    *provider.execution_gate.lock().unwrap() = Some(behind_gate);
+    let opens = provider.open_calls.load(Ordering::SeqCst);
+    release.send(()).unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !provider
+            .executions
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|execution| execution == "behind")
+        {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| {
+        panic!(
+            "the turn behind starts on the agent's new attachment: {:?}, {} opens",
+            provider.executions.lock().unwrap(),
+            provider.open_calls.load(Ordering::SeqCst)
+        )
+    });
+    assert!(
+        provider.open_calls.load(Ordering::SeqCst) > opens,
+        "the agent opened a new attachment by itself"
+    );
+    // The new attachment was put at the mode in force before the turn ran.
+    assert_eq!(
+        *provider.mode_updates.lock().unwrap(),
+        [ApprovalMode::Full, ApprovalMode::Full]
+    );
+    let live = service.resolve(&id, &caller()).await.unwrap();
+    assert_eq!(live.agent.approval_mode(), Some(ApprovalMode::Full));
+    drop(live);
+    let sent = tokio::time::timeout(
+        Duration::from_secs(5),
+        service.submit(
+            id.clone(),
+            caller(),
+            "after".into(),
+            message("And now?"),
+            SubmissionMode::Queue,
+        ),
+    )
+    .await
+    .expect("the message is answered while the turn behind runs");
+    assert!(sent.is_ok(), "the message was refused: {sent:?}");
+    release_behind.send(()).unwrap();
+    service.shutdown().await.unwrap();
+}
+
+/// A review lives on the attachment that asked it. Once the agent let its own
+/// process go, nothing holds a review, so an answer or a withdrawal is told it
+/// is stale, as a read of the review is, not that the agent failed. Found by
+/// the conversation chaos check.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_answer_to_an_agent_that_let_its_process_go_is_stale() {
+    use nessa_sdk::application::agent_execution::executions::ExecutionUpdate;
+    use nessa_sdk::application::agent_execution::providers::{
+        CleanupReport, CloseOutcome, ExecutionReport, ProviderExecutionReply, ProviderSessionState,
+    };
+    use nessa_sdk::domain::agent_execution::executions::ExecutionOutcome;
+    let (service, provider, _repository, _, _) = mode_fixture();
+    provider.session_resume.store(true, Ordering::SeqCst);
+    let id = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
+    service
+        .create(id.clone(), caller(), RequestedConversation::default())
+        .await
+        .unwrap();
+    *provider.execution_updates.lock().unwrap() =
+        vec![ExecutionUpdate::Finished(ExecutionOutcome::Completed)];
+    *provider.execution_reply.lock().unwrap() =
+        Some(ProviderExecutionReply::Finished(ExecutionReport::new(
+            Some(Ok(ExecutionOutcome::Completed)),
+            None,
+            ProviderSessionState::CleanupReported(CleanupReport::confirmed(CloseOutcome {
+                forced: false,
+            })),
+        )));
+    service
+        .submit(
+            id.clone(),
+            caller(),
+            "only".into(),
+            SubmittedMessage {
+                text: "The only turn".into(),
+                ..SubmittedMessage::default()
+            },
+            SubmissionMode::Queue,
+        )
+        .await
+        .unwrap();
+    let live = service.resolve(&id, &caller()).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !matches!(
+            live.agent.attachment_status().phase(),
+            nessa_sdk::application::agent_execution::agents::AttachmentPhase::Absent
+        ) {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the agent lets its process go after its turn");
+    drop(live);
+    let answered = service
+        .answer(
+            id.clone(),
+            caller(),
+            "only".into(),
+            "permission".into(),
+            "0".repeat(32),
+            "allow".into(),
+            PermissionCaller::Owner,
+        )
+        .await;
+    assert!(
+        matches!(
+            answered,
+            Err(ConversationError::PermissionAnswer {
+                error: AgentError::StalePermission,
+                ..
+            })
+        ),
+        "{answered:?}"
+    );
+    let withdrawn = service
+        .cancel_permission(
+            id.clone(),
+            caller(),
+            "only".into(),
+            "permission".into(),
+            "0".repeat(32),
+            "no".into(),
+        )
+        .await;
+    assert!(
+        matches!(
+            withdrawn,
+            Err(ConversationError::Agent(AgentError::StalePermission))
+        ),
+        "{withdrawn:?}"
+    );
+    service.shutdown().await.unwrap();
+}
+
+/// An answer to a conversation with no agent live names a review nothing
+/// holds: it is told so, and the conversation is not opened for it, which
+/// past the live-agent bound would be refused `conversation_capacity` or
+/// park another agent. Found by the conversation chaos check's extreme run.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_answer_to_a_conversation_with_no_agent_live_is_stale_and_opens_nothing() {
+    let (service, provider, _repository, _, _) = mode_fixture();
+    let id = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
+    service
+        .create(id.clone(), caller(), RequestedConversation::default())
+        .await
+        .unwrap();
+    service.close(id.clone(), caller()).await.unwrap();
+    let opens = provider.open_calls.load(Ordering::SeqCst);
+    let answered = service
+        .answer(
+            id.clone(),
+            caller(),
+            "execution".into(),
+            "permission".into(),
+            "0".repeat(32),
+            "allow".into(),
+            PermissionCaller::Owner,
+        )
+        .await;
+    assert!(
+        matches!(
+            answered,
+            Err(ConversationError::Agent(AgentError::StalePermission))
+        ),
+        "{answered:?}"
+    );
+    let withdrawn = service
+        .cancel_permission(
+            id.clone(),
+            caller(),
+            "execution".into(),
+            "permission".into(),
+            "0".repeat(32),
+            "no".into(),
+        )
+        .await;
+    assert!(
+        matches!(
+            withdrawn,
+            Err(ConversationError::Agent(AgentError::StalePermission))
+        ),
+        "{withdrawn:?}"
+    );
+    assert_eq!(provider.open_calls.load(Ordering::SeqCst), opens);
+    service.shutdown().await.unwrap();
+}

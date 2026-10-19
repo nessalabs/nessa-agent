@@ -1,0 +1,52 @@
+{
+  "head": "685622b2baad2a458276155f809fd5427529ac13",
+  "tested_merge": "af4ac1e81dd63af01019da71ee460cc01b5fc2e6",
+  "run_id": 39052123497,
+  "windows_job_id": 117452691896,
+  "source": "Supported GitHub check annotation API, not raw logs",
+  "required_checks": "all passed",
+  "windows_job": "passed including package selection, clippy and smokes",
+  "limit": "Only first10 phase notices are retained; device/drain durations absent. Later workflow fix aggregates phases. This is not a timing failure reproduction.",
+  "phase_annotations_as_returned": [
+    {
+      "message": "one-thread-phase enter=device-reply",
+      "title": "One-thread enrollment phase"
+    },
+    {
+      "message": "one-thread-phase leave=listener-and-device-store elapsed=8.0834ms",
+      "title": "One-thread enrollment phase"
+    },
+    {
+      "message": "one-thread-phase enter=listener-and-device-store",
+      "title": "One-thread enrollment phase"
+    },
+    {
+      "message": "one-thread-phase leave=pending elapsed=835.4\u00b5s",
+      "title": "One-thread enrollment phase"
+    },
+    {
+      "message": "one-thread-phase enter=pending",
+      "title": "One-thread enrollment phase"
+    },
+    {
+      "message": "one-thread-phase leave=create elapsed=123.0465ms",
+      "title": "One-thread enrollment phase"
+    },
+    {
+      "message": "one-thread-phase enter=create",
+      "title": "One-thread enrollment phase"
+    },
+    {
+      "message": "one-thread-phase leave=fixture elapsed=133.6119ms",
+      "title": "One-thread enrollment phase"
+    },
+    {
+      "message": "one-thread-phase enter=fixture",
+      "title": "One-thread enrollment phase"
+    },
+    {
+      "message": "one-thread-phase sample=109.654ms budget=30s",
+      "title": "One-thread enrollment phase"
+    }
+  ]
+}

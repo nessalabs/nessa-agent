@@ -15,6 +15,7 @@ import {
   interactionBudget,
   median,
   measurementFrom,
+  measure,
   missingFrameSample,
   observers,
   sampleLoaf,
@@ -37,6 +38,7 @@ it("samples callback execution rather than delayed nominal frame timestamps", ()
     window: {},
     performance: { now: () => now },
     requestAnimationFrame: (callback) => callbacks.push(callback),
+    addEventListener() {},
     PerformanceObserver: class {
       observe() {}
     },
@@ -57,6 +59,7 @@ it("retains a first frame whose execution clock starts at zero", () => {
     window: {},
     performance: { now: () => now },
     requestAnimationFrame: (callback) => callbacks.push(callback),
+    addEventListener() {},
     PerformanceObserver: class {
       observe() {}
     },
@@ -266,4 +269,67 @@ it("retains attribution in the pre-origin part of the first sampled gap", () => 
   assert.equal(measured.slow[0].loaf.duration, 70)
   assert.equal(measured.slow[0].loaf.styleAndLayout, 10)
   assert.equal(measured.slow[0].longTask, 60)
+})
+
+it("retains input stamps and raw gaps without changing the measured frame window", async () => {
+  const scope = {
+    performance: { now: () => 100 },
+    window: {
+      __perf: {
+        gaps: [
+          [90, 16],
+          [110, 20],
+        ],
+        loaf: [],
+        longtasks: [],
+        noLoaf: false,
+        inputs: [{ type: "pointerdown", stamp: 105, now: 106, trusted: true, pane: "1" }],
+      },
+    },
+  }
+  const page = {
+    evaluate: async (fn) => runInNewContext(`(${fn.toString()})()`, scope),
+    waitForTimeout: async () => {},
+  }
+  const result = await measure(page, async () => {}, 1200)
+  assert.equal(result.maxFrame, 20)
+  assert.equal(result.frames, 1)
+  assert.equal(result.sample.origin, 100)
+  assert.deepEqual(JSON.parse(JSON.stringify(result.sample.gaps)), [
+    [90, 16],
+    [110, 20],
+  ])
+  assert.equal(result.sample.inputs[0].stamp, 105)
+  assert.equal(result.sample.inputs[0].now, 106)
+})
+
+it("records actual trusted input targets on the same execution clock", () => {
+  const listeners = new Map()
+  const scope = {
+    window: {},
+    performance: { now: () => 120 },
+    requestAnimationFrame() {},
+    addEventListener: (type, callback) => listeners.set(type, callback),
+    PerformanceObserver: class {
+      observe() {}
+    },
+  }
+  runInNewContext(`(${observers.toString()})()`, scope)
+  assert.ok(listeners.has("pointerdown"))
+  const event = {
+    type: "pointerdown",
+    timeStamp: 110,
+    isTrusted: true,
+    target: {
+      tagName: "SPAN",
+      getAttribute: () => "workspace-pane-title",
+      closest: () => ({ dataset: { paneKey: "1" } }),
+    },
+  }
+  listeners.get("pointerdown")(event)
+  listeners.get("pointerdown")({ ...event, isTrusted: false })
+  assert.equal(scope.window.__perf.inputs.length, 1)
+  assert.equal(scope.window.__perf.inputs[0].stamp, 110)
+  assert.equal(scope.window.__perf.inputs[0].now, 120)
+  assert.equal(scope.window.__perf.inputs[0].pane, "1")
 })

@@ -1,6 +1,8 @@
 //! Fences a later restore must not undo: deleted conversations, revoked
 //! share grants, and revoked credentials. Secret bytes are not a field.
 
+use super::encoding::encode_identity as encode;
+
 use super::record::Fingerprint;
 
 /// The capabilities a revoked share grant held, the journal's `before`
@@ -302,22 +304,4 @@ fn name(value: String) -> Result<String, DeletionError> {
         return Err(DeletionError::Name);
     }
     Ok(value)
-}
-
-fn encode(value: &str) -> String {
-    const HEX: &[u8; 16] = b"0123456789ABCDEF";
-    let mut out = String::new();
-    for byte in value.bytes() {
-        match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(byte as char);
-            }
-            _ => {
-                out.push('%');
-                out.push(HEX[(byte >> 4) as usize] as char);
-                out.push(HEX[(byte & 0xf) as usize] as char);
-            }
-        }
-    }
-    out
 }

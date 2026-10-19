@@ -22,13 +22,6 @@ pub enum CatalogueWatchState {
     NotificationFailed,
 }
 
-/// A bounded source registration was refused before allocating a watch.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CatalogueWatchError {
-    /// The producer's published local registration limit is occupied.
-    Capacity,
-}
-
 // Implemented by the producer guard whose Drop retires the actual slot.
 pub(crate) trait CatalogueWatchRegistration: Send + Sync {}
 
@@ -38,7 +31,7 @@ pub(crate) trait CatalogueWatchRegistration: Send + Sync {}
 /// cursor, permission or receiver progress. Register before the final authorized
 /// head recheck. A commit before registration is found by that recheck; an
 /// incomplete append or another process's mutation requires fallback reads.
-/// The owning source tests cover capacity, cancellation and last-owner closure.
+/// The owning source tests cover cancellation, retirement and last-owner closure.
 pub struct CatalogueChangeWatch {
     signal: Arc<CatalogueChangeSignal>,
     // The concrete producer guard owns unregister-on-drop, not the waiter.
@@ -146,12 +139,8 @@ impl CatalogueChangeSignal {
 /// The caller supplies its current authenticated owner and separately rechecks
 /// head after registration; this port provides no authorization or source read.
 pub trait WatchCatalogue: Send + Sync {
-    /// Register before the final head recheck. Refuses full producer admission.
-    fn watch(
-        &self,
-        organization: &OrganizationId,
-        owner: &PrincipalId,
-    ) -> Result<CatalogueChangeWatch, CatalogueWatchError>;
+    /// Register before the final head recheck.
+    fn watch(&self, organization: &OrganizationId, owner: &PrincipalId) -> CatalogueChangeWatch;
 }
 
 #[cfg(test)]

@@ -69,7 +69,6 @@ async fn save_publications(storage: &RecordStorage, id: &SessionId, count: u64) 
         let receipt = lease
             .save_changes(
                 binding.clone(),
-                next.clone(),
                 vec![SessionSaveUnit::new(vec![change]).unwrap()],
             )
             .await
@@ -340,23 +339,12 @@ async fn malformed_completion_remains_refused_after_physical_validator_advanced(
     let provider = ProviderIdentity::new("fixture", "model", "workspace").unwrap();
     let opening = SessionChange::Opened {
         id: id.clone(),
-        provider: provider.clone(),
-        context: ProviderContext::Absent,
-    };
-    let snapshot = SessionSnapshot {
-        id: id.clone(),
         provider,
-        provider_context: ProviderContext::Absent,
-        invocations: Vec::new(),
-        queue_history: Vec::new(),
-        lease: None,
-        artifacts: Vec::new(),
-        notes: Vec::new(),
+        context: ProviderContext::Absent,
     };
     lease
         .save_changes(
             lease.load().await.unwrap().binding().clone(),
-            snapshot,
             vec![SessionSaveUnit::new(vec![opening]).unwrap()],
         )
         .await
@@ -374,23 +362,12 @@ async fn malformed_completion_remains_refused_after_physical_validator_advanced(
     let provider = ProviderIdentity::new("fixture", "model", "workspace").unwrap();
     let opening = SessionChange::Opened {
         id: foreign.clone(),
-        provider: provider.clone(),
-        context: ProviderContext::Absent,
-    };
-    let snapshot = SessionSnapshot {
-        id: foreign,
         provider,
-        provider_context: ProviderContext::Absent,
-        invocations: Vec::new(),
-        queue_history: Vec::new(),
-        lease: None,
-        artifacts: Vec::new(),
-        notes: Vec::new(),
+        context: ProviderContext::Absent,
     };
     donor_lease
         .save_changes(
             donor_lease.load().await.unwrap().binding().clone(),
-            snapshot,
             vec![SessionSaveUnit::new(vec![opening]).unwrap()],
         )
         .await
@@ -464,16 +441,9 @@ async fn historical_miss_preserves_known_forward_failure_and_clean_head() {
             before: snapshot.provider_context.clone(),
             after: ProviderContext::Recorded(ExecutionSessionId::new("later-context").unwrap()),
         };
-        let next = SessionSnapshot {
-            provider_context: ProviderContext::Recorded(
-                ExecutionSessionId::new("later-context").unwrap(),
-            ),
-            ..snapshot.clone()
-        };
         let receipt = lease
             .save_changes(
                 binding.clone(),
-                next,
                 vec![SessionSaveUnit::new(vec![change]).unwrap()],
             )
             .await

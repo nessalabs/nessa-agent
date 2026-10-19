@@ -215,10 +215,7 @@ pub(super) async fn provider_agent_with_review(
     ])
     .unwrap();
     let original = lease.load().await.unwrap().binding().clone();
-    lease
-        .save_changes(original, snapshot, vec![unit])
-        .await
-        .unwrap();
+    lease.save_changes(original, vec![unit]).await.unwrap();
     drop(lease);
     let manager = SessionManager::open(
         Some(id),

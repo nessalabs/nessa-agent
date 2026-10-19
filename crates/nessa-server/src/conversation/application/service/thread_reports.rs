@@ -89,11 +89,13 @@ pub struct PendingReport {
 /// send is submitted and settled once its parent has it, or once it never
 /// will. Keyed by the report's execution identity.
 pub trait ThreadReportStore: Send + Sync {
-    /// Save one waiting report. A report already saved is left as it is.
+    /// Save one waiting report. An exact repeat leaves the row as it is.
+    /// A different binding under its identity returns `RequestConflict`.
     /// Answers whether this save wrote it.
     fn save(&self, report: &PendingReport) -> ConversationFuture<'_, bool>;
-    /// Let go of one report; one not saved is no error.
-    fn settle(&self, report: &str) -> ConversationFuture<'_, ()>;
+    /// Let go of one report belonging to `child`; an absent row is no error.
+    /// Another child's binding returns `RequestConflict` and is retained.
+    fn settle(&self, child: &ConversationId, report: &str) -> ConversationFuture<'_, ()>;
     /// Let go of every report waiting on, or going to, a deleted conversation.
     fn forget_conversation(&self, id: &ConversationId) -> ConversationFuture<'_, ()>;
     /// Every saved report.
@@ -105,6 +107,9 @@ struct Watch {
     report: ThreadReport,
     /// Saved by an earlier run of the gateway and loaded at start.
     restored: bool,
+    /// Sender calls waiting on this turn in their own turn: while one waits,
+    /// the reply is theirs to take and the report holds back.
+    awaited: usize,
 }
 
 /// Who a caller is to access: the rest of a caller is attribution.
@@ -144,6 +149,18 @@ pub(crate) struct ThreadReports {
     /// report sees the first one's watch, never its half-made state.
     registering: tokio::sync::Mutex<()>,
     store: OnceLock<Arc<dyn ThreadReportStore>>,
+    /// Reports being queued, by report: so a sender that read the reply in
+    /// its own turn meanwhile can still call one off before it is submitted.
+    queuing: Arc<Mutex<HashMap<String, Queuing>>>,
+}
+
+/// A report taken off its watch and not yet queued into its parent.
+struct Queuing {
+    child: ConversationId,
+    watched: String,
+    parent: ConversationId,
+    /// The sender read the reply itself: the report is not sent.
+    claimed: bool,
 }
 
 /// What a look found of one watched turn.
@@ -155,20 +172,39 @@ enum Watched {
     Waiting,
 }
 
-/// Counts one report being queued until dropped.
-struct Delivering(Arc<AtomicUsize>);
+/// Counts one report being queued, and holds its place in `queuing`, until
+/// dropped.
+struct Delivering {
+    count: Arc<AtomicUsize>,
+    queuing: Arc<Mutex<HashMap<String, Queuing>>>,
+    report: String,
+}
+impl Delivering {
+    fn claimed(&self) -> bool {
+        self.queuing
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(&self.report)
+            .is_some_and(|queuing| queuing.claimed)
+    }
+}
 impl Drop for Delivering {
     fn drop(&mut self) {
-        self.0.fetch_sub(1, Ordering::SeqCst);
+        self.queuing
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&self.report);
+        self.count.fetch_sub(1, Ordering::SeqCst);
     }
 }
 
 /// A report taken off its watch, counted as being queued from the moment it
 /// left the registry. Its saved copy stays until it is delivered.
 struct Taken {
+    child: ConversationId,
     report: ThreadReport,
     text: String,
-    _delivering: Delivering,
+    delivering: Delivering,
 }
 
 impl ThreadReports {
@@ -210,6 +246,7 @@ impl ThreadReports {
             execution,
             report,
             restored,
+            awaited: 0,
         });
         true
     }
@@ -222,6 +259,69 @@ impl ThreadReports {
                 watches.remove(child);
             }
         }
+    }
+
+    /// Whether a report on `execution` in `child` was saved by an earlier run.
+    fn restored(&self, child: &ConversationId, execution: &str) -> bool {
+        self.lock().get(child).is_some_and(|list| {
+            list.iter()
+                .any(|watch| watch.execution == execution && watch.restored)
+        })
+    }
+
+    /// Count one more, or one fewer (`by` -1), sender call waiting on
+    /// `execution` in `child` for `parent`.
+    fn await_turn(
+        &self,
+        child: &ConversationId,
+        execution: &str,
+        parent: &ConversationId,
+        by: isize,
+    ) {
+        let mut watches = self.lock();
+        for watch in watches.get_mut(child).into_iter().flatten() {
+            if watch.execution == execution && &watch.report.parent == parent {
+                watch.awaited = watch.awaited.saturating_add_signed(by);
+            }
+        }
+    }
+
+    /// Let go of the watches on `execution` in `child` reporting to `parent`:
+    /// the reports let go. One already being queued is called off, unless its
+    /// parent has it already.
+    fn claim(
+        &self,
+        child: &ConversationId,
+        execution: &str,
+        parent: &ConversationId,
+    ) -> Vec<String> {
+        let mut watches = self.lock();
+        let mut claimed = Vec::new();
+        if let Some(list) = watches.get_mut(child) {
+            list.retain(|watch| {
+                let keep = watch.execution != execution || &watch.report.parent != parent;
+                if !keep {
+                    claimed.push(watch.report.execution.clone());
+                }
+                keep
+            });
+            if list.is_empty() {
+                watches.remove(child);
+            }
+        }
+        drop(watches);
+        for queuing in self
+            .queuing
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .values_mut()
+        {
+            if &queuing.child == child && queuing.watched == execution && &queuing.parent == parent
+            {
+                queuing.claimed = true;
+            }
+        }
+        claimed
     }
 
     /// Let go of every watch on, or reporting to, `id`, and of the fresh
@@ -301,14 +401,34 @@ impl ThreadReports {
             if !admitted.iter().any(|seen| person(seen) == person(caller)) {
                 return true;
             }
+            if watch.awaited > 0 {
+                return true;
+            }
             let Some(text) = finished(&watch.execution, watch.restored) else {
                 return true;
             };
             self.delivering.fetch_add(1, Ordering::SeqCst);
+            self.queuing
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .insert(
+                    watch.report.execution.clone(),
+                    Queuing {
+                        child: child.clone(),
+                        watched: watch.execution.clone(),
+                        parent: watch.report.parent.clone(),
+                        claimed: false,
+                    },
+                );
             taken.push(Taken {
+                child: child.clone(),
                 report: watch.report.clone(),
                 text,
-                _delivering: Delivering(self.delivering.clone()),
+                delivering: Delivering {
+                    count: self.delivering.clone(),
+                    queuing: self.queuing.clone(),
+                    report: watch.report.execution.clone(),
+                },
             });
             false
         });
@@ -375,6 +495,39 @@ impl ThreadReports {
     }
 }
 
+/// How a sent turn stands, as its report would tell it.
+#[derive(Debug, PartialEq, Eq)]
+pub enum ThreadTurn {
+    /// Settled for good: its outcome and final reply.
+    Ended(&'static str, Option<String>),
+    /// Running, waiting, or settling: a saved result can still turn into a
+    /// failure while it settles, and the report waits for that too.
+    Unfinished,
+    /// Its history cannot be read now; ask again.
+    Unreadable,
+}
+
+/// Holds a turn's report back while a sender call waits on it.
+pub struct AwaitedTurn {
+    service: ConversationService,
+    child: ConversationId,
+    execution: String,
+    parent: ConversationId,
+}
+impl Drop for AwaitedTurn {
+    fn drop(&mut self) {
+        self.service.inner.thread_reports.await_turn(
+            &self.child,
+            &self.execution,
+            &self.parent,
+            -1,
+        );
+        if tokio::runtime::Handle::try_current().is_ok() {
+            self.service.wake_thread_reports(&self.child);
+        }
+    }
+}
+
 /// Asks the service to look at a watched thread after each of its invocations.
 /// Holds the service weakly: the service owns the agent this hook is on.
 pub(crate) struct ThreadReportHook {
@@ -436,7 +589,7 @@ impl ConversationService {
         if reports.holds(&child, &report.execution) {
             return ReportRegistration::AlreadyWaiting;
         }
-        reports.fresh().insert(report.execution.clone());
+        let newly_fresh = reports.fresh().insert(report.execution.clone());
         // A row already saved, and not watched here, is an earlier run's: a
         // retry of its send, before the start read it, keeps it restored.
         let mut restored = false;
@@ -449,12 +602,16 @@ impl ConversationService {
             match store.save(&pending).await {
                 Ok(true) => {}
                 Ok(false) => {
-                    reports.fresh().remove(&report.execution);
-                    restored = true;
+                    if newly_fresh {
+                        reports.fresh().remove(&report.execution);
+                    }
+                    restored = newly_fresh;
                 }
                 Err(error) => {
                     tracing::warn!(%child, %error, "a thread report could not be saved; none will come");
-                    reports.fresh().remove(&report.execution);
+                    if newly_fresh {
+                        reports.fresh().remove(&report.execution);
+                    }
                     return ReportRegistration::Refused;
                 }
             }
@@ -466,10 +623,72 @@ impl ConversationService {
         }
     }
 
+    /// How `execution` in `child` stands, as its report would tell it. A
+    /// steering message is answered by the turn it was delivered into.
+    pub async fn thread_turn_end(
+        &self,
+        child: &ConversationId,
+        caller: &ConversationCaller,
+        execution: &str,
+    ) -> ThreadTurn {
+        let Some(history) = self.report_history(child, caller).await else {
+            return ThreadTurn::Unreadable;
+        };
+        let found = match invocation(&history, execution) {
+            Some(record) => in_record(&history, record, false),
+            None => Found::Waiting(None),
+        };
+        // An earlier run left it unfinished: its report says how it ended,
+        // and so does this.
+        let restored = self.inner.thread_reports.restored(child, execution);
+        match found {
+            Found::Finished(outcome, reply) => ThreadTurn::Ended(outcome, reply),
+            Found::Settling(saved) | Found::Waiting(saved) if restored => {
+                let (outcome, reply) = saved.unwrap_or(("interrupted", None));
+                ThreadTurn::Ended(outcome, reply)
+            }
+            Found::Settling(_) | Found::Waiting(_) => ThreadTurn::Unfinished,
+        }
+    }
+
+    /// A sender call waits on `execution` in `child` in its own turn: until
+    /// the returned guard is dropped, the turn's report holds back, so the
+    /// reply goes to the call. Dropping it looks again, so a turn that ended
+    /// without the call taking its reply is reported as usual.
+    pub fn await_thread_turn(
+        &self,
+        child: &ConversationId,
+        execution: &str,
+        parent: &ConversationId,
+    ) -> AwaitedTurn {
+        self.inner
+            .thread_reports
+            .await_turn(child, execution, parent, 1);
+        AwaitedTurn {
+            service: self.clone(),
+            child: child.clone(),
+            execution: execution.to_owned(),
+            parent: parent.clone(),
+        }
+    }
+
+    /// The sender already has `execution`'s reply, read in its own turn:
+    /// its report would only say it again, so it is let go.
+    pub async fn claim_thread_report(
+        &self,
+        child: &ConversationId,
+        execution: &str,
+        parent: &ConversationId,
+    ) {
+        for report in self.inner.thread_reports.claim(child, execution, parent) {
+            self.settle_saved(child, &report).await;
+        }
+    }
+
     /// Drop a report whose turn will never run.
     pub async fn forget_thread_report(&self, child: &ConversationId, report: &str) {
         self.inner.thread_reports.forget(child, report);
-        self.settle_saved(report).await;
+        self.settle_saved(child, report).await;
     }
 
     /// Let go of the reports on, or to, a deleted conversation.
@@ -482,10 +701,11 @@ impl ConversationService {
         }
     }
 
-    async fn settle_saved(&self, report: &str) {
+    async fn settle_saved(&self, child: &ConversationId, report: &str) {
         if let Some(store) = self.inner.thread_reports.store() {
-            if let Err(error) = store.settle(report).await {
+            if let Err(error) = store.settle(child, report).await {
                 tracing::warn!(report, %error, "a settled thread report stays saved; the next start settles it");
+                return;
             }
         }
         self.inner.thread_reports.fresh().remove(report);
@@ -613,7 +833,7 @@ impl ConversationService {
                 // Refused, or gone for good: this person is told nothing.
                 Err(ConversationError::NotFound | ConversationError::Deleted) => {
                     for report in self.inner.thread_reports.drop_person(child, &caller) {
-                        self.settle_saved(&report).await;
+                        self.settle_saved(child, &report).await;
                     }
                 }
                 // Not decidable now: a later look, or the next start, settles it.
@@ -708,6 +928,10 @@ impl ConversationService {
             if delivered == Some(true) {
                 break;
             }
+            // The sender read the reply in its own turn meanwhile.
+            if taken.delivering.claimed() {
+                break;
+            }
             if delivered == Some(false) {
                 let answer = self
                     .submit_as(
@@ -758,9 +982,13 @@ impl ConversationService {
             tokio::time::sleep(delay).await;
             delay = (delay * 2).min(DELIVERY_RETRY_MOST);
         }
-        self.settle_saved(&report.execution).await;
+        self.settle_saved(&taken.child, &report.execution).await;
     }
 }
+
+#[cfg(test)]
+#[path = "../../../../tests/conversation/thread_report_registry.rs"]
+mod tests;
 
 /// What `history` says of the watched `execution`: finished once its
 /// settlement is saved, with the report text. After a `failure`, a turn still

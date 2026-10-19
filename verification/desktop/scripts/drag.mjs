@@ -374,9 +374,6 @@ async function stationaryThrough(page, { focus, count, change }) {
       })),
     css.pane,
   )
-  const reduced = await page.evaluate(
-    () => matchMedia("(prefers-reduced-motion: reduce)").matches,
-  )
   await page.evaluate(
     ({ selectors, mark }) => {
       window.__paneFlightFrames = []
@@ -434,8 +431,9 @@ async function stationaryThrough(page, { focus, count, change }) {
     })
   )
     failures.push("the action changed no pane geometry")
-  if (!reduced && !samples.some((sample) => sample.flight))
-    failures.push("no layout flight was observed")
+  if (samples.length < 2) failures.push("no layout change frames were sampled")
+  if (samples.some((sample) => sample.flight))
+    failures.push("workspace bounds started a FLIP")
   for (const sample of samples) {
     if (sample.measuring) failures.push("the temporary measurement hold reached paint")
     for (const pane of sample.panes) {

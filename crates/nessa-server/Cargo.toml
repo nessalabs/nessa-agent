@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version = "1.89"
 description = "Nessa Client API server (WebSocket control plane)"
+default-run = "nessa"
 
 [lib]
 name = "nessa_server"
@@ -12,6 +13,14 @@ path = "src/lib.rs"
 [[bin]]
 name = "nessa"
 path = "src/main.rs"
+
+[[bin]]
+name = "nessa-backup-verify"
+path = "src/backup_verify_main.rs"
+
+[[bin]]
+name = "nessa-backup-plan"
+path = "src/backup_plan_main.rs"
 
 [dependencies]
 base64 = "0.22"

@@ -1715,6 +1715,13 @@ slice.
 | P67 | `accept` fails for one connection: connection aborted, reset or interrupted, or (by OS code, Unix) a network error of the new socket that accept(2) passes back: ENETDOWN, EPROTO, ENOPROTOOPT, EHOSTDOWN, ENONET (Linux), EHOSTUNREACH, EOPNOTSUPP, ENETUNREACH, EPERM, ETIMEDOUT; or an accepted socket cannot be prepared for its worker | Logged at debug and skipped; the next accept follows at once. A remote peer cannot end enrollment this way. | `native_listener_skips_connection_failures_and_backs_off_on_exhaustion` |
 | P67 | `accept` fails with anything else: resource exhaustion (EMFILE, ENFILE, ENOBUFS, ENOMEM; WSAEMFILE, WSAENOBUFS) or an error the listener does not recognise, including one with no OS code | Logged at warn; the listener pauses 50 ms after the first such failure, doubling to at most 1 s, then accepts again. The pause resets when an accept yields a connection, which is then passed on for dispatch; an accepted socket that cannot be prepared does not reset it. A stop that arrives during a pause ends the run at once. | `native_listener_skips_connection_failures_and_backs_off_on_exhaustion`; `native_listener_stop_ends_a_pause` |
 | P55, P66 | The gateway runs on a runtime whose blocking pool has one thread | Each owner command, each create and each connection is one blocking job that never waits for a second one: create runs its owner stages and the code registration inline in its own job. A pool of one cannot deadlock them. | `native_gateway_runs_on_a_one_thread_blocking_pool` |
+| P55, P66 test cleanup (#777) | The one-thread probe times out during fixture initialization | Retain the original initialization future outside the timed operation, complete it, and drain its gateway before releasing the fixture. The responsiveness outcome remains timeout. | `one_thread::timeout_before_fixture_completion_retains_initialization` |
+| P55, P66 test cleanup (#777) | Work and its deadline are both ready in one poll | Preserve the work-first poll ordering of the original timeout; a ready successful result still drains its owners before the runtime retires. | `one_thread::finished_work_wins_a_ready_deadline_and_still_drains` |
+| P55, P66 test cleanup (#777) | Timeout is recorded, then retained initialization panics while cleanup resumes it | Preserve TimedOut as the primary outcome and retain the late panic as a separate initialization-cleanup failure. Do not poll the unwound constructor again or claim that it produced a fixture. | `one_thread::late_initialization_panic_preserves_timeout_and_cleanup_failure` |
+| P55, P66 test cleanup (#777) | Fixture initialization panics | Do not poll the unwound future again or report a fixture that never finished construction. The original panic remains the outcome. | `one_thread::initialization_panic_is_not_polled_again_or_reported_as_a_fixture` |
+| P55, P66 test cleanup (#777) | Timeout or caller assertion panic while an admitted TLS peer is blocked reading | Keep the stop sender, listener result, connection owner, device join handle and private fixture outside cancellation. Send stop, join the listener, drain connections/gateway, and join the device before returning the original outcome. No drop is reported as confirmed drain. | `one_thread::timeout_stops_listener_and_joins_device`; `one_thread::panic_stops_listener_and_joins_device` |
+| P55, P66 test cleanup (#777) | The device panics before replying | Retain the device's actual join error separately from the caller panic; still join the listener and drain the original gateway. Successful work requires successful cleanup too. | `one_thread::device_panic_still_drains_original_gateway`; `one_thread::finished_work_does_not_hide_device_join_failure` |
+
 | P68 | Registration finishes before create publishes | The registration permit stays with its output until commit or refusal. | `native_registration_output_retains_original_capacity` |
 | P77, P83 | Create waiter or client waiter dropped mid-operation | The worker keeps the runtime, private store lock and permit until it ends; shutdown waits for it; reopen succeeds after. | `native_create_observer_loss_keeps_original_owner_until_drain`; `native_client_observer_loss_keeps_pending_save_and_operation_owned` |
 | O2, O3 | Owner lists unfinished enrollments and reads one; the session has expired | Each listed record and each status read asks current session and policy; an expired session is refused and the record is unchanged. Terminal records are not listed. | `native_owner_discovers_unfinished_enrollments_through_current_policy` |
@@ -2161,10 +2168,32 @@ so it is not asked again. When the gateway cannot be reached, approve,
 deny and revoke are disabled: the reducer would ignore the click.
 
 Native linking is on only when `pairing.pending` succeeds. `pairing_not_configured`
-is off: the switch is shown off and disabled, because nothing here writes
-`config.json`, and the footnote says to add or remove `native.listenAddress`
-(a numeric address; the example is `127.0.0.1:47650`) and restart. No method
-returns the address. `forbidden` is a refused owner, named as recovering
+is off. The switch turns it on or off with `pairing.setLinking`
+(`credential.manage`, answered whether linking is on or not): the gateway
+saves the choice in `config.json` and, when the running gateway does not
+match it, drains and replaces itself with the same executable (`execve`, so
+the process id and its supervisor stay). On keeps a `native.listenAddress`
+already there or names `127.0.0.1:47650`, after checking it can be bound,
+because a saved address that cannot be bound stops the next startup (S10).
+Off writes `"enabled": false` and keeps the addresses. Each change is
+audited in `conversations/audit/native-linking` (requested, then outcome,
+then how a restart ended, naming the caller). The switch holds its new value until a read after the
+reconnect, or until its wait passes; no method returns the address. Unix
+only: elsewhere the method answers `pairing_unavailable`.
+
+The gateway side's orderings, owned by `SelfRestart` and `ConfigLinking`:
+
+| Row | Event or ordering | Result | Test |
+| --- | --- | --- | --- |
+| NL1 | A change the running gateway does not match | Saved under `config.json.lock`, outcome recorded, then the restart is asked for 250 ms after the answer | `native_linking.rs` `turning_on_restarts_once_the_answer_had_its_grace` |
+| NL2 | A second change while a restart is held, or while the gateway stops | `pairing_busy`; nothing saved, so the gateway that comes back is the one the last answer named | `a_change_while_a_restart_is_held_or_the_gateway_stops_is_busy` |
+| NL3 | SIGTERM or Ctrl-C before the restart is asked, or during its drain; or the native listener ending before it is asked | The stop wins: the run ends, does not start again, and the restart is recorded cancelled. One signal future is kept from before the restart to the end of its drain | `self_restart.rs` `a_signal_first_stops_the_run_and_cancels_what_is_held`, `a_signal_during_the_restart_s_drain_still_stops_for_good`, `a_stop_during_the_restart_s_drain_wins`, `a_run_ending_on_its_own_closes_a_held_restart_only` |
+| NL4 | The requested record cannot be kept | `pairing_audit_unavailable`; nothing saved | `a_requested_record_not_kept_changes_nothing` |
+| NL5 | The outcome record cannot be kept | `pairing_audit_unavailable`; the change stays saved and nothing restarts, so it applies at the next start | `an_outcome_not_kept_leaves_the_change_for_the_next_start` |
+| NL6 | The listen address cannot be bound, whether or not `config.json` already says on | `pairing_address_in_use`; nothing saved, nothing restarted | `an_address_this_machine_cannot_bind_saves_nothing`, `a_file_already_on_is_still_bound_before_a_restart` |
+| NL7 | The drain ends and the process replaces itself, or the exec fails | `exec` is recorded before it; a failed exec is recorded and ends the run as a serve failure (non-zero, so launchd starts a managed gateway again) | `the_restart_s_end_is_recorded_with_the_change`; the exec itself by `conversation-stress.mjs` `linking` (same pid) |
+
+`forbidden` is a refused owner, named as recovering
 with `auth recover-owner`. A wire code is never the sentence.
 
 `pairing.pending` does not list an Active device. `credential.list` has no
@@ -2188,7 +2217,7 @@ already saved either way.
 | Row | Event or ordering | Result | Test |
 | --- | --- | --- | --- |
 | L1 | No gateway (the sample preview) | Pending card, no pair control | `linked-devices-tab.test.tsx`; `linked-devices.mjs` `pending` |
-| L2 | Read answers linking off | Switch off and disabled, how to turn it on, no pair | `linked-devices.test.ts`; `linked-devices-gateway.test.ts`; `linked-devices.mjs` `off` |
+| L2 | Read answers linking off | Switch off and enabled, no config hint, no pair | `linked-devices.test.ts`; `linked-devices-gateway.test.ts`; `linked-devices.mjs` `off` |
 | L3 | Read answers refused | Recover-owner sentence, no devices, no pair | `linked-devices.test.ts`; `linked-devices.mjs` `refused` |
 | L4 | Linking on, nothing open | Pair a device | `linked-devices.test.ts` |
 | L5 | Create answers with a code | Code once, both orbs, Cancel focused once it can be used | `linked-devices.test.ts`; `linked-devices-tab.test.tsx`; `linked-devices.mjs` `pair` |
@@ -2209,3 +2238,6 @@ already saved either way.
 | L20 | The session credential, a revoked credential, or any other grant | Not listed as a device | `linked-devices-gateway.test.ts`; `linked-devices.mjs` `revoke` |
 | L21 | The gateway cannot be reached | Said; pairing is not offered; approve, deny and revoke are disabled | `linked-devices.test.ts`; `linked-devices-tab.test.tsx` |
 | L22 | A first read fails, then the quiet poll | The read is asked again; success leaves the failure sentence | `linked-devices.test.ts` |
+| L23 | The switch is flipped and `pairing.setLinking` answers restarting | The switch holds the new value, polls stop, and the "cannot reach" sentence is not shown, until a read after the connection drops says where linking stands | `linked-devices.test.ts`; `linked-devices-tab.test.tsx`; `linked-devices.mjs` `toggle`; `conversation-stress.mjs` `linking` |
+| L24 | The answer is lost to the restart, or the gateway is not back within the switch's wait | A lost answer holds the switch as restarting does; past the wait the switch shows the gateway's last state and says the change is saved (or, for a lost answer, only that the gateway has not answered), until the gateway answers again. A wait ending while the returned gateway's read is out leaves that read to answer | `linked-devices.test.ts`; `linked-devices-tab.test.tsx` |
+| L25 | `pairing.setLinking` is refused (address in use, busy, unavailable, audit) or answers unchanged | A refusal is said under the switch; either way the switch shows the gateway's state, read again | `linked-devices.test.ts` |

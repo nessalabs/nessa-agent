@@ -143,6 +143,7 @@ async fn continuously_ready_lane_releases_all_record_leases(
         writers.push(tokio::spawn(write_authenticated(
             sink,
             controls,
+            no_close(),
             refusals,
             ordinary,
             records,
@@ -215,12 +216,13 @@ async fn arriving_record_interrupts_stalled_priority(close: bool, refusal: Optio
     let (record_send, records) = mpsc::channel(1);
     let record_slots = Arc::new(Semaphore::new(1));
     let global_reads = Arc::new(Semaphore::new(4));
+    let (close_send, close_receive) = tokio::sync::oneshot::channel();
     if close {
-        control_send
-            .send(ControlOutput::Close(SessionCloseReason::CredentialRevoked))
-            .await
+        close_send
+            .send(SessionCloseReason::CredentialRevoked)
             .unwrap();
     } else {
+        drop(close_send);
         control_send
             .send(ControlOutput::Response(Box::new(QueuedResponse {
                 message: WireResponse::ordinary(success("control", &json!({}))),
@@ -237,6 +239,7 @@ async fn arriving_record_interrupts_stalled_priority(close: bool, refusal: Optio
     let writer = tokio::spawn(write_authenticated(
         sink,
         controls,
+        close_receive,
         refusals,
         ordinary,
         records,
@@ -338,6 +341,7 @@ async fn nonexpired_pending_record_preserves_physical_priority_and_releases_leas
     let writer = tokio::spawn(write_authenticated(
         sink,
         controls,
+        no_close(),
         refusals,
         ordinary,
         records,
@@ -1359,6 +1363,7 @@ async fn slotless_record_refusal_expires_under_continuously_ready_controls() {
     let writer = tokio::spawn(write_authenticated(
         sink,
         controls,
+        no_close(),
         refusals,
         ordinary,
         records,
@@ -1437,6 +1442,7 @@ async fn a_pending_subscription_deadline_expires_during_another_physical_frame()
     let writer = tokio::spawn(write_authenticated(
         sink,
         controls,
+        no_close(),
         refusals,
         ordinary,
         records,
@@ -1510,6 +1516,7 @@ async fn pending_subscription_deadline_survives_a_continuously_ready_lane(ordina
     let writer = tokio::spawn(write_authenticated(
         sink,
         controls,
+        no_close(),
         refusals,
         ordinary,
         records,

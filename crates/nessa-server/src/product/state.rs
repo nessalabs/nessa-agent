@@ -13,6 +13,7 @@ use crate::conversation::application::{
     ReviewNoticeAuditor, ShareGrants, WatchCatalogue, WatchRecords,
 };
 pub(crate) use crate::core::limit_log::note_limit;
+use crate::device_pairing::application::NativeLinking;
 use crate::device_pairing::infrastructure::PairingOwnerCommands;
 use crate::mcp_servers::{
     application::McpServerSettings, entrypoint::http::ResourceRoute,
@@ -174,6 +175,10 @@ pub struct ProductRouteState {
     /// listen address. `None` answers every pairing method
     /// `pairing_not_configured`.
     pub(crate) pairing: Option<Arc<PairingOwnerCommands>>,
+    /// Turns native linking on or off (`pairing.setLinking`), composed
+    /// whether or not it is on now. `None` — not Unix — answers
+    /// `pairing_unavailable`.
+    pub(crate) native_linking: Option<Arc<dyn NativeLinking>>,
     /// This gateway's peer commands, composed with native pairing: a peer is
     /// enrolled with the native key. `None` answers every peer method
     /// `peer_not_configured`.
@@ -277,7 +282,7 @@ impl ProductRouteState {
         audience: AudienceId,
         dependencies: ProductDependencies,
     ) -> Self {
-        let limits = OperationalLimits::default();
+        let limits = OperationalLimits::small();
         Self {
             browser_sessions: None,
             browser_session_id: None,
@@ -308,6 +313,7 @@ impl ProductRouteState {
             mcp_server_settings: None,
             mcp_authorization: None,
             pairing: None,
+            native_linking: None,
             peers: None,
             conversations: None,
             permission_rules: None,
@@ -391,6 +397,12 @@ impl ProductRouteState {
     /// runtime. Without them the pairing methods answer `pairing_not_configured`.
     pub fn with_pairing(mut self, pairing: Arc<PairingOwnerCommands>) -> Self {
         self.pairing = Some(pairing);
+        self
+    }
+
+    /// Register what turns native linking on or off from Settings.
+    pub fn with_native_linking(mut self, linking: Arc<dyn NativeLinking>) -> Self {
+        self.native_linking = Some(linking);
         self
     }
 

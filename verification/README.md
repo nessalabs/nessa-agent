@@ -86,6 +86,15 @@ verification/
         cli.mjs             options, stderr diagnostics, JSON result, exit status
         server.mjs          reuse/start the dev server (warmed before the first page, a reused one too), or build + preview production
         browser.mjs         launch Chromium/WebKit, seed preferences, keep page diagnostic queues private
+        resource-read-observer.mjs browser factory decorators: original consumed stream/client/mount observations, bounded transport and cutoff
+        resource-read-liveness.test.mjs accepted/live ordering, later concurrent reads and original-owner stop/replacement controls
+        resource-read-evidence.mjs Node incremental hash, exact Request correlation and bounded evidence ownership (#996)
+        resource-read-modules.mjs opt-in exact Vite export decoration before navigation
+        open-failure-evidence.mjs failure-only animation/RAF and redacted pending HTTP/RPC capture before disposal (#981)
+        stress-conversation.mjs open exact conversation IDs; read Home's focused selected-row identity
+        stress-conversation.test.mjs duplicate titles, delayed selection and missing identities cannot redirect selection
+        stress-restart.mjs   scope intentional restart console lines to exact socket evidence and verified recovery (#1024)
+        stress-restart.test.mjs temporal, endpoint, occurrence, failed-recovery and cleanup boundaries
         page-lines.mjs      report each collected page event through its step or close owner
         page-lines.test.mjs queue-free page API, classification, once-only reporting and concurrent attribution
         workspace.mjs       open panes and completed tool work, read pane rects and focus, lift a pane, rect containment, a model rule or value read in the page
@@ -107,6 +116,15 @@ verification/
         gateway-view.test.mjs  gateway-view.mjs's rules, no gateway (#384's design table, and #419's W2–W3)
         browser.test.mjs    browser.mjs's recording of a failed request, no browser: harmless or an error (#485's F1′, F2–F4), and the favicon
 ```
+
+`resource-read-regression.mjs` is an opt-in harness regression using
+`desktop/fixtures/resource-read/index.html`: real production factories over
+synthetic HTTP/ports in Chromium and WebKit, deterministic simulated abort
+classification, corrupt/truncated/canceled/duplicate controls and a deliberate
+finite-animation timeout. Run it with `--channel bundled --evidence <new-dir>`.
+The actual app flow is separately required by `gateway-window.mjs`'s dev apps
+step. See [resource-read evidence](desktop/resource-read-evidence.md) for bounds
+and the difference between a synthetic abort and a natural browser failure.
 
 When the UI moves, edit `lib/selectors.mjs` — nothing else names a class, a
 label, a key or a storage key. A script that cannot find what a step needs to

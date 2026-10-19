@@ -32,7 +32,7 @@ use nessa_sdk::application::agent_execution::executions::{
 use nessa_sdk::application::agent_execution::permissions::PermissionCaller;
 use nessa_sdk::application::agent_execution::sessions::{
     CommittedSession, SessionLoad, SessionSaveGeneration, SessionSaveReceipt, SessionSaveUnit,
-    SessionSnapshot, SessionStorage, SessionStorageLease, StorageError, StorageFuture,
+    SessionStorage, SessionStorageLease, StorageError, StorageFuture,
 };
 use nessa_sdk::domain::agent_execution::prompts::UserMessage;
 use nessa_sdk::domain::agent_execution::sessions::SessionId;
@@ -94,7 +94,6 @@ impl SessionStorageLease for RefusingLease {
     fn save_changes(
         &self,
         binding: SessionSaveGeneration,
-        snapshot: SessionSnapshot,
         units: Vec<SessionSaveUnit>,
     ) -> StorageFuture<'_, SessionSaveReceipt> {
         assert!(
@@ -104,7 +103,7 @@ impl SessionStorageLease for RefusingLease {
         if self.refusing.load(Ordering::SeqCst) {
             return Box::pin(async { Err(StorageError::Io("the disk went away".into())) });
         }
-        self.inner.save_changes(binding, snapshot, units)
+        self.inner.save_changes(binding, units)
     }
     fn erase(&self) -> StorageFuture<'_, ()> {
         self.inner.erase()

@@ -31,18 +31,10 @@
     inset 0 1px 0 color-mix(in oklab, var(--foreground) 5%, transparent),
     0 12px 40px -18px rgb(0 0 0 / 45%);
   overflow: hidden;
-  animation: workspace-pane-in var(--desktop-slow) var(--desktop-out) both;
   transition:
     box-shadow var(--desktop-base) ease,
     opacity var(--desktop-base) ease,
     background-color var(--desktop-base) ease;
-}
-
-@keyframes workspace-pane-in {
-  from {
-    opacity: 0;
-    transform: scale(0.98);
-  }
 }
 
 html:not(.dark) .workspace-pane {
@@ -262,11 +254,6 @@ html:not(.dark) .workspace-pane[data-focused] {
   inset: 0;
 }
 
-/* Less motion, as Settings › Appearance › Motion or the system asks (`data-motion`). */
-:root[data-motion="reduced"] .workspace-pane {
-  animation: none;
-}
-
 /* Why a picture chosen from the pane's menu was not taken, for a moment, before its actions. */
 .workspace-pane-refusal {
   flex: none;
@@ -306,7 +293,6 @@ html:not(.dark) .workspace-pane[data-focused] {
     inset 0 0 0 1px var(--desktop-rim),
     0 16px 48px -18px rgb(0 0 0 / 55%);
   overflow: hidden;
-  animation: workspace-pane-in var(--desktop-slow) var(--desktop-out) both;
 }
 
 html:not(.dark) .workspace-widget-window {
@@ -328,10 +314,6 @@ html:not(.dark) .workspace-widget-window {
 
 .workspace-chat[data-window-widget] > .split-panes-grid {
   visibility: hidden;
-}
-
-:root[data-motion="reduced"] .workspace-widget-window {
-  animation: none;
 }
 
 /* A widget's way back, at the header's type: the trail truncates before the actions do. */

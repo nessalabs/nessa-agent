@@ -210,7 +210,7 @@
         "methods": {
           "type": "array",
           "items": { "type": "string" },
-          "maxItems": 74,
+          "maxItems": 77,
           "description": "Registered product methods; permission is checked for every command."
         }
       },
@@ -1660,7 +1660,7 @@
           "minLength": 1,
           "maxLength": 256,
           "x-utf8MaxBytes": 256,
-          "description": "Name the gateway derived from the conversation's first message, the same one conversation.list shows; null before anything was said."
+          "description": "Name the gateway derived from the conversation's first message, or the one a person renamed it to, the same one conversation.list shows; null before anything was said."
         },
         "questions": {
           "type": "array",
@@ -1877,7 +1877,7 @@
           "minLength": 1,
           "maxLength": 256,
           "x-utf8MaxBytes": 256,
-          "description": "Name the gateway derived from the conversation's first message, the same one its view carries; null when none is on record."
+          "description": "Name the gateway derived from the conversation's first message, or the one a person renamed it to, the same one its view carries; null when none is on record."
         },
         "preview": {
           "type": ["string", "null"],
@@ -2568,6 +2568,35 @@
       },
       "required": ["conversationId", "requestId"]
     },
+    "ConversationRenameParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Rename a conversation: the title conversation.list and a read show from now on. A later message does not rename it back. applied is false when it already has that title, and for a conversation nothing was said in, which has no title to change.",
+      "properties": {
+        "conversationId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization."
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Stable action identifier retained for retries of one logical command."
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 48,
+          "x-utf8MaxBytes": 192,
+          "description": "The new title: one line, with no whitespace at either end and no run of more than one whitespace character. Anything else is refused invalid_request; normalize before sending."
+        }
+      },
+      "required": ["conversationId", "requestId", "title"]
+    },
     "ConversationDeleteParams": {
       "type": "object",
       "additionalProperties": false,
@@ -2990,8 +3019,8 @@
         },
         "cause": {
           "type": "string",
-          "enum": ["stopped", "closed", "revoked", "expired", "lost"],
-          "description": "Why the lease is ending or ended: the first cause recorded. lost: the environment no longer held it, for example because the gateway started again or the connection to it was lost."
+          "enum": ["stopped", "closed", "revoked", "expired", "lost", "idle"],
+          "description": "Why the lease is ending or ended: the first cause recorded. lost: the environment no longer held it, for example because the gateway started again or the connection to it was lost. idle: the agent sat idle with nobody following the conversation, past limits.agentIdleSeconds, and the gateway stopped it; the conversation stays open and the next message starts the agent again, resuming its provider session."
         },
         "cleanup": {
           "type": "string",
@@ -5778,6 +5807,36 @@
       "required": ["items"],
       "description": "Result of pairing.pending: the enrollments an owner can still act on, without any code."
     },
+    "PairingSetLinkingParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Turn native linking on or off for this gateway. The gateway saves the choice in its config.json and, when the running gateway does not already match it, restarts itself to apply it. Turning it on keeps a listen address already named there, or names 127.0.0.1:47650; turning it off keeps the native settings and marks them off.",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "True turns native linking on; false turns it off. Sending the same value again changes nothing, so a retry is safe."
+        }
+      },
+      "required": ["enabled"]
+    },
+    "PairingLinkingApply": {
+      "type": "string",
+      "enum": ["unchanged", "restarting"],
+      "description": "How the choice takes effect. unchanged: the running gateway already matches it. restarting: the gateway is restarting itself now; the connection closes and reconnects to a gateway that matches it. A signal that stops the gateway before it restarts wins: it stays stopped, and the choice applies the next time it starts."
+    },
+    "PairingSetLinkingResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Result of pairing.setLinking.",
+      "properties": {
+        "enabled": { "type": "boolean", "description": "The saved choice." },
+        "applies": {
+          "$ref": "#/$defs/PairingLinkingApply",
+          "description": "How the saved choice takes effect."
+        }
+      },
+      "required": ["enabled", "applies"]
+    },
     "PairingErrorCode": {
       "type": "string",
       "enum": [
@@ -5788,9 +5847,11 @@
         "pairing_conflict",
         "pairing_ineligible",
         "pairing_busy",
-        "pairing_unavailable"
+        "pairing_unavailable",
+        "pairing_address_in_use",
+        "pairing_audit_unavailable"
       ],
-      "description": "Why the gateway refused a pairing method it dispatched. pairing_not_configured: native pairing is off in this gateway's configuration. pairing_not_found: no such invitation. pairing_slot_occupied: an invitation is already open; cancel it first. pairing_capacity: too many unfinished enrollments. pairing_conflict: the request names a different key or outcome than the one recorded. pairing_ineligible: the enrollment cannot take this step now (expired, ended, or not yet claimed). pairing_busy: another create is running. pairing_unavailable: storage or a worker failed; retry later."
+      "description": "Why the gateway refused a pairing method it dispatched. pairing_not_configured: native pairing is off in this gateway's configuration. pairing_not_found: no such invitation. pairing_slot_occupied: an invitation is already open; cancel it first. pairing_capacity: too many unfinished enrollments. pairing_conflict: the request names a different key or outcome than the one recorded. pairing_ineligible: the enrollment cannot take this step now (expired, ended, or not yet claimed). pairing_busy: another create is running; or, for pairing.setLinking, config.json is locked by another change or the gateway is already restarting or stopping, and nothing was saved. pairing_unavailable: storage or a worker failed; retry later. pairing_address_in_use: pairing.setLinking could not turn linking on because its listen address cannot be bound on this machine (another program holds the port, or the address is not one of this machine's); nothing was saved. pairing_audit_unavailable: pairing.setLinking could not keep the change's audit record; if that was before the change nothing was saved, and if after it the choice is saved and the gateway did not restart, so it applies the next time the gateway starts (read the state again to see which)."
     },
     "PeerEnrollParams": {
       "type": "object",
@@ -6107,7 +6168,7 @@
         "unknown_subscription",
         "cursor_ahead"
       ],
-      "description": "Refusals of subscribe and unsubscribe beside the conversation error codes a refused first read carries. subscription_capacity: the connection's published limit, or a gateway-wide watch capacity (record.change_watches, or conversation.catalogue_watches for a list subscription), is full. subscription_duplicate: this connection already follows that target; the agent catalog is one target, so a connection follows it at most once. unknown_subscription: no such live subscription on this connection, or one the other unsubscribe stops. cursor_ahead: after names a position past the stored history."
+      "description": "Refusals of subscribe and unsubscribe beside the conversation error codes a refused first read carries. subscription_capacity: the connection's published limit is full. subscription_duplicate: this connection already follows that target; the agent catalog is one target, so a connection follows it at most once. unknown_subscription: no such live subscription on this connection, or one the other unsubscribe stops. cursor_ahead: after names a position past the stored history."
     },
     "ConversationMessageDelivery": {
       "type": "string",
@@ -6784,6 +6845,187 @@
       },
       "required": ["subscriptionId", "cursor", "events"],
       "description": "An ordered bounded semantic event batch. An empty batch advances the checkpoint past filtered facts. Application checkpoints belong to the consumer."
+    },
+    "WorkspaceArrangement": {
+      "type": "string",
+      "enum": ["columns", "sidebar"],
+      "description": "How the window lays out its workspace, as chosen in Settings: three columns (sidebar, session list, panes), or sessions listed in the sidebar beside the panes."
+    },
+    "WorkspaceShowing": {
+      "type": "string",
+      "enum": ["panes", "agents", "widget"],
+      "description": "What fills the window's content region: the panes, the Agents overview drawn over them, or a widget drawn over them."
+    },
+    "WorkspaceWidget": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "A widget a pane or the window shows, by the plugin that draws it and its id within that plugin.",
+      "properties": {
+        "plugin": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "The plugin that draws the widget."
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "The widget's id within its plugin."
+        }
+      },
+      "required": ["plugin", "id"]
+    },
+    "WorkspacePaneKind": {
+      "type": "string",
+      "enum": ["conversation", "draft", "widget"],
+      "description": "What a pane shows: a conversation, a draft (a new conversation the person has not started yet), or a widget. Other kinds, such as an open file, are added here."
+    },
+    "WorkspacePaneItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "What one pane shows. A conversation names its conversationId, a widget its widget, and a draft neither.",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/WorkspacePaneKind",
+          "description": "What kind of thing the pane shows."
+        },
+        "conversationId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "Canonical lowercase hyphenated UUID of the conversation, when kind is conversation."
+        },
+        "widget": {
+          "$ref": "#/$defs/WorkspaceWidget",
+          "description": "The widget, when kind is widget."
+        }
+      },
+      "required": ["kind"]
+    },
+    "WorkspacePane": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One pane of a column, top to bottom.",
+      "properties": {
+        "heightPercent": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100,
+          "description": "The pane's share of its column's height, in whole percent."
+        },
+        "focused": {
+          "type": "boolean",
+          "description": "Whether this is the window's focused pane. At most one pane is."
+        },
+        "item": {
+          "$ref": "#/$defs/WorkspacePaneItem",
+          "description": "What the pane shows."
+        }
+      },
+      "required": ["heightPercent", "focused", "item"]
+    },
+    "WorkspaceColumn": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One column of panes, left to right.",
+      "properties": {
+        "widthPercent": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100,
+          "description": "The column's share of the panes' width, in whole percent."
+        },
+        "panes": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "items": { "$ref": "#/$defs/WorkspacePane" },
+          "description": "The column's panes, top to bottom."
+        }
+      },
+      "required": ["widthPercent", "panes"]
+    },
+    "WorkspaceWindow": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "What one desktop window shows now: its arrangement, which side columns are drawn, what fills its content region, and its panes left to right, each column top to bottom. It names conversations by id only; their titles and agents are the gateway's to say.",
+      "properties": {
+        "arrangement": {
+          "$ref": "#/$defs/WorkspaceArrangement",
+          "description": "The window's layout."
+        },
+        "sidebar": {
+          "type": "boolean",
+          "description": "Whether the sidebar is drawn: open by the person's choice and not folded for room."
+        },
+        "sessionList": {
+          "type": "boolean",
+          "description": "Whether the session list column is drawn. The sidebar arrangement has none and always says false."
+        },
+        "showing": {
+          "$ref": "#/$defs/WorkspaceShowing",
+          "description": "What fills the content region now."
+        },
+        "widget": {
+          "$ref": "#/$defs/WorkspaceWidget",
+          "description": "The widget drawn over the panes, when showing is widget."
+        },
+        "columns": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "items": { "$ref": "#/$defs/WorkspaceColumn" },
+          "description": "The panes' columns, left to right."
+        }
+      },
+      "required": ["arrangement", "sidebar", "sessionList", "showing", "columns"]
+    },
+    "WorkspacePublishParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Tell the gateway what this connection's desktop window shows now (workspace.publish), so the person's agents can read it with the read_window tool. Each publication replaces this connection's previous one; one with a lower revision than the one held is not applied. A publication with no window withdraws it. The gateway keeps a window only while its connection is open: a closed connection withdraws it, and a window that connects again publishes again, under the same windowId, which replaces whatever an older connection of that window still holds.",
+      "properties": {
+        "windowId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "The window's own id, made once when it opens and kept across its connections, so a connection it left behind never reads as a second window."
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "The window's publication number, increasing with each change and kept across its connections."
+        },
+        "window": {
+          "$ref": "#/$defs/WorkspaceWindow",
+          "description": "What the window shows. Absent withdraws the window: it shows no workspace now."
+        }
+      },
+      "required": ["windowId", "revision"]
+    },
+    "WorkspacePublishResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The answer to workspace.publish: the revision the gateway holds for this connection now, and whether this publication was applied.",
+      "properties": {
+        "revision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "The revision held now: this one when applied, a later one when this one arrived after it."
+        },
+        "applied": {
+          "type": "boolean",
+          "description": "False when a later revision was already held, so this one changed nothing."
+        }
+      },
+      "required": ["revision", "applied"]
     }
   }
 }

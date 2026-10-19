@@ -836,8 +836,9 @@ Mandatory permission audit remains separate from session snapshots.
 The host supplies verified attribution and authorizes commands before SDK access.
 
 The first durable creation consumer is `ConversationService::create_command`,
-which uses the SDK `commands::CreationCoordinator` with a principal control lease
-on the shared `RecordStorage` runtime. Its non-content binding and original
+which uses the SDK `commands::CreationCoordinator` with a lease on the request's
+own control stream (one per principal and request) in the shared `RecordStorage`
+runtime; creates of one conversation run one at a time in the host. Its non-content binding and original
 attempt precede initialization; attempted recovery stays interrupted without
 provider reopening. Current target access/deletion remains in the conversation
 service. The existing host admission guard spans the full command and terminal
@@ -1053,7 +1054,10 @@ relay. Conversation application admission derives the actor from the live source
 turn, Cedar decides owner delegation, and target commands retain their existing
 durable receipts and permission handling. Observation polls an independent
 committed reader and never opens an Agent. The ownership and ordering table is
-[agent thread tools](design/agent-thread-tools.md).
+[agent thread tools](design/agent-thread-tools.md). `read_window` tells an
+agent what the person's desktop window shows and which pane is its own, from
+what the window last published over `workspace.publish`; see
+[the window an agent shares](design/agent-window.md).
 
 ## Nessa-owned tools over MCP
 

@@ -30,10 +30,21 @@
 //! gate. Restore and quarantine are not here.
 //!
 //! The ordering table is [the export cut](../../../../docs/design/export-cut.md).
+//! The standalone reader enters through `entrypoint`, verifies through
+//! `application::verify_bundle`, and reads only supplied bundle/key paths through
+//! infrastructure. Its contract is [backup verification](../../../../docs/design/backup-verification.md).
+//! Offline restore planning reuses that verifier and reports unresolved prerequisites
+//! and proposed ordering without importing, quarantining or activating a gateway.
+//! Its contract is [offline planning](../../../../docs/design/offline-restore-planning.md).
 
 pub mod application;
 pub mod domain;
+pub mod entrypoint;
 pub mod infrastructure;
+
+#[cfg(test)]
+#[path = "../../tests/backup/verification.rs"]
+mod verification_tests;
 
 #[cfg(test)]
 #[path = "../../tests/backup/export.rs"]
@@ -54,3 +65,19 @@ mod file_tests;
 #[cfg(test)]
 #[path = "../../tests/backup/lease.rs"]
 mod lease_tests;
+
+#[cfg(test)]
+#[path = "../../tests/backup/verification_format.rs"]
+mod verification_format_tests;
+
+#[cfg(test)]
+#[path = "../../tests/backup/verification_directory.rs"]
+mod verification_directory_tests;
+
+#[cfg(test)]
+#[path = "../../tests/backup/verification_metadata.rs"]
+mod verification_metadata_tests;
+
+#[cfg(test)]
+#[path = "../../tests/backup/restore_planning.rs"]
+mod restore_planning_tests;

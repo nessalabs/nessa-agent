@@ -10,6 +10,7 @@ import { WorkspaceShell, type SidebarRegion } from "./workspace-shell"
 const region: SidebarRegion = {
   sidebar: { variant: "channels", defaultWidth: 240, limits: sidebarLimits },
   sessionList: true,
+  arrangement: "columns",
 }
 
 export function ThreeColumns(props: { hostKind: HostKind; browserSurface: boolean }) {

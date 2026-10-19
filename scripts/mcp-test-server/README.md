@@ -165,6 +165,25 @@ the permission, failure and cancel `scripted-scenarios.mjs` drives. The
 state table is in `scripted-scenario.mjs`, and its tests are
 `scripted-scenario.test.mjs`.
 
+A scenario step can also pause for a number of milliseconds (ended early by
+`session/cancel`), call a tool on another of the session's MCP servers
+(`"server"`, such as `nessa-agents` for `create_thread` and `send_message`),
+and keep a call's `structuredContent` under a name (`"save"`). A later step's
+text or arguments read a kept value as `${name.path}`; `${prompt.text}` is the
+prompt the turn answers. Under full access (`bypassPermissions` for Claude,
+`agent-full-access` for Codex) a permission step asks nothing and follows its
+allow branch, as a harness does. The agent advertises `session/resume`, so a
+restarted gateway resumes its turns. `scenarios/stress.mjs` builds the scenario
+the conversation stress check runs, from that check's numbers.
+
+`pnpm test:e2e:stress` is that check: one conversation talked to for many
+rounds through the real gateway and the desktop window, with sends, stops,
+failures, access changes mid-turn, gateway restarts, other threads and other
+conversations mixed in by a seeded plan, while background conversations run
+beside it. Build the gateway first (`cargo build -p nessa-server`). How to add
+a step to it is in
+[Conversation stress](../../CODING_STANDARDS.md#conversation-stress).
+
 `pnpm test:e2e:scripted` builds the gateway and runs the signed-out checks in
 Chromium and WebKit. It does not need harness `node_modules`. The summary it
 writes is what a pull request that changes UI, gateway, ACP, or MCP behavior

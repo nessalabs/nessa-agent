@@ -26,6 +26,7 @@ use crate::application::agent_execution::{
         ExecutionAuditRecord, ExecutionRequest, Submitter, TurnResumption, TurnResumptionRecord,
     },
     permissions::ActionContext,
+    providers::ApprovalMode,
     sessions::{InvocationRecord, InvocationSchedulingEvent, NoteCandidates},
 };
 use crate::domain::agent_execution::{
@@ -122,10 +123,11 @@ fn resumed(record: &InvocationRecord, saved: &HashSet<&ExecutionId>) -> bool {
 
 /// Whether `record` is owed, and how it stopped. `saved` is every identity in
 /// the session; `superseded` whether a later turn ended for good or is this
-/// process's own work ([`newest_final`]); `live` whether this process
-/// admitted or is running `id`. A failure is owed only while nothing came
-/// after it: a person who sent the next message moved on, and so did one who
-/// stopped it.
+/// process's own work ([`newest_final`]), or, for a successor, whether any
+/// message was saved after it ([`Agent::owed_turns`]); `live` whether this
+/// process admitted or is running `id`. A failure is owed only while nothing
+/// came after it: a person who sent the next message moved on, and so did one
+/// who stopped it.
 fn owed(
     record: &InvocationRecord,
     saved: &HashSet<&ExecutionId>,
@@ -329,10 +331,18 @@ impl Agent {
         let active = self.inner.lifecycle.active();
         let live = |id: &ExecutionId| scheduler.has_receipt(id) || active.as_ref() == Some(id);
         let newest_final = self.newest_final(live).await;
+        let newest_message = self.newest_message().await;
         self.inner
             .manager
             .pick_invocations(|index, record, saved| {
-                owed(record, saved, newest_final > Some(index), live).map(|_| OwedTurn {
+                // A successor is saved only once its turn has stopped, so a
+                // message saved after it was sent after that stop: the
+                // person moved on, even if their message only waited behind
+                // the successor and was stopped with it.
+                let retry_moved_past = Resumption::of(&record.request.execution_id).attempt() > 0
+                    && newest_message > Some(index);
+                let superseded = newest_final > Some(index) || retry_moved_past;
+                owed(record, saved, superseded, live).map(|_| OwedTurn {
                     index,
                     execution_id: record.request.execution_id.clone(),
                     submitted_by: record.actor.clone(),
@@ -381,6 +391,32 @@ impl Agent {
         turn: &OwedTurn,
         actor: ActionContext,
     ) -> Result<Resumed, AgentError> {
+        self.resume_turn_at(turn, actor, None).await
+    }
+
+    /// [`Self::resume_turn`], with the successor admitted only where it runs
+    /// at `mode` ([`Submitter::with_approval_mode`]). Refused with
+    /// [`AgentError::ApprovalModeChanged`] where it would run at another, and
+    /// then nothing is recorded, or only the turn's stop: either way it is
+    /// still owed.
+    ///
+    /// # Errors
+    /// As [`Self::resume_turn`], and [`AgentError::ApprovalModeChanged`].
+    pub async fn resume_turn_at(
+        &self,
+        turn: &OwedTurn,
+        actor: ActionContext,
+        mode: Option<ApprovalMode>,
+    ) -> Result<Resumed, AgentError> {
+        let submitter_mode = |submitter: Submitter| match mode {
+            Some(mode) => submitter.with_approval_mode(mode),
+            None => submitter,
+        };
+        // Asked first, so a successor that would be refused does not record
+        // the turn's stop for nothing.
+        if mode.is_some() && mode != self.approval_mode() {
+            return Err(AgentError::ApprovalModeChanged);
+        }
         let successor = Resumption::of(&turn.execution_id).successor();
         // A spent chain is ended by this decision, so it is no longer owed.
         let end = successor.is_none().then(|| actor.clone());
@@ -407,7 +443,10 @@ impl Agent {
         let admission = self
             .accept_work(
                 request,
-                Submitter::new(record.actor.clone(), record.initiation.clone()),
+                submitter_mode(Submitter::new(
+                    record.actor.clone(),
+                    record.initiation.clone(),
+                )),
                 InvocationKind::Queued,
                 NoteCandidates::default(),
             )
@@ -461,6 +500,20 @@ impl Agent {
             .manager
             .pick_invocations(|index, record, saved| {
                 ended_for_good(record, saved, &live).then_some(index)
+            })
+            .await
+            .pop()
+    }
+
+    /// The index of the newest message that is not a successor or a
+    /// steering message: someone's next step, however it ended.
+    async fn newest_message(&self) -> Option<usize> {
+        self.inner
+            .manager
+            .pick_invocations(|index, record, _| {
+                (record.submission != SubmissionMode::Immediate
+                    && Resumption::of(&record.request.execution_id).attempt() == 0)
+                    .then_some(index)
             })
             .await
             .pop()

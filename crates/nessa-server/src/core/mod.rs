@@ -38,8 +38,12 @@ pub(crate) mod limit_log;
 #[cfg(unix)]
 mod log_file;
 pub mod logging;
+#[cfg(unix)]
+mod open_files;
 pub(crate) mod read_workers;
 mod restart;
+#[cfg(unix)]
+pub(crate) mod self_restart;
 mod shutdown;
 mod startup_failure;
 pub mod trusted_origin;

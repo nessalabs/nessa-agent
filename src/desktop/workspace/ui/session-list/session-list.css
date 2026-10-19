@@ -239,3 +239,25 @@
   margin: 32px 12px;
   padding: 0;
 }
+
+/*
+ * Under the pointer, or while its menu is open, a row trades its time for
+ * its buttons (`SessionRowButtons`). They take the time's place in the
+ * row's grid, so the title gives way rather than running under them, and
+ * hang a few pixels into the padding above and below, so the line keeps its
+ * height. Nothing moves while the row is being renamed.
+ */
+.workspace-session-actions {
+  display: none;
+  margin-block: -4px;
+  gap: 2px;
+}
+
+.workspace-session:is(:hover, [data-actions]):not([data-renaming])
+  .workspace-session-actions {
+  display: inline-flex;
+}
+
+.workspace-session:is(:hover, [data-actions]):not([data-renaming]) time {
+  display: none;
+}

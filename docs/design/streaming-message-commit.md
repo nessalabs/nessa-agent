@@ -59,7 +59,7 @@ and already-admitted control polling read the lifecycle state immediately.
 | A save fails after a provider outcome was already recorded but trailing text remained pending | The prior success or failure remains the `StorageAfterExecution.execution_result`; cleanup retires the attachment without substituting a storage error for the known provider outcome. | Separate result and storage-failure slots in the supervisor. |
 | Append may have committed but acknowledgement is lost | Retry presents the same record bytes and identity; storage reconciles it once. | Semantic record writer and pending generation retention. |
 | Stop during stalled append | The write keeps lease ownership; stop cause and provider cleanup are independently bounded. | Session lifecycle and storage lease supervision. |
-| Shutdown/crash at a save boundary | A write may be source-visible before its acknowledgement; the manager advances its committed snapshot only after acknowledgement or exact reconciliation. Replay exposes the physical commit once and never executes tools. | Semantic record writer reconciliation, `committed` update after save, and storage replay. |
+| Shutdown/crash at a save boundary | A write may be source-visible before its acknowledgement; the manager's committed snapshot covers pending units only after acknowledgement or exact reconciliation. Replay exposes the physical commit once and never executes tools. | Semantic record writer reconciliation, dropping the pending units' undo after a save, and storage replay. |
 
 The panel's provisional live output can still appear before storage
 acknowledgement. This slice does not replace gateway views or claim remote

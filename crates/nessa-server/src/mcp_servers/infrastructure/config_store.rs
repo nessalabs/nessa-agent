@@ -68,43 +68,47 @@ pub struct ConfigCheck {
     pub parses: ConfigParse,
 }
 
-/// `config.json`'s `agents.mcpServers`, as [`McpServerStore`].
-pub struct ConfigJsonStore {
+/// `config.json` as one JSON object: read after the runtime configuration's
+/// check, and rewritten whole under `config.json.lock`. Every writer of the
+/// file goes through this one (`agents.mcpServers` here, `native` for
+/// `pairing.setLinking`), so they share one lock, one check and one layout.
+pub struct ConfigJson {
     files: Arc<dyn ConfigFiles>,
     check: ConfigCheck,
-    /// The `agents` block a write starts from when the file has none: the
-    /// catalog and workspace this gateway runs with, which a desktop gateway
-    /// composed without one. A gateway whose catalog or workspace path is
-    /// not UTF-8 composes no store at all
-    /// (`a_fallback_path_that_is_not_utf8_composes_no_settings`).
-    agents: Map<String, Value>,
     /// What the lock's bounded wait is measured on.
     clock: Arc<dyn Clock>,
-    /// What each revision is keyed with: the process's one key, which the
-    /// stand-ins' digests are keyed with too.
-    key: ConfigurationKey,
 }
 
-impl ConfigJsonStore {
-    pub fn new(
-        files: Arc<dyn ConfigFiles>,
-        check: ConfigCheck,
-        agents: Map<String, Value>,
-        clock: Arc<dyn Clock>,
-        key: ConfigurationKey,
-    ) -> Self {
+impl ConfigJson {
+    pub fn new(files: Arc<dyn ConfigFiles>, check: ConfigCheck, clock: Arc<dyn Clock>) -> Self {
         Self {
             files,
             check,
-            agents,
             clock,
-            key,
+        }
+    }
+
+    /// The lock, waited for at most [`LOCK_WAIT`]: [`StoreError::Busy`] past
+    /// that.
+    pub async fn lock(&self) -> Result<StoreLock, StoreError> {
+        let deadline = self.clock.now() + LOCK_WAIT;
+        loop {
+            let files = self.files.clone();
+            match tokio::task::spawn_blocking(move || files.try_lock()).await {
+                Ok(Ok(Some(lock))) => return Ok(lock),
+                Ok(Ok(None)) if self.clock.now() >= deadline => return Err(StoreError::Busy),
+                Ok(Ok(None)) => {
+                    let retry = self.clock.now() + LOCK_RETRY;
+                    self.clock.sleep_until(retry.min(deadline)).await;
+                }
+                Ok(Err(_)) | Err(_) => return Err(StoreError::Unavailable),
+            }
         }
     }
 
     /// The file as a JSON object, after the runtime configuration's check;
     /// an object with nothing in it when there is no file.
-    fn document(&self) -> Result<Map<String, Value>, StoreError> {
+    pub fn document(&self) -> Result<Map<String, Value>, StoreError> {
         let Some(bytes) = self
             .files
             .read(self.check.limit)
@@ -117,6 +121,16 @@ impl ConfigJsonStore {
             Ok(Value::Object(document)) => Ok(document),
             _ => Err(StoreError::ConfigInvalid),
         }
+    }
+
+    /// Replace the file with `document`, when it passes the check as
+    /// written. Call it holding [`Self::lock`].
+    pub fn publish(&self, document: Map<String, Value>) -> Result<Published, StoreError> {
+        let bytes = self.serialised(&Value::Object(document))?;
+        self.checked(&bytes)?;
+        self.files
+            .publish(&bytes)
+            .map_err(|_| StoreError::Unavailable)
     }
 
     /// `document` as it is written, with its closing newline: pretty-printed,
@@ -144,6 +158,36 @@ impl ConfigJsonStore {
     }
 }
 
+/// `config.json`'s `agents.mcpServers`, as [`McpServerStore`].
+pub struct ConfigJsonStore {
+    config: ConfigJson,
+    /// The `agents` block a write starts from when the file has none: the
+    /// catalog and workspace this gateway runs with, which a desktop gateway
+    /// composed without one. A gateway whose catalog or workspace path is
+    /// not UTF-8 composes no store at all
+    /// (`a_fallback_path_that_is_not_utf8_composes_no_settings`).
+    agents: Map<String, Value>,
+    /// What each revision is keyed with: the process's one key, which the
+    /// stand-ins' digests are keyed with too.
+    key: ConfigurationKey,
+}
+
+impl ConfigJsonStore {
+    pub fn new(
+        files: Arc<dyn ConfigFiles>,
+        check: ConfigCheck,
+        agents: Map<String, Value>,
+        clock: Arc<dyn Clock>,
+        key: ConfigurationKey,
+    ) -> Self {
+        Self {
+            config: ConfigJson::new(files, check, clock),
+            agents,
+            key,
+        }
+    }
+}
+
 /// The stored block in `document`, when there is one.
 fn stored_block(document: &Map<String, Value>) -> Option<&Value> {
     document.get("agents")?.as_object()?.get("mcpServers")
@@ -155,25 +199,11 @@ impl McpServerStore for ConfigJsonStore {
     }
 
     fn lock(&self) -> StoreFuture<'_, StoreLock> {
-        Box::pin(async move {
-            let deadline = self.clock.now() + LOCK_WAIT;
-            loop {
-                let files = self.files.clone();
-                match tokio::task::spawn_blocking(move || files.try_lock()).await {
-                    Ok(Ok(Some(lock))) => return Ok(lock),
-                    Ok(Ok(None)) if self.clock.now() >= deadline => return Err(StoreError::Busy),
-                    Ok(Ok(None)) => {
-                        let retry = self.clock.now() + LOCK_RETRY;
-                        self.clock.sleep_until(retry.min(deadline)).await;
-                    }
-                    Ok(Err(_)) | Err(_) => return Err(StoreError::Unavailable),
-                }
-            }
-        })
+        Box::pin(self.config.lock())
     }
 
     fn read(&self) -> Result<StoredServers, StoreError> {
-        let document = self.document()?;
+        let document = self.config.document()?;
         let stored = stored_block(&document);
         let servers = match stored {
             Some(block) => parse_block(block).ok_or(StoreError::ConfigInvalid)?,
@@ -186,7 +216,7 @@ impl McpServerStore for ConfigJsonStore {
     }
 
     fn write(&self, expected: &str, servers: &[StoredMcpServer]) -> Result<Written, StoreError> {
-        let mut document = self.document()?;
+        let mut document = self.config.document()?;
         // What is stored now is what the edit was made to, or the edit is
         // stale: something wrote outside the lock since the read.
         let current = revision(&self.key, stored_block(&document));
@@ -205,12 +235,7 @@ impl McpServerStore for ConfigJsonStore {
             return Err(StoreError::ConfigInvalid);
         };
         agents.insert("mcpServers".into(), written);
-        let bytes = self.serialised(&Value::Object(document))?;
-        self.checked(&bytes)?;
-        let published = self
-            .files
-            .publish(&bytes)
-            .map_err(|_| StoreError::Unavailable)?;
+        let published = self.config.publish(document)?;
         Ok(Written {
             revision: new_revision,
             durable: published == Published::Durable,

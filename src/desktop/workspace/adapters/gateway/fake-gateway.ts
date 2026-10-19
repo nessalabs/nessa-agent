@@ -31,9 +31,11 @@ import {
   type Subscription,
   type SubscriptionEnd,
   type ViewSubscriptionHandlers,
+  type WorkspaceWindow,
 } from "@nessa/client"
 import type { GatewayClient } from "./gateway-source"
 import type { SharingClient } from "./sharing-gateway"
+import type { WindowPublishClient } from "./window-publisher"
 
 /**
  * The fake's client: the source's, sharing's conversation methods (which
@@ -42,11 +44,12 @@ import type { SharingClient } from "./sharing-gateway"
  * those. A window fake still has to answer, because the window's client
  * requires them.
  */
-export type FakeGatewayClient = GatewayClient & {
-  readonly conversation: GatewayClient["conversation"] &
-    SharingClient["conversation"] &
-    Pick<ConversationApi, "permissionRules" | "revokePermissionRule">
-}
+export type FakeGatewayClient = GatewayClient &
+  WindowPublishClient & {
+    readonly conversation: GatewayClient["conversation"] &
+      SharingClient["conversation"] &
+      Pick<ConversationApi, "permissionRules" | "revokePermissionRule">
+  }
 
 const notShared = () => Promise.reject(new Error("the fake gateway does not share"))
 
@@ -74,6 +77,8 @@ type Method =
   | "withdraw"
   | "setApprovalMode"
   | "archive"
+  | "rename"
+  | "delete"
   | "permissionRules"
   | "revokePermissionRule"
 
@@ -324,6 +329,8 @@ export interface FakeGateway {
   readonly client: FakeGatewayClient
   /** Every call made, in order. */
   readonly calls: Call[]
+  /** Each window the client was told, newest last, with its revision; `undefined` withdrew it. */
+  readonly windows: { revision: number; window: WorkspaceWindow | undefined }[]
   readonly rows: Map<string, ConversationSummary>
   readonly views: Map<string, ConversationView>
   /**
@@ -405,6 +412,7 @@ export function fakeGateway(
   } = {},
 ): FakeGateway {
   const calls: FakeGateway["calls"] = []
+  const windows: FakeGateway["windows"] = []
   const rows = new Map<string, ConversationSummary>()
   const views = new Map<string, ConversationView>()
   const active = new Map<string, string>()
@@ -656,6 +664,23 @@ export function fakeGateway(
           rows.delete(args[0])
           return { requestId: "archive", applied: true }
         }) as never,
+      // As the gateway: the row and the open view take the title, and the
+      // title it already had is not applied.
+      rename: (...args) =>
+        answer("rename", args, () => {
+          const [conversationId, title] = args
+          const row = rows.get(conversationId)
+          if (!row || row.title === title) return { requestId: "rename", applied: false }
+          rows.set(conversationId, { ...row, title })
+          const view = views.get(conversationId)
+          if (view) views.set(conversationId, { ...view, title })
+          return { requestId: "rename", applied: true }
+        }) as never,
+      delete: (...args) =>
+        answer("delete", args, () => {
+          rows.delete(args[0])
+          return { requestId: "delete", applied: true }
+        }) as never,
       permissionRules: () =>
         answer("permissionRules", [], () => ({ requestId: "rules", rules: [] })) as never,
       revokePermissionRule: (...args) =>
@@ -663,6 +688,16 @@ export function fakeGateway(
           requestId: "revoke",
           applied: false,
         })) as never,
+    },
+    workspace: {
+      publish: (_windowId, revision, window) => {
+        const held = windows.at(-1)?.revision ?? -1
+        if (revision >= held) windows.push({ revision, window })
+        return Promise.resolve({
+          revision: Math.max(revision, held),
+          applied: revision >= held,
+        })
+      },
     },
     // The peek names the active execution; it ends cancelled, with what it waited on.
     stopThread: (...args) =>
@@ -755,6 +790,7 @@ export function fakeGateway(
   return Object.assign(fake, {
     client,
     calls,
+    windows,
     rows,
     views,
     active,

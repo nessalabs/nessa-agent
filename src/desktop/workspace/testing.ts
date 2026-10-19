@@ -4,6 +4,7 @@
  * released — a real desktop store around it, and animation frames a test
  * runs itself. Only tests import this.
  */
+import { conversationTitle } from "@nessa/client"
 import { makeDesktopStore } from "../store"
 import type {
   OutgoingMessage,
@@ -291,6 +292,22 @@ export function fakeSource(index: WorkspaceIndex = testIndex()): FakeSource {
       }),
     archive: (sessionId, initiator) =>
       answer("archive", [sessionId, initiator], () => {
+        const session = summaries.get(sessionId)
+        if (!session) throw new WorkspaceSourceError("unknown-session")
+        emit({ kind: "session-removed", sessionId, revision: session.revision + 1 })
+      }),
+    rename: (sessionId, typed, initiator) =>
+      answer("rename", [sessionId, typed, initiator], () => {
+        const session = summaries.get(sessionId)
+        if (!session) throw new WorkspaceSourceError("unknown-session")
+        const title = conversationTitle(typed) ?? session.title
+        emit({
+          kind: "session",
+          session: { ...session, title, revision: session.revision + 1 },
+        })
+      }),
+    delete: (sessionId, initiator) =>
+      answer("delete", [sessionId, initiator], () => {
         const session = summaries.get(sessionId)
         if (!session) throw new WorkspaceSourceError("unknown-session")
         emit({ kind: "session-removed", sessionId, revision: session.revision + 1 })

@@ -60,6 +60,7 @@ export const css = {
   cornerPane: "[data-pane-key][data-split-corner]", // the top-left pane, whose header clears the window's controls when no side column is beside it
   panesAlone: "[data-workspace][data-panes-alone]", // both side columns closed: the corner pane's header steps past the controls
   focusedPane: "[data-pane-key][data-pane-focused]",
+  workspaceFlight: "[data-split-flipping], [data-split-flying]",
   paneGrid: "[data-split-grid]", // the grid the panes are laid out in — the box the drag measures
   paneHeader: ".workspace-pane-header", // class: a pane's header, which carries the drag
   paneDragHandle: "[data-drag-pane]",
@@ -164,6 +165,7 @@ export const css = {
   listScroll: ".workspace-list-scroll", // class: the session list's scroller
   listEmptyAction: ".workspace-list-empty button", // the empty list's New Session, the kit's tinted pill
   sessionListRow: ".workspace-list [data-session-row]", // a row of the session list, not a sidebar thread
+  selectedSessionListRow: '.workspace-list [data-session-row][aria-selected="true"]', // the conversation the focused pane actually shows
   sessionRow: "[data-drag-item]", // a session a drag can carry to a pane
   sidebarEdge: '[role="separator"][aria-label="Resize Sidebar"]',
 
@@ -206,6 +208,7 @@ export const css = {
   overviewScroll: ".agents-overview-scroll", // class: the list's scroller, under the header
   overviewCount: ".agents-overview-counts button", // class: a header count, a toggle (aria-pressed, data-group)
   overviewGroup: ".agents-overview-group", // class: a listed group, labelled by its h2
+  peekConversation: ".agents-peek", // class: the whole conversation article, beside the list or inline
   overviewPeek: ".agents-overview-peek", // class: the peek beside the list, which scrolls
   peekSummary: ".agents-peek-summary", // class: what is going on, in the source's line
   peekCommand: ".agents-peek .workspace-approval-command", // class: the command in the peek, beside the list or under the row
@@ -214,6 +217,8 @@ export const css = {
   transcriptStep: ".workspace-steps li", // class: one step the agent took, in a message
   transcriptWorkToggle: ".workspace-work button[aria-expanded]", // completed tool work opens its steps in place
   overviewColumn: ".agents-overview-column", // class: the list the arrow keys walk
+  overviewGeometryItems:
+    ".agents-overview-group > h2, .agents-row-item, .agents-clear, .agents-overview-resting, .agents-overview-footnote", // classes: list headings, rows and notices whose placement is observed
   overviewResting: ".agents-overview-resting", // class: a group shown alone that lists nothing ("Nothing needs you"), the kit's EmptyState
   overviewFootnote: ".agents-overview-footnote", // class: how many sessions the view leaves out, and Show All
   inlinePeek: ".agents-inline-peek", // class: the peek opened beneath its row
@@ -249,6 +254,7 @@ export const css = {
   settingsHeading: "#settings-heading", // the open category's name
   settingsTab: '.settings-tabs [role="tab"]',
   settingsPanel: "#settings-panel", // the open tab's page
+  settingsLinkedDevices: '#settings-panel [data-setting="linked-devices"]', // Linked devices, as its tab draws it
   settingsCard: '[data-slot="settings-group-card"]', // the UI kit's card on a Settings page, which what it holds must lie inside
   settingsFormCard: ".settings-card", // class: a card Settings draws itself (Integrations' form and inspection), there only while open
   settingsGroupHeading: ".settings-group > h2", // class: a group's heading on a Settings page
@@ -290,6 +296,8 @@ export const css = {
   shareHosts: "[data-share-hosts]", // the Drive grant's host list
   shareHostCount: '[data-share-hosts] [data-slot="checkbox-list-count"]',
   shareNotes: "[data-share-notes]", // what a tool policy does not stop
+  shareEmpty: '[data-share-targets="none"]', // the one line drawn when no device is linked
+  shareLinkDevice: '[data-share-action="link-device"]', // that line's link to Settings › Linked devices
   shareReason: "[data-share-reason]", // why Share cannot send yet: this-session | another-session, or the draft's reason (changed, …)
   mcpServers: "[data-mcp-servers]", // the tab; its value: loading | listed | not-configured | failed | too-large | not-admin
   mcpRow: "[data-mcp-server]", // a server's row; its value is the server's name
@@ -937,4 +945,26 @@ export const userAttachments = {
   text: ".workspace-bubble p",
   pictures: "img",
   controls: "button",
+}
+
+/**
+ * The composer's controls a person uses in one conversation: Send and the
+ * Stop it turns into while a turn runs (one `button.desktop-send`, told apart
+ * by its name), and the access shield with its menu. `conversation-stress.mjs`
+ * drives them.
+ */
+export const composerControls = {
+  send: ["button", { name: "Send", exact: true }],
+  stop: ["button", { name: "Stop", exact: true }],
+  access: '[data-slot="composer-access-mode"]', // data-access-mode is ask-approval | auto-approval | full-access
+  accessMenu: '[data-slot="composer-access-mode-content"]',
+  /** The menu item for each access mode, by the gateway's name for it. */
+  accessItem: {
+    ask: ["menuitemradio", { name: "Ask for approval", exact: true }],
+    auto: ["menuitemradio", { name: "Auto approval", exact: true }],
+    full: ["menuitemradio", { name: "Full access", exact: true }],
+  },
+  /** The shield's value for each access mode. */
+  accessValue: { ask: "ask-approval", auto: "auto-approval", full: "full-access" },
+  notice: ".desktop-composer-notice", // class: what the composer says of a held or refused access change
 }

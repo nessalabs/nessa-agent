@@ -40,12 +40,19 @@ afterEach(async () => {
 })
 
 function gateway(read: () => Promise<Outcome<ReadValue>>): LinkedDevicesGateway & {
+  switchWaitMs: number
   creates: number
+  linkings: boolean[]
+  tell: (connection: LinkedDevicesConnection) => void
 } {
   const gate = {
     pollMs: 0,
+    switchWaitMs: 60_000,
     creates: 0,
-    follow(handler: (connection: { type: "connected" }) => void) {
+    linkings: [] as boolean[],
+    tell: (_connection: LinkedDevicesConnection) => {},
+    follow(handler: (connection: LinkedDevicesConnection) => void) {
+      gate.tell = handler
       handler({ type: "connected" })
       return () => {}
     },
@@ -96,6 +103,10 @@ function gateway(read: () => Promise<Outcome<ReadValue>>): LinkedDevicesGateway 
       value: { invitationId: "x", phase: "available" as const, expiresAtMs: 0 },
     }),
     revoke: async () => ({ ok: true as const, value: { credentialId: "device-1" } }),
+    setLinking: async (enabled: boolean) => {
+      gate.linkings.push(enabled)
+      return { ok: true as const, value: { enabled, applies: "restarting" as const } }
+    },
   }
   return gate
 }
@@ -129,7 +140,7 @@ describe("Linked devices", () => {
     expect(host.querySelector("[data-linked-action='pair']")).toBeNull()
   })
 
-  it("L2: linking off is a disabled switch and the config hint, with no pair button", async () => {
+  it("L2: linking off is a switch that can be turned, with no config hint, no group title and no pair button", async () => {
     const gate = gateway(async () => ({ ok: true, value: { kind: "off" } }))
     await mount(
       <LinkedDevicesProvider gateway={gate}>
@@ -139,10 +150,89 @@ describe("Linked devices", () => {
     expect(host.querySelector("[data-linked]")?.getAttribute("data-linked")).toBe("off")
     const toggle = host.querySelector<HTMLButtonElement>("[role='switch']")
     expect(toggle?.getAttribute("aria-checked")).toBe("false")
-    expect(toggle?.disabled).toBe(true)
-    expect(host.textContent).toContain("127.0.0.1:47650")
+    expect(toggle?.disabled).toBe(false)
+    expect(host.textContent).not.toContain("config.json")
+    expect(host.textContent).toContain("Changing this restarts the gateway")
+    expect(host.querySelector('[data-slot="settings-group-title"]')).toBeNull()
     expect(host.textContent).not.toContain("pairing_not_configured")
     expect(host.querySelector("[data-linked-action='pair']")).toBeNull()
+  })
+
+  it("L23: flipping the switch sends one change and holds it through the restart", async () => {
+    let on = false
+    const gate = gateway(async () =>
+      on
+        ? { ok: true, value: { kind: "on", enrollments: [], devices: [] } }
+        : { ok: true, value: { kind: "off" } },
+    )
+    await mount(
+      <LinkedDevicesProvider gateway={gate}>
+        <LinkedDevicesTab />
+      </LinkedDevicesProvider>,
+    )
+    const toggle = () => host.querySelector<HTMLButtonElement>("[role='switch']")
+    await act(async () => toggle()?.click())
+    expect(gate.linkings).toEqual([true])
+    expect(toggle()?.getAttribute("aria-checked")).toBe("true")
+    expect(toggle()?.disabled).toBe(true)
+    expect(host.textContent).toContain("Restarting the gateway")
+    on = true
+    await act(async () => gate.tell({ type: "unreachable" }))
+    expect(host.textContent).not.toContain("Cannot reach the gateway")
+    await act(async () => gate.tell({ type: "connected" }))
+    expect(host.querySelector("[data-linked]")?.getAttribute("data-linked")).toBe("on")
+    expect(toggle()?.disabled).toBe(false)
+    expect(host.textContent).not.toContain("Restarting the gateway")
+    expect(host.querySelector("[data-linked-action='pair']")).not.toBeNull()
+  })
+
+  it("L23: turning linking off does not say the gateway cannot be reached while it restarts", async () => {
+    let on = true
+    const gate = gateway(async () =>
+      on
+        ? { ok: true, value: { kind: "on", enrollments: [], devices: [] } }
+        : { ok: true, value: { kind: "off" } },
+    )
+    await mount(
+      <LinkedDevicesProvider gateway={gate}>
+        <LinkedDevicesTab />
+      </LinkedDevicesProvider>,
+    )
+    const toggle = () => host.querySelector<HTMLButtonElement>("[role='switch']")
+    await act(async () => toggle()?.click())
+    expect(gate.linkings).toEqual([false])
+    on = false
+    await act(async () => gate.tell({ type: "unreachable" }))
+    expect(toggle()?.getAttribute("aria-checked")).toBe("false")
+    expect(host.textContent).not.toContain("Cannot reach the gateway")
+    await act(async () => gate.tell({ type: "connected" }))
+    expect(host.querySelector("[data-linked]")?.getAttribute("data-linked")).toBe("off")
+  })
+
+  it("L24: a gateway not back within the wait lets the switch go and says the change is saved", async () => {
+    let on = false
+    const gate = gateway(async () =>
+      on
+        ? { ok: true, value: { kind: "on", enrollments: [], devices: [] } }
+        : { ok: true, value: { kind: "off" } },
+    )
+    gate.switchWaitMs = 20
+    await mount(
+      <LinkedDevicesProvider gateway={gate}>
+        <LinkedDevicesTab />
+      </LinkedDevicesProvider>,
+    )
+    const toggle = () => host.querySelector<HTMLButtonElement>("[role='switch']")
+    await act(async () => toggle()?.click())
+    await act(async () => gate.tell({ type: "unreachable" }))
+    await act(async () => new Promise((done) => setTimeout(done, 60)))
+    expect(toggle()?.getAttribute("aria-checked")).toBe("false")
+    expect(host.textContent).toContain("has not come back yet")
+    expect(host.textContent).not.toContain("Restarting the gateway")
+    on = true
+    await act(async () => gate.tell({ type: "connected" }))
+    expect(host.querySelector("[data-linked]")?.getAttribute("data-linked")).toBe("on")
+    expect(host.textContent).not.toContain("has not come back yet")
   })
 
   it("L5: Pair sends one create under StrictMode and shows the code and both orbs", async () => {

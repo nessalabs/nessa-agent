@@ -531,8 +531,25 @@ pub trait ServerInspector: Send + Sync {
     ) -> InspectFuture<'_>;
 }
 
-/// One tool call a [`BuiltInServer`] answers, as MCP's `CallToolResult`.
-pub type BuiltInFuture = Pin<Box<dyn Future<Output = serde_json::Value> + Send + 'static>>;
+/// One tool call a [`BuiltInServer`] answers.
+pub type BuiltInFuture = Pin<Box<dyn Future<Output = BuiltInAnswer> + Send + 'static>>;
+
+/// A tool call's answer, as MCP's `CallToolResult`, and what to do once it
+/// is written to its caller. An answer the caller never gets, because it
+/// cancelled the call or went first, drops `delivered` uncalled.
+pub struct BuiltInAnswer {
+    pub result: serde_json::Value,
+    pub delivered: Option<Box<dyn FnOnce() + Send>>,
+}
+
+impl From<serde_json::Value> for BuiltInAnswer {
+    fn from(result: serde_json::Value) -> Self {
+        Self {
+            result,
+            delivered: None,
+        }
+    }
+}
 
 /// A tool server the gateway serves itself, in its own process, to an open
 /// conversation's harness through the relay, as it relays a configured

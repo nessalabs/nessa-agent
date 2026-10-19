@@ -20,6 +20,8 @@ instead of creating a competing copy.
 | [Runtime architecture](design/runtime-architecture.md) | Read this to learn how Nessa runs agents on one machine and then on many: the words, the picture, seven situations (laptop, phone, home server, SSH host, someone else's machine, build on the Mac mini and run it here, share one conversation with a friend), leases, the mesh, sandboxes, sharing, directional sync, artifacts, build order and what was borrowed from Tailscale, Syncthing, VS Code and Codex; companion to ADR 252. |
 | [Agent execution design](design/agent_execution/README.md) | Ownership review and separately labeled future gateway/conversation proposals. |
 | [Authentication](design/auth/README.md) | Design references; [local usage](guides/local-auth.md) and [gateway review](reviews/local-auth-gateway.md). |
+| [Backup verification](design/backup-verification.md) | Read-only export-format and integrity checking; remaining restore contracts. |
+| [Offline restore planning](design/offline-restore-planning.md) | Verified-cut inspection and unresolved import/quarantine prerequisites; no activation. |
 | [Gateway alpha review](reviews/gateway-alpha-review.md) | Local architecture review, fixed findings, external comparisons, validation, and remaining release limits. |
 | [Runtime staging profile](reviews/runtime-staging-profile.md) | Reproducible macOS measurements of packaged runtime copy, sync, validation, publication, and reuse costs (issue 109). |
 | [todo/](todo/README.md) | Pending implementation tasks, including SDK context-first organization and caller updates. |

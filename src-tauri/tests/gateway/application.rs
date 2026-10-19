@@ -1528,6 +1528,7 @@ fn stop_outcome_is_audited_after_the_response_receiver_is_dropped() {
 
     let (receiver, worker) = spawn_stop_request(
         Arc::new(SettledHost),
+        DesktopHostLease::new(()),
         audit.clone(),
         session.clone(),
         attempt,
@@ -5937,3 +5938,6 @@ fn a_publication_record_failure_after_ready_keeps_a_newer_revision() {
 
 #[path = "application/claude_publication.rs"]
 mod claude_publication;
+
+#[path = "application/host_ownership.rs"]
+mod host_ownership_tests;

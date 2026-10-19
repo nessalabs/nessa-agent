@@ -30,8 +30,11 @@ import {
   canPair,
   canPoll,
   canReplace,
+  canToggle,
   initialLinkedDevicesState,
   linkedDevicesReducer,
+  linkingNoticeText,
+  linkingShown,
   noticeText,
   sentences,
   type LinkedDevice,
@@ -132,6 +135,8 @@ function requestOf(
       return gateway.status(pending.invitationId)
     case "revoke":
       return gateway.revoke(pending.credentialId)
+    case "setLinking":
+      return gateway.setLinking(pending.enabled)
   }
 }
 
@@ -151,6 +156,27 @@ function usePoll(
     const timer = window.setTimeout(() => dispatch({ type: "poll" }), gateway.pollMs)
     return () => window.clearTimeout(timer)
   }, [quiet, gateway, dispatch])
+}
+
+/**
+ * A restart the window has not seen through within `switchWaitMs` stops
+ * holding the switch, and says so: a gateway that never comes back must not
+ * leave "Restarting" on screen.
+ */
+function useSwitchWait(
+  gateway: LinkedDevicesGateway,
+  state: LinkedDevicesState,
+  dispatch: Dispatch,
+) {
+  const switching = state.switching !== null
+  useEffect(() => {
+    if (!switching) return
+    const timer = window.setTimeout(
+      () => dispatch({ type: "switchStalled" }),
+      gateway.switchWaitMs,
+    )
+    return () => window.clearTimeout(timer)
+  }, [switching, gateway, dispatch])
 }
 
 /**
@@ -192,6 +218,7 @@ function ManagedDevices({
   useEffect(() => gateway.follow(dispatch), [gateway])
   useRequests(gateway, state, dispatch)
   usePoll(gateway, state, dispatch)
+  useSwitchWait(gateway, state, dispatch)
   const container = useCodeFocus(state)
   const phase =
     state.connection === "unreachable" && state.linking === "unknown"
@@ -210,7 +237,7 @@ function ManagedDevices({
       data-connection={state.connection}
       aria-busy={state.pending !== null || undefined}
     >
-      <LinkingGroup state={state} />
+      <LinkingGroup state={state} dispatch={dispatch} />
       {state.linking === "on" ? (
         <>
           <PairingGroup state={state} dispatch={dispatch} />
@@ -218,10 +245,10 @@ function ManagedDevices({
           <DevicesGroup state={state} dispatch={dispatch} />
         </>
       ) : null}
-      {state.notice &&
-      state.linking !== "off" &&
-      state.linking !== "refused" &&
-      state.linking !== "unknown" ? (
+      {state.switching !== null ? null : state.notice &&
+        state.linking !== "off" &&
+        state.linking !== "refused" &&
+        state.linking !== "unknown" ? (
         <p className="settings-footnote" role="status" data-linked-notice>
           {state.connection === "unreachable" && state.notice.kind === "unreachable"
             ? sentences.unreachable
@@ -236,8 +263,19 @@ function ManagedDevices({
   )
 }
 
-function LinkingGroup({ state }: { state: LinkedDevicesState }) {
-  const on = state.linking === "on"
+/**
+ * The Native linking switch. Flipping it saves the choice on the gateway,
+ * which restarts itself to apply it; the switch holds the new value until
+ * the gateway that comes back says where it stands. No group title: the
+ * row's own label names it.
+ */
+function LinkingGroup({
+  state,
+  dispatch,
+}: {
+  state: LinkedDevicesState
+  dispatch: Dispatch
+}) {
   const detail =
     state.linking === "unknown"
       ? state.notice
@@ -248,18 +286,24 @@ function LinkingGroup({ state }: { state: LinkedDevicesState }) {
         : state.linking === "refused"
           ? sentences.refused
           : sentences.on
-  const footnote =
-    state.linking === "off"
-      ? sentences.enable
-      : state.linking === "on"
-        ? sentences.disable
-        : undefined
+  const footnote = state.linkingNotice
+    ? linkingNoticeText[state.linkingNotice]
+    : state.linking === "on" || state.linking === "off"
+      ? sentences.restartNote
+      : undefined
   return (
-    <SettingsGroup title="Native linking" footnote={footnote}>
+    <SettingsGroup footnote={footnote} data-linking-switch>
       <SettingsRow
         label="Native linking"
         detail={detail}
-        control={<Switch checked={on} disabled aria-label="Native linking" />}
+        control={
+          <Switch
+            checked={linkingShown(state)}
+            disabled={!canToggle(state)}
+            aria-label="Native linking"
+            onCheckedChange={(enabled) => dispatch({ type: "setLinking", enabled })}
+          />
+        }
       />
     </SettingsGroup>
   )

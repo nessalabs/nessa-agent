@@ -11,7 +11,8 @@
 //!         another note under the request ──▶ idempotency_conflict
 //!         full, or the author past its rate ──▶ message_quota_exceeded
 //! note_status(conversation, caller)
-//!   ──▶ the caller's conversation ──▶ its committed records ──▶ the caller's note, if saved
+//!   ──▶ the caller's conversation ──▶ its committed records, read on to their head
+//!   ──▶ the caller's note, if saved
 //! ```
 //!
 //! The rules are the SDK's ([`NoteRecord`]): the conversation's records are
@@ -24,8 +25,8 @@ use crate::conversation::application::{
 };
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_sdk::application::agent_execution::sessions::{
-    NoteCandidates, NoteDelivery, NoteRecord, NoteRecordError, NoteRequest, NoteState, NoteText,
-    StorageError,
+    CommittedSession, NoteCandidates, NoteDelivery, NoteRecord, NoteRecordError, NoteRequest,
+    NoteState, NoteText, StorageError,
 };
 use nessa_sdk::domain::agent_execution::executions::Initiator;
 use std::sync::Arc;
@@ -147,24 +148,41 @@ impl ConversationService {
             .ok_or(ConversationError::NotFound)?;
         self.access().admit(&record, &caller)?;
         let session_id = conversation_session(&id);
-        let committed = self
-            .inner
-            .storage
-            .read_committed(session_id.clone())
-            .await?;
-        if committed
-            .as_ref()
-            .is_some_and(|committed| committed.id() != &session_id)
-        {
-            return Err(ConversationError::Storage(StorageError::IdentityMismatch));
+        let found = |committed: &Option<CommittedSession>| {
+            committed
+                .as_ref()
+                .and_then(CommittedSession::snapshot)
+                .and_then(|snapshot| {
+                    snapshot
+                        .note(caller.principal_id.as_str(), &caller.action_id)
+                        .map(|note| (note.clone(), snapshot.note_state(note)))
+                })
+        };
+        // One committed read takes a bounded number of records, and a long
+        // history needs several: a note past where this one stopped is read
+        // on to, so it is never answered as not saved. Reading on stops at
+        // the head the read has seen, or when a read makes no progress.
+        let mut downloaded = None;
+        loop {
+            let committed = self
+                .inner
+                .storage
+                .read_committed(session_id.clone())
+                .await?;
+            let Some(read) = committed.as_ref() else {
+                return Ok(None);
+            };
+            if read.id() != &session_id {
+                return Err(ConversationError::Storage(StorageError::IdentityMismatch));
+            }
+            let note = found(&committed);
+            if note.is_some()
+                || read.downloaded() >= read.observed_head()
+                || downloaded.is_some_and(|before| read.downloaded() <= before)
+            {
+                return Ok(note);
+            }
+            downloaded = Some(read.downloaded());
         }
-        Ok(committed
-            .as_ref()
-            .and_then(|committed| committed.snapshot())
-            .and_then(|snapshot| {
-                snapshot
-                    .note(caller.principal_id.as_str(), &caller.action_id)
-                    .map(|note| (note.clone(), snapshot.note_state(note)))
-            }))
     }
 }

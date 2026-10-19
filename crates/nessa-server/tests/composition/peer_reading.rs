@@ -18,7 +18,8 @@ use crate::conversation::application::{
 };
 use crate::conversation::domain::{Conversation, ConversationDeletion, ShareAccess};
 use crate::conversation::infrastructure::{
-    LocalConversationStore, LocalReceiverAuthority, NessaCatalogueReadSource, NessaRecordReadSource,
+    LocalConversationStore, LocalReceiverAuthority, NessaCatalogueReadSource,
+    NessaRecordReadSource, TestReadGate,
 };
 use crate::device_pairing::infrastructure::PairingOwnerCommands;
 use crate::peer_gateways::application::{
@@ -55,6 +56,7 @@ use nessa_sdk::application::agent_execution::sessions::SessionStorage;
 use nessa_sdk::infrastructure::session_storage::RecordStorage;
 use nessa_sync::replication::domain::Id;
 use serde_json::Value;
+use std::future::pending;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
@@ -74,7 +76,8 @@ const POLICY: PollPolicy = PollPolicy {
     reads_at_once: READS_AT_ONCE,
 };
 /// Well under the handshake deadline a held read would otherwise reach (5 s),
-/// so an end inside it was a stop, not that deadline.
+/// so the silent-handshake cases cannot spend their whole deadline inside it.
+/// The manual-clock audit cases also check the captured cycle's stop flag.
 const PROMPT: Duration = Duration::from_secs(2);
 
 pub(super) fn uuid() -> String {
@@ -187,6 +190,8 @@ struct Peer {
     storage: Arc<RecordStorage>,
     native: SocketAddr,
     running: Option<RunningNative>,
+    record_hold: Option<Arc<TestReadGate>>,
+    record_source: Arc<NessaRecordReadSource>,
 }
 impl Peer {
     async fn start(root: &Path) -> Self {
@@ -194,6 +199,14 @@ impl Peer {
     }
     /// A, serving through `relay` too when one is given.
     async fn start_with(root: &Path, relay: Option<RelayAddress>) -> Self {
+        Self::prepare(root, relay, false).await
+    }
+
+    async fn with_held_record(root: &Path) -> Self {
+        Self::prepare(root, None, true).await
+    }
+
+    async fn prepare(root: &Path, relay: Option<RelayAddress>, hold_record: bool) -> Self {
         let (gateway, organization) = (uuid(), uuid());
         let (auth, session, owner) = owned(root, &gateway, &organization).await;
         let receivers = Arc::new(
@@ -221,6 +234,25 @@ impl Peer {
         );
         let storage = Arc::new(RecordStorage::new(root.join("source")).unwrap());
         storage.initialize().await.unwrap();
+        let (record_source, record_hold) = if hold_record {
+            let (source, gate) = NessaRecordReadSource::held_for_host_shutdown(
+                storage.clone(),
+                Id::new(&gateway).unwrap(),
+                Handle::current(),
+                false,
+            );
+            (source, Some(gate))
+        } else {
+            (
+                NessaRecordReadSource::new(
+                    storage.clone(),
+                    Id::new(&gateway).unwrap(),
+                    Handle::current(),
+                ),
+                None,
+            )
+        };
+        let record_source = Arc::new(record_source);
         let state = ProductRouteState::new(
             ResourceId::new(gateway.clone()).unwrap(),
             OrganizationId::new(organization.clone()).unwrap(),
@@ -246,11 +278,7 @@ impl Peer {
             metadata.clone(),
             crate::conversation_test_support::access_policy(),
         )
-        .with_record_source(Arc::new(NessaRecordReadSource::new(
-            storage.clone(),
-            Id::new(&gateway).unwrap(),
-            Handle::current(),
-        )))
+        .with_record_source(record_source.clone())
         .with_catalogue_source(Arc::new(NessaCatalogueReadSource::new(
             metadata.clone(),
             crate::conversation_test_support::access_policy(),
@@ -272,6 +300,8 @@ impl Peer {
             storage,
             native,
             running: Some(running),
+            record_hold,
+            record_source,
         }
     }
     /// A conversation of the owner's, with an opened, empty transcript.
@@ -506,6 +536,94 @@ impl Stall {
         *self.open.lock().unwrap() = true;
         self.opened.notify_all();
     }
+}
+
+/// A synthetic stalled write must be released on assertion failure too.
+struct ReleaseStall(Arc<Stall>);
+impl Drop for ReleaseStall {
+    fn drop(&mut self) {
+        self.0.release();
+    }
+}
+
+/// A failed test still releases the grantor's physical record-read worker.
+struct ReleaseRecord(Arc<TestReadGate>);
+impl Drop for ReleaseRecord {
+    fn drop(&mut self) {
+        self.0.release();
+    }
+}
+
+#[tokio::test]
+async fn a_cancelled_late_write_controller_releases_the_writer() {
+    let stall = Stall::new(4);
+    let release = ReleaseStall(stall.clone());
+    let hook = stall.hook();
+    let mut writer = tokio::task::spawn_blocking(move || hook(4));
+    let controller = tokio::spawn(async move {
+        let _release = release;
+        pending::<()>().await;
+    });
+    stall.until_reached().await;
+    controller.abort();
+    assert!(controller.await.unwrap_err().is_cancelled());
+    let completed = tokio::time::timeout(PROMPT, &mut writer).await;
+    // Release even a deliberately broken guard before reporting a failure.
+    stall.release();
+    match completed {
+        Ok(joined) => joined.unwrap(),
+        Err(error) => {
+            writer.await.unwrap();
+            panic!("cancelled controller left its writer held: {error}");
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_cancelled_record_hold_controller_releases_the_worker() {
+    let directory = tempfile::tempdir().unwrap();
+    let a = Peer::with_held_record(&directory.path().join("a")).await;
+    let gate = a.record_hold.as_ref().unwrap().clone();
+    // Retain fallback cleanup outside the controller tested below.
+    let _fallback = ReleaseRecord(gate.clone());
+    let release = ReleaseRecord(gate.clone());
+    let controller = tokio::spawn(async move {
+        let _release = release;
+        pending::<()>().await;
+    });
+    let b = Reader::prepare(&directory.path().join("b"), false).await;
+    let relay = Relay::start(a.native).await;
+    let (_, reader) = enroll(&a, &b, &relay, true).await;
+    let conversation = a.conversation().await;
+    a.grant(
+        ShareGrantTransition::Grant(ShareAccess::read()),
+        &conversation,
+        &reader.unwrap(),
+    )
+    .await;
+    let poller = b.poller(POLICY);
+    tokio::time::timeout(WAIT, gate.entered()).await.unwrap();
+    controller.abort();
+    assert!(controller.await.unwrap_err().is_cancelled());
+    let source = a.record_source.clone();
+    let mut joined = Box::pin(source.shutdown());
+    let completed = tokio::time::timeout(PROMPT, &mut joined).await;
+    // Even the missing-guard control must release and join physical work.
+    gate.release();
+    let timely = match completed {
+        Ok(result) => {
+            result.unwrap();
+            true
+        }
+        Err(_) => {
+            tokio::time::timeout(WAIT, joined).await.unwrap().unwrap();
+            false
+        }
+    };
+    tokio::time::timeout(WAIT, poller.join()).await.unwrap();
+    drop(relay);
+    stop(a).await;
+    assert!(timely, "cancelled controller left its record worker held");
 }
 
 /// A private directory for B's durable audit beneath `root`.
@@ -1286,17 +1404,46 @@ async fn records_land_in_turn_order() {
 /// and the forget goes ahead.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_stalled_audit_never_holds_an_owner_command() {
+    stalled_audit(None, false).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_late_audit_intent_does_not_spend_the_next_forgets_stop_window() {
+    stalled_audit(Some(PROMPT + PROMPT / 2), false).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[should_panic(expected = "forget stopped the captured read")]
+async fn an_ended_read_cannot_prove_a_forget_stopped_it() {
+    stalled_audit(None, true).await;
+}
+
+async fn stalled_audit(late_write: Option<Duration>, end_read_before_forget: bool) {
     let directory = tempfile::tempdir().unwrap();
-    let a = Peer::start(&directory.path().join("a")).await;
+    let a = Peer::with_held_record(&directory.path().join("a")).await;
+    let record_hold = a.record_hold.as_ref().unwrap().clone();
+    let _release_record = ReleaseRecord(record_hold.clone());
     let audits = audit_directory(&directory.path().join("audits"));
     let clock = Arc::new(Manual(AtomicU64::new(1_000)));
     let stall = Stall::new(3);
+    let _release_first = ReleaseStall(stall.clone());
+    let late = Stall::new(4);
+    let release_late = ReleaseStall(late.clone());
+    let before_write = {
+        let (first, late) = (stall.hook(), late.hook());
+        Arc::new(move |sequence| {
+            first(sequence);
+            if late_write.is_some() {
+                late(sequence);
+            }
+        })
+    };
     let audit = Arc::new(DurablePeerAudit::with_writer_hook(
         audits.clone(),
         Arc::new(SystemClock),
         clock.clone(),
         crate::peer_gateways::infrastructure::AUDIT_QUEUE,
-        stall.hook(),
+        before_write,
     ));
     let b = Reader::prepare_with(
         &directory.path().join("b"),
@@ -1306,12 +1453,25 @@ async fn a_stalled_audit_never_holds_an_owner_command() {
     )
     .await;
     let relay = Relay::start(a.native).await;
-    let (key, _) = enroll(&a, &b, &relay, true).await;
+    let (key, reader) = enroll(&a, &b, &relay, true).await;
+    let conversation = a.conversation().await;
+    a.grant(
+        ShareGrantTransition::Grant(ShareAccess::read()),
+        &conversation,
+        &reader.unwrap(),
+    )
+    .await;
 
-    relay.hold_after(1);
-    let held = relay.held();
+    // Hold after authentication. Advancing the audit's five-second clock
+    // must not also expire the read's five-second handshake.
     let poller = b.poller(POLICY);
-    relay.until_held(held).await;
+    tokio::time::timeout(WAIT, record_hold.entered())
+        .await
+        .expect("the authenticated record read reached its source");
+    let read_stop = b
+        .peers
+        .active_read_stop(&key)
+        .expect("the captured read still owns its cycle");
     stall.until_reached().await;
     let forget = tokio::spawn({
         let (peers, owner) = (b.peers.clone(), b.owner.clone());
@@ -1327,14 +1487,55 @@ async fn a_stalled_audit_never_holds_an_owner_command() {
         .expect("answered once the deadline passes")
         .unwrap();
     assert_eq!(answered.err(), Some(PeerError::AuditUnavailable));
+    assert!(
+        !read_stop.is_stopped(),
+        "the refused forget did not stop the read"
+    );
     assert_eq!(b.peers.list().await.unwrap().len(), 1, "nothing removed");
 
     stall.release();
+    let release = tokio::spawn(async move {
+        if let Some(delay) = late_write {
+            tokio::time::sleep(delay).await;
+        }
+        drop(release_late);
+    });
+    // Releasing the hook is not the writer's completion. The first forget
+    // already timed out; its queued intent still precedes the next command.
+    tokio::time::timeout(AUDIT_DEADLINE, async {
+        while audit.handled_sequence() < 4 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the old audit prefix finishes before timing the next forget");
+    assert_eq!(audit_sequences(&audits), [1, 2, 3, 4]);
+    if end_read_before_forget {
+        record_hold.release();
+        tokio::time::timeout(WAIT, async {
+            while b.peers.active_read_stop(&key).is_some() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("the negative control's read gave its turn back");
+        assert!(
+            !read_stop.is_stopped(),
+            "ending a read did not ask for a stop"
+        );
+    }
     tokio::time::timeout(PROMPT, b.peers.forget(key, &b.owner))
         .await
         .expect("forget stops the read")
         .unwrap();
+    // Joining the poller also stops cycles; retain the owner's fact first.
+    let stopped_captured_read = read_stop.is_stopped();
+    record_hold.release();
     tokio::time::timeout(WAIT, poller.join()).await.unwrap();
+    tokio::time::timeout(WAIT, a.record_source.shutdown())
+        .await
+        .unwrap()
+        .unwrap();
     assert!(audit.drained(AUDIT_DEADLINE).await);
     assert_eq!(
         audit_kinds(&audits),
@@ -1350,9 +1551,11 @@ async fn a_stalled_audit_never_holds_an_owner_command() {
         ]
     );
     assert_eq!(audit_sequences(&audits), [1, 2, 3, 4, 5, 6]);
+    release.await.unwrap();
 
     drop(relay);
     stop(a).await;
+    assert!(stopped_captured_read, "forget stopped the captured read");
 }
 
 fn filler() -> PeerAuditRecord {
@@ -1495,6 +1698,85 @@ impl TwoPeers {
         self.key_a = key_a;
         self.key_c = key_c;
     }
+
+    /// A caller can resume after the new peer already completed its first sync.
+    async fn enroll_a(&mut self, completed_before_return: bool) {
+        let (key, _) = enroll(&self.a, &self.b, &self.relay_a, true).await;
+        self.key_a = key;
+        if completed_before_return {
+            tokio::time::timeout(WAIT, async {
+                loop {
+                    if sync_of(&self.b, &key).await.is_some_and(|sync| {
+                        sync.state == SyncState::Synced
+                            && sync
+                                .last_synced_ms
+                                .is_some_and(|at| SystemClock.unix_milliseconds() > at)
+                    }) {
+                        return;
+                    }
+                    tokio::time::sleep(Duration::from_millis(1)).await;
+                }
+            })
+            .await
+            .expect("A completes before the enrollment caller resumes");
+        }
+    }
+
+    async fn add_a_beside_held_c(
+        &mut self,
+        policy: PollPolicy,
+        completed_before_return: bool,
+    ) -> (PeerPoller, usize) {
+        let (key_c, _) = enroll(&self.c, &self.b, &self.relay_c, true).await;
+        self.key_c = key_c;
+        self.relay_c.hold_after(1);
+        let poller = self.b.poller(policy);
+        self.relay_c.until_held(0).await;
+        let held = self.relay_c.held();
+
+        let since = SystemClock.unix_milliseconds();
+        self.enroll_a(completed_before_return).await;
+        let beside = HANDSHAKE.saturating_sub(Duration::from_secs(2));
+        let synced = tokio::time::timeout(beside, async {
+            loop {
+                if sync_of(&self.b, &self.key_a).await.is_some_and(|sync| {
+                    sync.state == SyncState::Synced
+                        && sync.last_synced_ms.is_some_and(|at| at >= since)
+                }) {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await;
+        assert!(
+            synced.is_ok(),
+            "A was not read while C's read was held; C held {} connections",
+            self.relay_c.held()
+        );
+        assert_eq!(
+            self.relay_c.held(),
+            held,
+            "reading A restarted C's held read"
+        );
+        (poller, held)
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_first_sync_completed_before_observation_is_not_lost() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut peers = TwoPeers::start(directory.path()).await;
+    let policy = PollPolicy {
+        interval: HANDSHAKE * 2,
+        backoff_cap: HANDSHAKE * 2,
+        ..POLICY
+    };
+    let (poller, _) = peers.add_a_beside_held_c(policy, true).await;
+    peers.relay_c.pass_all();
+    tokio::time::timeout(WAIT, poller.join()).await.unwrap();
+    stop(peers.a).await;
+    stop(peers.c).await;
 }
 
 /// A slow peer's read stays open while another peer, enrolled after that
@@ -1507,43 +1789,7 @@ async fn a_slow_peer_does_not_hold_up_the_others() {
     let mut peers = TwoPeers::start(directory.path()).await;
     // C's status goes through and its read is held. A is not enrolled yet,
     // so the only read that can start is C's.
-    let (key_c, _) = enroll(&peers.c, &peers.b, &peers.relay_c, true).await;
-    peers.key_c = key_c;
-    peers.relay_c.hold_after(1);
-    let poller = peers.b.poller(POLICY);
-    peers.relay_c.until_held(0).await;
-    let held = peers.relay_c.held();
-
-    // Enrolled while C's read is held. The poller lists again on its tick
-    // and reads A without waiting out C's budget.
-    let (key_a, _) = enroll(&peers.a, &peers.b, &peers.relay_a, true).await;
-    peers.key_a = key_a;
-    let since = SystemClock.unix_milliseconds();
-    // A connection the relay accepts and never speaks ends at the handshake
-    // deadline. This wait is inside that deadline, so a scheduler that waits
-    // out C cannot reach A, and one that reads A beside C can.
-    let beside = HANDSHAKE.saturating_sub(Duration::from_secs(2));
-    let synced = tokio::time::timeout(beside, async {
-        loop {
-            if sync_of(&peers.b, &peers.key_a).await.is_some_and(|sync| {
-                sync.state == SyncState::Synced && sync.last_synced_ms.is_some_and(|at| at >= since)
-            }) {
-                return;
-            }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-    })
-    .await;
-    assert!(
-        synced.is_ok(),
-        "A was not read while C's read was held; C held {} connections",
-        peers.relay_c.held()
-    );
-    assert_eq!(
-        peers.relay_c.held(),
-        held,
-        "reading A restarted C's held read"
-    );
+    let (poller, held) = peers.add_a_beside_held_c(POLICY, false).await;
 
     // Forgetting A stops A's cycle only. C's held read is the same one.
     peers

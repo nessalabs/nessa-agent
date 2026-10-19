@@ -39,9 +39,11 @@ import {
   useWidgetEscape,
   type EscapeScopes,
 } from "../../adapters/dom/widget-escape"
+import type { WindowArrangement } from "../../model/shown-window"
 import { labelOf, useKeyBindings, type Binding } from "../../adapters/dom/shortcuts"
 import { useFitOnResize } from "../../adapters/dom/window-width"
 import {
+  arrangementShown,
   canOpenBeside,
   closeInFront,
   fitToWindow,
@@ -102,6 +104,7 @@ import { PaneGrid } from "../panes/pane-grid"
 import { QuickSwitcher, type SwitcherMode } from "../quick-switcher/quick-switcher"
 import { SessionList } from "../session-list/session-list"
 import { ShareDialogHost } from "../share/share-dialog"
+import { DeleteSessionHost } from "../session-row-actions"
 import { OverviewQuietProvider } from "../source-list/overview-quiet"
 import { SourceList } from "../source-list/source-list"
 import {
@@ -128,6 +131,8 @@ export interface SidebarRegion {
     readonly limits: ColumnLimits
   }
   readonly sessionList: boolean
+  /** Which layout this is, as the window tells the person's agents. */
+  readonly arrangement: WindowArrangement
 }
 
 /** The frame the window lends its parts; its functions keep their identity. */
@@ -279,6 +284,14 @@ export function WorkspaceShell({
     window.addEventListener("nessa-open-review", open)
     return () => window.removeEventListener("nessa-open-review", open)
   }, [dispatch])
+  // The window tells the person's agents what it shows only while a layout
+  // of panes is on screen: the classic shell draws none.
+  useEffect(() => {
+    dispatch(arrangementShown({ arrangement: region.arrangement }))
+    return () => {
+      dispatch(arrangementShown({ arrangement: null }))
+    }
+  }, [dispatch, region.arrangement])
   const store = useWorkspaceStore()
   const root = useRef<HTMLDivElement>(null)
   const [theme] = useThemePreference()
@@ -533,6 +546,7 @@ export function WorkspaceShell({
                     />
                     <OverviewLayer root={root} />
                     <ShareDialogHost />
+                    <DeleteSessionHost />
                     {switcher ? (
                       <SwitcherHost
                         mode={switcher}

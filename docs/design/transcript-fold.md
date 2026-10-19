@@ -33,10 +33,10 @@ full snapshot together. The gateway checks the returned session identity before
 passing that immutable validated result to projection replacement, then rechecks typed metadata access after its async read
 and title lookup.
 
-The bounded display contract is the recent24 message records plus interaction-only
-rendering of the exact active record when it is outside that window. The extra
-record contributes no message, prompt, attachment or output copy. Messages remain
-at most24. The60000-byte budget bounds the serialized application transcript
+The bounded display contract is the recent24 message records, and the exact
+active record is always one of them: when more than 23 later turns would push it
+out of that window, the oldest other record gives way instead, since the running
+turn is the one a person stops by its id. Messages remain at most24. The60000-byte budget bounds the serialized application transcript
 body after title lookup and authority filtering. Internal selection is skipped by
 that serializer; the product wire adds catalog approval presets and runtime display
 metadata afterward. Those additions are outside this display budget. This is not
@@ -112,7 +112,7 @@ A different execution or incarnation grants no interaction authority.
 | Cache | Eviction target is exceeded | Evict inactive entries; retain fixed-pass progress and account pinned intentional history separately. Never truncate semantic state. |
 | Gateway read | Metadata tombstone commits during title lookup, normal or pending-mode read | Recheck the authoritative metadata after the await and refuse publication. `committed_reads_recheck_tombstone_after_title_lookup` |
 | Incomplete view | Agent capabilities refresh | Queue, steering and interaction controls remain unavailable. `incomplete_committed_view_suppresses_controls_even_after_capability_refresh` |
-| Exact active record outside recent display window | More than24 later queuedinputs; consumption/closure/replacement | Render only its interactions from current validated facts without copying message/output; preserve all actual question siblings, one identity per interaction, and no old tombstoneledger. Large escaped asks and multiple complete reviews use the existing60000encoded-byte owner; reviews yield atomically with the display-limit notice while fitting asks remain visible. `active_interactions_survive_recent_message_window_without_copying_the_message` |
+| Exact active record outside recent display window | More than24 later queuedinputs; consumption/closure/replacement | List the active record with its message, and let the oldest other record give way, so the window still holds at most24 messages; its interactions render as for any listed record, within the existing60000encoded-byte owner. | `the_running_turn_stays_listed_past_the_recent_message_window` |
 | Valid custom-backend asks | Aggregate exceeds ACP-only room or encoded view budget | Preserve complete SDK history and status; after other content/reviews yield, omit only whole question units until actual encoded view fits. Mark truncated and publish one generic pending-interactions interactionViewError notice with actual Stop guidance, preserving the meaning when both reviews and asks yield. No ACP admission policy reconstructed from retained history. `custom_backend_questions_over_display_budget_remain_semantic_and_atomic`; browser fixture preserves3real sibling field selections through the conditional interaction notice. |
 | Immutable ask collections | Caller provides large spare Vec capacity | Existing Question/AgentQuestion constructors retain compact boxed slices; actual retained event accounting includes owned collection slots and text. `ask_collections_compact_spare_capacity_and_account_owned_allocations` |
 | Cache discovery | Old or missing lookup completes after a new incarnation is admitted | A lookup never orders UUIDs or retires other keys. Store the actual StreamKey; only typed runtime invalidity retires that exact entry, acquiring the existing cache publication mutex only after metadata I/O so retirement and publication share one fence. Recheck the exact key after source join before publication. At capacity, inspect at most 64 existing entries outside the cache lock; transient metadata failures cannot retire. `late_discovery_cannot_retire_current_receiver` covers old/missing late and opposite valid orders, retained ownership and eventual new progress. |

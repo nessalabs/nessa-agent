@@ -54,7 +54,11 @@ person may no longer view the thread.
 
 The send saves and registers its report before it submits, so a turn that ends
 at once is not missed, and again after a submit that succeeded, so a
-concurrent retry that failed cannot let it go. A report that cannot be saved is
+concurrent retry that failed cannot let it go. A saved report identity is bound
+to its child, watched execution, parent and caller. `LocalThreadReports::save` refuses a conflicting binding rather than
+installing another watch, and cleanup deletes only a row for the named child.
+The storage conflict and child-scoped cleanup regressions enforce these rules.
+A report that cannot be saved is
 not promised (`reportsBack: false`). The send then looks once, so a retry of a
 turn that already ended still reports. A refused send asks the thread's saved
 history: with no turn under its execution, the report goes; with one, it waits
@@ -71,8 +75,11 @@ history when it is not. A watched execution is finished once its settlement is
 saved: settled, or cancelled, or injected into the turn its scheduling names as
 `target` once that turn has settled, whose outcome and reply are then its own.
 The hook runs before the settlement it follows is saved, and a failed turn
-makes the agent cancel the turns queued behind it after that, so a look keeps
-looking for up to five seconds while a watched turn is settling.
+makes the agent cancel the turns queued behind it after that. The gateway's
+existing queued-receipt watcher also asks for a look after its SDK receipt
+settles, including receipts already settled when first watched. That final
+wake does not depend on how long hooks or final storage take. Early looks
+keep looking for up to five seconds while a watched turn is settling.
 
 The report's execution identity derives from the send's source, request and
 purpose. The parent's own history is what says it has the report: each
@@ -91,6 +98,10 @@ not taken for an earlier run's.
 
 | When | What happens |
 | --- | --- |
+| Exact report binding saved again | Existing row retained; no replacement |
+| Report identity reused for another child, execution, parent or caller | Store refuses registration; original row and watch remain |
+| Failed-send cleanup names another child | Original child's saved row retained |
+| SDK receipt settles after the hook's early look ends | Receipt watcher wakes a new look after final settlement |
 | The send's submit succeeds | Report saved and held; one look |
 | The send is refused, no turn saved | Report let go |
 | The send is refused, a turn saved | Report waits for that turn |
@@ -118,9 +129,29 @@ person stops it as they would any turn. Tests:
 `a_long_reply_is_cut_so_the_whole_report_fits_the_input_limit`,
 `waiting_reports_survive_reopening_until_settled`.
 
-For example, call `send_message({threadId, message: "Review the change"})`, then
-`subscribe({threadId, replay: true})`. Continue with the returned `cursor` as
-`after` until `more` is false; use `waitMs` when waiting for later changes.
+For example, call `send_message({threadId, message: "Review the change"})`,
+then either end the turn and let the report wake it, or wait in place with one
+`subscribe({threadId, executionId})` naming the returned execution. That call
+waits up to 30 s (its default) and answers `turn: {finished: true, outcome,
+reply}` as soon as the turn ends, at once if it already had; `finished: false`
+means it still runs. The reply is read as the report reads it
+(`thread_turn_end`), so both always agree. While such a call waits, the turn's
+report holds back (`await_thread_turn`). Once the relay has written an answer
+holding the whole reply, the report is let go (`claim_thread_report`, run from
+the answer's `delivered` hook). A call that gives up, or whose answer is never
+written because it was cancelled or its caller went, looks again so the report
+is sent as usual. Test:
+`one_subscribe_naming_the_sent_turn_returns_its_reply_in_place_of_the_report`.
+
+To read a thread's events instead, call `subscribe({threadId, replay: true})`
+and continue with the returned `cursor` as `after` until `more` is false; use
+`waitMs` when waiting for later changes. A page holding only events the
+projection leaves out (message text, thinking) is read past, never answered
+empty with `more: true`, which once had an agent walk a streamed reply one
+invisible page at a time. An answer ends at the first `turn.ended`, which comes
+with `turn: {outcome, reply}`. That is the turn's settled end, the one its
+report carries, so it can be ahead of the event's own local outcome when
+settlement replaced it; the settlement events follow after the cursor.
 
 ## Source authority
 
@@ -167,7 +198,8 @@ can finish after source cancellation, as ordinary command admission does.
 
 `subscribe` holds one independent committed SDK reader, not an Agent handle. It
 projects execution/tool IDs, kinds, statuses and outcomes; it omits message
-content, thinking and tool arguments. A history gap or invalid/reset/pruned
+content, thinking and tool arguments, except an ended turn's final reply (the
+text after its last tool step), cut to fit the answer. A history gap or invalid/reset/pruned
 cursor is an explicit refusal. A callback does not run inside a transition,
 and receiving events does not cause a model turn or enqueue another message.
 
@@ -175,13 +207,15 @@ The tool returns up to 16 semantic facts per read step, with a maximum 256 MiB
 logical input budget because a stored semantic fact may span physical records.
 Only the metadata projection is returned, and tool result JSON is bounded to
 32 KiB before the MCP text/structured duplication. At most four observation calls
-run across the built-in tool server, leaving capacity under the relay's eight
-concurrent calls per connection. Independently, one conversation service admits
-at most eight physical source-admission owners across all tools. The permit is
+run at once for one source conversation, leaving capacity under the relay's
+eight concurrent calls per connection. Independently, one source conversation
+holds at most eight physical source-admission owners across all tools. Both
+bounds are per source, never a gateway total, so they grow with the agents; a
+source's entry leaves with its last permit (`SourcePermits`). The permit is
 acquired without waiting before spawning and is retained inside the detached
 owner until metadata/admission/audit work physically ends. Cancelling an observer
 releases its observation slot but does not free that physical permit. Further
-admission refuses unavailable while all eight are retained. Shutdown still waits
+admission from that source refuses unavailable while all eight are retained. Shutdown still waits
 for retained service admission, or reports its existing bounded drain failure.
 Initial source certification has a ten-second preparation bound beginning before
 source admission; setup, reauthorization and reads share cancellation and their
@@ -224,7 +258,7 @@ is not a claim that an external effect was rolled back.
 | Slow or oversized observation | Reader permits, step/response budgets and timeout refuse explicitly. |
 | Delayed stop versus newer execution | Existing exact-execution stop coordinator owns cancellation; `tests/conversation/mutation_commands.rs`. |
 | Running parent followed by enough Injected steering children to leave the message window; idle with queued work | Authoritative application snapshot resolves the parent or no active turn; shared service regression and the Relay active-stop regression in `tests/conversation/agent_tools.rs`. |
-| Repeated observer cancellation during blocked source metadata | Four observation slots return, but eight detached source owners retain separate permits and service admission; the ninth fails before metadata I/O, and shutdown drains only after release; same tests. |
+| Repeated observer cancellation during blocked source metadata | Four observation slots return, but eight detached source owners retain separate permits and service admission; that source's ninth fails before metadata I/O, and shutdown drains only after release; same tests. |
 | Target deleted or policy revoked while Page/Idle read is blocked | The final delivery check refuses before any event or cursor is returned; `tests/composition/conversation_tools_subscription.rs`. |
 | Prior Idle checkpoint, then target revoked during another read, reauthorization, or idle sleep as deadline expires | The cached checkpoint still passes final delivery admission; refusal returns no prior cursor; same tests. |
 | Final delivery authorization is blocked while source cancels or its delivery budget expires | Cancellation returns cancelled; ten-second delivery timeout returns unavailable, without events/cursor; same tests. |
@@ -234,6 +268,12 @@ is not a claim that an external effect was rolled back.
 | Now/Beginning first Idle then Preparing and another Page/Idle | First Idle establishes continuity; Preparing retains it. Wrong incarnation and backwards progress refuse, while trailing events and nondecreasing Idle remain valid; same tests. |
 | Now returns its first Page without a prior checkpoint | Accept the source's captured starting position; no prior cursor is fabricated; same tests. |
 | Subscribe supplies after together with replay:true or replay:false | Reject invalid_request by field presence before source admission or reader opening; actual Relay regression in `tests/conversation/agent_tools.rs`. |
+| A subscribe naming a turn starts before the turn ends | The turn's report is held while the call waits; a whole reply in an answer that fits claims it, and a call that times out or reads only events lets it go; `one_subscribe_naming_the_sent_turn_returns_its_reply_in_place_of_the_report` in `tests/conversation/agent_tools.rs`, holding in `tests/conversation/thread_report_registry.rs`. |
+| The report was taken for queuing, not yet submitted, when the call claims it | The claim marks it and delivery checks before each submit, so it is called off; `an_awaited_report_is_held_and_a_claim_calls_off_one_being_queued` in `tests/conversation/thread_report_registry.rs`. |
+| The report was already submitted before the call names the turn | The call still answers; the report stays queued, so the reply can come twice, never not at all; same agent_tools test. |
+| Cancellation, disconnect or revoked grant after the answer is built, before it is written | The relay drops the `delivered` hook unrun: no claim, the hold drops, the report is sent; `tests/mcp_servers/built_in.rs`. |
+| Claim settles the saved report and the store write fails, then the gateway restarts | The row stays saved and the next run delivers it, a repeat of the reply; `saved_thread_reports_are_delivered_after_a_restart` in `tests/conversation/agent_tools.rs`. |
+| The awaited turn's history is unreadable, or its end still settling | Looked for again every second; a deadline after an unreadable look answers unavailable, never `finished: false`; unit tests in `composition/conversation_tools.rs`. |
 
 The observation loop previously treated permission to start a read as permission
 to publish its eventual result. Separate return paths for page, idle, and deadline

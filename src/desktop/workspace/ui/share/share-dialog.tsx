@@ -20,8 +20,9 @@ import { shallowEqual } from "react-redux"
 import { Button } from "@nessa-ui/react/button"
 import { CheckboxList } from "@nessa-ui/react/checkbox-list"
 import { Choices } from "@nessa-ui/react/choices"
-import { Dialog, DialogClose } from "@nessa-ui/react/dialog"
+import { Dialog } from "@nessa-ui/react/dialog"
 import { Input } from "@nessa-ui/react/input"
+import { LoadingText } from "@nessa-ui/react/loading-text"
 import {
   SegmentedControl,
   SegmentedControlOption,
@@ -63,13 +64,14 @@ import {
   deviceDetail,
   doneCopy,
   draftReasonCopy,
-  driveNotes,
+  driveNote,
   grantSummary,
   presetCopy,
   readFailureCopy,
   roleCopy,
   waitingCopy,
 } from "./share-copy"
+import { openSettings } from "../../../settings"
 import "./share-dialog.css"
 
 const roles: readonly ShareRole[] = ["read", "comment", "drive"]
@@ -105,6 +107,13 @@ function ShareDialog({ dialog }: { dialog: ShareDialogState }) {
   const outcome = requestFrom(draft, grants ?? [], choices?.limits ?? noRoom)
   const onDraft = (next: ShareDraft) => void dispatch(draftShare({ draft: next }))
   const holds = grants?.find((grant) => grant.credentialId === draft.credentialId)
+  // Why the draft cannot be sent yet, once the form has been read.
+  const draftReason =
+    grants && choices && !held && !outcome.ok && outcome.reason !== "no-target"
+      ? outcome.reason
+      : null
+  // Share is offered only with a device to share with; the × closes the dialog.
+  const submittable = (choices?.targets.length ?? 0) > 0
   // Choosing a device starts from what it holds, or from nothing: never
   // from what another device's grant left in the form.
   const choose = (credentialId: string) => {
@@ -119,57 +128,51 @@ function ShareDialog({ dialog }: { dialog: ShareDialogState }) {
       }}
       size="lg"
       title={title ? `Share “${title}”` : "Share"}
-      description="Linked devices you share this conversation with can follow it from there."
       data-share-dialog=""
       data-share-state={
         grants === null ? (dialog.reading ? "reading" : "unread") : held ? "held" : "read"
       }
       footer={
-        <>
-          {/* Beside the button it holds back, so it is read where it matters. */}
-          {waiting ? (
-            <p className="share-reason nessa-text-2" data-share-reason={waiting}>
-              {waitingCopy[waiting]}
-            </p>
-          ) : grants &&
-            choices &&
-            !held &&
-            !outcome.ok &&
-            outcome.reason !== "no-target" ? (
-            <p className="share-reason nessa-text-2" data-share-reason={outcome.reason}>
-              {draftReasonCopy(outcome.reason, choices.limits)}
-              {outcome.reason === "changed" ? (
-                <>
-                  {" "}
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    data-share-action="restart"
-                    disabled={held}
-                    onClick={() => void dispatch(restartShare())}
-                  >
-                    Start Again
-                  </Button>
-                </>
-              ) : null}
-            </p>
-          ) : null}
-          <DialogClose asChild>
-            <Button variant="outline" data-share-action="close">
-              Done
-            </Button>
-          </DialogClose>
-          <Button
-            data-share-action="submit"
-            disabled={!outcome.ok || !changeable || choices === null}
-            onClick={() => {
-              // Sends the draft as the store holds it, not this render's copy.
-              void dispatch(shareSession())
-            }}
-          >
-            {holds ? "Update" : "Share"}
-          </Button>
-        </>
+        waiting || draftReason || submittable ? (
+          <>
+            {/* Beside the button it holds back, so it is read where it matters. */}
+            {waiting ? (
+              <p className="share-reason nessa-text-2" data-share-reason={waiting}>
+                {waitingCopy[waiting]}
+              </p>
+            ) : draftReason && choices ? (
+              <p className="share-reason nessa-text-2" data-share-reason={draftReason}>
+                {draftReasonCopy(draftReason, choices.limits)}
+                {draftReason === "changed" ? (
+                  <>
+                    {" "}
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      data-share-action="restart"
+                      disabled={held}
+                      onClick={() => void dispatch(restartShare())}
+                    >
+                      Start Again
+                    </Button>
+                  </>
+                ) : null}
+              </p>
+            ) : null}
+            {submittable ? (
+              <Button
+                data-share-action="submit"
+                disabled={!outcome.ok || !changeable}
+                onClick={() => {
+                  // Sends the draft as the store holds it, not this render's copy.
+                  void dispatch(shareSession())
+                }}
+              >
+                {holds ? "Update" : "Share"}
+              </Button>
+            ) : null}
+          </>
+        ) : null
       }
     >
       <div className="share-dialog">
@@ -230,9 +233,7 @@ function ShareDialog({ dialog }: { dialog: ShareDialogState }) {
             ) : null}
           </>
         ) : dialog.readFailure ? null : (
-          <p className="share-quiet nessa-text-2" data-share-loading="">
-            Reading who this is shared with…
-          </p>
+          <LoadingText className="share-quiet nessa-text-2" data-share-loading="" />
         )}
       </div>
     </Dialog>
@@ -264,12 +265,8 @@ function Grants({
   /** Revoke what was asked about, naming its revision as it was then. */
   onRevoke: () => void
 }) {
-  if (grants.length === 0)
-    return (
-      <p className="share-quiet nessa-text-2" data-share-grants="none">
-        Not shared with any device yet.
-      </p>
-    )
+  // Nothing shared says itself: no "Shared with" group.
+  if (grants.length === 0) return null
   return (
     <SettingsGroup title="Shared with" data-share-grants="">
       {grants.map((grant) => {
@@ -353,6 +350,32 @@ function Grants({
   )
 }
 
+/**
+ * Nothing to share with yet: one line, and the way to Settings › Linked
+ * devices, where a device is linked. Closing the dialog first, as Settings
+ * covers the window.
+ */
+function NoDevices() {
+  const dispatch = useWorkspaceDispatch()
+  return (
+    <p className="share-empty nessa-text-2" data-share-targets="none">
+      <span>No linked devices yet.</span>
+      <Button
+        variant="link"
+        size="sm"
+        className="share-link"
+        data-share-action="link-device"
+        onClick={() => {
+          dispatch(closeShare())
+          openSettings("devices")
+        }}
+      >
+        Link a Device
+      </Button>
+    </p>
+  )
+}
+
 function Form({
   choices,
   draft,
@@ -364,12 +387,7 @@ function Form({
   onDraft: (draft: ShareDraft) => void
   onChoose: (credentialId: string) => void
 }) {
-  if (choices.targets.length === 0)
-    return (
-      <p className="share-quiet nessa-text-2" data-share-targets="none">
-        No linked device can be shared with. Link one in Settings › Linked devices.
-      </p>
-    )
+  if (choices.targets.length === 0) return <NoDevices />
   return (
     <section className="share-form" aria-label="Share with a device">
       <h3 className="share-heading nessa-text-2">Share with</h3>
@@ -491,11 +509,9 @@ function DriveFields({
         limitReason="No more room for hosts"
         emptyMessage="The gateway runs your commands on no host, so this grant can’t run any."
       />
-      <ul className="share-notes nessa-text-2" data-share-notes="">
-        <li>{driveNotes.hosts}</li>
-        <li>{driveNotes.unasked}</li>
-        <li>{driveNotes.enforceable}</li>
-      </ul>
+      <p className="share-quiet nessa-text-2" data-share-notes="">
+        {driveNote}
+      </p>
     </div>
   )
 }
