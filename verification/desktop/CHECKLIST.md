@@ -1437,6 +1437,16 @@ says why where the conversations would be.
   pattern is installed. Recovery requires the current successor userText and its
   completion together in one existing60-second window poll. _Check:_ `lib/stress-restart.test.mjs` and the default
   and raised `conversation-stress.mjs` runs in Chromium and WebKit (#1024).
+  The current WebKit SIGKILL probe records the exact reset dialect
+  "The network connection was lost." on both the owned socket and console
+  inside this scope, followed by a distinct receiving connection. That exact
+  cause uses the same bounded observation owner; it is never a permanent
+  console exemption. Before correction, default behavior/followers passed but
+  this console check failed (59/60); the focused probe reproduced it (4/5).
+  A subsequent current linking-on probe separately pairs "Could not connect to
+  the server." on the same owned socket and console before a new receiving
+  connection. Its exact refusal dialect uses the same owner; default59/60 and
+  observation-only WebKit29/30 failures are retained before that correction.
 - _Harmless:_ the first page in a fresh browser asks for `/favicon.ico` and
   gets a 404 (matched by source URL in `lib/selectors.mjs`,
   `harmlessConsole`). Chromium reports a request as failed with

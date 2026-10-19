@@ -3,7 +3,9 @@ const causes = new Map([
   ["Error in connection establishment: net::ERR_CONNECTION_REFUSED", "refused"],
   ["net::ERR_CONNECTION_REFUSED", "refused"],
   ["Could not connect to 127.0.0.1: Connection refused", "refused"],
+  ["Could not connect to the server.", "refused"],
   ["Error receiving data: Connection reset by peer", "reset"],
+  ["The network connection was lost.", "reset"],
 ])
 const MAX_EVENTS = 64
 
