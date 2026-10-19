@@ -2779,6 +2779,35 @@ describe("writes", () => {
     expect(titles.slice(titles.indexOf("Rain plan"))).toEqual(["Rain plan"])
   })
 
+  it("a list frame that crosses a rename and says another client's later title keeps it", async () => {
+    const { gateway, source, updates, follow } = started()
+    gateway.rows.set(conversationA, row(conversationA))
+    follow()
+    await source.index()
+    updates.length = 0
+    // Stored at once, answered later: the frames in between may come after it.
+    const answered = deferred<void>()
+    gateway.once("rename", (normal) => {
+      const result = normal()
+      return answered.promise.then(() => result)
+    })
+    const renaming = source.rename(conversationA, "Rain plan", "person")
+    await flush()
+    // Another client renames it after this rename was stored; that frame is
+    // the only one its rename sends.
+    const stored = gateway.rows.get(conversationA)
+    if (stored) gateway.rows.set(conversationA, { ...stored, title: "Snow plan" })
+    gateway.publishList()
+    await flush()
+    answered.resolve()
+    await renaming
+    await flush()
+    expect(
+      (await source.index()).sessions.find((session) => session.id === conversationA)
+        ?.title,
+    ).toBe("Snow plan")
+  })
+
   it("a rename back to the title it had, asked while the first is on its way, is asked too", async () => {
     const { gateway, source, updates, follow } = started()
     gateway.rows.set(conversationA, row(conversationA))

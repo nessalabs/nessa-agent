@@ -744,7 +744,10 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
   // Renames on their way, each with the title it asks for and whether the
   // gateway stored it. A list frame that arrives meanwhile may have been read
   // before it was stored, so once it is, that frame says the new title (W6).
-  const renaming = new Map<string, { title: string; stored: boolean }>()
+  const renaming = new Map<
+    string,
+    { title: string; stored: boolean; before: ReadonlySet<string | null> }
+  >()
   // The subscribes of conversations let go past the limit while on their
   // way: the gateway counts one against the limit until it is answered and
   // closed, so the next open waits for them (D25).
@@ -876,6 +879,11 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
                 (!renaming.has(row.conversationId) &&
                   rows.get(row.conversationId)?.title === renamed?.title)
               if (!renamed?.stored) return row
+              // A frame cannot be ordered against the rename's answer. One
+              // that says a title from before the rename was read before it
+              // was stored; any other title came after it was asked, from
+              // the gateway or another client, and is the gateway's.
+              if (!renamed.before.has(row.title)) return row
               if (newest) return { ...row, title: renamed.title }
               // A later title is known: the newest stored here, else the row's.
               const later = renaming.get(row.conversationId)
@@ -1603,7 +1611,11 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
         const title = conversationTitle(typed)
         const called = renaming.get(sessionId)?.title ?? rows.get(sessionId)?.title
         if (title === null || title === called) return
-        const asked = { title, stored: false }
+        const asked = {
+          title,
+          stored: false,
+          before: new Set([rows.get(sessionId)?.title ?? null, called ?? null]),
+        }
         renaming.set(sessionId, asked)
         const { turn, settled } = inTurn(listing, async () => {
           held(sessionId)
