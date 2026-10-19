@@ -1923,7 +1923,13 @@ row.
   slid aside, with Archive and Delete, and opens nothing; Delete asks
   "Confirm" in place, then removes the row; a long swipe archives. On a Mac
   trackpad by hand: the swipe follows the fingers and a flick rests open,
-  never archives.
+  never archives. The mouse check waits for the published prepared ghost and
+  then its carrying mark before release, and keeps the captured row identity:
+  an unprepared flick is a click, which can retarget a live unselected-row
+  locator. The original 10/11 run and lightweight wrong-row trace failed;
+  anchoring alone exposed two no-open failures (4/5). The private prepared
+  check and exact restoration held 5/5; omitting readiness failed 4/5, while
+  omitting the anchor with readiness held 5/5 (not a negative control).
 
 ## A record the chat could not read
 
