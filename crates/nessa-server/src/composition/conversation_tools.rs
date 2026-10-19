@@ -738,7 +738,7 @@ async fn observe(
         None => EventStart::Now,
     };
     let mut progress = EventProgress::new(&start);
-    let mut looked = false;
+    let mut looks = TurnLooks::default();
     let limits =
         EventReadLimits::new(limit.min(16), 256 * 1024 * 1024).map_err(|_| "invalid_request")?;
     let opening = service.open_events(target.clone(), caller.clone(), start);
@@ -780,18 +780,14 @@ async fn observe(
                 let next = page.next().clone();
                 let caught_up = page.next() == page.captured_head();
                 if let Some(execution) = control.execution.clone() {
-                    // Look in its history first, for a turn that already ended;
-                    // after that, only when a turn ends or is withdrawn.
-                    let ends = !looked
-                        || events.iter().any(|event| {
-                            event.kind == "turn.ended"
-                                || matches!(
-                                    event.status,
-                                    Some("cancelled" | "settled" | "settlement_updated")
-                                )
-                        });
-                    looked = true;
-                    if ends {
+                    let signal = events.iter().any(|event| {
+                        event.kind == "turn.ended"
+                            || matches!(
+                                event.status,
+                                Some("cancelled" | "settled" | "settlement_updated")
+                            )
+                    });
+                    if looks.due(signal) {
                         match control
                             .step(service.thread_turn_end(target, caller, &execution))
                             .await
@@ -805,7 +801,7 @@ async fn observe(
                                     turn_value(&execution, end),
                                 ))
                             }
-                            Ok(None) => {}
+                            Ok(None) => looks.missed(signal),
                             Err(ended) => return control.finish(target, ended),
                         }
                     }
@@ -869,8 +865,7 @@ async fn observe(
                 validate_event_cursor(target, &cursor)
                     .map_err(|error| event_error_code(&error).to_owned())?;
                 if let Some(execution) = control.execution.clone() {
-                    if !looked {
-                        looked = true;
+                    if looks.due(false) {
                         match control
                             .step(service.thread_turn_end(target, caller, &execution))
                             .await
@@ -884,7 +879,7 @@ async fn observe(
                                     turn_value(&execution, end),
                                 ))
                             }
-                            Ok(None) => {}
+                            Ok(None) => looks.missed(false),
                             Err(ended) => return control.finish(target, ended),
                         }
                     }
@@ -897,6 +892,31 @@ async fn observe(
                     return control.finish(target, ended);
                 }
             }
+        }
+    }
+}
+
+/// When a call naming a turn looks in the thread's history for its end: at
+/// once, again whenever a page shows a turn ending or settling, and, while an
+/// end it saw cannot be read yet (still settling, or the history unreadable
+/// for a moment), again every `LOOK_RETRY` until it can.
+#[derive(Default)]
+struct TurnLooks {
+    looked: bool,
+    retry_at: Option<Instant>,
+}
+
+const LOOK_RETRY: Duration = Duration::from_secs(1);
+
+impl TurnLooks {
+    fn due(&self, signal: bool) -> bool {
+        !self.looked || signal || self.retry_at.is_some_and(|at| Instant::now() >= at)
+    }
+
+    fn missed(&mut self, signal: bool) {
+        self.looked = true;
+        if signal || self.retry_at.is_some() {
+            self.retry_at = Some(Instant::now() + LOOK_RETRY);
         }
     }
 }
@@ -937,6 +957,24 @@ fn turn_value(execution: &str, (outcome, reply): (&'static str, Option<String>))
 mod tests {
     use super::*;
     use serde_json::Map;
+
+    #[tokio::test(start_paused = true)]
+    async fn an_end_seen_but_not_yet_readable_is_looked_for_again_until_it_is() {
+        let mut looks = TurnLooks::default();
+        assert!(looks.due(false), "the first look is at once");
+        looks.missed(false);
+        assert!(!looks.due(false), "a turn still running waits for a sign");
+        tokio::time::advance(LOOK_RETRY * 3).await;
+        assert!(!looks.due(false), "and only for a sign");
+        assert!(looks.due(true));
+        looks.missed(true);
+        assert!(!looks.due(false), "an unreadable end is not hammered");
+        tokio::time::advance(LOOK_RETRY).await;
+        assert!(looks.due(false), "but looked for again with no new sign");
+        looks.missed(false);
+        tokio::time::advance(LOOK_RETRY).await;
+        assert!(looks.due(false), "until it can be read");
+    }
 
     #[test]
     fn a_long_reply_is_cut_so_it_fits_as_written_in_the_answer() {
