@@ -235,6 +235,28 @@ it("a row's More menu holds what the row can do, less the ways to open it, and R
   expect(selectSession(store.getState(), id)?.title).toBe("Rain plan")
 })
 
+it("Enter and Escape that an IME takes for its candidate leave the rename open", async () => {
+  const source = fakeSource()
+  const store = await shown(source)
+  const { row, id } = quietRow()
+  await act(async () => store.dispatch(renameStarted({ sessionId: id })))
+  await type(row, "雨の")
+  for (const init of [
+    { key: "Enter", isComposing: true },
+    { key: "Escape", isComposing: true },
+    { key: "Enter", keyCode: 229 },
+  ]) {
+    await act(async () => {
+      field(row)?.dispatchEvent(new KeyboardEvent("keydown", { ...init, bubbles: true }))
+      await settle()
+    })
+    expect(field(row)?.value).toBe("雨の")
+  }
+  expect(source.calls.some((call) => call[0] === "rename")).toBe(false)
+  await type(row, "雨の計画", "Enter")
+  expect(source.calls).toContainEqual(["rename", id, "雨の計画", "person"])
+})
+
 it("a More menu closed on an item that asks nothing more gives focus to its row, not to the pointer's button", async () => {
   const source = fakeSource()
   await shown(source)

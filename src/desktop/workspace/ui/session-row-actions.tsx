@@ -178,6 +178,9 @@ function RenameField({
       onKeyDown={(event) => {
         event.stopPropagation()
         if (event.key !== "Enter" && event.key !== "Escape") return
+        // An IME's Enter takes its candidate and its Escape drops it, not the
+        // title: Safari says so only by keyCode 229.
+        if (event.nativeEvent.isComposing || event.keyCode === 229) return
         event.preventDefault()
         finish(event.key === "Enter" ? draft : null)
         // Ended by a key, the row it is in takes focus back, as Finder's does;
