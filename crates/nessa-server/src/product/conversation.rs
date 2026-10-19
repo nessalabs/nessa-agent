@@ -655,12 +655,14 @@ pub(crate) async fn dispatch(
     .await;
     match result {
         Ok(response) => response,
-        Err(ConversationError::PermissionAnswer { error, selection }) => {
-            permission_answer_failure(&frame.id, error, selection)
-        }
         Err(error) => {
             trace_command_refusal(&frame.method, &error);
-            failure(&frame.id, error_code(&error).as_str())
+            match error {
+                ConversationError::PermissionAnswer { error, selection } => {
+                    permission_answer_failure(&frame.id, error, selection)
+                }
+                error => failure(&frame.id, error_code(&error).as_str()),
+            }
         }
     }
 }
@@ -695,7 +697,11 @@ fn command_refusal_hint(error: &ConversationError) -> Option<&'static str> {
             storage: Some(_), ..
         } => Some("evidence-storage"),
         ConversationError::Storage(error)
-        | ConversationError::Agent(AgentError::Storage(error)) => Some(storage_hint(error)),
+        | ConversationError::Agent(AgentError::Storage(error))
+        | ConversationError::PermissionAnswer {
+            error: AgentError::Storage(error),
+            ..
+        } => Some(storage_hint(error)),
         error => read_refusal_hint(error),
     }
 }
