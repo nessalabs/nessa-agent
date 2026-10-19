@@ -49,7 +49,36 @@ export function styleAndLayoutMs(loaf) {
 
 /** Installed as an init script: rAF gaps, LoAF and long-task buffers. */
 export function observers() {
-  window.__perf = { gaps: [], loaf: [], longtasks: [] }
+  window.__perf = { gaps: [], loaf: [], longtasks: [], inputs: [] }
+  for (const type of [
+    "pointermove",
+    "pointerdown",
+    "pointerup",
+    "keydown",
+    "keyup",
+    "focusin",
+    "focusout",
+  ]) {
+    addEventListener(
+      type,
+      (event) => {
+        if (!event.isTrusted) return
+        const target = event.target
+        window.__perf.inputs.push({
+          type: event.type,
+          stamp: event.timeStamp,
+          now: performance.now(),
+          trusted: true,
+          key: event.key,
+          repeat: event.repeat,
+          target: target?.tagName,
+          className: target?.getAttribute?.("class") ?? null,
+          pane: target?.closest?.(".workspace-pane")?.dataset.paneKey ?? null,
+        })
+      },
+      true,
+    )
+  }
   try {
     new PerformanceObserver((list) => {
       for (const e of list.getEntries())
@@ -178,9 +207,13 @@ export async function measure(page, act, settle = 1000) {
       loaf: p.loaf.slice(),
       longtasks: p.longtasks.slice(),
       noLoaf: !!p.noLoaf,
+      inputs: p.inputs.slice(),
     }
   })
-  return measurementFrom(raw, t0)
+  return {
+    ...measurementFrom(raw, t0),
+    sample: { origin: t0, gaps: raw.gaps, inputs: raw.inputs },
+  }
 }
 
 /**

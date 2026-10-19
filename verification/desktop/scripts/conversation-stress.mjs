@@ -24,19 +24,29 @@
  *   delegate    the agent creates a thread and messages it; the thread's
  *               report comes back as a turn of its own
  *   aside       another conversation is opened in the window and talked to
+ *   watch       the agent reads a new thread with more reads at once than
+ *               one conversation may hold: some wait, the rest are refused,
+ *               and a read after them is taken again
  *   long        another conversation takes `--long` turns of long streamed
  *               answers through the gateway; the last answer is whole, and
- *               the message sent in the window after them is answered
+ *               still whole after its agent is closed and its history opened
+ *               again, no slower for its length than `reopenGrowthMs`
+ *               allows; the message sent in the window after them is answered
  *   park        another conversation is left idle, unwatched, until the
  *               gateway parks its agent (its lease ends `idle`); it is opened
  *               in the window and the message sent there starts the agent
  *               again on its provider session
  *
  * Meanwhile `--parallel` background conversations take turns through the
- * gateway. With `--parks` above 0 the gateway parks every idle conversation
- * nobody follows after `PARK_IDLE_SECONDS`, so asides, threads and background
- * conversations are parked and started again as the run goes. At the end
- * every conversation must be at rest, every turn ended as
+ * gateway (every third one a watch), and `--followers` other clients follow
+ * every conversation's events, the main view and the list
+ * (`lib/stress-followers.mjs`), stopping and following again as they go, and
+ * across every restart. At the end each follower must have applied every
+ * conversation's events exactly once and in order. With `--parks` above 0 the
+ * gateway parks every idle conversation nobody follows after
+ * `PARK_IDLE_SECONDS`, so asides, threads and background conversations are
+ * parked and started again as the run goes. At the end every conversation
+ * must be at rest, every turn ended as
  * planned, and nothing denied automatically or hidden behind a display limit.
  *
  * Build the gateway first (`cargo build -p nessa-server`). How to add a step
@@ -57,6 +67,7 @@ import { turnEnded } from "../../../scripts/mcp-test-server/evidence.mjs"
 import {
   SAYS,
   STRESS,
+  WATCH_CALLS,
   stressScenario,
 } from "../../../scripts/mcp-test-server/scenarios/stress.mjs"
 import { openPage, withEngines } from "./lib/browser.mjs"
@@ -71,7 +82,8 @@ import {
 import { main } from "./lib/run.mjs"
 import { writeView } from "./lib/scripted-evidence.mjs"
 import { composerControls, css, offeredLabel } from "./lib/selectors.mjs"
-import { KNOBS, describe, knobsFrom, plan } from "./lib/stress-plan.mjs"
+import { Follower } from "./lib/stress-followers.mjs"
+import { KNOBS, describe, knobsFrom, plan, random } from "./lib/stress-plan.mjs"
 
 const INSTANCE = "conversation-stress"
 
@@ -122,6 +134,15 @@ const PARK_IDLE_SECONDS = 3
  */
 const LONG_CHUNKS = 40
 const LONG_CHUNK_BYTES = 300
+/**
+ * How much longer opening the `long` conversation again may take than
+ * opening one of a single long turn, both closed first so their whole saved
+ * history is replayed: half a second of noise, and a little for each turn.
+ * Measured against the short one in the same run, so a loaded machine slows
+ * both. On a 4-core machine, replayed in pages each turn adds about 15 ms;
+ * replayed fact by fact (#1006) each added about 60 ms, past this.
+ */
+const reopenGrowthMs = (turns) => 500 + 20 * turns
 
 const fold = (text) =>
   String(text ?? "")
@@ -624,6 +645,13 @@ const steps = {
     else await expectShown(run.page, SAYS.report, failures)
   },
 
+  async watch(run, step, failures) {
+    const text = prompt(run, STRESS.watch, step)
+    const seen = await send(run, run.main.id, text, failures)
+    const { turn } = await settled(run, run.main.id, seen, text, "completed", failures)
+    if (turn) watched(turn, failures)
+  },
+
   async aside(run, step, failures) {
     const conversationId = randomUUID()
     const first = prompt(run, STRESS.reply, step, " aside")
@@ -740,6 +768,37 @@ const steps = {
       failures.push(
         `the last long answer came back with ${chunks.length} of ${LONG_CHUNKS} chunks: ${JSON.stringify(said.slice(0, 80))}`,
       )
+    // Its agent is closed, so the next opening replays the whole saved
+    // history: that takes no longer for its length than the budget allows,
+    // and the answer read back after it is still whole.
+    const short = randomUUID()
+    await run.client.conversation.create({
+      conversationId: short,
+      agent: run.stack.agent,
+    })
+    run.checked.push(short)
+    const one = prompt(run, STRESS.long, step, " alone")
+    await run.client.conversation.submit(run.client.conversation.prepare(short, one))
+    await settled(run, short, new Set(), one, "completed", failures)
+    const alone = await reopened(run, short)
+    const again = await reopened(run, conversationId)
+    log(`long conversation reopened in ${again.ms} ms; one turn in ${alone.ms} ms`)
+    const growth = reopenGrowthMs(step.turns)
+    if (again.ms - alone.ms > growth)
+      failures.push(
+        `reopening ${step.turns} turns took ${again.ms} ms, one turn ${alone.ms} ms: over ${growth} ms more`,
+      )
+    if (again.view.transcriptState !== "complete")
+      failures.push(
+        `the reopened long conversation was read ${again.reads} times and is still ${again.view.transcriptState}`,
+      )
+    else {
+      const kept = again.view.messages.find((each) => each.userText === text)
+      if ((kept?.parts ?? []).map((part) => part.text ?? "").join("") !== said)
+        failures.push(
+          "the last long answer changed when the conversation was opened again",
+        )
+    }
     // A person opens the long conversation and writes in it.
     await open(run.page, await titleOf(run, conversationId))
     const last = prompt(run, STRESS.reply, step, " after the long answers")
@@ -748,6 +807,24 @@ const steps = {
     await expectShown(run.page, `${SAYS.echo}${last}`, failures)
     await open(run.page, run.main.title)
   },
+}
+
+/**
+ * Close `conversationId`'s agent, then open it again with a read, timed;
+ * the view is read on to the head, as one read takes a bounded number of
+ * records.
+ */
+async function reopened(run, conversationId) {
+  await run.client.conversation.close(conversationId)
+  const started = Date.now()
+  let view = await run.client.conversation.read(conversationId)
+  const ms = Date.now() - started
+  let reads = 1
+  for (; view.transcriptState !== "complete" && reads < 20; reads += 1) {
+    await sleep(100)
+    view = await run.client.conversation.read(conversationId)
+  }
+  return { ms, view, reads }
 }
 
 /**
@@ -779,6 +856,43 @@ async function followedOnce(run, conversationId) {
   }
 }
 
+/**
+ * What a watch turn's reads came to, as the agent said it: of `WATCH_CALLS`
+ * at once, some were refused for want of room and the rest waited, and
+ * nothing else happened to any of them.
+ */
+function watched(turn, failures) {
+  const said = (turn.parts ?? []).map((part) => part.text ?? "").join("")
+  const at = said.indexOf(SAYS.watched)
+  let results
+  try {
+    results = JSON.parse(said.slice(at + SAYS.watched.length))
+  } catch {
+    failures.push(
+      `the watch turn did not say what its reads came to: ${said.slice(0, 120)}`,
+    )
+    return
+  }
+  if (!Array.isArray(results) || results.length !== WATCH_CALLS) {
+    failures.push(`the watch turn made ${results?.length} reads, not ${WATCH_CALLS}`)
+    return
+  }
+  const refused = results.filter((each) => each?.error)
+  const waited = results.filter((each) => !each?.error)
+  // The agent's own server takes only so many calls at once, and of those
+  // the conversation only so many waiting reads: both refusals are expected.
+  const other = refused.filter(
+    (each) => !["subscription_capacity", "call_refused"].includes(each.error),
+  )
+  if (other.length)
+    failures.push(`reads were refused ${[...new Set(other.map((each) => each.error))]}`)
+  if (!refused.some((each) => each.error === "subscription_capacity"))
+    failures.push(`no read of ${WATCH_CALLS} at once was refused for want of room`)
+  if (!waited.length) failures.push("no read at all was taken")
+  if (waited.some((each) => each.timedOut !== true && !each.events?.length))
+    failures.push("a read that was taken neither waited nor returned events")
+}
+
 async function titleOf(run, conversationId) {
   const title = await waitFor(async () => {
     const { conversations } = await run.client.conversation.list({})
@@ -805,8 +919,10 @@ async function background(run, n) {
       run.leave()
     }
     for (let turn = 0; turn < run.knobs.turns; turn += 1) {
-      const permission = turn % 2 === 1
-      const text = `${permission ? STRESS.permission : STRESS.reply} b${n}.${turn} s${run.knobs.seed}`
+      const permission = turn % 3 === 1
+      const watch = turn % 3 === 2
+      const phrase = watch ? STRESS.watch : permission ? STRESS.permission : STRESS.reply
+      const text = `${phrase} b${n}.${turn} s${run.knobs.seed}`
       await run.enter()
       try {
         await run.client.conversation.submit(
@@ -849,6 +965,7 @@ async function background(run, n) {
           failures.push(
             `background ${n} turn ${turn} ended ${done?.status ?? "missing"}${done?.error ? ` (${done.error})` : ""}`,
           )
+        else if (watch) watched(done, failures)
       } finally {
         run.leave()
       }
@@ -959,6 +1076,7 @@ await main(
       })
       const run = new Run(stack, opened, knobs)
       const base = { engine, layout }
+      let followers = []
       try {
         const id = randomUUID()
         const first = `${STRESS.reply} main s${knobs.seed} ${engine}`
@@ -975,6 +1093,19 @@ await main(
         run.background = Array.from({ length: knobs.parallel }, (_, n) =>
           background(run, n),
         )
+        const { subscriptionLimits } = await import("@nessa/client")
+        followers = Array.from(
+          { length: knobs.followers },
+          (_, n) =>
+            new Follower({
+              n,
+              connect: () => connectClient(stack.gateway, INSTANCE, "panel"),
+              limits: subscriptionLimits,
+              random: random(knobs.seed * 1_000 + n + 1),
+              mainId: run.main.id,
+            }),
+        )
+        await Promise.all(followers.map((each) => each.start()))
         let stopped = null
         for (const step of planned) {
           const name = `${String(step.index).padStart(3, "0")} ${step.kind}`
@@ -1036,12 +1167,25 @@ await main(
             ...done.map((each) => each.conversationId),
           ]),
         })
+        await Promise.all(followers.map((each) => each.settle()))
+        const followed = []
+        for (const each of followers) followed.push(...(await each.check(run.client)))
+        rep.add({
+          name: "followers",
+          ...base,
+          seen: followers.map((each) => ({
+            conversations: each.events.size,
+            ...each.counts,
+          })),
+          failures: followed,
+        })
         if (options.evidence) {
           const view = await readWithReviews(run.client, run.main.id).catch(() => null)
           if (view) writeView(options.evidence, `views/${engine}-main.json`, view)
         }
       } finally {
         await Promise.allSettled(run.background)
+        await Promise.allSettled(followers.map((each) => each.close()))
         stack.client = run.client
         await opened.close()
       }

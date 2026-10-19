@@ -85,6 +85,7 @@ impl AgentError {
                 | Self::UnknownApp(_)
                 | Self::MessageTooLarge { .. }
                 | Self::Busy
+                | Self::ApprovalModeChanged
                 | Self::Closed
                 | Self::StalePermission
                 | Self::Deadline

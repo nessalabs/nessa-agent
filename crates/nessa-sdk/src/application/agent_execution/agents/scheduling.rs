@@ -688,19 +688,22 @@ impl Agent {
                         .catch_scheduling_panic(async {
                             let mut close = notice.clone();
                             tokio::select! { biased;
-                                _ = close.changed() => Err(StorageError::Io(
-                                    "queue reorder persistence interrupted by close".into(),
-                                )),
-                                result = agent.inner.manager.flush_observed() => result,
-                                _ = sleep_until(deadline) => Err(StorageError::Io(
+                                // A close while the order is saved declines the queue it
+                                // changed, so the caller is told the close, as in the audit
+                                // and retention phases, not a storage failure.
+                                _ = close.changed() => Err(AgentError::Closed),
+                                result = agent.inner.manager.flush_observed() => {
+                                    result.map_err(AgentError::Storage)
+                                }
+                                _ = sleep_until(deadline) => Err(AgentError::Storage(StorageError::Io(
                                     "queue reorder persistence timed out".into(),
-                                )),
+                                ))),
                             }
                         })
                         .await;
                     return match saved {
                         Ok(result) => {
-                            result.map_err(AgentError::Storage)?;
+                            result?;
                             Ok(QueueReorder::Applied)
                         }
                         Err(()) => {
@@ -715,19 +718,22 @@ impl Agent {
                     .catch_scheduling_panic(async {
                         let mut close = notice.clone();
                         tokio::select! { biased;
-                            _ = close.changed() => Err(StorageError::Io(
-                                "queue reorder persistence interrupted by close".into(),
-                            )),
-                            result = agent.inner.manager.flush_observed() => result,
-                            _ = sleep(AUDIT_OBSERVATION_TIMEOUT) => Err(StorageError::Io(
+                            // A close while the order is saved declines the queue it
+                            // changed, so the caller is told the close, as in the audit
+                            // and retention phases, not a storage failure.
+                            _ = close.changed() => Err(AgentError::Closed),
+                            result = agent.inner.manager.flush_observed() => {
+                                result.map_err(AgentError::Storage)
+                            }
+                            _ = sleep(AUDIT_OBSERVATION_TIMEOUT) => Err(AgentError::Storage(StorageError::Io(
                                 "queue reorder persistence timed out".into(),
-                            )),
+                            ))),
                         }
                     })
                     .await;
                 match saved {
                     Ok(result) => {
-                        result.map_err(AgentError::Storage)?;
+                        result?;
                         Ok(QueueReorder::Unchanged)
                     }
                     Err(()) => {
@@ -882,7 +888,8 @@ impl Agent {
         // Captured with the permit. Close detaches the attachment before it
         // takes this scheduler lock, so a later read would name the binding
         // preset for a generation that was admitted under the live one.
-        let approval_mode = self.approval_mode_at(work.live_generation());
+        let approval_mode = self.approval_mode_on(work.footing());
+        submitter.admits(approval_mode)?;
         scheduler
             .queue
             .validate_enqueue(&input.execution_id)
@@ -1547,12 +1554,13 @@ impl Agent {
         }
         let close_notice = self.inner.lifecycle.close_notice();
         *work_owner = Some(self.inner.lifecycle.accept_waiting_work()?);
-        let approval_mode = self.approval_mode_at(
+        let approval_mode = self.approval_mode_on(
             work_owner
                 .as_ref()
                 .expect("admitted steering owner")
-                .live_generation(),
+                .footing(),
         );
+        submitter.admits(approval_mode)?;
         scheduler
             .queue
             .validate_enqueue(&input.execution_id)

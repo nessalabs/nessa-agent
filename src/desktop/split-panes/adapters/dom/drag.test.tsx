@@ -128,8 +128,8 @@ function Host({ fake, options }: { fake: Fake; options: SplitPanesDragOptions })
 
 /**
  * A host that draws the layout as the source changes, in a `FlipScope` as
- * the workspace's grid is — jsdom resolves no motion tokens, so it flies
- * nothing, as with less motion.
+ * the workspace's grid is — jsdom resolves no motion tokens, so its
+ * zero-duration shape changes land immediately.
  */
 function FlippingHost({ fake, options }: { fake: Fake; options: SplitPanesDragOptions }) {
   const root = useRef<HTMLDivElement>(null)
@@ -684,9 +684,8 @@ it.each([{ kind: "glass", rebind: true }] as const)(
   },
 )
 
-it("with less motion, previews a swap at once — the other pane drawn where the drop puts it — and lets it go as the drop lands", async () => {
-  // As the person's window is set: Settings › Appearance › Motion, Reduced (#286).
-  document.documentElement.dataset.motion = "reduced"
+it.each(["full", "reduced"])("retires %s-motion previews", async (motion) => {
+  document.documentElement.dataset.motion = motion
   try {
     const fake = fakeSource(two())
     const root = await mounted(fake, options(), FlippingHost)

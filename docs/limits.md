@@ -13,7 +13,7 @@ Each row is a limit the gateway names when a refusal or a silent close hits it. 
 | server.record_reads | configured | 1024 | config.json limits.recordReads | a record read past the gateway's admission is refused |
 | server.deletions | configured | 8 | config.json limits.deletions | a deletion past the gateway's admission is refused |
 | server.upload_begins | configured | 16 | config.json limits.uploadBegins | an upload past the gateway's admission is refused |
-| server.live_conversations | configured | 65536 | config.json limits.liveConversations | opening a conversation past this many open at once, each with its agent running, is refused capacity |
+| server.live_conversations | configured | 65536 | config.json limits.liveConversations | opening a conversation past this many open at once, each with its agent running, parks the idle one used longest ago; it is refused capacity only when none can be parked |
 | server.agent_idle_seconds | configured | 120 | config.json limits.agentIdleSeconds | an agent idle this many seconds, nothing queued or waiting and nobody following its conversation, is stopped; the conversation stays open and the next message starts the agent again, resuming its session. 0 never stops one |
 | socket.ordinary_slots | configured | 16 | config.json limits.ordinarySlots | an ordinary frame past this socket's slots is refused |
 | socket.control_slots | configured | 4 | config.json limits.controlSlots | a control frame past this socket's slots is refused |
@@ -23,7 +23,7 @@ Each row is a limit the gateway names when a refusal or a silent close hits it. 
 | socket.ordinary_lane | derived | 20 | ordinary slots plus app calls per socket | a response that does not fit the ordinary lane closes the socket |
 | socket.control_lane | derived | 4 | control slots | a control response that does not fit the control lane closes the socket |
 | socket.record_lane | fixed | 1 | product socket RECORD_LANE | a second record response while one is queued closes the socket |
-| socket.refusal_lane | fixed | 1 | product socket REFUSAL_LANE | an app refusal waits while one is queued; a non-app refusal on a full lane closes the socket |
+| socket.refusal_lane | fixed | 1 | product socket REFUSAL_LANE | a refusal waits while one is queued, and the socket reads no further frame until it is |
 | socket.write_timeout | configured | 5000 | config.json session.writeTimeoutMs | a write that outlasts this closes the socket |
 | socket.record_delivery_deadline | fixed | 30000 | RECORD_SEND_TIMEOUT, the schema's passive delivery budget | a record response still queued at this deadline is noted and dropped |
 | socket.subscription_delivery_deadline | fixed | 10000 | protocol/product/v1.json x-subscriptionLimits.deliveryTimeoutMs | a subscription frame the writer has not taken by this ends that subscription as lagging; its end frame unwritten by this closes the socket |

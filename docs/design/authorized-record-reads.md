@@ -254,7 +254,11 @@ At most one admitted large passive response per socket still owns that physical/
 Bound admitted queued bytes by per-class slot count times its published response
 ceiling, plus the bounded generic refusal lane and the three record-delivery positions described above using their inbound-derived retained representation bounds. Reserve slots before source admission and retain them until write/drop (record delivery ends before the send, R64). Refusal
 traffic must not form another unbounded queue: when the applicable refusal lane is full,
-close the socket while already admitted controls retain their owners.
+the refusal waits in one place of its own and the socket reads no further frame until
+the writer takes the one ahead, while its writer, expiry, shutdown and finished
+requests are still polled. A client that asks past its slots is refused frame by frame,
+not cut off (`a_client_past_its_slots_is_refused_frame_by_frame_not_cut_off`,
+`a_waiting_refusal_does_not_stop_the_socket_closing`).
 
 Thus same-socket Stop can be received, authorized and dispatched during a stalled
 record send. Its acknowledgement may wait behind that frame until write completion

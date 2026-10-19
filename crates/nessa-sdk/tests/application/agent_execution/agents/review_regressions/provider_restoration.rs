@@ -51,7 +51,9 @@ async fn cleaned_control_generation_fences_permissions_through_gated_restoration
         let expected = if matches!(source, ProviderControl::Steer) {
             AgentError::Closed
         } else {
-            AgentError::AttachmentUnavailable(AttachmentPhase::Absent)
+            // No attachment holds a review, so every key is stale; the
+            // provider is not reached either way.
+            AgentError::StalePermission
         };
         let stage = format!("after the {source:?} cleanup-reporting control");
         assert_permissions_fenced(&agent, &backend, calls, expected, &stage).await;
@@ -133,7 +135,7 @@ async fn already_pending_permission_cannot_resume_against_a_cleaned_generation()
             if audit_failure {
                 AgentError::AuditFailure
             } else {
-                AgentError::AttachmentUnavailable(AttachmentPhase::Absent)
+                AgentError::StalePermission
             },
             "after an already-admitted control is interrupted",
         )

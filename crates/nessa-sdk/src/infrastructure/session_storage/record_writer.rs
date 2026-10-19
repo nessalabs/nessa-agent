@@ -1,11 +1,12 @@
 //! Exclusive semantic save owner: units remain private until a durable completion.
 
 use super::{
+    record::READ_PAGE,
     record_changes::RecordChanges,
     save_batch::SaveCommits,
     save_group::{GroupProgress, Header, SaveIdentity, EMPTY_CHAIN, HEADER_BYTES},
     snapshot,
-    stream_fact::{self, FactCommitError, FactRead, FramedFact},
+    stream_fact::{self, FactCommitError, FactRead, FactScanner, FramedFact},
 };
 use crate::{
     application::agent_execution::sessions::{
@@ -71,17 +72,25 @@ impl RecordWriter {
             receipt: None,
             changes: None,
         };
+        // One pass over the history, a page at a time (#1006).
+        let mut scanner =
+            FactScanner::up_to(&writer.stream, &bounds.tail, READ_PAGE).map_err(fact_error)?;
         loop {
-            match stream_fact::read_next_fact(reader, &writer.stream, &writer.cursor)
+            match scanner
+                .next(reader, &writer.cursor)
                 .await
                 .map_err(fact_error)?
             {
                 FactRead::Absent => break,
                 FactRead::Partial => {
                     // Recovery terminates only the physical attempt, then re-reads
-                    // its retained start identity/digest on the next iteration.
+                    // its retained start identity/digest on the next iteration,
+                    // from the tail the abort left.
                     stream_fact::abort_partial_fact(reader, &writer.stream, &writer.cursor)
                         .await
+                        .map_err(fact_error)?;
+                    let bounds = reader.bounds(&writer.stream).await.map_err(store_error)?;
+                    scanner = FactScanner::up_to(&writer.stream, &bounds.tail, READ_PAGE)
                         .map_err(fact_error)?;
                 }
                 FactRead::Aborted { cursor, key, .. } => {

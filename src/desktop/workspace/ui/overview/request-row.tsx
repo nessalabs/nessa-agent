@@ -36,8 +36,7 @@ import type { OnAnswer, Settling } from "./settling"
  * Mac menu. The buttons say what they do and carry no tooltip; each names
  * its chord to assistive technology (`aria-keyshortcuts`). Answered and
  * taken, the row waits, quiet, for the session to move on; then it
- * dematerializes here as the session's row materializes in its new group,
- * in the same beat (`leaveInPlace`), and the rows after it close the gap.
+ * is placed in its current group, and the rows after it close the gap.
  * What became of it is said to a screen reader by the overview.
  */
 export const RequestRow = memo(function RequestRow({
@@ -154,7 +153,7 @@ export const RequestRow = memo(function RequestRow({
     event.target instanceof Element && event.target.closest("button") !== null
 
   return (
-    <li className="agents-row-item" data-reflow={`request:${sessionId}`}>
+    <li className="agents-row-item">
       <div
         className="agents-request"
         data-overview-item={sessionId}
