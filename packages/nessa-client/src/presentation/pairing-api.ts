@@ -7,12 +7,14 @@ import type {
   PairingCreateResult,
   PairingOwnerStatus,
   PairingPendingResult,
+  PairingSetLinkingResult,
 } from "../generated/product.js"
 import {
   pairingApproveResult,
   pairingCreateResult,
   pairingOwnerStatus,
   pairingPendingResult,
+  pairingSetLinkingResult,
 } from "../protocol/pairing-validate.js"
 
 /**
@@ -48,6 +50,13 @@ export type PairingApi = {
   deny(invitationId: number[]): Promise<PairingOwnerStatus>
   /** Cancel an invitation the owner opened. */
   cancel(invitationId: number[]): Promise<PairingOwnerStatus>
+  /**
+   * Turn native linking on or off. It is answered whether or not linking is
+   * on now. `applies: "restarting"` means the gateway is starting itself
+   * again with the change: this connection closes, and the next one reaches
+   * a gateway that matches it. Sending the same value again is safe.
+   */
+  setLinking(enabled: boolean): Promise<PairingSetLinkingResult>
 }
 
 export function createPairingApi(session: RpcRequester): PairingApi {
@@ -80,5 +89,7 @@ export function createPairingApi(session: RpcRequester): PairingApi {
       call(ProductMethod.PairingDeny, invitation(invitationId), pairingOwnerStatus),
     cancel: (invitationId) =>
       call(ProductMethod.PairingCancel, invitation(invitationId), pairingOwnerStatus),
+    setLinking: (enabled) =>
+      call(ProductMethod.PairingSetLinking, { enabled }, pairingSetLinkingResult),
   }
 }

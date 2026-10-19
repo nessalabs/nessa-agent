@@ -7,12 +7,14 @@
 //! cleanup (ended stage) --> PairingStore stage lease + receivers (lookup, fence)
 //! read_status (device status) --> Auth PairingStore + live TLS proof + receivers (holding)
 //! recurrence            <-- activation, cleanup (whether a failure will recur)
+//! linking (on / off)    --> NativeLinking: config.json, then the gateway starts again; LinkingAudit
 //! nessa_protocol::pairing::DevicePairingStatus <-- read_status (projection it returns)
 //! ```
 //! Arrows point from a use case to the owner it asks. Auth decides every
 //! enrollment transition; `receivers` is the port to the receiver authority.
 mod activation;
 mod cleanup;
+mod linking;
 mod owner;
 mod owner_phone;
 mod read_status;
@@ -20,6 +22,10 @@ mod receivers;
 mod recurrence;
 pub use activation::{ActivationError, Approval, FreshStage};
 pub use cleanup::{CleanupError, SettleCleanup};
+pub use linking::{
+    LinkingApply, LinkingAudit, LinkingAuditPhase, LinkingAuditRecord, LinkingAuditUnavailable,
+    LinkingCaller, LinkingChange, LinkingError, LinkingRestart, NativeLinking,
+};
 pub use owner::{OwnerError, PairingOwner, PreparedInvitation};
 pub use owner_phone::FreshOwnerPhone;
 pub(crate) use read_status::claimed_status;

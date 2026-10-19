@@ -181,6 +181,7 @@ as described above; unknown names are absent and retain Requests/Ordinary refusa
 | `pairing.approve` | `pairing` | Ordinary | Requests | Manifest |
 | `pairing.deny` | `pairing` | Control | Controls | Manifest |
 | `pairing.cancel` | `pairing` | Control | Controls | Manifest |
+| `pairing.setLinking` | `pairing` | Ordinary | Requests | Manifest |
 | `peer.enroll` | `peers` | Ordinary | Requests | Manifest |
 | `peer.list` | `peers` | Ordinary | Requests | Manifest |
 | `peer.forget` | `peers` | Ordinary | Requests | Manifest |

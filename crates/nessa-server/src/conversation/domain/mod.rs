@@ -23,8 +23,10 @@ pub use receiver::{
 };
 pub use value_objects::{
     Capabilities, Capability, CommandHosts, ConversationDeletion, DeletionContradiction,
-    ProviderSessionErasure, ProviderSessionLink, ShareAccess, ShareAccessError, ToolCall,
-    ToolChoice, ToolPolicy, ToolPolicyError, ToolPreset, ToolRules, ToolSource,
+    PaneContent, PanePlace, ProviderSessionErasure, ProviderSessionLink, ShareAccess,
+    ShareAccessError, ToolCall, ToolChoice, ToolPolicy, ToolPolicyError, ToolPreset, ToolRules,
+    ToolSource, WidgetRef, WindowArrangement, WindowColumn, WindowPane, WindowRefusal,
+    WindowShowing, WorkspaceWindow,
 };
 
 #[cfg(test)]

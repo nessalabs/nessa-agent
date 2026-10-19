@@ -102,6 +102,24 @@ describe("client.pairing", () => {
     expect(approved.status.phase).toBe("staging")
   })
 
+  it("turns linking on and keeps how it applies; a malformed answer is not believed", async () => {
+    const { api, calls } = session(() => ({ enabled: true, applies: "restarting" }))
+    expect(await api.setLinking(true)).toEqual({ enabled: true, applies: "restarting" })
+    expect(calls).toEqual([{ method: "pairing.setLinking", params: { enabled: true } }])
+    for (const applies of ["later", "restartRequired"]) {
+      const odd = session(() => ({ enabled: true, applies }))
+      await expect(odd.api.setLinking(true)).rejects.toBeInstanceOf(NessaPairingError)
+    }
+    const refused = session(() => {
+      throw new NessaRpcError("pairing_address_in_use", "taken")
+    })
+    const error = await refused.api.setLinking(true).catch((cause: unknown) => cause)
+    expect(error).toBeInstanceOf(NessaPairingError)
+    expect((error as NessaPairingError).refusal).toBe(
+      PairingRefusalCode.PairingAddressInUse,
+    )
+  })
+
   it("refuses a code this build knows, and leaves an unknown code untyped", async () => {
     const refused = session(() => {
       throw new NessaRpcError(PairingRefusalCode.PairingNotConfigured, "no")

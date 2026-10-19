@@ -2344,7 +2344,26 @@ export interface PairingPendingResult {
   /** The caller's unfinished enrollments, including ended ones still owed cleanup. Bounded by the registry's configured capacity rather than a wire constant. */
   items: PairingOwnerStatus[]
 }
-/** Why the gateway refused a pairing method it dispatched. pairing_not_configured: native pairing is off in this gateway's configuration. pairing_not_found: no such invitation. pairing_slot_occupied: an invitation is already open; cancel it first. pairing_capacity: too many unfinished enrollments. pairing_conflict: the request names a different key or outcome than the one recorded. pairing_ineligible: the enrollment cannot take this step now (expired, ended, or not yet claimed). pairing_busy: another create is running. pairing_unavailable: storage or a worker failed; retry later. */
+/** Turn native linking on or off for this gateway. The gateway saves the choice in its config.json and, when the running gateway does not already match it, restarts itself to apply it. Turning it on keeps a listen address already named there, or names 127.0.0.1:47650; turning it off keeps the native settings and marks them off. */
+export interface PairingSetLinkingParams {
+  /** True turns native linking on; false turns it off. Sending the same value again changes nothing, so a retry is safe. */
+  enabled: boolean
+}
+/** How the choice takes effect. unchanged: the running gateway already matches it. restarting: the gateway is restarting itself now; the connection closes and reconnects to a gateway that matches it. A signal that stops the gateway before it restarts wins: it stays stopped, and the choice applies the next time it starts. */
+export const PairingLinkingApply = {
+  Unchanged: "unchanged",
+  Restarting: "restarting",
+} as const
+export type PairingLinkingApply =
+  (typeof PairingLinkingApply)[keyof typeof PairingLinkingApply]
+/** Result of pairing.setLinking. */
+export interface PairingSetLinkingResult {
+  /** The saved choice. */
+  enabled: boolean
+  /** How the saved choice takes effect. */
+  applies: PairingLinkingApply
+}
+/** Why the gateway refused a pairing method it dispatched. pairing_not_configured: native pairing is off in this gateway's configuration. pairing_not_found: no such invitation. pairing_slot_occupied: an invitation is already open; cancel it first. pairing_capacity: too many unfinished enrollments. pairing_conflict: the request names a different key or outcome than the one recorded. pairing_ineligible: the enrollment cannot take this step now (expired, ended, or not yet claimed). pairing_busy: another create is running; or, for pairing.setLinking, config.json is locked by another change or the gateway is already restarting or stopping, and nothing was saved. pairing_unavailable: storage or a worker failed; retry later. pairing_address_in_use: pairing.setLinking could not turn linking on because its listen address cannot be bound on this machine (another program holds the port, or the address is not one of this machine's); nothing was saved. pairing_audit_unavailable: pairing.setLinking could not keep the change's audit record; if that was before the change nothing was saved, and if after it the choice is saved and the gateway did not restart, so it applies the next time the gateway starts (read the state again to see which). */
 export const PairingErrorCode = {
   PairingNotConfigured: "pairing_not_configured",
   PairingNotFound: "pairing_not_found",
@@ -2354,6 +2373,8 @@ export const PairingErrorCode = {
   PairingIneligible: "pairing_ineligible",
   PairingBusy: "pairing_busy",
   PairingUnavailable: "pairing_unavailable",
+  PairingAddressInUse: "pairing_address_in_use",
+  PairingAuditUnavailable: "pairing_audit_unavailable",
 } as const
 export type PairingErrorCode = (typeof PairingErrorCode)[keyof typeof PairingErrorCode]
 /** Wire input for peer.enroll. This gateway enrolls with its own native key, so the peer knows it as one principal however often it is enrolled. */
@@ -2736,6 +2757,87 @@ export interface ConversationEvents {
   /** Committed semantic events in source order; empty advances filtered progress. */
   events: ConversationEvent[]
 }
+/** How the window lays out its workspace, as chosen in Settings: three columns (sidebar, session list, panes), or sessions listed in the sidebar beside the panes. */
+export const WorkspaceArrangement = { Columns: "columns", Sidebar: "sidebar" } as const
+export type WorkspaceArrangement =
+  (typeof WorkspaceArrangement)[keyof typeof WorkspaceArrangement]
+/** What fills the window's content region: the panes, the Agents overview drawn over them, or a widget drawn over them. */
+export const WorkspaceShowing = {
+  Panes: "panes",
+  Agents: "agents",
+  Widget: "widget",
+} as const
+export type WorkspaceShowing = (typeof WorkspaceShowing)[keyof typeof WorkspaceShowing]
+/** A widget a pane or the window shows, by the plugin that draws it and its id within that plugin. */
+export interface WorkspaceWidget {
+  /** The plugin that draws the widget. */
+  plugin: string
+  /** The widget's id within its plugin. */
+  id: string
+}
+/** What a pane shows: a conversation, a draft (a new conversation the person has not started yet), or a widget. Other kinds, such as an open file, are added here. */
+export const WorkspacePaneKind = {
+  Conversation: "conversation",
+  Draft: "draft",
+  Widget: "widget",
+} as const
+export type WorkspacePaneKind = (typeof WorkspacePaneKind)[keyof typeof WorkspacePaneKind]
+/** What one pane shows. A conversation names its conversationId, a widget its widget, and a draft neither. */
+export interface WorkspacePaneItem {
+  /** What kind of thing the pane shows. */
+  kind: WorkspacePaneKind
+  /** Canonical lowercase hyphenated UUID of the conversation, when kind is conversation. */
+  conversationId?: string
+  /** The widget, when kind is widget. */
+  widget?: WorkspaceWidget
+}
+/** One pane of a column, top to bottom. */
+export interface WorkspacePane {
+  /** The pane's share of its column's height, in whole percent. */
+  heightPercent: number
+  /** Whether this is the window's focused pane. At most one pane is. */
+  focused: boolean
+  /** What the pane shows. */
+  item: WorkspacePaneItem
+}
+/** One column of panes, left to right. */
+export interface WorkspaceColumn {
+  /** The column's share of the panes' width, in whole percent. */
+  widthPercent: number
+  /** The column's panes, top to bottom. */
+  panes: WorkspacePane[]
+}
+/** What one desktop window shows now: its arrangement, which side columns are drawn, what fills its content region, and its panes left to right, each column top to bottom. It names conversations by id only; their titles and agents are the gateway's to say. */
+export interface WorkspaceWindow {
+  /** The window's layout. */
+  arrangement: WorkspaceArrangement
+  /** Whether the sidebar is drawn: open by the person's choice and not folded for room. */
+  sidebar: boolean
+  /** Whether the session list column is drawn. The sidebar arrangement has none and always says false. */
+  sessionList: boolean
+  /** What fills the content region now. */
+  showing: WorkspaceShowing
+  /** The widget drawn over the panes, when showing is widget. */
+  widget?: WorkspaceWidget
+  /** The panes' columns, left to right. */
+  columns: WorkspaceColumn[]
+}
+/** Tell the gateway what this connection's desktop window shows now (workspace.publish), so the person's agents can read it with the read_window tool. Each publication replaces this connection's previous one; one with a lower revision than the one held is not applied. A publication with no window withdraws it. The gateway keeps a window only while its connection is open: a closed connection withdraws it, and a window that connects again publishes again, under the same windowId, which replaces whatever an older connection of that window still holds. */
+export interface WorkspacePublishParams {
+  /** The window's own id, made once when it opens and kept across its connections, so a connection it left behind never reads as a second window. */
+  windowId: string
+  /** The window's publication number, increasing with each change and kept across its connections. */
+  revision: number
+  /** What the window shows. Absent withdraws the window: it shows no workspace now. */
+  window?: WorkspaceWindow
+}
+/** The answer to workspace.publish: the revision the gateway holds for this connection now, and whether this publication was applied. */
+export interface WorkspacePublishResult {
+  /** The revision held now: this one when applied, a later one when this one arrived after it. */
+  revision: number
+  /** False when a later revision was already held, so this one changed nothing. */
+  applied: boolean
+}
 export const subscriptionLimits = {
   conversationTargets: 8,
   listTargets: 2,
@@ -2787,7 +2889,7 @@ export const mcpServerRules = {
 export const bounds = {
   maxOrdinaryResponseBytes: 65536,
   maxRequestFrameBytes: 65536,
-  maxReadyMethods: 74,
+  maxReadyMethods: 76,
   maxAuthCredentialCharacters: 16384,
   maxProductClientIdCharacters: 256,
   maxProductSurfaceInstanceCharacters: 256,
@@ -3064,6 +3166,7 @@ export const ProductMethod = {
   PairingApprove: "pairing.approve",
   PairingDeny: "pairing.deny",
   PairingCancel: "pairing.cancel",
+  PairingSetLinking: "pairing.setLinking",
   PeerEnroll: "peer.enroll",
   PeerList: "peer.list",
   PeerForget: "peer.forget",
@@ -3076,6 +3179,7 @@ export const ProductMethod = {
   ConversationShares: "conversation.shares",
   ConversationPermissionRules: "conversation.permissionRules",
   ConversationRevokePermissionRule: "conversation.revokePermissionRule",
+  WorkspacePublish: "workspace.publish",
   ConversationSubscribeEvents: "conversation.subscribeEvents",
   ConversationPeek: "conversation.peek",
 } as const
@@ -3151,6 +3255,7 @@ export const productReadyMethods = [
   "pairing.approve",
   "pairing.deny",
   "pairing.cancel",
+  "pairing.setLinking",
   "peer.enroll",
   "peer.list",
   "peer.forget",
@@ -3163,6 +3268,7 @@ export const productReadyMethods = [
   "conversation.shares",
   "conversation.permissionRules",
   "conversation.revokePermissionRule",
+  "workspace.publish",
   "conversation.subscribeEvents",
   "conversation.peek",
 ] as const
@@ -3229,6 +3335,7 @@ export const productMethodGrants = {
   "pairing.approve": "credential.manage",
   "pairing.deny": "credential.manage",
   "pairing.cancel": "credential.manage",
+  "pairing.setLinking": "credential.manage",
   "peer.enroll": "credential.manage",
   "peer.list": "credential.manage",
   "peer.forget": "credential.manage",
@@ -3241,6 +3348,7 @@ export const productMethodGrants = {
   "conversation.shares": "credential.manage",
   "conversation.permissionRules": "conversation.write",
   "conversation.revokePermissionRule": "conversation.write",
+  "workspace.publish": "conversation.write",
   "conversation.subscribeEvents": "conversation.write",
   "conversation.peek": "conversation.write",
 } as const

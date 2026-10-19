@@ -41,6 +41,7 @@ mod socket;
 mod state;
 mod subscription;
 pub(crate) mod wire;
+mod workspace;
 
 pub(crate) use operational_limits::ConfiguredLimits;
 pub use operational_limits::{InvalidOperationalLimits, OperationalLimits};
