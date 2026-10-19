@@ -684,14 +684,32 @@ fn trace_command_refusal(method: &str, error: &ConversationError) {
         method,
         code = error_code(error).as_str(),
         hint = command_refusal_hint(error),
+        storage = evidence_storage_hint(error),
         "conversation command refused",
     );
+}
+
+/// The storage failure behind a refusal for missing admission evidence,
+/// which its hint names only as a channel; an audit failure beside it
+/// already took the wire code.
+fn evidence_storage_hint(error: &ConversationError) -> Option<&'static str> {
+    match error {
+        ConversationError::AdmissionEvidence {
+            storage: Some(error),
+            ..
+        } => Some(storage_hint(error)),
+        _ => None,
+    }
 }
 
 /// The part of a refusal its wire code does not say, where one is known.
 fn command_refusal_hint(error: &ConversationError) -> Option<&'static str> {
     match error {
         ConversationError::Metadata => Some("metadata"),
+        ConversationError::AdmissionEvidence {
+            audit: Some(_),
+            storage: Some(_),
+        } => Some("evidence-audit-and-storage"),
         ConversationError::AdmissionEvidence { audit: Some(_), .. } => Some("evidence-audit"),
         ConversationError::AdmissionEvidence {
             storage: Some(_), ..
