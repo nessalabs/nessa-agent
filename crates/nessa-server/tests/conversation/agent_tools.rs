@@ -26,7 +26,7 @@ use nessa_sdk::{
         ExecutionUpdate, SubmissionMode as InvocationSubmissionMode,
     },
     domain::agent_execution::{
-        executions::{Initiation, MessageChunk},
+        executions::{ExecutionOutcome, Initiation, MessageChunk},
         sessions::SessionId,
         tools::{McpTool, ToolCallId, ToolCallUpdate, ToolStatus},
     },
@@ -1908,11 +1908,44 @@ async fn a_stopped_source_reply_claim_retains_the_durable_child_report() {
         )
         .await
         .unwrap();
+    let finish_cancelled = || {
+        provider
+            .execution_updates
+            .lock()
+            .unwrap()
+            .push(ExecutionUpdate::Finished(ExecutionOutcome::Cancelled));
+        *provider.execution_reply.lock().unwrap() = Some(
+            providers::ProviderExecutionReply::Finished(providers::ExecutionReport::new(
+                Some(Ok(ExecutionOutcome::Cancelled)),
+                None,
+                providers::ProviderSessionState::Usable,
+            )),
+        );
+    };
+    finish_cancelled();
+    release_child.send(()).unwrap();
     tokio::time::timeout(Duration::from_secs(10), async {
         loop {
             if matches!(
                 service
                     .thread_turn_end(&child, &caller("view-child"), "child-turn")
+                    .await,
+                ThreadTurn::Ended("cancelled", _)
+            ) {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    finish_cancelled();
+    release_parent.send(()).unwrap();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if matches!(
+                service
+                    .thread_turn_end(&parent, &caller("view-parent"), "source-turn")
                     .await,
                 ThreadTurn::Ended("cancelled", _)
             ) {
@@ -2003,8 +2036,6 @@ async fn a_stopped_source_reply_claim_retains_the_durable_child_report() {
     assert!(reports.pending().await.unwrap().is_empty());
     drop(held);
     drop(release_next);
-    drop(release_child);
-    drop(release_parent);
     retire(service, storage, metadata).await;
     let reopened = LocalThreadReports::open(&root.join("reports.sqlite3")).unwrap();
     assert!(reopened.pending().await.unwrap().is_empty());
