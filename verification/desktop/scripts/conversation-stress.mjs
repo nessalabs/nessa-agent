@@ -123,7 +123,6 @@ import {
 } from "./lib/stress-conversation.mjs"
 import { observeGatewayRestarts } from "./lib/stress-restart.mjs"
 import { KNOBS, describe, knobsFrom, plan, random } from "./lib/stress-plan.mjs"
-import { openStressConversation } from "./lib/stress-conversation.mjs"
 
 const INSTANCE = "conversation-stress"
 

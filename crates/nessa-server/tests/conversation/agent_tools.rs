@@ -19,11 +19,15 @@ use crate::mcp_servers::{
     },
 };
 #[cfg(unix)]
-use nessa_sdk::application::agent_execution::providers;
-#[cfg(unix)]
 use nessa_sdk::{
-    application::agent_execution::executions::{
-        ExecutionUpdate, SubmissionMode as InvocationSubmissionMode,
+    application::agent_execution::{
+        commands::{
+            CreationFuture, CreationReceipt, CreationStorage, CreationStorageError,
+            CreationStorageLease, MutationReceipt,
+        },
+        executions::{ExecutionUpdate, SubmissionMode as InvocationSubmissionMode},
+        providers,
+        sessions::StorageError,
     },
     domain::agent_execution::{
         executions::{ExecutionOutcome, Initiation, MessageChunk},
@@ -34,6 +38,8 @@ use nessa_sdk::{
 };
 #[cfg(unix)]
 use serde_json::{json, Value};
+#[cfg(unix)]
+use std::sync::atomic::AtomicUsize;
 use std::sync::{atomic::AtomicBool, Mutex};
 #[cfg(unix)]
 use tokio::io::{AsyncBufReadExt, BufReader, DuplexStream, ReadHalf, WriteHalf};
@@ -1822,13 +1828,6 @@ mod thread_report_settlement_tests;
 #[cfg(unix)]
 #[tokio::test]
 async fn a_stopped_source_reply_claim_retains_the_durable_child_report() {
-    use std::sync::atomic::AtomicUsize;
-
-    use nessa_sdk::application::agent_execution::commands::{
-        CreationFuture, CreationReceipt, CreationStorage, CreationStorageError,
-        CreationStorageLease, MutationReceipt,
-    };
-
     struct Receipts {
         storage: Arc<dyn CreationStorage>,
         fail: AtomicBool,
@@ -1850,9 +1849,7 @@ async fn a_stopped_source_reply_claim_retains_the_durable_child_report() {
             Box::pin(async move {
                 if self.fail.load(Ordering::SeqCst) {
                     self.failures.fetch_add(1, Ordering::SeqCst);
-                    return Err(CreationStorageError::Storage(
-                        nessa_sdk::application::agent_execution::sessions::StorageError::Busy,
-                    ));
+                    return Err(CreationStorageError::Storage(StorageError::Busy));
                 }
                 self.storage.mutations(principal).await
             })
