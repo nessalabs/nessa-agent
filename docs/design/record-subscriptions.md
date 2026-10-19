@@ -73,7 +73,7 @@ connection as that pass ([read-only sync example](read-only-sync-example.md#foll
 `conversation.list`, `.observe` and `.subscribeList` use a device's grant-scoped
 catalogue. The bounded rows and scoped head of a list come from one metadata
 snapshot; an incomplete frame compares that head, so an unrelated wake sends
-nothing (L6–L12). A peer gateway retains its existing catalogue read path.
+nothing (L6–L13). A peer gateway retains its existing catalogue read path.
 The desktop shows the
 view's own `truncated` and `transcriptState` (`history` on its transcript).
 It does not page records to reconstruct older text, and a turn the view left
@@ -294,6 +294,7 @@ guarantee (#935).
 | L10 | Catalogue admission succeeds but the configured policy denies or cannot decide a returned candidate | Refuse the whole batch without rows, cursor, scoped head or completeness; no partial disclosure from an inconsistent index | `a_paired_list_uses_the_configured_read_policy` |
 | L11 | A paired observation spans a page boundary while ungranted rows change | Keep the existing scoped cursor, return each granted identity once, and finish without exposing ungranted rows | `a_paired_list_observation_keeps_its_scoped_cursor` |
 | L12 | A list or observation reaches a gateway with no conversation service | Ask catalogue policy before exposing service availability: a peer remains forbidden, while an admitted device receives conversations_not_configured | `a_paired_list_admits_its_scope_before_service_availability` |
+| L13 | A seeded mock-agent socket run mixes hidden summary writes, omitted-row R1→R2→R3 replacement, revoke/regrant, archive/restore, running turns and reconnects; repeat at raised counts | Each batch matches an independent granted-row ordering, ungranted activity stays quiet, former-receiver heads stop at replacement, running settles, and reconnect releases watches/capacity | `paired_catalogue_seeded_mock_agent_stress`; `paired_catalogue_seeded_mock_agent_stress_under_load` (owned socket stress; canonical gate19 wiring still requires shared-harness coordination) |
 | AC1 | Subscribe to the agent catalog; on a gateway that pairs no environments, too | The reply, then one `agents.listed` frame, the generated shape, carrying what `agents.list` answers; with no environments paired nothing changes it, and no other frame comes | `the_agent_catalog_is_sent_again_as_paired_environments_come_and_go`; `a_gateway_pairing_no_environments_sends_its_catalog_once`; `an_agent_catalog_frame_is_the_generated_shape` |
 | AC2 | A paired environment connects, disconnects or is revoked; or the count moves with the catalog unchanged (a connection taking another's place) | A frame with the catalog as `agents.list` answers it then; none when it is the same | `the_agent_catalog_is_sent_again_as_paired_environments_come_and_go` |
 | AC3 | Many changes while a catalog frame waits for the writer | At most one more frame, with the latest catalog | `changes_while_a_catalog_frame_waits_collapse_into_one_frame` |

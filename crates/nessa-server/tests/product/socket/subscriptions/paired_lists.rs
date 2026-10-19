@@ -319,3 +319,6 @@ async fn a_paired_list_admits_its_scope_before_service_availability() {
         }
     }
 }
+
+#[path = "paired_lists/stress.rs"]
+mod stress;
