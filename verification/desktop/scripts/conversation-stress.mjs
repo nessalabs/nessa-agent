@@ -735,7 +735,14 @@ const steps = {
       }
       if (!/restarted/i.test(resumed.userText))
         failures.push("the resumed turn does not say Nessa restarted")
-      await expectShown(run.page, SAYS.resumed, failures, 60_000)
+      const resumedInWindow = await waitFor(async () => {
+        const text = await pageText(run.page)
+        return text.includes(fold(resumed.userText)) && text.includes(fold(SAYS.resumed))
+      }, 60_000)
+      if (!resumedInWindow)
+        failures.push(
+          "the window does not show the current resumed turn and its completion",
+        )
       // WebKit reports the socket killed by this owned restart differently.
       // Reclassify only held evidence after recovery, never future failures.
       if (cleanBeforeRestart && failures.length === 0) {

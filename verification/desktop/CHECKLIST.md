@@ -1420,8 +1420,10 @@ says why where the conversations would be.
   runs. _Check:_ every script adds them to its failures; `smoke.mjs` reports them
   per layout as `console`.
 - The stress check's deliberate gateway restart may lose its WebKit socket.
-  With no earlier held errors and a proven resumed successor in both source
-  and window, only the already-held exact owned `/session` network-lost line
+  The source must confirm the successor of the current cut request; one existing
+  60-second UI poll requires both its exact userText and the completion response.
+  Earlier pause completion text alone is not recovery evidence. With no earlier
+  held errors and that identity-bound successor in the window, only the already-held exact owned `/session` network-lost line
   is labelled as the deliberate restart. Future lines and other endpoints
   stay errors (`conversation-stress.mjs`, existing `reclassifyHeld` owner).
 - _Harmless:_ the first page in a fresh browser asks for `/favicon.ico` and
