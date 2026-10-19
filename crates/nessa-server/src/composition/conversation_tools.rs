@@ -595,11 +595,10 @@ async fn run(
             // it, a report would only repeat it. Until then the report stays
             // held, and an answer the caller never gets lets it go.
             if let (true, Some((execution, held))) = (whole, awaited) {
-                let parent = source.conversation().clone();
                 *delivered = Some(Box::new(move || {
                     tokio::spawn(async move {
                         service
-                            .claim_thread_report(&target, &execution, &parent)
+                            .claim_thread_report(&target, &execution, &source)
                             .await;
                         drop(held);
                     });

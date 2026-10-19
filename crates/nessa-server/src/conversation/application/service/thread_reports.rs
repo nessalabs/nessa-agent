@@ -30,7 +30,7 @@ use super::{
     ConversationCaller, ConversationError, ConversationService, Inner, SubmissionMode,
     SubmittedMessage, Writer,
 };
-use crate::conversation::application::ConversationFuture;
+use crate::conversation::application::{AgentToolSource, ConversationFuture};
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_sdk::application::agent_execution::{
@@ -684,14 +684,30 @@ impl ConversationService {
     }
 
     /// The sender already has `execution`'s reply, read in its own turn:
-    /// its report would only say it again, so it is let go.
+    /// its report would only say it again, so it is let go. A stopped source
+    /// execution cannot acknowledge it; unreadable Stop receipts retain it.
     pub async fn claim_thread_report(
         &self,
         child: &ConversationId,
         execution: &str,
-        parent: &ConversationId,
+        source: &AgentToolSource,
     ) {
-        for report in self.inner.thread_reports.claim(child, execution, parent) {
+        match self
+            .stopped_report_executions(source.conversation(), &source.caller())
+            .await
+        {
+            Ok(stopped) if !stopped.contains(source.execution()) => {}
+            Ok(_) => return,
+            Err(error) => {
+                tracing::warn!(conversation_id = %source.conversation(), execution = source.execution(), %error, "reply claim retains its report until source Stop receipts can be read");
+                return;
+            }
+        }
+        for report in self
+            .inner
+            .thread_reports
+            .claim(child, execution, source.conversation())
+        {
             self.settle_saved(child, &report).await;
         }
     }

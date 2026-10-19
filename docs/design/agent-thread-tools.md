@@ -329,6 +329,15 @@ until the relay writes the whole reply, as described above.
 | Sender disconnects or its reply is not written | No claim; existing delivery/restart handling retains the saved report; `one_subscribe_naming_the_sent_turn_returns_its_reply_in_place_of_the_report`. |
 | An injected turn's host is suspended and resumes | Subscribe and the report both follow the SDK's exact successor, remaining unfinished until it settles; `an_injected_report_waits_for_its_suspended_hosts_exact_successor`. |
 | A person stops the parent while a child report becomes ready | Existing durable Stop receipts hold dispatch and cancelled report attempts remain saved for later person input; a report does not restart the stopped parent. |
+| A whole-reply callback from the source turn runs after that turn was stopped | The callback carries its admitted `AgentToolSource`; existing durable Stop receipts refuse that exact execution's claim, retaining the saved report. `a_stopped_source_reply_claim_retains_the_durable_child_report` exercises the application callback after a real Stop. |
+| A later person turn starts before the old callback runs | The old execution remains stopped; its callback still retains the report. A newly admitted source execution can claim the reply; the same regression checks both identities. |
+| Stop receipt observation fails before a whole-reply claim | The report remains saved; an unreadable receipt does not prove that its source was not stopped. |
+
+The callback checks the source execution rather than the conversation's current
+pause: later person input can release a pause without reviving an earlier
+execution. The receipt observation orders the claim against Stop; a claim whose
+observation preceded Stop remains an earlier acknowledgement. This consumes the
+same receipt authority as report delivery, without changing tool authorization.
 
 Claims can suppress a report still waiting to be submitted. A report already
 submitted has the existing duplicate allowance; a failed store settlement leaves

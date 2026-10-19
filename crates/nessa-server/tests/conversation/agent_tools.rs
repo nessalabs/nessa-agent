@@ -1822,11 +1822,53 @@ mod thread_report_settlement_tests;
 #[cfg(unix)]
 #[tokio::test]
 async fn a_stopped_source_reply_claim_retains_the_durable_child_report() {
+    use std::sync::atomic::AtomicUsize;
+
+    use nessa_sdk::application::agent_execution::commands::{
+        CreationFuture, CreationReceipt, CreationStorage, CreationStorageError,
+        CreationStorageLease, MutationReceipt,
+    };
+
+    struct Receipts {
+        storage: Arc<dyn CreationStorage>,
+        fail: AtomicBool,
+        failures: AtomicUsize,
+    }
+    impl CreationStorage for Receipts {
+        fn open_creation(
+            &self,
+            principal: String,
+            request: String,
+            create: bool,
+        ) -> CreationFuture<'_, Option<Arc<dyn CreationStorageLease>>> {
+            self.storage.open_creation(principal, request, create)
+        }
+        fn creations(&self, principal: String) -> CreationFuture<'_, Vec<CreationReceipt>> {
+            self.storage.creations(principal)
+        }
+        fn mutations(&self, principal: String) -> CreationFuture<'_, Vec<MutationReceipt>> {
+            Box::pin(async move {
+                if self.fail.load(Ordering::SeqCst) {
+                    self.failures.fetch_add(1, Ordering::SeqCst);
+                    return Err(CreationStorageError::Storage(
+                        nessa_sdk::application::agent_execution::sessions::StorageError::Busy,
+                    ));
+                }
+                self.storage.mutations(principal).await
+            })
+        }
+    }
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("data");
     let provider = Arc::new(ProviderFactory::default());
     provider.turn_cancel.store(true, Ordering::SeqCst);
     let (service, storage, metadata) = fixture(&root, provider.clone());
+    let receipts = Arc::new(Receipts {
+        storage: storage.clone(),
+        fail: AtomicBool::new(false),
+        failures: AtomicUsize::new(0),
+    });
+    service.bind_commands(receipts.clone());
     super::parent_stop::bind(&service, &storage, &root, true).await;
     service.bind_agent_tool_audit(Arc::new(Audit::default()));
     let reports = Arc::new(LocalThreadReports::open(&root.join("reports.sqlite3")).unwrap());
@@ -1965,8 +2007,15 @@ async fn a_stopped_source_reply_claim_retains_the_durable_child_report() {
 
     // The caller connection still exists. This is the late whole-reply
     // callback's current application call, after real durable Stop evidence.
+    receipts.fail.store(true, Ordering::SeqCst);
     service
-        .claim_thread_report(&child, "child-turn", source.conversation())
+        .claim_thread_report(&child, "child-turn", &source)
+        .await;
+    assert!(receipts.failures.load(Ordering::SeqCst) > 0);
+    assert_eq!(reports.pending().await.unwrap().len(), 1);
+    receipts.fail.store(false, Ordering::SeqCst);
+    service
+        .claim_thread_report(&child, "child-turn", &source)
         .await;
     assert_eq!(
         reports.pending().await.unwrap().len(),
@@ -2012,7 +2061,7 @@ async fn a_stopped_source_reply_claim_retains_the_durable_child_report() {
     .await
     .unwrap();
     service
-        .claim_thread_report(&child, "child-turn", source.conversation())
+        .claim_thread_report(&child, "child-turn", &source)
         .await;
     assert_eq!(reports.pending().await.unwrap().len(), 1);
     let fresh = service
@@ -2031,7 +2080,7 @@ async fn a_stopped_source_reply_claim_retains_the_durable_child_report() {
         .unwrap();
     assert_eq!(fresh.execution(), "later-source-turn");
     service
-        .claim_thread_report(&child, "child-turn", fresh.conversation())
+        .claim_thread_report(&child, "child-turn", &fresh)
         .await;
     assert!(reports.pending().await.unwrap().is_empty());
     drop(held);
