@@ -1570,15 +1570,14 @@ impl Agent {
         };
         // Choose once for this operation: native input belongs to the active
         // response/turn; an independent queued invocation belongs to selection.
-        let configured = active
+        let mut configured = active
             .filter(|_| joins_target)
             .map(|active| active.configured)
             .unwrap_or_else(|| self.current_provider());
         validate_configured_input(configured.capabilities(), &input)?;
         let close_notice = self.inner.lifecycle.close_notice();
         *work_owner = Some(self.inner.lifecycle.accept_waiting_work()?);
-        let approval_mode = self.approval_mode();
-        submitter.admits(approval_mode)?;
+        submitter.admits(configured.approval_mode())?;
         scheduler
             .queue
             .validate_enqueue(&input.execution_id)
@@ -1658,7 +1657,9 @@ impl Agent {
         // before any queue receipt, queue effect, or queue-admission audit.
         let outcome = match outcome {
             Ok(SteeringOutcome::PromptRequired) => {
-                validate_configured_input(&self.capabilities(), &input)
+                configured = self.current_provider();
+                validate_configured_input(configured.capabilities(), &input)
+                    .and_then(|()| submitter.admits(configured.approval_mode()))
                     .map(|()| SteeringOutcome::PromptRequired)
             }
             outcome => outcome,
@@ -1747,7 +1748,7 @@ impl Agent {
                         .expect("admitted steering owner")
                         .provider_generation()
                 );
-                let effort_level = self.effort_level();
+                let effort_level = configured.effort_level();
                 let receipt = Self::accept_pending(
                     &mut scheduler,
                     input,
@@ -1764,9 +1765,9 @@ impl Agent {
                         SubmissionMode::Steering,
                         audit_actor.clone(),
                     )
-                    .with_approval_context(approval_mode, admission_generation)
+                    .with_approval_context(configured.approval_mode(), admission_generation)
                     .with_effort_level(effort_level)
-                    .with_model(self.provider_identity()),
+                    .with_model(configured.identity()),
                 );
                 let audit = self
                     .record_scheduling_audit(audit_record, "steering_queue_admission")

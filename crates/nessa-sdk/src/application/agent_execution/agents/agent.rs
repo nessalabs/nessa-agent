@@ -710,6 +710,18 @@ impl Agent {
         let before = ModelConfiguration::new(self.approval_mode(), self.effort_level());
         self.configured_provider(&ModelConfiguration::new(Some(mode), self.effort_level()))
             .map_err(ProviderOperationFailure::before_effect)?;
+        // A NextTurn model choice can leave a different binding executing.
+        // A direct preset ACK changes that binding's mode, not its model/effort.
+        let active_configured = self
+            .inner
+            .lifecycle
+            .active_configuration()
+            .map(|active| {
+                ModelConfiguration::new(Some(mode), active.configured.effort_level())
+                    .configured_provider(active.configured.as_ref(), self.inner.traces.clone())
+            })
+            .transpose()
+            .map_err(ProviderOperationFailure::before_effect)?;
         let result = self
             .inner
             .lifecycle
@@ -731,6 +743,11 @@ impl Agent {
                 configuration.clone(),
             )
             .await?;
+            if let Some(configured) = active_configured {
+                self.inner
+                    .lifecycle
+                    .acknowledge_active_configuration(configured);
+            }
             if let Err(error) = self
                 .inner
                 .manager

@@ -10,9 +10,9 @@ use crate::application::agent_execution::{
     caller_wake::{contain_caller_wake, CallerWaiter},
     permissions::ActionContext,
     providers::{
-        AgentProvider, ModelChange, ModelChangeEffect, ModelConfiguration, ProviderIdentity,
-        ProviderOperationFailure, ProviderOperationResult, ProviderOperationStage,
-        ProviderSessionState,
+        AgentProvider, ModelChange, ModelChangeEffect, ModelChangeTiming, ModelConfiguration,
+        ProviderIdentity, ProviderOperationFailure, ProviderOperationResult,
+        ProviderOperationStage, ProviderSessionState,
     },
 };
 use std::{
@@ -369,9 +369,13 @@ impl Agent {
                 ProviderSessionState::CleanupRequired,
             ));
         }
-        self.inner
-            .lifecycle
-            .acknowledge_active_model(normalized.clone(), effect.timing());
+        match effect.timing() {
+            ModelChangeTiming::NextTurn => {}
+            ModelChangeTiming::SubsequentResponses => self
+                .inner
+                .lifecycle
+                .acknowledge_active_configuration(normalized.clone()),
+        }
         *self.inner.provider.write().expect("current model binding") = normalized;
         Ok(effect)
     }

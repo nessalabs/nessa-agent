@@ -18,9 +18,8 @@ use crate::application::agent_execution::{
     executions::{AttachmentAuditCause, AttachmentAuditStage, ExecutionAuditRecord},
     permissions::ActionContext,
     providers::{
-        AgentProvider, CleanupReport, ModelChangeTiming, NativeExecutionHandoff,
-        OperationCapabilities, ProviderOpenControl, ProviderOperationFailure, ProviderSessionState,
-        SessionCloseRequest,
+        AgentProvider, CleanupReport, NativeExecutionHandoff, OperationCapabilities,
+        ProviderOpenControl, ProviderOperationFailure, ProviderSessionState, SessionCloseRequest,
     },
     sessions::{
         attachment::AttachmentLease, AttachedProvider, InvocationCancellationEvent,
@@ -1239,22 +1238,12 @@ impl SessionLifecycle {
     pub(super) fn active_configuration(&self) -> Option<ActiveExecution> {
         self.state.lock().expect("session lifecycle").active.clone()
     }
-    pub(super) fn acknowledge_active_model(
-        &self,
-        configured: Arc<dyn AgentProvider>,
-        timing: ModelChangeTiming,
-    ) {
-        match timing {
-            ModelChangeTiming::NextTurn => {}
-            ModelChangeTiming::SubsequentResponses => {
-                let mut state = self.state.lock().expect("session lifecycle");
-                // The model operation holds Scheduler through publication.
-                // Every new invocation must acquire it before execution, so an
-                // active owner here is still the one the operation observed.
-                if let Some(active) = state.active.as_mut() {
-                    active.configured = configured;
-                }
-            }
+    pub(super) fn acknowledge_active_configuration(&self, configured: Arc<dyn AgentProvider>) {
+        let mut state = self.state.lock().expect("session lifecycle");
+        // The configuration control holds Scheduler through publication. A new
+        // invocation cannot replace this owner while the control awaits its ACK.
+        if let Some(active) = state.active.as_mut() {
+            active.configured = configured;
         }
     }
     pub(super) fn start_execution(
