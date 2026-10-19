@@ -612,8 +612,10 @@ impl ConversationService {
     }
 
     /// How `execution` in `child` ended, as its report would tell it: the
-    /// outcome and the final reply, once its result is saved. `None` while it
-    /// runs, waits, or its history cannot be read now. A steering message is
+    /// outcome and the final reply, once it has settled for good. `None` while
+    /// it runs, waits, settles (a saved result can still turn into a failure
+    /// then, and the report waits for that too), or its history cannot be read
+    /// now. A steering message is
     /// answered by the turn it was delivered into.
     pub async fn thread_turn_end(
         &self,
@@ -634,8 +636,7 @@ impl ConversationService {
             Found::Settling(saved) | Found::Waiting(saved) if restored => {
                 Some(saved.unwrap_or(("interrupted", None)))
             }
-            Found::Settling(saved) => saved,
-            Found::Waiting(_) => None,
+            Found::Settling(_) | Found::Waiting(_) => None,
         }
     }
 
