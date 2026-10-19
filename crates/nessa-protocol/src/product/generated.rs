@@ -2755,6 +2755,105 @@ pub struct ConversationEvents {
     pub cursor: ConversationEventCursor,
     pub events: Vec<ConversationEvent>,
 }
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceArrangement {
+    Columns,
+    Sidebar,
+}
+impl WorkspaceArrangement {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Columns => "columns",
+            Self::Sidebar => "sidebar",
+        }
+    }
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceShowing {
+    Panes,
+    Agents,
+    Widget,
+}
+impl WorkspaceShowing {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Panes => "panes",
+            Self::Agents => "agents",
+            Self::Widget => "widget",
+        }
+    }
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkspaceWidget {
+    pub plugin: String,
+    pub id: String,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspacePaneKind {
+    Conversation,
+    Draft,
+    Widget,
+}
+impl WorkspacePaneKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Conversation => "conversation",
+            Self::Draft => "draft",
+            Self::Widget => "widget",
+        }
+    }
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkspacePaneItem {
+    pub kind: WorkspacePaneKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conversation_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub widget: Option<WorkspaceWidget>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkspacePane {
+    pub height_percent: u64,
+    pub focused: bool,
+    pub item: WorkspacePaneItem,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkspaceColumn {
+    pub width_percent: u64,
+    pub panes: Vec<WorkspacePane>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkspaceWindow {
+    pub arrangement: WorkspaceArrangement,
+    pub sidebar: bool,
+    pub session_list: bool,
+    pub showing: WorkspaceShowing,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub widget: Option<WorkspaceWidget>,
+    pub columns: Vec<WorkspaceColumn>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkspacePublishParams {
+    pub window_id: String,
+    pub revision: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window: Option<WorkspaceWindow>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkspacePublishResult {
+    pub revision: u64,
+    pub applied: bool,
+}
 pub const MAX_PEERS: usize = 64;
 pub const MAX_CONNECTION_CONVERSATION_SUBSCRIPTIONS: usize = 8;
 pub const MAX_CONNECTION_LIST_SUBSCRIPTIONS: usize = 2;
@@ -2904,6 +3003,7 @@ pub mod product_method {
     pub const CONVERSATION_SHARES: &str = "conversation.shares";
     pub const CONVERSATION_PERMISSION_RULES: &str = "conversation.permissionRules";
     pub const CONVERSATION_REVOKE_PERMISSION_RULE: &str = "conversation.revokePermissionRule";
+    pub const WORKSPACE_PUBLISH: &str = "workspace.publish";
     pub const CONVERSATION_SUBSCRIBE_EVENTS: &str = "conversation.subscribeEvents";
     pub const CONVERSATION_PEEK: &str = "conversation.peek";
 }
@@ -3096,7 +3196,7 @@ pub fn wire_shape_product_session_ready(value: &Value) -> bool {
         }) && object.get("methods").is_some_and(|field| {
             let _ = field;
             field.as_array().is_some_and(|items| {
-                items.len() <= 75
+                items.len() <= 76
                     && items.iter().all(|item| {
                         let _ = item;
                         item.is_string()
@@ -3194,6 +3294,7 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "conversation.shares",
     "conversation.permissionRules",
     "conversation.revokePermissionRule",
+    "workspace.publish",
     "conversation.subscribeEvents",
     "conversation.peek",
 ];
@@ -3274,6 +3375,7 @@ pub fn action_for_method(method: &str) -> Option<&'static str> {
         | "conversation.unsubscribe"
         | "conversation.permissionRules"
         | "conversation.revokePermissionRule"
+        | "workspace.publish"
         | "conversation.subscribeEvents"
         | "conversation.peek" => Some("conversation.write"),
         "conversation.recordsHead"

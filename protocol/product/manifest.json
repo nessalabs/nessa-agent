@@ -298,6 +298,10 @@
       "params": "ConversationRevokePermissionRuleParams",
       "grant": "conversation.write"
     },
+    "workspace.publish": {
+      "params": "WorkspacePublishParams",
+      "grant": "conversation.write"
+    },
     "conversation.subscribeEvents": {
       "params": "ConversationSubscribeEventsParams",
       "grant": "conversation.write"
