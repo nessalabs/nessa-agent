@@ -186,3 +186,42 @@ Published `f0694161150a6566647d9addf54949db30314591` CI attempt 1 completed
 all 12 jobs successfully in [run 39323294415](https://github.com/nessalabs/nessa-agent/actions/runs/39323294415).
 The subsequent recovery correction requires its own exact-head checks and fresh
 complete review before merging. No historical failure is erased by later passes.
+
+## Retained history and audit acknowledgement
+
+Fresh complete reviews of `f0563851da13788b301783376c4065490915241f`
+found that a failed final decline save could leave a locally final decision,
+then let an empty-owed retry clear the unfinished mark before persistence.
+The confirmed Stop receipt still fences native resumption. Separate runtime
+counterfactuals reproduce the missing decline audit and premature recovery
+completion against the unfixed SDK and gateway.
+
+The correction keeps these facts with their existing owners: the session manager
+distinguishes an applied decision from its save acknowledgement; the SDK audits
+the actual decline and retains independent storage/audit failures; gateway
+recovery and settlement flush retained history before clearing the durable mark.
+The real crash/SQLite regression crosses rejected writes and lost acknowledgements
+with both recovery paths and reopening. The SDK regression checks successful and
+rejected audit acknowledgements, and that failure before the earlier Interrupted
+edge creates no decline decision. Public SDK APIs and storage formats are unchanged.
+
+The same review directly observed a restart-test settlement race: an already saved
+input was mistaken for completion of the asynchronous durable-row cleanup. The
+test now waits on the report store's actual settlement and rechecks exactly one
+input. Published-head Linux CI also observed an empty crash marker between file
+creation and its byte write; the fixture now uses the existing atomic temporary
+file/rename publication pattern. Both failures and their logs remain retained.
+
+All six frozen `f0563851` browser runs passed: canonical dev 43, production 23,
+Codex parent Stop 4, default stress 66, raised stress 68 and restart-recovery
+stress 72. Their source and eight executable hashes stayed fixed and all owned
+processes were reaped. Its CI run finished with ten successful jobs and the
+Linux marker failure plus aggregate failure. These results support that head;
+the structural correction requires fresh checks and complete independent review.
+
+The local structural correction passed all 3,417 server library tests (12 existing
+ignores), all 2,491 SDK tests (23 existing ignores) and 58 doctests. Its focused
+parent-Stop group passed 47 tests with two helper-only ignores, and the SDK
+resumption group passed 39. All owned test processes were reaped. Exact-head
+CI, browser qualification and fresh complete independent review remain separate
+merge gates.

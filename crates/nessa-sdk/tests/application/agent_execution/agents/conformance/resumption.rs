@@ -331,6 +331,83 @@ async fn a_declined_suspended_turn_is_decided_once() {
 }
 
 #[tokio::test]
+async fn a_decline_audits_its_applied_decision_despite_a_failed_terminal_save() {
+    for reject_audit in [false, true] {
+        let saved = cut_off_while_running("decline-save").await;
+        let (agent, backend, storage, _hold) = restore_holding(saved).await;
+        let turn = agent.owed_turns().await.remove(0);
+        // Interrupted commits; the final NotResumed decision is retained but
+        // its adapter rejects the write without committing it.
+        let failed_write = storage.writes() + 2;
+        storage.0.lock().unwrap().fail_write = Some(failed_write);
+        backend.audit.reject.store(reject_audit, Ordering::SeqCst);
+        let error = bounded(agent.decline_turn(&turn, resumer()))
+            .await
+            .unwrap_err();
+        let storage_error = AgentError::Storage(StorageError::Io("fixture write failed".into()));
+        assert_eq!(
+            error,
+            if reject_audit {
+                AgentError::MultipleOperationFailures {
+                    first_error: Box::new(storage_error),
+                    subsequent_error: Box::new(AgentError::AuditFailure),
+                }
+            } else {
+                storage_error
+            }
+        );
+        assert_eq!(resumptions(&backend), [TurnResumption::Declined]);
+        assert_eq!(
+            storage.snapshot().invocations[0]
+                .scheduling
+                .last()
+                .unwrap()
+                .cause,
+            SchedulingCause::Interrupted
+        );
+        assert!(
+            agent.owed_turns().await.is_empty(),
+            "the live decision is retained"
+        );
+        agent
+            .session_manager()
+            .save_retained_lease_records()
+            .await
+            .unwrap();
+        assert_eq!(
+            storage.snapshot().invocations[0]
+                .scheduling
+                .last()
+                .unwrap()
+                .cause,
+            SchedulingCause::NotResumed
+        );
+        assert!(backend.executions.lock().unwrap().is_empty());
+        backend.audit.reject.store(false, Ordering::SeqCst);
+        bounded(agent.close(actor())).await.unwrap();
+        assert_ends_after_restore(&storage).await;
+    }
+}
+
+#[tokio::test]
+async fn a_failed_interrupted_save_does_not_invent_a_decline_decision() {
+    let saved = cut_off_while_running("interrupted-save").await;
+    let (agent, backend, storage, _hold) = restore_holding(saved).await;
+    let turn = agent.owed_turns().await.remove(0);
+    storage.fail_next();
+    assert!(matches!(
+        bounded(agent.decline_turn(&turn, resumer())).await,
+        Err(AgentError::Storage(_))
+    ));
+    assert!(resumptions(&backend).is_empty());
+    assert_eq!(agent.owed_turns().await.len(), 1);
+    bounded(agent.decline_turn(&turn, resumer())).await.unwrap();
+    assert_eq!(resumptions(&backend), [TurnResumption::Declined]);
+    bounded(agent.close(actor())).await.unwrap();
+    assert_ends_after_restore(&storage).await;
+}
+
+#[tokio::test]
 async fn a_spent_chain_of_suspended_turns_is_recorded_ended() {
     let mut saved = stopped_storage(Stop::Suspend).await;
     // The original and its three successors are each stopped by a shutdown.

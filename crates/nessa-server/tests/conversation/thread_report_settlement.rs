@@ -9,6 +9,16 @@ use nessa_sdk::application::agent_execution::{
 use nessa_sdk::domain::agent_execution::executions::ExecutionOutcome;
 use std::sync::Condvar;
 
+async fn settled_reports(store: &LocalThreadReports) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !store.pending().await.unwrap().is_empty() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("settled parent report releases its durable row");
+}
+
 struct HeldAfterHook {
     entered: Arc<tokio::sync::Notify>,
     release: Arc<(Mutex<bool>, Condvar)>,
@@ -321,13 +331,7 @@ async fn a_pending_mcp_report_survives_a_conflicting_target_retry() {
         "ownership keeps a queued report durable until the parent report turn settles"
     );
     drop(release_source);
-    tokio::time::timeout(Duration::from_secs(5), async {
-        while !store.pending().await.unwrap().is_empty() {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .expect("settled parent report releases its durable row");
+    settled_reports(&store).await;
     drop(client);
     drop(grant);
     serving.await.unwrap();
@@ -351,6 +355,9 @@ async fn a_pending_mcp_report_survives_a_conflicting_target_retry() {
     service.bind_thread_reports(store.clone());
     assert_eq!(service.resume_thread_reports().await.unwrap(), 1);
     assert_eq!(reports_in(&service, &source, 1).await.len(), 1);
-    assert!(store.pending().await.unwrap().is_empty());
+    // The input was already saved before the restart. Its presence does not
+    // mean the asynchronous replay observer has settled the durable row.
+    settled_reports(&store).await;
+    assert_eq!(reports_in(&service, &source, 1).await.len(), 1);
     retire(service, storage, metadata).await;
 }

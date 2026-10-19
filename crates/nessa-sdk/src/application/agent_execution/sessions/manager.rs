@@ -52,6 +52,12 @@ pub(crate) struct AttachmentOpenError {
     pub(crate) cause: AgentError,
     pub(crate) source: AttachmentOpenFailureSource,
 }
+
+/// A validated scheduling decision was applied to local evidence; its
+/// persistence acknowledgement is a separate fact.
+pub(crate) struct SchedulingCommit {
+    pub saved: Result<(), StorageError>,
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum AttachmentOpenFailureSource {
     Independent,
@@ -1565,6 +1571,16 @@ impl SessionManager {
     ) -> Result<(), StorageError> {
         self.record_scheduling_with_queue(index, event, None).await
     }
+    /// Return the locally applied decision even if its save is not acknowledged.
+    /// Validation failure returns no commit and grants no decision authority.
+    pub(crate) async fn record_scheduling_commit(
+        &self,
+        index: usize,
+        event: InvocationSchedulingEvent,
+    ) -> Result<SchedulingCommit, StorageError> {
+        self.record_scheduling_with_queue_commit(index, event, None)
+            .await
+    }
     /// Persist a lifecycle edge and its corresponding actual queue removal together.
     pub(crate) async fn record_scheduling_with_queue(
         &self,
@@ -1572,6 +1588,16 @@ impl SessionManager {
         event: InvocationSchedulingEvent,
         mutation: Option<QueueMutation>,
     ) -> Result<(), StorageError> {
+        self.record_scheduling_with_queue_commit(index, event, mutation)
+            .await?
+            .saved
+    }
+    async fn record_scheduling_with_queue_commit(
+        &self,
+        index: usize,
+        event: InvocationSchedulingEvent,
+        mutation: Option<QueueMutation>,
+    ) -> Result<SchedulingCommit, StorageError> {
         let mut evidence = self.evidence.lock().await;
         let snapshot = evidence
             .observed()
@@ -1603,7 +1629,9 @@ impl SessionManager {
             )));
         }
         evidence.record(changes)?;
-        self.save_observed(&mut evidence).await
+        Ok(SchedulingCommit {
+            saved: self.save_observed(&mut evidence).await,
+        })
     }
     /// Atomically retain a failed queued receipt, its terminal scheduling edge,
     /// and actual queue removal. The completed result is present before the

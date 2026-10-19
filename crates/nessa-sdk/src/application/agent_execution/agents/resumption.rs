@@ -65,6 +65,28 @@ pub struct OwedTurn {
     initiation: Initiation,
     dispatched: bool,
 }
+
+struct OwedSettlement {
+    record: InvocationRecord,
+    cause: SchedulingCause,
+    saved: Result<(), StorageError>,
+}
+
+/// A real local decision is audited even when its persistence is uncertain.
+/// Neither failure stands in for the other, or authorizes another decision.
+fn decision_evidence(
+    saved: Result<(), StorageError>,
+    audited: Result<(), AgentError>,
+) -> Result<(), AgentError> {
+    match (saved, audited) {
+        (Ok(()), audit) => audit,
+        (Err(error), Ok(())) => Err(AgentError::Storage(error)),
+        (Err(error), Err(audit)) => Err(AgentError::MultipleOperationFailures {
+            first_error: Box::new(AgentError::Storage(error)),
+            subsequent_error: Box::new(audit),
+        }),
+    }
+}
 impl OwedTurn {
     /// The turn that was cut off.
     pub fn execution_id(&self) -> &ExecutionId {
@@ -565,9 +587,15 @@ impl Agent {
         let successor = Resumption::of(&turn.execution_id).successor();
         // A spent chain is ended by this decision, so it is no longer owed.
         let end = successor.is_none().then(|| actor.clone());
-        let Some((record, cause)) = self.settle_owed(turn, end).await? else {
+        let Some(OwedSettlement {
+            record,
+            cause,
+            saved,
+        }) = self.settle_owed(turn, end).await?
+        else {
             return Ok(Resumed::NotOwed);
         };
+        saved.map_err(AgentError::Storage)?;
         let audit = |resumption| {
             ExecutionAuditRecord::TurnResumed(TurnResumptionRecord::new(
                 self.inner.manager.id().clone(),
@@ -616,27 +644,36 @@ impl Agent {
     /// [`TurnResumption::Declined`] record says so.
     ///
     /// # Errors
-    /// What saving the cancellation edges or the audit record returns.
+    /// What saving the cancellation edges or the audit record returns. Once
+    /// NotResumed is applied locally, its audit is attempted even if saving
+    /// that decision fails; independent failures are retained together.
     pub async fn decline_turn(
         &self,
         turn: &OwedTurn,
         actor: ActionContext,
     ) -> Result<(), AgentError> {
-        let Some((record, cause)) = self.settle_owed(turn, Some(actor.clone())).await? else {
+        let Some(OwedSettlement {
+            record,
+            cause,
+            saved,
+        }) = self.settle_owed(turn, Some(actor.clone())).await?
+        else {
             return Ok(());
         };
-        self.record_resumption_audit(ExecutionAuditRecord::TurnResumed(
-            TurnResumptionRecord::new(
-                self.inner.manager.id().clone(),
-                turn.execution_id.clone(),
-                cause,
-                turn.dispatched,
-                record.actor,
-                actor,
-                TurnResumption::Declined,
-            ),
-        ))
-        .await
+        let audited = self
+            .record_resumption_audit(ExecutionAuditRecord::TurnResumed(
+                TurnResumptionRecord::new(
+                    self.inner.manager.id().clone(),
+                    turn.execution_id.clone(),
+                    cause,
+                    turn.dispatched,
+                    record.actor,
+                    actor,
+                    TurnResumption::Declined,
+                ),
+            ))
+            .await;
+        decision_evidence(saved, audited)
     }
 
     /// Find `turn` if it is still owed and record its owed stop if it was
@@ -647,7 +684,7 @@ impl Agent {
         &self,
         turn: &OwedTurn,
         end: Option<ActionContext>,
-    ) -> Result<Option<(InvocationRecord, SchedulingCause)>, AgentError> {
+    ) -> Result<Option<OwedSettlement>, AgentError> {
         let scheduler = self.inner.scheduler.lock().await;
         let active = self.inner.lifecycle.active();
         let live = |id: &ExecutionId| scheduler.has_receipt(id) || active.as_ref() == Some(id);
@@ -692,14 +729,21 @@ impl Agent {
                 edge
             }
         };
-        if let Some(actor) = end {
+        let saved = if let Some(actor) = end {
             self.inner
                 .manager
-                .record_scheduling(turn.index, not_resumed(&owed_edge, actor)?)
+                .record_scheduling_commit(turn.index, not_resumed(&owed_edge, actor)?)
                 .await
-                .map_err(AgentError::Storage)?;
-        }
+                .map_err(AgentError::Storage)?
+                .saved
+        } else {
+            Ok(())
+        };
         drop(scheduler);
-        Ok(Some((record, owed_edge.cause)))
+        Ok(Some(OwedSettlement {
+            record,
+            cause: owed_edge.cause,
+            saved,
+        }))
     }
 }

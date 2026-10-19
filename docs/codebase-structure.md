@@ -2521,4 +2521,10 @@ evidence through the ordinary durable audit owner. Namespace
 The real coordinator/SQLite regressions live in `tests/conversation/parent_stop.rs`;
 `tests/conversation/parent_stop/confirmed_recovery.rs` kills a process between
 native cancel acknowledgement and turn settlement, retaining exact command authority.
+It also rejects the final decline write or loses its acknowledgement through real
+SQLite, then checks retry, settlement and reopening. `resumption.rs` flushes the
+existing session owner's retained evidence before recovery completes or its durable
+unfinished mark clears. The SDK session manager distinguishes an applied scheduling
+decision from its persistence acknowledgement; the decline owner audits that actual
+decision and retains independent persistence and audit failures.
 `verification/desktop/scripts/parent-stop.mjs` exercises the ordinary Stop button.

@@ -352,6 +352,17 @@ impl ConversationService {
         {
             return false;
         }
+        // The live owed view includes retained decisions. A failed terminal
+        // save must be acknowledged before that view can complete recovery.
+        if let Err(error) = live
+            .agent
+            .session_manager()
+            .save_retained_lease_records()
+            .await
+        {
+            tracing::warn!(conversation_id = %id, %error, "retained recovery history could not be saved");
+            return false;
+        }
         let Ok(actor) = ActionContext::new("gateway", "resume_owed", Uuid::new_v4().to_string())
         else {
             return false;
@@ -451,7 +462,10 @@ impl ConversationService {
             drop(held);
         }
         if !unsettled {
-            self.clear_if_nothing_owed(id, &live).await;
+            if let Err(error) = self.clear_if_nothing_owed(id, &live).await {
+                unsettled = true;
+                tracing::warn!(conversation_id = %id, %error, "a finished conversation's mark could not be cleared");
+            }
         }
         drop(_submissions);
         drop(_threads);
@@ -505,18 +519,25 @@ impl ConversationService {
 
     /// Clear `id`'s mark when its agent is idle and its history lists no
     /// owed turn: each was resumed, or declined, which ends it in history.
-    /// Read-only but for the mark. Called under the conversation's
-    /// submission lock.
-    async fn clear_if_nothing_owed(&self, id: &ConversationId, live: &LiveConversation) {
+    /// Flush retained history before clearing the mark: a live terminal
+    /// decision is not proof that its write was acknowledged. Called under
+    /// the conversation's submission lock.
+    async fn clear_if_nothing_owed(
+        &self,
+        id: &ConversationId,
+        live: &LiveConversation,
+    ) -> Result<(), ConversationError> {
         if self.inner.retirement.get().is_some()
             || !live.agent.is_idle().await
             || !live.agent.owed_turns().await.is_empty()
         {
-            return;
+            return Ok(());
         }
-        if let Err(error) = self.clear_mark(id).await {
-            tracing::warn!(conversation_id = %id, %error, "a finished conversation's mark could not be cleared");
-        }
+        live.agent
+            .session_manager()
+            .save_retained_lease_records()
+            .await?;
+        self.clear_mark(id).await
     }
 
     /// Mark `id` before its agent is given a turn. Durable before it
@@ -566,7 +587,10 @@ impl ConversationService {
         // can fix, and a turn a resume could not decide (a grant's policy
         // unreadable).
         if live.agent.owed_turns().await.is_empty() {
-            self.clear_if_nothing_owed(id, &live).await;
+            if let Err(error) = self.clear_if_nothing_owed(id, &live).await {
+                tracing::warn!(conversation_id = %id, %error, "settled conversation history could not be acknowledged");
+                self.schedule_retry(id, true).await;
+            }
             return;
         }
         // Released before the retry is due, so the retry never meets the
