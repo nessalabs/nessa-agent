@@ -3623,6 +3623,41 @@ describe("MCP Apps (#384)", () => {
     expect(a).not.toEqual(b)
   })
 
+  it.each(["conversation_erasure_incomplete", "audit_unavailable"])(
+    "a delete refused with %s happened all the same: the row goes and the apps forget it, and the failure still says so",
+    async (code) => {
+      const { gateway, source, told, updates, follow } = withApps()
+      gateway.rows.set(conversationA, row(conversationA))
+      gateway.rows.set(conversationB, row(conversationB))
+      follow()
+      await source.index()
+      updates.length = 0
+      gateway.once("delete", () => Promise.reject(rpcCode(code)))
+      await expect(source.delete(conversationA, "person")).rejects.toBeDefined()
+      await flush()
+      expect(kinds(updates)).toContain("session-removed")
+      expect(told).toContainEqual(["forget", conversationA])
+      expect((await source.index()).sessions.map((session) => session.id)).toEqual([
+        conversationB,
+      ])
+    },
+  )
+
+  it("a delete refused otherwise may not have happened: the row stays", async () => {
+    const { gateway, source, updates, follow } = withApps()
+    gateway.rows.set(conversationA, row(conversationA))
+    follow()
+    await source.index()
+    updates.length = 0
+    gateway.once("delete", () => Promise.reject(rpcCode("temporarily_unavailable")))
+    await expect(source.delete(conversationA, "person")).rejects.toBeDefined()
+    await flush()
+    expect(kinds(updates)).not.toContain("session-removed")
+    expect((await source.index()).sessions.map((session) => session.id)).toEqual([
+      conversationA,
+    ])
+  })
+
   it("D4: a conversation the gateway says was deleted is forgotten by the apps, after it is taken out", async () => {
     const { gateway, source, told, updates, follow } = withApps()
     gateway.rows.set(conversationA, row(conversationA))

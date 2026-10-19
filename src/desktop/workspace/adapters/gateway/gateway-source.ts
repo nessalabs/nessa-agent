@@ -1630,13 +1630,23 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
     delete: (sessionId) =>
       within(async (live) => {
         archiving.add(sessionId)
+        const gone = () => {
+          remove(sessionId)
+          tellApps(() => options.apps?.forget(sessionId))
+        }
         const { turn, settled } = inTurn(listing, async () => {
           held(sessionId)
           await within(() =>
-            dispatch(live, (connected) => connected.conversation.delete(sessionId)),
+            dispatch(live, (connected) => connected.conversation.delete(sessionId)).catch(
+              (error: unknown) => {
+                // Deleted, with only its erasure or its record unfinished:
+                // gone all the same, and the failure still says so.
+                if (deletedAnyway(error)) gone()
+                throw error
+              },
+            ),
           )
-          remove(sessionId)
-          tellApps(() => options.apps?.forget(sessionId))
+          gone()
         })
         listing = settled
         void settled.then(() => archiving.delete(sessionId))
@@ -1810,6 +1820,19 @@ function readTrace(subject: "index" | "conversation", sessionId?: string) {
     method: subject === "index" ? "conversation.subscribeList" : "conversation.subscribe",
     ...(sessionId === undefined ? {} : { sessionId }),
   }
+}
+
+/**
+ * A delete refused with one of the two codes that say it happened anyway
+ * (`conversation.delete`): its stored data, or the record of it, did not
+ * finish.
+ */
+function deletedAnyway(error: unknown): boolean {
+  const { code } = readHint(error)
+  return (
+    code === ConversationErrorCode.ConversationErasureIncomplete ||
+    code === ConversationErrorCode.AuditUnavailable
+  )
 }
 
 /** The gateway or socket fact already on the error, and nothing it says in prose. */
