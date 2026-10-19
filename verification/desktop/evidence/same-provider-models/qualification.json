@@ -1,0 +1,37 @@
+{
+  "qualified_source_commit": "414ce25f3afa381665bf47bc0ea757069f126dfd",
+  "base": "571c1bb501ffe36fdc6018c2e0f93b4f078b84e2",
+  "ui_pin": "0794a41bb1482aa7e677fd2b7012874bcc3e29b2",
+  "ui_manifest_sha256": "a643e6740b575c84d3c6e7a66b99b706d6fe894372d583fca41c82adc8a2b631",
+  "backend_receipt_sha256": "131e7a48b549f733b02cf0dbf404992f2aa567c7172067d9ba970980f782cb48",
+  "backend_runtime_union": {
+    "passed": 6838,
+    "ignored": 36,
+    "doctests": 69,
+    "note": "Source-qualified union; original failed runs and narrowly migrated fixtures retained separately."
+  },
+  "frontend": {
+    "files": 365,
+    "passed": 4906
+  },
+  "canonical": "three programs in Chromium and WebKit",
+  "chaos": {
+    "passed": 2,
+    "seeds": 2
+  },
+  "window_stress": {
+    "claude_default": 48,
+    "claude_raised_six": 62,
+    "codex_one": 9,
+    "codex_six": 19,
+    "engines": [
+      "chromium",
+      "webkit"
+    ]
+  },
+  "smoke": 33,
+  "composer": 3,
+  "historical_failures_preserved": true,
+  "synthetic_controls_are_not_browser_evidence": true,
+  "installed_app_parity_verified": false
+}
