@@ -107,7 +107,7 @@ fn catalogue() -> &'static [Limit] {
             id: "server.live_conversations",
             tier: "configured",
             owner: "config.json limits.liveConversations",
-            meaning: "opening a conversation past this many open at once, each with its agent running, is refused capacity",
+            meaning: "opening a conversation past this many open at once, each with its agent running, parks the idle one used longest ago; it is refused capacity only when none can be parked",
         },
         Limit {
             id: "server.agent_idle_seconds",
@@ -167,7 +167,7 @@ fn catalogue() -> &'static [Limit] {
             id: "socket.refusal_lane",
             tier: "fixed",
             owner: "product socket REFUSAL_LANE",
-            meaning: "an app refusal waits while one is queued; a non-app refusal on a full lane closes the socket",
+            meaning: "a refusal waits while one is queued, and the socket reads no further frame until it is",
         },
         Limit {
             id: "socket.write_timeout",

@@ -357,6 +357,75 @@ async fn parent_stop_default_override_grandchildren_and_unrelated_execution() {
     }
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn parent_stop_during_its_queue_handoff_still_captures_the_owned_child() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("data");
+    let provider = Arc::new(ProviderFactory::default());
+    provider.turn_cancel.store(true, Ordering::SeqCst);
+    let (service, storage, metadata) = fixture(&root, provider.clone());
+    let coordinator = bind(&service, &storage, &root, true).await;
+    let parent = id();
+    opened(&service, &provider, &parent).await;
+    let first = hold_turn(&service, &provider, &parent, "first").await;
+    let child_id = child(&service, &parent, "first", "create-child").await;
+    let child_work = hold_turn(&service, &provider, &child_id, "child").await;
+    drop(first);
+    let live = service.resolve(&parent, &caller("inspect")).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !live.agent.is_idle().await {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    let began = Arc::new(Notify::new());
+    let (prepare, preparation) = oneshot::channel();
+    *provider.prepare_gate.lock().unwrap() = Some((began.clone(), preparation));
+    let (execution, execution_gate) = oneshot::channel();
+    *provider.execution_gate.lock().unwrap() = Some(execution_gate);
+    let preparing = began.notified();
+    send(&service, &parent, "moving-root", "now").await;
+    tokio::time::timeout(Duration::from_secs(5), preparing)
+        .await
+        .unwrap();
+    assert!(live.agent.queued_ids().await.is_empty());
+    assert!(live.agent.active_execution_id().is_none());
+    let stopping = tokio::spawn({
+        let service = service.clone();
+        let storage = storage.clone();
+        let parent = parent.clone();
+        async move {
+            service
+                .stop_command(storage, parent, caller("stop-moving"), "moving-root".into())
+                .await
+        }
+    });
+    // Same held provider-preparation prefix as the upstream moving-turn test.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let waited = !stopping.is_finished();
+    prepare.send(()).unwrap();
+    let receipt = tokio::time::timeout(Duration::from_secs(5), stopping)
+        .await
+        .unwrap()
+        .unwrap();
+    drop((execution, child_work, live));
+    let cancelled = provider.cancel_turns.lock().unwrap().clone();
+    let child_lifetime = coordinator
+        .active_lifetime_for_session(&conversation_session(&child_id))
+        .unwrap();
+    let state = coordinator.lifetime_state(&child_lifetime);
+    retire(service, storage, metadata).await;
+    assert!(waited, "Stop waits for the exact parent's selected turn");
+    assert!(matches!(
+        receipt.unwrap().outcome(),
+        Some(MutationOutcome::Cancelled | MutationOutcome::AlreadyFinal)
+    ));
+    assert!(cancelled.contains(&"moving-root".into()));
+    assert!(cancelled.contains(&"child".into()));
+    assert_eq!(state, Some(LifetimeState::Open));
+}
+
 #[tokio::test]
 async fn parent_stop_cancels_owned_active_and_queued_turns_and_keeps_threads_reusable() {
     for (cascade, handoff) in [(true, false), (true, true), (false, false)] {

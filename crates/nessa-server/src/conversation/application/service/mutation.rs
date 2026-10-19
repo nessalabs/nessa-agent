@@ -5,7 +5,7 @@ use super::{
     SubmitFailure, SubmittedMessage, Writer,
 };
 use crate::conversation::domain::ConversationRefusal;
-use nessa_sdk::application::agent_execution::agents::{AgentError, QueueRemoval};
+use nessa_sdk::application::agent_execution::agents::{AgentError, AttachmentPhase, QueueRemoval};
 use nessa_sdk::application::agent_execution::commands::{
     CreationFuture, CreationInitializationFailure, CreationStorage, CreationTaskFault,
     MutationBinding, MutationCoordinator, MutationFailure, MutationOperation, MutationOutcome,
@@ -361,14 +361,16 @@ impl MutationTarget for SubmitTarget {
         let mode = self.mode;
         let delivery = self.delivery.clone();
         Box::pin(async move {
+            // `submit_command` holds admission through this effect.
             let submitted = service
-                .submit_as(
+                .submit_admitted_as(
                     id,
                     caller,
                     execution_id,
                     message.map_err(CreationInitializationFailure::Target)?,
                     mode,
                     Writer::Person(initiation, offers_remember),
+                    true,
                 )
                 .await
                 .map_err(SubmitFailure::into_error);
@@ -428,36 +430,56 @@ impl MutationTarget for StopTarget {
                 return Err(ConversationError::RequestConflict);
             }
             let live = service.resolve(&id, &caller).await?;
-            if live
-                .agent
-                .owed_turns()
-                .await
-                .iter()
-                .any(|owed| owed.execution_id() == &turn)
-            {
-                return Ok(MutationPlan::Effect);
-            }
-            if live
-                .agent
-                .queued_ids()
-                .await
-                .iter()
-                .any(|queued| queued == &turn)
-            {
-                return Ok(MutationPlan::Effect);
-            }
-            if live.agent.active_execution_id().as_ref() == Some(&turn) {
-                if live.agent.supports_turn_cancel() {
+            // A turn leaving the queue is neither queued nor running for a
+            // moment: asked again until it is one or ends, as in `effect`.
+            let deadline = std::time::Instant::now() + MOVING_TURN_WAIT;
+            loop {
+                if live
+                    .agent
+                    .owed_turns()
+                    .await
+                    .iter()
+                    .any(|owed| owed.execution_id() == &turn)
+                {
                     return Ok(MutationPlan::Effect);
                 }
-                return Err(ConversationError::Agent(AgentError::Unsupported(
-                    "turn cancel".into(),
-                )));
-            }
-            match turn_is_final(&live, &turn).await {
-                Some(true) => Ok(MutationPlan::AlreadyFinal),
-                Some(false) => Err(ConversationError::Agent(AgentError::SubmissionUnresolved)),
-                None => Err(ConversationError::NotFound),
+                if live
+                    .agent
+                    .queued_ids()
+                    .await
+                    .iter()
+                    .any(|queued| queued == &turn)
+                {
+                    return Ok(MutationPlan::Effect);
+                }
+                if live.agent.active_execution_id().as_ref() == Some(&turn) {
+                    if live.agent.supports_turn_cancel() {
+                        return Ok(MutationPlan::Effect);
+                    }
+                    // Only a provider that cannot cancel one turn is refused
+                    // here. One whose attachment is ending (a close, or a
+                    // failure stopping it) with its turn still listed is
+                    // answered by how the turn ends, below
+                    // (`a_stop_that_meets_a_close_is_answered_by_the_turns_end`).
+                    if matches!(
+                        live.agent.attachment_status().phase(),
+                        AttachmentPhase::Attached
+                    ) {
+                        return Err(ConversationError::Agent(AgentError::Unsupported(
+                            "turn cancel".into(),
+                        )));
+                    }
+                }
+                match turn_is_final(&live, &turn).await {
+                    Some(true) => return Ok(MutationPlan::AlreadyFinal),
+                    Some(false) if std::time::Instant::now() < deadline => {
+                        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                    }
+                    Some(false) => {
+                        return Err(ConversationError::Agent(AgentError::SubmissionUnresolved))
+                    }
+                    None => return Err(ConversationError::NotFound),
+                }
             }
         })
     }
@@ -477,67 +499,98 @@ impl MutationTarget for StopTarget {
             let actor = caller
                 .actor()
                 .map_err(CreationInitializationFailure::Target)?;
-            if let Some(owed) = live
-                .agent
-                .owed_turns()
-                .await
-                .into_iter()
-                .find(|owed| owed.execution_id() == &turn)
-            {
-                live.agent
-                    .decline_turn(&owed, actor)
-                    .await
-                    .map_err(|error| {
-                        CreationInitializationFailure::Target(ConversationError::Agent(error))
-                    })?;
-                service.wake_thread_reports(&id);
-                return Ok(MutationOutcome::Withdrawn);
-            }
-            if live
-                .agent
-                .queued_ids()
-                .await
-                .iter()
-                .any(|queued| queued == &turn)
-            {
-                match live
+            // Checked queued or running, and still one or the other unless it
+            // ended: a turn leaving the queue is neither for a moment, between
+            // its selection and its start. It is asked again until it is one
+            // or ends, rather than answered as not found
+            // (`a_stop_that_meets_a_turn_leaving_the_queue_stops_it`).
+            let deadline = std::time::Instant::now() + MOVING_TURN_WAIT;
+            // A cancel that met the agent's lifecycle ending (a close, or a
+            // failure stopping it) while its turn was still listed as running.
+            let mut ending: Option<AgentError> = None;
+            // A cancel the provider refused with its session still usable
+            // while the turn is listed running: the turn has not reached the
+            // provider yet, or has just left it. Asked again until it reaches
+            // the turn or the turn ends; at the deadline this refusal answers.
+            let mut refused: Option<AgentError> = None;
+            loop {
+                if let Some(owed) = live
                     .agent
-                    .remove_queued(turn.clone(), actor)
+                    .owed_turns()
                     .await
-                    .map_err(|error| {
-                        CreationInitializationFailure::Target(ConversationError::Agent(error))
-                    })? {
-                    QueueRemoval::Removed => {
-                        service.wake_thread_reports(&id);
-                        return Ok(MutationOutcome::Withdrawn);
-                    }
-                    QueueRemoval::NotPending => {}
+                    .into_iter()
+                    .find(|owed| owed.execution_id() == &turn)
+                {
+                    live.agent
+                        .decline_turn(&owed, actor.clone())
+                        .await
+                        .map_err(|error| {
+                            CreationInitializationFailure::Target(ConversationError::Agent(error))
+                        })?;
+                    service.wake_thread_reports(&id);
+                    return Ok(MutationOutcome::Withdrawn);
                 }
-            }
-            if live.agent.active_execution_id().as_ref() == Some(&turn) {
-                return match live.agent.cancel_turn(turn.clone()).await {
-                    Ok(()) => Ok(MutationOutcome::Cancelled),
-                    Err(failure) => {
-                        let (error, state) = failure.into_parts();
-                        if matches!(
-                            (&error, state),
-                            (AgentError::Unsupported(_), ProviderSessionState::Usable)
-                        ) && live.agent.active_execution_id().as_ref() != Some(&turn)
-                        {
-                            Ok(MutationOutcome::AlreadyFinal)
-                        } else {
-                            Err(CreationInitializationFailure::Target(
-                                ConversationError::Agent(error),
-                            ))
+                if live
+                    .agent
+                    .queued_ids()
+                    .await
+                    .iter()
+                    .any(|queued| queued == &turn)
+                {
+                    match live
+                        .agent
+                        .remove_queued(turn.clone(), actor.clone())
+                        .await
+                        .map_err(|error| {
+                            CreationInitializationFailure::Target(ConversationError::Agent(error))
+                        })? {
+                        QueueRemoval::Removed => {
+                            service.wake_thread_reports(&id);
+                            return Ok(MutationOutcome::Withdrawn);
                         }
+                        QueueRemoval::NotPending => {}
                     }
-                };
-            }
-            match turn_is_final(&live, &turn).await {
-                Some(true) => Ok(MutationOutcome::AlreadyFinal),
-                _ => Err(CreationInitializationFailure::Target(
-                    ConversationError::NotFound,
-                )),
+                }
+                if ending.is_none() && live.agent.active_execution_id().as_ref() == Some(&turn) {
+                    match live.agent.cancel_turn(turn.clone()).await {
+                        Ok(()) => return Ok(MutationOutcome::Cancelled),
+                        // The turn ended as the cancel reached it, its agent
+                        // stopping with it after a failure, say: the stop is
+                        // answered by how the turn ends, below.
+                        Err(_) if live.agent.active_execution_id().as_ref() != Some(&turn) => {}
+                        // The agent no longer takes control because it is
+                        // ending, and its turn ends with it: answered by how
+                        // the turn ends, below, not by the cancel's refusal
+                        // (`a_stop_whose_cancel_meets_the_agent_ending_is_answered_by_the_turns_end`).
+                        Err(failure)
+                            if !matches!(failure.session_state(), ProviderSessionState::Usable) =>
+                        {
+                            ending = Some(failure.into_parts().0);
+                        }
+                        // (`a_stop_whose_cancel_meets_the_turn_not_yet_in_the_provider_stops_it`)
+                        Err(failure) => refused = Some(failure.into_parts().0),
+                    }
+                }
+                match turn_is_final(&live, &turn).await {
+                    Some(true) => return Ok(MutationOutcome::AlreadyFinal),
+                    Some(false) if std::time::Instant::now() < deadline => {
+                        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                    }
+                    Some(false) => {
+                        return Err(CreationInitializationFailure::Target(
+                            ConversationError::Agent(
+                                ending
+                                    .or(refused)
+                                    .unwrap_or(AgentError::SubmissionUnresolved),
+                            ),
+                        ))
+                    }
+                    None => {
+                        return Err(CreationInitializationFailure::Target(
+                            ConversationError::NotFound,
+                        ))
+                    }
+                }
             }
         })
     }
@@ -603,6 +656,10 @@ pub(super) async fn ensure_live(
     service.access().admit(&record, caller)?;
     Ok(())
 }
+
+/// How long a stop waits for a turn between leaving the queue and starting
+/// to be one or the other.
+const MOVING_TURN_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
 
 async fn turn_is_final(live: &super::LiveConversation, turn: &ExecutionId) -> Option<bool> {
     let snapshot = live.agent.session_manager().snapshot().await?;

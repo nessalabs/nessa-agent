@@ -310,15 +310,16 @@ jobs:
   # conversations run beside it. Every feature a person reaches through a
   # conversation is flexed here (CODING_STANDARDS.md, "Conversation stress").
   # The pull request runs its default numbers; the nightly load run in
-  # conversation-stress-load.yml raises them.
+  # conversation-stress-load.yml raises them. The chaos check runs after it
+  # in the same job, on the same gateway build.
   conversation-stress:
     name: Conversation stress check
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     runs-on: ubuntu-latest
-    # Planning bound, not yet measured: a cold gateway build, the browser
-    # download and about two minutes of the check itself.
-    timeout-minutes: 45
+    # Planning bound: a cold gateway build, the browser download, the stress
+    # check, and the chaos check's seeds (with a shrink if one fails).
+    timeout-minutes: 60
     env:
       STRESS_EVIDENCE: ${{ github.workspace }}-stress-evidence
     steps:
@@ -343,6 +344,17 @@ jobs:
           set -o pipefail
           mkdir -p "$STRESS_EVIDENCE"
           pnpm test:e2e:stress -- --channel bundled --evidence "$STRESS_EVIDENCE" 2>&1 | tee "$STRESS_EVIDENCE/stress.log"
+        timeout-minutes: 20
+      # Seeded random actions from several clients at once on the same
+      # gateway build (conversation-chaos.mjs): a few short seeds here, many
+      # long ones nightly. A failure prints its seed and a shrunk action list.
+      - name: Run the conversation chaos check
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p "$STRESS_EVIDENCE/chaos"
+          pnpm test:e2e:chaos -- --evidence "$STRESS_EVIDENCE/chaos" 2>&1 | tee "$STRESS_EVIDENCE/chaos/chaos.log"
         timeout-minutes: 20
       - name: Keep the evidence of a failed run
         if: failure()

@@ -261,29 +261,56 @@ pub(super) struct WorkPermit {
     owner: Arc<SessionLifecycle>,
     id: u64,
     binding: Mutex<(WorkGeneration, ProviderGeneration)>,
-    /// The usable attachment's provider generation when this permit was
-    /// granted, or `None` when nothing was attached. Close can detach that
-    /// attachment before the admission record is written; this stays the
-    /// generation that accepted the work.
-    live_generation: Option<u64>,
+    /// What the work was accepted on, read under the lock that granted the
+    /// permit. Close can detach that attachment, and a recovery can finish
+    /// opening, before the admission record is written; this stays what
+    /// accepted the work.
+    footing: Footing,
     stop: watch::Receiver<()>,
     cancellation: watch::Receiver<Option<InvocationCancellationEvent>>,
 }
 pub(super) struct AttachmentStart {
     pub(super) generation: u64,
+    /// The provider generation this attachment opens: one past the
+    /// attachment it replaces.
+    pub(super) provider_generation: u64,
     pub(super) cause: AttachmentCause,
     pub(super) record: AttachmentAuditRecord,
     pub(super) result: watch::Sender<Option<Result<(), AgentError>>>,
     pub(super) open_control: ProviderOpenControl,
     pub(super) started_evidence: watch::Sender<Option<Result<(), AgentError>>>,
 }
+/// An automatic recovery that is due or under way, read with the rest of a
+/// [`Footing`].
+#[derive(Clone, Copy, Debug)]
+pub(super) struct Recovery {
+    /// The provider generation of the attachment the recovery replaces.
+    lost: u64,
+}
+impl Recovery {
+    /// Whether a live change verified on `generation` is the one this
+    /// recovery runs at: the lost attachment's, or the recovery's own, which
+    /// the change is carried to as it opens. Either may be the one recorded
+    /// by the time it is read.
+    pub(super) fn carries(&self, generation: u64) -> bool {
+        generation == self.lost || generation == self.lost + 1
+    }
+}
+/// Where work accepted now runs, read under one lifecycle lock: a usable
+/// attachment's provider generation, or, with none, the automatic recovery
+/// it waits for, if that is what opens next.
+#[derive(Clone, Copy, Debug)]
+pub(super) enum Footing {
+    Attached(u64),
+    Detached(Option<Recovery>),
+}
 impl WorkPermit {
     pub(super) fn provider_generation(&self) -> u64 {
         self.provider_generation_value().0
     }
-    /// The usable attachment when this permit was granted.
-    pub(super) fn live_generation(&self) -> Option<u64> {
-        self.live_generation
+    /// What accepted the work when this permit was granted.
+    pub(super) fn footing(&self) -> Footing {
+        self.footing
     }
     fn provider_generation_value(&self) -> ProviderGeneration {
         self.binding.lock().expect("work binding").1
@@ -338,6 +365,41 @@ impl Drop for WorkPermit {
         self.owner.changed.send_replace(());
     }
 }
+/// The usable attachment, or else whether the agent's own automatic
+/// recovery, not a caller's attachment, is the next one to run work: due,
+/// authorized, opening, or published and not yet ready. A caller that
+/// attaches first opens at the binding's preset instead; nothing in the
+/// gateway does while the agent recovers.
+fn footing_of(state: &State) -> Footing {
+    if let Some(generation) = usable_provider_generation(state) {
+        return Footing::Attached(generation);
+    }
+    if !matches!(state.work_status, WorkStatus::Open) {
+        return Footing::Detached(None);
+    }
+    let current = state.provider_generation.0;
+    let lost = match &state.attachment {
+        AttachmentState::Absent { recorded: true } if state.automatic_recovery_ready => {
+            Some(current)
+        }
+        AttachmentState::Authorized(authority)
+            if authority.cause == AttachmentCause::AutomaticRecovery =>
+        {
+            Some(current)
+        }
+        AttachmentState::Starting {
+            cause: AttachmentCause::AutomaticRecovery,
+            ..
+        }
+        | AttachmentState::Attached {
+            cause: AttachmentCause::AutomaticRecovery,
+            ..
+        } => current.checked_sub(1),
+        _ => None,
+    };
+    Footing::Detached(lost.map(|lost| Recovery { lost }))
+}
+
 fn usable_provider_generation(state: &State) -> Option<u64> {
     match &state.attachment {
         AttachmentState::Attached { .. } if state.provider_ready => {
@@ -443,10 +505,14 @@ impl SessionLifecycle {
         )
     }
     /// Stopped by itself with no way back but its owner's close (see
-    /// `Agent::awaits_close`). A stop that may still reopen it — cleanup not
-    /// yet started, or under way, or confirmed with work left to drain — is
-    /// not, and neither is an explicit close or a sealed lifetime, which its
-    /// owner is already ending.
+    /// `Agent::awaits_close`). A stop that may still reopen it — cleanup
+    /// under way, or confirmed with work left to drain, or not yet started
+    /// while the work that will start it is still held — is not, and neither
+    /// is an explicit close or a sealed lifetime, which its owner is already
+    /// ending. A provider-state fence whose cleanup nothing is left to start
+    /// is: a failed turn starts its own once it settles, but a review's
+    /// answer or withdrawal only fences, and leaves the agent for its owner's
+    /// close (`provider_controls_latch_every_uncertain_cleanup_wrapper_until_explicit_recovery`).
     pub(super) fn awaits_close(&self) -> bool {
         if self.lifetime_sealed() {
             return false;
@@ -461,7 +527,8 @@ impl SessionLifecycle {
         }
         match stop.recovery {
             RecoveryPolicy::NeedsExplicitClose => true,
-            RecoveryPolicy::CleanupNotStarted | RecoveryPolicy::ExplicitClose => false,
+            RecoveryPolicy::CleanupNotStarted => state.work.is_empty(),
+            RecoveryPolicy::ExplicitClose => false,
             RecoveryPolicy::Automatic => {
                 stop.finalized
                     && !stop
@@ -521,6 +588,10 @@ impl SessionLifecycle {
             AttachmentState::Attached { .. } => AttachmentPhase::Starting,
             AttachmentState::Failed { failure, .. } => AttachmentPhase::Failed(failure.code()),
         }
+    }
+    /// Where work accepted now would run ([`Footing`]).
+    pub(super) fn footing(&self) -> Footing {
+        footing_of(&self.state.lock().expect("session lifecycle"))
     }
     /// The provider generation of the usable attachment, if there is one. A
     /// replacement attachment always has a later one.
@@ -653,6 +724,7 @@ impl SessionLifecycle {
         });
         let start = AttachmentStart {
             generation: attachment_generation,
+            provider_generation: state.provider_generation.0 + 1,
             cause: authorization.cause,
             record: AttachmentAuditRecord {
                 session_id: self.session_id.clone(),
@@ -1101,11 +1173,11 @@ impl SessionLifecycle {
                 cancellation,
             },
         );
-        let live_generation = usable_provider_generation(&state);
+        let footing = footing_of(&state);
         Ok(WorkPermit {
             owner: self.clone(),
             id,
-            live_generation,
+            footing,
             binding: Mutex::new((work_generation, state.provider_generation)),
             stop: self.stop.subscribe(),
             cancellation: cancellation_notice,

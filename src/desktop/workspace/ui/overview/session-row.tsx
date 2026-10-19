@@ -59,7 +59,7 @@ export const SessionRow = memo(function SessionRow({
   }
 
   return (
-    <li className="agents-row-item" data-reflow={`row:${sessionId}`}>
+    <li className="agents-row-item">
       <ListRow
         as="button"
         className="agents-row"

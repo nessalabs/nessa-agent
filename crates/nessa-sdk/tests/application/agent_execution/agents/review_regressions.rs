@@ -1747,6 +1747,51 @@ async fn provider_controls_latch_every_uncertain_cleanup_wrapper_until_explicit_
     }
 }
 
+/// A review's answer or withdrawal whose provider failure leaves cleanup
+/// required latches the agent for its owner's close, and nothing else starts
+/// that cleanup. Once the turn it belonged to has settled, the agent says it
+/// awaits its close: its owner asks exactly that before closing it and
+/// opening a new one. Answering no left it refusing every message as closed.
+#[tokio::test]
+async fn a_review_control_that_latches_the_agent_leaves_it_awaiting_its_close() {
+    for operation in [ProviderControl::Answer, ProviderControl::CancelPermission] {
+        let (agent, backend, _) = probe(false).await;
+        *backend.control_attachment.lock().unwrap() = ProviderSessionState::CleanupRequired;
+        let (release, wait) = oneshot::channel();
+        *backend.execution_gate.lock().unwrap() = Some(wait);
+        let active = tokio::spawn({
+            let agent = agent.clone();
+            async move {
+                agent
+                    .invoke(input("active"), Submitter::owner(actor()))
+                    .await
+            }
+        });
+        backend.executing.notified().await;
+        *backend.control_error.lock().unwrap() = Some(AgentError::CleanupUncertain);
+        assert_eq!(
+            invoke_control(&agent, operation).await,
+            Err(AgentError::CleanupUncertain),
+            "{operation:?}"
+        );
+        // The turn still runs, and its settlement may yet start cleanup.
+        assert!(!agent.awaits_close(), "{operation:?}");
+        release.send(()).unwrap();
+        assert_eq!(active.await.unwrap(), Ok(ExecutionOutcome::Completed));
+        assert!(matches!(
+            agent
+                .enqueue(input("refused"), Submitter::owner(actor()))
+                .await,
+            Err(AgentError::Closed)
+        ));
+        assert!(agent.awaits_close(), "{operation:?}");
+        *backend.control_error.lock().unwrap() = None;
+        *backend.control_attachment.lock().unwrap() = ProviderSessionState::Usable;
+        agent.close(actor()).await.unwrap();
+        assert!(!agent.awaits_close(), "{operation:?}");
+    }
+}
+
 #[tokio::test]
 async fn provider_controls_with_confirmed_cleanup_do_not_latch_admission() {
     for operation in [

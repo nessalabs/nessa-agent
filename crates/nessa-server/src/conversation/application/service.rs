@@ -9,7 +9,7 @@ use super::metadata_target::{load_conversation, validate_target};
 use super::session_key::conversation_session;
 use super::source_permits::SourcePermits;
 use super::{
-    app_reviews::{AppReviews, ReviewAnswer, ReviewAnswerer},
+    app_reviews::{AppReviews, ReviewAnswer, ReviewAnswerer, Taken},
     drive_tools::{checked_source, AdmittedPolicies, DriveToolHook, DriveTools},
     environment::{
         confirmed_despite, issue, open_lease, AgentEnd, LeaseIssueError, LeaseRequest, LiveLease,
@@ -503,6 +503,10 @@ pub enum ReadOpening {
 enum Halt {
     Retired,
     Failed(ConversationError),
+    /// Refused by an agent between a failed turn and its recovery, with
+    /// nothing taken: offered again, the message finds the agent recovered,
+    /// or stuck and the conversation opened again.
+    Again(ConversationError),
 }
 impl From<ConversationError> for Halt {
     fn from(error: ConversationError) -> Self {
@@ -513,7 +517,7 @@ impl From<Halt> for ConversationError {
     fn from(halt: Halt) -> Self {
         match halt {
             Halt::Retired => Self::Unavailable,
-            Halt::Failed(error) => error,
+            Halt::Failed(error) | Halt::Again(error) => error,
         }
     }
 }
@@ -665,6 +669,12 @@ enum SubmissionDelivery {
     Queued(QueueAdmission),
     Injected { evidence: SteeringEvidence },
 }
+/// What one message's offers took from its apps, and the agent they were
+/// offered to: kept from a refused offer for the next (`submit_admitted_as`).
+/// The agent is named by a weak reference: holding it would keep an agent
+/// that closed alive, its history leased, and the opening that replaces it
+/// would wait on that lease.
+type Carried = Arc<std::sync::Mutex<Option<(std::sync::Weak<LiveConversation>, Taken)>>>;
 struct LiveConversation {
     agent: Agent,
     /// The lease its agent runs under. Every close of the agent goes through
@@ -743,11 +753,12 @@ struct Slot {
     /// A person's close needs none: it holds the submission lock until its
     /// slot is let go.
     stopping: AtomicBool,
-    /// When the conversation last showed it was in use: opened, sent a
-    /// message, or seen busy, followed or with an app call waiting by the
-    /// parking sweep. An agent is parked only once this is
-    /// `ConversationLimits::park_after` old (`service/parking.rs`). Unix
-    /// milliseconds from the service's clock.
+    /// When the conversation last showed it was in use: opened or asked for
+    /// by a read or a message, or seen busy, followed or with an app call
+    /// waiting by the parking sweep. An agent is parked only once this is
+    /// `ConversationLimits::park_after` old, or, past the bound on live
+    /// agents, the one with the oldest is parked first
+    /// (`service/parking.rs`). Unix milliseconds from the service's clock.
     touched: AtomicU64,
 }
 impl Slot {
@@ -999,6 +1010,32 @@ pub(super) fn attachment_failure_message(code: AttachmentFailureCode) -> &'stati
         AttachmentFailureCode::Storage => "Attachment state could not be saved.",
         AttachmentFailureCode::Cleanup => "Attachment cleanup could not be confirmed.",
     }
+}
+/// Whether `live`'s agent runs at its conversation's approval mode. Attached,
+/// the mode is the one applied to that attachment. With none yet, or one
+/// still opening, it is the mode the agent opens its attachment at
+/// (`Agent::approval_mode`): a message sent just after the conversation
+/// opened again is checked against that, not refused for being early.
+async fn mode_holds(live: &LiveConversation) -> bool {
+    let _ = live.join_attachment_owner().await;
+    if !matches!(
+        live.agent.attachment_status().phase(),
+        AttachmentPhase::Attached
+            | AttachmentPhase::Absent
+            | AttachmentPhase::Waiting
+            | AttachmentPhase::Starting
+    ) {
+        return false;
+    }
+    let committed = live
+        .projection
+        .lock()
+        .await
+        .view()
+        .selection
+        .as_ref()
+        .map(|selection| selection.approval_mode);
+    committed.is_some_and(|mode| live.agent.approval_mode() == Some(provider_approval_mode(mode)))
 }
 fn lifecycle_view(agent: &Agent) -> ConversationLifecycle {
     let status = agent.attachment_status();
@@ -1499,19 +1536,29 @@ impl ConversationService {
             approval_mode,
         )
         .map_err(|_| ConversationError::InvalidInput)?;
-        let place = {
+        // Past the cap, an idle agent is let go to make room; only when
+        // every live agent is at work is the creation refused.
+        let place = loop {
             let owners = service.inner.conversations.lock().await;
             if service.inner.retirement.get().is_some() {
                 return Err(ConversationError::Unavailable);
             }
             if owners.contains_key(&id) {
-                None
-            } else {
-                Some(CreationPlace::take(
-                    &service.inner.creating,
-                    owners.len(),
-                    service.inner.limits.max_conversations,
-                )?)
+                break None;
+            }
+            match CreationPlace::take(
+                &service.inner.creating,
+                owners.len(),
+                service.inner.limits.max_conversations,
+            ) {
+                Ok(place) => break Some(place),
+                Err(ConversationError::Capacity) => {
+                    drop(owners);
+                    if !service.make_room(&id).await {
+                        return Err(ConversationError::Capacity);
+                    }
+                }
+                Err(error) => return Err(error),
             }
         };
         // Where it runs is recorded before the conversation exists, under the
@@ -1569,7 +1616,7 @@ impl ConversationService {
                 .await
                 .map_err(|_| ConversationError::Audit)?;
         }
-        let slot = {
+        let slot = loop {
             let mut owners = service.inner.conversations.lock().await;
             if service.inner.retirement.get().is_some() {
                 return Err(ConversationError::Unavailable);
@@ -1582,7 +1629,11 @@ impl ConversationService {
                 && owners.len() + service.inner.creating.load(Ordering::SeqCst)
                     >= service.inner.limits.max_conversations
             {
-                return Err(ConversationError::Capacity);
+                drop(owners);
+                if !service.make_room(&id).await {
+                    return Err(ConversationError::Capacity);
+                }
+                continue;
             }
             let slot = match owners.entry(id.clone()) {
                 std::collections::hash_map::Entry::Occupied(_) if new_only => {
@@ -1606,8 +1657,9 @@ impl ConversationService {
                     slot
                 }
             };
+            slot.touch(service.inner.clock.unix_milliseconds());
             drop(place);
-            slot
+            break slot;
         };
         drop(creation_guard);
         service.wait_for_slot(&id, slot).await
@@ -1649,6 +1701,23 @@ impl ConversationService {
             .await
             .map(|(_, live)| live)?)
     }
+    /// The conversation live now, for an answer to what its agent holds (a
+    /// review). One with no agent live holds nothing to answer, so it is not
+    /// opened, which past `limits.liveConversations` could be refused
+    /// `conversation_capacity` or park another: the answer is stale.
+    async fn resolve_holding_reviews(
+        &self,
+        id: &ConversationId,
+        caller: &ConversationCaller,
+    ) -> Result<Arc<LiveConversation>, ConversationError> {
+        match self.resolve_opening(id, caller, false).await {
+            Ok((_, live)) => Ok(live),
+            Err(Halt::Failed(ConversationError::McpApp(McpAppError::Cancelled))) => {
+                Err(AgentError::StalePermission.into())
+            }
+            Err(halt) => Err(halt.into()),
+        }
+    }
     /// [`Self::resolve`]; with `open` false, only a conversation live now:
     /// one with none is refused `mcp_cancelled`, and not opened. The gateway
     /// retiring is [`Halt::Retired`]; an opening that failed is its own
@@ -1688,12 +1757,12 @@ impl ConversationService {
         self.access()
             .admit(&record, caller)
             .map_err(ConversationError::from)?;
-        let slot = {
+        let slot = loop {
             let mut owners = self.inner.conversations.lock().await;
             if self.inner.retirement.get().is_some() {
                 return Err(Halt::Retired);
             }
-            if let Some(slot) = owners.get(id) {
+            let slot = if let Some(slot) = owners.get(id) {
                 slot.clone()
             } else if !open {
                 return Err(ConversationError::McpApp(McpAppError::Cancelled).into());
@@ -1701,16 +1770,62 @@ impl ConversationService {
                 if owners.len() + self.inner.creating.load(Ordering::SeqCst)
                     >= self.inner.limits.max_conversations
                 {
-                    return Err(ConversationError::Capacity.into());
+                    drop(owners);
+                    if !self.make_room(id).await {
+                        return Err(ConversationError::Capacity.into());
+                    }
+                    continue;
                 }
                 let slot = Arc::new(Slot::new(self.inner.clock.unix_milliseconds()));
                 owners.insert(id.clone(), slot.clone());
-                self.start_slot(id.clone(), slot.clone(), actor, None);
+                self.start_slot(id.clone(), slot.clone(), actor.clone(), None);
                 slot
-            }
+            };
+            slot.touch(self.inner.clock.unix_milliseconds());
+            break slot;
         };
         let live = self.wait_for_slot(id, slot.clone()).await?;
         Ok((slot, live))
+    }
+    /// Park the agent used longest ago that could be parked now
+    /// (`service/parking.rs`), so one more conversation can open past the
+    /// bound on live agents rather than being refused. Nothing of it is
+    /// lost: its records and owed work stay, and the next read or message
+    /// opens it again on its provider session. An agent at work, followed,
+    /// waiting on an app's review, or unable to resume is never parked.
+    /// Answers whether one was.
+    async fn make_room(&self, keep: &ConversationId) -> bool {
+        let mut owners: Vec<(u64, ConversationId, Arc<Slot>)> = self
+            .inner
+            .conversations
+            .lock()
+            .await
+            .iter()
+            .filter(|(id, slot)| *id != keep && !slot.stopping.load(Ordering::SeqCst))
+            .map(|(id, slot)| {
+                (
+                    slot.touched.load(Ordering::SeqCst),
+                    id.clone(),
+                    slot.clone(),
+                )
+            })
+            .collect();
+        owners.sort_by_key(|(touched, _, _)| *touched);
+        for (touched, id, slot) in owners {
+            // A submission or read holds this while it uses the agent; one
+            // held now is a use. Never waited for: two openings at the bound
+            // would each wait for the other's.
+            let Some(submissions) = self.inner.mode_changes.try_lock(&id) else {
+                continue;
+            };
+            if self
+                .park_held(&id, slot, ParkWhen::UnusedSince(touched), submissions)
+                .await
+            {
+                return true;
+            }
+        }
+        false
     }
     fn start_slot(
         &self,
@@ -2148,8 +2263,15 @@ impl ConversationService {
                         );
                     }
                     // A conversation a restart left with unfinished turns
-                    // carries them on as soon as it is open again.
-                    service.resume_owed(&id, live.clone()).await;
+                    // carries them on as soon as it is open again. The slot
+                    // is let go first: the resume waits for the submission
+                    // lock, and a close and a reopening ahead of it there
+                    // must find this agent's history free, not held by a
+                    // slot only this task still keeps
+                    // (`a_read_behind_a_close_of_an_opening_agent_opens_it_again`).
+                    let live = live.clone();
+                    drop(owner);
+                    service.resume_owed(&id, live).await;
                 }
             });
         }
@@ -3101,22 +3223,72 @@ impl ConversationService {
         mode: SubmissionMode,
         writer: Writer,
     ) -> Result<SubmissionReceipt, SubmitFailure> {
-        let (asked, submission) =
-            self.submission_future(id, caller, execution_id, message, mode, writer);
-        let outcome = tokio::spawn(submission).await;
+        self.submit_admitted_as(id, caller, execution_id, message, mode, writer, false)
+            .await
+    }
+    /// [`Self::submit_as`] for a caller already holding admission for the
+    /// whole call (`held`), which is not asked for again. Tokio's lock is
+    /// fair: a second read queues behind a waiting retirement, which waits on
+    /// the first, and neither moves until retirement gives up waiting.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) async fn submit_admitted_as(
+        &self,
+        id: ConversationId,
+        caller: ConversationCaller,
+        execution_id: String,
+        message: SubmittedMessage,
+        mode: SubmissionMode,
+        writer: Writer,
+        held: bool,
+    ) -> Result<SubmissionReceipt, SubmitFailure> {
+        // A message that reaches an agent between a failed turn and its
+        // recovery is refused with nothing taken (`Halt::Again`): the agent
+        // is stopping, or would run it at a mode other than the
+        // conversation's. It is offered again until the agent has recovered,
+        // or is found stuck and the conversation opened again, for as long
+        // as a stop may take. Every offer carries the same message identity,
+        // so one the agent did take is answered with its own delivery
+        // (`messages_sent_while_a_failed_turn_settles_are_not_refused_for_the_mode`).
+        // What an offer took from the apps and was refused with is offered
+        // again with the message, not reported dropped and then missing
+        // from it; should no offer be taken, it is reported dropped unsent
+        // as this goes (row C11).
+        let deadline = std::time::Instant::now() + self.inner.deletion_budgets.stop;
+        let carried = Carried::default();
+        let (asked, outcome) = loop {
+            let (asked, submission) = self.submission_future(
+                id.clone(),
+                caller.clone(),
+                execution_id.clone(),
+                message.clone(),
+                mode,
+                writer.clone(),
+                held,
+                carried.clone(),
+            );
+            let outcome = tokio::spawn(submission).await;
+            if !matches!(outcome, Ok(Err(Halt::Again(_)))) || std::time::Instant::now() >= deadline
+            {
+                break (asked, outcome);
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        };
         let asked = asked.load(Ordering::SeqCst);
         let failure = match outcome {
             Ok(Ok(receipt)) => return Ok(receipt),
             // Only before anything is asked: admission, and the resolve.
             Ok(Err(Halt::Retired)) => SubmitFailure::Retired,
-            Ok(Err(Halt::Failed(error))) if asked => SubmitFailure::Asked(error),
-            Ok(Err(Halt::Failed(error))) => SubmitFailure::NotAsked(error),
+            Ok(Err(Halt::Failed(error) | Halt::Again(error))) if asked => {
+                SubmitFailure::Asked(error)
+            }
+            Ok(Err(Halt::Failed(error) | Halt::Again(error))) => SubmitFailure::NotAsked(error),
             Err(_) => SubmitFailure::TaskFailed { asked },
         };
         Err(failure)
     }
     /// The submission task, shared by normal supervision and controlled polling
     /// in the desktop-stop ordering test. Refusal attribution stays on this task.
+    #[allow(clippy::too_many_arguments)]
     fn submission_future(
         &self,
         id: ConversationId,
@@ -3125,6 +3297,8 @@ impl ConversationService {
         message: SubmittedMessage,
         mode: SubmissionMode,
         writer: Writer,
+        held: bool,
+        carried: Carried,
     ) -> (
         Arc<AtomicBool>,
         impl Future<Output = Result<SubmissionReceipt, Halt>> + Send + 'static,
@@ -3138,7 +3312,11 @@ impl ConversationService {
         let refused_for = writer.clone();
         let asked_when_refused = asked.clone();
         let submission = async move {
-            let _admission = service.admit().await?;
+            let _admission = if held {
+                None
+            } else {
+                Some(service.admit().await?)
+            };
             let _mode = service.inner.mode_changes.lock(&id).await;
             service.recover_mode_change(&id, &caller).await?;
             let actor = caller.actor()?;
@@ -3158,108 +3336,127 @@ impl ConversationService {
                 .await?;
             // A message is use: an agent is not parked from under it.
             owner.touch(service.inner.clock.unix_milliseconds());
-            // An agent that stopped itself and waits for its owner's close
-            // takes nothing more (`Agent::awaits_close`): the conversation is
-            // stopped, not gone, so a person's message closes it and opens
-            // the conversation again, as a desktop stop would have. So is an
-            // idle one that lost the conversation's approval mode with its
-            // attachment (`resumption::mode_lost`): it would open again at
-            // the mode it was first opened with, and the check below would
-            // refuse every message for as long as it lived. An app's message
-            // opens nothing, and is refused below as before.
-            if !writer.is_app()
-                && !owner.stopping.load(Ordering::SeqCst)
-                && (live.agent.awaits_close()
-                    || (resumption::mode_lost(&live).await && live.agent.is_idle().await))
-            {
-                // The ended agent holds its history's lease until the last
-                // handle goes, so this one goes before the conversation
-                // opens again.
-                drop(live);
-                service.reopen_ended(&id, owner).await;
-                (owner, live) = service.resolve_opening(&id, &caller, true).await?;
-            }
-            // A submission the agent already has is the agent's to answer: the
-            // same message recovers its original delivery and any other is a
-            // conflict, whatever this conversation holds today. Its images were
-            // checked when it was first accepted. Asking again would turn a
-            // retry of a delivered turn into "not found" once its upload was
-            // let go, where the same retry of a text turn succeeds.
-            // A retry carries what its saved record holds, never what is held
-            // now: the agent compares it with the message it has
-            // (`c12_a_retry_of_a_message_the_agent_has_carries_what_its_record_holds`).
-            let original = live
-                .agent
-                .session_manager()
-                .snapshot()
-                .await
-                .and_then(|snapshot| {
-                    snapshot
-                        .invocations
-                        .iter()
-                        .find(|record| record.request.execution_id == execution)
-                        .map(|record| {
-                            (
-                                record.request.user_message.app_model_context().to_vec(),
-                                record.initiation.clone(),
-                            )
-                        })
-                });
-            let (original, saved_initiation) = original.unzip();
-            let known = original.is_some();
-            // Asked under the submission lock, which a desktop stop takes to
-            // mark the owner: an owner being stopped is handed no new message
-            // (`an_owner_marked_as_stopping_is_handed_no_message`, #528),
-            // before anything about it is recorded. A message it already has
-            // is still answered with its own delivery
-            // (`a_retry_of_a_message_the_stopping_owner_has_recovers_its_delivery`).
-            if owner.stopping.load(Ordering::SeqCst) && !known {
-                return Err(ConversationError::Agent(AgentError::Closed).into());
-            }
-            let non_default_mode = live
-                .projection
-                .lock()
-                .await
-                .view()
-                .selection
-                .as_ref()
-                .is_some_and(|selection| selection.approval_mode != ConversationApprovalMode::Ask);
-            if non_default_mode
-                || service
-                    .inner
-                    .metadata
-                    .requires_mode_verification(&id)
-                    .await?
-            {
-                let _ = live.join_attachment_owner().await;
-                // Attached, the mode is the one applied to that attachment.
-                // With none yet, or one still opening, it is the mode the
-                // agent opens its attachment at (`Agent::approval_mode`): a
-                // message sent just after the conversation opened again is
-                // checked against that, not refused for being early.
-                if !matches!(
-                    live.agent.attachment_status().phase(),
-                    AttachmentPhase::Attached
-                        | AttachmentPhase::Absent
-                        | AttachmentPhase::Waiting
-                        | AttachmentPhase::Starting
-                ) {
-                    return Err(ConversationError::ApprovalModeNotApplied.into());
+            // Opened again at most once for this message: by the stuck agent
+            // it found, or by one that failed while it was being checked.
+            let mut reopened = false;
+            let (original, saved_initiation, known, non_default_mode) = {
+                // An agent that stopped itself and waits for its owner's
+                // close takes nothing more (`Agent::awaits_close`): the
+                // conversation is stopped, not gone, so a person's message
+                // closes it and opens the conversation again, as a desktop
+                // stop would have. So is one whose attachment failed, or that
+                // lost the conversation's approval mode with it
+                // (`resumption::stuck`): it would open again at the mode it
+                // was first opened with, and the check below would refuse
+                // every message for as long as it lived. Its failed turn and
+                // what was queued behind it settle first, as they do before
+                // the gateway's own retry closes it; a message that came
+                // while they settle waits for that rather than being refused
+                // (`messages_sent_while_a_failed_turn_settles_are_not_refused_for_the_mode`).
+                // An app's message opens nothing, and is refused below as
+                // before.
+                if !reopened
+                    && !writer.is_app()
+                    && !owner.stopping.load(Ordering::SeqCst)
+                    && (live.agent.awaits_close()
+                        || (resumption::stuck(&live).await && service.settles(&live).await))
+                {
+                    // The ended agent holds its history's lease until the last
+                    // handle goes, so this one goes before the conversation
+                    // opens again.
+                    drop(live);
+                    service.reopen_ended(&id, owner).await;
+                    (owner, live) = service.resolve_opening(&id, &caller, true).await?;
+                    reopened = true;
                 }
-                let committed = live
+                // A submission the agent already has is the agent's to answer:
+                // the same message recovers its original delivery and any
+                // other is a conflict, whatever this conversation holds today.
+                // Its images were checked when it was first accepted. Asking
+                // again would turn a retry of a delivered turn into "not
+                // found" once its upload was let go, where the same retry of a
+                // text turn succeeds. A retry carries what its saved record
+                // holds, never what is held now: the agent compares it with
+                // the message it has
+                // (`c12_a_retry_of_a_message_the_agent_has_carries_what_its_record_holds`).
+                let original = live
+                    .agent
+                    .session_manager()
+                    .snapshot()
+                    .await
+                    .and_then(|snapshot| {
+                        snapshot
+                            .invocations
+                            .iter()
+                            .find(|record| record.request.execution_id == execution)
+                            .map(|record| {
+                                (
+                                    record.request.user_message.app_model_context().to_vec(),
+                                    record.initiation.clone(),
+                                )
+                            })
+                    });
+                let (original, saved_initiation) = original.unzip();
+                let known = original.is_some();
+                // Asked under the submission lock, which a desktop stop takes
+                // to mark the owner: an owner being stopped is handed no new
+                // message (`an_owner_marked_as_stopping_is_handed_no_message`,
+                // #528), before anything about it is recorded. A message it
+                // already has is still answered with its own delivery
+                // (`a_retry_of_a_message_the_stopping_owner_has_recovers_its_delivery`).
+                if owner.stopping.load(Ordering::SeqCst) && !known {
+                    return Err(ConversationError::Agent(AgentError::Closed).into());
+                }
+                let non_default_mode = live
                     .projection
                     .lock()
                     .await
                     .view()
                     .selection
                     .as_ref()
-                    .map(|selection| selection.approval_mode)
-                    .ok_or(ConversationError::ApprovalModeNotApplied)?;
-                let expected = provider_approval_mode(committed);
-                if live.agent.approval_mode() != Some(expected) {
+                    .is_some_and(|selection| {
+                        selection.approval_mode != ConversationApprovalMode::Ask
+                    });
+                if (non_default_mode
+                    || service
+                        .inner
+                        .metadata
+                        .requires_mode_verification(&id)
+                        .await?)
+                    && !mode_holds(&live).await
+                {
+                    // Its attachment failed, lost its mode, or is opening
+                    // again at the agent's first mode, after it was looked at
+                    // above, or it has not settled yet: offered again (see
+                    // `submit_as`), it is found settled and stuck, and the
+                    // conversation opened again.
+                    if !reopened && !writer.is_app() && !owner.stopping.load(Ordering::SeqCst) {
+                        return Err(Halt::Again(ConversationError::ApprovalModeNotApplied));
+                    }
                     return Err(ConversationError::ApprovalModeNotApplied.into());
                 }
-            }
+                (original, saved_initiation, known, non_default_mode)
+            };
+            // Checked above, and again by the agent as it admits the turn:
+            // its attachment can fail in between, and a turn admitted then
+            // would run at the mode the agent was opened with.
+            let required_mode = if non_default_mode
+                || service
+                    .inner
+                    .metadata
+                    .requires_mode_verification(&id)
+                    .await?
+            {
+                live.projection
+                    .lock()
+                    .await
+                    .view()
+                    .selection
+                    .as_ref()
+                    .map(|selection| provider_approval_mode(selection.approval_mode))
+            } else {
+                None
+            };
             // A Drive grant's turn is admitted only where every call it asks
             // about is checked against the grant's policy, and is saved as
             // checked (rows J26 and J27).
@@ -3373,12 +3570,22 @@ impl ConversationService {
             // What it took is this task's own: should the task end, however,
             // before the agent was asked, each is reported dropped unsent as
             // it goes (row C11).
+            // An earlier offer of this message to this same agent, refused
+            // to be offered again, took them already: they are offered again
+            // as they were. One taken from an agent since replaced, or not
+            // carried now, is reported dropped unsent as it goes.
             let mut taken = None;
-            let carried = match original {
+            let offered_before = carried
+                .lock()
+                .expect("carried contexts")
+                .take()
+                .filter(|(from, _)| std::sync::Weak::ptr_eq(from, &Arc::downgrade(&live)))
+                .map(|(_, took)| took);
+            let contexts = match original {
                 Some(original) => original,
                 None if idle => {
-                    let mut took = live.app_reviews.take_held();
-                    let contexts = took.take_contexts();
+                    let took = offered_before.unwrap_or_else(|| live.app_reviews.take_held());
+                    let contexts = took.contexts();
                     taken = Some(took);
                     contexts
                 }
@@ -3386,7 +3593,7 @@ impl ConversationService {
             };
             let message = message
                 .sent_by(writer.sender())
-                .with_app_model_context(carried)
+                .with_app_model_context(contexts)
                 .map_err(|_| ConversationError::InvalidInput)?;
             if let Some(rules) = service.inner.permission_rules.get() {
                 rules.arm(
@@ -3460,6 +3667,9 @@ impl ConversationService {
             // the Drive grant as it stood at admission, its tools checked
             // (rows J15 and J27).
             let mut submitter = Submitter::new(actor, initiation);
+            if let Some(mode) = required_mode {
+                submitter = submitter.with_approval_mode(mode);
+            }
             if matches!(mode, SubmissionMode::Steer)
                 && live.agent.operation_capabilities().native_steering()
             {
@@ -3526,14 +3736,30 @@ impl ConversationService {
             let delivery = delivery.map_err(|error| match error {
                 AgentError::RefusedAfterSave => ConversationError::RevokedAfterSave,
                 AgentError::AfterSaveUnavailable => ConversationError::UnavailableAfterSave,
+                AgentError::ApprovalModeChanged => ConversationError::ApprovalModeNotApplied,
                 other => ConversationError::Agent(other),
             });
-            if let (Err(error), Some(took)) = (&delivery, taken) {
+            // Refused for now, to be offered again: what it took goes with
+            // the next offer (`a_message_offered_again_carries_the_contexts_it_took`).
+            let again = matches!(
+                delivery,
+                Err(ConversationError::ApprovalModeNotApplied
+                    | ConversationError::Agent(AgentError::Closed))
+            ) && !writer.is_app()
+                && !owner.stopping.load(Ordering::SeqCst);
+            if let (Err(error), Some(mut took)) = (&delivery, taken) {
                 if Reach::of_asked(error) == Reach::NotTaken {
-                    took.refused();
+                    took.handed_back();
+                    if again {
+                        *carried.lock().expect("carried contexts") =
+                            Some((Arc::downgrade(&live), took));
+                    }
                 }
             }
-            let delivery = delivery?;
+            let delivery = match delivery {
+                Err(error) if again => return Err(Halt::Again(error)),
+                delivery => delivery?,
+            };
             // The agent has the message now, so the list says so — before the
             // turn's watcher can record its reply, which must land after it. A
             // retry of a message the agent already had says nothing new.
@@ -3582,7 +3808,7 @@ impl ConversationService {
             // a refusal for its own reason would take that reason's place
             // (`m10_a_release_after_a_turn_running_refusal_keeps_turn_running`).
             match submitted {
-                Err(Halt::Failed(_))
+                Err(Halt::Failed(_) | Halt::Again(_))
                     if !asked_when_refused.load(Ordering::SeqCst)
                         && refused_for.opening_ended() =>
                 {
@@ -4038,7 +4264,7 @@ impl ConversationService {
                     );
                 }
             }
-            let live = service.resolve(&id, &caller).await?;
+            let live = service.resolve_holding_reviews(&id, &caller).await?;
             // An app's review first: it is the gateway's own, not the agent's.
             match live.app_reviews.answer(
                 &execution,
@@ -4179,7 +4405,7 @@ impl ConversationService {
                 ExecutionId::new(&execution).map_err(|_| ConversationError::InvalidInput)?;
             let permission_id =
                 PermissionId::new(&permission).map_err(|_| ConversationError::InvalidInput)?;
-            let live = service.resolve(&id, &caller).await?;
+            let live = service.resolve_holding_reviews(&id, &caller).await?;
             match live
                 .app_reviews
                 .cancel(&execution, &permission, &review, answerer(&caller))
@@ -5800,6 +6026,22 @@ impl ConversationService {
                         // ended, and is M10
                         // (`m10_a_message_after_a_desktop_stops_mark_is_refused_and_opens_nothing`).
                         drop(submissions.take());
+                        // Closed for good, it owes nothing: a turn a restart
+                        // cut off, or a failure left to retry, ends with it
+                        // rather than waiting unresolved for a resume that
+                        // will not come
+                        // (`a_close_ends_the_turns_a_restart_cut_off`).
+                        let mut owes_nothing = true;
+                        if end == AgentEnd::Close {
+                            for turn in live.agent.owed_turns().await {
+                                if let Err(error) =
+                                    live.agent.decline_turn(&turn, actor.clone()).await
+                                {
+                                    owes_nothing = false;
+                                    tracing::warn!(conversation_id = %id, execution_id = %turn.execution_id().as_str(), %error, "a turn the close ends could not be recorded ended; it stays marked, and the next start resumes it");
+                                }
+                            }
+                        }
                         let closed = self
                             .close_leased(live, cause, actor.clone(), end)
                             .await
@@ -5812,7 +6054,7 @@ impl ConversationService {
                         if let_go(&closed) {
                             // Closed for good: whatever it was doing ended
                             // with it, so a restart has nothing to resume.
-                            if end == AgentEnd::Close {
+                            if end == AgentEnd::Close && owes_nothing {
                                 self.forget_unfinished(id).await;
                             }
                             let _ = live.join_attachment_owner().await;
@@ -6488,6 +6730,7 @@ mod environment_tools;
 mod event_read;
 mod notes;
 mod parking;
+use parking::ParkWhen;
 mod resumption;
 pub use environment_tools::{
     CommandAnswer, CommandCall, CommandCallError, EnvironmentListing, HERE,

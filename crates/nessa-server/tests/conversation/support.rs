@@ -972,6 +972,11 @@ pub(crate) struct ProviderFactory {
     pub(crate) cancel_turns: Mutex<Vec<String>>,
     pub(crate) cancel_started: Notify,
     pub(crate) cancel_gate: Mutex<Option<Receiver<()>>>,
+    /// What the next turn cancel fails with, once its gate lets it go.
+    pub(crate) cancel_failure: Mutex<Option<AgentError>>,
+    /// The cancel failure says its agent is ending (cleanup required), not
+    /// that the session can still be used.
+    pub(crate) cancel_failure_ends: AtomicBool,
     /// When false, an active turn is refused before any cancel is sent.
     pub(crate) turn_cancel: AtomicBool,
     pub(crate) close_failure: Mutex<Option<AgentError>>,
@@ -1587,6 +1592,16 @@ impl ProviderSessionBackend for Backend {
             let gate = self.factory.cancel_gate.lock().unwrap().take();
             if let Some(gate) = gate {
                 let _ = gate.await;
+            }
+            if let Some(error) = self.factory.cancel_failure.lock().unwrap().take() {
+                return Err(ProviderOperationFailure::new(
+                    error,
+                    if self.factory.cancel_failure_ends.load(Ordering::SeqCst) {
+                        ProviderSessionState::CleanupRequired
+                    } else {
+                        ProviderSessionState::Usable
+                    },
+                ));
             }
             Ok(())
         })

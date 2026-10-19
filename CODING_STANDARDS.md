@@ -1010,6 +1010,27 @@ failure is replayed by passing the same numbers again.
   The check gets its own CI job because it needs both the gateway build and a
   browser, which no other job has.
 
+The stress check plays sequences someone thought of. `pnpm test:e2e:chaos`
+(`verification/desktop/scripts/conversation-chaos.mjs`) plays the ones nobody
+did: seeded waves of random actions (messages of every kind, steering, notes,
+answers, access changes, stops, queue edits, closes, archives, restarts) sent
+at once from several clients to a few conversations, while followers churn
+their subscriptions. However they land, the gateway must settle: every
+conversation at rest, every message it took ended once, nothing failed that
+did not ask to, every follower caught up.
+
+- **Add an action for a new feature.** A new way to change a conversation is
+  a new kind in `verification/desktop/scripts/lib/chaos-plan.mjs` (its weight
+  and what it picks) and its `apply` entry in `conversation-chaos.mjs`; a new
+  end state is a check in `check`. An error the action may meet without
+  anything being wrong goes in `EXPECTED`, with why.
+- **A failure comes with its smallest case.** The run prints the seed, cuts
+  the actions down to the fewest that still fail the same way, and writes
+  them where `--replay` reruns them. A seed fixes what is tried, not the order
+  it lands in, so run a replay a few times before calling it fixed.
+- **Pull requests run a few short seeds** after the stress check in its job;
+  the nightly load workflow runs many long ones.
+
 ## Adding a check to CI
 
 `.github/workflows/local-auth.yml` is the gate every pull request waits on, and

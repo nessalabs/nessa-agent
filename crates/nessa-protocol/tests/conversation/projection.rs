@@ -1466,6 +1466,43 @@ fn committed_partial_progress_cannot_be_replaced_by_an_older_complete_read() {
     assert!(!projection.read().capabilities.permissions);
 }
 
+/// A reader's receiver let go starts over from the beginning, so its next
+/// read is behind the view a longer read already gave, and is refused. The
+/// head it saw past that view's is not: the view is behind the history now,
+/// and says so, so its reader reads on instead of waiting for a commit that
+/// already happened. A refused read that saw no newer head changes nothing
+/// (`older_committed_read_cannot_replace_a_newer_terminal_view`).
+#[test]
+fn a_read_behind_the_view_that_saw_a_newer_head_marks_it_stale() {
+    let mut projection = projection();
+    let newer = completed_snapshot("execution", Vec::new());
+    assert!(projection.replace_committed(
+        &committed("incarnation", 3, 3, 3, Some(&newer)),
+        &[],
+        None
+    ));
+    projection.transcript_state(ConversationTranscriptState::Complete);
+    let shown = projection.read();
+
+    let older = completed_snapshot("earlier", Vec::new());
+    assert!(!projection.replace_committed(
+        &committed("incarnation", 1, 1, 4, Some(&older)),
+        &[],
+        None
+    ));
+    let behind = projection.read();
+    assert_eq!(
+        behind.transcript_state,
+        ConversationTranscriptState::Stale,
+        "a head past the view's was seen"
+    );
+    assert_eq!(
+        serde_json::to_value(&behind.messages).unwrap(),
+        serde_json::to_value(&shown.messages).unwrap(),
+        "the newer view is kept"
+    );
+}
+
 /// Options that each decide this one request.
 fn once_options() -> PermissionOptions {
     PermissionOptions::new(
@@ -1739,8 +1776,14 @@ fn older_observed_head_cannot_reenable_committed_controls() {
     );
 }
 
+/// The turn running here is listed however many turns are queued after it:
+/// it is the one a person stops, by its id, and a queue longer than the window
+/// would otherwise hide it, so nothing could stop it (found by the conversation
+/// chaos check). The window's oldest other turn gives way instead, and the
+/// view stays within its size bound with that turn's message as large as one
+/// may be.
 #[test]
-fn active_interactions_survive_recent_message_window_without_copying_the_message() {
+fn the_running_turn_stays_listed_past_the_recent_message_window() {
     let sibling_ask = event(ExecutionUpdate::QuestionAsked {
         id: QuestionId::new("question").unwrap(),
         question: AgentQuestion::new(
@@ -1771,6 +1814,9 @@ fn active_interactions_survive_recent_message_window_without_copying_the_message
         let id = ExecutionId::new(format!("queued-{index}")).unwrap();
         let mut record = review_snapshot(Vec::new()).invocations.remove(0);
         record.request.execution_id = id.clone();
+        // Each as long as a queued message may be, so the bound below has to
+        // give messages up.
+        record.request.user_message = said(&"q".repeat(ExecutionRequest::MAX_MESSAGE_BYTES));
         record.submission = InvocationSubmissionMode::Queued;
         record.scheduling = vec![InvocationSchedulingEvent {
             kind: InvocationKind::Queued,
@@ -1798,16 +1844,29 @@ fn active_interactions_survive_recent_message_window_without_copying_the_message
     projection.transcript_state(ConversationTranscriptState::Complete);
     let view = projection.read();
     assert!(view.truncated);
+    assert_eq!(
+        status_of(&view, "execution"),
+        ConversationMessageStatus::Running
+    );
+    assert!(view.messages.len() <= 24);
     assert!(view
         .messages
         .iter()
-        .all(|message| message.execution_id != "execution"));
-    assert!(view.messages.len() <= 24);
+        .all(|message| message.execution_id != "queued-1"));
+    assert_eq!(
+        status_of(&view, "queued-24"),
+        ConversationMessageStatus::Queued
+    );
     // What waits is the live owner's to list (`agent_question`): the fold
     // lists no question.
     assert!(view.questions.is_empty());
     let view = bound_view(view);
     assert!(serde_json::to_vec(&view).unwrap().len() <= 60_000);
+    assert!(view.truncated);
+    assert_eq!(
+        status_of(&view, "execution"),
+        ConversationMessageStatus::Running
+    );
     assert!(projection.replace_committed(&current, &order, None));
     assert!(projection.read().questions.is_empty());
     assert!(projection.read().permissions.is_empty());

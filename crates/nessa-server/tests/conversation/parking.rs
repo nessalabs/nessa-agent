@@ -157,21 +157,37 @@ struct Fixture {
 impl Fixture {
     /// A created conversation whose agent is open, under `park_after`.
     async fn new(park_after: Option<Duration>) -> Self {
-        Self::build(park_after, false).await
+        Self::build(
+            park_after,
+            false,
+            ConversationLimits::default().max_conversations,
+        )
+        .await
+    }
+
+    /// The same, with parking off and room for `live` agents at once.
+    async fn bounded(live: usize) -> Self {
+        Self::build(None, false, live).await
     }
 
     /// The same, with an agent and a model that take images.
     async fn with_images(park_after: Option<Duration>) -> Self {
-        Self::build(park_after, true).await
+        Self::build(
+            park_after,
+            true,
+            ConversationLimits::default().max_conversations,
+        )
+        .await
     }
 
-    async fn build(park_after: Option<Duration>, images: bool) -> Self {
-        Self::build_with_save_gate(park_after, images, None).await
+    async fn build(park_after: Option<Duration>, images: bool, live: usize) -> Self {
+        Self::build_with_save_gate(park_after, images, live, None).await
     }
 
     async fn build_with_save_gate(
         park_after: Option<Duration>,
         images: bool,
+        live: usize,
         save_gate: Option<Arc<CompletionSaveGate>>,
     ) -> Self {
         let provider = Arc::new(ProviderFactory::default());
@@ -215,6 +231,7 @@ impl Fixture {
             },
             ConversationLimits {
                 park_after,
+                max_conversations: live,
                 ..ConversationLimits::default()
             },
             None,
@@ -243,8 +260,21 @@ impl Fixture {
 
     /// The conversation's slot, once its agent is attached.
     async fn attached(&self) {
-        let slot = self.slot().await.expect("a live conversation");
-        let live = self.service.wait_for_slot(&self.id, slot).await.unwrap();
+        self.attach(&self.id).await;
+    }
+
+    /// Wait for `id`'s agent to attach: one still attaching is not parked.
+    async fn attach(&self, id: &ConversationId) {
+        let slot = self
+            .service
+            .inner
+            .conversations
+            .lock()
+            .await
+            .get(id)
+            .cloned()
+            .expect("a live conversation");
+        let live = self.service.wait_for_slot(id, slot).await.unwrap();
         let _ = live.join_attachment_owner().await;
     }
 
@@ -267,6 +297,23 @@ impl Fixture {
             .await
             .unwrap();
         view
+    }
+
+    /// Create one more conversation, and wait for its agent to attach.
+    async fn create_another(&self) -> Result<ConversationId, ConversationError> {
+        let id = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
+        tokio::time::timeout(
+            BOUND,
+            self.service.create(
+                id.clone(),
+                caller("create another"),
+                crate::conversation::application::RequestedConversation::default(),
+            ),
+        )
+        .await
+        .expect("the creation is answered")?;
+        self.attach(&id).await;
+        Ok(id)
     }
 
     async fn slot(&self) -> Option<Arc<Slot>> {
@@ -537,7 +584,13 @@ async fn a_completed_view_does_not_finish_a_turn_before_sdk_settlement() {
         })),
         idle_waiting: StdMutex::new(Some(waiting)),
     });
-    let fixture = Fixture::build_with_save_gate(Some(LIMIT), false, Some(gate)).await;
+    let fixture = Fixture::build_with_save_gate(
+        Some(LIMIT),
+        false,
+        ConversationLimits::default().max_conversations,
+        Some(gate),
+    )
+    .await;
     let first = fixture.turn("first");
     tokio::pin!(first);
     let mut returned_early = false;
@@ -687,5 +740,106 @@ async fn an_agent_that_cannot_resume_is_not_parked() {
     assert_eq!(fixture.service.park_idle(LIMIT).await, 0);
     assert!(fixture.slot().await.is_some());
     assert_eq!(fixture.provider.close_calls.load(Ordering::SeqCst), 0);
+    fixture.service.shutdown().await.unwrap();
+}
+
+/// Past the bound on live agents, an opening parks the idle agent used
+/// longest ago rather than being refused, and a message to that conversation
+/// opens it again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn past_the_bound_an_opening_parks_the_idle_agent_used_longest_ago() {
+    let fixture = Fixture::bounded(1).await;
+    fixture.turn("first").await;
+    let other = fixture.create_another().await.expect("room is made");
+    assert!(fixture.slot().await.is_none(), "the idle agent was parked");
+    assert_eq!(
+        fixture.lease().await,
+        (
+            ConversationLeaseState::Ended,
+            Some(ConversationLeaseCause::Idle)
+        )
+    );
+    fixture.turn("after parking").await;
+    assert!(
+        fixture
+            .service
+            .inner
+            .conversations
+            .lock()
+            .await
+            .get(&other)
+            .is_none(),
+        "the other conversation was parked to open it again"
+    );
+    fixture.service.shutdown().await.unwrap();
+}
+
+/// An agent at work is never parked to make room: past the bound, the
+/// opening is refused and the turn runs on.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn past_the_bound_an_agent_at_work_is_not_parked() {
+    let fixture = Fixture::bounded(1).await;
+    let (release, gate) = oneshot::channel();
+    *fixture.provider.execution_gate.lock().unwrap() = Some(gate);
+    let sent = fixture.send("long");
+    tokio::time::timeout(BOUND, fixture.provider.execution_started.notified())
+        .await
+        .expect("the turn reaches the provider");
+    assert!(matches!(
+        fixture.create_another().await,
+        Err(ConversationError::Capacity)
+    ));
+    assert!(fixture.slot().await.is_some(), "the busy agent stays");
+    release.send(()).unwrap();
+    sent.await.unwrap().unwrap();
+    fixture.completed("long").await;
+    fixture.service.shutdown().await.unwrap();
+}
+
+/// Past the bound, the agent used longest ago is the one parked, and a read
+/// is use. One whose submission lock is held (a read or message using it
+/// now) is passed over for the next, and so is one a window follows; with
+/// none left, the opening is refused.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn past_the_bound_the_one_used_longest_ago_is_parked_and_one_in_use_is_passed_over() {
+    let fixture = Fixture::bounded(2).await;
+    let live = |id: ConversationId| {
+        let service = fixture.service.clone();
+        async move { service.inner.conversations.lock().await.contains_key(&id) }
+    };
+    fixture.wait(Duration::from_secs(1));
+    let second = fixture.create_another().await.expect("room for two");
+    fixture.wait(Duration::from_secs(1));
+    // Read after the second opened: the first is now the more recently used.
+    fixture
+        .service
+        .read(fixture.id.clone(), caller("read"))
+        .await
+        .unwrap();
+    fixture.wait(Duration::from_secs(1));
+    let third = fixture.create_another().await.expect("room is made");
+    assert!(
+        !live(second.clone()).await,
+        "the one used longest ago was parked"
+    );
+    assert!(live(fixture.id.clone()).await, "the one read since stays");
+    fixture.wait(Duration::from_secs(1));
+    // The first is now the one used longest ago, but in use: the third goes.
+    let held = fixture.service.inner.mode_changes.lock(&fixture.id).await;
+    let fourth = fixture.create_another().await.expect("room is made");
+    drop(held);
+    assert!(
+        live(fixture.id.clone()).await,
+        "the one in use was passed over"
+    );
+    assert!(!live(third).await, "the next was parked");
+    // A window follows the first, and the fourth is in use: nothing can go.
+    let follower = fixture.service.live_changes(&fixture.id);
+    let held = fixture.service.inner.mode_changes.lock(&fourth).await;
+    assert!(matches!(
+        fixture.create_another().await,
+        Err(ConversationError::Capacity)
+    ));
+    drop((held, follower));
     fixture.service.shutdown().await.unwrap();
 }

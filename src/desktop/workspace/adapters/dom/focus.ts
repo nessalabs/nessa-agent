@@ -41,6 +41,39 @@ export const focusedPaneAttribute = "data-pane-focused"
 export const widgetWindowAttribute = "data-widget-window"
 
 /**
+ * Let go of a home before its send mutates the page. A command not asked
+ * may restore that same field; a replaced home or deliberate focus move
+ * keeps its authority. The normal pane controller owns the new composer.
+ */
+export function retireHomeFocus(
+  home: HTMLElement | null,
+  current: () => boolean,
+): () => void {
+  const held = document.activeElement
+  if (
+    !home?.isConnected ||
+    !current() ||
+    !(held instanceof HTMLElement) ||
+    !home.contains(held) ||
+    inModal(held)
+  )
+    return () => {}
+  held.blur()
+  return () => {
+    if (
+      current() &&
+      home.isConnected &&
+      held.isConnected &&
+      home.contains(held) &&
+      !inModal(held) &&
+      held.closest("[inert]") === null &&
+      document.activeElement === document.body
+    )
+      held.focus({ preventScroll: true })
+  }
+}
+
+/**
  * Where the caret lands now: the window's widget body while the window shows
  * one, else the focused pane's composer (a session) or body (a widget), if
  * it is on the page.

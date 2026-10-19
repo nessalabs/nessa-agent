@@ -8,7 +8,7 @@
  * Escape, or a pane command that changed nothing but is a navigation —
  * returns the caret to the focused pane's composer, and a move at the edge
  * leaves the overview where it is. One press answers one request: a held
- * ⌘↩, or two presses 80ms apart, answer one; so does a held ↩ or a double
+ * ⌘↩, or two queued ⌘↩ events stamped within 250ms, answer one; so does a held ↩ or a double
  * click on a pane's card (focus-answers-overview, focus-answers-card). ⌘R
  * straight after ↓ puts the caret in the reply pill of the row ↓ went to,
  * and what is typed at once lands there; sending, which moves that row from
@@ -243,13 +243,6 @@ const noFewer = async (page, than) =>
   ))
 
 /**
- * How far apart the second press comes: well inside the answer pause
- * (`answerPause`, 250ms, src/desktop/workspace/model/overview/walk.ts) — a
- * third of it — so it is a press the person could not yet aim.
- */
-const withinAnswerPause = 80
-
-/**
  * One press answers one request in the overview: a held ⌘↩'s repeats answer
  * nothing more, and a second press straight after the keyboard moved on is
  * not taken.
@@ -258,7 +251,7 @@ async function answerOnceInOverview(page) {
   const failures = []
   const trail = []
 
-  // The overview: a held ⌘↩, then two presses 80ms apart.
+  // The overview: a real held ⌘↩, then two already queued answer events.
   await page.keyboard.press(keys.overview)
   await contentIs(page, content.overview)
   await settled(page)
@@ -287,18 +280,65 @@ async function answerOnceInOverview(page) {
       `a held ⌘↩ answered ${start - (await requestCount(page))} requests, not 1`,
     )
   const next = await requestCount(page)
-  await page.keyboard.press(keys.allow)
-  await page.waitForTimeout(withinAnswerPause)
-  await page.keyboard.press(keys.allow)
+  // Construct both before handling either: native event stamps preserve when
+  // queued input was made, even if handling the first takes time. One browser
+  // task avoids treating an awaited driver's requested delay as an input gap.
+  // These DOM events are untrusted; the held-key check above uses real input.
+  const queued = await page.evaluate((selector) => {
+    const events = [0, 1].map(
+      () =>
+        new KeyboardEvent("keydown", {
+          key: "Enter",
+          code: "Enter",
+          metaKey: true,
+          repeat: false,
+          bubbles: true,
+          cancelable: true,
+        }),
+    )
+    return events.map((event) => {
+      const target = document.activeElement
+      const sessionId = target?.closest(selector)?.getAttribute("data-overview-item")
+      target?.dispatchEvent(event)
+      target?.dispatchEvent(
+        new KeyboardEvent("keyup", {
+          key: "Enter",
+          code: "Enter",
+          metaKey: true,
+          bubbles: true,
+        }),
+      )
+      return {
+        sessionId,
+        timeStamp: event.timeStamp,
+        repeat: event.repeat,
+        isTrusted: event.isTrusted,
+        prevented: event.defaultPrevented,
+      }
+    })
+  }, css.overviewItem)
+  const gap = queued[1].timeStamp - queued[0].timeStamp
+  if (!(gap >= 0 && gap < 250))
+    failures.push(`queued input stamps were ${gap}ms apart, outside the 250ms guard`)
+  if (
+    !queued[0].sessionId ||
+    !queued[1].sessionId ||
+    queued[0].sessionId === queued[1].sessionId
+  )
+    failures.push("the queued pair did not reach two different overview requests")
+  if (queued.some((event) => !event.prevented || event.repeat || event.isTrusted))
+    failures.push("the queued pair did not exercise two fresh synthetic answer events")
   const twice = (await fewer(page, next - 1)) && (await noFewer(page, next - 1))
   trail.push({
-    step: "⌘↩ twice, 80ms apart",
+    step: "two queued ⌘↩ events within 250ms",
+    queued,
+    gap,
     before: next,
     after: await requestCount(page),
   })
   if (!twice)
     failures.push(
-      `two presses 80ms apart answered ${next - (await requestCount(page))} requests, not 1`,
+      `two queued answer events within 250ms answered ${next - (await requestCount(page))} requests, not 1`,
     )
   await page.keyboard.press(keys.escape)
   await contentIs(page, content.panes)
@@ -730,8 +770,39 @@ async function firstMessageHandoff(page, reduced = false) {
   )
   if (!ready) return { failures: ["new-session home did not receive the caret"] }
   await page.evaluate(
-    ([pane, composer]) => {
+    ([pane, composer, home, field]) => {
       const current = document.querySelector(pane)
+      const originalHome = current.querySelector(home)
+      const originalField = originalHome.querySelector(field)
+      let retirement = null
+      let mutations = 0
+      const beforeRetirement = new MutationObserver((records) => {
+        mutations += records.length
+      })
+      // Observe only this native Enter's commit, not preceding typing or clocks.
+      const onKeyDown = (event) => {
+        if (event.target !== originalField || event.key !== "Enter" || event.repeat)
+          return
+        mutations = 0
+        beforeRetirement.observe(current, {
+          attributes: true,
+          childList: true,
+          characterData: true,
+          subtree: true,
+        })
+      }
+      const onFocusOut = (event) => {
+        if (event.target !== originalField) return
+        retirement = {
+          priorMutations: mutations + beforeRetirement.takeRecords().length,
+          homeConnected: originalHome.isConnected,
+          fieldConnected: originalField.isConnected,
+          trusted: event.isTrusted,
+        }
+        beforeRetirement.disconnect()
+      }
+      document.addEventListener("keydown", onKeyDown, true)
+      document.addEventListener("focusout", onFocusOut, true)
       const counts = []
       const flights = new Map()
       const seen = new Set()
@@ -753,16 +824,25 @@ async function firstMessageHandoff(page, reduced = false) {
       window.__focusHomeHandoff = () => {
         sample()
         observer.disconnect()
+        beforeRetirement.disconnect()
+        document.removeEventListener("keydown", onKeyDown, true)
+        document.removeEventListener("focusout", onFocusOut, true)
         cancelAnimationFrame(frame)
         delete window.__focusHomeHandoff
-        return { counts, flights: Object.fromEntries(flights), motionCount: seen.size }
+        return {
+          counts,
+          flights: Object.fromEntries(flights),
+          motionCount: seen.size,
+          retirement,
+        }
       }
     },
-    [css.focusedPane, css.composerCard],
+    [css.focusedPane, css.composerCard, css.paneHome, css.field],
   )
   let counts
   let flights
   let motionCount
+  let retirement
   const failures = []
   try {
     await page.keyboard.type(prompt)
@@ -824,7 +904,17 @@ async function firstMessageHandoff(page, reduced = false) {
     counts = observed.counts
     flights = observed.flights
     motionCount = observed.motionCount
+    retirement = observed.retirement
   }
+  if (
+    !retirement?.trusted ||
+    retirement.priorMutations !== 0 ||
+    !retirement.homeConnected ||
+    !retirement.fieldConnected
+  )
+    failures.push(
+      `home focus was not retired before its commit: ${JSON.stringify(retirement)}`,
+    )
   if (counts.length === 0) failures.push("handoff had no observed composer counts")
   if (counts.some((count) => count > 1))
     failures.push(`overlapping composers during handoff: ${counts.join(" ")}`)
@@ -842,7 +932,7 @@ async function firstMessageHandoff(page, reduced = false) {
         failures.push(`${id} did not glide from its origin`)
     }
   }
-  return { counts, flights, motionCount, after: await state(page), failures }
+  return { counts, flights, motionCount, retirement, after: await state(page), failures }
 }
 
 /** A retired workspace cannot start a new focus search from its held frame. */
@@ -979,7 +1069,7 @@ Steps (each asserts where the caret is afterwards):
   focus-reply (1440 × 900 and 1000 × 700): ↓ then ⌘R at once, and typing at
   once → the caret and every key are in the next row's reply pill; sending,
   which moves that row to Working → the caret stays in that session's pill
-  focus-answers-overview, -card: a held ⌘↩, and ⌘↩ twice 80ms apart, each answer one request;
+  focus-answers-overview, -card: a held ⌘↩, and two queued ⌘↩ events within 250ms, each answer one request;
   a held ↩ on a pane card's Allow Once, and a double click on Deny and on
   Always Allow, each answer one, and the held ↩ sends nothing typed
   focus-regroup-row, -peek, -away: a reply moves a request to Working, Escape

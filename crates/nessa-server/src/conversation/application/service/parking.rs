@@ -7,6 +7,8 @@
 //!   untouched for park_after ──▶ take the submission lock
 //!     ──▶ the same checks again ──▶ suspend (lease ends idle) ──▶ slot released
 //! the next message ──▶ opens the conversation ──▶ session/resume
+//! an opening past the bound on live agents ──▶ the parkable one touched
+//!   longest ago is parked now (`make_room`)
 //! ```
 //!
 //! Parking is the suspend an agent that stopped itself already gets: what it
@@ -22,6 +24,7 @@ use nessa_sdk::application::agent_execution::{
 use nessa_sdk::domain::agent_execution::leases::LeaseEndCause;
 use std::sync::{atomic::Ordering, Arc};
 use std::time::Duration;
+use tokio::sync::OwnedMutexGuard;
 use uuid::Uuid;
 
 use super::super::{
@@ -110,7 +113,21 @@ impl ConversationService {
         };
         // Held until the slot is released: what arrives meanwhile waits for
         // it, and opens the conversation again once it is gone.
-        let _submissions = self.inner.mode_changes.lock(id).await;
+        let submissions = self.inner.mode_changes.lock(id).await;
+        self.park_held(id, slot, ParkWhen::IdleFor(park_after), submissions)
+            .await
+    }
+
+    /// Park `slot` with its conversation's submission lock held, if it is
+    /// still the live owner, parkable, and unused as `when` asks. Returns
+    /// whether it was parked.
+    pub(super) async fn park_held(
+        &self,
+        id: &ConversationId,
+        slot: Arc<Slot>,
+        when: ParkWhen,
+        _submissions: OwnedMutexGuard<()>,
+    ) -> bool {
         let owner = self.inner.conversations.lock().await.get(id).cloned();
         if !owner.is_some_and(|owner| Arc::ptr_eq(&owner, &slot)) {
             return false;
@@ -118,8 +135,13 @@ impl ConversationService {
         let Some(live) = settled(&slot) else {
             return false;
         };
-        let now = self.inner.clock.unix_milliseconds();
-        if slot.untouched_for(now) < park_after || !self.parkable(id, &live).await {
+        let used = match when {
+            ParkWhen::IdleFor(park_after) => {
+                slot.untouched_for(self.inner.clock.unix_milliseconds()) < park_after
+            }
+            ParkWhen::UnusedSince(touched) => slot.touched.load(Ordering::SeqCst) > touched,
+        };
+        if used || !self.parkable(id, &live).await {
             return false;
         }
         // A delete lets go of the lock once its tombstone is written, and
@@ -134,7 +156,14 @@ impl ConversationService {
         else {
             return false;
         };
-        tracing::info!(conversation_id = %id, idle_seconds = park_after.as_secs(), "parking an idle agent");
+        match when {
+            ParkWhen::IdleFor(park_after) => {
+                tracing::info!(conversation_id = %id, idle_seconds = park_after.as_secs(), "parking an idle agent")
+            }
+            ParkWhen::UnusedSince(_) => {
+                tracing::info!(conversation_id = %id, "parking an idle agent to make room")
+            }
+        }
         match self
             .stop_and_release(
                 id,
@@ -153,6 +182,18 @@ impl ConversationService {
             }
         }
     }
+}
+
+/// How long a conversation must have gone unused for [`ConversationService::park_held`]
+/// to park it.
+pub(super) enum ParkWhen {
+    /// Untouched this long: the idle sweep.
+    IdleFor(Duration),
+    /// Untouched since it was picked, at this touch: past the bound on live
+    /// agents, the one used longest ago, however recently
+    /// ([`ConversationService::make_room`]). A read or message that lands
+    /// between the pick and the lock makes it used, and the next is tried.
+    UnusedSince(u64),
 }
 
 /// The live conversation `slot` holds, when it opened and nothing is

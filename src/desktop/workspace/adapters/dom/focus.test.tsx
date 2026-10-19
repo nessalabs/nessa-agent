@@ -37,7 +37,12 @@ import {
 } from "../../testing"
 import { widgetBodyAttribute } from "../../../widgets"
 import { marks } from "../../../split-panes"
-import { focusedPaneAttribute, focusInFront, useFocusFollowsPane } from "./focus"
+import {
+  focusedPaneAttribute,
+  focusInFront,
+  retireHomeFocus,
+  useFocusFollowsPane,
+} from "./focus"
 
 /** Panes as the page draws them, each with a composer, and a list beside them. */
 function Page() {
@@ -111,6 +116,59 @@ afterEach(async () => {
 /** The frames the caret's landing asked for, run because the test says so. */
 const frames = () => flushAnimationFrames(animation, act)
 const caretIn = () => document.activeElement?.getAttribute("aria-label")
+
+it("retires a home's field synchronously, with no pending focus frames", () => {
+  const home = document.createElement("section")
+  const field = document.createElement("textarea")
+  home.append(field)
+  host.append(home)
+  field.focus()
+  const restore = retireHomeFocus(home, () => true)
+  expect(document.activeElement).toBe(document.body)
+  expect(animation.pending()).toBe(0)
+  restore()
+  expect(document.activeElement).toBe(field)
+  expect(animation.pending()).toBe(0)
+})
+
+it.each(["outside", "modal", "stale"])("does not retire %s focus for a home", (cause) => {
+  const home = document.createElement("section")
+  const field = document.createElement("textarea")
+  host.append(home)
+  if (cause === "modal") home.setAttribute("role", "dialog")
+  ;(cause === "outside" ? host : home).append(field)
+  field.focus()
+  const restore = retireHomeFocus(home, () => cause !== "stale")
+  expect(document.activeElement).toBe(field)
+  restore()
+  expect(document.activeElement).toBe(field)
+})
+
+it.each(["session", "home", "field", "other-focus", "inert", "modal"])(
+  "does not restore a retired home after %s changes",
+  (cause) => {
+    const home = document.createElement("section")
+    const field = document.createElement("textarea")
+    home.append(field)
+    host.append(home)
+    field.focus()
+    let current = true
+    const restore = retireHomeFocus(home, () => current)
+    if (cause === "session") current = false
+    if (cause === "home") home.remove()
+    if (cause === "field") host.append(field)
+    if (cause === "inert") home.setAttribute("inert", "")
+    if (cause === "modal") home.setAttribute("role", "dialog")
+    const other = document.createElement("button")
+    host.append(other)
+    if (cause === "other-focus") other.focus()
+    const active = document.activeElement
+    restore()
+    expect(document.activeElement).toBe(active)
+    expect(document.activeElement).not.toBe(field)
+    expect(animation.pending()).toBe(0)
+  },
+)
 
 async function page() {
   const store = testStore()

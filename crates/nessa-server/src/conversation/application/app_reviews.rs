@@ -705,11 +705,11 @@ impl AppReviews {
 /// ([`Self::asking`]) they follow the message: taken, or unknown — the agent
 /// could not say, or the task failed mid-ask — the message's own record
 /// covers them, and dropping this reports nothing (row C11b). Only the
-/// agent's refusal hands them back ([`Self::refused`]).
+/// agent's refusal hands them back ([`Self::handed_back`]).
 ///
 /// Its fields are private, so a caller outside this module has no way to
 /// empty its records and silence a drop: what it reports is what it took.
-/// The message takes the contexts out with [`Self::take_contexts`]; the
+/// The message carries copies of the contexts ([`Self::contexts`]); the
 /// records stay.
 pub struct Taken {
     contexts: Vec<AppModelContext>,
@@ -720,10 +720,11 @@ pub struct Taken {
 }
 impl Taken {
     /// The contexts taken, in the order given, for the message to carry.
-    /// The records of the updates that gave them stay here: what a drop is
-    /// reported against.
-    pub fn take_contexts(&mut self) -> Vec<AppModelContext> {
-        std::mem::take(&mut self.contexts)
+    /// They stay here too, with the records of the updates that gave them:
+    /// a message offered again carries them again, and a drop is reported
+    /// against those records.
+    pub fn contexts(&self) -> Vec<AppModelContext> {
+        self.contexts.clone()
     }
 
     /// The agent is being asked to take the message that carries these:
@@ -733,9 +734,9 @@ impl Taken {
     }
 
     /// The agent refused the message: they went nowhere. Each is reported
-    /// dropped unsent, by the system, as this goes; the app may give it
-    /// again.
-    pub fn refused(mut self) {
+    /// dropped unsent, by the system, as this goes, unless the message is
+    /// offered again with them first; the app may give it again.
+    pub fn handed_back(&mut self) {
         self.armed = true;
     }
 }
