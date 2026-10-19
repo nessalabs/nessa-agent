@@ -17,13 +17,20 @@ import { applyLines } from "./page-lines.mjs"
 
 const require = createRequire(import.meta.url)
 
+/**
+ * The Chromium channel a check uses when none is given. A machine without
+ * Google Chrome (a cloud sandbox: scripts/cloud-startup.sh) sets
+ * NESSA_BROWSER_CHANNEL=bundled once instead of on every command.
+ */
+export const defaultChannel = process.env.NESSA_BROWSER_CHANNEL || "chrome"
+
 /** Options every check takes. */
 export const commonOptions = {
   help: { type: "boolean", short: "h", default: false },
   url: { type: "string" },
   mode: { type: "string", default: "dev" },
   engine: { type: "string", default: "chromium" },
-  channel: { type: "string", default: "chrome" },
+  channel: { type: "string", default: defaultChannel },
   layout: { type: "string", default: "columns,sidebar" },
   headed: { type: "boolean", default: false },
   out: { type: "string" },
@@ -40,7 +47,8 @@ Common options:
                        (default: dev; perf-budget defaults to prod)
   --engine <list>      chromium, webkit, or chromium,webkit (default varies per check)
   --channel <name>     Chromium channel: chrome (installed Google Chrome) or bundled
-                       (Playwright's Chromium). Default: chrome.
+                       (Playwright's Chromium). Default: $NESSA_BROWSER_CHANNEL,
+                       else chrome.
   --layout <list>      columns, sidebar, or columns,sidebar (default: both)
   --headed             Show the browser.
   --out <file>         Write the JSON result there instead of stdout.
