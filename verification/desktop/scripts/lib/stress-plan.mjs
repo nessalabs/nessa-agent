@@ -57,6 +57,10 @@ export const KNOBS = {
     default: 1,
     what: "conversations left idle until the gateway parks their agent, then talked to again",
   },
+  fresh: {
+    default: 2,
+    what: "conversations started from a new session's home in the window, their first message sent there",
+  },
   windows: {
     default: 1,
     what: "turns where an agent reads the window: beside another pane, then alone",
@@ -125,6 +129,7 @@ export function plan(knobs) {
   add(knobs.asides, () => ({ kind: "aside" }))
   add(knobs.large, () => ({ kind: "large" }))
   add(knobs.parks, () => ({ kind: "park" }))
+  add(knobs.fresh, () => ({ kind: "fresh" }))
   add(knobs.windows, () => ({ kind: "window" }))
   add(knobs.linkings, () => ({ kind: "linking" }))
   if (knobs.long > 0) steps.push({ kind: "long", turns: knobs.long })
