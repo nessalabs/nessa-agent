@@ -143,7 +143,15 @@ fn main() {
             review_notices::infrastructure::review_notice_sync,
         ])
         .setup(move |app| {
-            page_load::watch(app.handle().clone(), loads);
+            page_load::watch(
+                app.handle().clone(),
+                loads,
+                &[
+                    panel::MAIN_WINDOW,
+                    panel::SETUP_WINDOW,
+                    desktop_window::DESKTOP_WINDOW,
+                ],
+            );
             // Nothing below returns an error to Tauri (ADR 221). Tauri panics on
             // one, inside a macOS callback that cannot unwind, and the process
             // aborts with no word to the person. What setup cannot build is a
