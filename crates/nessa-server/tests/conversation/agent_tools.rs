@@ -1400,6 +1400,19 @@ async fn one_subscribe_naming_the_sent_turn_returns_its_reply_in_place_of_the_re
     let reports = reports_in(&service, &source, 1).await;
     assert_eq!(reports.len(), 1, "{reports:?}");
     assert!(reports[0].contains("Its reply:\nLater."), "{}", reports[0]);
+    // Named after its report was already queued, the call still answers;
+    // the report stays, so the reply comes twice, never not at all.
+    let late = client
+        .call(
+            "subscribe",
+            json!({"threadId":worker,"executionId":later_execution}),
+        )
+        .await;
+    assert_eq!(
+        late["structuredContent"]["turn"]["finished"], true,
+        "{late}"
+    );
+    assert_eq!(reports_in(&service, &source, 1).await.len(), 1);
 
     // Reading the thread's events past a turn's end leaves its report to
     // come: only a call naming the turn takes the reply in its place.

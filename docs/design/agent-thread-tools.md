@@ -268,6 +268,12 @@ is not a claim that an external effect was rolled back.
 | Now/Beginning first Idle then Preparing and another Page/Idle | First Idle establishes continuity; Preparing retains it. Wrong incarnation and backwards progress refuse, while trailing events and nondecreasing Idle remain valid; same tests. |
 | Now returns its first Page without a prior checkpoint | Accept the source's captured starting position; no prior cursor is fabricated; same tests. |
 | Subscribe supplies after together with replay:true or replay:false | Reject invalid_request by field presence before source admission or reader opening; actual Relay regression in `tests/conversation/agent_tools.rs`. |
+| A subscribe naming a turn starts before the turn ends | The turn's report is held while the call waits; a whole reply in an answer that fits claims it, and a call that times out or reads only events lets it go; `one_subscribe_naming_the_sent_turn_returns_its_reply_in_place_of_the_report` in `tests/conversation/agent_tools.rs`, holding in `tests/conversation/thread_report_registry.rs`. |
+| The report was taken for queuing, not yet submitted, when the call claims it | The claim marks it and delivery checks before each submit, so it is called off; `an_awaited_report_is_held_and_a_claim_calls_off_one_being_queued` in `tests/conversation/thread_report_registry.rs`. |
+| The report was already submitted before the call names the turn | The call still answers; the report stays queued, so the reply can come twice, never not at all; same agent_tools test. |
+| Cancellation, disconnect or revoked grant after the answer is built, before it is written | The relay drops the `delivered` hook unrun: no claim, the hold drops, the report is sent; `tests/mcp_servers/built_in.rs`. |
+| Claim settles the saved report and the store write fails, then the gateway restarts | The row stays saved and the next run delivers it, a repeat of the reply; `saved_thread_reports_are_delivered_after_a_restart` in `tests/conversation/agent_tools.rs`. |
+| The awaited turn's history is unreadable, or its end still settling | Looked for again every second; a deadline after an unreadable look answers unavailable, never `finished: false`; unit tests in `composition/conversation_tools.rs`. |
 
 The observation loop previously treated permission to start a read as permission
 to publish its eventual result. Separate return paths for page, idle, and deadline
