@@ -579,9 +579,14 @@ mod tests {
     };
     use event_stream::{
         infrastructure::{SqliteOptions, SqliteStore},
-        EventConfig, EventReader, PersistenceProfile, Runtime, RuntimeConfig, StreamId,
+        AppendReceipt, Bounds, EventConfig, EventReader, EventSink, Page, PageLimits,
+        PersistenceProfile, Result as StreamResult, Runtime, RuntimeConfig, ShutdownReport,
+        StreamId, SubscriptionOptions,
     };
-    use std::time::Duration;
+    use std::{
+        sync::atomic::{AtomicUsize, Ordering},
+        time::Duration,
+    };
 
     #[test]
     fn retain_next_fact_holds_one_oversized_fact_and_splits_before_a_second() {
@@ -668,5 +673,134 @@ mod tests {
                 .unwrap()
                 .closed
         );
+    }
+
+    /// Every store call an opening's replay makes, counted.
+    struct CountedRuntime<'a> {
+        runtime: &'a Runtime<SqliteStore>,
+        calls: AtomicUsize,
+    }
+    #[async_trait::async_trait]
+    impl EventSink for CountedRuntime<'_> {
+        async fn append(&self, stream: &StreamKey, event: NewEvent) -> StreamResult<AppendReceipt> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.runtime.append(stream, event).await
+        }
+    }
+    #[async_trait::async_trait]
+    impl EventReader for CountedRuntime<'_> {
+        async fn create_stream(&self, id: &StreamId) -> StreamResult<StreamKey> {
+            self.runtime.create_stream(id).await
+        }
+        async fn find_stream(&self, id: &StreamId) -> StreamResult<Option<StreamKey>> {
+            self.runtime.find_stream(id).await
+        }
+        async fn bounds(&self, stream: &StreamKey) -> StreamResult<Bounds> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.runtime.bounds(stream).await
+        }
+        async fn read_after(
+            &self,
+            after: &Cursor,
+            limits: PageLimits,
+            through: Option<&Cursor>,
+        ) -> StreamResult<Page> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.runtime.read_after(after, limits, through).await
+        }
+    }
+    #[async_trait::async_trait]
+    impl EventRuntime for CountedRuntime<'_> {
+        type Subscription = <Runtime<SqliteStore> as EventRuntime>::Subscription;
+        async fn try_append(
+            &self,
+            stream: &StreamKey,
+            event: NewEvent,
+        ) -> StreamResult<AppendReceipt> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.runtime.try_append(stream, event).await
+        }
+        async fn subscribe(
+            &self,
+            stream: &StreamKey,
+            options: SubscriptionOptions,
+        ) -> StreamResult<Self::Subscription> {
+            self.runtime.subscribe(stream, options).await
+        }
+        async fn shutdown(&self, deadline: Duration) -> StreamResult<ShutdownReport> {
+            self.runtime.shutdown(deadline).await
+        }
+    }
+
+    // #1006: replay read a long history one fact at a time, a bound and a
+    // page per fact, so opening a long conversation after a restart cost as
+    // many store round trips as it had saves. The condition: a long history.
+    #[tokio::test]
+    async fn opening_a_long_history_reads_it_in_pages_not_once_per_save() {
+        let directory = tempfile::tempdir().unwrap();
+        let options = SqliteOptions::new(directory.path().join("records.sqlite3"));
+        let config = RuntimeConfig {
+            events: EventConfig {
+                max_bytes: 1024 * 1024,
+                minimum_persistence: PersistenceProfile::ProcessRestart,
+            },
+            ..RuntimeConfig::default()
+        };
+        let id = SessionId::new("conversation").unwrap();
+        let runtime = Runtime::<SqliteStore>::open(options, config).await.unwrap();
+        let stream = runtime
+            .create_stream(&StreamId::new("conversation").unwrap())
+            .await
+            .unwrap();
+        let mut writer = RecordWriter::replay(&runtime, id.clone(), stream.clone())
+            .await
+            .unwrap();
+        let mut changes = vec![SessionChange::Opened {
+            id: id.clone(),
+            provider: ProviderIdentity::new("provider", "model", "workspace").unwrap(),
+            context: ProviderContext::Absent,
+        }];
+        let mut context = ProviderContext::Absent;
+        for save in 0..600 {
+            let after = ProviderContext::Recorded(
+                ExecutionSessionId::new(format!("remote-{save}")).unwrap(),
+            );
+            changes.push(SessionChange::ProviderContext {
+                before: context.clone(),
+                after: after.clone(),
+            });
+            context = after;
+        }
+        for change in changes {
+            let binding = writer.readable_snapshot().unwrap().binding().clone();
+            writer
+                .save(
+                    &runtime,
+                    None,
+                    binding,
+                    &[SessionSaveUnit::new(vec![change]).unwrap()],
+                )
+                .await
+                .unwrap();
+        }
+        let saved = writer.snapshot();
+        drop(writer);
+        let records = runtime.bounds(&stream).await.unwrap().tail.offset as usize;
+        assert!(records >= 600, "{records} records");
+
+        let counted = CountedRuntime {
+            runtime: &runtime,
+            calls: Default::default(),
+        };
+        let mut restored = RecordWriter::replay(&counted, id, stream).await.unwrap();
+        assert_eq!(restored.snapshot(), saved);
+        let calls = counted.calls.load(Ordering::SeqCst);
+        let pages = records.div_ceil(READ_PAGE.max_records);
+        assert!(
+            calls <= pages + 4,
+            "replaying {records} records took {calls} store calls, more than {pages} pages + 4"
+        );
+        drop(restored);
+        runtime.shutdown(Duration::from_secs(5)).await.unwrap();
     }
 }
