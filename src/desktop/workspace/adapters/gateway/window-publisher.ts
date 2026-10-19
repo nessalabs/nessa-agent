@@ -97,7 +97,7 @@ export function windowPublisher(options: {
         owed = false
         const client = await options.connected()
         watch(client)
-        const window = latest
+        const window: ShownWindow | null | undefined = latest
         revision += 1
         try {
           await client.workspace.publish(
