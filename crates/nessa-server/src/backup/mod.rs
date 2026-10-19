@@ -33,6 +33,9 @@
 //! The standalone reader enters through `entrypoint`, verifies through
 //! `application::verify_bundle`, and reads only supplied bundle/key paths through
 //! infrastructure. Its contract is [backup verification](../../../../docs/design/backup-verification.md).
+//! Offline restore planning reuses that verifier and reports unresolved prerequisites
+//! and proposed ordering without importing, quarantining or activating a gateway.
+//! Its contract is [offline planning](../../../../docs/design/offline-restore-planning.md).
 
 pub mod application;
 pub mod domain;
@@ -74,3 +77,7 @@ mod verification_directory_tests;
 #[cfg(test)]
 #[path = "../../tests/backup/verification_metadata.rs"]
 mod verification_metadata_tests;
+
+#[cfg(test)]
+#[path = "../../tests/backup/restore_planning.rs"]
+mod restore_planning_tests;
