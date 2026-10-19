@@ -1,6 +1,7 @@
 //! Public same-provider control preserves an active execution and exact saved context.
 use nessa_sdk::application::agent_execution::providers::NativeExecutionHandoff;
 mod admission;
+mod hooks;
 mod steering;
 use nessa_sdk::application::agent_execution::traces::LocalTraceStore;
 use nessa_sdk::application::dto::ImageInputLimitsDto;
@@ -24,6 +25,7 @@ struct Backend {
     preparation_gate: Mutex<Option<(oneshot::Sender<()>, oneshot::Receiver<()>)>>,
     closes: AtomicUsize,
     fail_model: Mutex<Option<AgentError>>,
+    execution_failure: Mutex<Option<ProviderOperationFailure>>,
     fail_approval: Mutex<Option<AgentError>>,
     replayed_failure: Mutex<Option<ProviderOperationFailure>>,
     model_mode: Mutex<ApprovalMode>,
@@ -139,6 +141,15 @@ impl ProviderSessionBackend for Backend {
             if let Err(error) = handoff() {
                 return ProviderExecutionReply::Rejected(error);
             }
+            if let Some(failure) = self.execution_failure.lock().unwrap().take() {
+                self.events.lock().unwrap().take();
+                let (error, state) = failure.into_parts();
+                return ProviderExecutionReply::Finished(ExecutionReport::new(
+                    Some(Err(error)),
+                    None,
+                    state,
+                ));
+            }
             let hold = self.hold.lock().unwrap().take();
             self.started.notify_one();
             if let Some(hold) = hold {
@@ -215,12 +226,16 @@ enum Normalization {
     IgnoreEffort,
     ChangeHost,
     ChangeHostAdjusted,
+    ChangeHooks,
+    ChangeHooksAdjusted,
 }
 #[derive(Clone)]
 struct Provider {
     model: String,
     mode: ApprovalMode,
     normalization_failure: bool,
+    native_hooks: bool,
+    opened_hooks: Arc<Mutex<Vec<bool>>>,
     normalization: Normalization,
     host: Option<Arc<dyn HarnessHost>>,
     normalization_host: Arc<dyn HarnessHost>,
@@ -244,6 +259,9 @@ impl AgentProvider for Provider {
     }
     fn approval_mode(&self) -> Option<ApprovalMode> {
         Some(self.mode)
+    }
+    fn native_hooks_allowed(&self) -> bool {
+        self.native_hooks
     }
     fn effort_level(&self) -> Option<EffortLevel> {
         self.effort.clone()
@@ -281,7 +299,15 @@ impl AgentProvider for Provider {
         let change_host = matches!(self.normalization, Normalization::ChangeHost)
             || (matches!(self.normalization, Normalization::ChangeHostAdjusted)
                 && (mode != self.approval_mode() || effort != self.effort_level()));
+        let change_hooks = matches!(self.normalization, Normalization::ChangeHooks)
+            || (matches!(self.normalization, Normalization::ChangeHooksAdjusted)
+                && (mode != self.approval_mode() || effort != self.effort_level()));
         Ok(Arc::new(Self {
+            native_hooks: if change_hooks {
+                !self.native_hooks
+            } else {
+                self.native_hooks
+            },
             host: if change_host {
                 Some(self.normalization_host.clone())
             } else {
@@ -304,6 +330,7 @@ impl AgentProvider for Provider {
         let (_, restore, _) = request.into_parts();
         Box::pin(async move {
             self.restores.lock().unwrap().push(restore.clone());
+            self.opened_hooks.lock().unwrap().push(self.native_hooks);
             let (sender, receiver) = mpsc::channel(4);
             *self.backend.events.lock().unwrap() = Some(sender);
             Ok(OpenedProviderSession {
@@ -432,6 +459,7 @@ async fn prepared_with_capabilities(
         preparation_gate: Mutex::new(None),
         closes: AtomicUsize::new(0),
         fail_model: Mutex::new(None),
+        execution_failure: Mutex::new(None),
         fail_approval: Mutex::new(None),
         replayed_failure: Mutex::new(None),
         model_mode: Mutex::new(ApprovalMode::Ask),
@@ -450,6 +478,8 @@ async fn prepared_with_capabilities(
         model: "large".into(),
         mode: ApprovalMode::Ask,
         normalization_failure: false,
+        native_hooks: false,
+        opened_hooks: Arc::new(Mutex::new(Vec::new())),
         normalization,
         host,
         normalization_host: Arc::new(UnstartedHost),

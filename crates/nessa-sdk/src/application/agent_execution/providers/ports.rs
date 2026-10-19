@@ -346,7 +346,9 @@ pub trait AgentProvider: Send + Sync {
     /// This pure operation validates settings before live mutation and retains
     /// the factory's existing credentials, lease authority and supplied trace port.
     /// Model, approval and effort controls use it; the clone must report the exact
-    /// requested settings without changing identity, model capabilities or host owner.
+    /// requested settings without changing identity, model capabilities, native-hook policy,
+    /// execution context or host owner. The same agreement is checked before native
+    /// mutation, after adjusted acknowledgements and before saved settings reopen.
     ///
     /// # Errors
     /// Unsupported factories refuse rather than restoring with stale settings.

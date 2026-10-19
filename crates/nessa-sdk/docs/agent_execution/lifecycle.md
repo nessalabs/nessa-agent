@@ -599,3 +599,23 @@ that migration error (39 passed, 13 Busy failures).
 | Relationship | Existing owner and expected result | Evidence |
 | --- | --- | --- |
 | Target factory accepts Ask only; preflight requests Ask; native model ACK reports Auto | The same target factory validates the complete acknowledged settings. Its Unsupported is post-effect uncertainty: CleanupRequired, one native call, no durable model/configuration commit, new admission fenced until cleanup. Do not relax profile capabilities to accommodate an invalid scripted ACK | Unchanged production passes the new public assertion. Isolated sole post-ACK target-normalization omission wrongly returns success and fails that assertion; source-preserving fresh guarded rebuild passes all 53 model tests. Exact seven-package all-target Clippy passes. This covers an existing guard, not a new production fix |
+
+### Normalized native-hook agreement (#975 R4)
+
+`ModelConfiguration::configured_provider` must preserve the supplied factory's
+`native_hooks_allowed` fact alongside identity, capabilities, settings, context
+and live host owner. Model, approval, effort and saved-setting restoration share
+this owner. A settings clone cannot grant hooks that its supplied factory denies.
+
+| Ordering | Required outcome | Evidence |
+| --- | --- | --- |
+| Model preflight or approval/effort preflight returns a clone with different native-hook policy | BeforeEffect refusal, zero native calls, unchanged durable configuration; admitted work remains usable | Public Agent model/approval/effort preflight cases: old production accepts hook-changing clones; fixed refuses; private sole-check omission reproduces |
+| Native ACK adjustment returns a clone with different native-hook policy | EffectUncertain / CleanupRequired, one native call, no new durable configuration or Applied audit, original actor retained; admission fenced until once-only cleanup | Public Agent adjusted-ACK case: old production accepts; fixed fences; private sole-check omission reproduces |
+| Saved settings need a clone with different native-hook policy | Refuse before opening; exact clone still restores original settings and hook policy | Public Agent saved-setting case: old production opens wrong policy; fixed refuses before open; exact clone restores |
+| Exact clones preserve denied or allowed native hooks through explicit or automatic reattachment | Both opens retain the supplied policy; checked-turn admission keeps its existing contract | Public Agent exact-clone matrix covers false/true policy × caller-requested/automatic recovery, with two policy-preserving opens. Existing active checked-turn control regressions remain required |
+
+The six public hook-normalization tests produce five intended old-production
+failures and one positive matrix. Fixed and private exact-restored runs pass all
+six; omitting only native-hook equality in an isolated archive/target restores
+the five failures while the exact-clone positive passes. Earlier incomplete
+reattachment fixture setup runs remain excluded from that evidence.

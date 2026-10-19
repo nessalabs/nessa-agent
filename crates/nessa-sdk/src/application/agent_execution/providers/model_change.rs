@@ -196,6 +196,7 @@ impl ModelConfiguration {
         )?;
         if normalized.identity() != provider.identity()
             || normalized.capabilities() != provider.capabilities()
+            || normalized.native_hooks_allowed() != provider.native_hooks_allowed()
             || normalized.approval_mode() != self.approval_mode()
             || normalized.effort_level().as_ref() != self.effort_level()
             || normalized.model_change_context() != provider.model_change_context()
