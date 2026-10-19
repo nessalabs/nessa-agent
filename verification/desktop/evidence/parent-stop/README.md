@@ -103,12 +103,13 @@ The Cargo-dev/default-feature gateway SHA256 is
 Canonical checks passed 43 dev / 23 production / 4 scripted Codex cases.
 These are Chromium and Playwright WebKit results, not native WKWebView.
 
-The images retain an unresolved rendering observation: Chromium override has
-missing assistant-marker glyphs, and WebKit default has a partial Cancelled
-status. An additive diagnostic at `f41e0483` captured a second frame after
-1500 ms: two later images still had missing glyphs, with full DOM text, loaded
-fonts and opacity 1. Cause remains unproven; no clean-four-capture claim or
-native reproduction is made. All four diagnostic behavior cases passed.
+The earlier missing-glyph assessment was incorrect. Reinspection of the raw
+retained PNG pixels and an enlarged crop shows complete assistant and Cancelled
+text. Every non-space character has foreground pixels in all eight retained
+current/diagnostic captures. Full-image display inspection had appeared clipped;
+no product rendering or image rewrite is warranted. Controlled captures,
+including the original pane capture before diagnostic layout reads, also contain
+complete glyphs. All four diagnostic behavior cases passed.
 
 ![Current Chromium default](current-parent-stop-chromium-default.png)
 ![Current Chromium override](current-parent-stop-chromium-override.png)
@@ -145,3 +146,43 @@ Main `6811e40d` (#1037) was subsequently integrated. Its sandbox startup and
 browser-default changes leave these explicitly selected `bundled` runs' browser
 selection and all SDK/server/product inputs unchanged. Exact-head CI and fresh
 complete independent reviews determine the final draft disposition.
+
+## Confirmed Stop recovery and access-menu verification — October 19
+
+The original #1034 watch has a durable exact Stop receipt settled as Cancelled,
+but its Running turn history has no terminal after process loss. Resumption
+waited on the captured Stop while recovery skipped the settled command.
+Commit `3c911747a5084933646cb2c66247dc3adafb932d` makes the gateway Stop owner
+finish that history through the existing SDK decline operation, under the
+original actor, with no provider cancellation or successor.
+
+A real process-kill regression fails on the prior runtime and passes with the
+correction. It covers recursive/default and override selections, changed
+settings, captured children, original caller attribution and later person work.
+Accepted/Attempted controls remain uncertain. The complete server suite passes
+3,416 tests with 12 existing/helper ignores. The complete original 182-action
+chaos plan, with both restarts, original concurrency and 240-second settlement
+limit, passes on the corrected gateway. This corroborates the causal regression;
+a passing replay does not disprove the original failure.
+
+The unchanged retained namespace cannot be reopened by current main: #975's
+current metadata contract refuses its absent `model_requests` table. The fixture
+was preserved unchanged; no migration or compatibility shim was introduced.
+The original SDK history and exact command ledger supplied the diagnosis.
+
+A controlled real menu-focus callback also reproduces the WebKit empty-composer
+Send failure: focus restoration between field focus and native text insertion
+produces no input event and expires the original 10-second Send assertion.
+Restoring focus before input passes; waiting for the menu interaction to finish
+also passes under the adverse ordering. The three original result/cleanup
+traces are in [access-focus-controls.json](access-focus-controls.json). The
+original uninstrumented failure lacks input events, so its exact scheduling
+cannot be established retrospectively. The stress helper now asserts menu focus
+restoration before the next field action, with no text retry, disabled-button
+bypass or Send timeout change. Product UI and SDK APIs are unchanged by that
+verification correction.
+
+Published `f0694161150a6566647d9addf54949db30314591` CI attempt 1 completed
+all 12 jobs successfully in [run 39323294415](https://github.com/nessalabs/nessa-agent/actions/runs/39323294415).
+The subsequent recovery correction requires its own exact-head checks and fresh
+complete review before merging. No historical failure is erased by later passes.

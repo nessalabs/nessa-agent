@@ -509,6 +509,16 @@ async function pickAccess(page, mode) {
     .locator(composerControls.accessMenu)
     .getByRole(...composerControls.accessItem[mode])
     .click({ timeout: 10_000 })
+  // Menu teardown restores focus asynchronously. Finish that interaction
+  // before the next fill focuses a field and inserts its text separately.
+  const restored = await waitFor(
+    () =>
+      dock(page)
+        .locator(composerControls.access)
+        .evaluate((node) => node === document.activeElement),
+    10_000,
+  )
+  if (!restored) throw new Error("the access menu did not restore focus to its control")
 }
 
 /** Waits for the gateway to say the conversation runs at `mode`. */
