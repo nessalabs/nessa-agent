@@ -1006,8 +1006,7 @@ const steps = {
     if (conversations.some((each) => each.conversationId === conversationId))
       failures.push("the gateway's list still holds the deleted conversation")
     const hidden = await waitFor(
-      async () =>
-        (await sessionRow(run.page, title).count()) === 0,
+      async () => (await sessionRow(run.page, title).count()) === 0,
       15_000,
     )
     if (!hidden) failures.push("the window still lists the deleted conversation")
