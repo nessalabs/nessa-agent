@@ -24,10 +24,7 @@
     "claude_raised_six": 62,
     "codex_one": 9,
     "codex_six": 19,
-    "engines": [
-      "chromium",
-      "webkit"
-    ]
+    "engines": ["chromium", "webkit"]
   },
   "smoke": 33,
   "composer": 3,
