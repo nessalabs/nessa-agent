@@ -854,3 +854,16 @@ async fn an_ended_turn_whose_history_cannot_be_read_is_refused_not_answered_with
         "temporarily_unavailable"
     );
 }
+
+/// A read that runs out of time while still behind the thread's events says
+/// so: an empty answer always comes with timedOut, never as a page.
+#[test]
+fn a_deadline_while_behind_is_a_timed_out_answer_not_an_empty_page() {
+    let (_stop, stopped) = watch::channel(false);
+    let mut control = SubscriptionControl::new(stopped, 0, None);
+    control.read_to(progress_cursor("incarnation", 3, None));
+    let value = control.finish(&id(), SubscriptionEnd::Deadline).unwrap();
+    assert_eq!(value["events"], json!([]));
+    assert_eq!(value["more"], true);
+    assert_eq!(value["timedOut"], true, "{value}");
+}

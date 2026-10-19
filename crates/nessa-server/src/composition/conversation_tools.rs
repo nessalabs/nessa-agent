@@ -110,7 +110,7 @@ impl BuiltInServer for ConversationTools {
             }),
             json!({
                 "name": "subscribe",
-                "description": "Wait for a thread's turn, or read its events. To get the reply to a message you sent, pass the executionId send_message returned: the call waits (up to waitMs, default and most 30000) and returns turn: {finished: true, outcome, reply} as soon as that turn ends, even if it already had. If turn.finished is false it is still running: call again the same way, or end your turn and its report wakes you. While waiting it reads past the thread's other events; its cursor continues after everything it read. Without executionId it returns the next committed events (metadata only, never empty while more are waiting) and a cursor; repeat with after to continue, omit after to start from now, or use replay:true to start from the beginning. A turn.ended event comes with turn: {outcome, reply}. This call does not send a message, run an agent, or arrange a future model turn.",
+                "description": "Wait for a thread's turn, or read its events. To get the reply to a message you sent, pass the executionId send_message returned: the call waits (up to waitMs, default and most 30000) and returns turn: {finished: true, outcome, reply} as soon as that turn ends, even if it already had. If turn.finished is false it is still running: call again the same way, or end your turn and its report wakes you. While waiting it reads past the thread's other events; its cursor continues after everything it read. Without executionId it returns the next committed events (metadata only; empty only with timedOut: true, when the read ran out of time before reaching an event: call again with its cursor) and a cursor; repeat with after to continue, omit after to start from now, or use replay:true to start from the beginning. A turn.ended event comes with turn: {outcome, reply}. This call does not send a message, run an agent, or arrange a future model turn.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -844,7 +844,7 @@ impl SubscriptionControl {
             SubscriptionEnd::Cancelled => Err("cancelled".into()),
             SubscriptionEnd::Deadline => match &self.checkpoint {
                 Some(cursor) => {
-                    let mut value = json!({"threadId":target.to_string(),"events":[],"cursor":cursor.encode(),"more":self.behind,"timedOut":self.wait_ms>0});
+                    let mut value = json!({"threadId":target.to_string(),"events":[],"cursor":cursor.encode(),"more":self.behind,"timedOut":self.wait_ms>0 || self.behind});
                     if let Some(execution) = &self.execution {
                         value["turn"] = json!({"executionId":execution,"finished":false});
                     }
