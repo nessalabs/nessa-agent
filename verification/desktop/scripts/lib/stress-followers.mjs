@@ -254,6 +254,10 @@ export class Follower {
               `a subscription past ${this.limits.conversationTargets} was accepted`,
             )
         } catch (error) {
+          // A list snapshot can name the exact conversation the run deletes
+          // while this admission waits. It cannot measure capacity this round.
+          if (error?.code === "conversation_deleted" && this.deleted.has(others[n]))
+            return
           // The gateway restarting, or this connection dropping, ends the
           // probe: it asks again on a later round.
           if (error?.code === "temporarily_unavailable" || !isRefusal(error)) return

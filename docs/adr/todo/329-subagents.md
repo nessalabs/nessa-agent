@@ -272,6 +272,7 @@ contract.
 | Child creation audit fails after metadata but before a slot is acquired | Transfer no cleanup owner; definite absence releases the reservation and capacity. Slot acquisition follows audit/admission checks | `child_creation_audit_failure_cannot_strand_unacquired_cleanup` |
 | Restored nondeletion Closing drain finishes before cleanup adapters are rebound | Rejoin the original Closing owners after acknowledged resource rebinding, preserving the original cause, initiator and operation. Pending/failed cleanup retains ownership and quota; later recovery retries that same owner | `tests/conversation/owned_recovery.rs`: real SQLite nondeletion Closing, lost acknowledgement, repeated recovery and quota checks |
 | Separate request histories are admitted or progressed in a different order | The storage observation orders by first Accepted publication, not stream creation or later progress; request exclusion remains independent | `mutation_enumeration_is_principal_scoped_read_only_and_keeps_latest_progress` |
+| A capacity probe awaits view admission while the person deletes that exact target | The stress run's existing exact deleted-target set identifies the typed `conversation_deleted` refusal. End this probe round and close prior views; a later round must still measure capacity. Another target's deletion grants no exception; other refusals retain the existing capacity/restart rules | `stress-followers.test.mjs`: gated deletion, foreign/late markers, other refusal codes, later capacity probe and excess admission |
 
 
 

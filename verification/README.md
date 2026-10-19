@@ -111,6 +111,8 @@ verification/
         stress-conversation.test.mjs duplicate titles, delayed selection and missing identities cannot redirect selection
         stress-restart.mjs   scope intentional restart console lines to exact socket evidence and verified recovery (#1024)
         stress-restart.test.mjs temporal, endpoint, occurrence, failed-recovery and cleanup boundaries
+        stress-followers.mjs subscription churn and capacity probes, correlated with exact run-owned deletions
+        stress-followers.test.mjs deletion during admission, foreign/late markers, typed refusal and capacity/cleanup controls
         page-lines.mjs      report each collected page event through its step or close owner
         page-lines.test.mjs queue-free page API, classification, once-only reporting and concurrent attribution
         workspace.mjs       open panes and completed tool work, read pane rects and focus, lift a pane, rect containment, a model rule or value read in the page
