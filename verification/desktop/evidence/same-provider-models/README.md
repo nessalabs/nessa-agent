@@ -1,6 +1,6 @@
-# Same-provider model control: current assembly
+# Same-provider model control: source-scoped evidence
 
-Runtime source `246765ad9fe4475cded0b5878cb66c55f1b07caa`, on immutable main
+Earlier complete-journey runtime source `246765ad9fe4475cded0b5878cb66c55f1b07caa`, on immutable main
 `5813f349a08e2f3ab1fd585d9ab775655d7e957b` (Native linking Settings); UI pin
 `0794a41bb1482aa7e677fd2b7012874bcc3e29b2`. This update changes only evidence.
 [Qualification](qualification.json) keeps exact source/artifact/photo hashes,
@@ -15,7 +15,7 @@ Full Claude retains **windows1/linkings1**; focused Codex explicitly uses **both
 Native settings tests touch only owned ephemeral ci configuration and an allocated
 loopback native port; they never change the installed app or its configuration.
 
-Current assembly passed full frontend **4,936 tests /369 files**, normal checks
+That assembly passed full frontend **4,936 tests /369 files**, normal checks
 and build; native linking **11**, self-restart **9**, runtime-config selection
 **16**, shared config MCP application **50**, pairing-audit **5**, actual native
 owner routes **13**, model owner **12**, wire model **2**, cold preset **7**,
@@ -48,7 +48,26 @@ Parent cold3442/4docs and SDK53 fixtures remain separately source-qualified; no
 new whole6838 run or performance claim is made. Fresh whole review and actual
 Linux CI remain required before merge. No raw journals/auth/config/keys are included.
 
-## Current inspected screenshots
+## R3 corrections and current qualification
+
+P2 source `d7982f5f8` permits a deliberate source recovery check when a retained
+Changing journal outlives its caller, including a fresh window. Local asking and
+access changes still block another call; Send/draft/outbox remain fenced until
+authoritative source reconciliation. Actual public-store before:2fail/17pass;
+sole-rule omission:3fail/17pass; exact restored focused:32pass. Full frontend
+**4,942 tests /369 files**, all normal stages, passed. Focused real Claude and
+Codex model1 journeys each passed **8/8**, Chromium/WebKit, windows0/linkings0
+and other knobs0; chaos **2/2**, actual model actions2/6. Prelaunch/post gateway
+hash47d7ec4c remains exact. The retained-journal regression is proved at the public
+store/source seam; no crashed-native browser reproduction is claimed.
+
+Assembly `f9a1cbf5b` also groups11 Rust import paths, preserving expanded imports,
+aliases, cfg(test) regions and behavior; SDK/server all-target strict Clippy and
+scoped formatting pass. Earlier full journey/native/canonical evidence and the
+photos below keep their original source attribution. Fresh whole R4 and actual
+current-head Linux CI remain required.
+
+## Earlier inspected screenshots
 
 - **Claude/WebKit**, full default run: confirmed Fable5.1,
   subsequent-responses text, draft and Stop. Original review is offscreen;

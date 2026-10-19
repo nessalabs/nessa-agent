@@ -250,5 +250,42 @@
       "result": "linked-devices2/16; only unknown workspace.publish; original and sole-admission omission retained, not relabelled"
     }
   ],
-  "old_restart_controls_scope": "The retained identity/console controls were qualified on main281b source; their exact owning hunk remains at current source. No borrowed classifier or outage helper was added to new Settings linking step."
+  "old_restart_controls_scope": "The retained identity/console controls were qualified on main281b source; their exact owning hunk remains at current source. No borrowed classifier or outage helper was added to new Settings linking step.",
+  "review_corrections": {
+    "qualified_assembly_source": "f9a1cbf5b",
+    "P2_source": "d7982f5f8bddae3a8971869725f78f6a0f9187cf",
+    "P2": "Retained Changing journal permits deliberate existing-source recovery; actual local asking/access still block, broad Send/draft/outbox fence and authoritative gateway preflight unchanged.",
+    "before": {
+      "failed": 2,
+      "passed": 17
+    },
+    "sole_rule_omission": {
+      "failed": 3,
+      "passed": 17
+    },
+    "restored_focused": 32,
+    "full_frontend": {
+      "passed": 4942,
+      "files": 369,
+      "all_normal_stages": "pass"
+    },
+    "focused_browser": {
+      "claude": 8,
+      "codex": 8,
+      "engines": ["chromium", "webkit"],
+      "model_changes": 1,
+      "windows": 0,
+      "linkings": 0,
+      "other_knobs": 0
+    },
+    "chaos": {
+      "seeds_passed": 2,
+      "actual_model_actions": [2, 6]
+    },
+    "retained_journal_browser_crash_reproduced": false,
+    "reproduction_scope": "Public store/source seam actual before/omission; ordinary real browser model journeys separately qualified. No product test switch or fabricated native crash.",
+    "gateway_prelaunch_and_post_sha256": "47d7ec4c56cebaf485a61ff9751124d048097150a4b94aa14aca5f752f1c629d",
+    "P3": "11-file import-only grouping; expanded paths/aliases, cfg(test) regions and non-import behavior equivalent except two short type references. SDK/server all-target Clippy -D warnings and scoped format pass. No repeated runtime/browser claim for import-only delta.",
+    "earlier_evidence": "All earlier keys retain their recorded sources and build artifacts; photos below predate P2. Fresh whole R4 and current Linux CI remain required."
+  }
 }
