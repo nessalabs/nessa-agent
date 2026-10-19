@@ -3,7 +3,9 @@
 //! `LocalConversationStore` keeps ownership records, tombstones and summaries
 //! with approval-mode requests in one private SQLite database (`schema.sql`, opened by
 //! `nessa-local-database`), and is the repository, the summaries and the
-//! listing and the owner-scoped catalogue at once. `export_facts` reads that
+//! listing and the reader-scoped catalogue at once. Paired lists acquire
+//! their bounded rows and scoped head in one transaction (L9 in
+//! `docs/design/record-subscriptions.md`). `export_facts` reads that
 //! database for the export cut: live grants, and grants whose latest journal
 //! row is a revoke.
 //!

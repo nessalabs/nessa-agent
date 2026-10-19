@@ -18,8 +18,8 @@
 
 use super::delivery::{Deadline, Outgoing, SubscriptionDeliveries};
 use crate::conversation::application::{
-    error_code, CatalogueChangeWatch, CatalogueWatchState, ConversationError, ConversationService,
-    ReadOpening,
+    error_code, CatalogueChangeWatch, CatalogueHead, CatalogueWatchState, ConversationError,
+    ConversationService, ReadOpening,
 };
 use crate::product::{
     conversation::{caller, read_list, read_view},
@@ -29,6 +29,7 @@ use crate::product::{
     state::{note_limit, ProductRouteState},
 };
 use nessa_auth::application::session::AuthenticatedSession;
+use nessa_auth::domain::PrincipalId;
 use nessa_protocol::conversation::{domain::ConversationId, projection::CommittedCursor};
 use nessa_protocol::product::generated::{
     product_event, product_method, ConversationListResult, ConversationListed,
@@ -220,6 +221,7 @@ impl Sources {
         service: Option<&ConversationService>,
         session: &AuthenticatedSession,
         target: &Target,
+        catalogue_owner: Option<&PrincipalId>,
     ) -> Result<Self, String> {
         let unavailable = || code_of(&ConversationError::Unavailable);
         let records = || state.record_watches.as_ref().ok_or_else(unavailable);
@@ -250,7 +252,10 @@ impl Sources {
                     .catalogue_watches
                     .as_ref()
                     .ok_or_else(unavailable)?
-                    .watch(&owner.organization_id, &owner.principal_id);
+                    .watch(
+                        &owner.organization_id,
+                        catalogue_owner.unwrap_or(&owner.principal_id),
+                    );
                 Self {
                     // A list row's `running` follows a turn's commits, which
                     // change no summary (row L2).
@@ -351,8 +356,8 @@ impl Sources {
 /// the method's grant still holds under current policy, and the browser
 /// session is still present. Asked before every read, so access lost between
 /// two batches ends the subscription before the next (row S14). A view also
-/// asks the read grant for its conversation here, and a list is refused to a
-/// paired device here (`read_access`, rows G12 and G13), so a device's
+/// asks the read grant for its conversation here, and a list asks the current
+/// catalogue policy here (`read_access`, rows G12 and G13), so a device's
 /// subscribe that may not read takes no watch and a revoke ends the
 /// subscription before its next read. The agent catalog asks only what
 /// `agents.list` asks, its method's grant (row AC6).
@@ -360,16 +365,17 @@ pub(super) async fn authorize_batch(
     state: &ProductRouteState,
     session: &AuthenticatedSession,
     target: &Target,
-) -> Result<AuthenticatedSession, &'static str> {
+) -> Result<(AuthenticatedSession, Option<read_access::CatalogueReader>), &'static str> {
     let current = admit_now(state, session, target.method()).await?;
-    match target {
+    let list = match target {
         Target::View { conversation, .. } | Target::Events { conversation, .. } => {
-            read_access::admit_conversation(state, &current, conversation).await?
+            read_access::admit_conversation(state, &current, conversation).await?;
+            None
         }
-        Target::List { .. } => read_access::admit_list(state, &current).await?,
-        Target::Agents => {}
-    }
-    Ok(current)
+        Target::List { .. } => Some(read_access::admit_list(state, &current).await?),
+        Target::Agents => None,
+    };
+    Ok((current, list))
 }
 
 /// One read's result: a view and where it was folded through, or a list.
@@ -384,7 +390,7 @@ enum Batch {
         /// though `cursor` stays (`CommittedCursor::read_through`).
         read: Cursor,
     },
-    List(ConversationListResult),
+    List(ConversationListResult, Option<CatalogueHead>),
     /// The catalog as `agents.list` answers it.
     Agents(Value),
 }
@@ -448,7 +454,7 @@ async fn read_batch(
         // request. Admitted before waiting for capacity, a grant revoked
         // during the wait would let one read through (row S30).
         let permit = state.requests.clone().acquire_owned().await;
-        let current = match authorize_batch(state, session, target).await {
+        let (current, list_scope) = match authorize_batch(state, session, target).await {
             Ok(current) => current,
             // A batch's admission that could not be verified now (the
             // receiver lookup, row G11) is retried as a read slot is, so one
@@ -504,9 +510,10 @@ async fn read_batch(
                 }
             }
             (Target::List { archived }, Some(service)) => {
-                read_list(state, service, &current, *archived, request_id)
+                let scope = list_scope.as_ref().ok_or_else(not_configured)?;
+                read_list(state, service, &current, *archived, request_id, scope)
                     .await
-                    .map(Batch::List)
+                    .map(|(list, head)| Batch::List(list, head))
             }
         };
         drop(permit);
@@ -695,7 +702,7 @@ impl Sent {
                     more,
                 })
             }
-            Batch::List(list) => {
+            Batch::List(list, head) => {
                 // Every row the service read, not only those the frame
                 // keeps: a row cut from the frame whose `running` changed by
                 // a commit alone (no catalogue change) is still a change. A
@@ -710,7 +717,10 @@ impl Sent {
                 let key = if payload["list"]["complete"] == true {
                     read
                 } else {
-                    serde_json::json!([read, self.catalogue])
+                    match head {
+                        Some(head) => serde_json::json!([read, head.incarnation, head.revision]),
+                        None => serde_json::json!([read, self.catalogue]),
+                    }
                 };
                 Framed::Frame(Frame {
                     name: product_event::CONVERSATION_LISTED,
@@ -877,13 +887,21 @@ pub(super) async fn run(run: Run) {
     };
     // Admitted before anything is registered: a session that may not follow
     // registers no watch (row S29).
-    if let Err(code) = authorize_batch(&state, &session, &target).await {
-        return refuse(code, slot);
-    }
-    let mut sources = match Sources::register(&state, service.as_deref(), &session, &target) {
+    let initial_scope = match authorize_batch(&state, &session, &target).await {
+        Ok((_, scope)) => scope,
+        Err(code) => return refuse(code, slot),
+    };
+    let mut sources = match Sources::register(
+        &state,
+        service.as_deref(),
+        &session,
+        &target,
+        initial_scope.as_ref().map(|scope| &scope.owner),
+    ) {
         Ok(sources) => sources,
         Err(code) => return refuse(&code, slot),
     };
+    drop(initial_scope);
     let after = match &target {
         Target::View { after, .. } => after.clone(),
         Target::List { .. } | Target::Agents | Target::Events { .. } => None,
@@ -1031,10 +1049,13 @@ mod tests {
         let list = |running: bool| {
             let mut rows: Vec<_> = (0..500).map(|n| row(n, 400)).collect();
             rows[499].running = running;
-            Batch::List(ConversationListResult {
-                conversations: rows,
-                complete: true,
-            })
+            Batch::List(
+                ConversationListResult {
+                    conversations: rows,
+                    complete: true,
+                },
+                None,
+            )
         };
         let key = |sent: &mut Sent, batch| match sent.frame(batch) {
             Framed::Frame(frame) => (frame.payload["list"].clone(), frame.key),
@@ -1045,6 +1066,34 @@ mod tests {
         assert_eq!(idle_rows["complete"], false, "cut");
         assert_eq!(idle_rows, running_rows, "the frame carries the same rows");
         assert_ne!(idle, running);
+    }
+
+    #[test]
+    fn a_scoped_incomplete_list_ignores_the_owner_wake_counter() {
+        let deliveries = Arc::new(SubscriptionDeliveries::new(Arc::new(
+            EventSequence::default(),
+        )));
+        let mut sent = sent(&deliveries);
+        let batch = |revision| {
+            Batch::List(
+                ConversationListResult {
+                    conversations: vec![row(1, 10)],
+                    complete: false,
+                },
+                Some(CatalogueHead {
+                    incarnation: "metadata".into(),
+                    revision,
+                }),
+            )
+        };
+        let key = |sent: &mut Sent, batch| match sent.frame(batch) {
+            Framed::Frame(frame) => frame.key,
+            Framed::Behind { .. } => panic!("a list has no view cursor"),
+        };
+        let first = key(&mut sent, batch(3));
+        sent.catalogue = 99;
+        assert_eq!(key(&mut sent, batch(3)), first);
+        assert_ne!(key(&mut sent, batch(4)), first);
     }
 
     fn sent(deliveries: &Arc<SubscriptionDeliveries>) -> Sent {

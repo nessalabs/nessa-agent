@@ -33,6 +33,9 @@ const QUIET: Duration = Duration::from_millis(750);
 #[path = "subscriptions/events.rs"]
 mod events;
 
+#[path = "subscriptions/paired_lists.rs"]
+mod paired_lists;
+
 /// A socket whose writes the test can hold: while the gate is shut, a flush
 /// does not finish, so the connection's one writer is stuck on that frame.
 #[derive(Default)]
@@ -2023,7 +2026,7 @@ impl SubscriptionFixture {
     }
 
     /// `conversation.list`, `.observe` and `.subscribeList` all answer
-    /// `forbidden`, so no list row or cursor reaches a device.
+    /// `forbidden`, so no list row or cursor reaches a peer.
     async fn assert_lists_refused(&self) {
         for method in ["conversation.list", "conversation.observe"] {
             let reply = self.call(method, json!({})).await;
@@ -2084,9 +2087,8 @@ async fn a_paired_device_on_the_socket_sees_only_what_it_was_granted() {
         )
         .await;
     assert_eq!(read["error"]["code"], "conversation_not_found", "{read}");
-    // The socket's lists are the owner's: a device lists through its
-    // catalogue, so it is refused them, whatever it was granted.
-    fixture.assert_lists_refused().await;
+    // A device starts with an empty grant-scoped list.
+    assert!(fixture.listed().await.is_empty());
     let shared = fixture
         .call(
             "conversation.shares",
@@ -2117,13 +2119,13 @@ async fn a_paired_device_on_the_socket_sees_only_what_it_was_granted() {
         )
         .await;
     assert_eq!(read["ok"], true, "{read}");
-    fixture.assert_lists_refused().await;
+    assert_eq!(fixture.listed().await.len(), 1);
 }
 
 /// A linked device holds `conversation.read`, the grant pairing mints, and
 /// not `conversation.write`. It follows a conversation that grant shares
 /// with it. An ungranted id is `conversation_not_found`. Its list
-/// subscription stays refused.
+/// subscription uses the same grant scope.
 #[tokio::test]
 async fn a_paired_reader_follows_a_granted_conversation_with_the_read_grant() {
     let fixture = SubscriptionFixture::new().await;
@@ -2154,7 +2156,7 @@ async fn a_paired_reader_follows_a_granted_conversation_with_the_read_grant() {
     let (stopped, _) = client.reply("stop").await;
     assert_eq!(stopped["ok"], true, "{stopped}");
     client.close().await;
-    fixture.assert_lists_refused().await;
+    assert_eq!(fixture.listed().await.len(), 1);
 }
 
 /// Row H8 (`docs/design/auth/peer-gateways.md`): a session whose receiver
@@ -2682,7 +2684,7 @@ async fn share_answers_its_revision_and_refuses_a_stale_expected_one() {
 
 /// Row J1: a device holding a Comment or a Drive grant reads on the
 /// socket exactly as one holding Read (G12): `conversation.read` and a view
-/// subscription are admitted and the owner's lists are refused.
+/// subscription and grant-scoped lists are admitted.
 #[tokio::test]
 async fn a_comment_or_drive_grant_reads_on_the_socket_as_read_does() {
     use crate::conversation::application::ShareGrantTransition;
@@ -2703,7 +2705,9 @@ async fn a_comment_or_drive_grant_reads_on_the_socket_as_read_does() {
         let mut client = fixture.connect();
         client.subscribe("subscribe", &fixture.id).await;
         client.close().await;
-        fixture.assert_lists_refused().await;
+        let listed = fixture.call("conversation.list", json!({})).await;
+        assert_eq!(listed["ok"], true, "{listed}");
+        assert_eq!(listed["payload"]["conversations"].as_array().unwrap().len(), 1);
         fixture.grant_to(ShareGrantTransition::Revoke).await;
         let read = fixture
             .call(

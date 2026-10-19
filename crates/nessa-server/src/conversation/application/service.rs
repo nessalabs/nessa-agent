@@ -18,16 +18,17 @@ use super::{
     placement::Environments,
     provider_sessions::{ProviderSessionErasers, ProviderSessionHandler},
     retries::{Claim, DeletionRetries, Waiting},
-    AgentToolAudit, ArtifactBudget, ArtifactCollector, ArtifactOffer, AttachmentRelease,
-    AttachmentReleaseCause, ConversationAccessPolicyEvaluator, ConversationAttachments,
-    ConversationCreationAudit, ConversationDeletionAudit, ConversationDeletionAuditRecord,
-    ConversationDeletionCause, ConversationError, ConversationFileLinkAudit,
-    ConversationFileLinkAuditRecord, ConversationFileLinkCause, ConversationFileLinkState,
-    ConversationListing, ConversationModeApplication, ConversationModeAudit,
-    ConversationModeAuditPhase, ConversationModeRequest, ConversationModeRequestState,
-    ConversationOwnershipState, ConversationRepository, ConversationSummaries, DeletionFailures,
-    FenceCapture, FetchRequests, ListedConversation, ObservationCursor, ObservedConversations,
-    OwnerAccess, PublishRequests, RevisionHold, RuntimeReadiness, ShareGrants, StopFailure,
+    AccessAction, AgentToolAudit, ArtifactBudget, ArtifactCollector, ArtifactOffer,
+    AttachmentRelease, AttachmentReleaseCause, CatalogueHead, ConversationAccessPolicyEvaluator,
+    ConversationAttachments, ConversationCreationAudit, ConversationDeletionAudit,
+    ConversationDeletionAuditRecord, ConversationDeletionCause, ConversationError,
+    ConversationFileLinkAudit, ConversationFileLinkAuditRecord, ConversationFileLinkCause,
+    ConversationFileLinkState, ConversationListing, ConversationModeApplication,
+    ConversationModeAudit, ConversationModeAuditPhase, ConversationModeRequest,
+    ConversationModeRequestState, ConversationOwnershipState, ConversationRepository,
+    ConversationSummaries, DeletionFailures, FenceCapture, FetchRequests, ListedConversation,
+    ObservationCursor, ObservedConversations, OwnerAccess, PairedAccess, PairedParty,
+    PublishRequests, Reader, RevisionHold, RuntimeReadiness, ShareGrants, StopFailure,
     SubmittedMessage, UnfinishedDeletions,
 };
 use crate::conversation::domain::{
@@ -3849,6 +3850,23 @@ impl ConversationService {
         caller: ConversationCaller,
         archived: bool,
     ) -> Result<ConversationList, ConversationError> {
+        let owner = caller.principal_id.clone();
+        self.list_for(caller, archived, &Reader::Owner, &owner, None)
+            .await
+            .map(|(list, _)| list)
+    }
+
+    /// Read the bounded list for this reader without opening an agent. A paired
+    /// result carries the catalogue head acquired with its rows; cancellation
+    /// releases the service admission and does not retain live agent handles.
+    pub(crate) async fn list_for(
+        &self,
+        caller: ConversationCaller,
+        archived: bool,
+        reader: &Reader,
+        owner: &PrincipalId,
+        paired_policy: Option<&dyn ConversationAccessPolicyEvaluator>,
+    ) -> Result<(ConversationList, Option<CatalogueHead>), ConversationError> {
         let _admission = self.admit().await?;
         caller.actor()?;
         // One past the bound, so the list can say whether it left any out.
@@ -3857,27 +3875,36 @@ impl ConversationService {
             .listing
             .list(
                 &caller.organization_id,
-                &caller.principal_id,
+                owner,
                 archived,
                 MAX_LISTED_CONVERSATIONS + 1,
+                reader,
             )
             .await?;
         let complete =
             listed.unreadable == 0 && listed.conversations.len() <= MAX_LISTED_CONVERSATIONS;
+        let head = if matches!(reader, Reader::PairedDevice { .. }) {
+            Some(listed.head.ok_or(ConversationError::Metadata)?)
+        } else {
+            None
+        };
         // Found by the listing, decided by the access policy: a row it
         // returns that is not this caller's, or is deleted, is not shown
         // whatever listing is wired here
         // (`a_list_shows_only_what_the_domain_lets_the_caller_see`).
         let owned: Vec<ListedConversation> = self
-            .admitted(listed.conversations, &caller)?
+            .admitted_for(listed.conversations, &caller, reader, owner, paired_policy)?
             .into_iter()
             .take(MAX_LISTED_CONVERSATIONS)
             .collect();
         let running = self.running_ids(&owned).await;
-        Ok(ConversationList {
-            conversations: list_entries(&owned, &running),
-            complete,
-        })
+        Ok((
+            ConversationList {
+                conversations: list_entries(&owned, &running),
+                complete,
+            },
+            head,
+        ))
     }
     /// One page of every summary this caller owns under `archived`, in
     /// creation order, from [`ConversationListing::observe`].
@@ -3894,6 +3921,22 @@ impl ConversationService {
         archived: bool,
         cursor: Option<ConversationObservationCursor>,
     ) -> Result<ConversationObservation, ConversationError> {
+        let owner = caller.principal_id.clone();
+        self.observe_for(caller, archived, cursor, &Reader::Owner, &owner, None)
+            .await
+    }
+
+    /// Continue the current observation cursor in this reader's grant scope.
+    /// Uses the existing incarnation/boundary/creation cursor and opens no agent.
+    pub(crate) async fn observe_for(
+        &self,
+        caller: ConversationCaller,
+        archived: bool,
+        cursor: Option<ConversationObservationCursor>,
+        reader: &Reader,
+        owner: &PrincipalId,
+        paired_policy: Option<&dyn ConversationAccessPolicyEvaluator>,
+    ) -> Result<ConversationObservation, ConversationError> {
         let _admission = self.admit().await?;
         caller.actor()?;
         let cursor = match cursor {
@@ -3908,19 +3951,15 @@ impl ConversationService {
         let observed = self
             .inner
             .listing
-            .observe(
-                &caller.organization_id,
-                &caller.principal_id,
-                archived,
-                cursor,
-            )
+            .observe(&caller.organization_id, owner, archived, cursor, reader)
             .await?;
         let ObservedConversations {
             conversations,
             complete,
             cursor,
         } = observed;
-        let owned: Vec<ListedConversation> = self.admitted(conversations, &caller)?;
+        let owned: Vec<ListedConversation> =
+            self.admitted_for(conversations, &caller, reader, owner, paired_policy)?;
         let running = self.running_ids(&owned).await;
         Ok(ConversationObservation {
             conversations: list_entries(&owned, &running),
@@ -3955,6 +3994,38 @@ impl ConversationService {
             .zip(admitted)
             .filter_map(|(row, admitted)| admitted.then_some(row))
             .collect())
+    }
+
+    fn admitted_for(
+        &self,
+        listed: Vec<ListedConversation>,
+        caller: &ConversationCaller,
+        reader: &Reader,
+        owner: &PrincipalId,
+        paired_policy: Option<&dyn ConversationAccessPolicyEvaluator>,
+    ) -> Result<Vec<ListedConversation>, ConversationError> {
+        let Reader::PairedDevice { receiver_id } = reader else {
+            return self.admitted(listed, caller);
+        };
+        let access = PairedAccess::new(
+            paired_policy.ok_or(ConversationError::Metadata)?,
+            PairedParty {
+                organization: &caller.organization_id,
+                signed_in_as: &caller.principal_id,
+                binding_owner: owner,
+                receiver: receiver_id,
+            },
+        );
+        let admitted = access
+            .allows_each(
+                AccessAction::Read,
+                listed.iter().map(|row| (&row.conversation, row.held)),
+            )
+            .map_err(|_| ConversationError::Metadata)?;
+        if admitted.iter().any(|admitted| !admitted) {
+            return Err(ConversationError::Metadata);
+        }
+        Ok(listed)
     }
     /// Which of `owned` are open here with a turn under way.
     ///

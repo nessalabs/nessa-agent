@@ -1,14 +1,15 @@
 //! Authenticated wire commands translate into the server-owned conversation service.
 //! The socket has already checked current access and the conversation action grant.
 use super::{
+    read_access::CatalogueReader,
     socket::{failure, failure_with_details, success},
     state::ProductRouteState,
 };
 use crate::conversation::application::{
-    error_code, rule_principal, ConversationCaller, ConversationError, ConversationService,
-    ListedPermissionRule, PermissionRuleCatalog, QuestionChoiceInput, ReadOpening, RequestedAgent,
-    RequestedConversation, RuleCatalogError, RuleChange, RulePrincipal, SubmissionMode,
-    SubmittedFile, SubmittedImage, SubmittedMessage,
+    error_code, rule_principal, CatalogueHead, ConversationCaller, ConversationError,
+    ConversationService, ListedPermissionRule, PermissionRuleCatalog, QuestionChoiceInput,
+    ReadOpening, RequestedAgent, RequestedConversation, RuleCatalogError, RuleChange,
+    RulePrincipal, SubmissionMode, SubmittedFile, SubmittedImage, SubmittedMessage,
 };
 use base64::Engine as _;
 use nessa_auth::application::session::{AuthenticatedSession, ReadCurrentSession};
@@ -221,27 +222,32 @@ async fn answer(
             }
             "conversation.list" => {
                 let ConversationListParams { archived } = params!(ConversationListParams);
-                if let Err(code) = super::read_access::admit_list(state, session).await {
-                    return Ok(failure(&frame.id, code));
-                }
-                let listed =
-                    read_list(state, service, session, archived.unwrap_or(false), &frame.id).await?;
+                let scope = match super::read_access::admit_list(state, session).await {
+                    Ok(scope) => scope,
+                    Err(code) => return Ok(failure(&frame.id, code)),
+                };
+                let (listed, _) =
+                    read_list(state, service, session, archived.unwrap_or(false), &frame.id, &scope).await?;
                 Ok(success(&frame.id, &fitted_list(listed, &frame.id)))
             }
             "conversation.observe" => {
                 let params = params!(ConversationObserveParams);
-                if let Err(code) = super::read_access::admit_list(state, session).await {
-                    return Ok(failure(&frame.id, code));
-                }
+                let scope = match super::read_access::admit_list(state, session).await {
+                    Ok(scope) => scope,
+                    Err(code) => return Ok(failure(&frame.id, code)),
+                };
                 let cursor = match params.cursor {
                     Some(cursor) => Some(observation_cursor(cursor)?),
                     None => None,
                 };
                 let observed = service
-                    .observe(
+                    .observe_for(
                         caller(frame.id.clone()),
                         params.archived.unwrap_or(false),
                         cursor,
+                        &scope.reader,
+                        &scope.owner,
+                        scope.policy.as_deref(),
                     )
                     .await;
                 trace_conversation_observe(observed.as_ref().err());
@@ -923,16 +929,24 @@ pub(super) async fn read_list(
     session: &AuthenticatedSession,
     archived: bool,
     request_id: &str,
-) -> Result<ConversationListResult, ConversationError> {
+    scope: &CatalogueReader,
+) -> Result<(ConversationListResult, Option<CatalogueHead>), ConversationError> {
     let listed = service
-        .list(caller(session, request_id.to_owned()), archived)
+        .list_for(
+            caller(session, request_id.to_owned()),
+            archived,
+            &scope.reader,
+            &scope.owner,
+            scope.policy.as_deref(),
+        )
         .await;
     // The desktop's index asks this list first. An incomplete list continues
     // as conversation.observe. The subject tells a list from a read.
     trace_conversation_index(listed.as_ref().err());
-    let listed = list_result(listed?);
+    let (listed, head) = listed?;
+    let listed = list_result(listed);
     super::read_access::admit_index_rows(state, session, &listed.conversations).await?;
-    Ok(listed)
+    Ok((listed, head))
 }
 
 pub(super) fn caller(session: &AuthenticatedSession, request_id: String) -> ConversationCaller {

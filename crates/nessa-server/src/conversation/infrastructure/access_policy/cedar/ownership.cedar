@@ -99,8 +99,8 @@ when {
     !resource.deleted
 };
 
-// The owner lists their own conversations. A paired reader lists through
-// its catalogue, never the owner's list, so no permit names one.
+// The owner lists their own conversations. Devices ask grant.list for a
+// grant-scoped catalogue under their distinct paired subject.
 @id("owner.list")
 permit (
     principal is NessaConversation::Person,

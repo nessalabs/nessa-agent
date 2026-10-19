@@ -207,6 +207,7 @@ fn bench_size(
             &caller.principal_id,
             false,
             MAX_LISTED_CONVERSATIONS + 1,
+            &Reader::Owner,
         ))?;
         sql.push(started.elapsed());
         let rows: Vec<&Conversation> = listed

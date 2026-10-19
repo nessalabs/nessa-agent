@@ -103,10 +103,11 @@ access policy (`ConversationAccessPolicyEvaluator`, answered by Cedar in
   found. So a device cannot tell an ungranted id from one that does not
   exist.
 - **A device lists through its catalogue**, which the store narrows to its
-  grants. The socket's lists (`conversation.list`, `.observe`,
-  `.subscribeList`) are the owner's own and are refused to a device
-  (`forbidden`), rather than read whole and filtered: a filtered list could
-  come back as empty pages, and its cursor would name the last ungranted row.
+  grants before bounds or observation cursors. Socket lists (`conversation.list`,
+  `.observe`, `.subscribeList`) ask `grant.list`, and every returned candidate
+  asks the current read policy. A list's scoped head and rows share a metadata
+  snapshot; an incomplete subscription uses that head rather than an owner-wide
+  wake counter. A peer gateway's list remains refused.
 
 Telling a device from the owner means resolving the session's receiver binding
 on every socket read and subscription batch, for the owner's surfaces too, on
@@ -153,9 +154,8 @@ sequenceDiagram
 ```
 
 A device learns that its catalogue changed by reading its catalogue head,
-which moves only with its granted rows and its own grant changes. A list
-subscription for a device waits on #724; until then a device's subscriptions
-follow one conversation each.
+which moves only with its granted rows and its own grant changes, or by following
+`conversation.subscribeList`. A view subscription still follows one conversation.
 
 ## Revisions
 
@@ -913,12 +913,10 @@ row's tests are named by the row: the transitions in
 
 ## Known limits
 
-- **A device has no list subscription yet** (#724). It polls its catalogue
-  head, which is the latest revision among its granted rows and its own grant
-  changes ([peer gateways](auth/peer-gateways.md), row H9), still numbered by
-  the owner's catalogue. A device paired before that change needs one explicit
-  catalogue reset (see the peer gateways Known limits). A peer gateway polls
-  the same head.
+- **Previously inflated checkpoints can exceed the scoped head.** The retained
+  client reports its existing `ResetRequired` outcome. This slice performs no
+  automatic cache purge, cursor reset or compatibility migration. A peer gateway
+  still polls its grant-scoped catalogue head rather than following a list.
 - **Unpairing is `credential.revoke`, which leaves the binding active.** Reads
   stop because the credential no longer authenticates, but `conversation.share`
   still accepts that credential and writes a grant no one can use.
@@ -993,7 +991,7 @@ otherwise.
 | G9 | Share twice; unshare what is not granted | `applied: false`; no revision; journaled with before equal to after, so a retry replays it | `a_repeated_share_or_unshare_changes_nothing` |
 | G10 | A grant and a revoke that change something | One journal row each: before, after, initiator, surface, request, revision | `every_grant_change_is_journaled_with_its_initiator` |
 | G11 | The owner's own surface (no receiver binding), or a gateway that pairs nothing | Reads, lists and subscribes as before; a receiver lookup that cannot be verified is retried as a read slot is, so it does not end a subscription | the existing subscription and conversation suites, which compose no receiver binding; `an_owner_surface_reads_everything_it_owns`; `an_owner_subscription_outlasts_one_failed_receiver_lookup` |
-| G12 | A socket session with a receiver binding | `conversation.read` and a view subscribe of an ungranted id answer `conversation_not_found`, a granted one is read; `conversation.list`, `.observe`, `.subscribeList` and the share commands answer `forbidden` | `a_paired_device_on_the_socket_sees_only_what_it_was_granted` |
+| G12 | A socket session with a receiver binding | `conversation.read` and a view subscribe of an ungranted id answer `conversation_not_found`, a granted one is read; a device's lists are grant-scoped and the share commands remain `forbidden`; a peer's lists remain refused | `a_paired_device_on_the_socket_sees_only_what_it_was_granted`; L6–L9 in [record subscriptions](record-subscriptions.md) |
 | G13 | A device's view subscription; the grant is revoked between batches | Ended `refused` with `conversation_not_found` before the next read | `a_revoke_ends_a_device_subscription_before_its_next_batch` |
 | G14 | A device unpaired (its binding inactive), whatever it was granted | Socket reads refused `unauthorized`; passive reads as before | `an_unpaired_device_reads_nothing_whatever_it_was_granted` |
 | G15 | Removed with the records watch (#257); a device follows a conversation through a view subscription, which row G13 covers | | |
