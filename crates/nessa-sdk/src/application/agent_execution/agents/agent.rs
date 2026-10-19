@@ -829,6 +829,11 @@ impl Agent {
     ///   when the agent verified the change but it cannot be recorded: the
     ///   level is in force, and no turn may run under it unrecorded.
     ///
+    /// A verified native ACK is audited as applied even when saving or retaining
+    /// its configuration subsequently fails. That failure is returned with
+    /// [`ProviderSessionState::CleanupRequired`]; a terminal audit error is
+    /// appended after the primary error. Applied does not imply durable storage.
+    ///
     /// The caller's `Waker` is woken when the operation's own task finishes;
     /// a panic from it is logged and does not affect the operation. See
     /// "Caller wakers" in docs/agent_execution/lifecycle.md.
@@ -935,51 +940,47 @@ impl Agent {
             .lifecycle
             .run_control_observed(&permit, attached.session.set_effort_level(level.clone()))
             .await;
-        let result = match sent {
+        // Native verification is a distinct fact from retaining its configuration.
+        // Keep both results under this owner until its one terminal audit attempt.
+        let (outcome, result) = match sent {
             Ok(()) => {
                 let configuration =
                     ModelConfiguration::new(self.approval_mode(), Some(level.clone()));
-                if let Err(error) = self
-                    .inner
-                    .manager
-                    .record_configuration(
-                        before,
-                        configuration.clone(),
-                        actor,
-                        SessionConfigurationKind::EffortLevel,
-                    )
-                    .await
-                {
+                let retained = async {
+                    self.inner
+                        .manager
+                        .record_configuration(
+                            before,
+                            configuration.clone(),
+                            actor,
+                            SessionConfigurationKind::EffortLevel,
+                        )
+                        .await
+                        .map_err(AgentError::Storage)?;
+                    match catch_unwind(AssertUnwindSafe(|| {
+                        self.retain_configuration(&configuration)
+                    })) {
+                        Ok(result) => result,
+                        Err(payload) => {
+                            std::mem::forget(payload);
+                            Err(AgentError::Protocol(
+                                "effort configuration retention panicked".into(),
+                            ))
+                        }
+                    }
+                }
+                .await
+                .map_err(|error| {
                     self.inner
                         .lifecycle
                         .record_control_state(&permit, &ProviderSessionState::CleanupRequired);
-                    return Err(ProviderOperationFailure::new(
-                        AgentError::Storage(error),
-                        ProviderSessionState::CleanupRequired,
-                    ));
-                }
-                if let Err(error) = self.retain_configuration(&configuration) {
-                    self.inner
-                        .lifecycle
-                        .record_control_state(&permit, &ProviderSessionState::CleanupRequired);
-                    return Err(ProviderOperationFailure::new(
-                        error,
-                        ProviderSessionState::CleanupRequired,
-                    ));
-                }
-                record(change.settled(EffortChangeOutcome::Applied))
-                    .await
-                    .map_err(|error| {
-                        // In force and unrecorded: no turn may run under it.
-                        self.inner
-                            .lifecycle
-                            .record_control_state(&permit, &ProviderSessionState::CleanupRequired);
-                        ProviderOperationFailure::new(error, ProviderSessionState::CleanupRequired)
-                    })
+                    ProviderOperationFailure::new(error, ProviderSessionState::CleanupRequired)
+                });
+                (EffortChangeOutcome::Applied, retained)
             }
             Err(failure) => {
-                // The backend's contract: Busy and Unsupported are refusals
-                // made before anything is sent. Anything else may have been.
+                // Busy and Unsupported on a usable connection are the backend's
+                // existing unsent-refusal contract. Other answers are unverified.
                 let unsent = matches!(
                     failure.error(),
                     AgentError::Busy | AgentError::Unsupported(_)
@@ -989,19 +990,32 @@ impl Agent {
                 } else {
                     EffortChangeOutcome::Failed
                 };
-                Err(match record(change.settled(outcome)).await {
-                    Ok(()) => failure,
-                    Err(audit) => {
-                        let (error, state) = failure.into_parts();
-                        ProviderOperationFailure::new(
+                (outcome, Err(failure))
+            }
+        };
+        let result = match record(change.settled(outcome)).await {
+            Ok(()) => result,
+            Err(audit) => {
+                let (error, state) = match result {
+                    Ok(()) => {
+                        // Verified and unrecorded: no turn may run under it.
+                        self.inner
+                            .lifecycle
+                            .record_control_state(&permit, &ProviderSessionState::CleanupRequired);
+                        (audit, ProviderSessionState::CleanupRequired)
+                    }
+                    Err(failure) => {
+                        let (primary, state) = failure.into_parts();
+                        (
                             AgentError::MultipleOperationFailures {
-                                first_error: Box::new(error),
+                                first_error: Box::new(primary),
                                 subsequent_error: Box::new(audit),
                             },
                             state,
                         )
                     }
-                })
+                };
+                Err(ProviderOperationFailure::new(error, state))
             }
         };
         drop(permit);

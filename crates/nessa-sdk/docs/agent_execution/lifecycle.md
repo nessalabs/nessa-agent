@@ -619,3 +619,29 @@ failures and one positive matrix. Fixed and private exact-restored runs pass all
 six; omitting only native-hook equality in an isolated archive/target restores
 the five failures while the exact-clone positive passes. Earlier incomplete
 reattachment fixture setup runs remain excluded from that evidence.
+
+### Effort acknowledgement and terminal settlement (#975 R5)
+
+The existing `change_effort_level` owner derives the native outcome before local
+configuration persistence and retention, then attempts one bounded terminal audit
+with its original `EffortLevelChange` while holding the scheduler and permit.
+`Applied` means the native level was verified, not that configuration storage
+succeeded. A later local failure is still returned and fences this generation.
+
+| Ordering | Required outcome | Public evidence |
+| --- | --- | --- |
+| Native ACK, configuration save succeeds and settings retained | Requested then Applied, exact durable settings, admission usable | Existing effort positives plus forwarding-store success; new public positive passes |
+| Native ACK, configuration save refuses | Requested then Applied; primary Storage error / CleanupRequired; no committed configuration at failed return, admission fenced, cleanup once | Forwarding real storage regression; old production fails, fixed and private exact restoration pass |
+| Native ACK, retention clone refuses or panics | Requested then Applied; original normalization error or typed panic failure / CleanupRequired; saved native settings retained, admission fenced, cleanup once | Public returned-refusal and panic cases; old production fails, fixed and private restoration pass |
+| Native ACK, local settlement error and terminal audit error | One terminal attempt, primary local error first and audit error second; CleanupRequired | Storage+audit and retention+audit cases preserve primary-first; fixed and private restoration pass |
+| Native refusal or unverified failure, or caller drops wait | Existing Refused/Failed semantics and owned settlement remain; backend/audit panic containment does not invent an ACK | Existing effort family plus native unverified/panic positives; scoped qualification below |
+
+Runtime teardown may prevent any future polling; no terminal audit delivery is
+claimed after the owning runtime has been destroyed. Model/approval terminal
+records remain owned by their existing outer `audit_configuration_control`.
+
+The eight new public settlement cases produce five intended old-production
+failures and three positives. Fixed and private exact-restored runs pass all
+eight. Omitting only the common terminal audit for known ACK plus local failure
+in an isolated archive/target reproduces the same five failures. Native effect
+and local settlement results remain separate; terminal audit is attempted once.

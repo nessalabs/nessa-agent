@@ -2,6 +2,8 @@
 //! provider backend: while what the agent offers is not negotiated, and for a
 //! level it does not offer.
 
+mod settlement;
+
 use super::MemoryStorage;
 use crate::application::agent_execution::support::*;
 use nessa_sdk::application::agent_execution::executions::EffortChangeStage;

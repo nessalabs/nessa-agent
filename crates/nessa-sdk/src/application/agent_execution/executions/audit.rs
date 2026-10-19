@@ -441,6 +441,8 @@ pub enum EffortChangeStage {
     /// Recorded before the request is sent. Nothing has reached the agent.
     Requested,
     /// The agent reported the requested level back: it is the level in force.
+    /// This verifies native effect, not durable configuration storage; a later
+    /// settlement failure is returned separately by the operation.
     Applied,
     /// The connection refused the change without sending it (a turn or a
     /// permission still open, or a backend that cannot change it live): the
