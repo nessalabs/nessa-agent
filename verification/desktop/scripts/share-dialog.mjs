@@ -286,6 +286,9 @@ function scriptedGateway(scenario = {}) {
           payload: { requestId: params.requestId, applied: before !== undefined },
         }
       }
+      // The window tells the gateway what it shows; held as sent.
+      case "workspace.publish":
+        return { ok: true, payload: { revision: params.revision, applied: true } }
       default:
         unexpected.push(method)
         return {
