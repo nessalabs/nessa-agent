@@ -1018,7 +1018,7 @@ export interface ConversationDeleteParams {
   /** Stable action identifier retained for retries of one logical command. */
   requestId: string
 }
-/** One capability a conversation grant may include. read: list, read and watch the conversation's records. comment: leave notes with conversation.message and ask where its own note stands with conversation.messageStatus. drive: start, steer and stop turns, answer or cancel their permission requests, answer their questions and look up those commands' receipts (conversation.send, steer, stop, answer, answerQuestion, cancel, receipt), with text only and under the grant's constraints. The only sets are read; read and comment; and read, comment and drive. Comment and drive are refused for a gateway principal. No capability deletes, archives, exports, re-shares or changes the model: those stay the owner's. */
+/** One capability a conversation grant may include. read: list, read and follow the conversation's records. comment: leave notes with conversation.message and ask where its own note stands with conversation.messageStatus. drive: start, steer and stop turns, answer or cancel their permission requests, answer their questions and look up those commands' receipts (conversation.send, steer, stop, answer, answerQuestion, cancel, receipt), with text only and under the grant's constraints. The only sets are read; read and comment; and read, comment and drive. Comment and drive are refused for a gateway principal. No capability deletes, archives, exports, re-shares or changes the model: those stay the owner's. */
 export const ConversationCapability = {
   Read: "read",
   Comment: "comment",
@@ -1046,7 +1046,7 @@ export interface ConversationToolPolicy {
   /** The hosts the holder's turns may run commands on with run, by the name environments_list gives them: an SSH destination or a paired environment's peer: name, never here, each named once and at most 253 bytes, the longest destination config.json accepts. Beside either preset or allow and deny, and not counted against the patterns: a policy may name 16 hosts however full its allow and deny lists are. A host is used only where the gateway also grants commands on it. Absent or empty, the holder's turns run commands nowhere: a drive grant never inherits the owner's hosts. A host that is no such name, one named twice, one longer than 253 bytes, or more than 16 is refused invalid_request. Listed only when it names a host. */
   commandHosts?: string[]
 }
-/** Grant (conversation.share) one paired device or peer gateway a capability set on one of the caller's conversations, or change the capabilities and constraints it already holds there. Nothing is granted by default or by list: a paired party sees only the conversations granted to it, one grant per conversation, and an ungranted one is not listed, not readable and not watchable. The only sets are read; read and comment; and read, comment and drive. drive needs a policy and the others take none, and either mistake is refused invalid_request. Comment and drive are written only when Cedar permits grant.comment and grant.drive for the target principal. A denial writes nothing and is refused capabilities_refused; details.policies are the Cedar policy ids, empty when no permit matched. The share does not decide by the principal's kind. A grant is refused share_target_not_paired unless the credential is an active paired device or peer gateway of the conversation's owner that holds conversation.read (an environment's credential never does), and conversation_deleted on a deleted conversation. The result names the grant's policyRevision, the grant epoch, once the share is made; applied is false when nothing changed: granting the capabilities and constraints already held, whose epoch is kept. With expectedPolicyRevision, a grant that is no longer at that epoch (changed or revoked since) is refused share_grant_changed, and nothing is changed. A conversation holds at most 64 grants, and at most 8 drive grants; one more is refused invalid_request. A retried requestId answers what it answered the first time, its policyRevision included, before expectedPolicyRevision is compared, so a share retried after a later unshare grants nothing; the same requestId naming another device, another capability set or policy, or the other change is refused invalid_request. A retried share is checked like a new one first, so once the conversation is deleted or the device unpaired it is refused conversation_deleted or share_target_not_paired and changes nothing. */
+/** Grant (conversation.share) one paired device or peer gateway a capability set on one of the caller's conversations, or change the capabilities and constraints it already holds there. Nothing is granted by default or by list: a paired party sees only the conversations granted to it, one grant per conversation, and an ungranted one is not listed, not readable and cannot be followed. The only sets are read; read and comment; and read, comment and drive. drive needs a policy and the others take none, and either mistake is refused invalid_request. Comment and drive are written only when Cedar permits grant.comment and grant.drive for the target principal. A denial writes nothing and is refused capabilities_refused; details.policies are the Cedar policy ids, empty when no permit matched. The share does not decide by the principal's kind. A grant is refused share_target_not_paired unless the credential is an active paired device or peer gateway of the conversation's owner that holds conversation.read (an environment's credential never does), and conversation_deleted on a deleted conversation. The result names the grant's policyRevision, the grant epoch, once the share is made; applied is false when nothing changed: granting the capabilities and constraints already held, whose epoch is kept. With expectedPolicyRevision, a grant that is no longer at that epoch (changed or revoked since) is refused share_grant_changed, and nothing is changed. A conversation holds at most 64 grants, and at most 8 drive grants; one more is refused invalid_request. A retried requestId answers what it answered the first time, its policyRevision included, before expectedPolicyRevision is compared, so a share retried after a later unshare grants nothing; the same requestId naming another device, another capability set or policy, or the other change is refused invalid_request. A retried share is checked like a new one first, so once the conversation is deleted or the device unpaired it is refused conversation_deleted or share_target_not_paired and changes nothing. */
 export interface ConversationShareParams {
   /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
   conversationId: string
@@ -1170,8 +1170,8 @@ export interface ConversationLease {
   host?: string
   /** The sandbox granted, or for a refused lease the one asked for. harness_default: whatever the agent's harness encloses by default, configured by nothing Nessa sets, and nothing more. none: nothing encloses what runs beyond the account the environment runs as. */
   sandbox?: "harness_default" | "none"
-  /** Why the lease is ending or ended: the first cause recorded. lost: the environment no longer held it, for example because the gateway started again or the connection to it was lost. */
-  cause?: "stopped" | "closed" | "revoked" | "expired" | "lost"
+  /** Why the lease is ending or ended: the first cause recorded. lost: the environment no longer held it, for example because the gateway started again or the connection to it was lost. idle: the agent sat idle with nobody following the conversation, past limits.agentIdleSeconds, and the gateway stopped it; the conversation stays open and the next message starts the agent again, resuming its provider session. */
+  cause?: "stopped" | "closed" | "revoked" | "expired" | "lost" | "idle"
   /** What the environment reported releasing, once it has: confirmed, released cooperatively; forced, released by forced termination; not_held, the environment holds nothing for the lease, though whether something started under it before the environment last started outlived it is not known. On an interrupted lease this is the evidence that arrived after its deadline. */
   cleanup?: "confirmed" | "forced" | "not_held"
   /** Why the lease was refused. sandbox_unavailable: the sandbox asked for is not one both the agent's binding and the environment can enforce. environment_unreachable: the environment could not be reached, or did not answer in time. environment_version_mismatch: the copy of this build the environment holds, where the gateway installs it, speaks another lease protocol, so nothing was sent to it. environment_busy: the environment is serving another connection. agent_unavailable: the environment cannot run this conversation's agent. environment_platform_unsupported: the environment had no copy of this build, and runs on a system or processor this build cannot run on, so nothing was installed or sent. environment_install_failed: the environment had no copy of this build, and installing one failed: what arrived did not match what was sent, did not run there, or could not be stored; nothing was sent. */
@@ -2446,75 +2446,6 @@ export const PeerErrorCode = {
   PeerAuditUnavailable: "peer_audit_unavailable",
 } as const
 export type PeerErrorCode = (typeof PeerErrorCode)[keyof typeof PeerErrorCode]
-/** Opaque current-connection watch identity. It grants no permission, is not a source position, and must be discarded on connection replacement. */
-export type ChangeWatchId = string
-/** Register catalogue interest before the final authorized head recheck. Acknowledgement precedes notices; no head or source read is performed. */
-export interface ConversationWatchCatalogueParams {
-  /** Server-bound receiver identity requesting this owner catalogue. */
-  receiverId: string
-  /** Positive current numeric receiver binding epoch. */
-  accessEpoch: string
-}
-/** Register stable conversation interest before final head recheck. Reset notices do not carry a source incarnation. */
-export interface ConversationWatchRecordsParams {
-  /** Conversation selected under authenticated ownership. */
-  conversationId: string
-  /** Trusted receiver binding selector; the actual physical scope is returned by the authenticated head read. */
-  receiverId: string
-  /** Positive current numeric receiver binding epoch. */
-  accessEpoch: string
-}
-/** A physically delivered acknowledgement activates this connection-local registration. */
-export interface ConversationWatchResult {
-  /** Opaque identity minted for this physical connection after producer installation; retain it only for this connection. */
-  watchId: ChangeWatchId
-}
-/** Remove only this connection’s watch interest. Repeating an allocated identity is idempotent. */
-export interface ConversationUnwatchParams {
-  /** Exact identity minted on this connection whose source interest is to be removed. */
-  watchId: ChangeWatchId
-}
-/** Removal acknowledgement. An already-started frame may finish before this response; no subsequent hint is admitted. */
-export interface ConversationUnwatchResult {
-  /** Original connection identity echoed after interest removal; previously admitted authority or physical frame work may remain. */
-  watchId: ChangeWatchId
-}
-/** Advisory payloadless dirty notice. Reauthorize and recheck heads; never advance progress from this event. */
-export interface ConversationChanged {
-  /** Opaque connection identity of the advisory hint; this field carries no source progress or authority. */
-  watchId: ChangeWatchId
-}
-/** Terminal advisory producer state. Neither outcome proves current source freshness or lost permission. */
-export const ChangeWatchEndReason = {
-  Closed: "closed",
-  NotificationFailed: "notification_failed",
-} as const
-export type ChangeWatchEndReason =
-  (typeof ChangeWatchEndReason)[keyof typeof ChangeWatchEndReason]
-/** Terminal producer notice under the same bounded delivery owner as changed notices. Recover with explicit reads/fallback. */
-export interface ConversationWatchEnded {
-  /** Opaque connection identity of the producer interest that ended. */
-  watchId: ChangeWatchId
-  /** Typed terminal producer outcome; neither value proves source freshness or permission revocation. */
-  reason: ChangeWatchEndReason
-}
-/** Typed watch admission/refusal. Watch state never changes downloaded/applied progress. */
-export const ChangeWatchErrorCode = {
-  InvalidRequest: "invalid_request",
-  Unauthorized: "unauthorized",
-  Forbidden: "forbidden",
-  WrongOwner: "wrong_owner",
-  WrongReceiver: "wrong_receiver",
-  StaleEpoch: "stale_epoch",
-  Unverifiable: "unverifiable",
-  TemporarilyUnavailable: "temporarily_unavailable",
-  WatchDuplicate: "watch_duplicate",
-  WatchCapacity: "watch_capacity",
-  WatchClosed: "watch_closed",
-  InvalidWatch: "invalid_watch",
-} as const
-export type ChangeWatchErrorCode =
-  (typeof ChangeWatchErrorCode)[keyof typeof ChangeWatchErrorCode]
 /** Opaque identity of one subscription on this connection. It grants nothing and is discarded with the connection. */
 export type ConversationSubscriptionId = string
 /** Where in the committed history a view was read. Compare positions only within one incarnation. */
@@ -2577,7 +2508,7 @@ export interface ConversationSubscriptionEnded {
   /** Where a view subscription resumes from: the cursor of the last view frame written or, when none was, the after it was opened with. Absent for a list, and for a view subscription opened without after that wrote no frame. */
   lastDelivered?: ConversationViewCursor
 }
-/** Refusals of subscribe and unsubscribe beside the conversation error codes a refused first read carries. subscription_capacity: the connection's published limit, or the gateway's watch capacity, is full. subscription_duplicate: this connection already follows that target; the agent catalog is one target, so a connection follows it at most once. unknown_subscription: no such live subscription on this connection, or one the other unsubscribe stops. cursor_ahead: after names a position past the stored history. */
+/** Refusals of subscribe and unsubscribe beside the conversation error codes a refused first read carries. subscription_capacity: the connection's published limit is full. subscription_duplicate: this connection already follows that target; the agent catalog is one target, so a connection follows it at most once. unknown_subscription: no such live subscription on this connection, or one the other unsubscribe stops. cursor_ahead: after names a position past the stored history. */
 export const ConversationSubscriptionErrorCode = {
   SubscriptionCapacity: "subscription_capacity",
   SubscriptionDuplicate: "subscription_duplicate",
@@ -2846,15 +2777,6 @@ export interface ModelChange {
   /** Exact model identifier within the conversation provider. */
   requestedModel: string
 }
-export const maxChangeWatchIdBytes = 57 as const
-export const changeWatchIdPattern =
-  "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-[1-9][0-9]{0,19}$" as const
-export const changeWatchLimits = {
-  globalOwners: 64,
-  principalOwners: 8,
-  recordTargets: 1,
-  catalogueTargets: 1,
-} as const
 export const subscriptionLimits = {
   conversationTargets: 8,
   listTargets: 2,
@@ -2906,7 +2828,7 @@ export const mcpServerRules = {
 export const bounds = {
   maxOrdinaryResponseBytes: 65536,
   maxRequestFrameBytes: 65536,
-  maxReadyMethods: 78,
+  maxReadyMethods: 75,
   maxAuthCredentialCharacters: 16384,
   maxProductClientIdCharacters: 256,
   maxProductSurfaceInstanceCharacters: 256,
@@ -3187,9 +3109,6 @@ export const ProductMethod = {
   PeerList: "peer.list",
   PeerForget: "peer.forget",
   PeerRelay: "peer.relay",
-  ConversationWatchRecords: "conversation.watchRecords",
-  ConversationWatchCatalogue: "conversation.watchCatalogue",
-  ConversationUnwatch: "conversation.unwatch",
   ConversationSubscribe: "conversation.subscribe",
   ConversationSubscribeList: "conversation.subscribeList",
   ConversationUnsubscribe: "conversation.unsubscribe",
@@ -3205,8 +3124,6 @@ export const ProductMethod = {
 export const ProductEvent = {
   SessionChallenge: "session.challenge",
   SessionTerminated: "session.terminated",
-  ConversationChanged: "conversation.changed",
-  ConversationWatchEnded: "conversation.watchEnded",
   ConversationView: "conversation.view",
   ConversationListed: "conversation.listed",
   AgentsListed: "agents.listed",
@@ -3280,9 +3197,6 @@ export const productReadyMethods = [
   "peer.list",
   "peer.forget",
   "peer.relay",
-  "conversation.watchRecords",
-  "conversation.watchCatalogue",
-  "conversation.unwatch",
   "conversation.subscribe",
   "conversation.subscribeList",
   "conversation.unsubscribe",
@@ -3295,7 +3209,7 @@ export const productReadyMethods = [
   "conversation.peek",
   "conversation.setModel",
 ] as const
-/** The grant each product method asks Cedar for, generated from protocol/product/manifest.json. null means another owner admits the method: the handshake, auth.session, or a watch. Writing to a conversation — an answer, an upload, an app's calls — asks for conversation.write; reading its records or catalogue asks for conversation.read; running a configured server, or enrolling a device, asks for credential.manage. */
+/** The grant each product method asks Cedar for, generated from protocol/product/manifest.json. null means another owner admits the method: the handshake or auth.session. Writing to a conversation — an answer, an upload, an app's calls — asks for conversation.write; reading its records or catalogue asks for conversation.read; running a configured server, or enrolling a device, asks for credential.manage. */
 export const productMethodGrants = {
   "session.authenticate": null,
   "auth.session": null,
@@ -3362,9 +3276,6 @@ export const productMethodGrants = {
   "peer.list": "credential.manage",
   "peer.forget": "credential.manage",
   "peer.relay": "credential.manage",
-  "conversation.watchRecords": null,
-  "conversation.watchCatalogue": null,
-  "conversation.unwatch": null,
   "conversation.subscribe": "conversation.write",
   "conversation.subscribeList": "conversation.write",
   "conversation.unsubscribe": "conversation.write",

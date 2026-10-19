@@ -3031,6 +3031,7 @@ async fn c15c_a_delete_giving_way_before_its_stop_reached_the_apps_drops_once_as
         ready: Notify::new(),
         started: std::sync::atomic::AtomicBool::new(true),
         stopping: std::sync::atomic::AtomicBool::new(false),
+        touched: std::sync::atomic::AtomicU64::new(0),
     });
     let live = fixture
         .service

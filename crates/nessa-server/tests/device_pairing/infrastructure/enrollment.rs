@@ -1,3 +1,4 @@
+use super::one_thread::{run, runtime, Completion, Phase};
 use super::support::{pending, sockets, Fault, FaultyStore, Fixture, Time, NOW_MS, WAIT};
 use nessa_auth::domain::pairing::ConsentClass;
 use nessa_auth::{
@@ -2281,11 +2282,11 @@ fn native_gateway_runs_on_a_one_thread_blocking_pool() {
     // The sample is one stretch on this thread, before the pool exists, so a
     // loaded runner's allowance grows with the stretch. Twenty times that
     // sample covers both stretches, TLS, and the owner commands, with margin
-    // if the machine slows after the sample. A fast sample stays under that
-    // product. The floor is `WAIT`, the socket budget the device thread
-    // already uses. Five seconds was that floor, and on a loaded Windows
-    // runner the exchange was still going when it expired. The timeout is
-    // what fails a job that waits on a second blocking thread.
+    // if the machine slows after the sample. The current floor is `WAIT`
+    // (30 seconds), already raised from an explicit five seconds by #843.
+    // That increase does not diagnose #777. The timeout still fails a job
+    // that waits on a second blocking thread; its original owners are drained
+    // before the runtime retires (the `one_thread` cleanup regressions).
     let sample = std::time::Instant::now();
     let mut entropy = OsEntropy;
     let code = ManualCode::generate(&mut entropy);
@@ -2296,87 +2297,118 @@ fn native_gateway_runs_on_a_one_thread_blocking_pool() {
         [9; 44],
     )
     .expect("one Argon2id stretch");
-    let budget = sample.elapsed().saturating_mul(20).max(WAIT);
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(2)
-        .max_blocking_threads(1)
-        .enable_all()
-        .build()
-        .unwrap();
-    let outcome = runtime.block_on(async {
-        tokio::time::timeout(budget, async {
-            let fixture = Fixture::new().await;
-            let created = fixture
-                .gateway
-                .create(fixture.session.clone(), ConsentClass::DeviceRead, OsEntropy)
-                .await
-                .unwrap();
-            let id = created.record().id();
-            assert_eq!(
-                fixture
+    let sampled = sample.elapsed();
+    let budget = sampled.saturating_mul(20).max(WAIT);
+    eprintln!("one-thread-phase sample={sampled:?} budget={budget:?}");
+    let runtime = runtime();
+    let attempt = runtime.block_on(async {
+        run(budget, |owners| {
+            Box::pin(async move {
+                let phase = Phase::enter("fixture");
+                owners.initialize().await;
+                let fixture = owners.fixture.as_ref().unwrap();
+                drop(phase);
+                let phase = Phase::enter("create");
+                let created = fixture
                     .gateway
-                    .pending(&fixture.session)
+                    .create(fixture.session.clone(), ConsentClass::DeviceRead, OsEntropy)
                     .await
-                    .unwrap()
-                    .len(),
-                1
-            );
-            let (address, stop, listener, connections) = fixture.listener().await;
-            let (_, store) = pending(fixture.directory.path(), "client-private");
-            let code = ManualCode::parse(created.code().expose_bytes()).unwrap();
-            let (reply, replied) = tokio::sync::oneshot::channel();
-            std::thread::spawn(move || {
-                let stream = TcpStream::connect(address).unwrap();
-                stream.set_read_timeout(Some(WAIT)).unwrap();
-                let (mut channel, public, key, message) = ready_to_confirm(
-                    stream,
-                    AttemptId::new([109; AttemptId::LENGTH]),
-                    &code,
-                    &store,
-                );
-                channel
-                    .send_envelope(
-                        &encode_request(&NativePairingRequest::Confirm { public, message })
-                            .unwrap(),
-                    )
                     .unwrap();
-                let status = decode_reply(&channel.receive_envelope().unwrap()).unwrap();
-                reply.send((status, key)).ok();
-            });
-            let (status, key) = replied.await.unwrap();
-            assert!(matches!(
-                status,
-                NativePairingReply::Status(NativePairingStatus::Claimed(_))
-            ));
-            stop.send(()).unwrap();
-            listener.await.unwrap().unwrap();
-            connections.shutdown().await;
-            assert_eq!(
-                fixture
-                    .gateway
-                    .owner_status(&fixture.session, id)
-                    .await
-                    .unwrap()
-                    .phase(),
-                PairingPhase::Claimed
-            );
-            assert_eq!(
-                fixture
-                    .gateway
-                    .decide(&fixture.session, id, OwnerDecision::Approve(key))
-                    .await
-                    .unwrap()
-                    .phase(),
-                PairingPhase::Approved
-            );
-            fixture.gateway.shutdown().await;
+                drop(phase);
+                let phase = Phase::enter("pending");
+                let id = created.record().id();
+                assert_eq!(
+                    fixture
+                        .gateway
+                        .pending(&fixture.session)
+                        .await
+                        .unwrap()
+                        .len(),
+                    1
+                );
+                drop(phase);
+                let phase = Phase::enter("listener-and-device-store");
+                let (address, stop, listener, connections) = fixture.listener().await;
+                owners.stop = Some(stop);
+                owners.listener = Some(listener);
+                owners.connections = Some(connections);
+                let (_, store) = pending(fixture.directory.path(), "client-private");
+                let code = ManualCode::parse(created.code().expose_bytes()).unwrap();
+                let (reply, replied) = tokio::sync::oneshot::channel();
+                drop(phase);
+                let phase = Phase::enter("device-reply");
+                owners.device = Some(std::thread::spawn(move || {
+                    let device_phase = Phase::enter("device-connect-and-ready-to-confirm");
+                    let stream = TcpStream::connect(address).unwrap();
+                    stream.set_read_timeout(Some(WAIT)).unwrap();
+                    let (mut channel, public, key, message) = ready_to_confirm(
+                        stream,
+                        AttemptId::new([109; AttemptId::LENGTH]),
+                        &code,
+                        &store,
+                    );
+                    drop(device_phase);
+                    let device_phase = Phase::enter("device-confirm-reply");
+                    channel
+                        .send_envelope(
+                            &encode_request(&NativePairingRequest::Confirm { public, message })
+                                .unwrap(),
+                        )
+                        .unwrap();
+                    let status = decode_reply(&channel.receive_envelope().unwrap()).unwrap();
+                    drop(device_phase);
+                    reply.send((status, key)).ok();
+                }));
+                let (status, key) = replied.await.unwrap();
+                drop(phase);
+                let phase = Phase::enter("listener-stop-and-connection-drain");
+                assert!(matches!(
+                    status,
+                    NativePairingReply::Status(NativePairingStatus::Claimed(_))
+                ));
+                owners.stop.take().unwrap().send(()).unwrap();
+                let joined = owners.listener.as_mut().unwrap().await;
+                owners.listener.take();
+                joined.unwrap().unwrap();
+                owners.connections.as_ref().unwrap().shutdown().await;
+                drop(phase);
+                let phase = Phase::enter("owner-status-and-approve");
+                assert_eq!(
+                    fixture
+                        .gateway
+                        .owner_status(&fixture.session, id)
+                        .await
+                        .unwrap()
+                        .phase(),
+                    PairingPhase::Claimed
+                );
+                assert_eq!(
+                    fixture
+                        .gateway
+                        .decide(&fixture.session, id, OwnerDecision::Approve(key))
+                        .await
+                        .unwrap()
+                        .phase(),
+                    PairingPhase::Approved
+                );
+                drop(phase);
+                let phase = Phase::enter("gateway-drain");
+                fixture.gateway.shutdown().await;
+                drop(phase);
+            })
         })
         .await
     });
+    // `run` has joined the physical owners before the runtime is retired.
+    // A timeout remains a failed responsiveness assertion after that drain.
     runtime.shutdown_timeout(std::time::Duration::from_secs(1));
-    outcome.unwrap_or_else(|_| {
-        panic!("gateway work finished on a one-thread blocking pool within {budget:?}")
-    });
+    match attempt.completion {
+        Ok(Completion::Finished) => attempt.cleanup.assert_success(),
+        Ok(Completion::TimedOut) => {
+            panic!("gateway work finished on a one-thread blocking pool within {budget:?}")
+        }
+        Err(panic) => std::panic::resume_unwind(panic),
+    }
 }
 
 /// Slice 2b row A16: a device whose handshake dropped, after another device

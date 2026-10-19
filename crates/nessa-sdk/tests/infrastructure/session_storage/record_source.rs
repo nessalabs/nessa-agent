@@ -39,7 +39,6 @@ async fn restored_checkpoint_accepts_real_same_generation_extension() {
     let first = lease
         .save_changes(
             lease.load().await.unwrap().binding().clone(),
-            initial.clone(),
             vec![SessionSaveUnit::new(vec![opening]).unwrap()],
         )
         .await
@@ -49,16 +48,9 @@ async fn restored_checkpoint_accepts_real_same_generation_extension() {
         before: ProviderContext::Absent,
         after: ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap()),
     };
-    let second_snapshot = SessionSnapshot {
-        model_change: None,
-        current_configuration: None,
-        provider_context: ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap()),
-        ..initial.clone()
-    };
     let second = lease
         .save_changes(
             first.next().clone(),
-            second_snapshot,
             vec![SessionSaveUnit::new(vec![context.clone()]).unwrap()],
         )
         .await
@@ -104,7 +96,6 @@ async fn restored_checkpoint_accepts_real_same_generation_extension() {
     let extended = lease
         .save_changes(
             first.next().clone(),
-            final_snapshot.clone(),
             vec![
                 SessionSaveUnit::new(vec![context]).unwrap(),
                 SessionSaveUnit::new(vec![suffix]).unwrap(),
@@ -155,7 +146,7 @@ async fn save_units_remain_private_to_source_and_receiver_until_completion() {
     let root = directory.path().join("records");
     let lease = storage.open(session.clone()).await.unwrap();
     let binding = lease.load().await.unwrap().binding().clone();
-    let (change, observed) = opened(&session);
+    let (change, _) = opened(&session);
     let units = vec![SessionSaveUnit::new(vec![change]).unwrap()];
     let completion = opening_completion_offset(&session).await;
     refuse_offset(
@@ -164,9 +155,7 @@ async fn save_units_remain_private_to_source_and_receiver_until_completion() {
         binding.base() + completion,
     );
     assert!(matches!(
-        lease
-            .save_changes(binding.clone(), observed.clone(), units.clone())
-            .await,
+        lease.save_changes(binding.clone(), units.clone()).await,
         Err(StorageError::Io(_))
     ));
     assert_eq!(rows(&root), 1);
@@ -196,10 +185,7 @@ async fn save_units_remain_private_to_source_and_receiver_until_completion() {
     .await
     .unwrap();
     sql(&root, "DROP TRIGGER refuse_source_completion;");
-    let receipt = lease
-        .save_changes(binding, observed.clone(), units)
-        .await
-        .unwrap();
+    let receipt = lease.save_changes(binding, units).await.unwrap();
     let end = receipt.next().base();
     assert_eq!(end, 2);
     let request = PageRequest {

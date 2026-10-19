@@ -6,7 +6,7 @@ mod client;
 mod gateway;
 #[path = "fixtures/semantic.rs"]
 mod semantic;
-pub(super) use client::{command, Frame, WatchChild, WireClient};
+pub(super) use client::{command, FollowChild, WireClient};
 use nessa_local_storage::OpenMode;
 use serde::{Deserialize, Serialize};
 use std::io::{BufRead, BufReader, Write};

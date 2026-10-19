@@ -1,0 +1,24 @@
+
+running 1 test
+test gateway::application::service::tests::host_ownership_tests::competing_host_is_refused_before_journal_settings_recovery_and_stop ... FAILED
+
+failures:
+
+---- gateway::application::service::tests::host_ownership_tests::competing_host_is_refused_before_journal_settings_recovery_and_stop stdout ----
+
+thread 'gateway::application::service::tests::host_ownership_tests::competing_host_is_refused_before_journal_settings_recovery_and_stop' (12656) panicked at /workspace/nessa-943-desktop-owner/src-tauri/src/gateway/application/../../../tests/gateway/application/host_ownership.rs:148:5:
+assertion `left == right` failed
+  left: Ok(())
+ right: Err(DesktopHostBusy)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    gateway::application::service::tests::host_ownership_tests::competing_host_is_refused_before_journal_settings_recovery_and_stop
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 156 filtered out; finished in 0.00s
+
+   Compiling nessa-desktop-host-ownership-proof v0.0.0 (/tmp/nessa-943-headless)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.96s
+     Running unittests src/lib.rs (/tmp/nessa-943-headless/target/debug/deps/nessa_desktop_host_ownership_proof-65b5a97976207635)
+error: test failed, to rerun pass `--lib`

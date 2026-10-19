@@ -382,33 +382,35 @@ async fn review_notice_reselects_after_shared_changes_during_audit() {
             );
             next_acknowledgement.send(Ok(())).unwrap();
         }
-        let queued = timeout(Duration::from_secs(2), frames.recv())
-            .await
-            .unwrap()
-            .unwrap();
-        let WireResponse::ReviewWaiting {
-            payload,
-            generation,
-        } = queued.message
-        else {
-            panic!("review snapshot expected")
-        };
-        assert_eq!(
-            payload.reviews.len(),
-            usize::from(!clear_board),
-            "a settled review must not be disclosed after a delayed audit"
-        );
-        assert_eq!(
-            generation,
-            fixture.board.current().0,
-            "the admitted candidate must retain the current board generation"
-        );
+        // A board that only moved is published at the generation the
+        // selection was taken at, and the next frame catches up to the board.
+        loop {
+            let queued = timeout(Duration::from_secs(2), frames.recv())
+                .await
+                .unwrap()
+                .unwrap();
+            let WireResponse::ReviewWaiting {
+                payload,
+                generation,
+            } = queued.message
+            else {
+                panic!("review snapshot expected")
+            };
+            assert_eq!(
+                payload.reviews.len(),
+                usize::from(!clear_board),
+                "a settled review must not be disclosed after a delayed audit"
+            );
+            drop(queued._slot);
+            if generation == fixture.board.current().0 {
+                break;
+            }
+        }
         assert_eq!(
             audit.records.lock().unwrap().len(),
             if clear_board { 1 } else { 2 },
             "shared changes during audit require reselection"
         );
-        drop(queued._slot);
         drop(authority);
         timeout(Duration::from_secs(2), task)
             .await
@@ -518,6 +520,97 @@ async fn review_notice_continuous_change_has_bounded_selection_attempts() {
         3,
         "selection retries must remain bounded"
     );
+}
+
+/// Adds a review of another conversation to the board while each of the first
+/// `churns` audits is written, as other busy agents do.
+struct BoardChurnAudit {
+    board: Arc<PermissionMemory>,
+    churns: std::sync::atomic::AtomicUsize,
+    records: Mutex<Vec<Arc<ReviewNoticeAuditRecord>>>,
+}
+impl ReviewNoticeAudit for BoardChurnAudit {
+    fn record(
+        &self,
+        record: Arc<ReviewNoticeAuditRecord>,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ReviewNoticeAuditFailure>> + Send + '_>> {
+        let index = self.records.lock().unwrap().len();
+        self.records.lock().unwrap().push(record);
+        let left = self.churns.load(std::sync::atomic::Ordering::SeqCst);
+        if left > 0 {
+            self.churns
+                .store(left - 1, std::sync::atomic::Ordering::SeqCst);
+            self.board.waiting(&ReviewNotice {
+                conversation_id: "00000000-0000-4000-8000-00000000000c".into(),
+                execution_id: ExecutionId::new("busy-turn").unwrap(),
+                permission_id: PermissionId::new(format!("busy-{index}")).unwrap(),
+                tool: "Bash".into(),
+            });
+        }
+        Box::pin(async { Ok(()) })
+    }
+}
+
+#[tokio::test]
+async fn review_notice_board_traffic_during_audit_is_published_without_closing() {
+    let mut fixture = ReviewFixture::new(
+        Arc::new(RecordingReviewNoticeAudit::default()),
+        Arc::new(MonotonicReviewNoticeClock::new()),
+    );
+    // More board changes than the bound on access changes.
+    let audit = Arc::new(BoardChurnAudit {
+        board: fixture.board.clone(),
+        churns: std::sync::atomic::AtomicUsize::new(6),
+        records: Mutex::new(Vec::new()),
+    });
+    fixture.state = fixture
+        .state
+        .with_review_notice_auditor(Arc::new(ReviewNoticeAuditor::new(
+            audit.clone(),
+            Arc::new(MonotonicReviewNoticeClock::new()),
+        )));
+    let (task, mut frames, authority) = fixture.publish(Arc::new(Semaphore::new(1))).await;
+    let first = timeout(Duration::from_secs(2), frames.recv())
+        .await
+        .unwrap()
+        .expect("a busy board is published, not closed");
+    let WireResponse::ReviewWaiting { payload, .. } = first.message else {
+        panic!("review snapshot expected")
+    };
+    assert_eq!(payload.reviews.len(), 1, "only the visible review is shown");
+    // The next pass may already be auditing while this frame is held.
+    assert!(
+        audit.records.lock().unwrap().len() <= 2,
+        "the review is shown after its first audit, though the board moved during it"
+    );
+    drop(first._slot);
+    // Each later change is published in turn until the board holds still.
+    loop {
+        let queued = timeout(Duration::from_secs(2), frames.recv())
+            .await
+            .unwrap()
+            .expect("a busy board is published, not closed");
+        let WireResponse::ReviewWaiting {
+            payload,
+            generation,
+        } = queued.message
+        else {
+            panic!("review snapshot expected")
+        };
+        assert_eq!(payload.reviews.len(), 1);
+        drop(queued._slot);
+        if generation == fixture.board.current().0
+            && audit.churns.load(std::sync::atomic::Ordering::SeqCst) == 0
+        {
+            break;
+        }
+    }
+    drop(authority);
+    timeout(Duration::from_secs(2), task)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
 }
 
 #[tokio::test]
@@ -1303,9 +1396,11 @@ async fn review_notice_durable_audit_failure_prevents_publication_and_preserves_
     );
 }
 
+/// #979: the close reason has its own slot, so a control lane already full
+/// of answers cannot crowd it out. The peer reads every queued answer and
+/// then the typed close, never a bare end of stream.
 #[tokio::test]
 async fn review_notice_audit_failure_with_full_control_lane_ends_connection() {
-    let (captured, _logging) = limit_log();
     let (audit, acknowledge) = GatedAudit::one();
     let fixture = ReviewFixture::new(audit.clone(), Arc::new(MonotonicReviewNoticeClock::new()));
     let session = authenticate(&fixture.state).await;
@@ -1319,21 +1414,18 @@ async fn review_notice_audit_failure_with_full_control_lane_ends_connection() {
         .await
         .unwrap()
         .unwrap();
-    for index in 0..fixture.state.limits.control_lane() {
+    let lane = fixture.state.limits.control_lane();
+    for index in 0..lane {
         admit(&peer, "conversation.cancel", &format!("control-{index}")).await;
     }
     acknowledge
         .send(Err(ReviewNoticeAuditFailure::Unavailable))
         .unwrap();
-    // This event is emitted only after the real close enqueue observes Full.
-    // Requiring it proves the regression actually filled the control lane.
-    timeout(Duration::from_secs(2), async {
-        while !limit_text(&captured).contains("socket.control_lane") {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .expect("fatal audit close must encounter the full control lane");
+    // The writer is still held, so nothing leaves the lane while the owner
+    // takes the failure and ends: give it those turns before the release.
+    for _ in 0..64 {
+        tokio::task::yield_now().await;
+    }
     assert!(
         !peer.input.is_closed(),
         "the peer input remains live during the held physical write"
@@ -1341,13 +1433,36 @@ async fn review_notice_audit_failure_with_full_control_lane_ends_connection() {
     release.send(()).unwrap();
     timeout(Duration::from_secs(2), task)
         .await
-        .expect("the connection owner must terminate despite a rejected close enqueue")
+        .expect("the connection owner must terminate while its control lane is full")
         .unwrap();
     assert!(
         peer.input.is_closed(),
         "the owner must stop receiving while the peer still owns its sender"
     );
-    while peer.output.recv().await.is_some() {}
+    let mut answers = 0;
+    let mut close = None;
+    while let Some(message) = peer.output.recv().await {
+        assert!(close.is_none(), "nothing follows the close");
+        match message {
+            Message::Text(text) => {
+                let frame: Value = serde_json::from_str(&text).unwrap();
+                if frame["id"].as_str().is_some_and(|id| id.starts_with("control-")) {
+                    answers += 1;
+                }
+            }
+            Message::Close(Some(frame)) => {
+                close = Some(serde_json::from_str::<SessionTermination>(&frame.reason).unwrap());
+            }
+            other => panic!("unexpected frame {other:?}"),
+        }
+    }
+    // Every answer was queued: the lane was full when the owner ended.
+    assert_eq!(answers, lane, "the queued control answers go first");
+    assert_eq!(
+        close.expect("a typed close, not a bare end of stream").code,
+        ReviewNoticePublicationFailure::Audit(ReviewNoticeAuditFailure::Unavailable)
+            .close_reason()
+    );
 }
 
 struct PanickingReviewPolicy;

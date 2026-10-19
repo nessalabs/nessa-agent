@@ -35,6 +35,10 @@ export function conversationLeaseStatus(
             : "Ended when Nessa restarted"
         case "stopped":
           return "Stopped"
+        // Stopped by the gateway while idle and unwatched; the next message
+        // starts the agent again.
+        case "idle":
+          return "Paused while idle"
         // No cause recorded: ended, and nothing more is claimed.
         case undefined:
           return "Ended"

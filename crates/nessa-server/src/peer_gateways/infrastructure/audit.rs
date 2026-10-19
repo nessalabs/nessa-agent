@@ -113,6 +113,12 @@ struct Shared {
     finished: watch::Sender<bool>,
 }
 impl DurablePeerAudit {
+    /// Last sequence handled, kept or refused; observing it leaves the queue open.
+    #[cfg(test)]
+    pub(crate) fn handled_sequence(&self) -> u64 {
+        self.shared.handled.load(Ordering::SeqCst)
+    }
+
     /// Records go in `directory`, which composition has already created
     /// private; an unsafe or missing one fails each write, never repaired.
     /// `wall` stamps each record's observation time; `clock` bounds

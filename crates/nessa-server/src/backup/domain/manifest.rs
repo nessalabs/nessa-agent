@@ -1,10 +1,14 @@
 //! The authenticated manifest of one cut. It names watermarks, record
 //! fingerprints, and skips. It does not hold secret bytes.
 
+use super::encoding::encode_identity as encode;
+
 use super::inventory::{StoreKind, WRITER_INVENTORY};
 use super::record::{
     CapturedRecord, DeferredEntry, Fingerprint, RecordBody, SkippedRecord, SourceCut,
 };
+
+pub const EXPORT_HEADER: &str = "nessa-export-cut/1";
 
 /// One cut, after every required store has been read.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -46,7 +50,8 @@ impl Manifest {
     /// their fingerprints are.
     pub fn canonical(&self) -> String {
         let mut text = String::new();
-        text.push_str("nessa-export-cut/1\n");
+        text.push_str(EXPORT_HEADER);
+        text.push('\n');
         text.push_str(&format!("captured-at {}\n", self.captured_at_ms));
         for cut in &self.stores {
             text.push_str(&format!(
@@ -146,23 +151,4 @@ fn skip_line(skipped: &SkippedRecord) -> String {
         encode(skipped.identity()),
         skipped.reason().as_str()
     )
-}
-
-/// Percent-encode to an unreserved alphabet so a value cannot break a line.
-fn encode(value: &str) -> String {
-    const HEX: &[u8; 16] = b"0123456789ABCDEF";
-    let mut out = String::new();
-    for byte in value.bytes() {
-        match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(byte as char);
-            }
-            _ => {
-                out.push('%');
-                out.push(HEX[(byte >> 4) as usize] as char);
-                out.push(HEX[(byte & 0xf) as usize] as char);
-            }
-        }
-    }
-    out
 }

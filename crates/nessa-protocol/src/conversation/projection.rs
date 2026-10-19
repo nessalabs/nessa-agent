@@ -155,6 +155,7 @@ pub fn lease_view(current: &CurrentLease) -> ConversationLeaseView {
                 LeaseEndCause::Revoked => ConversationLeaseCause::Revoked,
                 LeaseEndCause::Expired => ConversationLeaseCause::Expired,
                 LeaseEndCause::Lost => ConversationLeaseCause::Lost,
+                LeaseEndCause::Idle => ConversationLeaseCause::Idle,
             });
             view.cleanup = cleanup.map(|cleanup| match cleanup {
                 LeaseCleanup::Confirmed { forced: false } => ConversationLeaseCleanup::Confirmed,

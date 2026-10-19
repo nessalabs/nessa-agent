@@ -32,18 +32,11 @@ impl SessionStorageLease for PanicLease {
     fn save_changes(
         &self,
         binding: SessionSaveGeneration,
-        snapshot: SessionSnapshot,
         units: Vec<SessionSaveUnit>,
     ) -> StorageFuture<'_, SessionSaveReceipt> {
         Box::pin(async move {
-            let matches = snapshot.invocations.iter().any(|record| {
-                record.request.execution_id.as_str() == "steering"
-                    && record
-                        .scheduling
-                        .last()
-                        .is_some_and(|event| event.stage == self.stage)
-            });
-            let receipt = self.backing.save_changes(binding, snapshot, units).await?;
+            let matches = moves_to(&units, "steering", self.stage);
+            let receipt = self.backing.save_changes(binding, units).await?;
             if matches && !self.fired.swap(true, Ordering::SeqCst) {
                 panic!("committed steering acknowledgement panicked");
             }

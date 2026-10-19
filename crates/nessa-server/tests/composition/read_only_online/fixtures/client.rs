@@ -71,13 +71,13 @@ pub(crate) fn command(args: Vec<String>, lose: bool) -> (bool, Option<Value>) {
     }
     (output.status.success(), stdout)
 }
-/// A running `watch` command: its stdout lines as they arrive, each stamped
+/// A running `follow` command: its stdout lines as they arrive, each stamped
 /// with the moment this process received it.
-pub(crate) struct WatchChild {
+pub(crate) struct FollowChild {
     child: Child,
     lines: Receiver<(Value, Instant)>,
 }
-impl WatchChild {
+impl FollowChild {
     pub(crate) fn spawn(args: Vec<String>) -> Self {
         let mut child = Command::new(std::env::current_exe().unwrap())
             .args(["--exact", CLIENT, "--nocapture"])
@@ -107,7 +107,7 @@ impl WatchChild {
     pub(crate) fn next_line(&mut self) -> (Value, Instant) {
         self.lines
             .recv_timeout(Duration::from_secs(30))
-            .expect("watch line within 30 s")
+            .expect("follow line within 30 s")
     }
     /// Every line it writes until it exits, and whether it succeeded.
     pub(crate) fn finish(mut self) -> (Vec<Value>, bool) {
@@ -120,7 +120,7 @@ impl WatchChild {
         self.child.wait().unwrap().success()
     }
 }
-impl Drop for WatchChild {
+impl Drop for FollowChild {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
@@ -135,11 +135,11 @@ pub(crate) struct WireClient {
     // Frames that arrived while a call waited for its own response, in order.
     held: VecDeque<Frame>,
 }
-/// One frame as it arrived: its decoded text with the exact encoded length, or
-/// the end of the connection. A named native close arrives first as
-/// `session.terminated`; the read after that event is the end.
-pub(crate) enum Frame {
-    Text { value: Value, bytes: usize },
+/// One frame as it arrived: its decoded text, or the end of the connection.
+/// A named native close arrives first as `session.terminated`; the read
+/// after that event is the end.
+enum Frame {
+    Text { value: Value },
     Closed,
 }
 impl WireClient {
@@ -203,12 +203,12 @@ impl WireClient {
     }
     fn value(&mut self) -> Value {
         match self.frame() {
-            Frame::Text { value, .. } => value,
+            Frame::Text { value } => value,
             Frame::Closed => panic!("the gateway closed the probe connection"),
         }
     }
     /// The next frame in arrival order, held ones first.
-    pub(crate) fn frame(&mut self) -> Frame {
+    fn frame(&mut self) -> Frame {
         if let Some(frame) = self.held.pop_front() {
             return frame;
         }
@@ -235,7 +235,6 @@ impl WireClient {
             if let Some(body) = self.frames.filled(count).unwrap() {
                 return Frame::Text {
                     value: serde_json::from_slice(&body).unwrap(),
-                    bytes: body.len(),
                 };
             }
         }
@@ -250,7 +249,7 @@ impl WireClient {
         for _ in 0..16 {
             let frame = self.read_frame();
             match &frame {
-                Frame::Text { value, .. } if value["id"] == id => return value.clone(),
+                Frame::Text { value } if value["id"] == id => return value.clone(),
                 Frame::Text { .. } => self.held.push_back(frame),
                 Frame::Closed => panic!("the gateway closed the probe connection during a call"),
             }

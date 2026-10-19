@@ -8,7 +8,7 @@ use std::fmt::{Display, Formatter, Result as FmtResult};
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
 
-pub(crate) const HELP: &str = "read_only_sync pair PROFILE (code on stdin)\nread_only_sync status PROFILE\nread_only_sync sync-records PROFILE CONVERSATION PAGES\nread_only_sync check-records PROFILE CONVERSATION\nread_only_sync watch PROFILE CONVERSATION PAGES MAX_PASSES\nread_only_sync sync-catalogue PROFILE PAGES\nread_only_sync fetch PROFILE CONVERSATION DIGEST MIMETYPE SIZE OUT\nread_only_sync list CACHE RECEIVER ORIGIN CATALOGUE [AFTER_CREATION AFTER_ID]\nread_only_sync show CACHE RECEIVER ORIGIN CONVERSATION\nread_only_sync reset-records|reset-catalogue CACHE RECEIVER ORIGIN STREAM OPERATION CALLER GENERATION OLD_INCARNATION OLD_SCHEMA OLD_EPOCH NEW_INCARNATION NEW_SCHEMA NEW_EPOCH";
+pub(crate) const HELP: &str = "read_only_sync pair PROFILE (code on stdin)\nread_only_sync status PROFILE\nread_only_sync sync-records PROFILE CONVERSATION PAGES\nread_only_sync check-records PROFILE CONVERSATION\nread_only_sync follow PROFILE CONVERSATION PAGES MAX_PASSES\nread_only_sync sync-catalogue PROFILE PAGES\nread_only_sync fetch PROFILE CONVERSATION DIGEST MIMETYPE SIZE OUT\nread_only_sync list CACHE RECEIVER ORIGIN CATALOGUE [AFTER_CREATION AFTER_ID]\nread_only_sync show CACHE RECEIVER ORIGIN CONVERSATION\nread_only_sync reset-records|reset-catalogue CACHE RECEIVER ORIGIN STREAM OPERATION CALLER GENERATION OLD_INCARNATION OLD_SCHEMA OLD_EPOCH NEW_INCARNATION NEW_SCHEMA NEW_EPOCH";
 
 pub(crate) enum Command {
     Local(LocalCommand),
@@ -31,9 +31,10 @@ pub(crate) enum Command {
         profile: PathBuf,
         pages: usize,
     },
-    /// Follow one conversation's live hints on one connection, for at most
+    /// Follow one conversation through `conversation.subscribe` on one
+    /// connection, copying its records into the cache for at most
     /// `max_passes` passes, the recheck pass included.
-    Watch {
+    Follow {
         profile: PathBuf,
         conversation: ConversationId,
         pages: usize,
@@ -115,8 +116,8 @@ pub(crate) fn parse(args: &[String]) -> Result<Command, CommandError> {
                 pages: 0,
             })
         }
-        [name, profile, conversation, pages, passes] if name == "watch" => {
-            return Ok(Command::Watch {
+        [name, profile, conversation, pages, passes] if name == "follow" => {
+            return Ok(Command::Follow {
                 profile: profile.into(),
                 conversation: ConversationId::new(conversation)
                     .map_err(|_| CommandError::Identity)?,

@@ -304,6 +304,54 @@ jobs:
       # before the aggregate runs.
       - uses: taiki-e/install-action@just
       - run: pnpm frontend:check
+  # The conversation stress check (verification/desktop/scripts/conversation-stress.mjs):
+  # one conversation talked to for many rounds through the real gateway and
+  # the desktop window, with the scripted agent as the model, while other
+  # conversations run beside it. Every feature a person reaches through a
+  # conversation is flexed here (CODING_STANDARDS.md, "Conversation stress").
+  # The pull request runs its default numbers; the nightly load run in
+  # conversation-stress-load.yml raises them.
+  conversation-stress:
+    name: Conversation stress check
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
+    runs-on: ubuntu-latest
+    # Planning bound, not yet measured: a cold gateway build, the browser
+    # download and about two minutes of the check itself.
+    timeout-minutes: 45
+    env:
+      STRESS_EVIDENCE: ${{ github.workspace }}-stress-evidence
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.rust-cache != 'cold' }}
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-on-failure: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: ./.github/actions/pnpm-install
+      - name: Install the pinned Chromium and its runtime dependencies
+        run: pnpm exec playwright install --with-deps chromium
+        timeout-minutes: 15
+      - run: cargo build -p nessa-server
+      - name: Run the conversation stress check
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p "$STRESS_EVIDENCE"
+          pnpm test:e2e:stress -- --channel bundled --evidence "$STRESS_EVIDENCE" 2>&1 | tee "$STRESS_EVIDENCE/stress.log"
+        timeout-minutes: 20
+      - name: Keep the evidence of a failed run
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: conversation-stress-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.STRESS_EVIDENCE }}
+          if-no-files-found: ignore
+          retention-days: 7
   # The long Windows server libtest starts immediately on its own runner.
   # Both jobs compile the complete package group to preserve Cargo feature
   # unification. Only execution is partitioned; remaining owns all doctests.
@@ -405,6 +453,32 @@ jobs:
       # the ACP
       # process-contract semaphore is process-local, and a process-per-test
       # runner would make that semaphore admit every contract test at once.
+      # #777: one controlled isolated observation before the unchanged package
+      # selection below. Aggregate phases per command so the notice limit
+      # cannot hide device/drain timings. No raw log access or retry is needed.
+      - name: Locate the Windows one-thread enrollment timeout
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          observe_phases() {
+            "$@" 2>&1 | awk '
+              {
+                print; fflush()
+                if ($0 ~ /^one-thread-phase / || $0 ~ /^test result:/) {
+                  line = $0
+                  gsub(/%/, "%25", line)
+                  gsub(/\r/, "%0D", line)
+                  phases = phases line "%0A"
+                }
+              }
+              END {
+                if (phases != "") printf "::notice title=One-thread enrollment phases::%s\n", phases
+              }
+            '
+          }
+          observe_phases cargo test -p nessa-server --test native_enrollment enrollment::native_gateway_runs_on_a_one_thread_blocking_pool -- --exact --nocapture
+          observe_phases cargo test -p nessa-server --test native_enrollment one_thread:: -- --nocapture
+        timeout-minutes: 45
       - shell: bash
         run: node scripts/cargo-test-parallel.mjs --concurrency 2 --partition ${{ matrix.partition }} -- -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-protocol -p nessa-client-core -p nessa-device-client -p nessa-sdk
         timeout-minutes: 45
@@ -592,6 +666,7 @@ jobs:
       - gateway-contract
       - desktop-release-profile
       - frontend
+      - conversation-stress
       - local-auth
       - windows-server-tests
       - sdk-domain-coverage

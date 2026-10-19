@@ -272,8 +272,6 @@ const sharedOutcomes = new Set([
   "SessionCloseReason",
   "RecordReadErrorCode",
   "CatalogueReadErrorCode",
-  "ChangeWatchErrorCode",
-  "ChangeWatchEndReason",
   "ConversationErrorCode",
 ])
 // Outcome enums referenced by typed payload fields serialize through Serde.
@@ -368,49 +366,12 @@ function agreeing(name, values) {
     throw new Error(`${name} disagree: ${JSON.stringify(values)}`)
   return first
 }
-// Watch capacity is product policy. The server reads these constants and holds
-// no limit of its own; per-connection capacity is the sum of the per-kind limits.
-const watchLimits = schema["x-changeWatchLimits"]
-const watchLimitNames = [
-  "globalOwners",
-  "principalOwners",
-  "recordTargets",
-  "catalogueTargets",
-]
-for (const name of watchLimitNames) {
-  if (
-    !watchLimits ||
-    !Object.hasOwn(watchLimits, name) ||
-    !Number.isSafeInteger(watchLimits[name]) ||
-    watchLimits[name] <= 0
-  )
-    throw new Error(`Invalid change watch limit: ${name}`)
-}
-if (Object.keys(watchLimits).length !== watchLimitNames.length)
-  throw new Error("Invalid change watch limit: unknown policy key")
-if (watchLimits.principalOwners > watchLimits.globalOwners)
-  throw new Error("Invalid change watch limit: principalOwners exceeds globalOwners")
-const connectionWatches = watchLimits.recordTargets + watchLimits.catalogueTargets
-const watchId = schema.$defs.ChangeWatchId
-if (typeof watchId.pattern !== "string" || !Number.isSafeInteger(watchId.maxLength))
-  throw new Error("Invalid change watch ID publication")
-rs += `pub const MAX_CHANGE_WATCH_ID_BYTES: usize = ${watchId.maxLength};\n`
-// Published so the server can test the identities it mints against the schema.
-rs += `pub const CHANGE_WATCH_ID_PATTERN: &str = ${JSON.stringify(watchId.pattern)};\n`
-rs += `pub const MAX_GLOBAL_CHANGE_WATCHES: usize = ${watchLimits.globalOwners};\n`
-rs += `pub const MAX_PRINCIPAL_CHANGE_WATCHES: usize = ${watchLimits.principalOwners};\n`
-rs += `pub const MAX_CONNECTION_RECORD_WATCHES: usize = ${watchLimits.recordTargets};\n`
-rs += `pub const MAX_CONNECTION_CATALOGUE_WATCHES: usize = ${watchLimits.catalogueTargets};\n`
-rs += `pub const MAX_CONNECTION_CHANGE_WATCHES: usize = ${connectionWatches};\n`
 // The most peer gateways one gateway keeps: the list's bound is the store's,
 // so the server refuses one more rather than list fewer than it holds.
 const maxPeers = schema.$defs.PeerListResult.properties.items.maxItems
 if (!Number.isSafeInteger(maxPeers) || maxPeers <= 0)
   throw new Error("Invalid peer list bound")
 rs += `pub const MAX_PEERS: usize = ${maxPeers};\n`
-ts += `export const maxChangeWatchIdBytes = ${watchId.maxLength} as const\n`
-ts += `export const changeWatchIdPattern = ${JSON.stringify(watchId.pattern)} as const\n`
-ts += `export const changeWatchLimits = ${JSON.stringify(watchLimits)} as const\n`
 // Subscription capacity and delivery deadline are product policy too: the
 // server reads these constants, and the desktop keeps within the same limit.
 const subscriptionLimits = schema["x-subscriptionLimits"]
@@ -878,7 +839,7 @@ ts += `export const ProductHandshakeMethod = ${JSON.stringify(manifest.handshake
 export const productReadyMethods = ${JSON.stringify(readyMethods)} as const
 `
 ts += `${doc(
-  "The grant each product method asks Cedar for, generated from protocol/product/manifest.json. null means another owner admits the method: the handshake, auth.session, or a watch. Writing to a conversation — an answer, an upload, an app's calls — asks for conversation.write; reading its records or catalogue asks for conversation.read; running a configured server, or enrolling a device, asks for credential.manage.",
+  "The grant each product method asks Cedar for, generated from protocol/product/manifest.json. null means another owner admits the method: the handshake or auth.session. Writing to a conversation — an answer, an upload, an app's calls — asks for conversation.write; reading its records or catalogue asks for conversation.read; running a configured server, or enrolling a device, asks for credential.manage.",
 )}export const productMethodGrants = ${JSON.stringify(methodGrants(productMethods))} as const\n`
 rs += `pub const PRODUCT_VERSION: u64 = ${manifest.version};\npub const PRODUCT_SESSION_PATH: &str = ${JSON.stringify(manifest.path)};\n`
 function wireShape(node) {
@@ -1033,8 +994,7 @@ function actionForMethodRust(methods) {
 /// catalogue asks for \`conversation.read\`. Running a configured server with
 /// the gateway's authority, and enrolling a device, asks for
 /// \`credential.manage\`; Auth asks again for the exact consent. \`None\`
-/// means another owner admits the method: the handshake, \`auth.session\`, or
-/// a watch.
+/// means another owner admits the method: the handshake or \`auth.session\`.
 pub fn action_for_method(method: &str) -> Option<&'static str> {
     match method {
         ${arms.join("\n        ")}

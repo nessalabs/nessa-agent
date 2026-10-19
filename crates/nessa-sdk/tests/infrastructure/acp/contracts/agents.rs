@@ -4,9 +4,9 @@ use crate::{
         agents::SteeringDelivery,
         hooks::{BeforeInvocation, InvocationContext},
         sessions::{
-            SessionLoad, SessionManager, SessionSaveGeneration, SessionSaveReceipt,
-            SessionSaveUnit, SessionSnapshot, SessionStorage, SessionStorageLease, StorageError,
-            StorageFuture, SubmissionAcknowledgement,
+            SessionChange, SessionLoad, SessionManager, SessionSaveGeneration, SessionSaveReceipt,
+            SessionSaveUnit, SessionStorage, SessionStorageLease, StorageError, StorageFuture,
+            SubmissionAcknowledgement,
         },
     },
     domain::agent_execution::sessions::SessionId,
@@ -549,6 +549,17 @@ impl SessionStorage for FailReviewStorage {
         })
     }
 }
+/// The provider observations in a save, in order: the units are the only
+/// account of what changed.
+fn observations(units: &[SessionSaveUnit]) -> impl Iterator<Item = &ExecutionEvent> {
+    units
+        .iter()
+        .flat_map(SessionSaveUnit::changes)
+        .filter_map(|change| match change {
+            SessionChange::ProviderObservation(event) => Some(event),
+            _ => None,
+        })
+}
 impl SessionStorageLease for FailReviewLease {
     fn load(&self) -> StorageFuture<'_, SessionLoad> {
         self.inner.load()
@@ -556,19 +567,15 @@ impl SessionStorageLease for FailReviewLease {
     fn save_changes(
         &self,
         binding: SessionSaveGeneration,
-        snapshot: SessionSnapshot,
         units: Vec<SessionSaveUnit>,
     ) -> StorageFuture<'_, SessionSaveReceipt> {
         Box::pin(async move {
-            let has_review = snapshot.invocations.iter().any(|record| {
-                record.events.iter().any(|event| {
-                    matches!(event.update(), ExecutionUpdate::PermissionRequested { .. })
-                })
-            });
+            let has_review = observations(&units)
+                .any(|event| matches!(event.update(), ExecutionUpdate::PermissionRequested { .. }));
             if has_review && !self.failed.swap(true, Ordering::SeqCst) {
                 return Err(StorageError::Io("review persistence rejected".into()));
             }
-            self.inner.save_changes(binding, snapshot, units).await
+            self.inner.save_changes(binding, units).await
         })
     }
     fn erase(&self) -> StorageFuture<'_, ()> {
@@ -654,18 +661,15 @@ impl SessionStorageLease for FailSelectedDeclineLease {
     fn save_changes(
         &self,
         binding: SessionSaveGeneration,
-        snapshot: SessionSnapshot,
         units: Vec<SessionSaveUnit>,
     ) -> StorageFuture<'_, SessionSaveReceipt> {
         Box::pin(async move {
-            let selected = snapshot.invocations.iter().any(|record| {
-                record.events.iter().any(|event| {
-                    matches!(
-                        event.update(),
-                        ExecutionUpdate::ReviewDeclined(observation)
-                            if observation.stage() == ReviewDeclineStage::Selected
-                    )
-                })
+            let selected = observations(&units).any(|event| {
+                matches!(
+                    event.update(),
+                    ExecutionUpdate::ReviewDeclined(observation)
+                        if observation.stage() == ReviewDeclineStage::Selected
+                )
             });
             let gate = if selected {
                 self.gate.lock().unwrap().take()
@@ -679,7 +683,7 @@ impl SessionStorageLease for FailSelectedDeclineLease {
                     "selected decline persistence rejected".into(),
                 ));
             }
-            self.inner.save_changes(binding, snapshot, units).await
+            self.inner.save_changes(binding, units).await
         })
     }
     fn erase(&self) -> StorageFuture<'_, ()> {

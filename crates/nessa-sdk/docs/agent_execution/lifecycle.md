@@ -260,9 +260,11 @@ persisted explicitly; `AgentError` is a diagnostic projection, not a lifecycle
 state machine.
 
 This does not turn snapshots into a complete permission audit log or durable job
-queue. The storage port receives a complete observed snapshot and the semantic
-changes that produced it. Record storage validates that fold and appends one
-fact at the save boundary. Streaming text does not trigger a save for every
+queue. The storage port receives only the semantic changes since the last save:
+they are the one account of what changed. The session applies each change to its
+own state the same way storage does, so neither keeps or compares a copy of the
+other's. Record storage checks the changes and appends one fact at the save
+boundary. Streaming text does not trigger a save for every
 chunk. Per-invocation output limits and transport queue bounds protect different
 retained data; neither is a total conversation-size limit.
 
@@ -574,3 +576,11 @@ must invoke handoff there, then forward the same idempotent callback when its
 inner backend settles. Merely forwarding at the end incorrectly labels an
 already native fixture turn as preparing; the existing 52-case model suite caught
 that migration error (39 passed, 13 Busy failures).
+
+### daf57 current-main integration
+
+| Relationship | Existing owner retained by integration | Qualification |
+| --- | --- | --- |
+| Model/preset settings and committed snapshot after a failed save | Main's Continuation applies ConfigurationChanged/ModelChanged units through evidence.record; their existing forward and undo arms retain provider, model-change record and current configuration together. SDK setters do not mutate a second expected snapshot | Source integration; assembled configuration/save failure/restore/model suites pending |
+| Cold model selection before attachment | Existing complete saved-history validation, exact prior identity and no pending work; storage derives the replacement snapshot from the single ModelChanged unit | Source integration; cold model-change and persistence suites pending |
+| Required native handoff and incoming resumption/records | WorkPermit and serialized ACP callback remain unchanged; incoming record continuation, resumption readiness, exact Stop identity and fresh unit save contract are preserved | Focused checkpoint proof remains historical; assembled full SDK/server and gate19 stress pending |

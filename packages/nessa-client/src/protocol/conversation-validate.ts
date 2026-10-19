@@ -882,6 +882,7 @@ const leaseValues = {
     revoked: true,
     expired: true,
     lost: true,
+    idle: true,
   } satisfies Record<NonNullable<ConversationLease["cause"]>, true>,
   cleanup: { confirmed: true, forced: true, not_held: true } satisfies Record<
     NonNullable<ConversationLease["cleanup"]>,

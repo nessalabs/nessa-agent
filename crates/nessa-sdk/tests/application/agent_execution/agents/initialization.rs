@@ -445,17 +445,16 @@ impl SessionStorageLease for PanickingStorageLease {
     fn save_changes(
         &self,
         binding: SessionSaveGeneration,
-        snapshot: SessionSnapshot,
         units: Vec<SessionSaveUnit>,
     ) -> StorageFuture<'_, SessionSaveReceipt> {
         let Some(failure) = self.failure.lock().unwrap().take() else {
-            return self.backing.save_changes(binding, snapshot, units);
+            return self.backing.save_changes(binding, units);
         };
         if matches!(failure, SavePanic::Construct) {
             panic!("save construction panic");
         }
         Box::pin(PanickingSaveFuture {
-            backing: self.backing.save_changes(binding, snapshot, units),
+            backing: self.backing.save_changes(binding, units),
             failure,
         })
     }
@@ -556,11 +555,10 @@ impl SessionStorageLease for ContradictoryRecordLoadLease {
     fn save_changes(
         &self,
         binding: SessionSaveGeneration,
-        snapshot: SessionSnapshot,
         units: Vec<SessionSaveUnit>,
     ) -> StorageFuture<'_, SessionSaveReceipt> {
         self.saves.fetch_add(1, Ordering::SeqCst);
-        self.backing.save_changes(binding, snapshot, units)
+        self.backing.save_changes(binding, units)
     }
     fn erase(&self) -> StorageFuture<'_, ()> {
         self.backing.erase()
@@ -788,18 +786,6 @@ async fn prepare_leaves_an_unfinished_save_it_did_not_plan_unresolved() {
         lease
             .save_changes(
                 binding,
-                SessionSnapshot {
-                    model_change: None,
-                    current_configuration: None,
-                    id: foreign.clone(),
-                    provider: other.clone(),
-                    provider_context: ProviderContext::Absent,
-                    invocations: Vec::new(),
-                    queue_history: Vec::new(),
-                    lease: None,
-                    artifacts: Vec::new(),
-                    notes: Vec::new(),
-                },
                 vec![SessionSaveUnit::new(vec![SessionChange::Opened {
                     id: foreign.clone(),
                     provider: other,
@@ -830,19 +816,12 @@ async fn prepare_leaves_an_unfinished_save_it_did_not_plan_unresolved() {
     );
     let lease = storage.open(later.clone()).await.unwrap();
     let loaded = lease.load().await.unwrap();
-    let prior = loaded.snapshot().unwrap().clone();
     let context = ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap());
     refuse_record_appends_from(&root, record_rows(&root) + 1);
     assert!(matches!(
         lease
             .save_changes(
                 loaded.binding().clone(),
-                SessionSnapshot {
-                    model_change: None,
-                    current_configuration: None,
-                    provider_context: context.clone(),
-                    ..prior.clone()
-                },
                 vec![SessionSaveUnit::new(vec![SessionChange::ProviderContext {
                     before: ProviderContext::Absent,
                     after: context,
@@ -2501,11 +2480,10 @@ impl SessionStorageLease for SwappedSnapshotLoadLease {
     fn save_changes(
         &self,
         generation: SessionSaveGeneration,
-        snapshot: SessionSnapshot,
         units: Vec<SessionSaveUnit>,
     ) -> StorageFuture<'_, SessionSaveReceipt> {
         self.saves.fetch_add(1, Ordering::SeqCst);
-        self.backing.save_changes(generation, snapshot, units)
+        self.backing.save_changes(generation, units)
     }
     fn erase(&self) -> StorageFuture<'_, ()> {
         self.backing.erase()

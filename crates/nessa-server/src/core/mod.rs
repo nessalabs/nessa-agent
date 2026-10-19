@@ -38,6 +38,8 @@ pub(crate) mod limit_log;
 #[cfg(unix)]
 mod log_file;
 pub mod logging;
+#[cfg(unix)]
+mod open_files;
 pub(crate) mod read_workers;
 mod restart;
 mod shutdown;
@@ -51,5 +53,5 @@ pub use error::{
 pub use launch::Launch;
 pub use shutdown::{
     NativeShutdownFailure, Outcome, ReaderDrain, ServersOutcome, ShutdownFailure, ShutdownReport,
-    ShutdownStage, WatchDrain,
+    ShutdownStage,
 };

@@ -29,6 +29,10 @@ snapshot for retention and preview eviction. The immutable resource value carrie
 byte identity and authoritative metadata together; storage and accounting use
 that value's object identity.
 
+Desktop gateway service-label ownership is described in
+[desktop host ownership](design/desktop-host-ownership.md); its application lease
+precedes macOS recovery and shared writes, separate from registration locking.
+
 ## Today
 
 Nessa has a Rust desktop host (window, tray, settings, OS integration), a React
@@ -378,6 +382,14 @@ against a private scripted gateway.
   (`SessionAccessory`, drawn by the workspace's slot). Counts live in
   `src/desktop/model/counts.ts`. The preview is the window preference
   `useSubagentsPreview`, offered under Settings › Advanced › Experimental.
+- The desktop composer's Send and Stop controls have separate DOM identities
+  (`src/desktop/ui/composer.tsx`). A gesture that began on one cannot invoke
+  the replacement action after a source phase change; the unsent draft stays.
+  `composer-action-lifetime.test.tsx` checks both directions and activation
+  of the current control under StrictMode. The replayable native-pointer,
+  keyboard and focus regression for Chromium/WebKit lives beside its synthetic
+  evidence in `docs/reviews/evidence/composer-action-identity-1000/` while the
+  shared verification tree is held unchanged.
 - The shared desktop light's fixed grain tile lives in
   `src/desktop/ui/ambient-grain.png`, drawn by `.desktop-grain` in the desktop
   stylesheet. It is pre-rendered to keep SVG turbulence out of runtime raster
@@ -618,6 +630,11 @@ acknowledgement checkpoints rather than continuous attachment. Windows `sync` on
 revalidates binding and does not claim directory durability or arbitrary power-loss
 survival. See the [local-storage module map](../crates/nessa-local-storage/README.md#module-map)
 and [retained publication design](design/retained-directory-publication.md).
+`PrivateDirectory::open_root` retains an existing caller-trusted private root;
+`open_directory` carries that captured ancestry into an existing child. Backup
+verification uses these read/search acquisitions for manifest reads, enumeration
+and body access, including cuts without a records directory. Neither acquisition
+creates storage or repairs permissions.
 
 On Unix, `create_private_directory_path` and `PrivateDirectory::open_path` retain an
 absolute private store through ordinary locator ancestry. System and account
@@ -937,7 +954,6 @@ source adapter. Attachment adapters consume this owner when activated.
 `conversation/application/metadata_target.rs` correlates existing metadata loads and creation acknowledgements with the requested identity before ownership, selection, grant admission or effects. Created receipts additionally match the admitted full immutable proposal; Existing retains original creator evidence. Current mode intent/terminal/retirement tests live in `tests/conversation/approval_mode.rs`, with unchanged-preset publication/recovery in `tests/conversation/approval_mode/unchanged.rs`; creation receipt tests in `tests/conversation/creation_metadata.rs`. Projection owns selection/runtime replacements and their revision; no display-history or paging API is added.
 
 Named record-read owners: `conversation/application/record_read/read.rs` owns passive read orchestration and its port/types; `conversation/infrastructure/record_read/source.rs` owns tracked read lifecycle, `operation.rs` owns SDK physical execution; `product/record_read/dispatch.rs` owns routing and typed outcome presentation, with `wire.rs` the codec. Their mod.rs files contain module documentation/declarations/reexports. Infrastructure tests live under `tests/conversation/record_read/`.
-`product/change_watch/` owns live change hints on the product socket: `registration.rs` the watch identity and the one current-admission call (through `AdmitPassiveRead`), `connection.rs` a connection's two target positions and their authority tasks, `delivery.rs` the pending/in-flight notice positions the single writer in `socket.rs` takes from, and `owner.rs` the gateway-wide watch permits and first task fault. Producers are injected through `conversation/application/change_watch.rs` (`WatchRecords`, `WatchNamespaces`) with adapters in `conversation/infrastructure/change_watch.rs`; a watch never reads a head or takes a passive-read permit. The client side is `packages/nessa-client/src/presentation/change-watch-api.ts` and `protocol/change-watch-validate.ts`, through the existing dispatcher. The state and order table is in [committed change watches](design/committed-change-watches.md#298b-authorized-live-hints-over-the-product-socket); socket tests are `tests/product/socket/watches.rs`.
 `product/subscription/` owns replay-to-live view and list subscriptions on the product socket ([record subscriptions](design/record-subscriptions.md)): `connection.rs` a connection's subscriptions and their limits, `target.rs` one task per subscription — wake sources registered before each read, every batch admitted in `authorize_batch`, read through the same fold as `conversation.read` and `conversation.list`, `lagging` when a frame is not taken in time — and `delivery.rs` the frames the single writer in `socket.rs` takes, one in flight per subscription. `conversation/application/live_changes.rs` wakes a reader on live facts that are not records. The client side is `packages/nessa-client/src/presentation/subscription-api.ts` and `protocol/subscription-validate.ts`; socket tests are `tests/product/socket/subscriptions.rs`. The desktop workspace's gateway source (`src/desktop/workspace/adapters/gateway/gateway-source.ts`) follows these subscriptions and polls nothing.
 
 `product/subscription/events.rs` follows committed semantic events through the same connection and delivery owners. `conversation/application/service/event_read.rs` owns target admission, shared `EventProgress` correlation of reader outputs with their start/prior checkpoint, and the metadata-only projection from the SDK reader; it never opens an Agent. Event consumers share that continuity validator before publishing data or retaining checkpoints. Event subscriptions retain a replay cursor rather than replacing a conversation view. Their socket regressions are `tests/product/socket/subscriptions/events.rs`, with delivery deadline tests in `tests/product/subscription_event_delivery.rs`; shared continuity and projection regressions are `tests/conversation/event_read.rs`.
@@ -990,14 +1006,17 @@ The same store implements `ConversationCatalogue` for owner-scoped current
 metadata reads. Its per-owner head and per-conversation creation/change revisions
 are committed with the visible write; a retained tombstone is a catalogue deletion
 marker. The finite pass order is in [conversation catalogue](design/conversation-catalogue.md).
-`application/catalogue_watch.rs` owns payloadless owner-scoped watch interest;
+`application/catalogue_watch.rs` owns payloadless owner-scoped change interest,
+which only wakes record subscriptions (`conversation.subscribe`);
 `infrastructure/catalogue_changes.rs` bounds and coalesces actual registrations.
 `LocalConversationStore` publishes after visible metadata transaction commits,
 inside the retained blocking owner. SDK `sessions/committed_changes.rs` and
 `session_storage/record_changes.rs` separately own record interest and publish
 outer save completions and reset receipts. Neither producer starts
 a read or changes receiver progress. [Committed change watches](design/committed-change-watches.md)
-owns their registration/recheck and accounting contract; wire activation remains #298.
+owns their registration/recheck and accounting contract. Their one consumer is
+the product socket's record subscriptions (`product/subscription/`), which
+register them as wake sources.
 `infrastructure/catalogue_source.rs` adapts that port to sync-engine's
 `CatalogueSource` through a bounded blocking worker bound to one authenticated
 caller and exact scope. The worker owns a Tokio runtime so metadata reads can
@@ -1609,6 +1628,19 @@ snapshots. `infrastructure/` reads the namespace, including `device/outbox/` and
 mac key stays beside the deletion inventory and is not part of the bundle.
 Restore and quarantine are not in this module.
 
+The separate `nessa-backup-verify` binary enters through `backup_verify_main.rs`
+and `composition/backup_verification.rs`, without gateway bootstrap.
+`backup/entrypoint/arguments.rs` parses explicit input paths; `application/verification.rs`
+authenticates and streams the supplied cut through read-only ports;
+`domain/verification.rs` owns validated cut metadata; `application/verification_format.rs`
+owns the typed decoding port and authentication offsets. `infrastructure/manifest_decode.rs`
+and `deletion_decode.rs` own persisted grammars, shared by live storage and the injected
+`ExportFormat` verification adapter. The directory and
+key readers live in `infrastructure/verification.rs`. Tests follow these owners
+under `tests/backup/verification*.rs`; `tests/backup_verifier.rs` exercises the
+actual binary. [Standalone verification](design/backup-verification.md) defines
+the limits and the remaining restore contracts (#270).
+
 ## Attachments
 
 `crates/nessa-server/src/attachments/` owns the files a conversation uploads so
@@ -2170,11 +2202,11 @@ bounded private profile and opens the device's private enrollment state; its
 `device.rs` child pairs and reads the pinned enrollment status. Its `online.rs`
 child admits each run by that status, composes the protected native session's
 facades and the private cache after actual authenticated discovery; the
-existing finite drivers own work. For `watch` it also adapts that connection,
-driver and cache to the session port of `application/watch.rs`, the bounded
-loop of one record watch, whose hints the session keeps in its inbox
-(`infrastructure/gateway/session.rs`) and whose lines `entrypoint/watch.rs`
-writes.
+existing finite drivers own work. For `follow` it also adapts that connection,
+driver and cache to the session port of `application/follow.rs`, the bounded
+loop of one `conversation.subscribe`, whose views the session keeps in its
+subscription inbox (`infrastructure/gateway/session.rs`) and whose lines
+`entrypoint/follow.rs` writes.
 Paths in this module map are relative to `crates/nessa-client-core/src/` unless
 a crate is named. The `read_only_sync/entrypoint/`
 owns argument parsing and JSON output; its `online.rs` presents separate captured
@@ -2199,13 +2231,13 @@ produce real SDK Agent decisions through the gateway service and its canonical
 record/metadata stores. Its `semantic/storage.rs` child delegates the real writer
 and captures only successfully confirmed producer candidates. Public fold replay
 and checkpoint continuation compare with those independent snapshots; cached
-committed reads separately check incremental/full parity. The public core watch
-command resumes the rich prefix through actual hint passes. Independent native
+committed reads separately check incremental/full parity. The public core follow
+command resumes the rich prefix through passes woken by subscription views. Independent native
 core processes compare retained views,
 progress, live suffixes and deletion after restart. Pure parser
 and JSON presentation evidence lives under `crates/nessa-client-core/tests/read_only_sync/entrypoint/`,
-the status decision's and the watch loop's under `crates/nessa-client-core/tests/read_only_sync/application/`,
-the session's watch evidence in `crates/nessa-client-core/tests/read_only_sync/gateway/session/watch.rs`, and the
+the status decision's and the follow loop's under `crates/nessa-client-core/tests/read_only_sync/application/`,
+the session's subscription and follow-wait evidence in `crates/nessa-client-core/tests/read_only_sync/gateway/session/subscribe.rs`, and the
 code-line reader's in `crates/nessa-client-core/tests/composition/read_only_device.rs`.
 The five-mode saved-output race is in the client's
 `tests/read_only_sync/infrastructure/saved_output.rs`, beside the private cache
@@ -2221,8 +2253,8 @@ The client incoming wire admission uses `packages/nessa-client/src/protocol/uniq
 
 SDK `application/agent_execution/commands/creation.rs` owns immutable creation
 bindings, progress and effect order. `commands/mutation.rs` owns the same
-principal stream for submit and exact-turn Stop. `infrastructure/session_storage/creation.rs`
-implements that principal lease with the existing SQLite runtime; it does not
+per-request stream for submit and exact-turn Stop. `infrastructure/session_storage/creation.rs`
+implements that lease, one stream per principal and request, with the existing SQLite runtime; it does not
 modify the conversation semantic record writer. The host consumers live under
 `conversation/application/service/creation.rs` and `service/mutation.rs`, sharing
 the existing creation helper, metadata/deletion authority and admission guard.
@@ -2234,21 +2266,23 @@ Tests mirror those owners under `nessa-sdk/tests/infrastructure/session_storage/
 [command creation](design/command-creation.md). The phone send both sides share
 is [phone send](design/phone-send-contract.md).
 
-Watch shutdown is part of normal host cleanup in `composition/root.rs`: after native
-pairing is signalled to stop, it closes
-`ProductRouteState` watch and review-notice audit admission before polling the
-reader, watch, and review-audit drains under one shared deadline. Audit deadline
+Product shutdown is part of normal host cleanup in `composition/root.rs`. After
+native pairing is signalled to stop, `cleanup_product` first calls
+`ProductRouteState::close_sockets`, so every authenticated product socket closes
+`temporary_unavailable` and its client may retry. It then closes review-notice
+audit and MCP server admission, and polls the record and catalogue reader drains
+and the review-audit drain under one shared deadline. Audit deadline
 observation records an unconfirmed result without claiming physical release;
-reader/watch drains retain their existing physical joins. Composition then
+reader drains keep their existing physical joins. Composition then
 carries their outcomes through conversation/storage, MCP and the native join
 in the same `ShutdownReport` (one `Outcome` per cleanup owner and a derived
 stage, in `core/shutdown.rs`). Interleaving tests are
-`tests/composition/watch_shutdown.rs` and `tests/composition/review_notice_shutdown.rs`,
-using the watch fixture in
-`tests/product/socket/watches.rs`; the MCP stage through the same cleanup —
-`composition/mcp_servers.rs::stop` draining stored-server changes before the
-servers stop — in `tests/composition/mcp_shutdown.rs`. The separate-process replay-to-live tests, with
-the probe client and with the example's own `watch` on two paired devices, are in
+`tests/composition/reader_shutdown.rs` and `tests/composition/review_notice_shutdown.rs`,
+using `HostProductFixture` in `tests/product/socket/host_fixture.rs`; the MCP
+stage through the same cleanup — `composition/mcp_servers.rs::stop` draining
+stored-server changes before the servers stop — in
+`tests/composition/mcp_shutdown.rs`. The separate-process replay-to-live tests,
+with the example's own `follow` on two paired devices, are in
 `tests/composition/read_only_online.rs`, with the gateway's `live` mode in its
 `fixtures/gateway.rs`.
 
@@ -2364,6 +2398,10 @@ reopen/retry and private admission/drain; Auth's TLS adapter owns the shared key
 representation conversion. The server's
 `tests/composition/read_only_online/native_session.rs` drives the actual paired
 gateway and the optional generated Swift probe under `verification/native-device`.
+Its `native_session/clock.rs` holds controlled elapsed time and a failing wall-time
+watchdog for refusal and budget ordering; the contract is in
+`docs/design/native-session-verification-997.md`. `NativeSession::open_with_clock`
+accepts the protocol clock at composition; `open` keeps the production default.
 Core's `retained/active.rs` validates fresh status against the current immutable
 issued record before product selection. Release Apple packaging is verified;
 the actual phone repository remains unfinished under issue 782. This module does not supply native

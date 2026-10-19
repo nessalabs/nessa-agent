@@ -374,58 +374,6 @@ impl CatalogueReadErrorCode {
         }
     }
 }
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-pub enum ChangeWatchEndReason {
-    #[serde(rename = "closed")]
-    Closed,
-    #[serde(rename = "notification_failed")]
-    NotificationFailed,
-}
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-pub enum ChangeWatchErrorCode {
-    #[serde(rename = "invalid_request")]
-    InvalidRequest,
-    #[serde(rename = "unauthorized")]
-    Unauthorized,
-    #[serde(rename = "forbidden")]
-    Forbidden,
-    #[serde(rename = "wrong_owner")]
-    WrongOwner,
-    #[serde(rename = "wrong_receiver")]
-    WrongReceiver,
-    #[serde(rename = "stale_epoch")]
-    StaleEpoch,
-    #[serde(rename = "unverifiable")]
-    Unverifiable,
-    #[serde(rename = "temporarily_unavailable")]
-    TemporarilyUnavailable,
-    #[serde(rename = "watch_duplicate")]
-    WatchDuplicate,
-    #[serde(rename = "watch_capacity")]
-    WatchCapacity,
-    #[serde(rename = "watch_closed")]
-    WatchClosed,
-    #[serde(rename = "invalid_watch")]
-    InvalidWatch,
-}
-impl ChangeWatchErrorCode {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::InvalidRequest => "invalid_request",
-            Self::Unauthorized => "unauthorized",
-            Self::Forbidden => "forbidden",
-            Self::WrongOwner => "wrong_owner",
-            Self::WrongReceiver => "wrong_receiver",
-            Self::StaleEpoch => "stale_epoch",
-            Self::Unverifiable => "unverifiable",
-            Self::TemporarilyUnavailable => "temporarily_unavailable",
-            Self::WatchDuplicate => "watch_duplicate",
-            Self::WatchCapacity => "watch_capacity",
-            Self::WatchClosed => "watch_closed",
-            Self::InvalidWatch => "invalid_watch",
-        }
-    }
-}
 /// Published bound from the product schema.
 pub const MAX_MCP_MESSAGE_BYTES: usize = 8192;
 /// Published MCP App call timing from the product schema, in milliseconds.

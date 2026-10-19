@@ -20,6 +20,7 @@ mod page_load;
 mod panel;
 mod platform;
 mod provider_authentication;
+mod review_notices;
 mod saving;
 mod settings;
 mod shortcut;
@@ -137,6 +138,9 @@ fn main() {
             startup::quit_nessa,
             linger::infrastructure::linger_status,
             linger::infrastructure::linger_accept,
+            review_notices::infrastructure::review_notice_access,
+            review_notices::infrastructure::review_notice_ask,
+            review_notices::infrastructure::review_notice_sync,
         ])
         .setup(move |app| {
             page_load::watch(app.handle().clone(), loads);
@@ -351,6 +355,9 @@ fn main() {
                 // One resolution, at the entry point. The decision itself takes
                 // what it needs as parameters and lives below.
                 if let Some(deps) = composition::resolve(app) {
+                    // A notice outliving the app would name a review nobody
+                    // is told has settled.
+                    review_notices::infrastructure::leave_before_exit(app);
                     stop_agents_if_asked(&*deps.settings, deps.gateway.as_deref());
                 }
             }

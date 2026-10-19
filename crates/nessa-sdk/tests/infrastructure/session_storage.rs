@@ -77,7 +77,6 @@ async fn record_storage_reopens_the_same_semantic_history() {
     lease
         .save_changes(
             lease.load().await.unwrap().binding().clone(),
-            snapshot.clone(),
             vec![SessionSaveUnit::new(vec![change]).unwrap()],
         )
         .await
@@ -99,11 +98,10 @@ async fn record_storage_lease_excludes_second_manager_and_reset_erases_history()
         storage.open(id.clone()).await,
         Err(StorageError::Busy)
     ));
-    let (change, snapshot) = opened(&id);
+    let (change, _) = opened(&id);
     first
         .save_changes(
             first.load().await.unwrap().binding().clone(),
-            snapshot,
             vec![SessionSaveUnit::new(vec![change]).unwrap()],
         )
         .await
@@ -135,11 +133,10 @@ async fn record_source_reads_committed_frames_while_writer_lease_is_held() {
         .await
         .unwrap()
         .unwrap();
-    let (change, snapshot) = opened(&id);
+    let (change, _) = opened(&id);
     lease
         .save_changes(
             lease.load().await.unwrap().binding().clone(),
-            snapshot,
             vec![SessionSaveUnit::new(vec![change]).unwrap()],
         )
         .await
@@ -177,11 +174,10 @@ async fn sync_pass_reloads_checkpoint_after_lost_commit_reply() {
     let storage = Arc::new(RecordStorage::new(directory.path().join("sessions")).unwrap());
     let id = SessionId::new("conversation").unwrap();
     let lease = storage.open(id.clone()).await.unwrap();
-    let (change, snapshot) = opened(&id);
+    let (change, _) = opened(&id);
     lease
         .save_changes(
             lease.load().await.unwrap().binding().clone(),
-            snapshot,
             vec![SessionSaveUnit::new(vec![change]).unwrap()],
         )
         .await
@@ -357,18 +353,17 @@ fn child_record_source_server_probe() {
     let lease = runtime.block_on(storage.open(session.clone())).unwrap();
     let loaded = runtime.block_on(lease.load()).unwrap();
     let (saved, binding) = loaded.into_published(&session).unwrap();
-    let (snapshot, next_generation) = match saved {
-        Some(snapshot) => (snapshot, binding),
+    let next_generation = match saved {
+        Some(_) => binding,
         None => {
-            let (change, snapshot) = opened(&session);
+            let (change, _) = opened(&session);
             let receipt = runtime
                 .block_on(lease.save_changes(
                     binding.clone(),
-                    snapshot.clone(),
                     vec![SessionSaveUnit::new(vec![change]).unwrap()],
                 ))
                 .unwrap();
-            (snapshot, receipt.next_for(&binding, 1).unwrap())
+            receipt.next_for(&binding, 1).unwrap()
         }
     };
     let source = runtime
@@ -402,18 +397,11 @@ fn child_record_source_server_probe() {
             let context = ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap());
             let change = SessionChange::ProviderContext {
                 before: ProviderContext::Absent,
-                after: context.clone(),
-            };
-            let next = SessionSnapshot {
-                model_change: None,
-                current_configuration: None,
-                provider_context: context,
-                ..snapshot
+                after: context,
             };
             control_handle
                 .block_on(lease.save_changes(
                     next_generation,
-                    next,
                     vec![SessionSaveUnit::new(vec![change]).unwrap()],
                 ))
                 .unwrap();

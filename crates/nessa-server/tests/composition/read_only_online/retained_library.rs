@@ -309,14 +309,14 @@ fn verify_paired_lifecycle(removal_mode: usize) {
     runtime.block_on(device.shutdown());
 }
 
-/// The subscription feed and the retained watch fold report the same activity
+/// The subscription feed and the retained records fold report the same activity
 /// for one granted conversation. The corpus is the semantic gateway's settled
 /// suffix: while a permission is still open, the live agent and the retained
 /// fold disagree on message status, which that fixture already records.
 /// Revision, gateway time, title, approval mode and capabilities stay out of
 /// the comparison.
 #[test]
-fn paired_owner_subscription_feed_matches_the_retained_watch_view() {
+fn paired_owner_subscription_feed_matches_the_retained_records_view() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("gateway");
     let mut gateway = Gateway::start_semantic(&root);
@@ -471,7 +471,7 @@ fn paired_owner_subscription_feed_matches_the_retained_watch_view() {
     runtime.block_on(device.shutdown());
 }
 
-/// Activity the watch fold and the subscription view both own. The live
+/// Activity the retained records fold and the subscription view both own. The live
 /// overlay (title, capabilities, approval mode, revision, gateway time) is
 /// not part of the retained records.
 fn activity(view: &Value) -> Value {

@@ -178,6 +178,7 @@ export const css = {
   approvalHead: ".workspace-approval-head", // class: who asks, and what
   approvalHeadWords: ".workspace-approval-head-words", // class: the head's words, without its icon
   approvalCommand: ".workspace-approval-command", // class: what is asked, whole: a command, or an app's tool and its message
+  approvalDisclose: ".workspace-approval-disclose", // class: Show All, which unfolds an agent's long script past its first lines
 
   // A message of the person's that an MCP App wrote (#390)
   messageAuthor: ".workspace-message-author", // class: which app wrote it, above its bubble
@@ -936,4 +937,26 @@ export const userAttachments = {
   text: ".workspace-bubble p",
   pictures: "img",
   controls: "button",
+}
+
+/**
+ * The composer's controls a person uses in one conversation: Send and the
+ * Stop it turns into while a turn runs (one `button.desktop-send`, told apart
+ * by its name), and the access shield with its menu. `conversation-stress.mjs`
+ * drives them.
+ */
+export const composerControls = {
+  send: ["button", { name: "Send", exact: true }],
+  stop: ["button", { name: "Stop", exact: true }],
+  access: '[data-slot="composer-access-mode"]', // data-access-mode is ask-approval | auto-approval | full-access
+  accessMenu: '[data-slot="composer-access-mode-content"]',
+  /** The menu item for each access mode, by the gateway's name for it. */
+  accessItem: {
+    ask: ["menuitemradio", { name: "Ask for approval", exact: true }],
+    auto: ["menuitemradio", { name: "Auto approval", exact: true }],
+    full: ["menuitemradio", { name: "Full access", exact: true }],
+  },
+  /** The shield's value for each access mode. */
+  accessValue: { ask: "ask-approval", auto: "auto-approval", full: "full-access" },
+  notice: ".desktop-composer-notice", // class: what the composer says of a held or refused access change
 }

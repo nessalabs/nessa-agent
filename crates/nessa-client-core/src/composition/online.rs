@@ -6,8 +6,9 @@
 //!                     --> Terminal: purge the saved receiver, with receipt
 //!   --> an authority refusal during the run --> pinned status again
 //! ```
-//! `watch` holds the same session for its bounded loop: registration, then
-//! one finite records pass per operation, each from the durable checkpoint.
+//! `follow` holds the same session for its bounded loop: `conversation.subscribe`,
+//! then one finite records pass per operation, each from the durable
+//! checkpoint, whenever a view's cursor moves.
 //! `fetch` holds it for one held file, one `artifact.read` range per
 //! operation, into the part beside its output; it opens no cache, and an
 //! output already there is answered before the profile is opened (`fetch`).
@@ -21,14 +22,14 @@ use crate::read_only_sync::application::device::{
     asks_status, CachePurges, PinnedStatus, PurgeBeforeEnd, PurgeReceipt,
 };
 use crate::read_only_sync::application::driver::{run_catalogue, run_records};
-use crate::read_only_sync::application::watch::{
-    discover, follow, PassResult, Registered, Wait, WatchPass, WatchSession,
+use crate::read_only_sync::application::follow::{
+    discover, follow, FollowPass, FollowSession, PassResult, Subscribed, Wait,
 };
 use crate::read_only_sync::application::{
     CacheError, CachePolicy, Cancellation, GatewayError, GatewayPolicy,
 };
 use crate::read_only_sync::domain::HeldFile;
-use crate::read_only_sync::entrypoint::watch::WatchLines;
+use crate::read_only_sync::entrypoint::follow::FollowLines;
 use crate::read_only_sync::entrypoint::{online, Command, CommandError};
 use crate::read_only_sync::infrastructure::cache::ReadOnlyCache;
 use crate::read_only_sync::infrastructure::gateway::{
@@ -143,7 +144,7 @@ pub(super) fn execute(
     let profile_path = match command {
         Command::Records { profile, .. }
         | Command::Catalogue { profile, .. }
-        | Command::Watch { profile, .. }
+        | Command::Follow { profile, .. }
         | Command::Fetch { profile, .. } => profile,
         _ => return Err(CommandError::Arguments),
     };
@@ -156,7 +157,7 @@ pub(super) fn execute(
     }
     let operation = match command {
         Command::Records { .. } => "records",
-        Command::Watch { .. } => "watch",
+        Command::Follow { .. } => "follow",
         Command::Fetch { .. } => "fetch",
         _ => "catalogue",
     };
@@ -248,12 +249,12 @@ pub(super) fn execute(
             ..
         } => run.records(conversation.clone(), *pages, output),
         Command::Catalogue { pages, .. } => run.catalogue(*pages, output),
-        Command::Watch {
+        Command::Follow {
             conversation,
             pages,
             max_passes,
             ..
-        } => run.watch(conversation.clone(), *pages, *max_passes, output),
+        } => run.follow(conversation.clone(), *pages, *max_passes, output),
         Command::Fetch { file, out, .. } => run.fetch(file, out, output),
         _ => Err(CommandError::Arguments),
     }
@@ -435,9 +436,9 @@ impl Run<'_> {
             output,
         )
     }
-    /// Rows W1–W16: discovery and the cache as for `sync-records`, then the
-    /// bounded watch loop on this one connection.
-    fn watch(
+    /// Discovery and the cache as for `sync-records`, then the bounded follow
+    /// loop on this one connection.
+    fn follow(
         self,
         conversation: ConversationId,
         pages: usize,
@@ -449,7 +450,7 @@ impl Run<'_> {
             self.access_epoch,
             conversation.clone(),
         );
-        // Row W17 before registration: a preparing discovery is asked again.
+        // Before subscribing, a preparing discovery is asked again.
         let discovery = discover(|| self.connection.run(|| source.discover()))
             .map_err(CommandError::Gateway)?;
         let scope = match discovery.result {
@@ -458,7 +459,7 @@ impl Run<'_> {
         };
         let cache = open_cache(self.cache_path, self.policy, output)?;
         let authorizer = source.authorizer();
-        let mut session = ConnectionWatch {
+        let mut session = ConnectionFollow {
             run: &self,
             conversation,
             pages,
@@ -468,7 +469,7 @@ impl Run<'_> {
             cache,
             rechecked: None,
         };
-        let mut lines = WatchLines::new(output, self.enrollment.clone());
+        let mut lines = FollowLines::new(output, self.enrollment.clone());
         let end = follow(&mut session, &mut lines, max_passes).map_err(|_| CommandError::Output)?;
         // Row PC5: `recheck` asks only after an authority refusal, and once:
         // a pass that already asked for this cause carries the answer.
@@ -545,8 +546,8 @@ impl Run<'_> {
     }
 }
 
-/// The watch loop's session port over this run's connection, driver and cache.
-struct ConnectionWatch<'a> {
+/// The follow loop's session port over this run's connection, driver and cache.
+struct ConnectionFollow<'a> {
     run: &'a Run<'a>,
     conversation: ConversationId,
     pages: usize,
@@ -557,19 +558,15 @@ struct ConnectionWatch<'a> {
     /// The last pass's gateway failure and the `recheck` its report carries.
     rechecked: Option<(GatewayError, Value)>,
 }
-impl WatchSession for ConnectionWatch<'_> {
+impl FollowSession for ConnectionFollow<'_> {
     type Report = Value;
-    fn register(&mut self) -> Result<Registered, GatewayError> {
-        self.run.connection.watch_records(
-            &self.run.receiver,
-            self.run.access_epoch,
-            &self.conversation,
-        )
+    fn subscribe(&mut self) -> Result<Subscribed, GatewayError> {
+        self.run.connection.subscribe(&self.conversation)
     }
     fn wait(&mut self) -> Result<Wait, GatewayError> {
-        self.run.connection.wait_hint()
+        self.run.connection.wait_view()
     }
-    fn pass(&mut self) -> Result<WatchPass<Value>, GatewayError> {
+    fn pass(&mut self) -> Result<FollowPass<Value>, GatewayError> {
         let attempt = self.run.connection.run(|| {
             run_records(
                 &self.scope,
@@ -599,7 +596,7 @@ impl WatchSession for ConnectionWatch<'_> {
             Some(Ok(run)) if run.complete => PassResult::Complete,
             _ => PassResult::Incomplete,
         };
-        Ok(WatchPass { report, result })
+        Ok(FollowPass { report, result })
     }
 }
 

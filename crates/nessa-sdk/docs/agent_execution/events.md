@@ -45,7 +45,7 @@ semantic validation and rollback, including its rules for skipping dependent
 changes after a gap. It preserves transitions such as context A to B to A in one
 save, even when the final snapshot is unchanged.
 
-The adapter admits four retained readers per store. Output pages accept at most
+The adapter retains any number of readers per store; each belongs to a follower its host bounds. At most four physical read steps run at once, and a step past that is refused `Capacity` for the caller to retry. Output pages accept at most
 256 events and 256 MiB encoded semantic payload bytes. The pending output holds
 at most one decoded unit, whose encoded body is limited by the existing 160 MiB
 fact bound. Each single change's encoded semantic batch is charged; gap payload
@@ -69,7 +69,7 @@ queue. Slow readers replay history and do not block provider progress.
 | More than 32 unreadable units | Later gaps still appear; `all_separated_invalid_units_emit_gaps_after_summary_limit` |
 | Small page then larger retry | Typed refusal preserves pending event; `item_budget_refusal_preserves_pending_event_and_reset_invalidates_cursor` |
 | Reset after read / old resume | Typed IdentityChanged; same test |
-| Invalid index, occupied observer slots, drop, shutdown | Refusal and capacity release; `invalid_cursor_and_observer_capacity_are_typed_and_drop_releases_capacity` |
+| Invalid index, many retained readers, shutdown | Typed refusal and no reader cap; `invalid_cursor_is_typed_and_retained_readers_are_not_capped` |
 | Cancel read, then drop handle while worker waits | Registration remains occupied until owned worker completes; `cancelled_read_and_dropped_handle_retain_registration_until_worker_finishes` |
 | Final metadata check fails after decoding | Pending payload and delivery cursor survive for retry; `failed_final_metadata_check_preserves_pending_payload_and_delivery_cursor` |
 | Custom page with mixed identities, wrong next/head, empty/oversized or unordered events | Constructor rejects before publication; `page_constructor_rejects_contradictory_adapter_output` and `page_constructor_accepts_ordered_correlated_changes` |

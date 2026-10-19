@@ -836,8 +836,9 @@ Mandatory permission audit remains separate from session snapshots.
 The host supplies verified attribution and authorizes commands before SDK access.
 
 The first durable creation consumer is `ConversationService::create_command`,
-which uses the SDK `commands::CreationCoordinator` with a principal control lease
-on the shared `RecordStorage` runtime. Its non-content binding and original
+which uses the SDK `commands::CreationCoordinator` with a lease on the request's
+own control stream (one per principal and request) in the shared `RecordStorage`
+runtime; creates of one conversation run one at a time in the host. Its non-content binding and original
 attempt precede initialization; attempted recovery stays interrupted without
 provider reopening. Current target access/deletion remains in the conversation
 service. The existing host admission guard spans the full command and terminal
@@ -988,7 +989,7 @@ contract contains no routing or IO and is separate from generic protocol frames.
 
 **Device client core** (`crates/nessa-client-core`) — reusable Rust library and
 standalone retained-sync example. Owns device enrollment, private profile/cache,
-finite retained reads, bounded watch composition, and an independent protected
+finite retained reads, a bounded follow over record subscriptions, and an independent protected
 product child. The child reuses the canonical pinned OpenProduct handshake and
 shared incremental channel, with one bounded request/event pump, original native
 IDs and cancellation-independent physical drain. Actual Ready methods gate

@@ -1,7 +1,7 @@
 //! Authenticated commands resolve one shared Agent owner per conversation.
 //! Service -> metadata_target -> metadata repository.
 //! Shared Agent -> SDK session storage/provider.
-//! Service::create_command -> SDK CreationCoordinator -> principal control lease;
+//! Service::create_command -> SDK CreationCoordinator -> request control lease;
 //! service/creation keeps current target deletion and the existing admission guard.
 //! Service -> ConversationSummaries: what a list shows about each conversation,
 //! written when a message is accepted and when a turn completes.
@@ -147,17 +147,15 @@ mod change_watch;
 #[cfg(test)]
 pub(crate) use app_reviews::MAX_APP_REVIEW_BYTES;
 pub(crate) use audit_records::audit_records;
-pub use change_watch::{WatchNamespaces, WatchRecords};
+pub use change_watch::WatchRecords;
 mod catalogue;
 pub(crate) mod catalogue_watch;
-pub use catalogue_watch::{
-    CatalogueChangeWatch, CatalogueWatchError, CatalogueWatchState, WatchCatalogue,
-};
+pub use catalogue_watch::{CatalogueChangeWatch, CatalogueWatchState, WatchCatalogue};
 mod access_policy;
 mod agent_tools;
 pub use agent_tools::{
     AgentToolAudit, AgentToolAuditRecord, AgentToolRequest, AgentToolSource,
-    MAX_AGENT_TOOL_ADMISSIONS,
+    MAX_AGENT_TOOL_ADMISSIONS, MAX_EVENT_READERS,
 };
 mod app_call_policy;
 mod artifacts;
@@ -194,6 +192,8 @@ mod review_notice_selection;
 pub(crate) use review_notice_selection::{AuditedReviewSelection, SelectReviewNotice};
 mod service;
 mod session_key;
+mod source_permits;
+pub use source_permits::{SourcePermit, SourcePermits};
 mod share_grants;
 mod tool_policy;
 pub use crate::conversation::domain::ReceiverBinding;

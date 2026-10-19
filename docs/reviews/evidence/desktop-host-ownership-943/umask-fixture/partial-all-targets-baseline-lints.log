@@ -1,0 +1,37 @@
+    Checking nessa-desktop-host-ownership-proof v0.0.0 (/tmp/nessa-943-headless)
+error: this lint expectation is unfulfilled
+   --> /workspace/nessa-943-desktop-owner/src-tauri/src/gateway/domain/value_objects/reconciliation_evidence.rs:650:13
+    |
+650 |             dead_code,
+    |             ^^^^^^^^^
+    |
+    = note: rejected-report inspection is exercised by domain and application tests; production serializes the enclosing outcome
+    = note: `-D unfulfilled-lint-expectations` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(unfulfilled_lint_expectations)]`
+
+error: this lint expectation is unfulfilled
+   --> /workspace/nessa-943-desktop-owner/src-tauri/src/gateway/domain/value_objects/reconciliation_evidence.rs:661:13
+    |
+661 |             dead_code,
+    |             ^^^^^^^^^
+    |
+    = note: rejected-report inspection is exercised by domain and application tests; production serializes the enclosing outcome
+
+error: this lint expectation is unfulfilled
+   --> /workspace/nessa-943-desktop-owner/src-tauri/src/gateway/domain/value_objects/reconciliation_evidence.rs:675:13
+    |
+675 |             dead_code,
+    |             ^^^^^^^^^
+    |
+    = note: rejected-report inspection is exercised by domain and application tests; production serializes the enclosing outcome
+
+error: this lint expectation is unfulfilled
+   --> /workspace/nessa-943-desktop-owner/src-tauri/src/gateway/domain/value_objects/reconciliation_evidence.rs:686:13
+    |
+686 |             dead_code,
+    |             ^^^^^^^^^
+    |
+    = note: rejected-report inspection is exercised by domain and application tests; production serializes the enclosing outcome
+
+error: could not compile `nessa-desktop-host-ownership-proof` (lib) due to 4 previous errors
+warning: build failed, waiting for other jobs to finish...

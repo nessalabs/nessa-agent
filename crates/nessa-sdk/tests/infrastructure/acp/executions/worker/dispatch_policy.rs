@@ -109,7 +109,6 @@ async fn worker_projection_after_reload(
     lease
         .save_changes(
             lease.load().await.unwrap().binding().clone(),
-            snapshot,
             vec![SessionSaveUnit::new(changes).unwrap()],
         )
         .await

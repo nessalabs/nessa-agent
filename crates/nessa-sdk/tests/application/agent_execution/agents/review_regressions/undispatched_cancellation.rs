@@ -27,19 +27,19 @@ impl SessionStorageLease for CancellationPanicLease {
     fn save_changes(
         &self,
         binding: SessionSaveGeneration,
-        snapshot: SessionSnapshot,
         units: Vec<SessionSaveUnit>,
     ) -> StorageFuture<'_, SessionSaveReceipt> {
         Box::pin(async move {
-            if snapshot
-                .invocations
-                .iter()
-                .any(|record| record.cancellation.is_some())
-                && !self.panicked.swap(true, Ordering::SeqCst)
-            {
+            let stops = decisions(&units).any(|change| match change {
+                SessionChange::StopDecision { .. } => true,
+                SessionChange::ProviderReport { local_stop, .. } => local_stop.is_some(),
+                SessionChange::InputAccepted(record) => record.cancellation.is_some(),
+                _ => false,
+            });
+            if stops && !self.panicked.swap(true, Ordering::SeqCst) {
                 panic!("cancellation persistence panicked");
             }
-            self.backing.save_changes(binding, snapshot, units).await
+            self.backing.save_changes(binding, units).await
         })
     }
     fn erase(&self) -> StorageFuture<'_, ()> {

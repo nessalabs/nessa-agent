@@ -90,7 +90,7 @@ impl Wire {
     }
     pub(super) fn event(&mut self, seq: u64) {
         self.send(OutgoingMessage::Event(
-            EventFrame::push("conversation.changed", &json!({"seq":seq}), seq, seq).unwrap(),
+            EventFrame::push("conversation.listed", &json!({"seq":seq}), seq, seq).unwrap(),
         ));
     }
 }

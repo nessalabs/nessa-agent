@@ -90,11 +90,19 @@ export function harnessInfo(agent) {
   return { name, version }
 }
 
-/** `initialize`'s result: protocol 1, the pinned harness, nothing optional offered. */
+/**
+ * `initialize`'s result: protocol 1, the pinned harness, and `session/resume`,
+ * which both pinned harnesses offer and a gateway needs to carry a turn on
+ * after it restarts. Nothing else optional is offered.
+ */
 export const initializeResult = (agent) => ({
   protocolVersion: 1,
   agentInfo: harnessInfo(agent),
-  agentCapabilities: { loadSession: false, promptCapabilities: {} },
+  agentCapabilities: {
+    loadSession: false,
+    promptCapabilities: {},
+    sessionCapabilities: { resume: {} },
+  },
   authMethods: [],
 })
 

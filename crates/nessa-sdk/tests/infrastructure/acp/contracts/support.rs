@@ -366,6 +366,7 @@ pub(super) fn opencode_configuration(
         "export default { description: 'must not load', args: {}, execute() { throw new Error('loaded') } }",
     )
     .unwrap();
+    let foreign_database = caller_data.join("opencode/foreign.db");
     config.environment.extend([
         ("HOME".into(), caller_home.clone().into_os_string()),
         (
@@ -385,6 +386,14 @@ pub(super) fn opencode_configuration(
         (
             "NESSA_REFUSED_OPENCODE_HOME".into(),
             caller_home.into_os_string(),
+        ),
+        (
+            "OPENCODE_DB".into(),
+            foreign_database.clone().into_os_string(),
+        ),
+        (
+            "NESSA_REFUSED_OPENCODE_DB".into(),
+            foreign_database.into_os_string(),
         ),
     ]);
     config.credential_environment.insert(
@@ -437,10 +446,12 @@ pub(super) fn test_opencode_binding_with_audit(
     audit: Arc<RecordingAudit>,
 ) -> (TempDir, OpencodeAcpProvider) {
     let (root, config, model) = opencode_configuration(mode, capacity);
+    let sessions = root.path().join("opencode-sessions.sqlite3");
     (
         root,
         OpencodeAcpProvider::new(config, &model, TokenLimits::new(900, 100).unwrap(), audit)
-            .unwrap(),
+            .unwrap()
+            .with_session_database(sessions),
     )
 }
 

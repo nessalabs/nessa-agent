@@ -31,14 +31,11 @@ impl SessionStorageLease for PausedObservationLease {
     fn save_changes(
         &self,
         binding: SessionSaveGeneration,
-        snapshot: SessionSnapshot,
         units: Vec<SessionSaveUnit>,
     ) -> StorageFuture<'_, SessionSaveReceipt> {
         Box::pin(async move {
-            if snapshot
-                .invocations
-                .iter()
-                .any(|record| !record.events.is_empty())
+            if decisions(&units)
+                .any(|change| matches!(change, SessionChange::ProviderObservation(_)))
             {
                 let gate = self.gate.lock().unwrap().take();
                 if let Some((entered, release)) = gate {
@@ -46,7 +43,7 @@ impl SessionStorageLease for PausedObservationLease {
                     release.await.unwrap();
                 }
             }
-            self.backing.save_changes(binding, snapshot, units).await
+            self.backing.save_changes(binding, units).await
         })
     }
     fn erase(&self) -> StorageFuture<'_, ()> {

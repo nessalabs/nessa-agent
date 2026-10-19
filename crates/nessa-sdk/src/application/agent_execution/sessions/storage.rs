@@ -406,9 +406,9 @@ pub struct SessionSnapshot {
 
 /// One SDK decision retained for an atomic semantic-record save.
 ///
-/// A record writer receives these in decision order. Existing snapshot adapters
-/// may use the accompanying snapshot alone. No variant authorizes replay to run
-/// a provider or tool effect.
+/// A record writer receives these in decision order. An adapter that stores
+/// whole snapshots applies them with [`SessionSaveUnit::fold`]. No variant
+/// authorizes replay to run a provider or tool effect.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SessionChange {
     /// Provider-verified same-provider model selection, preserving history and context.
@@ -834,10 +834,13 @@ pub trait SessionStorageLease: Send + Sync {
     /// Cancellation retains the adapter's original physical I/O ownership.
     fn load(&self) -> StorageFuture<'_, SessionLoad>;
 
-    /// Persist explicit indivisible semantic units and their final candidate.
-    /// Every unit checkpoint and the complete candidate validate before pending
-    /// reconciliation or append. Record adapters keep all units unpublished until
-    /// one durable completion terminal; snapshot adapters persist the candidate.
+    /// Persist explicit indivisible semantic units. The units are the only
+    /// account of what changed: the saved state is the prior state with them
+    /// applied, in order, and a caller's own state is built the same way, so
+    /// nothing else is passed or compared. Every unit applies before pending
+    /// reconciliation or append, at the cost of the units, not the history.
+    /// Record adapters keep all units unpublished until one durable completion
+    /// terminal.
     ///
     /// Retain the original binding and exact ordered boundaries after failure,
     /// cancellation or a lost reply. An exact retry can resume a confirmed prefix;
@@ -851,12 +854,11 @@ pub trait SessionStorageLease: Send + Sync {
     ///
     /// # Errors
     /// Refuses wrong incarnation/base/generation, a prefix that changes or omits
-    /// durable units, invalid unit/candidate and unavailable persistence. A failure is not proof
+    /// durable units, a unit that does not apply, and unavailable persistence. A failure is not proof
     /// of absence and cannot release a reserved command identity for redispatch.
     fn save_changes(
         &self,
         binding: SessionSaveGeneration,
-        snapshot: SessionSnapshot,
         units: Vec<SessionSaveUnit>,
     ) -> StorageFuture<'_, SessionSaveReceipt>;
 

@@ -14,6 +14,11 @@ export function ClipboardProvider({
   return <Clipboard.Provider value={write}>{children}</Clipboard.Provider>
 }
 
+/** The host's clipboard writer, or null where it supplies none. */
+export function useClipboardWrite(): ((text: string) => Promise<void>) | null {
+  return useContext(Clipboard)
+}
+
 /** A short send failure; technical details remain available through Copy. */
 export function SendFailure({
   details,

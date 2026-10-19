@@ -37,7 +37,7 @@ use nessa_protocol::conversation::read_scope::ReceiverReadScope;
 use nessa_protocol::pairing::wire::NativePairingStatus;
 use nessa_sdk::application::agent_execution::providers::ProviderIdentity;
 use nessa_sdk::application::agent_execution::sessions::{
-    SessionChange, SessionSaveUnit, SessionSnapshot, SessionStorage,
+    SessionChange, SessionSaveUnit, SessionStorage,
 };
 use nessa_sdk::domain::agent_execution::sessions::{
     ExecutionSessionId, ProviderContext, SessionId,
@@ -47,7 +47,7 @@ use nessa_sync::replication::domain::Id;
 use serde_json::json;
 use std::io::{self, Write};
 use std::net::{SocketAddr, TcpStream};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
@@ -72,6 +72,7 @@ struct GatedRead {
     mode: String,
     pages: AtomicUsize,
     heads: Arc<HeadHold>,
+    budget_head: PathBuf,
 }
 /// Live mode's held head read: the head reads counted so far, the one
 /// `hold` named (zero for none), and the `release` that lets it answer.
@@ -90,7 +91,7 @@ impl HeadHold {
     pub(super) fn release(&self) {
         self.release.notify_one();
     }
-    /// Hold the second head read from now: a `watch`'s discovery reads the
+    /// Hold the second head read from now: a `follow`'s discovery reads the
     /// first, its recheck pass the second.
     fn hold_recheck(&self) {
         let next = self.count.load(Ordering::SeqCst) + 2;
@@ -113,13 +114,17 @@ impl RecordReadSource for GatedRead {
                 ("delayed-head", Some(1)) => tokio::time::sleep(Duration::from_secs(6)).await,
                 // The recheck pass `hold` named answers only after `release`,
                 // so a commit acknowledged in between lands while it reads
-                // the head (committed change watches L9).
+                // the head (read-only sync example, row W6).
                 ("live" | "semantic", Some(count))
                     if count == self.heads.held.load(Ordering::SeqCst) =>
                 {
                     self.heads.release.notified().await
                 }
                 ("timeout-head", Some(1)) => std::future::pending::<()>().await,
+                ("budget-head", Some(1)) => {
+                    super::private_write(&self.budget_head, b"");
+                    std::future::pending::<()>().await;
+                }
                 // A cold first head read, as a loaded gateway answers it
                 // (row W17); the next head read succeeds.
                 ("preparing-head", Some(1)) => {
@@ -189,7 +194,6 @@ impl RecordReadSource for GatedRead {
                     lease
                         .save_changes(
                             lease.load().await.unwrap().binding().clone(),
-                            snapshot,
                             vec![SessionSaveUnit::new(vec![SessionChange::ProviderContext {
                                 before,
                                 after,
@@ -338,10 +342,13 @@ async fn gateway_child() {
     let receiver_slot = Arc::new(OnceLock::new());
     let heads = Arc::new(HeadHold::default());
     // Built before bind: the socket answers `conversation.subscribe` from
-    // this service. Other modes keep conversations unset, so they still
-    // answer `conversations_not_configured`.
+    // this service. The modes a `follow` runs against get one over the same
+    // owners; the others keep conversations unset, so they still answer
+    // `conversations_not_configured`.
     let semantic =
         (mode == "semantic").then(|| super::semantic::prepare(storage.clone(), metadata.clone()));
+    let follows = matches!(mode.as_str(), "live" | "preparing-head")
+        .then(|| super::semantic::reader(storage.clone(), metadata.clone()));
     let mut state = ProductRouteState::new(
         ResourceId::new(gateway.clone()).unwrap(),
         OrganizationId::new(organization.clone()).unwrap(),
@@ -381,12 +388,19 @@ async fn gateway_child() {
         mode: mode.clone(),
         pages: AtomicUsize::new(0),
         heads: heads.clone(),
+        budget_head: root.join("budget-head-entered"),
     }))
     .with_catalogue_source(Arc::new(NessaCatalogueReadSource::new(
         metadata.clone(),
         crate::conversation_test_support::access_policy(),
         Id::new(&gateway).unwrap(),
     )));
+    if let Some(service) = follows {
+        state = state
+            .with_conversations(service)
+            // The model the setup conversation was created with.
+            .with_agents_catalog(super::semantic::catalog_for("model"));
+    }
     if let Some(corpus) = &semantic {
         state = state
             .with_conversations(corpus.service.clone())
@@ -525,18 +539,6 @@ async fn gateway_child() {
                 lease
                     .save_changes(
                         lease.load().await.unwrap().binding().clone(),
-                        SessionSnapshot {
-                            id: session,
-                            provider,
-                            provider_context: context,
-                            model_change: None,
-                            current_configuration: None,
-                            invocations: vec![],
-                            queue_history: vec![],
-                            lease: None,
-                            artifacts: Vec::new(),
-                            notes: Vec::new(),
-                        },
                         vec![SessionSaveUnit::new(changes).unwrap()],
                     )
                     .await
@@ -578,10 +580,10 @@ struct LiveDevices {
 /// Live mode's control lines, each answered with `DONE <line>` once its effect
 /// is durable: `commit` appends one provider-context save to the conversation
 /// through this process's own storage owner, so its committed-change watch
-/// publishes; `revoke` removes the first device's receiver binding, as an
+/// wakes the subscriptions; `revoke` removes the first device's receiver binding, as an
 /// owner would, and `revoke b` the second device's. `revoke-credential b`
 /// revokes that device's issued credential, the same registry write mode
-/// `revoke` uses for the first device. `hold` makes the next `watch`'s
+/// `revoke` uses for the first device. `hold` makes the next `follow`'s
 /// recheck pass wait at its head read until `release`.
 async fn live_control(
     storage: Arc<RecordStorage>,
@@ -614,7 +616,6 @@ async fn live_control(
                 lease
                     .save_changes(
                         binding,
-                        snapshot,
                         vec![SessionSaveUnit::new(vec![SessionChange::ProviderContext {
                             before,
                             after,

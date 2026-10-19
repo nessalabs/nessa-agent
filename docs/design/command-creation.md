@@ -3,10 +3,11 @@
 Issue: [#268](https://github.com/nessalabs/nessa-agent/issues/268).
 Owner: SDK command coordinator; host conversation service owns target access,
 deleted status and configuration. Creation, queued submit and exact-turn Stop
-share one principal control stream. The phone client outbox remains [#269](https://github.com/nessalabs/nessa-agent/issues/269).
+share one request namespace per principal; each request keeps its own small
+control stream. The phone client outbox remains [#269](https://github.com/nessalabs/nessa-agent/issues/269).
 
 The host supplies an already verified `ActionContext`, target session identity,
-and SHA-256 fingerprint of its canonical creation input. The principal's control
+and SHA-256 fingerprint of its canonical creation input. The request's control
 stream retains those non-content facts and the original origin. Raw requested
 configuration is passed to the existing conversation creation owner, which stores
 its selected configuration under the existing target deletion policy. The control
@@ -32,38 +33,43 @@ stream nor writes progress.
 | C4 | Crash or process restart after durable `Attempted`, before acknowledged `Ready` | Original target and binding remain; restart/retry returns `Interrupted`, no second initialization. Caller loss while the owner is still running is C7, not this row | `an_interrupted_creation_preserves_its_target_without_reinitialization`, `a_crash_after_provider_open_reopens_the_original_interrupted_receipt` (child publishes its complete effect marker atomically before parent kill) |
 | C5 | `Accepted` saved but no `Attempted` | Exact explicit retry may make the first attempt; read-only lookup performs no writes | `an_accepted_creation_can_make_its_first_attempt_after_reopen` |
 | C6 | Deleted target on new, accepted, attempted, ready or read-only lookup, including after shutdown and reopen of a finished creation | Current host deletion refusal before initialization or returned readiness; control history remains non-content | `deletion_refuses_each_creation_state_and_read_only_lookup`, `deletion_refuses_finished_creation_lookup_and_retry_after_reopen` |
-| C7 | Caller stops waiting while initialization runs | One supervised operation retains its original principal lease and initializer; duplicate request is Busy until completion, then returns the same receipt. Busy is the initializer still publishing, not a lost lease. Lookup waits until that publish is Ready; a five-second bound expired on Windows while the publish was still running (#558) | `caller_loss_keeps_the_original_creation_owner_until_completion`, `direct_sdk_caller_loss_retains_the_original_initializer_and_lease` |
+| C7 | Caller stops waiting while initialization runs | One supervised operation retains its original request lease and initializer; duplicate request is Busy until completion, then returns the same receipt. Busy is the initializer still publishing, not a lost lease. Lookup waits until that publish is Ready; a five-second bound expired on Windows while the publish was still running (#558) | `caller_loss_keeps_the_original_creation_owner_until_completion`, `direct_sdk_caller_loss_retains_the_original_initializer_and_lease` |
 | C8 | Commit acknowledgement is uncertain | No initialization without acknowledged `Attempted`; exact event retry/replay establishes the retained fact, without an alternate ID | `an_uncertain_creation_commit_cannot_authorize_initialization` |
 | C9 | Target deleted while initialization or terminal save runs | Check current target again before returning the receipt; do not erase the original attempted/ready history | `deletion_during_initialization_refuses_the_returned_receipt` |
 | C12 | A second creation request names an already-owned target | Existing creation owner reopens it: no second provider open, original creator retained, and no second creation receipt. A stored receipt would skip the attach a later restart needs | `a_second_creation_request_cannot_reinitialize_the_original_target`, `a_new_request_reopens_an_owned_conversation_and_attaches_after_restart` |
 | C13 | Retirement begins while creation is initializing or saving its terminal | Existing host admission guard spans the complete supervised command, including caller loss; the actual admission writer is excluded while the original terminal save is held, and retirement joins it before storage shutdown | `retirement_joins_the_original_creation_receipt_owner` |
-| C14 | Sixteen principal control owners already hold their original leases | New owner receives typed Busy without a queue; releasing one permits a new owner | `creation_owner_capacity_releases_only_with_the_original_lease` |
+| C14 | Many requests of one principal run at once, including while one initializer is held | Each opens its own request's history; none waits on or is refused for another, and there is no count limit. Only the same request is Busy | `requests_never_wait_on_each_other_and_a_lease_holds_one_request`, `direct_sdk_caller_loss_retains_the_original_initializer_and_lease` |
+| C18 | Two requests create one new conversation at once, the second while the first is still opening its agent | The host runs creates of one conversation one at a time: the second waits, then reopens what the first created, writing no receipt of its own, instead of failing as a conflict | `two_requests_creating_one_conversation_both_open_it` |
 | C15 | Ready control receipt survives but current target metadata is absent | Host reports NotFound, rather than returning saved readiness as current target existence | `a_ready_receipt_does_not_invent_missing_target_metadata` |
 | C16 | Supervised command or control I/O task panics or is unexpectedly cancelled, including before/after Accepted, Attempted and Ready saves | Preserve a typed task fault, separately from backend refusal; retain saved original progress and original provider ownership without replaying an attempted effect | `a_panicked_creation_task_keeps_original_progress_and_a_typed_fault`, `a_panicked_creation_save_preserves_original_phase_and_provider_ownership` |
 | C17 | Preparation publishes a live conversation before its asynchronous provider attachment finishes; an ordinary join waiter or lost caller competes with the creation waiter, or existing close cancels authorization before attachment | Original attachment owner retains its typed completion for every waiter; `Ready` requires successful attachment/publication, and a failure retains `Attempted` | `creation_waits_for_original_attachment_before_saving_ready`, `an_interrupted_creation_preserves_its_target_without_reinitialization`, `competing_attachment_waiters_share_original_completion_and_fault`, `dropping_an_attachment_join_waiter_keeps_the_original_running_owner`, `caller_loss_keeps_the_original_creation_owner_until_completion`, `close_before_attachment_keeps_creation_attempted_after_original_task_completion` |
 | C10 | Malformed, skipped or contradictory restored control events, including foreign principal, altered binding and forged event identity | Typed corruption or principal identity mismatch, no target effect or repaired history | `creation_replay_refuses_impossible_history`, `creation_save_refuses_another_principal_or_original_binding`, `creation_replay_refuses_foreign_or_forged_control_evidence`, `creation_codec_bounds_fields_and_preserves_exact_non_content_identity` |
-| C11 | Principal's finite receipt capacity reached | Existing receipts still readable; refuse a new binding before append | `creation_capacity_preserves_existing_receipts` |
+| C11 | A request's history holds more than its three records, or another request | Typed corruption on replay, no target effect | `creation_replay_refuses_impossible_history` |
 
 Both command and target streams use the same `RecordStorage` runtime; there is no
-cross-stream transaction. Principal control streams use the common command namespace, not one stream per
-operation. Their IDs contain `:`, which the
+cross-stream transaction. Request control streams use the common command
+namespace, one stream per principal request. Their IDs contain `:`, which the
 SDK `SessionId` type cannot hold, so conversation stream identities cannot alias
-control streams. At most sixteen principal control owners hold leases at once; existing storage
-lease accounting owns that limit. A principal's original exclusive lease serializes creation and
-survives caller loss. The process-local lease shares the existing storage owner;
-the runtime's SQLite lock supplies cross-process exclusion. Creation records are
-small atomic events rather than the conversation's potentially oversized semantic
-facts. Replay pages accommodate the shared runtime's published
-`MAX_STORED_RECORD_BYTES` event envelope, even though this schema's records are
-smaller, and retain at most 4,096 receipt bindings per principal. Full retained
-control-history scan cost is separate from page bounds.
+control streams. A request's exclusive lease serializes that request only and
+survives caller loss; a duplicate of a running request is Busy, while other
+requests of the same principal run beside it. An earlier design kept every
+request of a principal in one stream under one lease: two conversations created
+or messaged at the same moment then failed as unavailable storage, a creation
+held every other command of that person for the whole provider start, and the
+4,096th request made every later one of that principal fail. The process-local lease shares the existing
+storage owner; the runtime's SQLite lock supplies cross-process exclusion.
+Creation records are small atomic events rather than the conversation's
+potentially oversized semantic facts. Replay pages accommodate the shared
+runtime's published `MAX_STORED_RECORD_BYTES` event envelope, even though this
+schema's records are smaller; a request's stream holds at most three records.
 The first implementation does not garbage-collect those bindings.
 
 ## Shared request identity
 
-One principal control stream (`nessa:commands:{sha256(principal)}`) holds every
-mutation. `requestId` is unique for that principal across creation, submit and
-Stop. A second operation, target, turn, origin or fingerprint under the same
+Each principal request has one control stream
+(`nessa:commands:{sha256(len(principal) ‖ principal ‖ requestId)}`) holding that
+request's records, whichever family it is. `requestId` is unique for that
+principal across creation, submit and Stop. A second operation, target, turn, origin or fingerprint under the same
 request is a typed conflict before any effect. Read-only lookup opens the stream
 only when it already exists, writes nothing, and still checks current deletion
 before returning a receipt.
@@ -114,7 +120,7 @@ sequenceDiagram
     participant C as Caller
     participant H as ConversationService
     participant R as MutationCoordinator
-    participant S as Principal control stream
+    participant S as Request control stream
     participant A as Agent
     C->>H: Stop turn T with requestId
     H->>R: Verified binding

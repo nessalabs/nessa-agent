@@ -1,6 +1,6 @@
 # Operational limits
 
-Each row is a limit the gateway names when a refusal or a silent close hits it. The number is the owner's, read when this document is rendered; this file is compared to that rendering and is not edited by hand. The client's preparing retries are named here and counted only in `PREPARING_ATTEMPTS` (`crates/nessa-client-core/src/read_only_sync/application/watch.rs`); this document does not copy that count. The client's foreground phone sends are named here and counted only in `FOREGROUND_SENDS` (`crates/nessa-client-core/src/outbox/domain/decide.rs`); this document does not copy that count. A wire field carrying the limit id is a later schema change and is not these rows.
+Each row is a limit the gateway names when a refusal or a silent close hits it. The number is the owner's, read when this document is rendered; this file is compared to that rendering and is not edited by hand. The client's preparing retries are named here and counted only in `PREPARING_ATTEMPTS` (`crates/nessa-client-core/src/read_only_sync/application/follow.rs`); this document does not copy that count. The client's foreground phone sends are named here and counted only in `FOREGROUND_SENDS` (`crates/nessa-client-core/src/outbox/domain/decide.rs`); this document does not copy that count. A wire field carrying the limit id is a later schema change and is not these rows.
 
 | id | tier | effective | owner | what hitting it means |
 | --- | --- | --- | --- | --- |
@@ -8,11 +8,13 @@ Each row is a limit the gateway names when a refusal or a silent close hits it. 
 | product.max_record_response_bytes | fixed | 131072 | protocol/product/v1.json RecordPageResult bounds | a record page past this is refused rather than written to the socket |
 | product.max_client_id_characters | fixed | 256 | protocol/product/v1.json ProductClientMetadata.id maxLength | a client id longer than this is refused at the handshake |
 | product.max_surface_instance_characters | fixed | 256 | protocol/product/v1.json ProductSurface.instance maxLength | a surface instance longer than this is refused at the handshake |
-| server.requests | configured | 128 | config.json limits.requests | an ordinary request past the gateway's admission is refused |
-| server.controls | configured | 32 | config.json limits.controls | a control past the gateway's admission is refused |
-| server.record_reads | configured | 4 | config.json limits.recordReads | a record read past the gateway's admission is refused |
+| server.requests | configured | 16384 | config.json limits.requests | an ordinary request past the gateway's admission is refused |
+| server.controls | configured | 16384 | config.json limits.controls | a control past the gateway's admission is refused |
+| server.record_reads | configured | 1024 | config.json limits.recordReads | a record read past the gateway's admission is refused |
 | server.deletions | configured | 8 | config.json limits.deletions | a deletion past the gateway's admission is refused |
 | server.upload_begins | configured | 16 | config.json limits.uploadBegins | an upload past the gateway's admission is refused |
+| server.live_conversations | configured | 65536 | config.json limits.liveConversations | opening a conversation past this many open at once, each with its agent running, is refused capacity |
+| server.agent_idle_seconds | configured | 120 | config.json limits.agentIdleSeconds | an agent idle this many seconds, nothing queued or waiting and nobody following its conversation, is stopped; the conversation stays open and the next message starts the agent again, resuming its session. 0 never stops one |
 | socket.ordinary_slots | configured | 16 | config.json limits.ordinarySlots | an ordinary frame past this socket's slots is refused |
 | socket.control_slots | configured | 4 | config.json limits.controlSlots | a control frame past this socket's slots is refused |
 | socket.record_slot | fixed | 1 | product socket RECORD_SLOT | a second record frame while one is in flight is refused |
@@ -24,12 +26,9 @@ Each row is a limit the gateway names when a refusal or a silent close hits it. 
 | socket.refusal_lane | fixed | 1 | product socket REFUSAL_LANE | an app refusal waits while one is queued; a non-app refusal on a full lane closes the socket |
 | socket.write_timeout | configured | 5000 | config.json session.writeTimeoutMs | a write that outlasts this closes the socket |
 | socket.record_delivery_deadline | fixed | 30000 | RECORD_SEND_TIMEOUT, the schema's passive delivery budget | a record response still queued at this deadline is noted and dropped |
-| socket.watch_delivery_deadline | fixed | 30000 | RECORD_SEND_TIMEOUT, the same duration as record delivery | a watch frame still queued at this deadline is noted and dropped |
 | socket.subscription_delivery_deadline | fixed | 10000 | protocol/product/v1.json x-subscriptionLimits.deliveryTimeoutMs | a subscription frame the writer has not taken by this ends that subscription as lagging; its end frame unwritten by this closes the socket |
 | socket.conversation_subscriptions | fixed | 8 | protocol/product/v1.json x-subscriptionLimits.conversationTargets | a conversation subscription past this on one socket is refused |
 | socket.list_subscriptions | fixed | 2 | protocol/product/v1.json x-subscriptionLimits.listTargets | a list subscription past this on one socket is refused |
-| record.change_watches | fixed | 64 | MAX_RECORD_CHANGE_WATCHES in crates/nessa-sdk/src/infrastructure/session_storage/record_changes.rs | the record watches every socket shares, devices' and subscriptions' alike; past this a watch or subscription is refused subscription_capacity. A view subscription holds one record watch and each list subscription holds one (any commit); a connection consumes a watch for each followed target |
-| conversation.catalogue_watches | fixed | 64 | MAX_CATALOGUE_CHANGE_WATCHES in crates/nessa-server/src/conversation/infrastructure/catalogue_changes.rs | the catalogue watches every socket shares; a list subscription holds one beside its record watch, as a device's catalogue watch does; past this one is refused subscription_capacity |
 | conversation.share_grants | fixed | 64 | MAX_SHARE_GRANTS_PER_CONVERSATION in crates/nessa-server/src/conversation/application/share_grants.rs, the schema's ConversationSharesResult x-maxGrants | the paired parties one conversation is shared with, any role; one more conversation.share is refused invalid_request. conversation.shares returns them a page at a time |
 | conversation.share_page | fixed | 8 | MAX_SHARE_PAGE in the generated product protocol, the schema's ConversationSharesParams pageSize | the grants one conversation.shares answer holds; a pageSize outside 1 through this is refused invalid_request, and a page of this many grants, each at its largest policy, fits one frame |
 | conversation.drive_grants | fixed | 8 | MAX_DRIVE_GRANTS_PER_CONVERSATION in crates/nessa-server/src/conversation/application/share_grants.rs | the drive grants one conversation holds; one more conversation.share naming drive is refused invalid_request |
@@ -81,7 +80,9 @@ Each row is a limit the gateway names when a refusal or a silent close hits it. 
 | command.max_argv_bytes | fixed | 4096 | CommandWork::MAX_ARGV_BYTES | a `run` whose arguments together are longer is refused before anything is recorded |
 | command.max_cwd_bytes | fixed | 1024 | CommandWork::MAX_CWD_BYTES | a `run` whose working directory is longer is refused before anything is recorded |
 | mcp.built_in_calls | fixed | 8 | built-in MCP server MAX_BUILT_IN_CALLS | a tool call past this many running on one stand-in's connection is answered with an error |
+| agent_tools.waiting_reads | fixed | 4 | MAX_EVENT_READERS in crates/nessa-server/src/conversation/application/agent_tools.rs | a `subscribe` past this many running for one source conversation is refused subscription_capacity; other sources are not counted against it |
+| agent_tools.source_admissions | fixed | 8 | MAX_AGENT_TOOL_ADMISSIONS in crates/nessa-server/src/conversation/application/agent_tools.rs | an agent tool call past this many detached admissions retained by one source conversation is refused unavailable; other sources are not counted against it |
 | mcp.built_in_line_bytes | fixed | 65536 | built-in MCP server MAX_BUILT_IN_LINE_BYTES | a message longer than this ends the stand-in's connection |
 
-| client.preparing_attempts | client | the client's own | `PREPARING_ATTEMPTS` in `crates/nessa-client-core/src/read_only_sync/application/watch.rs` | how many times a preparing read is asked again |
+| client.preparing_attempts | client | the client's own | `PREPARING_ATTEMPTS` in `crates/nessa-client-core/src/read_only_sync/application/follow.rs` | how many times a preparing read is asked again |
 | client.foreground_sends | client | the client's own | `FOREGROUND_SENDS` in `crates/nessa-client-core/src/outbox/domain/decide.rs` | how many times one foreground phone send is asked |

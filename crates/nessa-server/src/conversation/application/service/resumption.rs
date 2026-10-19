@@ -27,7 +27,7 @@
 //! history decides what is owed. A mark left behind costs one opening that
 //! finds nothing; a mark missing loses a turn, so it is written before the
 //! agent is asked.
-use super::{load_conversation, ConversationService, LiveConversation};
+use super::{load_conversation, provider_approval_mode, ConversationService, LiveConversation};
 use crate::conversation::application::{
     ConversationCaller, ConversationError, RevisionHold, UnfinishedTurns,
 };
@@ -116,13 +116,39 @@ async fn non_default_mode(live: &LiveConversation) -> bool {
 }
 
 /// Whether `live`'s agent cannot take a turn until it is closed and opened
-/// again: it awaits its close, or its attachment failed.
-fn stuck(live: &LiveConversation) -> bool {
+/// again: it awaits its close, its attachment failed, or it lost the
+/// conversation's approval mode with its attachment ([`mode_lost`]).
+async fn stuck(live: &LiveConversation) -> bool {
     live.agent.awaits_close()
         || matches!(
             live.agent.attachment_status().phase(),
             AttachmentPhase::Failed(_)
         )
+        || mode_lost(live).await
+}
+
+/// Whether `live`'s agent would open its next attachment at an approval
+/// mode other than the conversation's. A mode changed live is held by the
+/// attachment it was applied on; once that attachment is gone (a failed
+/// turn, a lost process), the next one opens at the mode the agent was
+/// opened with (`Agent::approval_mode`). A turn must never run so: the
+/// agent is closed and the conversation opened again, at its record's mode.
+pub(super) async fn mode_lost(live: &LiveConversation) -> bool {
+    if !matches!(
+        live.agent.attachment_status().phase(),
+        AttachmentPhase::Absent | AttachmentPhase::Failed(_)
+    ) {
+        return false;
+    }
+    let committed = live
+        .projection
+        .lock()
+        .await
+        .view()
+        .selection
+        .as_ref()
+        .map(|selection| selection.approval_mode);
+    committed.is_some_and(|mode| live.agent.approval_mode() != Some(provider_approval_mode(mode)))
 }
 
 /// How many marked conversations the startup sweep opens at once. Each
@@ -219,7 +245,7 @@ impl ConversationService {
             // person's message that closes the same agent is ordered with it.
             let _submissions = self.inner.mode_changes.lock(id).await;
             if let Some(live) = waiting.upgrade() {
-                if stuck(&live) {
+                if stuck(&live).await {
                     // Released before the retry is due, so the retry never
                     // meets the closing agent.
                     if live.agent.is_idle().await {
@@ -284,7 +310,7 @@ impl ConversationService {
         let _ = live.join_attachment_owner().await;
         // An agent that is stuck takes no turn: its retry closes it and
         // opens a new one (`resume_or_retry`, `after_settle`).
-        if stuck(&live)
+        if stuck(&live).await
             || !matches!(
                 live.agent.attachment_status().phase(),
                 AttachmentPhase::Attached | AttachmentPhase::Absent
@@ -478,7 +504,7 @@ impl ConversationService {
         }
         // Released before the retry is due, so the retry never meets the
         // closing agent.
-        if stuck(&live) {
+        if stuck(&live).await {
             self.release_for_reopen(id, live).await;
         }
         self.schedule_retry(id, true).await;

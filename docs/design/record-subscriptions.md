@@ -64,8 +64,12 @@ a second fold (rule "one fold" in the transcript-fold design). A linked device
 follows one conversation with `conversation.subscribe` on a new pinned
 session to the same gateway as its checkpoint read. The two calls do not
 share a connection. The checkpoint read still copies records
-(`conversation.recordsHead` / `recordsPage`). `conversation.watchRecords`
-remains for that retained path until nessa-ios is confirmed to have stopped using `conversation.watchRecords`.
+(`conversation.recordsHead` / `recordsPage`). Subscriptions are the only live
+read path: the product-socket watch (`conversation.watchRecords`,
+`conversation.watchCatalogue`, `conversation.unwatch`) was deleted in #257. The
+example client's bounded `follow` keeps its private record cache fresh by
+running a checkpoint pass whenever a view's cursor moves, on the same
+connection as that pass ([read-only sync example](read-only-sync-example.md#following-a-conversation)).
 `conversation.subscribeList` stays refused to a paired device until #724
 scopes the catalogue head to the device's grants. The desktop shows the
 view's own `truncated` and `transcriptState` (`history` on its transcript).
@@ -94,8 +98,9 @@ One task per subscription, owned by the connection
    read, read again at once. Otherwise wait for a wake. Not `partial`: that
    is an unfinished fact at a confirmed head, which reading again does not
    change, so it would read in a loop.
-5. A read refused for want of a storage read slot (`Busy`, `ReadCapacity`) is
-   tried again a few times with a doubling wait before the subscription is
+5. A storage read waits for a free read thread rather than failing. A read
+   still refused for want of room (`Busy`, or `ReadCapacity` when the view
+   cache holds only pinned entries) is tried again a few times with a doubling wait before the subscription is
    refused (row S23): one commit wakes every subscription at once, and the
    SDK runs a few reads at a time. A list waits `LIST_REREAD_FLOOR` (250 ms)
    after a wake before it reads, so a reply saved every 100 ms costs a few
@@ -184,8 +189,8 @@ kept busy with its own traffic for the whole timeout can end a subscription
 `lagging` too; the client resumes it the same way. A write that has started
 and stalls past the socket's write timeout closes the socket, as every other
 frame does. The terminal frame itself must be written by its deadline or the
-socket closes, as a watch's terminal notice does; so must the subscribe reply,
-by the request's reply deadline, as a watch's reply (row S31): written after
+socket closes; so must the subscribe reply, by the request's reply deadline
+(row S31): written after
 the client stopped waiting, it would name a live subscription the client never
 learns, and every subscribe again would be refused `subscription_duplicate`.
 
@@ -199,7 +204,7 @@ value, and reads happen in the subscription's own task under the server-wide
 
 `product/subscription/target.rs::authorize_batch` is the one place a batch is
 admitted. A subscription's task asks it before it registers any wake source,
-so a session that may not follow takes nothing from the shared watch pools,
+so a session that may not follow registers no watch,
 and again before every read, once the batch holds its `requests` permit: a
 request holds its capacity before it is admitted (`dispatch` does the same), so
 nothing revoked while a batch waits for a permit is read (row S30). An unsubscribe is admitted by the socket before
@@ -211,9 +216,10 @@ conversation, and a list batch, which is refused to a paired device
 ### Limits
 
 `x-subscriptionLimits` publishes `conversationTargets` (8) and `listTargets`
-(two: active and archived) per connection, and `deliveryTimeoutMs` (10000). The SDK and catalogue
-watch registries keep their own producer bounds (64 each); a full one refuses
-`subscription_capacity`. A list frame larger than the 64 KiB frame bound is
+(two: active and archived) per connection, and `deliveryTimeoutMs` (10000).
+Those per-connection limits are the only count: the SDK and catalogue watch
+registries index interest by conversation and owner and set no gateway-wide
+bound of their own (#978). A list frame larger than the 64 KiB frame bound is
 cut, newest first, and marked `complete: false` (row L3): the client walks
 `conversation.observe` for the rest, as it does for any incomplete list. A
 list the service bounds (`MAX_LISTED_CONVERSATIONS`) is incomplete the same
@@ -269,9 +275,9 @@ guarantee (#935).
 | S26 | A followed conversation is closed or stopped (its agent let go) | One frame: the same history, read-only, lifecycle `absent`; the agent is not opened again until a send opens it | `a_closed_conversation_is_shown_let_go_and_not_opened_again` |
 | S27 | A followed conversation has an unfinished approval-mode change | The view shows the change pending; recovery is not run and the agent is not opened | `a_pending_mode_change_is_shown_not_recovered_by_a_follower` |
 | S28 | The agent's opening fails while a follower waits on it (or failed and holds its slot) | The follower is shown the committed history, read-only; `conversation.read` and a send report the failure | `a_failed_opening_holding_its_slot_is_read_by_a_follower_as_its_history` (`tests/conversation/desktop_stop.rs`) |
-| S29 | A subscribe or unsubscribe the session may not make (grant, presence, or no longer current) | Refused with the admission's code; a subscribe takes no watch from the shared pools first | `a_forbidden_subscribe_is_refused_before_it_takes_a_watch`, `a_forbidden_unsubscribe_is_refused` |
+| S29 | A subscribe or unsubscribe the session may not make (grant, presence, or no longer current) | Refused with the admission's code; a subscribe leaves no watch registered | `a_forbidden_subscribe_is_refused_before_it_takes_a_watch`, `a_forbidden_unsubscribe_is_refused` |
 | S30 | Every request permit taken when a batch is woken; the grant is revoked while it waits for one | Ended `refused` with `forbidden`; no frame is read under the old grant, because a batch is admitted only once it holds its capacity, as `dispatch` admits a request | `a_grant_revoked_while_a_batch_waits_for_capacity_ends_it_before_the_read` |
-| S31 | The subscribe reply is not written by the request's reply deadline (the writer held behind other traffic) | The socket closes, as for a watch's reply; the client reconnects and subscribes again, never left with a live subscription it cannot name | `a_subscribe_reply_not_written_by_its_deadline_closes_the_socket`; `the_reply_and_the_last_frame_carry_a_deadline_through_their_write` (unit, `product/subscription/delivery.rs`) |
+| S31 | The subscribe reply is not written by the request's reply deadline (the writer held behind other traffic) | The socket closes; the client reconnects and subscribes again, never left with a live subscription it cannot name | `a_subscribe_reply_not_written_by_its_deadline_closes_the_socket`; `the_reply_and_the_last_frame_carry_a_deadline_through_their_write` (unit, `product/subscription/delivery.rs`) |
 | L1 | List subscription; a catalogue change | A new list frame | `a_list_subscription_follows_the_catalogue` |
 | L2 | A turn starts or ends without a summary change | A new list frame with `running` changed | `a_turn_without_a_summary_change_updates_the_list` |
 | L3 | A list larger than one frame | Cut newest first, `complete: false` | `a_list_too_large_for_one_frame_is_cut_and_marked_incomplete` (unit) |

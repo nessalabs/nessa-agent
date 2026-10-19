@@ -20,7 +20,6 @@ use nessa_protocol::product::generated::{
     AgentsListResult, AgentsListed, MAX_CONNECTION_CONVERSATION_SUBSCRIPTIONS, MAX_SHARE_PAGE,
     SUBSCRIPTION_DELIVERY_TIMEOUT_MS,
 };
-use nessa_sdk::application::agent_execution::sessions::ChangeWatchError;
 use nessa_sdk::domain::agent_execution::sessions::ExecutionSessionId;
 use std::task::Waker;
 use tempfile::TempDir;
@@ -606,18 +605,6 @@ impl SubscriptionFixture {
             binding = writer
                 .save_changes(
                     binding,
-                    SessionSnapshot {
-                        id: session.clone(),
-                        provider: provider.clone(),
-                        provider_context: context.clone(),
-                        model_change: None,
-                        current_configuration: None,
-                        invocations: Vec::new(),
-                        queue_history: Vec::new(),
-                        lease: None,
-                        artifacts: Vec::new(),
-                        notes: Vec::new(),
-                    },
                     vec![SessionSaveUnit::new(vec![change]).unwrap()],
                 )
                 .await
@@ -653,43 +640,22 @@ impl SubscriptionFixture {
         let writer = self.storage.open(id.clone()).await.unwrap();
         let provider = ProviderIdentity::new("gateway-test", "test", "test").unwrap();
         let loaded = writer.load().await.unwrap();
-        let (context, changes) = match loaded.snapshot() {
-            None => (
-                ProviderContext::Absent,
-                vec![SessionChange::Opened {
-                    id: id.clone(),
-                    provider: provider.clone(),
-                    context: ProviderContext::Absent,
-                }],
-            ),
-            Some(snapshot) => {
-                let after = ProviderContext::Recorded(
+        let changes = match loaded.snapshot() {
+            None => vec![SessionChange::Opened {
+                id: id.clone(),
+                provider: provider.clone(),
+                context: ProviderContext::Absent,
+            }],
+            Some(snapshot) => vec![SessionChange::ProviderContext {
+                before: snapshot.provider_context.clone(),
+                after: ProviderContext::Recorded(
                     ExecutionSessionId::new(Uuid::new_v4().to_string()).unwrap(),
-                );
-                (
-                    after.clone(),
-                    vec![SessionChange::ProviderContext {
-                        before: snapshot.provider_context.clone(),
-                        after,
-                    }],
-                )
-            }
+                ),
+            }],
         };
         writer
             .save_changes(
                 loaded.binding().clone(),
-                SessionSnapshot {
-                    id,
-                    provider,
-                    provider_context: context,
-                    model_change: None,
-                    current_configuration: None,
-                    invocations: Vec::new(),
-                    queue_history: Vec::new(),
-                    lease: None,
-                    artifacts: Vec::new(),
-                    notes: Vec::new(),
-                },
                 vec![SessionSaveUnit::new(changes).unwrap()],
             )
             .await
@@ -1241,10 +1207,10 @@ async fn a_grant_revoked_while_a_batch_waits_for_capacity_ends_it_before_the_rea
     client.close().await;
 }
 
-/// Row S31: the subscribe reply is owed by the request's reply deadline, as
-/// a watch's is. A writer held past it closes the socket rather than write
-/// the identity after the client stopped waiting for it, which would leave
-/// a live subscription the client cannot name and every retry refused
+/// Row S31: the subscribe reply is owed by the request's reply deadline. A
+/// writer held past it closes the socket rather than write the identity
+/// after the client stopped waiting for it, which would leave a live
+/// subscription the client cannot name and every retry refused
 /// `subscription_duplicate`.
 #[tokio::test]
 async fn a_subscribe_reply_not_written_by_its_deadline_closes_the_socket() {
@@ -1584,21 +1550,13 @@ async fn a_pending_mode_change_is_shown_not_recovered_by_a_follower() {
     client.close().await;
 }
 
-/// Row S29: a subscribe the session may not make is refused before it takes
-/// a watch: with the SDK's watch pool full, it is refused `forbidden`, not
-/// `subscription_capacity`.
+/// Row S29: a subscribe the session may not make is refused `forbidden` and
+/// leaves no watch behind.
 #[tokio::test]
 async fn a_forbidden_subscribe_is_refused_before_it_takes_a_watch() {
     let fixture = SubscriptionFixture::new().await;
     grants(&fixture.authority, &["server.read"]);
-    let mut held = Vec::new();
-    loop {
-        match fixture.storage.watch_any_committed() {
-            Ok(watch) => held.push(watch),
-            Err(ChangeWatchError::Capacity) => break,
-            Err(error) => panic!("{error:?}"),
-        }
-    }
+    let held = fixture.storage.committed_watches();
     let mut client = fixture.connect();
     client.send(
         "view",
@@ -1610,7 +1568,7 @@ async fn a_forbidden_subscribe_is_refused_before_it_takes_a_watch() {
     client.send("list", "conversation.subscribeList", json!({}));
     let (reply, _) = client.reply("list").await;
     assert_eq!(reply["error"]["code"], "forbidden", "{reply}");
-    drop(held);
+    assert_eq!(fixture.storage.committed_watches(), held);
     client.close().await;
 }
 
@@ -1639,33 +1597,21 @@ async fn a_forbidden_unsubscribe_is_refused() {
 async fn closing_the_socket_drops_every_subscription() {
     let fixture = SubscriptionFixture::new().await;
     let other = fixture.create().await;
+    let before = fixture.storage.committed_watches();
     let mut client = fixture.connect();
     client.subscribe("one", &fixture.id).await;
     client.subscribe("two", &other).await;
     client.send("list", "conversation.subscribeList", json!({}));
     assert_eq!(client.reply("list").await.0["ok"], true);
     client.close().await;
-    // The SDK's watch registry is full again only if all three let go.
-    let held = timeout(EXPECTED, async {
-        loop {
-            let mut held = Vec::new();
-            loop {
-                match fixture.storage.watch_any_committed() {
-                    Ok(watch) => held.push(watch),
-                    Err(ChangeWatchError::Capacity) => break,
-                    Err(error) => panic!("{error:?}"),
-                }
-            }
-            if held.len() == 64 {
-                return held.len();
-            }
-            drop(held);
+    // The SDK's watch registry is back where it was only if all three let go.
+    timeout(EXPECTED, async {
+        while fixture.storage.committed_watches() != before {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })
     .await
-    .unwrap();
-    assert_eq!(held, 64);
+    .expect("every subscription's watch goes with its socket");
     assert_eq!(
         fixture.state.requests.available_permits(),
         fixture.state.limits.requests()
@@ -2083,21 +2029,13 @@ impl SubscriptionFixture {
             let reply = self.call(method, json!({})).await;
             assert_eq!(reply["error"]["code"], "forbidden", "{method}: {reply}");
         }
-        // With the watch pool full, a refused subscribe answers `forbidden`,
-        // not `subscription_capacity`: it took no watch first (row S29).
-        let mut held = Vec::new();
-        loop {
-            match self.storage.watch_any_committed() {
-                Ok(watch) => held.push(watch),
-                Err(ChangeWatchError::Capacity) => break,
-                Err(error) => panic!("{error:?}"),
-            }
-        }
+        // A refused subscribe answers `forbidden` and leaves no watch (row S29).
+        let held = self.storage.committed_watches();
         let mut client = self.connect();
         client.send("list", "conversation.subscribeList", json!({}));
         let (reply, _) = client.reply("list").await;
         assert_eq!(reply["error"]["code"], "forbidden", "{reply}");
-        drop(held);
+        assert_eq!(self.storage.committed_watches(), held);
         client.close().await;
     }
 }
@@ -4627,6 +4565,52 @@ async fn the_agent_catalog_is_sent_again_as_paired_environments_come_and_go() {
     fixture.goes(&f);
     let revoked = client.until(&id, |_| true).await.remove(0);
     assert_eq!(places(&revoked), ["build.example"]);
+    client.close().await;
+}
+
+/// Row E1: `session.challenge` is the socket's event 1, and every event
+/// after it, a waiting-review snapshot or a subscription frame alike, takes
+/// the next number of the socket's one numbering in the order the writer
+/// sends it, so one socket never repeats a number.
+#[tokio::test]
+async fn review_snapshots_and_subscription_frames_continue_one_socket_numbering() {
+    let fixture = SubscriptionFixture::new().await;
+    let (_rules, board) = open_rules();
+    let mut client = connect(
+        fixture.state.clone().with_permission_rules(board.clone()),
+        &fixture.session,
+    );
+    let snapshot = client.next().await;
+    assert_eq!(
+        snapshot["event"],
+        product_event::PERMISSION_REVIEW_WAITING,
+        "{snapshot}"
+    );
+    assert_eq!(snapshot["seq"], CHALLENGE_EVENT_SEQUENCE + 1, "{snapshot}");
+    client.send("agents", "agents.subscribe", json!({}));
+    let (reply, before) = client.reply("agents").await;
+    assert_eq!(reply["ok"], true, "{reply}");
+    assert!(before.is_empty(), "{before:?}");
+    let id = reply["payload"]["subscriptionId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let catalog = client.until(&id, |_| true).await.remove(0);
+    assert_eq!(catalog["seq"], CHALLENGE_EVENT_SEQUENCE + 2, "{catalog}");
+    // A change of the waiting set is the next event after the frame.
+    board.waiting(&ReviewNotice {
+        conversation_id: fixture.id.to_string(),
+        execution_id: ExecutionId::new("turn").unwrap(),
+        permission_id: PermissionId::new("waiting").unwrap(),
+        tool: "Bash".into(),
+    });
+    let changed = client.next().await;
+    assert_eq!(
+        changed["event"],
+        product_event::PERMISSION_REVIEW_WAITING,
+        "{changed}"
+    );
+    assert_eq!(changed["seq"], CHALLENGE_EVENT_SEQUENCE + 3, "{changed}");
     client.close().await;
 }
 

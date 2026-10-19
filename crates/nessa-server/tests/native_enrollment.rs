@@ -12,6 +12,9 @@ mod listener;
 #[cfg(unix)]
 #[path = "device_pairing/mounted.rs"]
 mod mounted;
+/// The one-thread probe's test-only cancellation/cleanup owner and regressions.
+#[path = "device_pairing/infrastructure/one_thread.rs"]
+mod one_thread;
 #[path = "device_pairing/owner_routes.rs"]
 mod owner_routes;
 #[path = "peer_gateways/enroll.rs"]

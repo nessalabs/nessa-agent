@@ -1,0 +1,14 @@
+{
+  "base": "53fd532505693021313040b7aacafb4e5f58fd7f",
+  "finding": "https://github.com/nessalabs/nessa-agent/pull/962#discussion_r4304129564",
+  "row": "H11",
+  "before": "actual claim_host_ownership function and actual new regression test extracted into a minimal port harness; final-interval release fails; other five retained-owner tests pass",
+  "after": "same extracted function/test plus actual retained-owner module: six tests pass; persistent owner stops at five seconds, 100 waits and 101 nonblocking attempts",
+  "limits": "minimal substitutes for GatewayHost and GatewayError; not the full Tauri crate, native acceptance, or full platform CI",
+  "architecture": "104/104 and checker pass with configured Rust toolchain; initial missing cargo PATH attempt retained separately",
+  "source_sha256": {
+    "src-tauri/src/gateway/application/service.rs": "510c32c75a1fe87a135ade264558e78550ad59c2c97077439823f4208452858d",
+    "src-tauri/tests/gateway/application/host_ownership.rs": "a89f674c7e6851587b3227ccb0db9e95b092dfd07efd26c0fe89fbc5ffcac6ad",
+    "docs/design/desktop-host-ownership.md": "8a1c9daa474d93fe153be1e856490f0f966c43b058c56540f19158cb48135457"
+  }
+}

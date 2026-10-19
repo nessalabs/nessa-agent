@@ -12,7 +12,6 @@ use crate::conversation::application::{
 };
 use crate::device_pairing::infrastructure::PairingRuntimeError;
 use crate::mcp_servers::application::Unfinished;
-use crate::product::WatchTaskFault;
 use nessa_auth::application::pairing::PairingWorkerFault;
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter, Result as FmtResult};
@@ -57,8 +56,8 @@ impl<E> Outcome<E> {
     }
 }
 
-/// The two passive readers' physical drains, and whether the deadline they
-/// share with the watch drain passed while either was still unknown.
+/// The two passive readers' physical drains, and whether the shared drain
+/// deadline passed while either was still unknown.
 #[derive(Debug, Default)]
 pub struct ReaderDrain {
     record: Outcome<RecordReadError>,
@@ -88,32 +87,6 @@ impl ReaderDrain {
     }
 }
 
-/// The watch drain: the first task fault it returned, and whether the shared
-/// deadline passed while it was still unknown.
-#[derive(Debug, Default)]
-pub struct WatchDrain {
-    outcome: Outcome<WatchTaskFault>,
-    deadline_exceeded: bool,
-}
-impl WatchDrain {
-    /// The drain's outcome; `Unknown` while original watch tasks still run.
-    pub fn outcome(&self) -> &Outcome<WatchTaskFault> {
-        &self.outcome
-    }
-    /// The first task fault the drain returned, if any.
-    pub fn fault(&self) -> Option<WatchTaskFault> {
-        self.outcome.failed().copied()
-    }
-    /// Whether the shutdown deadline passed before the drain returned.
-    pub fn deadline_exceeded(&self) -> bool {
-        self.deadline_exceeded
-    }
-    /// The drain returned without a fault within the deadline.
-    pub fn confirmed(&self) -> bool {
-        self.outcome.is_ok() && !self.deadline_exceeded
-    }
-}
-
 /// MCP stop (`composition::mcp_servers::stop`): the servers stop whatever
 /// happens, so `Failed` says the drain before it ran out of time — admitted
 /// changes or inspections still running, their outcomes perhaps unrecorded —
@@ -138,7 +111,7 @@ pub enum NativeShutdownFailure {
 /// still pending, or ended without reporting.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ShutdownStage {
-    /// A reader, watch, or review-audit drain outcome is still unknown.
+    /// A reader or review-audit drain outcome is still unknown.
     Drains,
     /// Every drain outcome is known; conversation cleanup's is still unknown.
     Conversations,
@@ -165,7 +138,6 @@ impl Display for ShutdownStage {
 #[derive(Debug, Default)]
 pub struct ShutdownReport {
     readers: ReaderDrain,
-    watches: WatchDrain,
     review_audit: Outcome<ReviewNoticeAuditFailure>,
     /// Absent conversations are recorded as `Ok`: successful no-work evidence.
     conversations: Outcome<ConversationError>,
@@ -180,10 +152,6 @@ impl ShutdownReport {
     /// The two passive readers' drains.
     pub fn readers(&self) -> &ReaderDrain {
         &self.readers
-    }
-    /// The watch drain.
-    pub fn watches(&self) -> &WatchDrain {
-        &self.watches
     }
     /// Review-notice selections: acknowledged, failed, or not yet observed.
     pub fn review_audit(&self) -> &Outcome<ReviewNoticeAuditFailure> {
@@ -207,10 +175,7 @@ impl ShutdownReport {
     }
     /// The first owner, in cleanup order, whose outcome is still unknown.
     pub fn stage(&self) -> ShutdownStage {
-        if !self.readers.complete()
-            || !self.watches.outcome.is_known()
-            || !self.review_audit.is_known()
-        {
+        if !self.readers.complete() || !self.review_audit.is_known() {
             ShutdownStage::Drains
         } else if !self.conversations.is_known() {
             ShutdownStage::Conversations
@@ -226,7 +191,6 @@ impl ShutdownReport {
     /// never confirmed, so only a `Complete` report can be.
     pub fn confirmed(&self) -> bool {
         self.readers.confirmed()
-            && self.watches.confirmed()
             && self.review_audit.is_ok()
             && self.conversations.is_ok()
             && self.held_reads.is_none()
@@ -238,9 +202,6 @@ impl ShutdownReport {
     }
     pub(crate) fn observe_catalogue(&mut self, result: Result<(), CatalogueReadError>) {
         self.readers.catalogue.observe(result);
-    }
-    pub(crate) fn observe_watches(&mut self, result: Result<(), WatchTaskFault>) {
-        self.watches.outcome.observe(result);
     }
     pub(crate) fn observe_review_audit(&mut self, result: Result<(), ReviewNoticeAuditFailure>) {
         self.review_audit.observe(result);
@@ -266,10 +227,6 @@ impl ShutdownReport {
         if !self.readers.complete() {
             self.readers.deadline_exceeded = true;
             tracing::error!("passive reader shutdown exceeded deadline; retaining runtime until physical work ends");
-        }
-        if !self.watches.outcome.is_known() {
-            self.watches.deadline_exceeded = true;
-            tracing::error!("watch shutdown exceeded deadline; retaining runtime until original watch tasks end");
         }
     }
     /// `Ok` only for a confirmed report; otherwise the report is the failure.
@@ -301,10 +258,6 @@ impl Display for ShutdownReport {
         write_outcome(f, "catalogue reader", &self.readers.catalogue, "pending")?;
         if self.readers.deadline_exceeded {
             f.write_str("; readers exceeded deadline")?;
-        }
-        write_outcome(f, "watch drain", &self.watches.outcome, "pending")?;
-        if self.watches.deadline_exceeded {
-            f.write_str("; watch drain exceeded deadline")?;
         }
         write_outcome(f, "review audit", &self.review_audit, "pending")?;
         write_outcome(
@@ -366,7 +319,6 @@ mod tests {
         }
         report.observe_record(Ok(()));
         report.observe_catalogue(Err(CatalogueReadError::WorkerPanicked));
-        report.observe_watches(Ok(()));
         report.observe_review_audit(Ok(()));
         if stage == ShutdownStage::Conversations {
             return report;
@@ -392,23 +344,23 @@ mod tests {
         let cases = [
             (
                 ShutdownStage::Drains,
-                "stage reached: drains; record reader pending; catalogue reader failed WorkerPanicked; readers exceeded deadline; watch drain pending; watch drain exceeded deadline; review audit pending; conversations not started; MCP stop not started; native drain not started",
+                "stage reached: drains; record reader pending; catalogue reader failed WorkerPanicked; readers exceeded deadline; review audit pending; conversations not started; MCP stop not started; native drain not started",
             ),
             (
                 ShutdownStage::Conversations,
-                "stage reached: conversations; record reader ok; catalogue reader failed WorkerPanicked; watch drain ok; review audit ok; conversations pending; MCP stop not started; native drain not started",
+                "stage reached: conversations; record reader ok; catalogue reader failed WorkerPanicked; review audit ok; conversations pending; MCP stop not started; native drain not started",
             ),
             (
                 ShutdownStage::Servers,
-                "stage reached: MCP stop; record reader ok; catalogue reader failed WorkerPanicked; watch drain ok; review audit ok; conversations failed Audit; MCP stop pending; native drain not started",
+                "stage reached: MCP stop; record reader ok; catalogue reader failed WorkerPanicked; review audit ok; conversations failed Audit; MCP stop pending; native drain not started",
             ),
             (
                 ShutdownStage::Native,
-                "stage reached: native drain; record reader ok; catalogue reader failed WorkerPanicked; watch drain ok; review audit ok; conversations failed Audit; MCP stop ok; native drain pending",
+                "stage reached: native drain; record reader ok; catalogue reader failed WorkerPanicked; review audit ok; conversations failed Audit; MCP stop ok; native drain pending",
             ),
             (
                 ShutdownStage::Complete,
-                "stage reached: complete; record reader ok; catalogue reader failed WorkerPanicked; watch drain ok; review audit ok; conversations failed Audit; MCP stop ok; native drain failed ListenerFault(Panic)",
+                "stage reached: complete; record reader ok; catalogue reader failed WorkerPanicked; review audit ok; conversations failed Audit; MCP stop ok; native drain failed ListenerFault(Panic)",
             ),
         ];
         for (stage, line) in cases {
@@ -428,7 +380,6 @@ mod tests {
         assert!(!report.confirmed());
         report.observe_record(Ok(()));
         report.observe_catalogue(Ok(()));
-        report.observe_watches(Ok(()));
         report.observe_review_audit(Ok(()));
         report.observe_conversations(Ok(()));
         report.observe_servers(Ok(()));
@@ -450,7 +401,6 @@ mod tests {
         let mut report = ShutdownReport::default();
         report.observe_record(Ok(()));
         report.observe_catalogue(Ok(()));
-        report.observe_watches(Ok(()));
         report.observe_review_audit(Ok(()));
         report.observe_held_reads(Ok(()));
         report.observe_conversations(Ok(()));
@@ -460,7 +410,6 @@ mod tests {
         let mut report = ShutdownReport::default();
         report.observe_record(Ok(()));
         report.observe_catalogue(Ok(()));
-        report.observe_watches(Ok(()));
         report.observe_review_audit(Ok(()));
         report.observe_held_reads(Err(ArtifactReadError::WorkerPanicked));
         report.observe_conversations(Ok(()));
@@ -473,7 +422,7 @@ mod tests {
         );
         assert_eq!(
             report.into_result().unwrap_err().to_string(),
-            "stage reached: complete; record reader ok; catalogue reader ok; watch drain ok; review audit ok; conversations ok; held reads failed WorkerPanicked; MCP stop ok; native drain ok"
+            "stage reached: complete; record reader ok; catalogue reader ok; review audit ok; conversations ok; held reads failed WorkerPanicked; MCP stop ok; native drain ok"
         );
     }
 
@@ -482,8 +431,7 @@ mod tests {
     #[should_panic(expected = "observed once")]
     fn an_outcome_is_observed_once() {
         let mut report = ShutdownReport::default();
-        report.observe_watches(Ok(()));
         report.observe_review_audit(Ok(()));
-        report.observe_watches(Err(WatchTaskFault::Panic));
+        report.observe_review_audit(Err(ReviewNoticeAuditFailure::TimedOut));
     }
 }

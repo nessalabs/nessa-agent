@@ -877,6 +877,7 @@ pub enum ConversationLeaseCause {
     Revoked,
     Expired,
     Lost,
+    Idle,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]

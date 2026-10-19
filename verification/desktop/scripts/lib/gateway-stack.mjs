@@ -121,7 +121,7 @@ export function scriptedLaunch(agent, { tool, scenario, evidence } = {}) {
  * `as` the gateway's owner (the default) or its panel. With `scripted`, a tool
  * name, the scripted agent is the runtime and calls that tool. With
  * `scenario`, it runs that file. With `evidence`, the run's logs are written
- * there. `options.mode` `prod` previews a production build; the default is a
+ * there. `limits` is the gateway config's `limits` (`startLocalGateway`). `options.mode` `prod` previews a production build; the default is a
  * dev server. Resolves with `{ url, mode, close, client, gateway, timings,
  * token }`: `url` the desktop page, `token()` the owner token, `close()`
  * stops all three. A gateway that does not start is "could not run", with
@@ -130,7 +130,7 @@ export function scriptedLaunch(agent, { tool, scenario, evidence } = {}) {
 export async function startGatewayStack(
   options,
   instance,
-  { as = "owner", scripted, scenario, evidence } = {},
+  { as = "owner", scripted, scenario, evidence, limits } = {},
 ) {
   const agent = options.agent
   if (!["claude", "codex"].includes(agent))
@@ -151,6 +151,7 @@ export async function startGatewayStack(
     path: command.path,
     mcpServer: launch?.mcp ?? { command: process.execPath, args: [serverScript] },
     signedOut: launch?.signedOut ?? false,
+    limits,
   }).catch((error) => {
     // What it said as it failed, on stderr; the result keeps one line.
     if (error.gatewayLog) log(error.gatewayLog.slice(-4000))
@@ -194,19 +195,7 @@ export async function startGatewayStack(
         ? await startPreview(options, stage)
         : await startDevServer(options, stage)
     timings.devServerMs = Date.now() - started
-    // `@nessa/client` is TypeScript in this checkout.
-    const { register } = await import("tsx/esm/api")
-    register()
-    const { NessaClient } = await import("@nessa/client")
-    client = await NessaClient.connect({
-      stage: "ci",
-      url: gateway.url.replace(/^http/, "ws"),
-      role: "surface",
-      surface: { kind: "panel", instance },
-      client: { id: instance, version: "0.1.0", platform: "node" },
-      profile: "product",
-      auth: { credential: as === "panel" ? panelCredential(gateway) : token() },
-    })
+    client = await connectClient(gateway, instance, as)
     return {
       url: dev.url,
       mode: options.mode === "prod" ? "prod" : "dev",
@@ -220,6 +209,31 @@ export async function startGatewayStack(
     await close()
     throw error
   }
+}
+
+/**
+ * A `NessaClient` on `gateway`, named `instance`, signed in `as` its owner or
+ * its panel. A check that restarts the gateway connects a new one after.
+ */
+export async function connectClient(gateway, instance, as = "owner") {
+  // `@nessa/client` is TypeScript in this checkout.
+  const { register } = await import("tsx/esm/api")
+  register()
+  const { NessaClient } = await import("@nessa/client")
+  return NessaClient.connect({
+    stage: "ci",
+    url: gateway.url.replace(/^http/, "ws"),
+    role: "surface",
+    surface: { kind: "panel", instance },
+    client: { id: instance, version: "0.1.0", platform: "node" },
+    profile: "product",
+    auth: {
+      credential:
+        as === "panel"
+          ? panelCredential(gateway)
+          : readFileSync(gateway.token, "utf8").trim(),
+    },
+  })
 }
 
 /** Waits up to `ms` for `check()` to be truthy, and says what it last was. */

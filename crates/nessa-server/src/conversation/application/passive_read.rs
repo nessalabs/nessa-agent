@@ -137,34 +137,6 @@ impl AdmitPassiveRead<'_> {
         })
     }
 
-    /// Whether `session`, admitted to `scope`, may watch its owner's
-    /// catalogue: a watch fires on every change to it, granted or not, so
-    /// the policy decides from whom the session signed in as
-    /// (`catalogue.watch`). Refused, it is `Forbidden`.
-    pub fn catalogue_watch(
-        &self,
-        session: &AuthenticatedSession,
-        scope: &CatalogueReadScope,
-    ) -> Result<(), ReadRefusal> {
-        let ask = AccessAsk {
-            subject: AccessSubject::PairedReader {
-                organization: &scope.organization_id,
-                signed_in_as: session.context().principal_id(),
-                binding_owner: &scope.owner_id,
-                receiver: &scope.receiver_id,
-            },
-            action: AccessAction::CatalogueWatch,
-            resource: AccessResource::Catalogue {
-                organization: &scope.organization_id,
-                owner: &scope.owner_id,
-            },
-            held: None,
-            request: RequestShape::default(),
-            target: None,
-        };
-        paired_refusal(self.access_policy.evaluate(&ask), ReadRefusal::Forbidden)
-    }
-
     pub async fn catalogue_with<T, E, F, Fut>(
         &self,
         session: &AuthenticatedSession,

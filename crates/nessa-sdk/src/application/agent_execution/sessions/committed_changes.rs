@@ -18,11 +18,9 @@ pub enum ChangeWatchState {
     Closed,
 }
 
-/// A bounded source registration was refused before allocating a watch.
+/// A source registration was refused before allocating a watch.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ChangeWatchError {
-    /// The producer's published local registration limit is occupied.
-    Capacity,
     /// The publisher has closed its admission.
     Closed,
 }
@@ -36,7 +34,7 @@ pub(crate) trait CommittedChangeRegistration: Send + Sync {}
 /// cursor, permission or receiver progress. Register before the final authorized
 /// head recheck. A commit before registration is found by that recheck; an
 /// incomplete append or another process's mutation requires fallback reads.
-/// The owning source tests cover capacity, cancellation and last-owner closure.
+/// The owning source tests cover cancellation, retirement and last-owner closure.
 pub struct CommittedChangeWatch {
     signal: Arc<CommittedChangeSignal>,
     // The concrete producer guard owns unregister-on-drop, not the waiter.

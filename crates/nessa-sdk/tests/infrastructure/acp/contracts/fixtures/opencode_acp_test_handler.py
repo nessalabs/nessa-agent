@@ -94,6 +94,14 @@ assert pathlib.Path(os.environ["XDG_STATE_HOME"]).is_relative_to(pathlib.Path(os
 assert pathlib.Path(os.environ["XDG_DATA_HOME"]).is_relative_to(pathlib.Path(os.environ["HOME"]))
 for alternate in ("OPENCODE_CONFIG", "OPENCODE_CONFIG_CONTENT", "OPENCODE_CONFIG_DIR"):
     assert alternate not in os.environ
+# Sessions are kept where the binding says, never where the caller's
+# environment said, and never in the private home that goes with the process:
+# a session must outlive it to be resumed.
+database = os.environ.get("OPENCODE_DB")
+refused_database = os.environ.get("NESSA_REFUSED_OPENCODE_DB")
+assert refused_database is None or database != refused_database
+if database is not None:
+    assert not pathlib.Path(database).is_relative_to(pathlib.Path(os.environ["HOME"]))
 
 (root / "pid").write_text(str(os.getpid()))
 # What Opencode itself opens a session on: its gateway's current default, which

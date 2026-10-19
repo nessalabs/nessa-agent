@@ -292,6 +292,111 @@ pub(super) enum ChangeUndo {
     NoteRetired(usize),
 }
 
+/// Units applied to a [`continuation::Continuation`] that its owner may still
+/// need to take back: how to undo each of their changes, and the changes, to
+/// apply them again. The owner decides how long they stay (the record writer
+/// keeps a binding's units until the binding changes, so a retry can be
+/// checked against the state before them), so the continuation can return to
+/// an earlier state without a copy of it.
+#[derive(Default)]
+pub(crate) struct AppliedUnits {
+    undo: Vec<ChangeUndo>,
+    // Where each unit's undo begins in `undo`.
+    starts: Vec<usize>,
+    units: Vec<Vec<SessionChange>>,
+}
+
+impl continuation::Continuation {
+    /// Apply one unit, and keep in `applied` how to undo it. A refused unit
+    /// changes nothing.
+    pub(crate) fn apply_kept(
+        &mut self,
+        changes: Vec<SessionChange>,
+        applied: &mut AppliedUnits,
+    ) -> Result<(), StorageError> {
+        let mut undo = Vec::new();
+        if let Err(refusal) = self.stage(&changes, &mut undo) {
+            self.rollback(undo);
+            return Err(refusal.error);
+        }
+        applied.starts.push(applied.undo.len());
+        applied.undo.extend(undo);
+        applied.units.push(changes);
+        Ok(())
+    }
+
+    /// How many units `applied` holds.
+    pub(crate) fn applied_len(applied: &AppliedUnits) -> usize {
+        applied.units.len()
+    }
+
+    /// Return to the state before every unit in `applied`, and forget them.
+    pub(crate) fn revert(&mut self, applied: &mut AppliedUnits) {
+        self.revert_after(applied, 0);
+    }
+
+    /// Return to the state after the first `keep` units in `applied`, and
+    /// forget the rest.
+    pub(crate) fn revert_after(&mut self, applied: &mut AppliedUnits, keep: usize) {
+        let Some(&start) = applied.starts.get(keep) else {
+            return;
+        };
+        self.rollback(applied.undo.split_off(start));
+        applied.starts.truncate(keep);
+        applied.units.truncate(keep);
+    }
+
+    /// Run `read` on the state before the units in `applied`, then apply
+    /// them again. Its cost is those units', not the history's.
+    pub(crate) fn before_applied<T>(
+        &mut self,
+        applied: &mut AppliedUnits,
+        read: impl FnOnce(&mut Self) -> T,
+    ) -> Result<T, StorageError> {
+        self.after_applied(applied, 0, read)
+    }
+
+    /// Run `read` on the state after only the first `keep` units in
+    /// `applied`, then apply the rest again.
+    pub(crate) fn after_applied<T>(
+        &mut self,
+        applied: &mut AppliedUnits,
+        keep: usize,
+        read: impl FnOnce(&mut Self) -> T,
+    ) -> Result<T, StorageError> {
+        let Some(&start) = applied.starts.get(keep) else {
+            return Ok(read(self));
+        };
+        let units = applied.units.split_off(keep);
+        applied.starts.truncate(keep);
+        self.rollback(applied.undo.split_off(start));
+        let value = read(self);
+        for changes in units {
+            // They applied to this same state before, so they apply again.
+            self.apply_kept(changes, applied)
+                .map_err(|error| corrupt(format!("applied units no longer apply: {error}")))?;
+        }
+        Ok(value)
+    }
+
+    /// Whether `units` apply in order to this state. It is left as it was.
+    pub(crate) fn check_units(
+        &mut self,
+        units: &[super::SessionSaveUnit],
+    ) -> Result<(), StorageError> {
+        let mut undo = Vec::new();
+        let mut result = Ok(());
+        for unit in units {
+            if let Err(refusal) = self.stage(unit.changes(), &mut undo) {
+                result = Err(refusal.error);
+                break;
+            }
+        }
+        self.rollback(undo);
+        result
+    }
+}
+
 impl continuation::Continuation {
     pub(super) fn stage(
         &mut self,

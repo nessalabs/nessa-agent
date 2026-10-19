@@ -506,6 +506,9 @@ mod startup_responses;
 #[path = "worker/response_deadlines.rs"]
 mod response_deadlines;
 
+#[path = "worker/audit_deadlines.rs"]
+mod audit_deadlines;
+
 #[test]
 fn questions_are_advertised_in_the_shape_acp_reads_and_only_where_answerable() {
     // ACP's schema reads `elicitation.form` as an object and discards anything

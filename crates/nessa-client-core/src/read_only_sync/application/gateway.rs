@@ -1,6 +1,5 @@
 use nessa_protocol::product_contract::generated::{
-    CatalogueReadErrorCode, ChangeWatchErrorCode, ConversationErrorCode, RecordReadErrorCode,
-    SessionCloseReason,
+    CatalogueReadErrorCode, ConversationErrorCode, RecordReadErrorCode, SessionCloseReason,
 };
 use nessa_protocol::product_contract::{connection_outcome, ConnectionOutcome};
 use std::io::{Read, Result as IoResult, Write};
@@ -94,8 +93,6 @@ pub(crate) enum GatewayError {
     Busy,
     Record(RecordReadErrorCode),
     Catalogue(CatalogueReadErrorCode),
-    /// The gateway refused a change-watch request with its typed code.
-    Watch(ChangeWatchErrorCode),
     /// The gateway refused one `artifact.read` range with its typed code.
     HeldFile(HeldFileRefusal),
     /// The gateway refused `conversation.subscribe` or `conversation.unsubscribe`

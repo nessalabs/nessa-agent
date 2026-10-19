@@ -1,5 +1,4 @@
 use super::operational_limits::OperationalLimits;
-use super::{change_watch::WatchOwners, WatchTaskFault};
 use crate::agent_install::application::AgentInstallations;
 use crate::agents::application::{AgentProbe, SharedAgentReadiness};
 use crate::agents::infrastructure::NativeHooksPreferences;
@@ -11,9 +10,8 @@ use crate::conversation::application::{
     CatalogueReadSource, ConversationAccessPolicyEvaluator, ConversationMetadataReader,
     ConversationRepository, ConversationService, FenceCapture, McpAppAudit,
     OwnerPhonePolicyEvaluator, OwnerPhoneReceiverAuthority, ReceiverAuthority, RecordReadSource,
-    ReviewNoticeAuditor, ShareGrants, WatchCatalogue, WatchNamespaces, WatchRecords,
+    ReviewNoticeAuditor, ShareGrants, WatchCatalogue, WatchRecords,
 };
-use crate::conversation::infrastructure::UuidWatchNamespaces;
 pub(crate) use crate::core::limit_log::note_limit;
 use crate::device_pairing::infrastructure::PairingOwnerCommands;
 use crate::mcp_servers::{
@@ -31,9 +29,7 @@ use nessa_auth::{
     domain::{AudienceId, OrganizationId, Resource, ResourceId},
 };
 use nessa_protocol::clock::Clock as UptimeClock;
-use nessa_protocol::product::generated::{
-    AgentsListResult, MAX_GLOBAL_CHANGE_WATCHES, MAX_PRINCIPAL_CHANGE_WATCHES,
-};
+use nessa_protocol::product::generated::AgentsListResult;
 use serde_json::Value;
 use std::{
     sync::Arc,
@@ -85,10 +81,14 @@ pub struct ProductRouteState {
     /// Physical record reads or pending record replies, kept separate from
     /// command and control admission. How many is [`OperationalLimits`].
     pub(crate) record_reads: Arc<Semaphore>,
-    pub(super) change_watches: Arc<WatchOwners>,
+    /// What wakes a subscription: committed record changes and changes to
+    /// an owner's catalogue.
     pub(crate) record_watches: Option<Arc<dyn WatchRecords>>,
     pub(crate) catalogue_watches: Option<Arc<dyn WatchCatalogue>>,
-    pub(crate) watch_namespaces: Arc<dyn WatchNamespaces>,
+    /// Becomes true once host cleanup begins. Every authenticated socket
+    /// then closes `temporary_unavailable`, so a client reconnects after the
+    /// restart instead of reading from a gateway that is stopping.
+    pub(crate) closing: Arc<tokio::sync::watch::Sender<bool>>,
     /// Beginning an upload has capacity of its own. It opens no provider, so it
     /// does not belong behind reads and opens; and it sweeps tickets, reads
     /// holds, and writes audit records, so it must never be what keeps a
@@ -245,10 +245,17 @@ pub struct ProductDependencies {
 }
 
 impl ProductRouteState {
-    /// Close only watch admission; original admitted authority tasks keep their permits.
-    /// Normal host cleanup consumes this before polling reader or watch drain.
-    pub(crate) fn close_watch_admission(&self) {
-        self.change_watches.close();
+    /// Begin host cleanup: every authenticated socket closes
+    /// `temporary_unavailable` ([`Self::closed`]).
+    pub(crate) fn close_sockets(&self) {
+        self.closing.send_replace(true);
+    }
+
+    /// Resolves once [`Self::close_sockets`] has been called, at once if it
+    /// already was.
+    pub(crate) async fn closed(&self) {
+        let mut closing = self.closing.subscribe();
+        let _ = closing.wait_for(|closing| *closing).await;
     }
 
     /// Admit no more `mcpServers.save`, `.remove` or `.inspect` — each later
@@ -263,13 +270,6 @@ impl ProductRouteState {
         }
     }
 
-    /// Join the distinct actual watch resource after closing admission/connection interest.
-    /// The normal host report retains its returned first fault alongside reader outcomes.
-    pub(crate) async fn drain_watches(&self) -> Result<(), WatchTaskFault> {
-        self.close_watch_admission();
-        self.change_watches.drain().await
-    }
-
     /// Bind trusted gateway ownership and audience to an isolated dependency scope.
     pub fn new(
         gateway_id: ResourceId,
@@ -277,7 +277,7 @@ impl ProductRouteState {
         audience: AudienceId,
         dependencies: ProductDependencies,
     ) -> Self {
-        let limits = OperationalLimits::default();
+        let limits = OperationalLimits::small();
         Self {
             browser_sessions: None,
             browser_session_id: None,
@@ -288,13 +288,9 @@ impl ProductRouteState {
             requests: Arc::new(Semaphore::new(limits.requests())),
             controls: Arc::new(Semaphore::new(limits.controls())),
             record_reads: Arc::new(Semaphore::new(limits.record_reads())),
-            change_watches: Arc::new(WatchOwners::new(
-                MAX_GLOBAL_CHANGE_WATCHES,
-                MAX_PRINCIPAL_CHANGE_WATCHES,
-            )),
             record_watches: None,
             catalogue_watches: None,
-            watch_namespaces: Arc::new(UuidWatchNamespaces),
+            closing: Arc::new(tokio::sync::watch::Sender::new(false)),
             upload_begins: Arc::new(Semaphore::new(limits.upload_begins())),
             artifact_reads: Arc::new(Semaphore::new(HeldReads::CONCURRENT_READS)),
             deletions: Arc::new(Semaphore::new(limits.deletions())),
@@ -442,7 +438,8 @@ impl ProductRouteState {
         self
     }
 
-    /// Compose the actual local producers alongside independently admitted readers.
+    /// Compose the local producers of committed record and catalogue
+    /// changes that wake subscriptions.
     pub fn with_change_watches(
         mut self,
         records: Arc<dyn WatchRecords>,
@@ -450,12 +447,6 @@ impl ProductRouteState {
     ) -> Self {
         self.record_watches = Some(records);
         self.catalogue_watches = Some(catalogue);
-        self
-    }
-
-    /// Inject connection identity minting for host substitution and deterministic tests.
-    pub fn with_watch_namespaces(mut self, namespaces: Arc<dyn WatchNamespaces>) -> Self {
-        self.watch_namespaces = namespaces;
         self
     }
 

@@ -9,6 +9,7 @@ use super::{
     artifacts::ArtifactRefusal,
     attachment::AttachmentLease,
     notes::{NoteAdmission, NoteRefusal, NoteSelection},
+    records::{continuation::Continuation, AppliedUnits},
     steering_position::SteeringPosition,
     ArtifactRecord, CurrentLease, InvocationCancellationEvent, InvocationRecord,
     InvocationSchedulingEvent, LeaseRecord, MessageCommitClock, MessageCommitSleep, NoteCandidates,
@@ -20,8 +21,8 @@ use crate::application::agent_execution::{
     agents::AgentError,
     caller_wake::{contain_caller_wake, CallerWaiter},
     executions::{
-        limits::{reserve_observation_slot, ObservationUsage},
-        ExecutionEvent, ExecutionRequest, ExecutionUpdate, SubmissionMode, Submitter,
+        limits::ObservationUsage, ExecutionEvent, ExecutionRequest, ExecutionUpdate,
+        SubmissionMode, Submitter,
     },
     permissions::ActionContext,
     providers::{
@@ -33,8 +34,8 @@ use crate::application::agent_execution::{
 };
 use crate::domain::agent_execution::{
     executions::{
-        ExecutionId, ExecutionOutcome, Initiation, InvocationHistory, InvocationKind,
-        InvocationObservation, InvocationStage, QueueMutation, QueueOrderChange, SchedulingCause,
+        ExecutionId, ExecutionOutcome, Initiation, InvocationKind, InvocationStage, QueueMutation,
+        QueueOrderChange, SchedulingCause,
     },
     permissions::PermissionRequest,
     prompts::NoteContext,
@@ -270,11 +271,13 @@ impl Drop for InvocationObservations<'_> {
 struct Evidence {
     save_generation: Option<SessionSaveGeneration>,
     event_usage: HashMap<ExecutionId, ObservationUsage>,
-    // Derived live text validation only. Saves invalidate it before any await;
-    // restoration and consequential boundaries still validate complete evidence.
-    message_histories: HashMap<ExecutionId, (usize, InvocationHistory)>,
-    observed: Option<SessionSnapshot>,
-    committed: Option<SessionSnapshot>,
+    // The conversation as observed: the saved records with `pending` applied
+    // after them. It changes only by applying a unit ([`Self::record`]), the
+    // same way storage applies it, so it can never disagree with what is saved.
+    observed: Continuation,
+    // How to undo each pending unit, so the saved conversation can be read
+    // without keeping a copy of it.
+    applied: AppliedUnits,
     // Decisions retained after observation but before a confirmed save. A
     // retry submits the same ordered facts, including earlier failed writes.
     pending: Vec<SessionSaveUnit>,
@@ -294,12 +297,36 @@ impl Evidence {
             .clone()
             .ok_or_else(|| StorageError::Corrupt("session has not loaded its save binding".into()))
     }
-    fn append_unit(&mut self, changes: Vec<SessionChange>) {
-        self.pending
-            .push(SessionSaveUnit::new(changes).expect("SDK decision boundary is nonempty"));
+    fn observed(&self) -> Option<&SessionSnapshot> {
+        self.observed.snapshot.as_ref()
     }
-    fn push_change(&mut self, change: SessionChange) {
-        self.append_unit(vec![change]);
+    /// Apply one decision boundary to the observed conversation and retain it
+    /// for the next save. A unit that does not apply changes nothing.
+    fn record(&mut self, changes: Vec<SessionChange>) -> Result<(), StorageError> {
+        let unit = SessionSaveUnit::new(changes.clone())?;
+        self.observed.apply_kept(changes, &mut self.applied)?;
+        self.pending.push(unit);
+        Ok(())
+    }
+    /// Forget every pending unit after the first `keep`, as if never observed.
+    fn forget_after(&mut self, keep: usize) {
+        self.observed.revert_after(&mut self.applied, keep);
+        self.pending.truncate(keep);
+    }
+    /// The pending units are durable: the observed conversation is saved.
+    fn saved(&mut self, next: SessionSaveGeneration) {
+        self.applied = AppliedUnits::default();
+        self.pending.clear();
+        self.message_commit = None;
+        self.save_generation = Some(next);
+    }
+    /// The conversation as last saved: the observed one without its pending
+    /// units. Its cost is a copy of it plus the pending units, never a
+    /// comparison or a second retained copy.
+    fn committed(&mut self) -> Option<SessionSnapshot> {
+        self.observed
+            .before_applied(&mut self.applied, |state| state.snapshot.clone())
+            .expect("pending units apply again to the state they applied to")
     }
 }
 const MESSAGE_COMMIT_DELAY: Duration = Duration::from_millis(100);
@@ -357,10 +384,7 @@ impl SessionManager {
     /// docs/agent_execution/lifecycle.md.
     pub async fn snapshot(&self) -> Option<SessionSnapshot> {
         let waiter = CallerWaiter::CommittedSnapshot(self.id.clone());
-        contain_caller_wake(waiter, async {
-            self.evidence.lock().await.committed.clone()
-        })
-        .await
+        contain_caller_wake(waiter, async { self.evidence.lock().await.committed() }).await
     }
     #[cfg(test)]
     pub(crate) async fn pending_message_deadline(
@@ -432,7 +456,7 @@ impl SessionManager {
         kind: SessionConfigurationKind,
     ) -> Result<(), StorageError> {
         let mut evidence = self.evidence.lock().await;
-        let snapshot = evidence.observed.as_mut().ok_or_else(|| {
+        let snapshot = evidence.observed().ok_or_else(|| {
             StorageError::Corrupt("configuration change before preparation".into())
         })?;
         let record = SessionConfigurationRecord::new(
@@ -446,8 +470,7 @@ impl SessionManager {
             actor,
             kind,
         );
-        snapshot.current_configuration = Some(record.clone());
-        evidence.push_change(SessionChange::ConfigurationChanged(record));
+        evidence.record(vec![SessionChange::ConfigurationChanged(record)])?;
         catch_storage_operation(|| Box::pin(self.save_observed(&mut evidence))).await
     }
 
@@ -496,7 +519,7 @@ impl SessionManager {
         change: ModelChange,
         actor: ActionContext,
     ) -> Result<(), AgentError> {
-        if self.evidence.lock().await.observed.is_some() || self.attachment.needs_cleanup() {
+        if self.evidence.lock().await.observed().is_some() || self.attachment.needs_cleanup() {
             return Err(AgentError::Busy);
         }
         let saved = catch_storage_operation(|| self.storage_lease.load())
@@ -506,7 +529,7 @@ impl SessionManager {
             return Err(AgentError::Storage(StorageError::Unresolved));
         }
         let (saved, generation) = saved.into_checked(&self.id).map_err(AgentError::Storage)?;
-        let Some(mut snapshot) = saved else {
+        let Some(snapshot) = saved else {
             return Ok(());
         };
         if &snapshot.provider != change.before() {
@@ -528,24 +551,12 @@ impl SessionManager {
             return Err(AgentError::Busy);
         }
         let configuration = change.requested_configuration().clone();
-        snapshot.provider = change.after().clone();
-        let record =
-            ModelChangeRecord::new(change.clone(), actor.clone(), configuration.clone(), None);
-        snapshot.current_configuration = Some(SessionConfigurationRecord::new(
-            Some(snapshot.current_configuration.as_ref().map_or_else(
-                || record.change().prior_configuration().clone(),
-                |record| record.after().clone(),
-            )),
-            configuration,
-            actor,
-            SessionConfigurationKind::Model,
-        ));
-        snapshot.model_change = Some(record.clone());
+        let record = ModelChangeRecord::new(change, actor, configuration, None);
         let unit = SessionSaveUnit::new(vec![SessionChange::ModelChanged(record)])
             .map_err(AgentError::Storage)?;
         let receipt = catch_storage_operation(|| {
             self.storage_lease
-                .save_changes(generation.clone(), snapshot, vec![unit])
+                .save_changes(generation.clone(), vec![unit])
         })
         .await
         .map_err(AgentError::Storage)?;
@@ -564,30 +575,14 @@ impl SessionManager {
         actor: ActionContext,
     ) -> Result<(), StorageError> {
         let mut evidence = self.evidence.lock().await;
-        let snapshot = evidence.observed.as_mut().ok_or_else(|| {
+        let snapshot = evidence.observed().ok_or_else(|| {
             StorageError::Corrupt("model change before session preparation".into())
         })?;
         if &snapshot.provider != change.before() {
             return Err(StorageError::IdentityMismatch);
         }
-        snapshot.provider = change.after().clone();
-        let record = ModelChangeRecord::new(
-            change.clone(),
-            actor.clone(),
-            configuration.clone(),
-            Some(timing),
-        );
-        snapshot.current_configuration = Some(SessionConfigurationRecord::new(
-            Some(snapshot.current_configuration.as_ref().map_or_else(
-                || record.change().prior_configuration().clone(),
-                |record| record.after().clone(),
-            )),
-            configuration,
-            actor,
-            SessionConfigurationKind::Model,
-        ));
-        snapshot.model_change = Some(record.clone());
-        evidence.push_change(SessionChange::ModelChanged(record));
+        let record = ModelChangeRecord::new(change, actor, configuration, Some(timing));
+        evidence.record(vec![SessionChange::ModelChanged(record)])?;
         catch_storage_operation(|| Box::pin(self.save_observed(&mut evidence))).await
     }
 
@@ -610,8 +605,7 @@ impl SessionManager {
         let unfinished = saved.state() == SessionLoadState::Unfinished;
         let (saved, mut save_generation) =
             saved.into_checked(&self.id).map_err(AgentError::Storage)?;
-        let compacted = saved.as_ref().cloned();
-        drop(saved);
+        let compacted = saved;
         let identity = provider.identity();
         if compacted
             .as_ref()
@@ -620,52 +614,38 @@ impl SessionManager {
             return Err(AgentError::Storage(StorageError::IdentityMismatch));
         }
         let created = compacted.is_none();
-        let mut snapshot = compacted.unwrap_or_else(|| SessionSnapshot {
-            model_change: None,
-            current_configuration: None,
-            queue_history: Vec::new(),
-            lease: None,
-            artifacts: Vec::new(),
-            notes: Vec::new(),
-            id: self.id.clone(),
-            provider: identity,
-            provider_context: ProviderContext::Absent,
-            invocations: Vec::new(),
-        });
+        let restore_queue = match &compacted {
+            Some(snapshot) => !super::queue_validation::replay(snapshot)
+                .map_err(AgentError::Storage)?
+                .is_empty(),
+            None => false,
+        };
+        let mut observed = Continuation::restore(compacted).map_err(AgentError::Storage)?;
         let mut changes = if created {
             vec![SessionChange::Opened {
-                id: snapshot.id.clone(),
-                provider: snapshot.provider.clone(),
-                context: snapshot.provider_context.clone(),
+                id: self.id.clone(),
+                provider: identity,
+                context: ProviderContext::Absent,
             }]
         } else {
             Vec::new()
         };
-        if !super::queue_validation::replay(&snapshot)
-            .map_err(AgentError::Storage)?
-            .is_empty()
-        {
-            Self::append_queue_mutation(&mut snapshot, QueueMutation::Restored, None)
-                .map_err(AgentError::Storage)?;
-            changes.push(SessionChange::QueueDecision(
-                snapshot
-                    .queue_history
-                    .last()
-                    .expect("restoration decision")
-                    .clone(),
-            ));
+        if restore_queue {
+            changes.push(SessionChange::QueueDecision(QueueHistoryRecord {
+                mutation: QueueMutation::Restored,
+                actor: None,
+                scheduling_length: None,
+            }));
         }
         if unfinished && changes.is_empty() {
             return Err(AgentError::Storage(StorageError::Unresolved));
         }
         if !changes.is_empty() {
+            observed.apply_unit(&changes).map_err(AgentError::Storage)?;
             let unit = SessionSaveUnit::new(changes).map_err(AgentError::Storage)?;
             let receipt = catch_storage_operation(|| {
-                self.storage_lease.save_changes(
-                    save_generation.clone(),
-                    snapshot.clone(),
-                    vec![unit],
-                )
+                self.storage_lease
+                    .save_changes(save_generation.clone(), vec![unit])
             })
             .await
             .map_err(StorageError::bounded)
@@ -683,13 +663,17 @@ impl SessionManager {
                 .next_for(&save_generation, 1)
                 .map_err(AgentError::Storage)?;
         }
-        let context = snapshot.provider_context.clone();
+        let context = observed
+            .snapshot
+            .as_ref()
+            .expect("prepared session")
+            .provider_context
+            .clone();
         *self.evidence.lock().await = Evidence {
             save_generation: Some(save_generation),
             event_usage: HashMap::new(),
-            message_histories: HashMap::new(),
-            observed: Some(snapshot.clone()),
-            committed: Some(snapshot),
+            observed,
+            applied: AppliedUnits::default(),
             pending: Vec::new(),
             message_commit: None,
         };
@@ -704,14 +688,15 @@ impl SessionManager {
         // Held until this returns: every path that keeps what the open
         // launched arms the lease first, so an observer never sees neither.
         let _open = self.attachment.opening();
-        let snapshot = self
+        let restore = self
             .evidence
             .lock()
             .await
-            .observed
-            .clone()
-            .expect("prepared session evidence");
-        let restore = snapshot.provider_context.recorded().cloned();
+            .observed()
+            .expect("prepared session evidence")
+            .provider_context
+            .recorded()
+            .cloned();
         let opening = catch_unwind(AssertUnwindSafe(|| {
             provider.open(ProviderOpenRequest::new(
                 self.id.clone(),
@@ -851,56 +836,34 @@ impl SessionManager {
         // while open was pending cannot be overwritten by the pre-open view.
         let save_result = {
             let mut evidence = self.evidence.lock().await;
-            let next = evidence
-                .observed
-                .as_mut()
-                .expect("prepared session evidence");
-            let before = next.provider_context.clone();
-            next.provider_context = ProviderContext::Recorded(session.id().clone());
-            let next = next.clone();
-            if before != next.provider_context {
-                evidence.push_change(SessionChange::ProviderContext {
-                    before,
-                    after: next.provider_context.clone(),
-                });
-            }
-            let result = if evidence.pending.is_empty() {
+            let before = evidence
+                .observed()
+                .expect("prepared session evidence")
+                .provider_context
+                .clone();
+            let after = ProviderContext::Recorded(session.id().clone());
+            let recorded = if before == after {
                 Ok(())
             } else {
-                let generation = evidence.generation();
-                match generation {
+                evidence.record(vec![SessionChange::ProviderContext { before, after }])
+            };
+            match recorded {
+                Err(error) => Err(error),
+                Ok(()) if evidence.pending.is_empty() => Ok(()),
+                Ok(()) => match evidence.generation() {
                     Ok(generation) => {
                         let result = catch_storage_operation(|| {
-                            self.storage_lease.save_changes(
-                                generation.clone(),
-                                next.clone(),
-                                evidence.pending.clone(),
-                            )
+                            self.storage_lease
+                                .save_changes(generation.clone(), evidence.pending.clone())
                         })
                         .await
-                        .map_err(StorageError::bounded);
-                        match result {
-                            Ok(receipt) => {
-                                match receipt.next_for(&generation, evidence.pending.len()) {
-                                    Ok(next) => {
-                                        evidence.save_generation = Some(next);
-                                        Ok(())
-                                    }
-                                    Err(error) => Err(error),
-                                }
-                            }
-                            Err(error) => Err(error),
-                        }
+                        .map_err(StorageError::bounded)
+                        .and_then(|receipt| receipt.next_for(&generation, evidence.pending.len()));
+                        result.map(|next| evidence.saved(next))
                     }
                     Err(error) => Err(error),
-                }
-            };
-            if result.is_ok() {
-                evidence.committed = Some(next);
-                evidence.pending.clear();
-                evidence.message_commit = None;
+                },
             }
-            result
         };
         if let Err(error) = save_result {
             let cleanup_result = self.attachment.cleanup().await;
@@ -979,10 +942,7 @@ impl SessionManager {
         // for it retires and takes notes as of its own admission.
         let now_ms = self.message_commit_clock.unix_milliseconds();
         tokio::spawn(async move {
-            let snapshot = evidence
-                .observed
-                .as_ref()
-                .expect("initialized agent session");
+            let snapshot = evidence.observed().expect("initialized agent session");
             if snapshot
                 .invocations
                 .iter()
@@ -1006,7 +966,6 @@ impl SessionManager {
                     .find(|record| &record.request.execution_id == execution)
             })
             .map_err(AgentError::UnknownApp)?;
-            let mut next = snapshot.clone();
             // A steered message's offset is its target's saved event count.
             // A target not saved has none: a defensive refusal of an
             // invariant, since no `Agent` entry reaches it (a native steer
@@ -1029,12 +988,7 @@ impl SessionManager {
                 .transpose()?;
             let NoteSelection { retired, taken } =
                 super::notes::select(snapshot, &notes.candidates, notes.takes_notes, now_ms);
-            for record in &retired {
-                if let Some(note) = next.notes.iter_mut().find(|note| note.id == record.id) {
-                    note.retired = Some(record.retirement);
-                }
-            }
-            next.invocations.push(InvocationRecord {
+            let record = InvocationRecord {
                 target_event_offset,
                 submission,
                 request,
@@ -1049,30 +1003,25 @@ impl SessionManager {
                 local_outcome: None,
                 cancellation: None,
                 result: None,
-            });
+            };
+            let execution_id = record.request.execution_id.clone();
             // Reserve identity before polling untrusted storage. Even a task panic
             // after committing the write must not erase admission or permit replay.
-            let index = next.invocations.len() - 1;
+            let index = snapshot.invocations.len();
             let generation = evidence.generation().map_err(AgentError::Storage)?;
             let pending_before = evidence.pending.len();
-            for record in retired {
-                evidence.push_change(SessionChange::NoteRetired(record));
+            let recorded = retired
+                .into_iter()
+                .try_for_each(|record| evidence.record(vec![SessionChange::NoteRetired(record)]))
+                .and_then(|()| {
+                    evidence.record(vec![SessionChange::InputAccepted(Box::new(record))])
+                });
+            if let Err(error) = recorded {
+                evidence.forget_after(pending_before);
+                return Err(AgentError::Storage(error));
             }
-            evidence.push_change(SessionChange::InputAccepted(Box::new(
-                next.invocations[index].clone(),
-            )));
-            evidence.message_histories.clear();
-            let previous = evidence.observed.replace(next);
             let save_result = storage_lease
-                .save_changes(
-                    generation.clone(),
-                    evidence
-                        .observed
-                        .as_ref()
-                        .expect("reserved admission")
-                        .clone(),
-                    evidence.pending.clone(),
-                )
+                .save_changes(generation.clone(), evidence.pending.clone())
                 .await
                 .map_err(StorageError::bounded);
             let receipt = match save_result {
@@ -1088,28 +1037,22 @@ impl SessionManager {
                     {
                         Ok((None, _)) => true,
                         Ok((Some(saved), _)) => {
-                            let next = evidence.observed.as_ref().expect("reserved admission");
+                            let next = evidence.observed().expect("reserved admission");
                             let absent = saved.id == next.id
                                 && saved.provider == next.provider
                                 && saved.provider_context == next.provider_context
                                 && super::validation::validate(&saved).is_ok()
-                                && !saved.invocations.iter().any(|record| {
-                                    record.request.execution_id
-                                        == next
-                                            .invocations
-                                            .last()
-                                            .expect("new input")
-                                            .request
-                                            .execution_id
-                                });
+                                && !saved
+                                    .invocations
+                                    .iter()
+                                    .any(|record| record.request.execution_id == execution_id);
                             saved.discard_rejected_errors();
                             absent
                         }
                         Err(_) => false,
                     };
                     if absent {
-                        evidence.observed = previous;
-                        evidence.pending.truncate(pending_before);
+                        evidence.forget_after(pending_before);
                     }
                     return Err(AgentError::Storage(error));
                 }
@@ -1117,10 +1060,7 @@ impl SessionManager {
             let next_generation = receipt
                 .next_for(&generation, evidence.pending.len())
                 .map_err(AgentError::Storage)?;
-            evidence.committed = evidence.observed.clone();
-            evidence.pending.clear();
-            evidence.message_commit = None;
-            evidence.save_generation = Some(next_generation);
+            evidence.saved(next_generation);
             Ok(index)
         })
         .await
@@ -1135,7 +1075,7 @@ impl SessionManager {
         mut pick: impl FnMut(usize, &InvocationRecord, &HashSet<&ExecutionId>) -> Option<T>,
     ) -> Vec<T> {
         let evidence = self.evidence.lock().await;
-        let Some(snapshot) = evidence.observed.as_ref() else {
+        let Some(snapshot) = evidence.observed() else {
             return Vec::new();
         };
         let saved: HashSet<&ExecutionId> = snapshot
@@ -1154,8 +1094,7 @@ impl SessionManager {
         self.evidence
             .lock()
             .await
-            .observed
-            .as_ref()?
+            .observed()?
             .invocations
             .iter()
             .find(|record| &record.request.execution_id == id)
@@ -1167,8 +1106,7 @@ impl SessionManager {
         self.evidence
             .lock()
             .await
-            .observed
-            .as_ref()
+            .observed()
             .is_some_and(|snapshot| snapshot.provider_context.recorded().is_some())
     }
     /// Check the complete reviewed subject before acknowledging adapter evidence.
@@ -1181,8 +1119,7 @@ impl SessionManager {
     ) -> Result<(), AgentError> {
         let evidence = self.evidence.lock().await;
         let review = evidence
-            .observed
-            .as_ref()
+            .observed()
             .and_then(|snapshot| {
                 snapshot
                     .invocations
@@ -1227,9 +1164,8 @@ impl SessionManager {
     ) -> Result<(), StorageError> {
         let mut evidence = self.evidence.lock().await;
         let record = evidence
-            .observed
-            .as_mut()
-            .and_then(|snapshot| snapshot.invocations.get_mut(index))
+            .observed()
+            .and_then(|snapshot| snapshot.invocations.get(index))
             .ok_or_else(|| {
                 StorageError::Corrupt("cancellation has no submitted invocation".into())
             })?;
@@ -1238,17 +1174,16 @@ impl SessionManager {
             .record_cancellation(cancellation.cancellation()?)
             .map_err(|error| StorageError::Corrupt(error.to_string()))?;
         let execution_id = record.request.execution_id.clone();
-        record.cancellation = Some(cancellation.clone());
-        evidence.push_change(SessionChange::StopDecision {
+        evidence.record(vec![SessionChange::StopDecision {
             execution_id,
             event: cancellation,
-        });
+        }])?;
         self.save_observed(&mut evidence).await
     }
     /// Check the bounded session-level reorder budget before changing live order.
     pub(crate) async fn check_queue_reorder_capacity(&self) -> Result<(), StorageError> {
         let evidence = self.evidence.lock().await;
-        if evidence.observed.as_ref().is_some_and(|snapshot| {
+        if evidence.observed().is_some_and(|snapshot| {
             snapshot
                 .queue_history
                 .iter()
@@ -1260,11 +1195,24 @@ impl SessionManager {
         }
         Ok(())
     }
-    fn append_queue_mutation(
-        snapshot: &mut SessionSnapshot,
+    /// `decision` as made just after a new scheduling edge of `edge` in the
+    /// same unit: the edge counts toward its invocation's scheduling length.
+    fn after_edge(mut decision: QueueHistoryRecord, edge: &ExecutionId) -> QueueHistoryRecord {
+        if decision.mutation.id() == Some(edge) {
+            decision.scheduling_length = decision.scheduling_length.map(|length| length + 1);
+        }
+        decision
+    }
+    /// The queue decision `mutation` makes, as observed. Applying it checks
+    /// it against the queue.
+    fn queue_decision(
+        evidence: &Evidence,
         mutation: QueueMutation,
         actor: Option<ActionContext>,
-    ) -> Result<(), StorageError> {
+    ) -> Result<QueueHistoryRecord, StorageError> {
+        let snapshot = evidence
+            .observed()
+            .ok_or_else(|| StorageError::Corrupt("queue has no session".into()))?;
         let scheduling_length = mutation
             .id()
             .map(|id| {
@@ -1276,16 +1224,11 @@ impl SessionManager {
                     .ok_or_else(|| StorageError::Corrupt("queue mutation has no invocation".into()))
             })
             .transpose()?;
-        snapshot.queue_history.push(QueueHistoryRecord {
+        Ok(QueueHistoryRecord {
             mutation,
             actor,
             scheduling_length,
-        });
-        if let Err(error) = super::queue_validation::replay(snapshot) {
-            snapshot.queue_history.pop();
-            return Err(error);
-        }
-        Ok(())
+        })
     }
     /// Record actual queue membership after the scheduler changed it. Failure
     /// retains observed evidence and must not roll back the live queue silently.
@@ -1295,17 +1238,8 @@ impl SessionManager {
         actor: Option<ActionContext>,
     ) -> Result<(), StorageError> {
         let mut evidence = self.evidence.lock().await;
-        let snapshot = evidence
-            .observed
-            .as_mut()
-            .ok_or_else(|| StorageError::Corrupt("queue has no session".into()))?;
-        Self::append_queue_mutation(snapshot, mutation, actor)?;
-        let decision = snapshot
-            .queue_history
-            .last()
-            .expect("queue decision")
-            .clone();
-        evidence.push_change(SessionChange::QueueDecision(decision));
+        let decision = Self::queue_decision(&evidence, mutation, actor)?;
+        evidence.record(vec![SessionChange::QueueDecision(decision)])?;
         self.save_observed(&mut evidence).await
     }
     /// Persist dequeue before releasing the scheduler, independently of later dispatch.
@@ -1339,27 +1273,17 @@ impl SessionManager {
         apply: impl FnOnce() -> Result<(), StorageError>,
     ) -> Result<(), StorageError> {
         let mut evidence = self.evidence.lock().await;
-        let snapshot = evidence
-            .observed
-            .as_mut()
-            .ok_or_else(|| StorageError::Corrupt("queue has no session".into()))?;
         // Either both effects happen or neither does, so a refused order change
         // leaves no retained mutation the live queue never made. Only this
         // transition rolls back: every other queue record describes an effect
         // the scheduler has already performed.
-        let retained = snapshot.queue_history.len();
-        let result =
-            Self::append_queue_mutation(snapshot, QueueMutation::Reordered(change), Some(actor))
-                .and_then(|()| apply());
+        let retained = evidence.pending.len();
+        let decision =
+            Self::queue_decision(&evidence, QueueMutation::Reordered(change), Some(actor))?;
+        evidence.record(vec![SessionChange::QueueDecision(decision)])?;
+        let result = apply();
         if result.is_err() {
-            snapshot.queue_history.truncate(retained);
-        } else {
-            let decision = snapshot
-                .queue_history
-                .last()
-                .expect("queue reorder")
-                .clone();
-            evidence.push_change(SessionChange::QueueDecision(decision));
+            evidence.forget_after(retained);
         }
         result
     }
@@ -1385,10 +1309,7 @@ impl SessionManager {
         decide: impl FnOnce(Option<&CurrentLease>) -> (Vec<LeaseRecord>, T),
     ) -> Result<LeaseCommit<T>, LeaseRecordError> {
         let mut evidence = self.evidence.lock().await;
-        let snapshot = evidence
-            .observed
-            .as_mut()
-            .ok_or(LeaseRecordError::NotLoaded)?;
+        let snapshot = evidence.observed().ok_or(LeaseRecordError::NotLoaded)?;
         let (records, decided) = decide(snapshot.lease.as_ref());
         if records.is_empty() {
             return Ok(LeaseCommit {
@@ -1405,8 +1326,9 @@ impl SessionManager {
                 CurrentLease::apply(lease.as_ref(), record).map_err(LeaseRecordError::Refused)?,
             );
         }
-        snapshot.lease = lease;
-        evidence.append_unit(records.into_iter().map(SessionChange::Lease).collect());
+        evidence
+            .record(records.into_iter().map(SessionChange::Lease).collect())
+            .map_err(LeaseRecordError::Storage)?;
         let saved = self.save_observed(&mut evidence).await;
         Ok(LeaseCommit {
             decided,
@@ -1426,7 +1348,7 @@ impl SessionManager {
     /// [`Agent::prepare`]: crate::application::agent_execution::agents::Agent::prepare
     pub async fn artifact_room(&self) -> Option<usize> {
         let evidence = self.evidence.lock().await;
-        evidence.observed.as_ref().map(|snapshot| {
+        evidence.observed().map(|snapshot| {
             ArtifactRecord::MAX_PER_CONVERSATION.saturating_sub(snapshot.artifacts.len())
         })
     }
@@ -1436,7 +1358,7 @@ impl SessionManager {
     /// accepted.
     pub async fn accepts_turn(&self, turn: &ExecutionId) -> bool {
         let evidence = self.evidence.lock().await;
-        evidence.observed.as_ref().is_some_and(|snapshot| {
+        evidence.observed().is_some_and(|snapshot| {
             snapshot
                 .invocations
                 .iter()
@@ -1450,7 +1372,7 @@ impl SessionManager {
     /// like it, only what was seen.
     pub async fn has_artifact_room(&self, record: &ArtifactRecord) -> Option<bool> {
         let evidence = self.evidence.lock().await;
-        evidence.observed.as_ref().map(|snapshot| {
+        evidence.observed().map(|snapshot| {
             snapshot.artifacts.len() < ArtifactRecord::MAX_PER_CONVERSATION
                 || snapshot
                     .artifacts
@@ -1485,10 +1407,7 @@ impl SessionManager {
     /// [`Agent::prepare`]: crate::application::agent_execution::agents::Agent::prepare
     pub async fn record_artifact(&self, record: ArtifactRecord) -> Result<(), ArtifactRecordError> {
         let mut evidence = self.evidence.lock().await;
-        let snapshot = evidence
-            .observed
-            .as_mut()
-            .ok_or(ArtifactRecordError::NotLoaded)?;
+        let snapshot = evidence.observed().ok_or(ArtifactRecordError::NotLoaded)?;
         let accepted = |turn: &ExecutionId| {
             snapshot
                 .invocations
@@ -1518,8 +1437,9 @@ impl SessionManager {
                 })
             }
         }
-        snapshot.artifacts.push(record.clone());
-        evidence.append_unit(vec![SessionChange::Artifact(record)]);
+        evidence
+            .record(vec![SessionChange::Artifact(record)])
+            .map_err(ArtifactRecordError::Storage)?;
         self.save_observed(&mut evidence)
             .await
             .map_err(ArtifactRecordError::Storage)
@@ -1551,15 +1471,13 @@ impl SessionManager {
         // is admitted, never dated before, which would let it fall out of the
         // rate window at once.
         let now = self.message_commit_clock.unix_milliseconds();
-        let snapshot = evidence
-            .observed
-            .as_mut()
-            .ok_or(NoteRecordError::NotLoaded)?;
+        let snapshot = evidence.observed().ok_or(NoteRecordError::NotLoaded)?;
         let record = match super::notes::admit(snapshot, request, now) {
             Ok(NoteAdmission::Recorded(record)) => record,
             Ok(NoteAdmission::New(record)) => {
-                snapshot.notes.push(record.clone());
-                evidence.append_unit(vec![SessionChange::Note(record.clone())]);
+                evidence
+                    .record(vec![SessionChange::Note(record.clone())])
+                    .map_err(NoteRecordError::Storage)?;
                 record
             }
             Err(NoteRefusal::Conflict) => return Err(NoteRecordError::Conflict),
@@ -1602,23 +1520,21 @@ impl SessionManager {
         super::validation::validate_submission_acknowledgement(&acknowledgement)?;
         let mut evidence = self.evidence.lock().await;
         let record = evidence
-            .observed
-            .as_mut()
+            .observed()
             .ok_or_else(|| StorageError::Corrupt("acknowledgement has no session".into()))?
             .invocations
-            .get_mut(index)
+            .get(index)
             .ok_or_else(|| {
                 StorageError::Corrupt("acknowledgement has no submitted invocation".into())
             })?;
         let before = record.acknowledgement.clone();
         if before != acknowledgement {
             let execution_id = record.request.execution_id.clone();
-            record.acknowledgement = acknowledgement.clone();
-            evidence.push_change(SessionChange::ReceiptUpdated {
+            evidence.record(vec![SessionChange::ReceiptUpdated {
                 execution_id,
                 before,
                 after: acknowledgement,
-            });
+            }])?;
         }
         Ok(())
     }
@@ -1641,10 +1557,9 @@ impl SessionManager {
     ) -> Result<(), StorageError> {
         let mut evidence = self.evidence.lock().await;
         let snapshot = evidence
-            .observed
-            .as_mut()
+            .observed()
             .ok_or_else(|| StorageError::Corrupt("scheduling event has no session".into()))?;
-        let record = snapshot.invocations.get_mut(index).ok_or_else(|| {
+        let record = snapshot.invocations.get(index).ok_or_else(|| {
             StorageError::Corrupt("scheduling event has no submitted invocation".into())
         })?;
         let mut history = super::validation::invocation_history(record)?;
@@ -1659,30 +1574,18 @@ impl SessionManager {
         super::validation::validate_stop_actor(record.local_cancellation.as_ref(), Some(&event))?;
         let actor = event.actor.clone();
         let execution_id = record.request.execution_id.clone();
-        record.scheduling.push(event.clone());
-        let decision = if let Some(mutation) = mutation {
-            if let Err(error) = Self::append_queue_mutation(snapshot, mutation, actor) {
-                snapshot.invocations[index].scheduling.pop();
-                return Err(error);
-            }
-            Some(
-                snapshot
-                    .queue_history
-                    .last()
-                    .expect("queue removal")
-                    .clone(),
-            )
-        } else {
-            None
-        };
         let mut changes = vec![SessionChange::SchedulingTransition {
-            execution_id,
+            execution_id: execution_id.clone(),
             event,
         }];
-        if let Some(decision) = decision {
-            changes.push(SessionChange::QueueDecision(decision));
+        if let Some(mutation) = mutation {
+            let decision = Self::queue_decision(&evidence, mutation, actor)?;
+            changes.push(SessionChange::QueueDecision(Self::after_edge(
+                decision,
+                &execution_id,
+            )));
         }
-        evidence.append_unit(changes);
+        evidence.record(changes)?;
         self.save_observed(&mut evidence).await
     }
     /// Atomically retain a failed queued receipt, its terminal scheduling edge,
@@ -1697,23 +1600,22 @@ impl SessionManager {
     ) -> Result<(), StorageError> {
         let result = result.map_err(AgentError::bounded);
         let mut evidence = self.evidence.lock().await;
-        let mut next = evidence
-            .observed
-            .as_ref()
+        let record = evidence
+            .observed()
             .ok_or_else(|| StorageError::Corrupt("queue settlement has no session".into()))?
-            .clone();
-        let record = next.invocations.get_mut(index).ok_or_else(|| {
-            StorageError::Corrupt("queue settlement has no submitted invocation".into())
-        })?;
+            .invocations
+            .get(index)
+            .ok_or_else(|| {
+                StorageError::Corrupt("queue settlement has no submitted invocation".into())
+            })?;
         let execution_id = record.request.execution_id.clone();
         let before = record.result.clone();
-        record.local_outcome = result.as_ref().ok().copied();
-        record.result = Some(result.clone());
-        record.scheduling.push(event.clone());
-        let local_outcome = record.local_outcome;
-        super::validation::invocation_history(record)?;
-        Self::append_queue_mutation(&mut next, mutation, None)?;
-        evidence.append_unit(vec![
+        let local_outcome = result.as_ref().ok().copied();
+        let decision = Self::after_edge(
+            Self::queue_decision(&evidence, mutation, None)?,
+            &execution_id,
+        );
+        evidence.record(vec![
             SessionChange::LocalSettlement {
                 execution_id: execution_id.clone(),
                 before,
@@ -1724,14 +1626,8 @@ impl SessionManager {
                 execution_id,
                 event,
             },
-            SessionChange::QueueDecision(
-                next.queue_history
-                    .last()
-                    .expect("failed queue removal")
-                    .clone(),
-            ),
-        ]);
-        evidence.observed = Some(next);
+            SessionChange::QueueDecision(decision),
+        ])?;
         self.save_observed(&mut evidence).await
     }
     /// Scope output authority to the owning observation loop, including unwind.
@@ -1765,8 +1661,7 @@ impl SessionManager {
     ) -> Result<R, StorageError> {
         let evidence = self.evidence.lock().await;
         let record = evidence
-            .observed
-            .as_ref()
+            .observed()
             .ok_or_else(|| StorageError::Corrupt("invocation observations have no session".into()))?
             .invocations
             .get(index)
@@ -1781,8 +1676,7 @@ impl SessionManager {
     pub(crate) async fn taken_notes(&self, index: usize) -> Result<Vec<NoteContext>, StorageError> {
         let evidence = self.evidence.lock().await;
         let snapshot = evidence
-            .observed
-            .as_ref()
+            .observed()
             .ok_or_else(|| StorageError::Corrupt("a turn's notes have no session".into()))?;
         let record = snapshot
             .invocations
@@ -1866,8 +1760,7 @@ impl SessionManager {
             *usage
         } else {
             let record = evidence
-                .observed
-                .as_ref()
+                .observed()
                 .and_then(|snapshot| {
                     snapshot
                         .invocations
@@ -1900,106 +1793,43 @@ impl SessionManager {
         let mut evidence = self.evidence.lock().await;
         let usage = Self::usage_after(&mut evidence, &event)
             .map_err(|error| StorageError::Corrupt(error.to_string()))?;
-        if !save {
-            let id = event.execution_id().clone();
-            if !evidence.message_histories.contains_key(&id) {
-                let snapshot = evidence
-                    .observed
-                    .as_ref()
-                    .expect("initialized agent session");
-                let index = snapshot
-                    .invocations
-                    .iter()
-                    .position(|record| record.request.execution_id == id)
-                    .ok_or_else(|| {
-                        StorageError::Corrupt(
-                            "provider observation has no submitted invocation".into(),
-                        )
-                    })?;
-                let history = super::validation::invocation_history(&snapshot.invocations[index])?;
-                evidence
-                    .message_histories
-                    .insert(id.clone(), (index, history));
-            }
-            let (index, history) = evidence
-                .message_histories
-                .get_mut(&id)
-                .expect("initialized text history");
-            history
-                .observe(&id, InvocationObservation::Output)
-                .map_err(|error| StorageError::Corrupt(error.to_string()))?;
-            let index = *index;
-            let record = &mut evidence
-                .observed
-                .as_mut()
-                .expect("initialized agent session")
-                .invocations[index];
-            reserve_observation_slot(&mut record.events);
-            record.events.push(event.clone());
-            evidence.push_change(SessionChange::ProviderObservation(event));
-            evidence.event_usage.insert(id, usage);
-            let generation = evidence.generation()?;
-            let pending = evidence
-                .message_commit
-                .get_or_insert_with(|| PendingMessageCommit {
-                    generation,
-                    deadline: self
-                        .message_commit_clock
-                        .now()
-                        .saturating_add(MESSAGE_COMMIT_DELAY),
-                    bytes: 0,
-                    retained_bytes: 0,
-                    count: 0,
-                });
-            pending.bytes = pending.bytes.saturating_add(message_bytes);
-            pending.retained_bytes = pending
-                .retained_bytes
-                .saturating_add(message_retained_bytes);
-            pending.count = pending.count.saturating_add(1);
-            // The smaller cadence is the normal flush. The larger retained
-            // safety bound remains a backstop for future policy adjustments.
-            if pending.bytes >= MESSAGE_COMMIT_BYTES
-                || pending.count >= MESSAGE_COMMIT_COUNT
-                || pending.retained_bytes >= 8 * 1024 * 1024
-                || pending.count >= 1024
-            {
-                self.save_observed(&mut evidence).await?;
-            }
-            return Ok(());
-        }
-        evidence.message_histories.clear();
-        let snapshot = evidence
-            .observed
-            .as_mut()
-            .expect("initialized agent session");
-        // Output from an abandoned caller wait still belongs to its original input.
-        let record = snapshot
-            .invocations
-            .iter_mut()
-            .find(|record| &record.request.execution_id == event.execution_id())
-            .ok_or_else(|| {
-                StorageError::Corrupt("provider observation has no submitted invocation".into())
-            })?;
-        let execution_id = event.execution_id().clone();
-        reserve_observation_slot(&mut record.events);
-        record.events.push(event.clone());
-        if let Err(error) = super::validation::validate(snapshot) {
-            snapshot
-                .invocations
-                .iter_mut()
-                .find(|record| record.request.execution_id == execution_id)
-                .expect("matched invocation")
-                .events
-                .pop();
-            return Err(error);
-        }
-        evidence.push_change(SessionChange::ProviderObservation(event));
-        evidence.event_usage.insert(execution_id, usage);
+        // Output from an abandoned caller wait still belongs to its original
+        // input; applying it checks the invocation's whole history.
+        let id = event.execution_id().clone();
+        evidence.record(vec![SessionChange::ProviderObservation(event)])?;
+        evidence.event_usage.insert(id, usage);
         // Text/thought fragments are live output until a bounded output flush
         // or the next boundary save. Tools, reviews, terminal events and
         // settlement persist the accumulated observations. A process failure
         // may lose only the unfinished streaming suffix.
         if save {
+            return self.save_observed(&mut evidence).await;
+        }
+        let generation = evidence.generation()?;
+        let pending = evidence
+            .message_commit
+            .get_or_insert_with(|| PendingMessageCommit {
+                generation,
+                deadline: self
+                    .message_commit_clock
+                    .now()
+                    .saturating_add(MESSAGE_COMMIT_DELAY),
+                bytes: 0,
+                retained_bytes: 0,
+                count: 0,
+            });
+        pending.bytes = pending.bytes.saturating_add(message_bytes);
+        pending.retained_bytes = pending
+            .retained_bytes
+            .saturating_add(message_retained_bytes);
+        pending.count = pending.count.saturating_add(1);
+        // The smaller cadence is the normal flush. The larger retained
+        // safety bound remains a backstop for future policy adjustments.
+        if pending.bytes >= MESSAGE_COMMIT_BYTES
+            || pending.count >= MESSAGE_COMMIT_COUNT
+            || pending.retained_bytes >= 8 * 1024 * 1024
+            || pending.count >= 1024
+        {
             self.save_observed(&mut evidence).await?;
         }
         Ok(())
@@ -2013,9 +1843,8 @@ impl SessionManager {
         cancellation: Option<InvocationCancellationEvent>,
     ) -> Result<(), StorageError> {
         let mut evidence = self.evidence.lock().await;
-        let record = &mut evidence
-            .observed
-            .as_mut()
+        let record = &evidence
+            .observed()
             .expect("initialized agent session")
             .invocations[index];
         if let Some(result) = &record.result {
@@ -2029,7 +1858,6 @@ impl SessionManager {
             record.scheduling.last(),
         )?;
         let execution_id = record.request.execution_id.clone();
-        let new_report = record.provider_report.is_none();
         if let Some(prior) = &record.provider_report {
             if prior != &settlement || record.local_cancellation != cancellation {
                 return Err(StorageError::Corrupt(
@@ -2037,15 +1865,11 @@ impl SessionManager {
                 ));
             }
         } else {
-            record.provider_report = Some(settlement.clone());
-            record.local_cancellation = cancellation.clone();
-        }
-        if new_report {
-            evidence.push_change(SessionChange::ProviderReport {
+            evidence.record(vec![SessionChange::ProviderReport {
                 execution_id,
                 report: settlement,
                 local_stop: cancellation,
-            });
+            }])?;
         }
         self.save_observed(&mut evidence).await
     }
@@ -2053,8 +1877,7 @@ impl SessionManager {
     pub(crate) async fn invocation_cancelled(&self, index: usize) -> bool {
         let evidence = self.evidence.lock().await;
         let record = &evidence
-            .observed
-            .as_ref()
+            .observed()
             .expect("initialized agent session")
             .invocations[index];
         record.provider_report.as_ref().is_some_and(|settlement| {
@@ -2072,23 +1895,20 @@ impl SessionManager {
         let result = result.map_err(AgentError::bounded);
         let mut evidence = self.evidence.lock().await;
         let local_outcome = Self::validate_result(&evidence, index, &result)?;
-        let record = &mut evidence
-            .observed
-            .as_mut()
+        let record = &evidence
+            .observed()
             .expect("initialized agent session")
             .invocations[index];
         let before = record.result.clone();
         let prior_outcome = record.local_outcome;
         let execution_id = record.request.execution_id.clone();
-        record.local_outcome = local_outcome;
-        record.result = Some(result.clone());
         if before.as_ref() != Some(&result) || prior_outcome != local_outcome {
-            evidence.push_change(SessionChange::LocalSettlement {
+            evidence.record(vec![SessionChange::LocalSettlement {
                 execution_id,
                 before,
                 after: result,
                 local_outcome,
-            });
+            }])?;
         }
         self.save_observed(&mut evidence).await
     }
@@ -2097,8 +1917,7 @@ impl SessionManager {
         self.evidence
             .lock()
             .await
-            .observed
-            .as_ref()?
+            .observed()?
             .invocations
             .get(index)?
             .scheduling
@@ -2111,8 +1930,7 @@ impl SessionManager {
     pub(crate) async fn initiation_of(&self, id: &ExecutionId) -> Option<Initiation> {
         let evidence = self.evidence.lock().await;
         evidence
-            .observed
-            .as_ref()?
+            .observed()?
             .invocations
             .iter()
             .find(|record| &record.request.execution_id == id)
@@ -2126,8 +1944,7 @@ impl SessionManager {
     ) -> Option<(usize, InvocationSchedulingEvent)> {
         let evidence = self.evidence.lock().await;
         let (index, record) = evidence
-            .observed
-            .as_ref()?
+            .observed()?
             .invocations
             .iter()
             .enumerate()
@@ -2143,8 +1960,7 @@ impl SessionManager {
     ) -> Result<SchedulingCause, StorageError> {
         let evidence = self.evidence.lock().await;
         let record = evidence
-            .observed
-            .as_ref()
+            .observed()
             .and_then(|snapshot| snapshot.invocations.get(index))
             .ok_or_else(|| {
                 StorageError::Corrupt("scheduling settlement has no invocation".into())
@@ -2167,7 +1983,7 @@ impl SessionManager {
     ) -> Result<ExecutionOutcome, AgentError> {
         let error = error.bounded();
         let mut evidence = self.evidence.lock().await;
-        let Some(index) = evidence.observed.as_ref().and_then(|snapshot| {
+        let Some(index) = evidence.observed().and_then(|snapshot| {
             snapshot
                 .invocations
                 .iter()
@@ -2175,19 +1991,11 @@ impl SessionManager {
         }) else {
             return Err(error);
         };
-        let prior = evidence
-            .observed
-            .as_ref()
-            .expect("matched invocation")
-            .invocations[index]
+        let prior = evidence.observed().expect("matched invocation").invocations[index]
             .result
             .clone()
             .or_else(|| {
-                evidence
-                    .observed
-                    .as_ref()
-                    .expect("matched invocation")
-                    .invocations[index]
+                evidence.observed().expect("matched invocation").invocations[index]
                     .provider_report
                     .as_ref()
                     .map(|settlement| settlement.clone().into_result())
@@ -2264,20 +2072,21 @@ impl SessionManager {
                 execution_result: Box::new(result),
             }
             .bounded());
-            let record = &mut evidence
-                .observed
-                .as_mut()
+            let record = &evidence
+                .observed()
                 .expect("initialized agent session")
                 .invocations[index];
             let execution_id = record.request.execution_id.clone();
             let local_outcome = record.local_outcome;
-            record.result = Some(result.clone());
-            evidence.push_change(SessionChange::LocalSettlement {
+            // The wrapper only describes this failed write. If it does not
+            // apply, the result before it stays retained for the next save,
+            // and the caller still gets this write's failure and the result.
+            let _ = evidence.record(vec![SessionChange::LocalSettlement {
                 execution_id,
                 before: Some(before),
                 after: result.clone(),
                 local_outcome,
-            });
+            }]);
         }
         (result, storage_failure)
     }
@@ -2287,9 +2096,8 @@ impl SessionManager {
         result: &Result<ExecutionOutcome, AgentError>,
     ) -> Result<bool, StorageError> {
         let local_outcome = Self::validate_result(evidence, index, result)?;
-        let record = &mut evidence
-            .observed
-            .as_mut()
+        let record = &evidence
+            .observed()
             .expect("initialized agent session")
             .invocations[index];
         if record.result.as_ref() == Some(result) {
@@ -2297,41 +2105,26 @@ impl SessionManager {
         }
         let before = record.result.clone();
         let execution_id = record.request.execution_id.clone();
-        record.local_outcome = local_outcome;
-        record.result = Some(result.clone());
-        evidence.push_change(SessionChange::LocalSettlement {
+        evidence.record(vec![SessionChange::LocalSettlement {
             execution_id,
             before,
             after: result.clone(),
             local_outcome,
-        });
+        }])?;
         Ok(true)
     }
     async fn save_observed(&self, evidence: &mut Evidence) -> Result<(), StorageError> {
         if evidence.pending.is_empty() {
             return Ok(());
         }
-        evidence.message_histories.clear();
-        let snapshot = evidence
-            .observed
-            .as_ref()
-            .expect("initialized agent session")
-            .clone();
         let generation = evidence.generation()?;
         let receipt = self
             .storage_lease
-            .save_changes(
-                generation.clone(),
-                snapshot.clone(),
-                evidence.pending.clone(),
-            )
+            .save_changes(generation.clone(), evidence.pending.clone())
             .await
             .map_err(StorageError::bounded)?;
         let next_generation = receipt.next_for(&generation, evidence.pending.len())?;
-        evidence.committed = Some(snapshot);
-        evidence.pending.clear();
-        evidence.message_commit = None;
-        evidence.save_generation = Some(next_generation);
+        evidence.saved(next_generation);
         Ok(())
     }
     fn validate_result(
@@ -2340,8 +2133,7 @@ impl SessionManager {
         result: &Result<ExecutionOutcome, AgentError>,
     ) -> Result<Option<ExecutionOutcome>, StorageError> {
         let record = &evidence
-            .observed
-            .as_ref()
+            .observed()
             .expect("initialized agent session")
             .invocations[index];
         super::validation::local_result_transition(record, result)

@@ -103,6 +103,7 @@ async fn raw_event_filters_use_the_published_cardinality_and_uniqueness_contract
     use nessa_protocol::product::generated::{ConversationEventKind, MAX_EVENT_SUBSCRIPTION_KINDS};
 
     let fixture = SubscriptionFixture::new().await;
+    let held = fixture.storage.committed_watches();
     let mut unavailable = fixture.state.clone();
     unavailable.conversations = None;
     // Invalid params must not reach even the missing-service/admission branch.
@@ -129,13 +130,8 @@ async fn raw_event_filters_use_the_published_cardinality_and_uniqueness_contract
     }
     client.close().await;
     // No failed raw request retained a source watch or touched an Agent.
-    let mut watches = Vec::new();
-    while let Ok(watch) = fixture.storage.watch_any_committed() {
-        watches.push(watch);
-    }
-    assert_eq!(watches.len(), 64);
+    assert_eq!(fixture.storage.committed_watches(), held);
     assert!(fixture.provider.executions.lock().unwrap().is_empty());
-    drop(watches);
     grants(&fixture.authority, &["conversation.write", "server.read"]);
     for options in [
         json!({}),

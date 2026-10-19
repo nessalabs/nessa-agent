@@ -84,15 +84,23 @@ impl SessionStorageLease for RecordingLease {
     fn save_changes(
         &self,
         binding: SessionSaveGeneration,
-        snapshot: SessionSnapshot,
         units: Vec<SessionSaveUnit>,
     ) -> StorageFuture<'_, SessionSaveReceipt> {
         Box::pin(async move {
-            let candidate = snapshot.clone();
-            let receipt = self.inner.save_changes(binding, snapshot, units).await?;
+            let receipt = self.inner.save_changes(binding, units).await?;
+            // The writer's own published state is what the save confirmed.
+            let confirmed = self
+                .inner
+                .load()
+                .await?
+                .snapshot()
+                .cloned()
+                .ok_or_else(|| {
+                    StorageError::Corrupt("a confirmed save published nothing".into())
+                })?;
             *self.confirmed.lock().unwrap() = Some(ConfirmedSnapshot {
                 binding: receipt.next().clone(),
-                snapshot: candidate,
+                snapshot: confirmed,
             });
             self.changed.notify_one();
             Ok(receipt)
@@ -131,7 +139,6 @@ async fn confirmed_producer_snapshot_changes_only_after_successful_save() {
     let receipt = lease
         .save_changes(
             lease.load().await.unwrap().binding().clone(),
-            snapshot.clone(),
             vec![SessionSaveUnit::new(vec![SessionChange::Opened {
                 id,
                 provider,
@@ -146,19 +153,13 @@ async fn confirmed_producer_snapshot_changes_only_after_successful_save() {
     assert_eq!(confirmed.binding, *receipt.next());
     let requested = ProviderContext::Recorded(ExecutionSessionId::new("requested").unwrap());
     let different = ProviderContext::Recorded(ExecutionSessionId::new("contradictory").unwrap());
-    let invalid = SessionSnapshot {
-        provider_context: requested,
-        model_change: None,
-        current_configuration: None,
-        ..snapshot
-    };
     assert!(matches!(
         lease
             .save_changes(
                 receipt.next().clone(),
-                invalid,
+                // `before` names a context the session never had.
                 vec![SessionSaveUnit::new(vec![SessionChange::ProviderContext {
-                    before: ProviderContext::Absent,
+                    before: requested,
                     after: different
                 }])
                 .unwrap()]

@@ -18,8 +18,8 @@
 
 use super::delivery::{Deadline, Outgoing, SubscriptionDeliveries};
 use crate::conversation::application::{
-    error_code, CatalogueChangeWatch, CatalogueWatchError, CatalogueWatchState, ConversationError,
-    ConversationService, ReadOpening,
+    error_code, CatalogueChangeWatch, CatalogueWatchState, ConversationError, ConversationService,
+    ReadOpening,
 };
 use crate::product::{
     conversation::{caller, read_list, read_view},
@@ -223,22 +223,17 @@ impl Sources {
     ) -> Result<Self, String> {
         let unavailable = || code_of(&ConversationError::Unavailable);
         let records = || state.record_watches.as_ref().ok_or_else(unavailable);
-        let capacity = |error: ChangeWatchError| match error {
-            ChangeWatchError::Capacity => ConversationSubscriptionErrorCode::SubscriptionCapacity
-                .as_str()
-                .to_owned(),
-            ChangeWatchError::Closed => unavailable(),
-        };
+        let closed = |ChangeWatchError::Closed| unavailable();
         Ok(match target {
             Target::Events { conversation, .. } => Self {
-                records: Some(records()?.watch(conversation).map_err(capacity)?),
+                records: Some(records()?.watch(conversation).map_err(closed)?),
                 catalogue: None,
                 live: None,
                 environments: None,
                 hooks: None,
             },
             Target::View { conversation, .. } => Self {
-                records: Some(records()?.watch(conversation).map_err(capacity)?),
+                records: Some(records()?.watch(conversation).map_err(closed)?),
                 catalogue: None,
                 // A view also shows what is live and not a record.
                 live: Some(
@@ -255,16 +250,11 @@ impl Sources {
                     .catalogue_watches
                     .as_ref()
                     .ok_or_else(unavailable)?
-                    .watch(&owner.organization_id, &owner.principal_id)
-                    .map_err(|CatalogueWatchError::Capacity| {
-                        ConversationSubscriptionErrorCode::SubscriptionCapacity
-                            .as_str()
-                            .to_owned()
-                    })?;
+                    .watch(&owner.organization_id, &owner.principal_id);
                 Self {
                     // A list row's `running` follows a turn's commits, which
                     // change no summary (row L2).
-                    records: Some(records()?.watch_any().map_err(capacity)?),
+                    records: Some(records()?.watch_any().map_err(closed)?),
                     catalogue: Some(catalogue),
                     live: None,
                     environments: None,
@@ -636,7 +626,7 @@ impl Sent {
     }
 
     /// The subscription's one terminal frame. Written by its deadline or the
-    /// socket closes, as a watch's terminal notice does.
+    /// socket closes.
     fn end(&self, reason: ConversationSubscriptionEndReason, code: Option<String>) {
         let payload = serde_json::to_value(ConversationSubscriptionEnded {
             subscription_id: self.id.clone(),
@@ -869,7 +859,7 @@ pub(super) async fn run(run: Run) {
         ));
     };
     // Admitted before anything is registered: a session that may not follow
-    // takes nothing from the shared watch pools (row S29).
+    // registers no watch (row S29).
     if let Err(code) = authorize_batch(&state, &session, &target).await {
         return refuse(code, slot);
     }
@@ -920,10 +910,9 @@ pub(super) async fn run(run: Run) {
                 );
                 // The reply is this subscription's first frame, so it is
                 // written before any event of it (row S1). It is owed by
-                // the request's reply deadline, as a watch's reply is: one
-                // written later than the client waits would leave it a live
-                // subscription it cannot name, so missing it closes the
-                // socket (row S31).
+                // the request's reply deadline: one written later than the
+                // client waits would leave it a live subscription it cannot
+                // name, so missing it closes the socket (row S31).
                 if deliveries
                     .offer(
                         &id,

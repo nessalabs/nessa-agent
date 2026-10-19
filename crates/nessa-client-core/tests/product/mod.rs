@@ -146,7 +146,7 @@ fn idle_partial_frame_survives_ticks_and_event_waiter_does_not_own_reader() {
     let (release, held) = signal();
     let (endpoint, peer) = peer(move |wire| {
         let event = OutgoingMessage::Event(
-            EventFrame::push("conversation.changed", &json!({}), 1, 1).unwrap(),
+            EventFrame::push("conversation.listed", &json!({}), 1, 1).unwrap(),
         );
         let bytes = encode_frame(
             MAX_PROTECTED_RESPONSE_BYTES,
@@ -735,7 +735,7 @@ fn held_delivered_event_batch_clones_keep_count_and_byte_permits() {
             second.send(()).unwrap();
             assert!(wire.request().is_none());
         });
-        let event = EventFrame::push("conversation.changed", &json!({"seq":1}), 1, 1).unwrap();
+        let event = EventFrame::push("conversation.listed", &json!({"seq":1}), 1, 1).unwrap();
         let event_bytes = OutgoingMessage::Event(event).to_wire_text().unwrap().len();
         let limits = ProductLimits::new(
             1,
@@ -1669,7 +1669,7 @@ fn session_terminated_is_the_close_reason_and_is_not_queued() {
     receive(&seen);
     let batch = session.events(u64::MAX).unwrap();
     assert_eq!(batch.len(), 1);
-    assert_eq!(batch[0].event, "conversation.changed");
+    assert_eq!(batch[0].event, "conversation.listed");
     assert_eq!(
         session.events(u64::MAX).err(),
         Some(ProductFailure::Closed(Some(
