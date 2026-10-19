@@ -23,6 +23,9 @@
  *               and started again; the turn is resumed and the window follows
  *   delegate    the agent creates a thread and messages it; the thread's
  *               report comes back as a turn of its own
+ *   await       the agent messages a thread and waits for it with one
+ *               subscribe call naming the sent turn: the thread's reply comes
+ *               back in that call, and no report follows
  *   aside       another conversation is opened in the window and talked to
  *   watch       the agent reads a new thread with more reads at once than
  *               one conversation may hold: some wait, the rest are refused,
@@ -103,9 +106,18 @@ import {
 } from "./lib/gateway-stack.mjs"
 import { main } from "./lib/run.mjs"
 import { writeView } from "./lib/scripted-evidence.mjs"
-import { composerControls, css, keys, names, offeredLabel } from "./lib/selectors.mjs"
+import {
+  composerControls,
+  css,
+  keys,
+  names,
+  offeredLabel,
+  selectorFor,
+} from "./lib/selectors.mjs"
 import { freePort } from "./lib/server.mjs"
 import { Follower } from "./lib/stress-followers.mjs"
+import { openStressConversation } from "./lib/stress-conversation.mjs"
+import { observeGatewayRestarts } from "./lib/stress-restart.mjs"
 import { KNOBS, describe, knobsFrom, plan, random } from "./lib/stress-plan.mjs"
 
 const INSTANCE = "conversation-stress"
@@ -183,7 +195,8 @@ const fold = (text) =>
 
 /** Everything the run shares: the stack, the page, and the client in use now. */
 class Run {
-  constructor(stack, opened, knobs) {
+  constructor(stack, opened, knobs, restartConsole) {
+    this.restartConsole = restartConsole
     this.stack = stack
     this.opened = opened
     this.page = opened.page
@@ -299,29 +312,16 @@ async function untilView(run, conversationId, ready, seconds = 60) {
 
 const ended = (turn) => turnEnded(turn.status)
 
-/**
- * Opens `title`'s conversation in the window, and waits for its composer.
- * The row is the one titled `title` exactly: another row's last line can
- * quote it, as a window turn's does.
- */
-async function open(page, title) {
-  await sessionRow(page, title).click({ timeout: 15_000 })
-  await dock(page).locator("textarea").waitFor({ timeout: 15_000 })
-}
-
-/** The row of the conversation titled `title`. */
-const sessionRow = (page, title) =>
-  page
-    .locator(css.sessionRow)
-    .filter({ has: page.getByText(title, { exact: true }) })
-    .first()
+/** The row of the conversation `conversationId` in the window's list. */
+const sessionRow = (page, conversationId) =>
+  page.locator(selectorFor.sessionListRowFor(conversationId))
 
 /**
- * Chooses `label` in the More menu of the row titled `title`: the pointer
+ * Chooses `label` in the More menu of `conversationId`'s row: the pointer
  * over the row shows its buttons, as a person sees them.
  */
-async function choose(page, title, label) {
-  const row = sessionRow(page, title)
+async function choose(page, conversationId, label) {
+  const row = sessionRow(page, conversationId)
   await row.hover({ timeout: 15_000 })
   await row.locator('[data-session-action="more"]').click({ timeout: 10_000 })
   await page
@@ -329,9 +329,10 @@ async function choose(page, title, label) {
     .click({ timeout: 10_000 })
 }
 
-/** Waits for a row titled `title` in the window's list. */
-async function rowShown(page, title, failures) {
-  const shown = await sessionRow(page, title)
+/** Waits for `conversationId`'s row to say `title`. */
+async function rowShown(page, conversationId, title, failures) {
+  const shown = await sessionRow(page, conversationId)
+    .filter({ has: page.getByText(title, { exact: true }) })
     .waitFor({ timeout: 15_000 })
     .then(() => true)
     .catch(() => false)
@@ -708,41 +709,40 @@ const steps = {
         )
         return
       }
-      // The window retries its socket while the gateway is down; each refused
-      // attempt logs a console error that is the restart, not a fault.
-      run.opened.noteHarmless(
-        /WebSocket connection to '.+\/session' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED/,
-      )
-      const old = run.client
-      run.restarts += 1
-      await run.stack.gateway.restart(step.signal)
-      old.close()
-      run.client = await connectClient(run.stack.gateway, INSTANCE, "panel")
-      // The cut-off turn is carried on by a successor: a notice, then the same text.
-      const resumed = await waitFor(async () => {
-        const view = await run.client.conversation.read(run.main.id)
-        return view.messages.find(
-          (each) =>
-            !seen.has(each.executionId) &&
-            each.userText !== text &&
-            each.userText.endsWith(text) &&
-            each.status === "completed",
-        )
-      }, 90_000)
-      if (!resumed) {
-        const view = await run.client.conversation.read(run.main.id).catch(() => null)
-        failures.push(
-          `the cut-off turn was not resumed after ${step.signal}: ${JSON.stringify(
-            view?.messages
-              .filter((each) => !seen.has(each.executionId))
-              .map((each) => [each.status, each.userText.slice(0, 60)]),
-          )}`,
-        )
-        return
-      }
-      if (!/restarted/i.test(resumed.userText))
-        failures.push("the resumed turn does not say Nessa restarted")
-      await expectShown(run.page, SAYS.resumed, failures, 60_000)
+      await run.restartConsole.during(run.opened, async () => {
+        const before = failures.length
+        const old = run.client
+        run.restarts += 1
+        await run.stack.gateway.restart(step.signal)
+        old.close()
+        run.client = await connectClient(run.stack.gateway, INSTANCE, "panel")
+        // The cut-off turn is carried on by a successor: a notice, then the same text.
+        const resumed = await waitFor(async () => {
+          const view = await run.client.conversation.read(run.main.id)
+          return view.messages.find(
+            (each) =>
+              !seen.has(each.executionId) &&
+              each.userText !== text &&
+              each.userText.endsWith(text) &&
+              each.status === "completed",
+          )
+        }, 90_000)
+        if (!resumed) {
+          const view = await run.client.conversation.read(run.main.id).catch(() => null)
+          failures.push(
+            `the cut-off turn was not resumed after ${step.signal}: ${JSON.stringify(
+              view?.messages
+                .filter((each) => !seen.has(each.executionId))
+                .map((each) => [each.status, each.userText.slice(0, 60)]),
+            )}`,
+          )
+          return
+        }
+        if (!/restarted/i.test(resumed.userText))
+          failures.push("the resumed turn does not say Nessa restarted")
+        await expectShown(run.page, SAYS.resumed, failures, 60_000)
+        return failures.length === before
+      })
     })
   },
 
@@ -751,10 +751,6 @@ const steps = {
     const config = join(gateway.directory, "ci", "instances", INSTANCE, "config.json")
     await run.exclusive(async () => {
       const pid = gateway.server.pid
-      // The window retries its socket while the gateway restarts.
-      run.opened.noteHarmless(
-        /WebSocket connection to '.+\/session' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED/,
-      )
       if (!(await run.page.$(css.settings))) await run.page.keyboard.press(keys.settings)
       await run.page.locator(css.settingsCategory, { hasText: names.connections }).click()
       await run.page.locator(css.settingsTab, { hasText: names.linkedDevices }).click()
@@ -770,32 +766,36 @@ const steps = {
           failures.push(`linking was not ${enabled ? "off" : "on"} before the switch`)
           return
         }
-        const old = run.client
-        run.restarts += 1
-        await run.page.locator(`${css.linked} [role='switch']`).click()
-        const shown = await waitFor(
-          async () =>
-            (await run.page.locator(css.linked).getAttribute("data-linked")) === want,
-          60_000,
-        )
-        if (!shown) failures.push(`the window did not come back with linking ${want}`)
-        old.close()
-        run.client = await connectClient(gateway, INSTANCE, "panel")
-        const answered = await run.client.pairing.pending().then(
-          () => "on",
-          (error) =>
-            error?.refusal === "pairing_not_configured" ? "off" : String(error),
-        )
-        if (answered !== want)
-          failures.push(`the gateway answers linking ${answered}, not ${want}`)
-        const saved = JSON.parse(readFileSync(config, "utf8")).native
-        if (
-          (saved?.enabled !== false) !== enabled ||
-          saved?.listenAddress !== run.nativeAddress
-        )
-          failures.push(`config.json holds native ${JSON.stringify(saved)}`)
-        if (gateway.server.pid !== pid || gateway.server.exitCode !== null)
-          failures.push("the gateway did not start again in the same process")
+        await run.restartConsole.during(run.opened, async () => {
+          const before = failures.length
+          const old = run.client
+          run.restarts += 1
+          await run.page.locator(`${css.linked} [role='switch']`).click()
+          const shown = await waitFor(
+            async () =>
+              (await run.page.locator(css.linked).getAttribute("data-linked")) === want,
+            60_000,
+          )
+          if (!shown) failures.push(`the window did not come back with linking ${want}`)
+          old.close()
+          run.client = await connectClient(gateway, INSTANCE, "panel")
+          const answered = await run.client.pairing.pending().then(
+            () => "on",
+            (error) =>
+              error?.refusal === "pairing_not_configured" ? "off" : String(error),
+          )
+          if (answered !== want)
+            failures.push(`the gateway answers linking ${answered}, not ${want}`)
+          const saved = JSON.parse(readFileSync(config, "utf8")).native
+          if (
+            (saved?.enabled !== false) !== enabled ||
+            saved?.listenAddress !== run.nativeAddress
+          )
+            failures.push(`config.json holds native ${JSON.stringify(saved)}`)
+          if (gateway.server.pid !== pid || gateway.server.exitCode !== null)
+            failures.push("the gateway did not start again in the same process")
+          return failures.length === before
+        })
       }
       // Esc does not close Settings; its back control returns to the app.
       await run.page.getByRole("button", { name: "Back to nessa Agent" }).first().click()
@@ -828,6 +828,41 @@ const steps = {
     else await expectShown(run.page, SAYS.report, failures)
   },
 
+  async await(run, step, failures) {
+    const text = prompt(run, STRESS.await, step)
+    const seen = await send(run, run.main.id, text, failures)
+    const { turn } = await settled(run, run.main.id, seen, text, "completed", failures)
+    if (!turn) return
+    const said = (turn.parts ?? []).map((part) => part.text ?? "").join("")
+    const found = new RegExp(`${SAYS.awaited}([0-9a-f-]+): (.*)`, "s").exec(said)
+    const reply = `${SAYS.echo}${STRESS.reply} awaited by the parent`
+    if (!found) {
+      failures.push(
+        `the await turn did not say what it waited for: ${said.slice(0, 160)}`,
+      )
+      return
+    }
+    if (!found[2].startsWith(reply))
+      failures.push(
+        `one subscribe call did not return the thread's reply: ${found[2].slice(0, 160)}`,
+      )
+    await expectShown(run.page, `${SAYS.awaited}${found[1]}: ${reply}`, failures)
+    // The reply came back in the call, so no report wakes the conversation.
+    // A report would be queued as soon as the thread's turn settled, which
+    // was before the call returned.
+    await sleep(3_000)
+    const view = await run.client.conversation.read(run.main.id)
+    if (
+      view.messages.some(
+        (each) =>
+          !seen.has(each.executionId) &&
+          each.userText.startsWith(STRESS.report) &&
+          each.userText.includes(found[1]),
+      )
+    )
+      failures.push("a report followed the reply the agent already took with subscribe")
+  },
+
   async watch(run, step, failures) {
     const text = prompt(run, STRESS.watch, step)
     const seen = await send(run, run.main.id, text, failures)
@@ -848,10 +883,14 @@ const steps = {
     // ⌘B hides the sidebar, which makes room for a pane beside; ⌘-click on a
     // row in the session list then opens it there, focused. The page is a Mac's.
     await run.page.keyboard.press(keys.toggleSidebar)
-    await sessionRow(run.page, await titleOf(run, conversationId)).click({
-      modifiers: ["Meta"],
-      timeout: 15_000,
-    })
+    await run.page
+      .locator(selectorFor.sessionListRowFor(conversationId), {
+        hasText: await titleOf(run, conversationId),
+      })
+      .click({
+        modifiers: ["Meta"],
+        timeout: 15_000,
+      })
     if (
       !(await waitFor(
         async () => (await run.page.locator(css.pane).count()) === 2,
@@ -935,12 +974,12 @@ const steps = {
     )
     await settled(run, conversationId, new Set(), first, "completed", failures)
     const title = await titleOf(run, conversationId)
-    await open(run.page, title)
+    await openStressConversation(run.page, conversationId, title)
     const second = prompt(run, STRESS.reply, step, " aside again")
     const seen = await send(run, conversationId, second, failures)
     await settled(run, conversationId, seen, second, "completed", failures)
     await expectShown(run.page, `${SAYS.echo}${second}`, failures)
-    await open(run.page, run.main.title)
+    await openStressConversation(run.page, run.main.id, run.main.title)
   },
 
   async fresh(run, step, failures) {
@@ -991,7 +1030,7 @@ const steps = {
       await Promise.allSettled(burst)
       for (const client of clients) client.close()
     }
-    await open(run.page, run.main.title)
+    await openStressConversation(run.page, run.main.id, run.main.title)
   },
 
   async park(run, step, failures) {
@@ -1024,7 +1063,11 @@ const steps = {
     }
     // A person opens the parked conversation and writes in it: the window
     // shows it with no agent running, and Send starts one.
-    await open(run.page, await titleOf(run, conversationId))
+    await openStressConversation(
+      run.page,
+      conversationId,
+      await titleOf(run, conversationId),
+    )
     const second = prompt(run, STRESS.reply, step, " after parking")
     const seen = await send(
       run,
@@ -1046,7 +1089,7 @@ const steps = {
       failures.push(`the next message left the lease ${after?.lease?.state ?? "missing"}`)
     else if (!(after.lease.revision > (before.lease?.revision ?? 0)))
       failures.push("the next message ran on the parked agent's lease, not a new one")
-    await open(run.page, run.main.title)
+    await openStressConversation(run.page, run.main.id, run.main.title)
   },
 
   async rename(run, step, failures) {
@@ -1066,11 +1109,10 @@ const steps = {
       failures,
     )
     if (failures.length) return
-    const title = await titleOf(run, conversationId)
     const renamed = `Renamed s${run.knobs.seed} ${step.index}`
     // As a person does: the row's More menu under the pointer, Rename, the
     // new title typed over the old one, and Return.
-    await choose(run.page, title, "Rename")
+    await choose(run.page, conversationId, "Rename")
     const field = run.page.locator("[data-session-rename]")
     await field.fill(renamed)
     await field.press("Enter")
@@ -1082,9 +1124,9 @@ const steps = {
       )
     }, 15_000)
     if (!listed) failures.push("the gateway's list never said the new title")
-    await rowShown(run.page, renamed, failures)
+    await rowShown(run.page, conversationId, renamed, failures)
     // A message after the rename keeps the person's title, not the first message's.
-    await open(run.page, renamed)
+    await openStressConversation(run.page, conversationId, renamed)
     const second = prompt(run, STRESS.reply, step, " after rename")
     const seen = await send(
       run,
@@ -1096,7 +1138,7 @@ const steps = {
     await settled(run, conversationId, seen, second, "completed", failures)
     if ((await titleOf(run, conversationId)) !== renamed)
       failures.push("a message after the rename changed the title back")
-    await open(run.page, run.main.title)
+    await openStressConversation(run.page, run.main.id, run.main.title)
   },
 
   async delete(run, step, failures) {
@@ -1108,8 +1150,7 @@ const steps = {
     )
     await settled(run, conversationId, new Set(), first, "completed", failures)
     if (failures.length) return
-    const title = await titleOf(run, conversationId)
-    await choose(run.page, title, "Delete…")
+    await choose(run.page, conversationId, "Delete…")
     const asked = run.page.locator("[data-delete-session]")
     await asked.waitFor({ timeout: 10_000 })
     // Marked as the delete is confirmed, and no sooner: from here a
@@ -1130,7 +1171,7 @@ const steps = {
     if (conversations.some((each) => each.conversationId === conversationId))
       failures.push("the gateway's list still holds the deleted conversation")
     const hidden = await waitFor(
-      async () => (await sessionRow(run.page, title).count()) === 0,
+      async () => (await sessionRow(run.page, conversationId).count()) === 0,
       15_000,
     )
     if (!hidden) failures.push("the window still lists the deleted conversation")
@@ -1212,12 +1253,16 @@ const steps = {
         )
     }
     // A person opens the long conversation and writes in it.
-    await open(run.page, await titleOf(run, conversationId))
+    await openStressConversation(
+      run.page,
+      conversationId,
+      await titleOf(run, conversationId),
+    )
     const last = prompt(run, STRESS.reply, step, " after the long answers")
     const seen = await send(run, conversationId, last, failures)
     await settled(run, conversationId, seen, last, "completed", failures)
     await expectShown(run.page, `${SAYS.echo}${last}`, failures)
-    await open(run.page, run.main.title)
+    await openStressConversation(run.page, run.main.id, run.main.title)
   },
 }
 
@@ -1519,7 +1564,11 @@ await main(
     const origin = new URL(stack.url).origin
     await withEngines(options, rep, async (engine, browser) => {
       const layout = options.layouts[0]
+      let restartConsole
       const opened = await openPage(browser, {
+        preparePage: async (page) => {
+          restartConsole = observeGatewayRestarts(page, stack.endpoint)
+        },
         url: `${origin}/desktop.html`,
         layout,
         lines: { engine, layout },
@@ -1527,7 +1576,7 @@ await main(
           [gatewayHost, { endpoint: stack.endpoint, credential: stack.credential }],
         ],
       })
-      const run = new Run(stack, opened, knobs)
+      const run = new Run(stack, opened, knobs, restartConsole)
       const base = { engine, layout }
       let followers = []
       try {
@@ -1538,7 +1587,7 @@ await main(
         await run.client.conversation.submit(run.client.conversation.prepare(id, first))
         await settled(run, id, new Set(), first, "completed", setup)
         run.main = { id, title: await titleOf(run, id) }
-        await open(run.page, run.main.title)
+        await openStressConversation(run.page, run.main.id, run.main.title)
         if (setup.length) {
           rep.add({ name: "setup", ...base, failures: setup })
           return
@@ -1641,7 +1690,11 @@ await main(
         await Promise.allSettled(run.background)
         await Promise.allSettled(followers.map((each) => each.close()))
         stack.client = run.client
-        await opened.close()
+        try {
+          await opened.close()
+        } finally {
+          restartConsole.dispose()
+        }
       }
     })
   },

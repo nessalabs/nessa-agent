@@ -7,7 +7,7 @@ use super::super::{
     Relay,
 };
 use super::MAX_BUILT_IN_LINE_BYTES;
-use crate::mcp_servers::application::{BuiltInFuture, BuiltInServer};
+use crate::mcp_servers::application::{BuiltInAnswer, BuiltInFuture, BuiltInServer};
 use crate::mcp_servers::domain::ConfigurationKey;
 use nessa_sdk::domain::agent_execution::sessions::SessionId;
 use nessa_sdk::infrastructure::acp::sessions::StandInGrants;
@@ -21,12 +21,37 @@ use tokio::io::{AsyncWriteExt, BufReader, DuplexStream, ReadHalf, WriteHalf};
 use tokio::sync::watch;
 
 /// `echo` answers its arguments; `wait` answers once stopped. Says which
-/// session each call was for, and which calls were stopped.
+/// session each call was for, which calls were stopped, and which answers
+/// were delivered or let go undelivered.
 #[derive(Default)]
 struct Fake {
     sessions: Mutex<Vec<String>>,
     stopped: Arc<Mutex<Vec<String>>>,
+    delivered: Arc<Mutex<Vec<String>>>,
+    let_go: Arc<Mutex<Vec<String>>>,
     revision: Mutex<String>,
+}
+
+type Names = Arc<Mutex<Vec<String>>>;
+
+/// Records its name once the answer carrying it is gone, delivered or not.
+struct Gone(String, Names);
+impl Drop for Gone {
+    fn drop(&mut self) {
+        self.1.lock().unwrap().push(self.0.clone());
+    }
+}
+
+fn marked(result: Value, name: String, delivered: &Names, let_go: &Names) -> BuiltInAnswer {
+    let gone = Gone(name.clone(), let_go.clone());
+    let delivered = delivered.clone();
+    BuiltInAnswer {
+        result,
+        delivered: Some(Box::new(move || {
+            delivered.lock().unwrap().push(name);
+            drop(gone);
+        })),
+    }
 }
 impl BuiltInServer for Fake {
     fn name(&self) -> &str {
@@ -51,16 +76,18 @@ impl BuiltInServer for Fake {
             .unwrap()
             .push(session.as_str().to_owned());
         let stopped = self.stopped.clone();
+        let (delivered, let_go) = (self.delivered.clone(), self.let_go.clone());
         Box::pin(async move {
             if tool == "wait" {
                 let _ = stop.wait_for(|stop| *stop).await;
-                stopped
-                    .lock()
-                    .unwrap()
-                    .push(arguments["name"].as_str().unwrap().into());
-                return json!({"content": [], "isError": true});
+                let name = arguments["name"].as_str().unwrap().to_owned();
+                stopped.lock().unwrap().push(name.clone());
+                let result = json!({"content": [], "isError": true});
+                return marked(result, name, &delivered, &let_go);
             }
-            json!({"content": [{"type": "text", "text": arguments.to_string()}], "call": call})
+            let result =
+                json!({"content": [{"type": "text", "text": arguments.to_string()}], "call": call});
+            marked(result, tool, &delivered, &let_go)
         })
     }
 }
@@ -141,6 +168,17 @@ impl Client {
     }
 }
 
+/// Waits until `list` holds `names`.
+async fn holds(list: &Mutex<Vec<String>>, names: &[&str]) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while list.lock().unwrap().as_slice() != names {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the answers are let go");
+}
+
 async fn stopped(fake: &Fake, names: &[&str]) {
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
@@ -177,6 +215,12 @@ async fn a_built_in_server_answers_mcp_for_the_conversation_its_grant_names() {
     assert_eq!(called["id"], 2);
     assert_eq!(called["result"]["content"][0]["text"], r#"{"say":"hi"}"#);
     assert_eq!(*opened.fake.sessions.lock().unwrap(), ["conversation"]);
+    holds(&opened.fake.let_go, &["echo"]).await;
+    assert_eq!(
+        *opened.fake.delivered.lock().unwrap(),
+        ["echo"],
+        "a written answer is delivered"
+    );
     let unknown = client
         .ask(json!({"jsonrpc": "2.0", "id": 3, "method": "resources/list"}))
         .await;
@@ -208,6 +252,11 @@ async fn a_cancelled_call_is_stopped_and_not_answered() {
         .ask(json!({"jsonrpc": "2.0", "id": 8, "method": "ping"}))
         .await;
     assert_eq!(pong["id"], 8);
+    holds(&opened.fake.let_go, &["seven"]).await;
+    assert!(
+        opened.fake.delivered.lock().unwrap().is_empty(),
+        "an answer its caller cancelled is let go undelivered"
+    );
 }
 
 #[tokio::test]
