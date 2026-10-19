@@ -48,6 +48,8 @@ mod installed_launch;
 mod local_auth;
 #[cfg(unix)]
 mod managed_adapter;
+#[cfg(unix)]
+mod native_linking;
 mod native_pairing;
 #[cfg(unix)]
 mod opencode_profile;

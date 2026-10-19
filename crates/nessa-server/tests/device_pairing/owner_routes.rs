@@ -29,7 +29,10 @@ use nessa_server::conversation::application::{FenceCapture, FenceCaptureError};
 use nessa_server::{
     agents::application::{AgentProbe, AgentProbeEvidence},
     app::dependencies::RuntimeDependencies,
-    device_pairing::infrastructure::{InvitationEntropy, PairingOwnerCommands},
+    device_pairing::{
+        application::{LinkingApply, LinkingCaller, LinkingChange, LinkingError, NativeLinking},
+        infrastructure::{InvitationEntropy, PairingOwnerCommands},
+    },
     product::{ProductDependencies, ProductRouteState},
     server::entrypoint::http,
 };
@@ -49,9 +52,48 @@ impl AgentProbe for NoAgents {
     }
 }
 
+/// What `pairing.setLinking` asked, answering `answer` to each.
+struct Linking {
+    asked: std::sync::Mutex<Vec<(LinkingCaller, bool)>>,
+    answer: Result<LinkingApply, LinkingError>,
+}
+
+impl Linking {
+    fn answering(answer: Result<LinkingApply, LinkingError>) -> Arc<Self> {
+        Arc::new(Self {
+            asked: std::sync::Mutex::new(Vec::new()),
+            answer,
+        })
+    }
+    fn asked(&self) -> Vec<(LinkingCaller, bool)> {
+        self.asked.lock().unwrap().clone()
+    }
+}
+
+impl NativeLinking for Linking {
+    fn set(
+        &self,
+        caller: LinkingCaller,
+        enabled: bool,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<LinkingChange, LinkingError>> + Send + '_>,
+    > {
+        self.asked.lock().unwrap().push((caller, enabled));
+        let answer = self
+            .answer
+            .map(|applies| LinkingChange { enabled, applies });
+        Box::pin(async move { answer })
+    }
+}
+
 /// Serve the real product route for `fixture`'s gateway, with or without its
 /// owner pairing commands.
 async fn serve(fixture: &Fixture, pairing: bool) -> SocketAddr {
+    serve_with(fixture, pairing, None).await
+}
+
+/// [`serve`], with `linking` behind `pairing.setLinking`.
+async fn serve_with(fixture: &Fixture, pairing: bool, linking: Option<Arc<Linking>>) -> SocketAddr {
     let mut state = ProductRouteState::new(
         ResourceId::new("gateway").unwrap(),
         OrganizationId::new("org").unwrap(),
@@ -76,6 +118,9 @@ async fn serve(fixture: &Fixture, pairing: bool) -> SocketAddr {
             fixture.gateway.clone(),
             Arc::new(|| Box::new(OsEntropy) as Box<dyn InvitationEntropy>),
         )));
+    }
+    if let Some(linking) = linking {
+        state = state.with_native_linking(linking);
     }
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
@@ -288,7 +333,8 @@ async fn owner_route_refuses_a_member_before_disclosure() {
         panic!("a new member credential is issued");
     };
     let member = String::from_utf8(evidence.expose_bytes().to_vec()).unwrap();
-    let address = serve(&fixture, true).await;
+    let linking = Linking::answering(Ok(LinkingApply::Restarting));
+    let address = serve_with(&fixture, true, Some(linking.clone())).await;
     let token = fixture.owner_token.clone();
     let owned =
         blocking(|| ProductClient::connect(address, &token).ok("pairing.create", json!({})));
@@ -308,11 +354,13 @@ async fn owner_route_refuses_a_member_before_disclosure() {
                 "pairing.approve",
                 json!({"invitationId": id, "deviceKey": vec![7; 32]}),
             ),
+            ("pairing.setLinking", json!({"enabled": false})),
         ] {
             assert_eq!(client.refused(method, params), "forbidden", "{method}");
         }
     });
     assert_eq!(fixture.registry.pending_pairings().unwrap(), before);
+    assert!(linking.asked().is_empty(), "Cedar refused before the port");
     let missing = blocking(|| {
         ProductClient::connect(address, &token)
             .refused("pairing.status", json!({"invitationId": vec![9; 16]}))
@@ -516,6 +564,12 @@ async fn owner_route_refuses_malformed_params_before_the_store() {
                 json!({"invitationId": vec![1; 16], "deviceKey": vec![1; 31]}),
             ),
             ("pairing.approve", json!({"invitationId": vec![1; 16]})),
+            ("pairing.setLinking", json!({})),
+            ("pairing.setLinking", json!({"enabled": "yes"})),
+            (
+                "pairing.setLinking",
+                json!({"enabled": true, "requestId": "r"}),
+            ),
         ] {
             assert_eq!(
                 owner.refused(method, params.clone()),
@@ -546,6 +600,45 @@ async fn owner_route_without_native_pairing_is_not_configured() {
         }
     });
     assert!(fixture.registry.pending_pairings().unwrap().is_empty());
+}
+
+/// Row L23 (route side): `pairing.setLinking` is answered while native
+/// pairing is off — turning it on is how it comes to run — with the caller
+/// named to the port, and each refusal said as its own code. Without a port
+/// it is unavailable.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn set_linking_is_answered_while_pairing_is_off() {
+    let fixture = Fixture::new().await;
+    let token = fixture.owner_token.clone();
+    let linking = Linking::answering(Ok(LinkingApply::Restarting));
+    let address = serve_with(&fixture, false, Some(linking.clone())).await;
+    let answer = blocking(|| {
+        ProductClient::connect(address, &token).ok("pairing.setLinking", json!({"enabled": true}))
+    });
+    assert_eq!(answer, json!({"enabled": true, "applies": "restarting"}));
+    let asked = linking.asked();
+    assert_eq!(asked.len(), 1);
+    assert_eq!(asked[0].0.principal_id, "owner");
+    assert!(asked[0].1);
+    for (error, code) in [
+        (LinkingError::Busy, "pairing_busy"),
+        (LinkingError::AddressInUse, "pairing_address_in_use"),
+        (LinkingError::Unavailable, "pairing_unavailable"),
+        (LinkingError::AuditUnavailable, "pairing_audit_unavailable"),
+    ] {
+        let address = serve_with(&fixture, false, Some(Linking::answering(Err(error)))).await;
+        let refused = blocking(|| {
+            ProductClient::connect(address, &token)
+                .refused("pairing.setLinking", json!({"enabled": false}))
+        });
+        assert_eq!(refused, code);
+    }
+    let address = serve(&fixture, true).await;
+    let refused = blocking(|| {
+        ProductClient::connect(address, &token)
+            .refused("pairing.setLinking", json!({"enabled": true}))
+    });
+    assert_eq!(refused, "pairing_unavailable");
 }
 
 /// Row A11: approval's typed stop reaches the wire, `retryable` for a

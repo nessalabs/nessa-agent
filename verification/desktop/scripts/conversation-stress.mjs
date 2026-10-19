@@ -36,6 +36,11 @@
  *               gateway parks its agent (its lease ends `idle`); it is opened
  *               in the window and the message sent there starts the agent
  *               again on its provider session
+ *   linking     native linking is turned on, then off, with the switch in
+ *               Settings › Connections › Linked devices; each time the gateway
+ *               saves config.json and starts itself again in the same
+ *               process, the window comes back to the new state, and the
+ *               message sent after it is answered
  *
  * Meanwhile `--parallel` background conversations take turns through the
  * gateway (every third one a watch), and `--followers` other clients follow
@@ -57,7 +62,7 @@
  *   NESSA_STRESS_ROUNDS=60 pnpm test:e2e:stress # the same, from the environment
  */
 import { randomUUID } from "node:crypto"
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { setTimeout as sleep } from "node:timers/promises"
@@ -81,7 +86,8 @@ import {
 } from "./lib/gateway-stack.mjs"
 import { main } from "./lib/run.mjs"
 import { writeView } from "./lib/scripted-evidence.mjs"
-import { composerControls, css, offeredLabel } from "./lib/selectors.mjs"
+import { composerControls, css, keys, names, offeredLabel } from "./lib/selectors.mjs"
+import { freePort } from "./lib/server.mjs"
 import { Follower } from "./lib/stress-followers.mjs"
 import { KNOBS, describe, knobsFrom, plan, random } from "./lib/stress-plan.mjs"
 
@@ -168,6 +174,8 @@ class Run {
     /** Other conversations a step opened that the final rest check sweeps too. */
     this.checked = []
     this.sent = new Map()
+    /** Where native linking listens once the `linking` step turns it on. */
+    this.nativeAddress = stack.nativeAddress
   }
 
   /** Waits while a restart holds the gateway. */
@@ -622,6 +630,65 @@ const steps = {
     })
   },
 
+  async linking(run, step, failures) {
+    const gateway = run.stack.gateway
+    const config = join(gateway.directory, "ci", "instances", INSTANCE, "config.json")
+    await run.exclusive(async () => {
+      const pid = gateway.server.pid
+      // The window retries its socket while the gateway restarts.
+      run.opened.noteHarmless(
+        /WebSocket connection to '.+\/session' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED/,
+      )
+      if (!(await run.page.$(css.settings))) await run.page.keyboard.press(keys.settings)
+      await run.page.locator(css.settingsCategory, { hasText: names.connections }).click()
+      await run.page.locator(css.settingsTab, { hasText: names.linkedDevices }).click()
+      for (const enabled of [true, false]) {
+        const want = enabled ? "on" : "off"
+        const before = await waitFor(
+          async () =>
+            (await run.page.locator(css.linked).getAttribute("data-linked")) ===
+            (enabled ? "off" : "on"),
+          30_000,
+        )
+        if (!before) {
+          failures.push(`linking was not ${enabled ? "off" : "on"} before the switch`)
+          return
+        }
+        const old = run.client
+        run.restarts += 1
+        await run.page.locator(`${css.linked} [role='switch']`).click()
+        const shown = await waitFor(
+          async () =>
+            (await run.page.locator(css.linked).getAttribute("data-linked")) === want,
+          60_000,
+        )
+        if (!shown) failures.push(`the window did not come back with linking ${want}`)
+        old.close()
+        run.client = await connectClient(gateway, INSTANCE, "panel")
+        const answered = await run.client.pairing.pending().then(
+          () => "on",
+          (error) =>
+            error?.refusal === "pairing_not_configured" ? "off" : String(error),
+        )
+        if (answered !== want)
+          failures.push(`the gateway answers linking ${answered}, not ${want}`)
+        const saved = JSON.parse(readFileSync(config, "utf8")).native
+        if (
+          (saved?.enabled !== false) !== enabled ||
+          saved?.listenAddress !== run.nativeAddress
+        )
+          failures.push(`config.json holds native ${JSON.stringify(saved)}`)
+        if (gateway.server.pid !== pid || gateway.server.exitCode !== null)
+          failures.push("the gateway did not start again in the same process")
+      }
+      // Esc does not close Settings; its back control returns to the app.
+      await run.page.getByRole("button", { name: "Back to nessa Agent" }).first().click()
+      await run.page.waitForSelector(css.settings, { state: "detached", timeout: 10_000 })
+    })
+    // The restarted gateway still answers the conversation, in the window.
+    if (failures.length === 0) await steps.reply(run, step, failures)
+  },
+
   async delegate(run, step, failures) {
     const text = prompt(run, STRESS.delegate, step)
     const seen = await send(run, run.main.id, text, failures)
@@ -1011,6 +1078,7 @@ async function atRest(run, ids) {
 
 async function startStack(options) {
   const knobs = knobsFrom(options)
+  const nativeAddress = `127.0.0.1:${await freePort()}`
   const directory = mkdtempSync(join(tmpdir(), "nessa-stress-"))
   const scenario = join(directory, "stress.json")
   writeFileSync(
@@ -1037,6 +1105,8 @@ async function startStack(options) {
       scenario,
       evidence: options.evidence,
       limits: { agentIdleSeconds: knobs.parks > 0 ? PARK_IDLE_SECONDS : 0 },
+      // Off, at a port of its own: the `linking` step turns it on from Settings.
+      native: { enabled: false, listenAddress: nativeAddress },
     })
   } catch (error) {
     rmSync(directory, { recursive: true, force: true })
@@ -1053,6 +1123,7 @@ async function startStack(options) {
   return panelTarget(stack, () => ({
     knobs,
     agent: options.agent,
+    nativeAddress,
     endpoint: stack.gateway.url.replace(/^http/, "ws"),
   }))
 }
