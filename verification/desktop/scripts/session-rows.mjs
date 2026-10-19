@@ -186,13 +186,20 @@ Checks, per engine:
         const before = await openId(page)
         let row = await quietRow(page)
         let id = await row.getAttribute("data-session-row")
+        row = rowById(page, id)
         const wrapper = () => rowById(page, id).locator("xpath=..")
 
         // A mouse drag is the drag to a pane: the row does not slide.
         const box = await row.boundingBox()
         await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
         await page.mouse.down()
+        await page
+          .locator(".split-panes-ghost[data-drag-waiting]")
+          .waitFor({ state: "attached", timeout: 3_000 })
         await page.mouse.move(box.x + 20, box.y + box.height / 2, { steps: 8 })
+        await page
+          .locator(".split-panes-ghost:not([data-drag-waiting])")
+          .waitFor({ state: "attached", timeout: 3_000 })
         const dragged = await wrapper().getAttribute("data-swipe")
         await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2, { steps: 4 })
         await page.mouse.up()

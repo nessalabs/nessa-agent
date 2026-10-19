@@ -237,6 +237,18 @@ fn snapshot_header(value: &SessionSnapshot) -> usize {
         .saturating_add(value.provider.context().len())
         .saturating_add(
             value
+                .model_change
+                .as_ref()
+                .map_or(0, |record| record.retained_payload_bytes()),
+        )
+        .saturating_add(
+            value
+                .current_configuration
+                .as_ref()
+                .map_or(0, |record| record.retained_payload_bytes()),
+        )
+        .saturating_add(
+            value
                 .provider_context
                 .recorded()
                 .map_or(0, |id| id.as_str().len()),
@@ -408,7 +420,9 @@ pub(super) fn touched(
         .and_then(|id| positions.get(id))
         .and_then(|index| snapshot.invocations.get(*index));
     base.saturating_add(match change {
-        SessionChange::Opened { .. } => snapshot_header(snapshot),
+        SessionChange::Opened { .. }
+        | SessionChange::ModelChanged(_)
+        | SessionChange::ConfigurationChanged(_) => snapshot_header(snapshot),
         SessionChange::InputAccepted(_) => {
             if include_input {
                 record.map_or(0, invocation)

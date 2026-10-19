@@ -11,6 +11,7 @@ use nessa_sdk::application::agent_execution::permissions::{
     ApprovalAttribution, ApprovalBasis, PermissionAnswer, PermissionCancellationRequest,
     QuestionAnswer,
 };
+use nessa_sdk::application::agent_execution::providers::HarnessHostIdentity;
 use nessa_sdk::application::agent_execution::providers::{
     ApprovalMode, ProviderOpenError, ProviderOpenRequest,
 };
@@ -395,6 +396,9 @@ struct StallingOpen {
     registered: Notify,
 }
 impl AgentProvider for StallingOpen {
+    fn harness_host_identity(&self) -> HarnessHostIdentity<'_> {
+        self.inner.harness_host_identity()
+    }
     fn identity(&self) -> ProviderIdentity {
         self.inner.identity()
     }
@@ -499,7 +503,9 @@ async fn panicking_lock_waiter_does_not_fail_the_admission_that_released_it() {
                     agent.idle_for_approval_change().await;
                 }),
                 LockWaiter::SetApprovalMode => Box::pin(async {
-                    let _ = agent.set_approval_mode(ApprovalMode::Ask).await;
+                    let _ = agent
+                        .set_approval_mode(ApprovalMode::Ask, close_action())
+                        .await;
                 }),
                 LockWaiter::CommittedSnapshot => Box::pin(async {
                     agent.session_manager().snapshot().await;
@@ -806,7 +812,9 @@ impl JoinedOperation {
             ),
             Self::SetApprovalMode => (
                 Box::pin(async {
-                    let _ = agent.set_approval_mode(ApprovalMode::Ask).await;
+                    let _ = agent
+                        .set_approval_mode(ApprovalMode::Ask, close_action())
+                        .await;
                 }),
                 format!("approval mode change of session {session}"),
             ),

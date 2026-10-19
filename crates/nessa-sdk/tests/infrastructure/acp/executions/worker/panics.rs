@@ -157,6 +157,7 @@ async fn begin(
                 },
                 None,
             ),
+            Arc::new(|| Ok(())),
             reply,
         ))
         .await
@@ -290,6 +291,9 @@ async fn audit_panics_attempt_all_cleanup_records_and_retain_process_for_retry()
                         }
                         ExecutionAuditRecord::LateProviderResult(_) => {
                             panic!("explicit close did not record a late provider result")
+                        }
+                        ExecutionAuditRecord::ConfigurationControlled(_) => {
+                            panic!("explicit close did not issue a configuration control")
                         }
                         ExecutionAuditRecord::NativeHooksLaunch(_) => {
                             panic!("explicit close did not record a hooks launch")
@@ -484,6 +488,7 @@ async fn worker_phase_panics_preserve_scope_and_startup_or_execution_receipt() {
                         },
                         None,
                     ),
+                    Arc::new(|| Ok(())),
                     reply,
                 ))
                 .await

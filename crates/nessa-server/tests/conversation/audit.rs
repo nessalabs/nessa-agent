@@ -13,6 +13,7 @@ use nessa_sdk::application::agent_execution::{
         PermissionAnswerRecord, QuestionAnswerRecord, QuestionRefusalRecord, RefusedAsk,
         ReviewDeclineRecord,
     },
+    providers::ProviderOperationStage,
     sessions::SessionManager,
     tools::ToolReviewInput,
 };
@@ -38,6 +39,7 @@ use nessa_sdk::domain::agent_execution::{
     ExecutionError,
 };
 use nessa_sdk::infrastructure::session_storage::{InMemoryStorage, RuntimeMessageCommitClock};
+use serde_json::Value;
 use std::fs;
 struct TestClock;
 impl Clock for TestClock {
@@ -119,6 +121,7 @@ async fn audit_maps_attachment_and_admission_evidence_without_losing_correlation
     assert!(admission["approvalMode"].is_null());
     assert!(admission["effortLevel"].is_null());
     assert!(admission["admissionGeneration"].is_null());
+    assert_eq!(admission.get("model"), Some(&Value::Null));
     assert_eq!(admission["before"], "unowned");
     assert_eq!(admission["after"], "owned");
     assert_eq!(admission["cause"], "submitted");
@@ -1322,3 +1325,292 @@ fn audit_maps_why_a_hooks_launch_happened() {
 
 #[path = "audit/physical.rs"]
 mod physical;
+
+#[tokio::test]
+async fn native_configuration_audit_keeps_requested_and_acknowledged_settings_separate() {
+    use nessa_sdk::application::agent_execution::providers::ApprovalMode;
+    let factory = Arc::new(ProviderFactory::default());
+    let audit = Arc::new(RecordingModeExecutionAudit::default());
+    let manager = SessionManager::open(
+        Some(SessionId::new("configuration-session").unwrap()),
+        Arc::new(InMemoryStorage::new()),
+        Arc::new(RuntimeMessageCommitClock::new()),
+    )
+    .await
+    .unwrap();
+    let agent = Agent::prepare(
+        Arc::new(Provider::new(factory.clone())),
+        manager,
+        audit.clone(),
+    )
+    .await
+    .unwrap();
+    let attachment = agent
+        .authorize_attachment(AttachmentRequest::CallerRequested(actor()))
+        .unwrap();
+    agent
+        .start_attachment(attachment)
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
+    agent
+        .set_approval_mode(
+            ApprovalMode::Auto,
+            ActionContext::new("person", "window", "approval-choice").unwrap(),
+        )
+        .await
+        .unwrap();
+    let target = Arc::new(Provider::new(factory.clone()).with_model("second-model"));
+    agent
+        .set_model(
+            target.clone(),
+            ActionContext::new("person", "window", "model-choice").unwrap(),
+        )
+        .await
+        .unwrap();
+    assert!(agent
+        .set_model(
+            target,
+            ActionContext::new("person", "window", "unchanged-model").unwrap()
+        )
+        .await
+        .is_err());
+    *factory.mode_failure.lock().unwrap() =
+        Some(AgentError::Transport("controlled preset failure".into()));
+    assert!(agent
+        .set_approval_mode(
+            ApprovalMode::Full,
+            ActionContext::new("person", "window", "failed-preset").unwrap()
+        )
+        .await
+        .is_err());
+    let values = audit
+        .records
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|record| matches!(record, ExecutionAuditRecord::ConfigurationControlled(_)))
+        .map(record_value)
+        .collect::<Vec<_>>();
+    let model = values
+        .iter()
+        .filter(|value| value["actor"]["requestId"] == "model-choice")
+        .collect::<Vec<_>>();
+    assert_eq!(model.len(), 3);
+    for record in &model {
+        assert_eq!(record["kind"], "configuration_control");
+        assert_eq!(record["sessionId"], "configuration-session");
+        assert!(!record["attachmentGeneration"].as_str().unwrap().is_empty());
+        assert_eq!(record["before"]["provider"]["name"], "gateway-test");
+        assert_eq!(record["before"]["provider"]["modelId"], "test");
+        assert_eq!(record["before"]["provider"]["context"], "test");
+        assert_eq!(record["before"]["configuration"]["approvalMode"], "auto");
+        assert_eq!(record["request"]["kind"], "model");
+        assert_eq!(record["request"]["provider"]["modelId"], "second-model");
+        assert_eq!(record["actor"]["principalId"], "person");
+        assert_eq!(record["actor"]["surfaceId"], "window");
+        assert_eq!(record["cause"], "caller_requested");
+    }
+    assert_eq!(model[0]["stage"], "requested");
+    assert_eq!(model[0]["acknowledged"], Value::Null);
+    for record in &model[1..] {
+        assert_eq!(
+            record["acknowledged"]["provider"]["modelId"],
+            "second-model"
+        );
+        assert_eq!(
+            record["acknowledged"]["configuration"]["approvalMode"],
+            "ask"
+        );
+    }
+    assert_eq!(model[1]["stage"], "acknowledged");
+    assert_eq!(model[2]["stage"], "applied");
+    for (request, stage) in [("unchanged-model", "refused"), ("failed-preset", "failed")] {
+        let record = values
+            .iter()
+            .find(|value| value["actor"]["requestId"] == request && value["stage"] == stage)
+            .unwrap();
+        assert_eq!(record["acknowledged"], Value::Null);
+        assert_eq!(record["before"]["provider"]["modelId"], "second-model");
+    }
+    let approval = values
+        .iter()
+        .find(|value| {
+            value["actor"]["requestId"] == "approval-choice" && value["stage"] == "applied"
+        })
+        .unwrap();
+    assert_eq!(approval["request"]["kind"], "approval_mode");
+    assert_eq!(approval["request"]["approvalMode"], "auto");
+    assert_eq!(
+        approval["acknowledged"]["configuration"]["approvalMode"],
+        "auto"
+    );
+    agent.close(actor()).await.unwrap();
+}
+
+#[tokio::test]
+async fn durable_queue_admission_keeps_the_admitted_model_after_selection_changes() {
+    use nessa_sdk::application::agent_execution::{
+        agents::SteeringDelivery,
+        executions::{ExecutionRequest, Submitter},
+    };
+    use nessa_sdk::domain::agent_execution::{
+        executions::{GrantInitiator, Initiation},
+        prompts::{PromptText, UserMessage},
+    };
+
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("audit");
+    let sink = DurableExecutionAudit::new(path.clone(), Arc::new(TestClock)).unwrap();
+    let factory = Arc::new(ProviderFactory::default());
+    let audit = Arc::new(RecordingModeExecutionAudit::default());
+    let manager = SessionManager::open(
+        Some(SessionId::new("admission-model-session").unwrap()),
+        Arc::new(InMemoryStorage::new()),
+        Arc::new(RuntimeMessageCommitClock::new()),
+    )
+    .await
+    .unwrap();
+    let agent = Agent::prepare(
+        Arc::new(Provider::new(factory.clone())),
+        manager,
+        audit.clone(),
+    )
+    .await
+    .unwrap();
+    let attachment = agent
+        .authorize_attachment(AttachmentRequest::CallerRequested(actor()))
+        .unwrap();
+    agent
+        .start_attachment(attachment)
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
+    let admitted_model = agent.provider_identity();
+    let input = |id: &str| ExecutionRequest {
+        execution_id: ExecutionId::new(id).unwrap(),
+        user_message: UserMessage::text_only(PromptText::new("message").unwrap()),
+        estimated_input_tokens: 1,
+        reserved_output_tokens: 1,
+    };
+    let (release, gate) = tokio::sync::oneshot::channel();
+    *factory.execution_gate.lock().unwrap() = Some(gate);
+    let active = agent
+        .enqueue(input("active"), Submitter::owner(actor()))
+        .await
+        .unwrap();
+    factory.execution_started.notified().await;
+    let queued = agent
+        .enqueue(input("queued"), Submitter::owner(actor()))
+        .await
+        .unwrap();
+    let boundary = agent
+        .enqueue_steering(input("boundary"), Submitter::owner(actor()))
+        .await
+        .unwrap();
+    // A different initiator cannot join this active turn. Public steer takes
+    // the PromptRequired path and retains the input for its own invocation.
+    let steered = match agent
+        .steer(
+            input("steered"),
+            Submitter::new(
+                ActionContext::new("another-person", "window", "steer").unwrap(),
+                Initiation::checked_grant(GrantInitiator::new("shared-conversation", 1).unwrap()),
+            ),
+        )
+        .await
+        .unwrap()
+    {
+        SteeringDelivery::Queued(receipt) => receipt,
+        SteeringDelivery::Injected { .. } => panic!("a different initiator must queue"),
+    };
+    assert_eq!(*factory.executions.lock().unwrap(), vec!["active"]);
+    let records = audit
+        .records
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|record| {
+            matches!(record, ExecutionAuditRecord::QueueAdmitted(record)
+            if record.execution_id().as_str() != "active")
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(records.len(), 3);
+    for record in records {
+        let ExecutionAuditRecord::QueueAdmitted(admission) = &record else {
+            unreachable!()
+        };
+        assert_eq!(admission.model(), Some(&admitted_model));
+        sink.record(record).await.unwrap();
+    }
+    let durable = fs::read_dir(path)
+        .unwrap()
+        .map(|file| {
+            let path = file.unwrap().path();
+            let bytes = fs::read(&path).unwrap();
+            (path, bytes)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(durable.len(), 3);
+    let refused = agent
+        .set_model(
+            Arc::new(Provider::new(factory.clone()).with_model("second-model")),
+            ActionContext::new("person", "window", "model-choice-while-queued").unwrap(),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(refused.error(), &AgentError::Busy);
+    assert_eq!(refused.stage(), ProviderOperationStage::BeforeEffect);
+    assert_eq!(agent.provider_identity(), admitted_model);
+    assert!(factory.model_updates.lock().unwrap().is_empty());
+    assert_eq!(*factory.executions.lock().unwrap(), vec!["active"]);
+    release.send(()).unwrap();
+    for receipt in [active, queued, boundary, steered] {
+        let id = receipt.id().clone();
+        assert_eq!(
+            receipt.wait().await,
+            Ok(ExecutionOutcome::Completed),
+            "admitted receipt {id:?} completes before the model choice"
+        );
+    }
+    agent
+        .set_model(
+            Arc::new(Provider::new(factory.clone()).with_model("second-model")),
+            ActionContext::new("person", "window", "model-choice").unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(agent.provider_identity().model_id(), "second-model");
+    assert_eq!(factory.model_updates.lock().unwrap().len(), 1);
+    let mut modes = Vec::new();
+    for (path, bytes) in durable {
+        assert_eq!(fs::read(path).unwrap(), bytes);
+        let value: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(value["observedAtMs"], 1234);
+        assert_eq!(value["record"]["kind"], "queue_admitted");
+        assert_eq!(value["record"]["sessionId"], "admission-model-session");
+        assert_eq!(
+            value["record"]["model"],
+            json!({
+                "name":"gateway-test", "modelId":"test", "context":"test"
+            })
+        );
+        modes.push((
+            value["record"]["executionId"].as_str().unwrap().to_owned(),
+            value["record"]["mode"].as_str().unwrap().to_owned(),
+        ));
+    }
+    modes.sort();
+    assert_eq!(
+        modes,
+        vec![
+            ("boundary".into(), "boundary_steering".into()),
+            ("queued".into(), "queued".into()),
+            ("steered".into(), "steering".into()),
+        ]
+    );
+    agent.close(actor()).await.unwrap();
+}

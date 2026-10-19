@@ -133,6 +133,7 @@ import { isSignedOut } from "../../../../session"
 import { agentForProvider } from "../../../model/composer-options"
 import {
   WorkspaceSourceError,
+  WorkspaceModelError,
   type WorkspaceSource,
   type WorkspaceUpdate,
 } from "../../application/ports"
@@ -165,6 +166,8 @@ export interface GatewayClient {
     | "answerQuestion"
     | "stop"
     | "setApprovalMode"
+    | "setModel"
+    | "read"
     | "archive"
     | "rename"
     | "delete"
@@ -1578,6 +1581,57 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
           return connected.conversation.setApprovalMode(sessionId, mode)
         })
       }),
+    setModel: (sessionId, { provider, modelId }, requestId, _initiator) =>
+      within(async (live) => {
+        await transcriptOf(sessionId, "person")
+        const current = knownModel(sessionId)
+        if (!current) throw new WorkspaceModelError("unavailable", true)
+        if (current.provider !== provider)
+          throw new WorkspaceModelError("not-supported", false)
+        // Read reconciles a lost native receipt. Refollow uses the existing
+        // bounded frame owner; the read or ACK does not fabricate a frame.
+        const reconcile = async () => {
+          const fresh = await dispatch(live, (connected) =>
+            connected.conversation.read(sessionId),
+          )
+          if (fresh.modelChange || fresh.approvalModeChange)
+            throw new WorkspaceModelError("unavailable", true)
+          const following = views.get(sessionId)
+          if (following) letGo(following)
+          await transcriptOf(sessionId, "person")
+          const applied = reads.get(sessionId)?.view
+          if (
+            !applied ||
+            !runningModel(applied) ||
+            applied.modelChange ||
+            applied.approvalModeChange
+          )
+            throw new WorkspaceModelError("unavailable", true)
+        }
+        let sourceReconciled: boolean
+        let receipt: Awaited<ReturnType<GatewayClient["conversation"]["setModel"]>>
+        try {
+          await reconcile()
+          receipt = await dispatch(live, (connected) => {
+            held(sessionId)
+            return connected.conversation.setModel(sessionId, modelId, { requestId })
+          })
+        } catch (error) {
+          if (error instanceof WorkspaceModelError) throw error
+          const refused = refusalOf(error)
+          throw new WorkspaceModelError(
+            refused instanceof WorkspaceSourceError ? refused.reason : "unavailable",
+            !(error instanceof NessaConversationControlError) || error.uncertain,
+            refused instanceof WorkspaceSourceError ? refused.diagnostic : undefined,
+          )
+        } finally {
+          sourceReconciled = await reconcile().then(
+            () => true,
+            () => false,
+          )
+        }
+        return { ...receipt, sourceReconciled }
+      }),
     // The gateway keeps no pin.
     setPinned: () => Promise.reject(new WorkspaceSourceError("not-supported")),
     archive: (sessionId) =>
@@ -1959,6 +2013,8 @@ function reasonFor(
     // audit that did not answer, an outcome the gateway could not settle.
     case ConversationErrorCode.ApprovalModeNotApplied:
     case ConversationErrorCode.ApprovalModeUncertain:
+    case ConversationErrorCode.ModelChangeNotApplied:
+    case ConversationErrorCode.ModelChangeUncertain:
     case ConversationErrorCode.ApprovalRequestConflict:
     case ConversationErrorCode.TurnRunning:
     case ConversationErrorCode.ConversationCapacity:

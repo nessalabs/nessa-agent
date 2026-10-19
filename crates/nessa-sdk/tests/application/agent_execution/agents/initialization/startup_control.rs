@@ -1,5 +1,6 @@
 //! Startup controls remain bound to one owned provider attachment generation.
 use super::*;
+use nessa_sdk::application::agent_execution::providers::HarnessHostIdentity;
 
 struct IgnoredStartupControlProvider {
     inner: Arc<TestProvider>,
@@ -9,6 +10,9 @@ struct IgnoredStartupControlProvider {
 }
 
 impl AgentProvider for IgnoredStartupControlProvider {
+    fn harness_host_identity(&self) -> HarnessHostIdentity<'_> {
+        self.inner.harness_host_identity()
+    }
     fn identity(&self) -> ProviderIdentity {
         self.inner.identity()
     }

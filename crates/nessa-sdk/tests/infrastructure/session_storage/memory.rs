@@ -20,6 +20,8 @@ fn opening(id: &SessionId, name: &str) -> (SessionSaveUnit, SessionSnapshot) {
         context: ProviderContext::Absent,
     };
     let snapshot = SessionSnapshot {
+        model_change: None,
+        current_configuration: None,
         id: id.clone(),
         provider,
         provider_context: ProviderContext::Absent,
@@ -39,6 +41,8 @@ fn context(prior: &SessionSnapshot, name: &str) -> (SessionSaveUnit, SessionSnap
         after: context.clone(),
     };
     let snapshot = SessionSnapshot {
+        model_change: None,
+        current_configuration: None,
         provider_context: context,
         ..prior.clone()
     };

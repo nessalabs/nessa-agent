@@ -574,6 +574,9 @@ async fn a_retry_whose_agent_cannot_attach_yet_is_tried_again() {
     tokio::time::timeout(BOUND, retries).await.unwrap().unwrap();
 }
 
+#[path = "resumption/model_controls.rs"]
+mod model_controls;
+
 /// A close that lands while the agent of a conversation a restart left owed
 /// is still opening lets its history go: the next command opens it again
 /// instead of finding the history still held (`storage: Busy`) until the

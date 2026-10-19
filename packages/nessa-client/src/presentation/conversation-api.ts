@@ -34,6 +34,7 @@ import type {
   ConversationReorderResult,
   ConversationRevokePermissionRuleResult,
   ConversationSetApprovalModeResult,
+  ConversationSetModelResult,
   ConversationCapability,
   ConversationShareResult,
   ConversationSharesCursor,
@@ -61,6 +62,7 @@ import {
   conversationMutation,
   conversationReorder,
   conversationApprovalMode,
+  conversationModel,
   conversationShareResult,
   conversationShares,
   maxPolicyRevision,
@@ -124,7 +126,7 @@ export type ConversationCreateOptions = ConversationActionOptions & {
    * this gateway does not run is refused by the gateway, as a
    * NessaConversationMutationError with `uncertain` false. */
   agent?: string
-  /** Exact catalog model fixed when a new conversation is created. */
+  /** Initial catalog model when a new conversation is created. */
   model?: string
   /** Initial provider preset; omitted selects ask. */
   approvalMode?: ApprovalMode
@@ -160,12 +162,18 @@ export function conversationTitle(text: string): string | null {
 export type ConversationApi = {
   /** Create or reopen a conversation. The gateway answers when the original attachment is ready. IDs are generated when options are omitted. */
   create: (options?: ConversationCreateOptions) => Promise<ConversationCreateResult>
-  /** Change the provider preset only while this conversation has no running turn. */
+  /** Change the provider preset using its native application boundary; pending reviews retain their identity. */
   setApprovalMode: (
     conversationId: string,
     mode: ApprovalMode,
     options?: ConversationActionOptions,
   ) => Promise<ConversationSetApprovalModeResult>
+  /** Change model within this provider. Acknowledgement describes the native effect boundary. */
+  setModel: (
+    conversationId: string,
+    model: string,
+    options?: ConversationActionOptions,
+  ) => Promise<ConversationSetModelResult>
   /** Read current provider lifecycle, output, queue, tools, and complete actionable permission choices. */
   read: (conversationId: string) => Promise<ConversationView>
   /**
@@ -793,6 +801,17 @@ export function createConversationApi(
           ...environment,
         },
         (value) => conversationId(value, id),
+      )
+    },
+    setModel: (id, model, options = {}) => {
+      validConversationId(id)
+      boundedText(model, "Model", 256)
+      const requestId = boundedText(options.requestId ?? newId(), "Request ID", 256)
+      return mutate(
+        ProductMethod.ConversationSetModel,
+        { conversationId: id, requestId, model },
+        (value) => conversationModel(value, requestId, model),
+        false,
       )
     },
     setApprovalMode: (id, mode, options = {}) => {

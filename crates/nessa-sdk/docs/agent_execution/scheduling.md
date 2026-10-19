@@ -247,7 +247,7 @@ stateDiagram-v2
             [*] --> Waiting
             Waiting --> Active: selected
             Waiting --> Settling: withdrawal / stop / close / attachment or admission failure
-            Active --> Executing: invocation entered
+            Active --> Executing: serialized native handoff accepted
             Executing --> Settling: result / Stop / panic
             Settling --> Retired: original persistence and recovery finish
         }
@@ -385,6 +385,43 @@ at the next priority boundary. Unsupported steering returns `Unsupported`; choos
 Timeouts, transport failures, and malformed replies are never converted to a new
 prompt because delivery may already have happened. Ambiguous steering or evidence
 failure stops waiting work with a retained `RunnerStopped` reason.
+
+The validation binding follows the operation that owns fresh input; a saved
+submission first recovers its exact identity and receipt without fresh validation.
+The active invocation retains its immutable configured-provider owner, rather
+than looking up an older model by name or copying a separate capabilities cache.
+An acknowledged model transition changes that active steering binding only for
+`SubsequentResponses`; `NextTurn` leaves it with the active turn. Model control
+holds the Scheduler lock through acknowledgement and publication. Both queued
+selection (`run_queue`) and direct invocation (`invoke`) need that same lock
+before execution, so the original active turn may finish during acknowledgement
+but a new active turn cannot replace it. This existing admission owner is the
+barrier; binding publication adds no separate generation or execution-ID rule.
+`dropped_model_caller_keeps_owned_settlement_and_original_actor` covers the
+retained control and later-control serialization; it does not independently
+claim a public replacement-invocation race witness. Configured admission, backend preflight and worker profile validation must consume
+the same operation-selected binding; a mutable attachment selection is not that
+authority. The profile validates the supplied capabilities, without resolving the
+current model again.
+
+| Fresh or retained operation | Configuration owner | Required regression |
+| --- | --- | --- |
+| Same-initiator native steering after `NextTurn` | Active invocation's retained provider A, even while next-turn selection is B | Custom conforming native-steering provider: widening B cannot admit input invalid for A; narrowing B cannot reject valid A input |
+| Same-initiator native steering after `SubsequentResponses` | Active invocation's binding advanced to acknowledged B | Widening B admits input B supports; narrowing B refuses input B cannot accept |
+| No active target, or a different initiator | Current selection B for its own queued invocation | No native dispatch; B admission limits apply |
+| Native `PromptRequired` explicitly confirms nonconsumption | Current selection B before acquiring queued ownership | Input accepted for native A but invalid for queued B is refused, never queued or dispatched as B; input valid for both queues once with original identity and B audit provenance |
+| Exact saved steering retry / changed same-ID request | Original receipt / `SubmissionConflict`, before either current-model check | Native injected retry remains identical with zero additional native calls or admission writes |
+| Operation-selected native binding crosses adapter validation | The same selected capabilities pass through ProviderSession, backend preflight and the ACP steering command/worker; model-dependent profile checks use that supplied binding, while frame and negotiated checks remain intact | Model-aware custom backend plus actual ACP transport: unequal A/B output ceilings with NextTurn native A, SubsequentResponses native B and queued B. The fixture records both native delivery and successor prompts before shutdown; explicit retirement after a refused before-probe confirms cleanup and retains the transport-closed active receipt. Actual before: both NextTurn output cases refused with InvalidInput while both SubsequentResponses cases passed. Fixed ACP four and model-aware public ten pass. Independently substituting backend B or worker B reproduces two failures with two positive counterparts, and each exact restoration passes all four |
+
+The public regressions in `tests/application/agent_execution/agents/models/steering.rs`
+cover these cases, including exact injected retries and conflicting identities.
+The before implementation failed four cases while six positive counterparts
+passed; the corrected ten-case matrix passes. Omitting the routing choice,
+connected validation binding, response-timing update, or fallback validation
+reproduces the corresponding failure, and each exact restoration passes.
+Built-in Codex does not offer native steering; the `NextTurn` plus native-steering
+case is a public custom-provider composition. Claude's `SubsequentResponses`
+contract continues to use B for a subsequent response.
 
 The ACP adapter negotiates native steering support during initialization and uses
 `_session/steering` with host-owned idle delivery. Detached provider-started turns

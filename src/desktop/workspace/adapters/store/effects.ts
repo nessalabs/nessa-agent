@@ -1,3 +1,4 @@
+import { modelConfirmed } from "../../model/model-choice"
 /**
  * What follows from a change of state, whoever caused it — a click, a
  * keystroke, an agent's dispatch: a session on screen now — in a pane, or in
@@ -224,5 +225,26 @@ export function workspaceEffects(
     },
   })
 
+  listener.startListening({
+    predicate: (_action, current, previous) => current.workspace !== previous.workspace,
+    effect: (_action, api) => {
+      const state = api.getState().workspace
+      for (const [sessionId, choice] of Object.entries(state.modelChoices)) {
+        if (
+          modelConfirmed(
+            choice,
+            sessionOf(state, sessionId)?.model,
+            entry(state.transcripts, sessionId)?.modelControl?.pending,
+          )
+        )
+          api.dispatch(
+            workspaceActions.modelChoiceCleared({
+              sessionId,
+              requestId: choice.requestId,
+            }),
+          )
+      }
+    },
+  })
   return listener
 }

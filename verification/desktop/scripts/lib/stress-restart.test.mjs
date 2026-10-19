@@ -7,7 +7,9 @@ import { watchLines } from "./page-lines.mjs"
 const endpoint = "ws://127.0.0.1:12345"
 const REFUSED = "Could not connect to 127.0.0.1: Connection refused"
 const RESET = "Error receiving data: Connection reset by peer"
-function fixture() {
+const LOST = "The network connection was lost."
+const CONNECT = "Could not connect to the server."
+function fixture(defaultCause = REFUSED) {
   const page = new EventEmitter()
   const lines = watchLines()
   page.on("console", (message) => {
@@ -24,7 +26,7 @@ function fixture() {
     page.emit("websocket", ws)
     return ws
   }
-  const consoleError = (cause = REFUSED, url = endpoint + "/session") => {
+  const consoleError = (cause = defaultCause, url = endpoint + "/session") => {
     const text = `WebSocket connection to '${url}' failed: ${cause}`
     page.emit("console", {
       type: () => "error",
@@ -32,7 +34,7 @@ function fixture() {
       location: () => ({}),
     })
   }
-  const fail = (ws, cause = REFUSED) => {
+  const fail = (ws, cause = defaultCause) => {
     consoleError(cause, ws.url())
     ws.emit("socketerror", cause)
   }
@@ -43,6 +45,8 @@ function fixture() {
 for (const cause of [
   REFUSED,
   RESET,
+  LOST,
+  CONNECT,
   "Error in connection establishment: net::ERR_CONNECTION_REFUSED",
 ]) {
   test(`exact owned ${cause} is retained as harmless only after recovery`, async () => {
@@ -89,79 +93,81 @@ test("an identical error after verified recovery is still a failure", async () =
   f.observer.dispose()
 })
 
-for (const [name, body] of [
-  [
-    "console without socket evidence",
-    (f) => {
-      f.consoleError()
-      f.recover()
-      return true
-    },
-  ],
-  [
-    "socket without a new receiving connection",
-    (f) => {
-      f.fail(f.socket())
-      return true
-    },
-  ],
-  [
-    "failed recovery assertion",
-    (f) => {
-      f.fail(f.socket())
-      f.recover()
-      return false
-    },
-  ],
-  [
-    "unknown socket cause",
-    (f) => {
-      f.fail(f.socket(), "TLS certificate expired")
-      f.recover()
-      return true
-    },
-  ],
-  [
-    "another gateway",
-    (f) => {
-      f.fail(f.socket("ws://127.0.0.1:54321/session"))
-      f.recover()
-      return true
-    },
-  ],
-  [
-    "another path",
-    (f) => {
-      f.fail(f.socket(endpoint + "/other"))
-      f.recover()
-      return true
-    },
-  ],
-  [
-    "query suffix",
-    (f) => {
-      f.fail(f.socket(endpoint + "/session?other"))
-      f.recover()
-      return true
-    },
-  ],
-  [
-    "evidence overflow",
-    (f) => {
-      const ws = f.socket()
-      for (let i = 0; i < 65; i++) f.fail(ws)
-      f.recover()
-      return true
-    },
-  ],
-]) {
-  test(`${name} leaves every console error failed`, async () => {
-    const f = fixture()
-    await f.observer.during(f.opened, async () => body(f))
-    assert.equal(f.lines.harmless.length, 0)
-    assert.ok(f.lines.errors.length > 0)
-    f.observer.dispose()
-  })
+for (const cause of [REFUSED, LOST, CONNECT]) {
+  for (const [name, body] of [
+    [
+      "console without socket evidence",
+      (f) => {
+        f.consoleError()
+        f.recover()
+        return true
+      },
+    ],
+    [
+      "socket without a new receiving connection",
+      (f) => {
+        f.fail(f.socket())
+        return true
+      },
+    ],
+    [
+      "failed recovery assertion",
+      (f) => {
+        f.fail(f.socket())
+        f.recover()
+        return false
+      },
+    ],
+    [
+      "unknown socket cause",
+      (f) => {
+        f.fail(f.socket(), "TLS certificate expired")
+        f.recover()
+        return true
+      },
+    ],
+    [
+      "another gateway",
+      (f) => {
+        f.fail(f.socket("ws://127.0.0.1:54321/session"))
+        f.recover()
+        return true
+      },
+    ],
+    [
+      "another path",
+      (f) => {
+        f.fail(f.socket(endpoint + "/other"))
+        f.recover()
+        return true
+      },
+    ],
+    [
+      "query suffix",
+      (f) => {
+        f.fail(f.socket(endpoint + "/session?other"))
+        f.recover()
+        return true
+      },
+    ],
+    [
+      "evidence overflow",
+      (f) => {
+        const ws = f.socket()
+        for (let i = 0; i < 65; i++) f.fail(ws)
+        f.recover()
+        return true
+      },
+    ],
+  ]) {
+    test(`${name} (${cause}) leaves every console error failed`, async () => {
+      const f = fixture(cause)
+      await f.observer.during(f.opened, async () => body(f))
+      assert.equal(f.lines.harmless.length, 0)
+      assert.ok(f.lines.errors.length > 0)
+      f.observer.dispose()
+    })
+  }
 }
 
 test("throw retains error evidence and retires the observation before another action", async () => {

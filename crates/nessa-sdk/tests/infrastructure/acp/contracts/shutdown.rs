@@ -26,7 +26,7 @@ async fn runtime_failure_close_uses_the_authoritative_execution_correlation() {
                 assert_eq!(
                     opened
                         .session
-                        .execute(prompt("execution"))
+                        .execute(prompt("execution"), Arc::new(|| Ok(())))
                         .await
                         .into_result(),
                     Ok(ExecutionOutcome::Completed)
@@ -104,7 +104,10 @@ async fn isolated_bindings_and_close_during_streaming() {
     let active = start(&a, "long").await;
     next(&mut a).await;
     assert_eq!(
-        a.session.execute(prompt("busy")).await.into_result(),
+        a.session
+            .execute(prompt("busy"), Arc::new(|| Ok(())))
+            .await
+            .into_result(),
         Err(AgentError::Busy)
     );
     a.session
@@ -140,10 +143,13 @@ async fn prompt_deadline_and_dropped_handles_cleanup() {
         .unwrap();
     // Once the agent has the prompt, the execution's bound passes.
     let (answer, ()) = promptly(async {
-        tokio::join!(opened.session.execute(prompt("test")), async {
-            wait_for_file(&root, "prompt-observed").await;
-            clock.advance(limit);
-        })
+        tokio::join!(
+            opened.session.execute(prompt("test"), Arc::new(|| Ok(()))),
+            async {
+                wait_for_file(&root, "prompt-observed").await;
+                clock.advance(limit);
+            }
+        )
     })
     .await;
     assert_eq!(answer.into_result(), Err(AgentError::Deadline));

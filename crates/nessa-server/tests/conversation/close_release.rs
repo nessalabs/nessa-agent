@@ -20,6 +20,8 @@ use nessa_sdk::domain::common::value_objects::{ImageMediaType, Sha256Digest};
 
 fn snapshot(invocations: Vec<InvocationRecord>) -> SessionSnapshot {
     SessionSnapshot {
+        model_change: None,
+        current_configuration: None,
         id: SessionId::new("00000000-0000-4000-8000-00000000000c").unwrap(),
         provider: ProviderIdentity::new("gateway-test", "test", "test").unwrap(),
         provider_context: ProviderContext::Recorded(ExecutionSessionId::new("provider-1").unwrap()),

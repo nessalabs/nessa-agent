@@ -345,9 +345,11 @@ impl ConversationService {
         if !self.holds_open(id, &live).await || stuck(&live).await {
             return false;
         }
-        // Its approval mode is not settled: nothing runs until it is, and
-        // the next opening resumes it.
-        if !matches!(self.inner.metadata.pending_mode_change(id).await, Ok(None)) {
+        // Its selection is not settled: normal configuration recovery must
+        // reconcile the journal before any owed turn resumes.
+        if !matches!(self.inner.metadata.pending_mode_change(id).await, Ok(None))
+            || !matches!(self.inner.metadata.pending_model_change(id).await, Ok(None))
+        {
             return false;
         }
         let Ok(actor) = ActionContext::new("gateway", "resume_owed", Uuid::new_v4().to_string())

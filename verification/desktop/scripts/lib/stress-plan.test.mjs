@@ -14,6 +14,7 @@ test("every required step appears as often as its number says", () => {
   const knobs = knobsFrom({ rounds: "40", seed: "9" }, {})
   const steps = plan(knobs)
   const count = (kind) => steps.filter((step) => step.kind === kind).length
+  assert.equal(count("model"), knobs.modelSwitches)
   assert.equal(count("stop"), knobs.stops)
   assert.equal(count("parent-stop"), knobs.parentstops)
   assert.equal(count("fail"), knobs.fails)
@@ -46,10 +47,12 @@ test("a failure is always followed by a reply, and a switch never picks the mode
       if (step.kind === "fail") assert.equal(steps[index + 1]?.kind, "reply")
       if (step.kind === "switch") {
         assert.notEqual(step.from, step.to)
-        assert.ok(["permission", "reviews", "large"].includes(steps[index + 1]?.kind))
+        assert.ok(
+          ["permission", "reviews", "large", "model"].includes(steps[index + 1]?.kind),
+        )
         assert.equal(steps[index + 1]?.mode, step.to)
       }
-      if (step.kind === "reviews" || step.kind === "large")
+      if (step.kind === "reviews" || step.kind === "large" || step.kind === "model")
         assert.notEqual(step.mode, "full")
     })
   }
@@ -76,4 +79,76 @@ test("parent Stop appears once by default and at the raised flag or environment 
   assert.equal(count(knobsFrom({ parentstops: "3" }, {})), 3)
   assert.equal(count(knobsFrom({}, { NESSA_STRESS_PARENTSTOPS: "4" })), 4)
   assert.equal(count(knobsFrom({ parentstops: "0" }, {})), 0)
+})
+
+test("positive model steps retain default and raised counts, run last, and enter Ask", () => {
+  for (let seed = 0; seed < 50; seed += 1) {
+    for (const count of [1, 6]) {
+      const steps = plan(
+        knobsFrom({ seed: String(seed), modelSwitches: String(count) }, {}),
+      )
+      const first = steps.findIndex((step) => step.kind === "model")
+      assert.equal(steps.filter((step) => step.kind === "model").length, count)
+      assert.ok(steps.slice(first).every((step) => step.kind === "model"))
+      let mode = "ask"
+      for (const step of steps) {
+        if (step.kind === "switch") {
+          assert.equal(step.from, mode)
+          mode = step.to
+        }
+        if (step.kind === "model") {
+          assert.equal(step.mode, "ask")
+          assert.equal(mode, "ask")
+        }
+      }
+    }
+  }
+})
+
+test("the legacy seed preserves the existing non-model work's relative order", () => {
+  const steps = plan(
+    knobsFrom(
+      {
+        parentstops: "0",
+        windows: "0",
+        linkings: "0",
+        awaits: "0",
+        fresh: "0",
+        renames: "0",
+        deletes: "0",
+      },
+      {},
+    ),
+  )
+  // A forced Ask before a card has no following switch-witness permission.
+  // Keep the original seed's required work and its existing witness turns.
+  const original = steps.filter(
+    (step, index) =>
+      step.kind !== "model" &&
+      !(step.kind === "switch" && steps[index + 1]?.after !== "switch"),
+  )
+  assert.deepEqual(
+    original.map((step) => step.kind),
+    [
+      "delegate",
+      "park",
+      "stop",
+      "long",
+      "watch",
+      "fail",
+      "reply",
+      "switch",
+      "permission",
+      "reviews",
+      "switch",
+      "permission",
+      "restart",
+      "aside",
+      "large",
+      "switch",
+      "permission",
+      "stop",
+      "aside",
+    ],
+  )
 })

@@ -88,6 +88,8 @@ pub(super) fn turn(id: &str, message: UserMessage, tools: Vec<ToolCallUpdate>) -
 }
 pub(super) fn snapshot(invocations: Vec<InvocationRecord>) -> SessionSnapshot {
     SessionSnapshot {
+        model_change: None,
+        current_configuration: None,
         id: SessionId::new("session").unwrap(),
         provider: ProviderIdentity::new("provider", "model", "").unwrap(),
         provider_context: ProviderContext::Recorded(ExecutionSessionId::new("provider").unwrap()),

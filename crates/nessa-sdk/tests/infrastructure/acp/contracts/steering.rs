@@ -54,6 +54,7 @@ async fn steering_injects_into_the_target_and_keeps_output_with_its_invocation()
             .steer(
                 ExecutionId::new("first").unwrap(),
                 prompt("adjust course"),
+                &opened.session.capabilities(),
                 &|| {}
             )
             .await
@@ -100,7 +101,12 @@ async fn idle_race_returns_prompt_required_without_a_detached_invocation() {
     assert_eq!(
         opened
             .session
-            .steer(ExecutionId::new("first").unwrap(), prompt("later"), &|| {})
+            .steer(
+                ExecutionId::new("first").unwrap(),
+                prompt("later"),
+                &opened.session.capabilities(),
+                &|| {}
+            )
             .await
             .map_err(|failure| failure.into_error())
             .unwrap(),
@@ -131,6 +137,7 @@ async fn stale_target_and_unsupported_steering_never_send_the_message() {
             .steer(
                 ExecutionId::new("old").unwrap(),
                 prompt("must not arrive"),
+                &opened.session.capabilities(),
                 &|| {},
             )
             .await
@@ -146,7 +153,12 @@ async fn stale_target_and_unsupported_steering_never_send_the_message() {
         assert!(matches!(
             opened
                 .session
-                .steer(ExecutionId::new("newer").unwrap(), invalid, &|| {})
+                .steer(
+                    ExecutionId::new("newer").unwrap(),
+                    invalid,
+                    &opened.session.capabilities(),
+                    &|| {}
+                )
                 .await
                 .map_err(|failure| failure.into_error()),
             Err(AgentError::InvalidInput(_))
@@ -180,6 +192,7 @@ async fn ambiguous_steering_errors_are_terminal_and_never_replayed() {
             opened.session.steer(
                 ExecutionId::new("first").unwrap(),
                 prompt("ambiguous"),
+                &opened.session.capabilities(),
                 &|| {},
             ),
         )
@@ -223,6 +236,7 @@ async fn pending_steering_blocks_new_prompts_and_close_settles_the_reply() {
             .steer(
                 ExecutionId::new("first").unwrap(),
                 prompt("pending"),
+                &session.capabilities(),
                 &|| {},
             )
             .await
@@ -230,7 +244,11 @@ async fn pending_steering_blocks_new_prompts_and_close_settles_the_reply() {
     });
     wait_for_file(&root, "steering-observed").await;
     assert_eq!(
-        opened.session.execute(prompt("newer")).await.into_result(),
+        opened
+            .session
+            .execute(prompt("newer"), Arc::new(|| Ok(())))
+            .await
+            .into_result(),
         Err(AgentError::Busy)
     );
     assert_eq!(
@@ -239,6 +257,7 @@ async fn pending_steering_blocks_new_prompts_and_close_settles_the_reply() {
             .steer(
                 ExecutionId::new("first").unwrap(),
                 prompt("another"),
+                &opened.session.capabilities(),
                 &|| {}
             )
             .await
@@ -282,6 +301,7 @@ async fn steering_has_a_deadline_even_when_execution_has_none() {
             .steer(
                 ExecutionId::new("first").unwrap(),
                 prompt("pending"),
+                &session.capabilities(),
                 &|| {},
             )
             .await
@@ -334,6 +354,7 @@ async fn a_completed_target_cannot_steer_the_next_running_invocation() {
             .steer(
                 ExecutionId::new("first").unwrap(),
                 prompt("finish first"),
+                &opened.session.capabilities(),
                 &|| {}
             )
             .await
@@ -355,7 +376,12 @@ async fn a_completed_target_cannot_steer_the_next_running_invocation() {
     assert_eq!(
         opened
             .session
-            .steer(ExecutionId::new("first").unwrap(), prompt("stale"), &|| {})
+            .steer(
+                ExecutionId::new("first").unwrap(),
+                prompt("stale"),
+                &opened.session.capabilities(),
+                &|| {}
+            )
             .await
             .map_err(|failure| failure.into_error())
             .unwrap(),
@@ -512,7 +538,7 @@ async fn failed_restoration_clears_previously_negotiated_operation_support() {
     assert!(matches!(
         opened
             .session
-            .execute(prompt("restore"))
+            .execute(prompt("restore"), Arc::new(|| Ok(())))
             .await
             .into_result(),
         Err(AgentError::Unsupported(_))
@@ -548,6 +574,7 @@ async fn oversized_steering_is_rejected_without_interrupting_the_active_prompt()
             .steer(
                 ExecutionId::new("active-survives").unwrap(),
                 oversized,
+                &opened.session.capabilities(),
                 &|| {}
             )
             .await
@@ -563,6 +590,7 @@ async fn oversized_steering_is_rejected_without_interrupting_the_active_prompt()
             .steer(
                 ExecutionId::new("active-survives").unwrap(),
                 prompt("valid-followup"),
+                &opened.session.capabilities(),
                 &|| {},
             )
             .await

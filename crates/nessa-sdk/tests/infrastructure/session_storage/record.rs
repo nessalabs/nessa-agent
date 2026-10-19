@@ -454,6 +454,8 @@ async fn late_invalid_unit_never_appends_valid_prefix() {
         after: ProviderContext::Recorded(ExecutionSessionId::new("valid-prefix-context").unwrap()),
     };
     let candidate = SessionSnapshot {
+        model_change: None,
+        current_configuration: None,
         provider_context: ProviderContext::Recorded(
             ExecutionSessionId::new("valid-prefix-context").unwrap(),
         ),

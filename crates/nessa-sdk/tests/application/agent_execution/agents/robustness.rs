@@ -1,5 +1,7 @@
 //! Deterministic stream and subscriber failure probes using local test adapters.
 use super::*;
+use nessa_sdk::application::agent_execution::providers::HarnessHostIdentity;
+use nessa_sdk::application::agent_execution::providers::NativeExecutionHandoff;
 use nessa_sdk::application::agent_execution::providers::ProviderOpenFuture;
 
 struct ExhaustedProvider {
@@ -28,6 +30,9 @@ impl ExecutionEventStream for ExhaustedEvents {
     }
 }
 impl AgentProvider for ExhaustedProvider {
+    fn harness_host_identity(&self) -> HarnessHostIdentity<'_> {
+        HarnessHostIdentity::local()
+    }
     fn identity(&self) -> ProviderIdentity {
         ProviderIdentity::new("exhaustion-probe", "fixture", "test").unwrap()
     }
@@ -128,8 +133,16 @@ impl ProviderSessionBackend for ExhaustedBackend {
     fn prepare_invocation(&self) -> ProviderOperationFuture<'_, ()> {
         Box::pin(async { Ok(()) })
     }
-    fn execute(&self, _: ExecutionRequest) -> ProviderExecutionFuture<'_> {
-        Box::pin(async {
+    fn execute(
+        &self,
+        _: ExecutionRequest,
+        handoff: NativeExecutionHandoff,
+    ) -> ProviderExecutionFuture<'_> {
+        Box::pin(async move {
+            if let Err(error) = handoff() {
+                return ProviderExecutionReply::Rejected(error);
+            }
+
             self.0.fetch_add(1, Ordering::SeqCst);
             ProviderExecutionReply::Finished(ExecutionReport::new(
                 Some(Ok(ExecutionOutcome::Completed)),
@@ -181,8 +194,16 @@ impl ProviderSessionBackend for CloseDependentBackend {
     fn prepare_invocation(&self) -> ProviderOperationFuture<'_, ()> {
         Box::pin(async { Ok(()) })
     }
-    fn execute(&self, _: ExecutionRequest) -> ProviderExecutionFuture<'_> {
+    fn execute(
+        &self,
+        _: ExecutionRequest,
+        handoff: NativeExecutionHandoff,
+    ) -> ProviderExecutionFuture<'_> {
         Box::pin(async move {
+            if let Err(error) = handoff() {
+                return ProviderExecutionReply::Rejected(error);
+            }
+
             let result: Result<ExecutionOutcome, AgentError> = {
                 async move {
                     self.started.fetch_add(1, Ordering::SeqCst);
@@ -251,6 +272,9 @@ impl ProviderSessionBackend for CloseDependentBackend {
     }
 }
 impl AgentProvider for StreamFailureProvider {
+    fn harness_host_identity(&self) -> HarnessHostIdentity<'_> {
+        HarnessHostIdentity::local()
+    }
     fn identity(&self) -> ProviderIdentity {
         ExhaustedProvider { failure: true }.identity()
     }

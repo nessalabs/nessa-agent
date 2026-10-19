@@ -11,7 +11,9 @@ use crate::application::agent_execution::executions::{
     ExecutionEvent, ExecutionRequest, SubmissionMode,
 };
 use crate::application::agent_execution::permissions::ActionContext;
-use crate::application::agent_execution::providers::{ExecutionReport, ProviderIdentity};
+use crate::application::agent_execution::providers::{
+    ExecutionReport, ModelChangeRecord, ProviderIdentity, SessionConfigurationRecord,
+};
 pub use crate::domain::agent_execution::sessions::ProviderContext;
 use crate::domain::agent_execution::{
     executions::{
@@ -380,6 +382,10 @@ pub struct SessionSnapshot {
     pub provider: ProviderIdentity,
     /// Opaque provider context to resume without replaying input, or explicit absence.
     pub provider_context: ProviderContext,
+    /// Complete native settings acknowledged by the last explicit model selection.
+    pub model_change: Option<ModelChangeRecord>,
+    /// Latest attributed configuration control; restoration uses this current value.
+    pub current_configuration: Option<SessionConfigurationRecord>,
     /// Submitted invocations in admission order, including unresolved work.
     pub invocations: Vec<InvocationRecord>,
     /// Append-only global queue membership/order facts. Local selection precedes
@@ -404,6 +410,10 @@ pub struct SessionSnapshot {
 /// authorizes replay to run a provider or tool effect.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SessionChange {
+    /// Provider-verified same-provider model selection, preserving history and context.
+    ModelChanged(ModelChangeRecord),
+    /// A verified approval or effort change, retaining complete before/after settings.
+    ConfigurationChanged(SessionConfigurationRecord),
     /// The first empty state of a newly created conversation.
     Opened {
         /// Conversation identity.
@@ -1156,6 +1166,8 @@ mod committed_tests {
             mem::size_of::<AgentError>() + allocated
         );
         let mut snapshot = SessionSnapshot {
+            model_change: None,
+            current_configuration: None,
             id: SessionId::new("session").unwrap(),
             provider: ProviderIdentity::new("provider", "model", "workspace").unwrap(),
             provider_context: ProviderContext::Absent,

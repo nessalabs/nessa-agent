@@ -76,6 +76,7 @@ pub(super) async fn attach_agent(
 #[derive(Default)]
 pub(super) struct RecordingAudit {
     pub(super) records: Mutex<Vec<PermissionCancellation>>,
+    pub(super) configuration: Mutex<Vec<ConfigurationControlRecord>>,
     pub(super) closures: Mutex<Vec<SessionClosureRecord>>,
     pub(super) finishes: Mutex<Vec<ExecutionFinish>>,
     pub(super) answers: Mutex<Vec<PermissionAnswerRecord>>,
@@ -123,6 +124,9 @@ impl ExecutionAudit for RecordingAudit {
                 | ExecutionAuditRecord::QueueSettled(_)
                 | ExecutionAuditRecord::SteeringAcknowledged(_)
                 | ExecutionAuditRecord::EffortLevelChanged(_) => {}
+                ExecutionAuditRecord::ConfigurationControlled(record) => {
+                    self.configuration.lock().unwrap().push(record)
+                }
                 ExecutionAuditRecord::ReviewDeclined(record) => {
                     self.declines.lock().unwrap().push(record)
                 }
@@ -548,7 +552,12 @@ pub(super) async fn start(
 ) -> tokio::task::JoinHandle<Result<ExecutionOutcome, AgentError>> {
     let session = opened.session.clone();
     let input = prompt(text);
-    tokio::spawn(async move { session.execute(input).await.into_result() })
+    tokio::spawn(async move {
+        session
+            .execute(input, Arc::new(|| Ok(())))
+            .await
+            .into_result()
+    })
 }
 pub(super) async fn next(opened: &mut OpenedProviderSession) -> ExecutionUpdate {
     timeout(Duration::from_secs(3), opened.events.next())

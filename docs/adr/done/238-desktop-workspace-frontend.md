@@ -958,6 +958,28 @@ links here):
 
 ### Commands in flight
 
+The existing model picker also controls an established conversation within its
+provider. The source owns the confirmed model and pending/recovery facts; the
+window owns only the correlated choice (`model-commands.test.ts`, real-window
+`conversation-stress.mjs` model step). Access remains with `accessChoices`.
+
+| Model event | Order / owner | Result |
+| --- | --- | --- |
+| Draft pick | Existing draft-only local choice, first-send snapshot unchanged; no established local override | No setting command; creation carries its captured model. |
+| Established pick | Capture session/provider/model/requestId before await; install model-only choice; source setModel | Confirmed model stays visible; draft, review and Stop identities stay. Cross-provider choices are absent and refused by command boundary. |
+| ACK before frame / frame before ACK | Correlate original requestId and target. The gateway reports `sourceReconciled` only after its post-control read and applied catalog-model frame with no pending configuration; clear the completed token then, even if another controller now owns model B. Without that fact keep Send fenced for matching confirmation; a completed ACK permits a deliberate picker recheck through the same authoritative source preflight. | Source selection stays authoritative; no historical-target latch, optimistic applied model, second model cache or read-as-frame shortcut. |
+| Refusal / uncertain control | Preserve closed control certainty. Definite not-applied is refused; unknown receipt, unknown current model or failed reconciliation remains recovery-required and fences Send | No guessed Busy or automatic retry. A deliberate picker choice remains available after the local call completes, including a retained source Changing journal in a fresh window. Only the actual local asking call or access change holds picker admission. The choice first reads and refollows through the existing bounded source owner; no native control until that authoritative frame has no pending configuration. Send remains fenced throughout retained uncertainty. |
+| Lost ACK + failed recovery read + no frame | Retain correlated recovery-required choice, even when the old transcript has no pending field | Old source data cannot re-enable Send. Only a matching confirmed source selection or an explicit successful reconciliation can resolve the uncertainty. |
+| Send during local/source setting work | Guard before consuming draft or adding an optimistic message | Draft stays; original permission answers and Stop remain independently available. |
+| Deliberate gateway restart in window stress | Source confirms the successor of this exact cut request; within one existing 60-second UI poll, require both that successor's full userText and the completion response. Earlier pause text is not recovery evidence. | Only then proceed to the next native UI command; reclassify only already-held exact owned-endpoint network-lost/could-not-connect lines when no earlier error existed and recovery held. Future and other-endpoint failures remain errors. No automatic resend, connection state owner or additional timeout. |
+| Portable positive model journey | Existing seeded plan keeps its non-model/preset steps first, then its declared model steps; the real access shield confirms Ask before the original review is created | Same-provider picker, original review/draft/Stop and next-native-prompt model witness remain required. Concurrent and unsupported-acknowledgement negatives stay independent. |
+| Settings fixture beside window publication | The scripted Linked devices socket explicitly answers the real window's workspace.publish, with canonical UUID/safe revision and one publication per connection; stale revisions keep the held receipt. | Pairing scenarios/refusals and unknown-method errors remain independent; no production policy or protocol validator is replaced. |
+| Native linking beside model control | Settings owns its existing sequence/drop/read-after-reconnect state; the gateway saves and audits native configuration under the shared config lock, then drains and execs in the same process. Default linking/window work stays before model positives; exact model request/target/source confirmation remains independent. | Real Settings toggles use only the owned test gateway configuration and allocated loopback port. They are distinct from the stress helper's process-kill restart and cannot borrow its console classification. |
+| Shown-window publication beside model control | Desktop arrangement → shownWindow → existing publisher; stable window identity/revision belongs to that connection. Native model control keeps its independent requestId/target and source reconciliation. Window stress opens and opens beside by exact conversation ID, never title. | Publication is not model confirmation; read_window reports gateway committed metadata through existing Cedar admission. Default window work remains before portable model positives. |
+| Concurrent model controls and other commands | Existing seeded chaos model action; exact receipt target/request; source is reconciled at rest | Model not-applied/uncertain are expected only for model actions; access-mode not-applied/unavailable are expected only for mode actions. These are outcomes to reconcile, not proof of application: neither configuration change may remain pending at the final read. Window stress remains the visible operation proof. |
+| Removed/rebound session / late receipt | Forget choice with session; completion checks session and token | Old completion cannot settle another request. |
+
+
 What each command shows at once, and what each of the source's answers does
 to it. One row, at least one test (`adapters/store/commands.test.ts`,
 `application/usecases/sessions.test.ts`, `application/usecases/updates.test.ts`).
@@ -965,9 +987,10 @@ to it. One row, at least one test (`adapters/store/commands.test.ts`,
 Nothing the person does is written into what the source said. A message waits
 in an **outbox**, shown after the source's conversation, until a replacement
 from the source includes it by id; an answer to an approval waits in `answers`
-until the source's conversation no longer asks; a model chosen for the next
-turn waits in `chosenModels` until the person chooses again — no summary
-speaks for the person, whichever model it names. A new session is listed at
+until the source's conversation no longer asks. Draft model choices stay local;
+an established conversation shows its source-confirmed model. Its same-provider
+picker asks the source through `model-commands.ts`, with one immutable request
+identity in `modelChoices`; an acknowledgement is separate from a source frame. A new session is listed at
 revision 0 — the window's own — until the source first speaks of it, and every
 message sent to it meanwhile carries what it starts with, which the source
 takes once (`OutgoingMessage.start`). It shows running while any message may

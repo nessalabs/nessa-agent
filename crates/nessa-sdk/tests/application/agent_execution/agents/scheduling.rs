@@ -26,6 +26,7 @@ use crate::domain::{
     },
 };
 use crate::infrastructure::session_storage::{InMemoryStorage, RuntimeMessageCommitClock};
+use nessa_sdk::application::agent_execution::providers::HarnessHostIdentity;
 use std::{
     future::Future,
     pin::Pin,
@@ -184,6 +185,9 @@ impl ExecutionAudit for AuditPanic {
 
 struct CountingProvider(Arc<AtomicUsize>);
 impl AgentProvider for CountingProvider {
+    fn harness_host_identity(&self) -> HarnessHostIdentity<'_> {
+        HarnessHostIdentity::local()
+    }
     fn identity(&self) -> ProviderIdentity {
         TestProvider.identity()
     }
@@ -199,6 +203,9 @@ impl AgentProvider for CountingProvider {
 struct TestProvider;
 
 impl AgentProvider for TestProvider {
+    fn harness_host_identity(&self) -> HarnessHostIdentity<'_> {
+        HarnessHostIdentity::local()
+    }
     fn identity(&self) -> ProviderIdentity {
         ProviderIdentity::new("failed-pending", "fixture", "fixture").unwrap()
     }

@@ -126,6 +126,8 @@ pub enum ConversationError {
     /// Retains the original cause without claiming another slot as cleanup.
     ChildCreationRefused(Box<ConversationError>),
     TurnRunning,
+    ModelChangeNotApplied,
+    ModelChangeUncertain,
     ApprovalModeNotApplied,
     ApprovalModeUncertain,
     Capacity,

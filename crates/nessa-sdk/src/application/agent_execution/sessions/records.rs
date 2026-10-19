@@ -1,5 +1,6 @@
 //! Logical Nessa fact identity, separate from an event-stream cursor or retry ID.
 //! One accepted fact can use one inline record or several sealed physical records.
+
 pub(crate) mod continuation;
 
 use super::{
@@ -12,6 +13,10 @@ use crate::{
     application::agent_execution::{
         agents::{validate_saved_resumption, AgentError},
         executions::ExecutionUpdate,
+        providers::{
+            ModelChangeRecord, ProviderIdentity, SessionConfigurationKind,
+            SessionConfigurationRecord,
+        },
     },
     domain::agent_execution::{
         executions::{
@@ -274,6 +279,8 @@ pub(super) enum ChangeUndo {
         Option<Result<ExecutionOutcome, AgentError>>,
     ),
     Context(ProviderContext),
+    Configuration(Option<SessionConfigurationRecord>),
+    Model(ProviderIdentity, Option<ModelChangeRecord>),
     /// Provider evidence before this change. Rollback of an abandoned unit
     /// restores it with the mutations; a later context record must not see
     /// evidence for an event that was rolled back.
@@ -500,6 +507,8 @@ impl continuation::Continuation {
                 provider_evidence.validate(context)?;
                 undo.push(ChangeUndo::Opened);
                 *candidate = Some(SessionSnapshot {
+                    model_change: None,
+                    current_configuration: None,
                     id: id.clone(),
                     provider: provider.clone(),
                     provider_context: context.clone(),
@@ -792,6 +801,59 @@ impl continuation::Continuation {
                 ));
                 record.local_outcome = *local_outcome;
             }
+            SessionChange::ConfigurationChanged(record) => {
+                let snapshot = candidate
+                    .as_mut()
+                    .ok_or_else(|| corrupt("configuration change precedes session open"))?;
+                if snapshot
+                    .current_configuration
+                    .as_ref()
+                    .is_some_and(|current| Some(current.after()) != record.before())
+                {
+                    return Err(corrupt("configuration prior differs from current settings"));
+                }
+                if record.kind() == SessionConfigurationKind::Model {
+                    return Err(corrupt("model configuration requires a model change"));
+                }
+                record
+                    .validate_relationship(snapshot.model_change.as_ref())
+                    .map_err(corrupt)?;
+                undo.push(ChangeUndo::Configuration(
+                    snapshot.current_configuration.replace(record.clone()),
+                ));
+            }
+            SessionChange::ModelChanged(record) => {
+                let change = record.change();
+                let snapshot = candidate
+                    .as_mut()
+                    .ok_or_else(|| corrupt("model change precedes session open"))?;
+                if &snapshot.provider != change.before() {
+                    return Err(StorageError::IdentityMismatch);
+                }
+                if snapshot
+                    .current_configuration
+                    .as_ref()
+                    .is_some_and(|current| current.after() != change.prior_configuration())
+                {
+                    return Err(corrupt("model change prior differs from current settings"));
+                }
+                let configuration = SessionConfigurationRecord::new(
+                    Some(snapshot.current_configuration.as_ref().map_or_else(
+                        || record.change().prior_configuration().clone(),
+                        |record| record.after().clone(),
+                    )),
+                    record.configuration().clone(),
+                    record.actor().clone(),
+                    SessionConfigurationKind::Model,
+                );
+                undo.push(ChangeUndo::Configuration(
+                    snapshot.current_configuration.replace(configuration),
+                ));
+                undo.push(ChangeUndo::Model(
+                    std::mem::replace(&mut snapshot.provider, change.after().clone()),
+                    snapshot.model_change.replace(record.clone()),
+                ));
+            }
             SessionChange::ProviderContext { before, after } => {
                 let snapshot = candidate
                     .as_mut()
@@ -995,6 +1057,14 @@ impl continuation::Continuation {
                     .saturating_add(super::retained::result_payload(result.as_ref()));
                 record.result = result;
                 record.local_outcome = outcome;
+            }
+            ChangeUndo::Model(provider, configuration) => {
+                let snapshot = self.snapshot.as_mut().expect("open");
+                snapshot.provider = provider;
+                snapshot.model_change = configuration;
+            }
+            ChangeUndo::Configuration(record) => {
+                self.snapshot.as_mut().expect("open").current_configuration = record;
             }
             ChangeUndo::Context(context) => {
                 self.snapshot.as_mut().expect("open").provider_context = context

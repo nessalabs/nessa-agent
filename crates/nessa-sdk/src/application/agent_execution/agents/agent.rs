@@ -9,7 +9,7 @@ use super::{
         AttachmentAttemptFailure, AttachmentEvidenceTransition, AttachmentFailureSource,
     },
     audit_observation::AuditObserver,
-    lifecycle::{Footing, SessionLifecycle, WorkPermit},
+    lifecycle::{SessionLifecycle, WorkPermit},
     scheduling::{ActiveInvocation, CloseMode, Scheduler},
 };
 use crate::application::agent_execution::agents::{
@@ -17,9 +17,9 @@ use crate::application::agent_execution::agents::{
 };
 use crate::application::agent_execution::caller_wake::{contain_caller_wake, CallerWaiter};
 use crate::application::agent_execution::executions::{
-    limits::MAX_RETAINED_OUTPUT_EVENTS, EffortChangeOutcome, EffortLevelChange,
-    EffortLevelChangeRecord, ExecutionAudit, ExecutionAuditRecord, ExecutionEvent,
-    ExecutionRequest, ExecutionUpdate, Submitter,
+    limits::MAX_RETAINED_OUTPUT_EVENTS, ConfigurationControl, ConfigurationControlRequest,
+    EffortChangeOutcome, EffortLevelChange, EffortLevelChangeRecord, ExecutionAudit,
+    ExecutionAuditRecord, ExecutionEvent, ExecutionRequest, ExecutionUpdate, Submitter,
 };
 use crate::application::agent_execution::hooks::{
     EvaluationSuffix, HookFailureKind, HookRegistration, InvocationHook, InvocationHooks,
@@ -32,16 +32,17 @@ use crate::application::agent_execution::permissions::{
 };
 use crate::application::agent_execution::providers::{
     validate_configured_input, AgentProvider, ApprovalMode, CleanupReport, CloseOutcome,
-    ExecutionEventStream, ExecutionReportSource, ObservationFailure, ObservationFailureCause,
-    OperationCapabilities, ProviderExecutionReply, ProviderOperationFailure,
-    ProviderOperationResult, ProviderSession, ProviderSessionState, SessionCloseRequest,
+    ExecutionEventStream, ExecutionReportSource, ModelConfiguration, ObservationFailure,
+    ObservationFailureCause, OperationCapabilities, ProviderExecutionReply, ProviderIdentity,
+    ProviderOperationFailure, ProviderOperationResult, ProviderSession, ProviderSessionState,
+    SessionCloseRequest, SessionConfigurationKind,
 };
 use crate::application::agent_execution::sessions::{
     AttachmentOpenFailureSource, InvocationCancellationEvent, MessageCommitSleep, ProviderContext,
     SessionManager, StorageError,
 };
 use crate::application::agent_execution::tools::ToolReviewInput;
-use crate::application::agent_execution::traces::GenAiSpan;
+use crate::application::agent_execution::traces::{GenAiSpan, LocalTraceStore};
 use crate::domain::agent_execution::executions::{Initiation, Initiator, ToolChecking};
 use crate::domain::agent_execution::permissions::{
     CustomPermissionCancellationReason, PendingQuestion, PendingReview, PermissionAuthorityError,
@@ -53,7 +54,7 @@ use crate::domain::model_metadata::value_objects::{EffortLevel, EffortLevels};
 use crate::domain::{
     agent_execution::{
         executions::{ExecutionId, ExecutionOutcome},
-        sessions::{AttachmentCause, ExecutionSessionId, SessionId},
+        sessions::{ExecutionSessionId, SessionId},
     },
     effective_capabilities::value_objects::EffectiveCapabilities,
 };
@@ -325,7 +326,7 @@ fn hook_attribution(
 /// checked at admission; one saved before that, and restored, is not sent.
 /// A checked turn needs a process that asks about every call, so in
 /// [`ApprovalMode::Ask`] with its own hooks not allowed to answer first.
-fn checked_tools_unsupported(
+pub(super) fn checked_tools_unsupported(
     initiation: &Initiation,
     approval_mode: Option<ApprovalMode>,
     capabilities: OperationCapabilities,
@@ -388,16 +389,8 @@ pub struct Agent {
 }
 pub(super) struct Inner {
     pub(super) instance_id: String,
-    /// A preset verified by a live change, and the provider generation of the
-    /// attachment it was applied to. It is in force only while that
-    /// attachment is: any other opens at the provider's own preset.
-    pub(super) live_approval_mode: RwLock<Option<(u64, ApprovalMode)>>,
-    /// A level verified by a live change, and the provider generation of the
-    /// attachment it was applied to. It is in force only while that
-    /// attachment is: any other opens at the provider's own level.
-    pub(super) live_effort_level: RwLock<Option<(u64, EffortLevel)>>,
-    pub(super) provider: Arc<dyn AgentProvider>,
-    capabilities: EffectiveCapabilities,
+    pub(super) provider: RwLock<Arc<dyn AgentProvider>>,
+    pub(super) traces: Option<Arc<LocalTraceStore>>,
     pub(super) audit: Arc<AuditObserver>,
     pub(super) manager: SessionManager,
     pub(super) invocation: Arc<Mutex<()>>,
@@ -424,8 +417,8 @@ impl Agent {
     /// until its agent span closes. This does not call the provider.
     pub fn read_traces(&self, conversation_id: &str) -> Vec<GenAiSpan> {
         self.inner
-            .provider
-            .traces()
+            .traces
+            .clone()
             .map(|store| store.read(conversation_id))
             .unwrap_or_default()
     }
@@ -433,7 +426,7 @@ impl Agent {
         self.inner.manager.id().as_str()
     }
     fn note_grant_trace(&self, execution_id: &ExecutionId, submitter: &Submitter) -> bool {
-        let Some(store) = self.inner.provider.traces() else {
+        let Some(store) = self.inner.traces.clone() else {
             return false;
         };
         let Initiator::Grant(grant) = submitter.initiation.initiator() else {
@@ -450,13 +443,13 @@ impl Agent {
         true
     }
     fn retire_grant_trace(&self, execution_id: &ExecutionId) {
-        let Some(store) = self.inner.provider.traces() else {
+        let Some(store) = self.inner.traces.clone() else {
             return;
         };
         store.retire(self.trace_conversation(), execution_id.as_str());
     }
     fn note_hook_trace(&self, execution_id: &str, verdict: &str) {
-        let Some(store) = self.inner.provider.traces() else {
+        let Some(store) = self.inner.traces.clone() else {
             return;
         };
         store.note_hook(
@@ -615,52 +608,12 @@ impl Agent {
         })
         .await
     }
-    /// The approval preset in force: the one last verified by a live change
-    /// on the current attachment, or else the provider's own
-    /// ([`AgentProvider::approval_mode`]), which every new attachment a
-    /// caller opens starts at. An attachment the agent recovers by itself
-    /// keeps the live change of the one it replaces. Either way it is also
-    /// the answer while none is attached, so work admitted then names the
-    /// mode the next attachment will run at. `None` means this provider
-    /// makes no claim.
+    /// The confirmed current preset, retained across attachment retirement.
+    /// `None` means this provider makes no claim.
     pub fn approval_mode(&self) -> Option<ApprovalMode> {
-        self.approval_mode_on(self.inner.lifecycle.footing())
+        self.current_provider().approval_mode()
     }
-    /// The preset of what accepted the work ([`Footing`], read with its
-    /// permit). With nothing attached, the preset is the one a later
-    /// attachment runs at: the binding's, or the live change an automatic
-    /// recovery keeps (`carried_approval_mode`). Close can detach the
-    /// current attachment before the admission record is written; the
-    /// generation captured when the work was accepted still names its own
-    /// preset.
-    pub(super) fn approval_mode_on(&self, footing: Footing) -> Option<ApprovalMode> {
-        let generation = match footing {
-            Footing::Attached(generation) => generation,
-            Footing::Detached(recovery) => {
-                return recovery
-                    .and_then(|recovery| {
-                        let live = *self
-                            .inner
-                            .live_approval_mode
-                            .read()
-                            .expect("approval mode lock");
-                        live.filter(|(generation, _)| recovery.carries(*generation))
-                            .map(|(_, mode)| mode)
-                    })
-                    .or_else(|| self.inner.provider.approval_mode());
-            }
-        };
-        let live = *self
-            .inner
-            .live_approval_mode
-            .read()
-            .expect("approval mode lock");
-        match live {
-            Some((live_generation, mode)) if live_generation == generation => Some(mode),
-            _ => self.inner.provider.approval_mode(),
-        }
-    }
-    /// Apply and verify a native approval preset on an attached, idle provider
+    /// Apply and verify a native approval preset on the attached provider
     /// generation. The scheduler lock excludes queued admission and dispatch
     /// until the response is checked. The owned task continues after the
     /// caller drops its waiter; concurrent close interrupts a pending response.
@@ -668,12 +621,10 @@ impl Agent {
     /// explicit session status, and the lifecycle control runner fences an
     /// uncertain generation before another turn can dispatch.
     ///
-    /// A verified change is recorded against this attachment's provider
-    /// generation. [`Self::approval_mode`] reports it only while that
-    /// attachment is the one in use. A later attachment a caller opens
-    /// starts at [`AgentProvider::approval_mode`], and every admission after
-    /// that records that mode; one the agent recovers by itself is put at
-    /// this change before any work runs on it
+    /// The existing active turn and pending permission identities are retained.
+    /// A checked grant cannot switch away from mandatory review. A successful
+    /// choice is durably attributed to `actor` before publication and restored
+    /// with later attachments. Every subsequent admission records that mode
     /// ([`QueueAdmissionRecord::approval_mode`](crate::application::agent_execution::executions::QueueAdmissionRecord::approval_mode)).
     ///
     /// The caller's `Waker` is woken by the operation's owned task. Its panic
@@ -681,16 +632,23 @@ impl Agent {
     /// docs/agent_execution/lifecycle.md.
     ///
     /// # Errors
+    /// Returns [`AgentError::Busy`] before effect when changing the preset while
+    /// unstarted admitted input waits, including selected or preparing work.
+    /// An unchanged preset and supported native-executing controls remain allowed.
     /// Returns the provider's typed failure and lifecycle status. A pending
     /// response interrupted by close returns [`AgentError::Closed`] with
     /// [`ProviderSessionState::CleanupRequired`]. If the owned task is cancelled
     /// or panics, returns [`AgentError::SubmissionUnresolved`] with that status.
-    pub async fn set_approval_mode(&self, mode: ApprovalMode) -> ProviderOperationResult<()> {
+    pub async fn set_approval_mode(
+        &self,
+        mode: ApprovalMode,
+        actor: ActionContext,
+    ) -> ProviderOperationResult<()> {
         let agent = self.clone();
         let waiter = CallerWaiter::ApprovalModeChange(self.inner.manager.id().clone());
         contain_caller_wake(
             waiter,
-            tokio::spawn(async move { agent.apply_approval_mode(mode).await }),
+            tokio::spawn(async move { agent.apply_approval_mode(mode, actor).await }),
         )
         .await
         .unwrap_or_else(|_| {
@@ -700,92 +658,131 @@ impl Agent {
             ))
         })
     }
-    async fn apply_approval_mode(&self, mode: ApprovalMode) -> ProviderOperationResult<()> {
-        let scheduler = self.inner.scheduler.lock().await;
-        if !scheduler.is_idle() || self.inner.lifecycle.active().is_some() {
-            return Err(ProviderOperationFailure::new(
-                AgentError::Busy,
-                ProviderSessionState::Usable,
-            ));
+    async fn apply_approval_mode(
+        &self,
+        mode: ApprovalMode,
+        actor: ActionContext,
+    ) -> ProviderOperationResult<()> {
+        let _scheduler = self.inner.scheduler.lock().await;
+        let permit = self
+            .inner
+            .lifecycle
+            .accept_control()
+            .map_err(ProviderOperationFailure::before_effect)?;
+        let control = self.configuration_control(
+            &permit,
+            actor.clone(),
+            ConfigurationControlRequest::ApprovalMode(mode),
+        );
+        self.audit_configuration_control(
+            &permit,
+            control.clone(),
+            self.apply_approval_control(&permit, &control, mode, actor),
+            |_| {
+                (
+                    self.provider_identity(),
+                    ModelConfiguration::new(self.approval_mode(), self.effort_level()),
+                )
+            },
+        )
+        .await
+    }
+    async fn apply_approval_control(
+        &self,
+        permit: &WorkPermit,
+        control: &ConfigurationControl,
+        mode: ApprovalMode,
+        actor: ActionContext,
+    ) -> ProviderOperationResult<()> {
+        if let Some(id) = self.inner.lifecycle.active() {
+            if let Some(initiation) = self.inner.manager.initiation_of(&id).await {
+                checked_tools_unsupported(&initiation, Some(mode), self.operation_capabilities())
+                    .map_err(ProviderOperationFailure::before_effect)?;
+            }
         }
-        let permit = self.inner.lifecycle.accept_control().map_err(|error| {
-            ProviderOperationFailure::new(error, ProviderSessionState::CleanupRequired)
-        })?;
         let attached = self
             .inner
             .lifecycle
-            .attached_provider(&permit)
+            .attached_provider(permit)
             .map_err(|error| {
                 ProviderOperationFailure::new(error, ProviderSessionState::CleanupRequired)
             })?;
+        let before = ModelConfiguration::new(self.approval_mode(), self.effort_level());
+        self.configured_provider(&ModelConfiguration::new(Some(mode), self.effort_level()))
+            .map_err(ProviderOperationFailure::before_effect)?;
+        // A NextTurn model choice can leave a different binding executing.
+        // A direct preset ACK changes that binding's mode, not its model/effort.
+        let active_configured = self
+            .inner
+            .lifecycle
+            .active_configuration()
+            .map(|active| {
+                ModelConfiguration::new(Some(mode), active.configured.effort_level())
+                    .configured_provider(active.configured.as_ref(), self.inner.traces.clone())
+            })
+            .transpose()
+            .map_err(ProviderOperationFailure::before_effect)?;
         let result = self
             .inner
             .lifecycle
-            .run_control_observed(&permit, async {
+            .run_control_observed(permit, async {
                 attached.session.set_approval_mode(mode).await
             })
-            .await;
+            .await
+            .map_err(|failure| {
+                // An adapter cannot reuse another operation's local refusal proof.
+                let (error, state) = failure.into_parts();
+                ProviderOperationFailure::new(error, state)
+            });
         if result.is_ok() {
-            *self
+            let configuration = ModelConfiguration::new(Some(mode), self.effort_level());
+            self.acknowledge_configuration(
+                permit,
+                control,
+                self.provider_identity(),
+                configuration.clone(),
+            )
+            .await?;
+            if let Some(configured) = active_configured {
+                self.inner
+                    .lifecycle
+                    .acknowledge_active_configuration(configured);
+            }
+            if let Err(error) = self
                 .inner
-                .live_approval_mode
-                .write()
-                .expect("approval mode lock") = Some((permit.provider_generation(), mode));
+                .manager
+                .record_configuration(
+                    before,
+                    configuration.clone(),
+                    actor,
+                    SessionConfigurationKind::ApprovalMode,
+                )
+                .await
+            {
+                self.inner
+                    .lifecycle
+                    .record_control_state(permit, &ProviderSessionState::CleanupRequired);
+                return Err(ProviderOperationFailure::new(
+                    AgentError::Storage(error),
+                    ProviderSessionState::CleanupRequired,
+                ));
+            }
+            if let Err(error) = self.retain_configuration(&configuration) {
+                self.inner
+                    .lifecycle
+                    .record_control_state(permit, &ProviderSessionState::CleanupRequired);
+                return Err(ProviderOperationFailure::new(
+                    error,
+                    ProviderSessionState::CleanupRequired,
+                ));
+            }
         }
-        drop(permit);
-        drop(scheduler);
         result
     }
-    /// The preset an attachment that recovers by itself is put at before it
-    /// is published: a live change verified on the attachment it replaces,
-    /// where that is not the preset every attachment opens at. A recovery is the agent's own
-    /// doing, so nothing it was running under may change with it; a caller's
-    /// attachment opens at the binding's preset, as documented on
-    /// [`Self::set_approval_mode`].
-    fn carried_approval_mode(
-        &self,
-        cause: AttachmentCause,
-        provider_generation: u64,
-    ) -> Option<ApprovalMode> {
-        if cause != AttachmentCause::AutomaticRecovery {
-            return None;
-        }
-        provider_generation
-            .checked_sub(1)
-            .and_then(|last| self.live_approval_mode_of(last))
-            .filter(|mode| Some(*mode) != self.inner.provider.approval_mode())
-    }
-    /// The live change verified on provider generation `generation`, if any.
-    fn live_approval_mode_of(&self, generation: u64) -> Option<ApprovalMode> {
-        let live = *self
-            .inner
-            .live_approval_mode
-            .read()
-            .expect("approval mode lock");
-        live.filter(|(live_generation, _)| *live_generation == generation)
-            .map(|(_, mode)| mode)
-    }
-    /// The reasoning effort level in force: the one last verified by a live
-    /// change on the current attachment, or else the provider's own
-    /// ([`AgentProvider::effort_level`]), which every new attachment opens
-    /// at — including while none is attached, so work admitted then names
-    /// the level the next attachment will run at. `None` means no level is
-    /// sent and the agent keeps its own default.
+    /// The confirmed current effort, retained for later attachments.
+    /// `None` leaves the native provider's default selected.
     pub fn effort_level(&self) -> Option<EffortLevel> {
-        let live = self
-            .inner
-            .live_effort_level
-            .read()
-            .expect("effort level lock")
-            .clone();
-        match live {
-            Some((generation, level))
-                if self.inner.lifecycle.attached_generation() == Some(generation) =>
-            {
-                Some(level)
-            }
-            _ => self.inner.provider.effort_level(),
-        }
+        self.current_provider().effort_level()
     }
     /// The reasoning effort levels a person can choose now, least effort
     /// first: the model's catalogue levels
@@ -848,6 +845,11 @@ impl Agent {
     /// - The audit sink's error with [`ProviderSessionState::CleanupRequired`]
     ///   when the agent verified the change but it cannot be recorded: the
     ///   level is in force, and no turn may run under it unrecorded.
+    ///
+    /// A verified native ACK is audited as applied even when saving or retaining
+    /// its configuration subsequently fails. That failure is returned with
+    /// [`ProviderSessionState::CleanupRequired`]; a terminal audit error is
+    /// appended after the primary error. Applied does not imply durable storage.
     ///
     /// The caller's `Waker` is woken when the operation's own task finishes;
     /// a panic from it is logged and does not affect the operation. See
@@ -923,6 +925,11 @@ impl Agent {
                 ProviderSessionState::Usable,
             ));
         }
+        self.configured_provider(&ModelConfiguration::new(
+            self.approval_mode(),
+            Some(level.clone()),
+        ))
+        .map_err(ProviderOperationFailure::before_effect)?;
         let change = EffortLevelChange::new(
             self.inner.manager.id().clone(),
             format!(
@@ -930,7 +937,7 @@ impl Agent {
                 self.inner.instance_id,
                 permit.provider_generation()
             ),
-            actor,
+            actor.clone(),
             self.effort_level(),
             level.clone(),
         );
@@ -942,55 +949,111 @@ impl Agent {
         record(change.requested())
             .await
             .map_err(|error| ProviderOperationFailure::new(error, ProviderSessionState::Usable))?;
-        // Interruptible by close, and a failure that leaves the connection
-        // uncertain retires this generation, as for any provider control.
-        let sent = self
-            .inner
-            .lifecycle
-            .run_control_observed(&permit, attached.session.set_effort_level(level.clone()))
-            .await;
-        let result = match sent {
-            Ok(()) => {
-                *self
-                    .inner
-                    .live_effort_level
-                    .write()
-                    .expect("effort level lock") = Some((permit.provider_generation(), level));
-                record(change.settled(EffortChangeOutcome::Applied))
+        // Native verification survives later local failures; all callbacks after
+        // Requested share this owner and its single terminal audit attempt.
+        let mut outcome = EffortChangeOutcome::Failed;
+        let mut operation = Box::pin(async {
+            let before = ModelConfiguration::new(self.approval_mode(), self.effort_level());
+            let sent = self
+                .inner
+                .lifecycle
+                .run_control_observed(&permit, attached.session.set_effort_level(level.clone()))
+                .await;
+            match sent {
+                Ok(()) => {
+                    outcome = EffortChangeOutcome::Applied;
+                    // Effort cannot change the serialized preset; retain its
+                    // captured value instead of asking the factory again.
+                    let configuration =
+                        ModelConfiguration::new(before.approval_mode(), Some(level.clone()));
+                    async {
+                        self.inner
+                            .manager
+                            .record_configuration(
+                                before,
+                                configuration.clone(),
+                                actor,
+                                SessionConfigurationKind::EffortLevel,
+                            )
+                            .await
+                            .map_err(AgentError::Storage)?;
+                        self.retain_configuration(&configuration)
+                    }
                     .await
                     .map_err(|error| {
-                        // In force and unrecorded: no turn may run under it.
                         self.inner
                             .lifecycle
                             .record_control_state(&permit, &ProviderSessionState::CleanupRequired);
                         ProviderOperationFailure::new(error, ProviderSessionState::CleanupRequired)
                     })
+                }
+                Err(failure) => {
+                    // Only a typed unsent refusal on a usable connection proves
+                    // the old level remains in force.
+                    if matches!(
+                        failure.error(),
+                        AgentError::Busy | AgentError::Unsupported(_)
+                    ) && failure.session_state() == &ProviderSessionState::Usable
+                    {
+                        outcome = EffortChangeOutcome::Refused;
+                    }
+                    Err(failure)
+                }
             }
-            Err(failure) => {
-                // The backend's contract: Busy and Unsupported are refusals
-                // made before anything is sent. Anything else may have been.
-                let unsent = matches!(
-                    failure.error(),
-                    AgentError::Busy | AgentError::Unsupported(_)
-                ) && failure.session_state() == &ProviderSessionState::Usable;
-                let outcome = if unsent {
-                    EffortChangeOutcome::Refused
-                } else {
-                    EffortChangeOutcome::Failed
-                };
-                Err(match record(change.settled(outcome)).await {
-                    Ok(()) => failure,
-                    Err(audit) => {
-                        let (error, state) = failure.into_parts();
-                        ProviderOperationFailure::new(
+        });
+        let panicked = || {
+            self.inner
+                .lifecycle
+                .record_control_state(&permit, &ProviderSessionState::CleanupRequired);
+            ProviderOperationFailure::new(
+                AgentError::SubmissionUnresolved,
+                ProviderSessionState::CleanupRequired,
+            )
+        };
+        let mut result = poll_fn(|context| {
+            match catch_unwind(AssertUnwindSafe(|| operation.as_mut().poll(context))) {
+                Ok(poll) => poll,
+                Err(payload) => {
+                    std::mem::forget(payload);
+                    Poll::Ready(Err(panicked()))
+                }
+            }
+        })
+        .await;
+        if let Err(payload) = catch_unwind(AssertUnwindSafe(|| drop(operation))) {
+            std::mem::forget(payload);
+            let failure = panicked();
+            result = Err(match result {
+                Err(primary) => ProviderOperationFailure::new(
+                    primary.into_error(),
+                    ProviderSessionState::CleanupRequired,
+                ),
+                Ok(()) => failure,
+            });
+        }
+        let result = match record(change.settled(outcome)).await {
+            Ok(()) => result,
+            Err(audit) => {
+                let (error, state) = match result {
+                    Ok(()) => {
+                        // Verified and unrecorded: no turn may run under it.
+                        self.inner
+                            .lifecycle
+                            .record_control_state(&permit, &ProviderSessionState::CleanupRequired);
+                        (audit, ProviderSessionState::CleanupRequired)
+                    }
+                    Err(failure) => {
+                        let (primary, state) = failure.into_parts();
+                        (
                             AgentError::MultipleOperationFailures {
-                                first_error: Box::new(error),
+                                first_error: Box::new(primary),
                                 subsequent_error: Box::new(audit),
                             },
                             state,
                         )
                     }
-                })
+                };
+                Err(ProviderOperationFailure::new(error, state))
             }
         };
         drop(permit);
@@ -999,7 +1062,7 @@ impl Agent {
     }
     /// Load and validate saved evidence without opening a provider context.
     ///
-    /// `provider` supplies immutable identity and model capabilities;
+    /// `provider` supplies the selected immutable factory and model capabilities;
     /// `session_manager` transfers its exclusive storage lease into this Agent;
     /// `audit` receives mandatory attachment and scheduling evidence. Identity and
     /// storage failures return [`AgentInitializationError`].
@@ -1073,7 +1136,24 @@ impl Agent {
             .prepare(provider.as_ref())
             .await
             .map_err(|cause| AgentInitializationError::new(cause, None))?;
-        let capabilities = provider.capabilities().clone();
+        let traces = provider.traces();
+        let saved_configuration = session_manager
+            .snapshot()
+            .await
+            .and_then(|snapshot| snapshot.current_configuration);
+        let provider = match saved_configuration.as_ref() {
+            Some(record)
+                if provider.approval_mode() == record.after().approval_mode()
+                    && provider.effort_level().as_ref() == record.after().effort_level() =>
+            {
+                provider
+            }
+            Some(record) => record
+                .after()
+                .configured_provider(provider.as_ref(), traces.clone())
+                .map_err(|cause| AgentInitializationError::new(cause, None))?,
+            None => provider,
+        };
         let audit = Arc::new(AuditObserver::new(
             audit,
             session_manager.message_commit_clock(),
@@ -1089,10 +1169,8 @@ impl Agent {
         Ok(Self {
             inner: Arc::new(Inner {
                 instance_id: uuid::Uuid::new_v4().to_string(),
-                live_approval_mode: RwLock::new(None),
-                live_effort_level: RwLock::new(None),
-                provider,
-                capabilities,
+                provider: RwLock::new(provider),
+                traces,
                 audit,
                 manager: session_manager,
                 invocation: Arc::new(Mutex::new(())),
@@ -1110,10 +1188,22 @@ impl Agent {
     pub fn session_manager(&self) -> &SessionManager {
         &self.inner.manager
     }
-    /// Immutable effective model limits selected when this provider was opened.
-    /// Negotiated runtime operations are available through `operation_capabilities`.
-    pub fn capabilities(&self) -> &EffectiveCapabilities {
-        &self.inner.capabilities
+    /// Owned snapshot of the currently acknowledged model limits and features.
+    /// An active native turn retains its own captured model identity; this selection
+    /// governs subsequent admission. Negotiated operations use `operation_capabilities`.
+    pub fn capabilities(&self) -> EffectiveCapabilities {
+        self.current_provider().capabilities().clone()
+    }
+    pub(super) fn current_provider(&self) -> Arc<dyn AgentProvider> {
+        self.inner
+            .provider
+            .read()
+            .expect("current model binding")
+            .clone()
+    }
+    /// The exact acknowledged provider/model/context identity used for subsequent work.
+    pub fn provider_identity(&self) -> ProviderIdentity {
+        self.current_provider().identity()
     }
 
     /// Whether this agent still owns provider or storage resources whose
@@ -1182,7 +1272,6 @@ impl Agent {
             AgentError::Protocol("attachment start requires a Tokio runtime".into())
         })?;
         let (start, wait) = self.inner.lifecycle.start_attachment(authorization)?;
-        let carried = self.carried_approval_mode(start.cause, start.provider_generation);
         let agent = self.clone();
         runtime.spawn(async move {
             let started = agent
@@ -1192,7 +1281,7 @@ impl Agent {
                 .await;
             start.started_evidence.send_replace(Some(started.clone()));
             let lifecycle = agent.inner.lifecycle.clone();
-            let provider = agent.inner.provider.clone();
+            let provider = agent.current_provider();
             let attempt_result = match started {
                 Ok(()) => {
                     lifecycle
@@ -1215,31 +1304,8 @@ impl Agent {
                                     };
                                     AttachmentAttemptFailure::new(failure.cause, source)
                                 })?;
-                            // The agent's own recovery is put at the mode in
-                            // force before it is published, so nothing (a
-                            // queued turn, a direct invocation, a control)
-                            // reaches it at another one. A failure still
-                            // publishes it, then fails it below, so its
-                            // cleanup closes what was opened.
-                            let carry = match carried {
-                                Some(mode) => {
-                                    let applied = attached
-                                        .session
-                                        .set_approval_mode(mode)
-                                        .await
-                                        .map_err(ProviderOperationFailure::into_error);
-                                    if applied.is_ok() {
-                                        *agent
-                                            .inner
-                                            .live_approval_mode
-                                            .write()
-                                            .expect("approval mode lock") =
-                                            Some((start.provider_generation, mode));
-                                    }
-                                    applied
-                                }
-                                None => Ok(()),
-                            };
+                            // The current normalized factory opens this attachment at
+                            // persisted settings before it is published.
                             let (published, published_evidence) = lifecycle
                                 .publish_attachment(start.generation, attached)
                                 .map_err(|_| AttachmentAttemptFailure::from(AgentError::Closed))?;
@@ -1260,7 +1326,6 @@ impl Agent {
                                     ),
                                 ));
                             }
-                            carry.map_err(AttachmentAttemptFailure::from)?;
                             if !lifecycle.acknowledge_attachment_publication(start.generation) {
                                 return Err(AgentError::Closed.into());
                             }
@@ -1438,7 +1503,6 @@ impl Agent {
         submitter: Submitter,
     ) -> AgentFuture<'_, ExecutionOutcome> {
         Box::pin(async move {
-            validate_configured_input(&self.inner.capabilities, &input)?;
             let invocation = self
                 .inner
                 .invocation
@@ -1446,6 +1510,9 @@ impl Agent {
                 .try_lock_owned()
                 .map_err(|_| AgentError::Busy)?;
             let work = self.inner.lifecycle.accept_work()?;
+            let scheduler = self.inner.scheduler.lock().await;
+            validate_configured_input(&self.capabilities(), &input)?;
+            drop(scheduler);
             // Accepted work always reaches its owner, even if close overtakes
             // this handoff. The supervisor saves the input and its stop evidence.
             let agent = self.clone();
@@ -1866,15 +1933,20 @@ impl Agent {
         let mut events = attached.events.lock().await;
         let mut execution = Box::pin(async {
             self.inner.manager.begin_dispatch(&input.execution_id);
-            let _active =
-                match ActiveInvocation::new(&self.inner.lifecycle, input.execution_id.clone()) {
-                    Ok(active) => active,
-                    Err(error) => {
-                        return (ProviderExecutionReply::Rejected(error), work.cancellation());
-                    }
-                };
-            work.mark_execution_started();
-            let outcome = attached.session.execute(dispatched).await;
+            let _active = match ActiveInvocation::new(
+                &self.inner.lifecycle,
+                input.execution_id.clone(),
+                self.current_provider(),
+            ) {
+                Ok(active) => active,
+                Err(error) => {
+                    return (ProviderExecutionReply::Rejected(error), work.cancellation());
+                }
+            };
+            let outcome = attached
+                .session
+                .execute(dispatched, work.native_handoff())
+                .await;
             // Capture the existing stop authority with the reply. A later Stop
             // cannot retroactively authorize an earlier cancellation report.
             let cancellation_at_reply = work.cancellation();
@@ -2718,7 +2790,7 @@ impl Agent {
     /// controls and interrupts pending response waits with `Closed`. A received
     /// receipt still completes local evidence validation. Admitted provider effects
     /// and mandatory audit remain owned by the adapter and settled by cleanup.
-    /// Failure returns [`PermissionAnswerFailure`](crate::application::agent_execution::permissions::PermissionAnswerFailure),
+    /// Failure returns [`PermissionAnswerFailure`](PermissionAnswerFailure),
     /// whose selection state distinguishes a still-pending review from a consumed
     /// decision and from an interrupted outcome that must be reloaded.
     ///
