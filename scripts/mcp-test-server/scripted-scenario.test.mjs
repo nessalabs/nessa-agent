@@ -895,3 +895,38 @@ test("a saved call fills the next call's arguments through the real stand-in", a
   assert.equal(said.length, 1)
   assert.doesNotMatch(said[0], /\$\{/)
 })
+
+test("a tool step with times makes that many calls at once and saves every result", async () => {
+  assert.throws(
+    () =>
+      parseScenario({
+        turns: [{ steps: [{ do: "tool", tool: "x", arguments: {}, times: 1 }] }],
+      }),
+    /times is a whole number from 2/,
+  )
+  const agent = start("claude", {
+    turns: [
+      {
+        steps: [
+          { do: "tool", tool: "report_rows", arguments: {}, save: "rows", times: 3 },
+          { do: "text", chunks: ["Saved ${rows.length} results."] },
+        ],
+      },
+    ],
+  })
+  await agent.request("initialize", {})
+  const sessionId = (await agent.request("session/new", claudeOpen)).result.sessionId
+  const done = await agent.request("session/prompt", { sessionId, prompt: [] })
+  assert.equal(done.result.stopReason, "end_turn")
+  const calls = new Set(
+    done.notes
+      .map((note) => note.params.update)
+      .filter((update) => update.sessionUpdate === "tool_call")
+      .map((update) => update.toolCallId),
+  )
+  assert.equal(calls.size, 3, "each call is announced on its own")
+  const said = done.notes
+    .map((note) => note.params.update.content?.text)
+    .filter((text) => typeof text === "string" && text.startsWith("Saved"))
+  assert.deepEqual(said, ["Saved 3 results."])
+})

@@ -41,7 +41,12 @@
  * the turn, and a result that is an error fails the turn. A string anywhere
  * in a later step's arguments or text that is `${name.path}` is replaced by
  * that saved value's field, so one call can name what an earlier call made.
- * `${prompt.text}` is the prompt the turn answers.
+ * `${prompt.text}` is the prompt the turn answers. With `times`, the same
+ * call is made that many times at once, as a model's parallel calls are;
+ * `save` then keeps every result in order, an error's `structuredContent`
+ * included (a call the server refused outright is saved as
+ * `{ error: "call_refused", message }`), and an error does not fail the
+ * turn, so a check can count how many were refused.
  *
  * A permission offers two answers, the two the window can give: allow once
  * and deny once. A withdrawn review is the third answer, `cancelled`, not
@@ -74,13 +79,15 @@ const FIELDS = {
 }
 
 /** Fields a step may leave out. */
-const OPTIONAL = { tool: ["server", "save"] }
+const OPTIONAL = { tool: ["server", "save", "times"] }
 
 /** The modes, by harness, in which the harness asks for nothing. */
 export const FULL_ACCESS = { claude: "bypassPermissions", codex: "agent-full-access" }
 
 /** The longest pause a step may ask for. */
 const MAX_PAUSE_MS = 60_000
+/** The most calls one tool step makes at once. */
+const MAX_TIMES = 32
 
 const OPTIONS = [
   { optionId: ALLOW_ONCE, kind: "allow_once", name: "Allow once" },
@@ -168,6 +175,7 @@ function parseStep(step, branch) {
         arguments: argumentsOf(step.arguments),
         ...(Object.hasOwn(step, "server") ? { server: toolName(step.server) } : {}),
         ...(Object.hasOwn(step, "save") ? { save: toolName(step.save) } : {}),
+        ...(Object.hasOwn(step, "times") ? { times: timesOf(step.times) } : {}),
       }
     case "pause":
       if (!Number.isInteger(step.ms) || step.ms < 0 || step.ms > MAX_PAUSE_MS)
@@ -188,6 +196,12 @@ function parseStep(step, branch) {
     default:
       return { do: step.do }
   }
+}
+
+function timesOf(times) {
+  if (!Number.isInteger(times) || times < 2 || times > MAX_TIMES)
+    throw new Error(`a tool step's times is a whole number from 2 to ${MAX_TIMES}`)
+  return times
 }
 
 function toolName(name) {
@@ -385,7 +399,10 @@ async function runStep(step, ctx) {
     case "text": {
       const messageId = ctx.messageId()
       for (const chunk of step.chunks) {
-        const text = filled(chunk, ctx.saved)
+        // A chunk that is one whole reference is still text: a saved list
+        // or object is written as JSON, never sent as an ACP text block.
+        const value = filled(chunk, ctx.saved)
+        const text = typeof value === "string" ? value : JSON.stringify(value)
         if (ctx.cancelled()) return { stopReason: "cancelled" }
         ctx.update({
           sessionUpdate: "agent_message_chunk",
@@ -396,7 +413,9 @@ async function runStep(step, ctx) {
       return null
     }
     case "tool":
-      return callTool(step, ctx, ctx.openCall(step.tool))
+      return step.times
+        ? callMany(step, ctx)
+        : callTool(step, ctx, ctx.openCall(step.tool))
     case "permission":
       return ask(step, ctx)
     case "pause":
@@ -491,6 +510,50 @@ async function callTool(step, ctx, existing) {
       return { fail: `${step.tool} failed: ${resultText(result)}` }
     ctx.saved.set(step.save, result?.structuredContent ?? null)
   }
+  return null
+}
+
+/** `step`'s call made `step.times` times at once, each its own announced call. */
+async function callMany(step, ctx) {
+  const args = filled(step.arguments, ctx.saved)
+  const calls = Array.from({ length: step.times }, () => {
+    const id = ctx.toolId()
+    ctx.update(
+      permissionCall(ctx.agent, {
+        id,
+        tool: step.tool,
+        title: step.tool,
+        arguments: args,
+        server: step.server,
+      }).update,
+    )
+    return id
+  })
+  // A call the server refuses outright is that call's error, as a harness
+  // shows the model, not the turn's: the others still answer.
+  const results = await Promise.all(
+    calls.map((id) =>
+      Promise.resolve()
+        .then(() =>
+          ctx.callTool(
+            mcpArguments(ctx.agent, { id, tool: step.tool, arguments: args }),
+            step.server ?? SERVER,
+          ),
+        )
+        .catch((error) => ({
+          isError: true,
+          content: [{ type: "text", text: error.message }],
+          structuredContent: { error: "call_refused", message: error.message },
+        })),
+    ),
+  )
+  if (ctx.cancelled()) return { stopReason: "cancelled" }
+  calls.forEach((id, index) => ctx.update(completedUpdate(id, results[index])))
+  if (step.save)
+    ctx.saved.set(
+      step.save,
+      results.map((result) => result?.structuredContent ?? null),
+    )
   return null
 }
 

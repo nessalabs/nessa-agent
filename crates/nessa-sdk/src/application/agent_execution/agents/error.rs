@@ -284,6 +284,10 @@ pub enum AgentError {
     },
     /// An immediate operation overlaps existing work; queued admission has a separate contract.
     Busy,
+    /// The submitter asked for its turn to run at one approval mode
+    /// ([`Submitter::with_approval_mode`](crate::application::agent_execution::executions::Submitter::with_approval_mode))
+    /// and the agent would run it at another. Nothing was saved or queued.
+    ApprovalModeChanged,
     /// The operation was locally cancelled or its provider context disconnected; cleanup is a separate fact.
     Closed,
     /// The review is no longer pending or the execution/review/option correlation was rejected.
@@ -429,6 +433,7 @@ impl AgentError {
             | Self::ImageInputRefused(_)
             | Self::MessageTooLarge { .. }
             | Self::Busy
+            | Self::ApprovalModeChanged
             | Self::StalePermission
             | Self::AuthenticationRequired { .. }
             | Self::CleanupUncertain

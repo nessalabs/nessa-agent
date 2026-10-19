@@ -3837,32 +3837,77 @@ async fn rejected_capacity_does_not_write_metadata_even_with_concurrent_creates(
         max_conversations: 1,
         ..ConversationLimits::default()
     });
-    let (a, b) = tokio::join!(
+    // Only an agent that can resume its provider session is parked.
+    provider.session_resume.store(true, Ordering::SeqCst);
+    let busy = id();
+    service
+        .create(
+            busy.clone(),
+            caller("panel", "a"),
+            crate::conversation::application::RequestedConversation::default(),
+        )
+        .await
+        .unwrap();
+    opened(&provider, 1).await;
+    // An agent at work is never let go to make room.
+    let (release, held) = tokio::sync::oneshot::channel::<()>();
+    *provider.execution_gate.lock().unwrap() = Some(held);
+    let running = provider.execution_started.notified();
+    service
+        .submit(
+            busy.clone(),
+            caller("panel", "work"),
+            "work".into(),
+            SubmittedMessage {
+                text: "Hold on".into(),
+                ..SubmittedMessage::default()
+            },
+            SubmissionMode::Queue,
+        )
+        .await
+        .unwrap();
+    running.await;
+    let (b, c) = tokio::join!(
         service.create(
             id(),
-            caller("panel", "a"),
+            caller("panel", "b"),
             crate::conversation::application::RequestedConversation::default()
         ),
         service.create(
             id(),
-            caller("phone", "b"),
+            caller("phone", "c"),
             crate::conversation::application::RequestedConversation::default()
         )
     );
-    assert_eq!(usize::from(a.is_ok()) + usize::from(b.is_ok()), 1);
+    assert!(matches!(b, Err(ConversationError::Capacity)), "{b:?}");
+    assert!(matches!(c, Err(ConversationError::Capacity)), "{c:?}");
     assert_eq!(repository.records.lock().unwrap().len(), 1);
-    opened(&provider, 1).await;
-    assert!(matches!(
-        service
-            .create(
-                id(),
-                caller("panel", "c"),
-                crate::conversation::application::RequestedConversation::default()
-            )
-            .await,
-        Err(ConversationError::Capacity)
-    ));
-    assert_eq!(repository.records.lock().unwrap().len(), 1);
+    assert_eq!(provider.close_calls.load(Ordering::SeqCst), 0);
+    // Once it has nothing to do, it is let go for the next one; its
+    // conversation stays and opens again when asked for.
+    release.send(()).unwrap();
+    completed(&service, &busy, 1).await;
+    // Its receipt settles a moment before the runner lets it go idle.
+    let next = id();
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        loop {
+            match service
+                .create(
+                    next.clone(),
+                    caller("panel", "d"),
+                    crate::conversation::application::RequestedConversation::default(),
+                )
+                .await
+            {
+                Err(ConversationError::Capacity) => tokio::task::yield_now().await,
+                created => break created.unwrap(),
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(provider.close_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(repository.records.lock().unwrap().len(), 2);
     service.shutdown().await.unwrap();
 }
 #[tokio::test]
@@ -5465,6 +5510,108 @@ async fn custom_committed_adapter_cannot_substitute_requested_session_or_destroy
     assert_eq!(
         serde_json::to_value(before).unwrap(),
         serde_json::to_value(after).unwrap()
+    );
+    service.shutdown().await.unwrap();
+}
+
+/// A committed read that has taken none of the records yet the first time it
+/// is asked, as one read of a long history stops at its bound.
+struct ShortFirstRead {
+    inner: Arc<InMemoryStorage>,
+    short: AtomicBool,
+}
+impl SessionStorage for ShortFirstRead {
+    fn open(&self, id: SessionId) -> StorageFuture<'_, Box<dyn SessionStorageLease>> {
+        self.inner.open(id)
+    }
+    fn open_existing(
+        &self,
+        id: SessionId,
+    ) -> StorageFuture<'_, Option<Box<dyn SessionStorageLease>>> {
+        self.inner.open_existing(id)
+    }
+    fn read_committed(&self, id: SessionId) -> StorageFuture<'_, Option<CommittedSession>> {
+        Box::pin(async move {
+            if self.short.swap(false, Ordering::SeqCst) {
+                Ok(Some(CommittedSession::new(
+                    id,
+                    "short".into(),
+                    0,
+                    0,
+                    5,
+                    None,
+                    CommittedStatus::new(
+                        CommittedCompleteness::NotLoaded,
+                        CommittedFreshness::Stale,
+                    ),
+                )?))
+            } else {
+                self.inner.read_committed(id).await
+            }
+        })
+    }
+}
+#[tokio::test]
+async fn a_note_past_where_one_committed_read_stops_is_still_found() {
+    let (_, provider, repository, storage) = fixture(ConversationLimits::default());
+    let storage = Arc::new(ShortFirstRead {
+        inner: storage,
+        short: AtomicBool::new(false),
+    });
+    let service = ConversationService::new(
+        ConversationDependencies {
+            access_policy: crate::conversation_test_support::access_policy(),
+            agents: only(Arc::new(Provider::new(provider))),
+            storage: storage.clone(),
+            metadata: repository,
+            mode_audit: Arc::new(AcceptingModeAudit),
+            creation_audit: Arc::new(AcceptingCreationAudit),
+            file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
+            attachments: None,
+            summaries: Arc::new(MemorySummaries::default()),
+            listing: Arc::new(Unlisted),
+            deletion_audit: Arc::new(AcceptingDeletionAudit),
+            provider_sessions: ProviderSessionErasers::default(),
+            deletion_budgets: DELETION_BUDGETS,
+            message_commit_clock: Arc::new(RuntimeMessageCommitClock::new()),
+            clock: Arc::new(TestClock),
+            environment: crate::conversation::infrastructure::in_process_environment().into(),
+        },
+        ConversationLimits::default(),
+        None,
+    )
+    .unwrap();
+    let id = id();
+    service
+        .create(
+            id.clone(),
+            caller("panel", "create"),
+            RequestedConversation::default(),
+        )
+        .await
+        .unwrap();
+    service
+        .leave_note(
+            id.clone(),
+            caller("panel", "note"),
+            nessa_sdk::domain::agent_execution::executions::Initiator::Owner,
+            "a note".into(),
+            nessa_sdk::application::agent_execution::sessions::NoteDelivery::NextTurn,
+        )
+        .await
+        .unwrap();
+    storage.short.store(true, Ordering::SeqCst);
+    let status = service
+        .note_status(id, caller("panel", "note"))
+        .await
+        .unwrap();
+    assert!(
+        !storage.short.load(Ordering::SeqCst),
+        "the short read was met"
+    );
+    assert!(
+        status.is_some(),
+        "the saved note is found past the short read"
     );
     service.shutdown().await.unwrap();
 }
