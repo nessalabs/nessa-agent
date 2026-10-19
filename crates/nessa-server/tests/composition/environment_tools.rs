@@ -480,6 +480,7 @@ async fn a_call_before_the_service_is_attached_or_for_no_conversation_is_an_erro
             json!({}),
             stop,
         )
-        .await;
+        .await
+        .result;
     assert_eq!(answer["isError"], true);
 }

@@ -293,15 +293,16 @@ pub use service::{
     event_error_code, project_events, validate_event_cursor, ConversationEventError, EventProgress,
     ThreadEvent,
 };
-pub use service::{CommandAnswer, CommandCall, CommandCallError, EnvironmentListing, HERE};
 pub use service::{
-    ConversationAgent, ConversationAgentFuture, ConversationAgentSource, ConversationAgents,
-    ConversationCaller, ConversationDeletionBudgets, ConversationDependencies, ConversationLimits,
-    ConversationService, DeletionsLeft, FailureBackoff, McpAppCall, McpAppContextUpdate,
-    McpAppMessage, McpAppRead, McpAppResource, PendingReport, QuestionChoiceInput, ReadOpening,
-    ReportRegistration, RequestedAgent, RequestedConversation, SubmissionMode, ThreadReport,
-    ThreadReportStore, MAX_APP_CALLS, MAX_LISTED_CONVERSATIONS, MAX_RESOURCE_META_BYTES,
+    AwaitedTurn, ConversationAgent, ConversationAgentFuture, ConversationAgentSource,
+    ConversationAgents, ConversationCaller, ConversationDeletionBudgets, ConversationDependencies,
+    ConversationLimits, ConversationService, DeletionsLeft, FailureBackoff, McpAppCall,
+    McpAppContextUpdate, McpAppMessage, McpAppRead, McpAppResource, PendingReport,
+    QuestionChoiceInput, ReadOpening, ReportRegistration, RequestedAgent, RequestedConversation,
+    SubmissionMode, ThreadReport, ThreadReportStore, ThreadTurn, MAX_APP_CALLS,
+    MAX_LISTED_CONVERSATIONS, MAX_RESOURCE_META_BYTES,
 };
+pub use service::{CommandAnswer, CommandCall, CommandCallError, EnvironmentListing, HERE};
 pub(crate) use service::{ExportAdmission, ExportHoldFailure};
 pub use service::{
     FetchAnswer, FetchCall, FetchCallRefusal, PublishAnswer, PublishCall, PublishCallRefusal,

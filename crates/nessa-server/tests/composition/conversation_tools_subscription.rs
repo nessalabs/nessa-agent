@@ -65,7 +65,7 @@ async fn source_admission_cancel_and_deadline_release_the_tool_reader_slot() {
             .expect("blocked source lookup must not retain the subscription")
             .unwrap();
         assert_eq!(
-            result["structuredContent"]["error"],
+            result.result["structuredContent"]["error"],
             if cancel {
                 "cancelled"
             } else {
@@ -208,7 +208,7 @@ async fn reader_open_reauthorization_and_read_obey_cancellation_and_setup_deadli
             });
             let service = observing_service(metadata, storage);
             let (stop, stopped) = watch::channel(false);
-            let control = SubscriptionControl::new(stopped, 30000);
+            let control = SubscriptionControl::new(stopped, 30000, None);
             let owned = service.clone();
             let work = tokio::spawn(async move {
                 follow(
@@ -217,6 +217,7 @@ async fn reader_open_reauthorization_and_read_obey_cancellation_and_setup_deadli
                     caller(),
                     Follow {
                         thread_id: id().to_string(),
+                        execution_id: None,
                         after: None,
                         replay: None,
                         wait_ms: Some(30000),
@@ -274,7 +275,7 @@ async fn repeated_cancelled_observers_cannot_exceed_detached_source_capacity() {
             .await
             .expect("source cancellation must release the response")
             .unwrap();
-        assert_eq!(result["structuredContent"]["error"], "cancelled");
+        assert_eq!(result.result["structuredContent"]["error"], "cancelled");
         assert_eq!(
             tools.readers.held(&id()),
             0,
@@ -299,7 +300,7 @@ async fn repeated_cancelled_observers_cannot_exceed_detached_source_capacity() {
     .await
     .expect("physical source capacity refuses without waiting");
     assert_eq!(
-        result["structuredContent"]["error"],
+        result.result["structuredContent"]["error"],
         error_code(&ConversationError::Unavailable).as_str()
     );
     assert!(
@@ -330,7 +331,7 @@ async fn repeated_cancelled_observers_cannot_exceed_detached_source_capacity() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(result["structuredContent"]["error"], "cancelled");
+    assert_eq!(result.result["structuredContent"]["error"], "cancelled");
     drop(release_other);
     drop(metadata.metadata_load_gate.lock().unwrap().take());
     let owned = service.clone();
@@ -448,7 +449,9 @@ impl CommittedEventReader for DeliveryReader {
                     next.clone(),
                     SessionChange::LocalSettlement {
                         execution_id: ExecutionId::new("finished").unwrap(),
-                        before: None,
+                        // A settlement update, not a turn's end: these pages
+                        // are about cursors, not the reply an end looks up.
+                        before: Some(Ok(ExecutionOutcome::Completed)),
                         after: Ok(ExecutionOutcome::Completed),
                         local_outcome: None,
                     },
@@ -505,14 +508,16 @@ fn delivery_call(
             caller(),
             Follow {
                 thread_id: id().to_string(),
+                execution_id: None,
                 after: None,
                 replay: None,
                 wait_ms: Some(wait),
                 limit: None,
             },
-            SubscriptionControl::new(stop, wait),
+            SubscriptionControl::new(stop, wait, None),
         )
         .await
+        .map(|(value, _)| value)
     })
 }
 
@@ -627,7 +632,7 @@ async fn already_observed_cancellation_refuses_delivery_before_polling_authoriza
     let (stop, mut stopped) = watch::channel(false);
     stop.send_replace(true);
     assert!(*stopped.borrow_and_update());
-    let mut control = SubscriptionControl::new(stopped, 0);
+    let mut control = SubscriptionControl::new(stopped, 0, None);
     let mut polled = false;
     let result = control
         .step_until(
@@ -683,7 +688,9 @@ fn progress_page(incarnation: &str, position: u64, index: u64) -> EventRead {
         next.clone(),
         SessionChange::LocalSettlement {
             execution_id: ExecutionId::new("trailing").unwrap(),
-            before: None,
+            // A settlement update, not a turn's end: these pages are about
+            // cursors, not the reply an end looks up.
+            before: Some(Ok(ExecutionOutcome::Completed)),
             after: Ok(ExecutionOutcome::Completed),
             local_outcome: None,
         },
@@ -715,6 +722,7 @@ async fn scripted_follow(
         caller(),
         Follow {
             thread_id: id().to_string(),
+            execution_id: None,
             after: match &start {
                 EventStart::After(cursor) => Some(cursor.encode()),
                 _ => None,
@@ -727,12 +735,12 @@ async fn scripted_follow(
             wait_ms: Some(wait),
             limit: None,
         },
-        SubscriptionControl::new(stopped, wait),
+        SubscriptionControl::new(stopped, wait, None),
     )
     .await;
     assert_eq!(storage.opened.lock().unwrap().as_ref(), Some(&start));
     service.shutdown().await.unwrap();
-    result
+    result.map(|(value, _)| value)
 }
 
 #[tokio::test(start_paused = true)]
@@ -819,4 +827,43 @@ async fn follow_retains_now_idle_progress_through_preparing_and_valid_trailing_e
         progress_cursor("captured", 9, Some(1)).encode()
     );
     assert_eq!(first["events"][0]["executionId"], "trailing");
+}
+
+/// A turn's end whose history cannot be read now is refused, so the caller
+/// asks again from its cursor, never told the turn ended without a reply.
+#[tokio::test(start_paused = true)]
+async fn an_ended_turn_whose_history_cannot_be_read_is_refused_not_answered_without_a_reply() {
+    let next = progress_cursor("incarnation", 1, Some(1));
+    let ended = CommittedEvent::change(
+        next.clone(),
+        SessionChange::LocalSettlement {
+            execution_id: ExecutionId::new("ended").unwrap(),
+            before: None,
+            after: Ok(ExecutionOutcome::Completed),
+            local_outcome: None,
+        },
+    );
+    let page = EventRead::Page(
+        CommittedEventPage::new(vec![ended], next, progress_cursor("incarnation", 1, None))
+            .unwrap(),
+    );
+    assert_eq!(
+        scripted_follow(EventStart::Beginning, vec![page], 0)
+            .await
+            .unwrap_err(),
+        "temporarily_unavailable"
+    );
+}
+
+/// A read that runs out of time while still behind the thread's events says
+/// so: an empty answer always comes with timedOut, never as a page.
+#[test]
+fn a_deadline_while_behind_is_a_timed_out_answer_not_an_empty_page() {
+    let (_stop, stopped) = watch::channel(false);
+    let mut control = SubscriptionControl::new(stopped, 0, None);
+    control.read_to(progress_cursor("incarnation", 3, None));
+    let value = control.finish(&id(), SubscriptionEnd::Deadline).unwrap();
+    assert_eq!(value["events"], json!([]));
+    assert_eq!(value["more"], true);
+    assert_eq!(value["timedOut"], true, "{value}");
 }
