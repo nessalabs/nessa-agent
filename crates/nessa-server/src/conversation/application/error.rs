@@ -123,6 +123,8 @@ pub enum ConversationError {
     ApprovalModeUnavailable,
     RequestConflict,
     TurnRunning,
+    ModelChangeNotApplied,
+    ModelChangeUncertain,
     ApprovalModeNotApplied,
     ApprovalModeUncertain,
     Capacity,

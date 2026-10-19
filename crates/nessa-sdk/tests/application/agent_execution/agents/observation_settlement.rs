@@ -1,6 +1,8 @@
 //! Invalid observations must not erase settlement released by provider cleanup.
 use super::{actor, capabilities, request, MemoryStorage};
 use crate::application::agent_execution::support::*;
+use nessa_sdk::application::agent_execution::providers::HarnessHostIdentity;
+use nessa_sdk::application::agent_execution::providers::NativeExecutionHandoff;
 use std::{sync::atomic::AtomicBool, time::Duration};
 use tokio::sync::{mpsc, watch};
 
@@ -29,6 +31,9 @@ impl ExecutionEventStream for SettlementEvents {
     }
 }
 impl AgentProvider for SettlementProvider {
+    fn harness_host_identity(&self) -> HarnessHostIdentity<'_> {
+        HarnessHostIdentity::local()
+    }
     fn identity(&self) -> ProviderIdentity {
         ProviderIdentity::new("observation-settlement", "fixture", "test").unwrap()
     }
@@ -54,8 +59,16 @@ impl ProviderSessionBackend for SettlementBackend {
     fn prepare_invocation(&self) -> ProviderOperationFuture<'_, ()> {
         Box::pin(async { Ok(()) })
     }
-    fn execute(&self, input: ExecutionRequest) -> ProviderExecutionFuture<'_> {
+    fn execute(
+        &self,
+        input: ExecutionRequest,
+        handoff: NativeExecutionHandoff,
+    ) -> ProviderExecutionFuture<'_> {
         Box::pin(async move {
+            if let Err(error) = handoff() {
+                return ProviderExecutionReply::Rejected(error);
+            }
+
             let result: Result<ExecutionOutcome, AgentError> = {
                 async move {
                     let terminal = ExecutionEvent::new(
@@ -328,6 +341,9 @@ impl ExecutionEventStream for PolicyStopEvents {
     }
 }
 impl AgentProvider for PolicyStopProvider {
+    fn harness_host_identity(&self) -> HarnessHostIdentity<'_> {
+        HarnessHostIdentity::local()
+    }
     fn identity(&self) -> ProviderIdentity {
         ProviderIdentity::new("policy-stop", "fixture", "test").unwrap()
     }
@@ -353,8 +369,16 @@ impl ProviderSessionBackend for PolicyStopBackend {
     fn prepare_invocation(&self) -> ProviderOperationFuture<'_, ()> {
         Box::pin(async { Ok(()) })
     }
-    fn execute(&self, input: ExecutionRequest) -> ProviderExecutionFuture<'_> {
+    fn execute(
+        &self,
+        input: ExecutionRequest,
+        handoff: NativeExecutionHandoff,
+    ) -> ProviderExecutionFuture<'_> {
         Box::pin(async move {
+            if let Err(error) = handoff() {
+                return ProviderExecutionReply::Rejected(error);
+            }
+
             self.events
                 .send(Ok(ExecutionEvent::new(
                     input.execution_id,

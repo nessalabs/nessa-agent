@@ -482,11 +482,11 @@ impl Environment for SshEnvironment {
         Box::pin(async move {
             let LeaseWork::Agent(work) = &grant.work;
             let link = self.inner.link(Install::IfAbsent(lease.as_str())).await?;
-            let host = Arc::new(LeaseHost {
+            let host: Arc<dyn HarnessHost> = Arc::new(LeaseHost {
                 link: link.clone(),
                 lease: lease.as_str().into(),
             });
-            let provider = binding.on_host(host).map_err(|error| {
+            let provider = binding.on_host(host.clone()).map_err(|error| {
                 tracing::warn!(agent = work.agent(), %error, "this agent's binding cannot start its harness on a host");
                 LeaseRefusal::AgentUnavailable
             })?;
@@ -509,6 +509,7 @@ impl Environment for SshEnvironment {
                 workspace,
                 granted: granted(terms),
                 hold: Arc::new(SshHold {
+                    host,
                     inner: self.inner.clone(),
                     link,
                     lease: lease.as_str().into(),
@@ -728,6 +729,7 @@ fn command_result(answer: CommandAnswer, stopped: Option<LeaseEndCause>) -> Comm
 
 /// The gateway's side of one lease on a host.
 struct SshHold {
+    host: Arc<dyn HarnessHost>,
     inner: Arc<Inner>,
     link: Arc<HostLink>,
     lease: String,
@@ -743,6 +745,13 @@ struct SshHold {
 }
 
 impl LeaseHold for SshHold {
+    fn model_provider(
+        &self,
+        binding: Arc<dyn AgentProvider>,
+    ) -> Result<Arc<dyn AgentProvider>, AgentError> {
+        binding.on_host(self.host.clone())
+    }
+
     fn ends(&self) -> Option<EnvironmentFuture<'static, LeaseEndCause>> {
         let mut ending = self.ending.clone();
         Some(Box::pin(async move {

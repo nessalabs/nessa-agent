@@ -67,6 +67,10 @@ test("shrinking stops at its budget and keeps the input when no cut fails", asyn
   assert.equal(calls, 5)
 })
 
+test("the default seeded actions include same-provider model controls", () => {
+  assert.ok(actions(knobsFrom({}, {})).some((action) => action.kind === "model"))
+})
+
 test("a rename says what it types", () => {
   const renames = actions(knobsFrom({ waves: "60", width: "6" }, {})).filter(
     (action) => action.kind === "rename",

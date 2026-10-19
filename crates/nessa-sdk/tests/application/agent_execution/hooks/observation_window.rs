@@ -5,6 +5,8 @@ use nessa_sdk::application::agent_execution::hooks::{
     HookRegistration, InvocationContext, InvocationHook, InvocationObservationWindow,
     ObservationKind, PhrasePresence, ProposedToolCall, ToolVerdict,
 };
+use nessa_sdk::application::agent_execution::providers::HarnessHostIdentity;
+use nessa_sdk::application::agent_execution::providers::NativeExecutionHandoff;
 use nessa_sdk::domain::agent_execution::executions::{GrantInitiator, Initiation};
 use nessa_sdk::domain::agent_execution::permissions::RefusalOutcome;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -163,13 +165,21 @@ impl ProviderSessionBackend for ScriptedBackend {
     fn prepare_invocation(&self) -> ProviderOperationFuture<'_, ()> {
         Box::pin(async { Ok(()) })
     }
-    fn execute(&self, input: ExecutionRequest) -> ProviderExecutionFuture<'_> {
+    fn execute(
+        &self,
+        input: ExecutionRequest,
+        handoff: NativeExecutionHandoff,
+    ) -> ProviderExecutionFuture<'_> {
         let started = self.started.clone();
         let controller = self.controller.clone();
         let reviews = self.reviews.clone();
         let release = self.release.clone();
         let handshake = self.handshake.clone();
         Box::pin(async move {
+            if let Err(error) = handoff() {
+                return ProviderExecutionReply::Rejected(error);
+            }
+
             // Register for release before the stream can run to its end.
             let released = release.notified();
             tokio::pin!(released);
@@ -341,6 +351,9 @@ struct ScriptedProvider {
 }
 
 impl AgentProvider for ScriptedProvider {
+    fn harness_host_identity(&self) -> HarnessHostIdentity<'_> {
+        HarnessHostIdentity::local()
+    }
     /// Ask, so a grant's checked turn may be sent here.
     fn approval_mode(
         &self,

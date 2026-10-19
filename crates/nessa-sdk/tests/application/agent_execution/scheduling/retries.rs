@@ -95,7 +95,7 @@ async fn scheduling_retry_rejects_changed_content_attribution_or_delivery_mode()
     .unwrap();
     assert!(matches!(
         agent.enqueue(different, Submitter::owner(actor())).await,
-        Err(AgentError::ImageInputRefused(ImageInputRefusal::NotOffered))
+        Err(AgentError::SubmissionConflict)
     ));
     let mut different = request("same");
     different.estimated_input_tokens += 1;

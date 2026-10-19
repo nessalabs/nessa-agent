@@ -1,5 +1,6 @@
 //! Unconfirmed cleanup ends observation draining while preserving the accepted prefix.
 use super::*;
+use nessa_sdk::application::agent_execution::providers::HarnessHostIdentity;
 
 struct ReadyOutputProvider {
     backend: Arc<WorkflowBackend>,
@@ -14,6 +15,9 @@ struct ReadyOutput {
     release: Option<oneshot::Sender<()>>,
 }
 impl AgentProvider for ReadyOutputProvider {
+    fn harness_host_identity(&self) -> HarnessHostIdentity<'_> {
+        HarnessHostIdentity::local()
+    }
     fn identity(&self) -> ProviderIdentity {
         WorkflowProvider(self.backend.clone()).identity()
     }

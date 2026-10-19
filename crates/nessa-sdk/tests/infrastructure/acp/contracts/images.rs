@@ -66,10 +66,10 @@ fn stalling() -> (Arc<FixedImages>, mpsc::UnboundedReceiver<()>) {
 
 /// Answers every read with the same bytes, but only once the test says so.
 /// Says when each read began, so a test knows the budget is being held.
-struct Gated {
+pub(super) struct Gated {
     bytes: Vec<u8>,
     began: mpsc::UnboundedSender<()>,
-    release: Semaphore,
+    pub(super) release: Semaphore,
     reads: AtomicUsize,
 }
 impl UserImageSource for Gated {
@@ -82,7 +82,7 @@ impl UserImageSource for Gated {
         })
     }
 }
-fn gated(bytes: Vec<u8>) -> (Arc<Gated>, mpsc::UnboundedReceiver<()>) {
+pub(super) fn gated(bytes: Vec<u8>) -> (Arc<Gated>, mpsc::UnboundedReceiver<()>) {
     let (began, begins) = mpsc::unbounded_channel();
     let source = Arc::new(Gated {
         bytes,
@@ -93,7 +93,7 @@ fn gated(bytes: Vec<u8>) -> (Arc<Gated>, mpsc::UnboundedReceiver<()>) {
     (source, begins)
 }
 
-fn reference(bytes: &[u8], media_type: ImageMediaType) -> ImageReference {
+pub(super) fn reference(bytes: &[u8], media_type: ImageMediaType) -> ImageReference {
     let digest = Sha256Digest::from_bytes(Sha256::digest(bytes).into());
     ImageReference::new(digest, media_type, bytes.len() as u64).unwrap()
 }
@@ -219,7 +219,11 @@ async fn an_advertising_agent_receives_text_then_images_in_attachment_order() {
     assert!(opened.session.operation_capabilities().image_input());
 
     let sent = message("both", Some("what is this?"), vec![second, first]);
-    let result = opened.session.execute(sent).await.into_result();
+    let result = opened
+        .session
+        .execute(sent, Arc::new(|| Ok(())))
+        .await
+        .into_result();
     assert_eq!(result, Ok(ExecutionOutcome::Completed));
     assert_eq!(
         observed(&root, "prompt-observed").unwrap(),
@@ -232,7 +236,11 @@ async fn an_advertising_agent_receives_text_then_images_in_attachment_order() {
 
     // An image alone is a whole message: no empty text block is invented.
     let alone = message("alone", None, vec![first]);
-    let result = opened.session.execute(alone).await.into_result();
+    let result = opened
+        .session
+        .execute(alone, Arc::new(|| Ok(())))
+        .await
+        .into_result();
     assert_eq!(result, Ok(ExecutionOutcome::Completed));
     assert_eq!(
         observed(&root, "prompt-observed").unwrap(),
@@ -264,7 +272,11 @@ async fn an_agent_that_did_not_advertise_images_is_sent_nothing() {
     assert!(!opened.session.operation_capabilities().image_input());
 
     let refused = message("refused", Some("look"), vec![image]);
-    let result = opened.session.execute(refused).await.into_result();
+    let result = opened
+        .session
+        .execute(refused, Arc::new(|| Ok(())))
+        .await
+        .into_result();
     assert_eq!(
         result,
         Err(AgentError::ImageInputRefused(
@@ -275,7 +287,11 @@ async fn an_agent_that_did_not_advertise_images_is_sent_nothing() {
     assert_eq!(observed(&root, "prompt-observed"), None);
 
     // The refusal dispatched nothing, so the context is still usable.
-    let result = opened.session.execute(prompt("text")).await.into_result();
+    let result = opened
+        .session
+        .execute(prompt("text"), Arc::new(|| Ok(())))
+        .await
+        .into_result();
     assert_eq!(result, Ok(ExecutionOutcome::Completed));
     close(&opened).await;
 }
@@ -296,7 +312,10 @@ async fn a_binding_without_a_byte_source_refuses_images_at_admission() {
     let image = reference(b"image", ImageMediaType::Webp);
     let result = opened
         .session
-        .execute(message("refused", Some("look"), vec![image]))
+        .execute(
+            message("refused", Some("look"), vec![image]),
+            Arc::new(|| Ok(())),
+        )
         .await
         .into_result();
     assert_eq!(
@@ -340,14 +359,18 @@ async fn an_image_that_cannot_be_supplied_intact_sends_nothing_and_keeps_the_con
     ] {
         // A good image before the bad one must not be sent on its own either.
         let refused = message(id, Some("look"), vec![intact, image]);
-        let result = opened.session.execute(refused).await.into_result();
+        let result = opened
+            .session
+            .execute(refused, Arc::new(|| Ok(())))
+            .await
+            .into_result();
         assert_eq!(result, Err(AgentError::UserImage(expected)), "{id}");
         assert_eq!(observed(&root, "prompt-observed"), None, "{id}");
     }
 
     let result = opened
         .session
-        .execute(message("intact", None, vec![intact]))
+        .execute(message("intact", None, vec![intact]), Arc::new(|| Ok(())))
         .await
         .into_result();
     assert_eq!(result, Ok(ExecutionOutcome::Completed));
@@ -380,6 +403,7 @@ async fn steering_carries_images_the_same_way_a_prompt_does() {
         .steer(
             ExecutionId::new("first").unwrap(),
             message("bad", Some("adjust"), vec![missing]),
+            &opened.session.capabilities(),
             &|| {},
         )
         .await
@@ -395,6 +419,7 @@ async fn steering_carries_images_the_same_way_a_prompt_does() {
         .steer(
             ExecutionId::new("first").unwrap(),
             message("good", Some("adjust"), vec![image]),
+            &opened.session.capabilities(),
             &|| {},
         )
         .await;
@@ -428,7 +453,10 @@ async fn a_model_without_recorded_image_limits_is_offered_no_images() {
     let image = reference(b"image", ImageMediaType::Png);
     let result = opened
         .session
-        .execute(message("refused", Some("look"), vec![image]))
+        .execute(
+            message("refused", Some("look"), vec![image]),
+            Arc::new(|| Ok(())),
+        )
         .await
         .into_result();
     assert_eq!(
@@ -454,7 +482,10 @@ async fn an_image_outside_the_models_limits_or_the_frame_is_refused_without_a_re
     let webp = reference(b"image", ImageMediaType::Webp);
     let result = opened
         .session
-        .execute(message("webp", Some("look"), vec![webp]))
+        .execute(
+            message("webp", Some("look"), vec![webp]),
+            Arc::new(|| Ok(())),
+        )
         .await
         .into_result();
     assert_eq!(
@@ -469,12 +500,21 @@ async fn an_image_outside_the_models_limits_or_the_frame_is_refused_without_a_re
         let result = if steering {
             opened
                 .session
-                .steer(ExecutionId::new("none").unwrap(), sent, &|| {})
+                .steer(
+                    ExecutionId::new("none").unwrap(),
+                    sent,
+                    &opened.session.capabilities(),
+                    &|| {},
+                )
                 .await
                 .map(|_| ExecutionOutcome::Completed)
                 .map_err(|failure| failure.into_error())
         } else {
-            opened.session.execute(sent).await.into_result()
+            opened
+                .session
+                .execute(sent, Arc::new(|| Ok(())))
+                .await
+                .into_result()
         };
         assert!(
             matches!(
@@ -505,7 +545,12 @@ async fn a_source_that_never_answers_does_not_keep_the_context_from_closing() {
         Some("look"),
         vec![reference(b"x", ImageMediaType::Png)],
     );
-    let running = tokio::spawn(async move { session.execute(stalled).await.into_result() });
+    let running = tokio::spawn(async move {
+        session
+            .execute(stalled, Arc::new(|| Ok(())))
+            .await
+            .into_result()
+    });
     begins.recv().await.unwrap();
 
     // The read is still outstanding, and close completes anyway.
@@ -540,7 +585,12 @@ async fn a_source_that_never_answers_is_unavailable_at_the_read_bound_and_keeps_
         Some("look"),
         vec![reference(b"x", ImageMediaType::Png)],
     );
-    let running = tokio::spawn(async move { session.execute(stalled).await.into_result() });
+    let running = tokio::spawn(async move {
+        session
+            .execute(stalled, Arc::new(|| Ok(())))
+            .await
+            .into_result()
+    });
     begins.recv().await.unwrap();
 
     // Only the read's bound is reached; nothing else the test waits on is.
@@ -552,7 +602,11 @@ async fn a_source_that_never_answers_is_unavailable_at_the_read_bound_and_keeps_
     );
     assert_eq!(observed(&root, "prompt-observed"), None);
 
-    let result = opened.session.execute(prompt("text")).await.into_result();
+    let result = opened
+        .session
+        .execute(prompt("text"), Arc::new(|| Ok(())))
+        .await
+        .into_result();
     assert_eq!(result, Ok(ExecutionOutcome::Completed));
     close(&opened).await;
 }
@@ -577,7 +631,12 @@ async fn a_shorter_execution_timeout_shortens_the_read_bound() {
         Some("look"),
         vec![reference(b"x", ImageMediaType::Png)],
     );
-    let running = tokio::spawn(async move { session.execute(stalled).await.into_result() });
+    let running = tokio::spawn(async move {
+        session
+            .execute(stalled, Arc::new(|| Ok(())))
+            .await
+            .into_result()
+    });
     begins.recv().await.unwrap();
 
     clock.advance(limit);
@@ -607,7 +666,11 @@ async fn a_source_that_panics_costs_one_message_and_not_the_worker() {
         Some("look"),
         vec![reference(b"x", ImageMediaType::Png)],
     );
-    let result = opened.session.execute(panicking).await.into_result();
+    let result = opened
+        .session
+        .execute(panicking, Arc::new(|| Ok(())))
+        .await
+        .into_result();
     assert_eq!(
         result,
         Err(AgentError::UserImage(UserImageError::Unavailable))
@@ -615,7 +678,11 @@ async fn a_source_that_panics_costs_one_message_and_not_the_worker() {
     assert_eq!(observed(&root, "prompt-observed"), None);
 
     // The same process is still there and still answers.
-    let result = opened.session.execute(prompt("text")).await.into_result();
+    let result = opened
+        .session
+        .execute(prompt("text"), Arc::new(|| Ok(())))
+        .await
+        .into_result();
     assert_eq!(result, Ok(ExecutionOutcome::Completed));
     close(&opened).await;
 }
@@ -647,7 +714,12 @@ async fn a_steering_read_that_never_answers_does_not_hold_up_the_active_executio
     );
     let steering = tokio::spawn(async move {
         session
-            .steer(ExecutionId::new("first").unwrap(), stalled, &|| {})
+            .steer(
+                ExecutionId::new("first").unwrap(),
+                stalled,
+                &session.capabilities(),
+                &|| {},
+            )
             .await
     });
     begins.recv().await.unwrap();
@@ -660,6 +732,7 @@ async fn a_steering_read_that_never_answers_does_not_hold_up_the_active_executio
         opened.session.steer(
             ExecutionId::new("first").unwrap(),
             prompt("text steering"),
+            &opened.session.capabilities(),
             &|| {},
         ),
     )
@@ -713,7 +786,12 @@ async fn a_steering_read_that_never_answers_is_unavailable_at_the_steering_bound
     );
     let steering = tokio::spawn(async move {
         session
-            .steer(ExecutionId::new("first").unwrap(), stalled, &|| {})
+            .steer(
+                ExecutionId::new("first").unwrap(),
+                stalled,
+                &session.capabilities(),
+                &|| {},
+            )
             .await
     });
     begins.recv().await.unwrap();
@@ -738,6 +816,7 @@ async fn a_steering_read_that_never_answers_is_unavailable_at_the_steering_bound
         .steer(
             ExecutionId::new("first").unwrap(),
             prompt("text steering"),
+            &opened.session.capabilities(),
             &|| {},
         )
         .await;
@@ -763,7 +842,12 @@ async fn reading_a_prompts_images_spends_the_executions_deadline_rather_than_add
         .unwrap();
     let session = opened.session.clone();
     let sent = message("stalled", Some("look"), vec![image]);
-    let running = tokio::spawn(async move { session.execute(sent).await.into_result() });
+    let running = tokio::spawn(async move {
+        session
+            .execute(sent, Arc::new(|| Ok(())))
+            .await
+            .into_result()
+    });
     begins.recv().await.unwrap();
 
     // Half of the execution's four seconds goes on reading its image.
@@ -809,7 +893,12 @@ async fn reading_a_steerings_images_spends_the_steering_deadline_rather_than_add
     let sent = message("stalled", Some("adjust"), vec![image]);
     let steering = tokio::spawn(async move {
         session
-            .steer(ExecutionId::new("first").unwrap(), sent, &|| {})
+            .steer(
+                ExecutionId::new("first").unwrap(),
+                sent,
+                &session.capabilities(),
+                &|| {},
+            )
             .await
             .map_err(|failure| failure.into_error())
     });
@@ -855,7 +944,10 @@ async fn a_session_bounds_the_encoded_image_bytes_waiting_to_be_dispatched() {
         let session = opened.session.clone();
         let sent = message(id, None, vec![image]);
         reading.push(tokio::spawn(async move {
-            session.execute(sent).await.into_result()
+            session
+                .execute(sent, Arc::new(|| Ok(())))
+                .await
+                .into_result()
         }));
         begins.recv().await.unwrap();
     }
@@ -863,7 +955,7 @@ async fn a_session_bounds_the_encoded_image_bytes_waiting_to_be_dispatched() {
     // single one of them is read.
     let refused = opened
         .session
-        .execute(message("third", None, vec![image]))
+        .execute(message("third", None, vec![image]), Arc::new(|| Ok(())))
         .await
         .into_result();
     assert_eq!(refused, Err(AgentError::Busy));
@@ -878,7 +970,9 @@ async fn a_session_bounds_the_encoded_image_bytes_waiting_to_be_dispatched() {
     source.release.add_permits(1);
     let result = timeout(
         Duration::from_secs(5),
-        opened.session.execute(message("later", None, vec![image])),
+        opened
+            .session
+            .execute(message("later", None, vec![image]), Arc::new(|| Ok(()))),
     )
     .await
     .expect("the budget was not returned")
@@ -953,7 +1047,10 @@ async fn codex_images_follow_the_model_source_and_negotiated_offer() {
             .unwrap();
         let result = opened
             .session
-            .execute(message("photo", Some("look"), vec![image]))
+            .execute(
+                message("photo", Some("look"), vec![image]),
+                Arc::new(|| Ok(())),
+            )
             .await
             .into_result();
         if let Some(expected) = expected {
@@ -972,7 +1069,10 @@ async fn codex_images_follow_the_model_source_and_negotiated_offer() {
             assert_eq!(
                 opened
                     .session
-                    .execute(message("image-only", None, vec![image]))
+                    .execute(
+                        message("image-only", None, vec![image]),
+                        Arc::new(|| Ok(()))
+                    )
                     .await
                     .into_result(),
                 Ok(ExecutionOutcome::Completed)
@@ -986,7 +1086,7 @@ async fn codex_images_follow_the_model_source_and_negotiated_offer() {
         assert_eq!(
             opened
                 .session
-                .execute(prompt("still usable"))
+                .execute(prompt("still usable"), Arc::new(|| Ok(())))
                 .await
                 .into_result(),
             Ok(ExecutionOutcome::Completed)

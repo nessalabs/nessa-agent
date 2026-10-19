@@ -17,7 +17,7 @@ async fn streams_two_prompts_with_one_immutable_session_and_repeated_close() {
         assert_eq!(
             opened
                 .session
-                .execute(prompt(input))
+                .execute(prompt(input), Arc::new(|| Ok(())))
                 .await
                 .into_result()
                 .unwrap(),
@@ -66,7 +66,11 @@ async fn streams_two_prompts_with_one_immutable_session_and_repeated_close() {
         first
     );
     assert_eq!(
-        opened.session.execute(prompt("late")).await.into_result(),
+        opened
+            .session
+            .execute(prompt("late"), Arc::new(|| Ok(())))
+            .await
+            .into_result(),
         Ok(ExecutionOutcome::Completed)
     );
     opened

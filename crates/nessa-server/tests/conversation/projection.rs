@@ -297,6 +297,8 @@ pub(super) fn event(update: ExecutionUpdate) -> ExecutionEvent {
 
 fn review_snapshot(events: Vec<ExecutionEvent>) -> SessionSnapshot {
     SessionSnapshot {
+        model_change: None,
+        current_configuration: None,
         id: SessionId::new("conversation").unwrap(),
         provider: ProviderIdentity::new("fixture", "model", "configuration").unwrap(),
         provider_context: ProviderContext::Recorded(

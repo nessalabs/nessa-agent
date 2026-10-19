@@ -1,9 +1,11 @@
+use nessa_sdk::application::agent_execution::providers::NativeExecutionHandoff;
 mod approval;
 mod conformance;
 mod effort;
 mod initialization;
 mod lifecycle;
 mod messages;
+mod models;
 mod observation_settlement;
 mod retained_output;
 mod review_regressions;
@@ -12,6 +14,7 @@ mod streaming_persistence;
 mod structured_observations;
 use super::support::*;
 use nessa_sdk::application::agent_execution::executions::SubmissionMode;
+use nessa_sdk::application::agent_execution::providers::HarnessHostIdentity;
 use nessa_sdk::application::agent_execution::sessions::QueueHistoryRecord;
 use nessa_sdk::application::agent_execution::{
     agents::Agent,
@@ -499,6 +502,9 @@ impl ExecutionEventStream for TestEvents {
     }
 }
 impl AgentProvider for TestProvider {
+    fn harness_host_identity(&self) -> HarnessHostIdentity<'_> {
+        HarnessHostIdentity::local()
+    }
     fn identity(&self) -> ProviderIdentity {
         self.identity.clone()
     }
@@ -538,8 +544,16 @@ impl ProviderSessionBackend for TestBackend {
     fn prepare_invocation(&self) -> ProviderOperationFuture<'_, ()> {
         Box::pin(async { Ok(()) })
     }
-    fn execute(&self, input: ExecutionRequest) -> ProviderExecutionFuture<'_> {
+    fn execute(
+        &self,
+        input: ExecutionRequest,
+        handoff: NativeExecutionHandoff,
+    ) -> ProviderExecutionFuture<'_> {
         Box::pin(async move {
+            if let Err(error) = handoff() {
+                return ProviderExecutionReply::Rejected(error);
+            }
+
             let result: Result<ExecutionOutcome, AgentError> = {
                 async move {
                     self.calls.executions.fetch_add(1, Ordering::SeqCst);
@@ -1081,6 +1095,8 @@ async fn unfinished_saved_invocations_are_retained_without_automatic_replay() {
     let storage = MemoryStorage::default();
     let provider = TestProvider::new();
     storage.0.lock().unwrap().snapshot = Some(SessionSnapshot {
+        model_change: None,
+        current_configuration: None,
         queue_history: Vec::new(),
         id: SessionId::new("conversation").unwrap(),
         provider: provider.identity(),
@@ -1209,6 +1225,8 @@ async fn restored_unresolved_admission_is_never_redispatched_by_retry() {
             });
         }
         storage.0.lock().unwrap().snapshot = Some(SessionSnapshot {
+            model_change: None,
+            current_configuration: None,
             queue_history,
             id: SessionId::new("conversation").unwrap(),
             provider: provider.identity(),

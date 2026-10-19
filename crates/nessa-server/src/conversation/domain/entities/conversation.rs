@@ -40,6 +40,15 @@ impl Conversation {
         self.approval_mode = mode;
         self
     }
+    pub fn with_model_selection(
+        mut self,
+        model: ConversationModelId,
+        approval_mode: ConversationApprovalMode,
+    ) -> Self {
+        self.model = model;
+        self.approval_mode = approval_mode;
+        self
+    }
     /// Bind an identity to the authenticated creator. Ownership never comes from prompt data.
     #[expect(
         clippy::too_many_arguments,
@@ -196,7 +205,7 @@ impl Conversation {
     pub fn agent(&self) -> Option<AgentId> {
         self.agent
     }
-    /// The fixed model selected when the conversation was created.
+    /// The last durably committed model selected for this conversation.
     pub fn model(&self) -> &ConversationModelId {
         &self.model
     }

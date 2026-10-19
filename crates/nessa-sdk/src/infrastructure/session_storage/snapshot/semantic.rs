@@ -1,12 +1,15 @@
 //! Version 1 semantic fact bodies using the existing typed snapshot field mappings.
 //! The physical frame and the application fold are separate boundaries.
 
+use crate::domain::model_metadata::value_objects::EffortLevel;
+
 use super::{
     artifacts::WireArtifact,
     cancellation::Cancellation,
     errors::{Outcome, SavedError},
     leases::WireLease,
     notes::{WireNote, WireNoteRetired},
+    permissions::Actor,
     queue_order::QueueEvent,
     records::{Acknowledgement, Event, Metadata, Provider},
     scheduling::SchedulingEvent,
@@ -15,7 +18,10 @@ use super::{
 };
 use crate::{
     application::agent_execution::{
-        providers::ExecutionReport,
+        providers::{
+            ApprovalMode, ExecutionReport, ModelChange, ModelChangeRecord, ModelChangeTiming,
+            ModelConfiguration, SessionConfigurationKind, SessionConfigurationRecord,
+        },
         sessions::{ProviderContext, SessionChange, SessionSaveUnit, StorageError},
     },
     domain::agent_execution::{
@@ -30,7 +36,150 @@ use std::fmt;
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub(super) struct SavedConfigurationChange {
+    before: Option<SavedModelConfiguration>,
+    after: SavedModelConfiguration,
+    actor: Actor,
+    kind: String,
+}
+impl From<&SessionConfigurationRecord> for SavedConfigurationChange {
+    fn from(record: &SessionConfigurationRecord) -> Self {
+        Self {
+            before: record.before().map(Into::into),
+            after: record.after().into(),
+            actor: record.actor().into(),
+            kind: match record.kind() {
+                SessionConfigurationKind::Model => "model",
+                SessionConfigurationKind::ApprovalMode => "approvalMode",
+                SessionConfigurationKind::EffortLevel => "effortLevel",
+            }
+            .into(),
+        }
+    }
+}
+impl SavedConfigurationChange {
+    pub(super) fn decode(self) -> Result<SessionConfigurationRecord, StorageError> {
+        let kind = match self.kind.as_str() {
+            "model" => SessionConfigurationKind::Model,
+            "approvalMode" => SessionConfigurationKind::ApprovalMode,
+            "effortLevel" => SessionConfigurationKind::EffortLevel,
+            _ => return Err(corrupt("unknown configuration change kind")),
+        };
+        Ok(SessionConfigurationRecord::new(
+            self.before
+                .map(SavedModelConfiguration::decode)
+                .transpose()?,
+            self.after.decode()?,
+            self.actor.decode()?,
+            kind,
+        ))
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct SavedModelChange {
+    before: Provider,
+    after: Provider,
+    context: String,
+    actor: Actor,
+    before_configuration: SavedModelConfiguration,
+    requested_configuration: SavedModelConfiguration,
+    configuration: SavedModelConfiguration,
+    timing: Option<String>,
+}
+impl From<&ModelChangeRecord> for SavedModelChange {
+    fn from(record: &ModelChangeRecord) -> Self {
+        let change = record.change();
+        Self {
+            before: Provider {
+                name: change.before().name().into(),
+                model_id: change.before().model_id().into(),
+                context: change.before().context().into(),
+            },
+            after: Provider {
+                name: change.after().name().into(),
+                model_id: change.after().model_id().into(),
+                context: change.after().context().into(),
+            },
+            context: change.context().into(),
+            actor: record.actor().into(),
+            before_configuration: change.prior_configuration().into(),
+            requested_configuration: change.requested_configuration().into(),
+            configuration: record.configuration().into(),
+            timing: record.timing().map(|timing| {
+                match timing {
+                    ModelChangeTiming::SubsequentResponses => "subsequentResponses",
+                    ModelChangeTiming::NextTurn => "nextTurn",
+                }
+                .into()
+            }),
+        }
+    }
+}
+impl SavedModelChange {
+    pub(super) fn decode(self) -> Result<ModelChangeRecord, StorageError> {
+        Ok(ModelChangeRecord::new(
+            ModelChange::restore(
+                self.before.decode()?,
+                self.after.decode()?,
+                self.context,
+                self.before_configuration.decode()?,
+                self.requested_configuration.decode()?,
+            )
+            .map_err(corrupt)?,
+            self.actor.decode()?,
+            self.configuration.decode()?,
+            self.timing
+                .map(|timing| match timing.as_str() {
+                    "subsequentResponses" => Ok(ModelChangeTiming::SubsequentResponses),
+                    "nextTurn" => Ok(ModelChangeTiming::NextTurn),
+                    _ => Err(corrupt("unknown model application boundary")),
+                })
+                .transpose()?,
+        ))
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct SavedModelConfiguration {
+    approval_mode: Option<String>,
+    effort_level: Option<String>,
+}
+impl From<&ModelConfiguration> for SavedModelConfiguration {
+    fn from(value: &ModelConfiguration) -> Self {
+        Self {
+            approval_mode: value.approval_mode().map(|mode| mode.as_str().into()),
+            effort_level: value.effort_level().map(|level| level.as_str().into()),
+        }
+    }
+}
+impl SavedModelConfiguration {
+    pub(super) fn decode(self) -> Result<ModelConfiguration, StorageError> {
+        let mode = self
+            .approval_mode
+            .map(|mode| match mode.as_str() {
+                "ask" => Ok(ApprovalMode::Ask),
+                "auto" => Ok(ApprovalMode::Auto),
+                "full" => Ok(ApprovalMode::Full),
+                _ => Err(corrupt("unknown model approval preset")),
+            })
+            .transpose()?;
+        let effort = self
+            .effort_level
+            .map(EffortLevel::new)
+            .transpose()
+            .map_err(corrupt)?;
+        Ok(ModelConfiguration::new(mode, effort))
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 enum WireChange<E = Event> {
+    ModelChanged(SavedModelChange),
+    ConfigurationChanged(SavedConfigurationChange),
     Opened {
         id: String,
         provider: Provider,
@@ -110,6 +259,10 @@ fn encode_result(
 impl<'a> From<&'a SessionChange> for WireChange<Event<&'a str>> {
     fn from(value: &'a SessionChange) -> Self {
         match value {
+            SessionChange::ModelChanged(record) => Self::ModelChanged(record.into()),
+            SessionChange::ConfigurationChanged(record) => {
+                Self::ConfigurationChanged(record.into())
+            }
             SessionChange::Opened {
                 id,
                 provider,
@@ -194,6 +347,10 @@ impl TryFrom<WireChange> for SessionChange {
 
     fn try_from(value: WireChange) -> Result<Self, Self::Error> {
         Ok(match value {
+            WireChange::ModelChanged(record) => Self::ModelChanged(record.decode()?),
+            WireChange::ConfigurationChanged(record) => {
+                Self::ConfigurationChanged(record.decode()?)
+            }
             WireChange::Opened {
                 id,
                 provider,
@@ -1173,6 +1330,256 @@ mod tests {
             decode_batch(&bare, &ProviderContext::Absent),
             Err(StorageError::AnotherVersion { found: None })
         );
+    }
+
+    #[test]
+    fn model_and_later_settings_round_trip_with_exact_actor_and_before_state() {
+        use crate::application::agent_execution::providers::{
+            ApprovalMode, ModelChange, ModelChangeRecord, ModelChangeTiming, ModelConfiguration,
+            SessionConfigurationKind, SessionConfigurationRecord,
+        };
+        let before = ProviderIdentity::new("fixture", "model", "workspace").unwrap();
+        let after =
+            ProviderIdentity::new("fixture", "another", "workspace-with-other-limits").unwrap();
+        let actor = ActionContext::new("person", "window", "switch-model").unwrap();
+        let configuration = ModelConfiguration::new(Some(ApprovalMode::Ask), None);
+        let model = ModelChangeRecord::new(
+            ModelChange::restore(
+                before.clone(),
+                after.clone(),
+                "same-workspace".into(),
+                ModelConfiguration::new(Some(ApprovalMode::Ask), None),
+                ModelConfiguration::new(Some(ApprovalMode::Ask), None),
+            )
+            .unwrap(),
+            actor.clone(),
+            configuration.clone(),
+            Some(ModelChangeTiming::NextTurn),
+        );
+        let changed = SessionChange::ModelChanged(model.clone());
+        assert_eq!(
+            decode_one(&encode_one(&changed).unwrap(), &ProviderContext::Absent).unwrap(),
+            changed
+        );
+        let initial = crate::application::agent_execution::sessions::records::fold_changes(
+            None,
+            &[opened_change()],
+        )
+        .unwrap();
+        let selected = crate::application::agent_execution::sessions::records::fold_changes(
+            Some(&initial),
+            std::slice::from_ref(&changed),
+        )
+        .unwrap();
+        assert_eq!(selected.provider, after);
+        assert_eq!(selected.model_change.as_ref(), Some(&model));
+        let mode_actor = ActionContext::new("person", "window", "change-mode").unwrap();
+        let mode = SessionConfigurationRecord::new(
+            Some(configuration),
+            ModelConfiguration::new(Some(ApprovalMode::Auto), None),
+            mode_actor.clone(),
+            SessionConfigurationKind::ApprovalMode,
+        );
+        let changed_mode = SessionChange::ConfigurationChanged(mode.clone());
+        assert_eq!(
+            decode_one(
+                &encode_one(&changed_mode).unwrap(),
+                &ProviderContext::Absent
+            )
+            .unwrap(),
+            changed_mode
+        );
+        let latest = crate::application::agent_execution::sessions::records::fold_changes(
+            Some(&selected),
+            std::slice::from_ref(&changed_mode),
+        )
+        .unwrap();
+        assert_eq!(latest.model_change.as_ref(), Some(&model));
+        assert_eq!(latest.current_configuration.as_ref(), Some(&mode));
+        assert_eq!(
+            latest.current_configuration.as_ref().unwrap().actor(),
+            &mode_actor
+        );
+        assert!(
+            crate::application::agent_execution::sessions::records::fold_changes(
+                Some(&latest),
+                &[changed_mode]
+            )
+            .is_err()
+        );
+        assert!(
+            crate::application::agent_execution::sessions::records::fold_changes(
+                Some(&selected),
+                &[changed]
+            )
+            .is_err()
+        );
+        let bytes = serde_json::to_vec(&super::super::checkpoint::SnapshotRef(&latest)).unwrap();
+        let saved: super::super::checkpoint::Snapshot = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(saved.decode().unwrap(), latest);
+    }
+
+    #[test]
+    fn configuration_relationships_match_semantic_fold_and_checkpoint_restore() {
+        use crate::application::agent_execution::providers::{
+            ApprovalMode, ModelChange, ModelChangeRecord, ModelConfiguration,
+            SessionConfigurationKind, SessionConfigurationRecord,
+        };
+        use crate::application::agent_execution::sessions::records::fold_changes;
+        use crate::domain::model_metadata::value_objects::EffortLevel;
+        let configuration = |mode, effort: &str| {
+            ModelConfiguration::new(Some(mode), Some(EffortLevel::new(effort.into()).unwrap()))
+        };
+        let ask_high = configuration(ApprovalMode::Ask, "high");
+        let ask_low = configuration(ApprovalMode::Ask, "low");
+        let auto_high = configuration(ApprovalMode::Auto, "high");
+        let actor = ActionContext::new("person", "window", "model").unwrap();
+        let other = ActionContext::new("person", "window", "later-setting").unwrap();
+        let initial = fold_changes(None, &[opened_change()]).unwrap();
+        let model = ModelChangeRecord::new(
+            ModelChange::restore(
+                initial.provider.clone(),
+                ProviderIdentity::new("fixture", "other", "context").unwrap(),
+                "workspace".into(),
+                ask_high.clone(),
+                ask_high.clone(),
+            )
+            .unwrap(),
+            actor.clone(),
+            ask_high.clone(),
+            None,
+        );
+        let selected = fold_changes(
+            Some(&initial),
+            &[SessionChange::ModelChanged(model.clone())],
+        )
+        .unwrap();
+        let cases = [
+            (
+                "approval changes effort",
+                SessionConfigurationKind::ApprovalMode,
+                Some(ask_high.clone()),
+                ask_low.clone(),
+                other.clone(),
+                false,
+            ),
+            (
+                "effort changes approval",
+                SessionConfigurationKind::EffortLevel,
+                Some(ask_high.clone()),
+                auto_high.clone(),
+                other.clone(),
+                false,
+            ),
+            (
+                "missing prior",
+                SessionConfigurationKind::ApprovalMode,
+                None,
+                auto_high.clone(),
+                other.clone(),
+                false,
+            ),
+            (
+                "model actor differs",
+                SessionConfigurationKind::Model,
+                Some(ask_high.clone()),
+                ask_high.clone(),
+                other.clone(),
+                false,
+            ),
+            (
+                "model prior differs",
+                SessionConfigurationKind::Model,
+                Some(ask_low.clone()),
+                ask_high.clone(),
+                actor.clone(),
+                false,
+            ),
+            (
+                "model after differs",
+                SessionConfigurationKind::Model,
+                Some(ask_high.clone()),
+                ask_low.clone(),
+                actor.clone(),
+                false,
+            ),
+            (
+                "valid model",
+                SessionConfigurationKind::Model,
+                Some(ask_high.clone()),
+                ask_high.clone(),
+                actor.clone(),
+                true,
+            ),
+            (
+                "valid later approval",
+                SessionConfigurationKind::ApprovalMode,
+                Some(ask_high.clone()),
+                auto_high,
+                other.clone(),
+                true,
+            ),
+            (
+                "valid later effort",
+                SessionConfigurationKind::EffortLevel,
+                Some(ask_high),
+                ask_low,
+                other,
+                true,
+            ),
+        ];
+        for (name, kind, before, after, actor, valid) in cases {
+            let record = SessionConfigurationRecord::new(before, after, actor, kind);
+            let mut snapshot = selected.clone();
+            snapshot.current_configuration = Some(record.clone());
+            let later = SessionConfigurationRecord::new(
+                Some(record.after().clone()),
+                record.after().clone(),
+                record.actor().clone(),
+                SessionConfigurationKind::ApprovalMode,
+            );
+            assert_eq!(
+                fold_changes(
+                    Some(&snapshot),
+                    &[SessionChange::ConfigurationChanged(later)]
+                )
+                .is_ok(),
+                valid,
+                "malformed prior cannot be hidden by later control: {name}"
+            );
+            let bytes =
+                serde_json::to_vec(&super::super::checkpoint::SnapshotRef(&snapshot)).unwrap();
+            let checkpoint: super::super::checkpoint::Snapshot =
+                serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(checkpoint.decode().is_ok(), valid, "checkpoint: {name}");
+            if kind != SessionConfigurationKind::Model {
+                assert_eq!(
+                    fold_changes(
+                        Some(&selected),
+                        &[SessionChange::ConfigurationChanged(record)]
+                    )
+                    .is_ok(),
+                    valid,
+                    "semantic fold: {name}"
+                );
+            }
+        }
+        for missing_model in [true, false] {
+            let mut snapshot = selected.clone();
+            if missing_model {
+                snapshot.model_change = None;
+            } else {
+                snapshot.current_configuration = None;
+            }
+            let bytes =
+                serde_json::to_vec(&super::super::checkpoint::SnapshotRef(&snapshot)).unwrap();
+            let checkpoint: super::super::checkpoint::Snapshot =
+                serde_json::from_slice(&bytes).unwrap();
+            assert!(
+                checkpoint.decode().is_err(),
+                "missing model/current relationship: {missing_model}"
+            );
+        }
     }
 
     fn opened_change() -> SessionChange {

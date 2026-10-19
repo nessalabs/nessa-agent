@@ -12,6 +12,10 @@
 
 /** Every number the check takes: its default, and what it counts. */
 export const KNOBS = {
+  modelSwitches: {
+    default: 1,
+    what: "same-provider model choices through the actual composer picker",
+  },
   seed: { default: 1, what: "the plan's seed; the same seed gives the same plan" },
   rounds: {
     default: 16,
@@ -139,6 +143,7 @@ export function plan(knobs) {
   add(knobs.awaits, () => ({ kind: "await" }))
   add(knobs.watches, () => ({ kind: "watch" }))
   add(knobs.switches, () => ({ kind: "switch" }))
+  add(knobs.modelSwitches, () => ({ kind: "model" }))
   add(knobs.asides, () => ({ kind: "aside" }))
   add(knobs.large, () => ({ kind: "large" }))
   add(knobs.parks, () => ({ kind: "park" }))
@@ -156,18 +161,28 @@ export function plan(knobs) {
     const j = Math.floor(next() * (i + 1))
     ;[steps[i], steps[j]] = [steps[j], steps[i]]
   }
+  // Preset checks keep their original model. Positive model changes follow
+  // that work, using Ask before their review; chaos keeps concurrent coverage.
+  const sequence = [
+    ...steps.filter((step) => step.kind !== "model"),
+    ...steps.filter((step) => step.kind === "model"),
+  ]
   let mode = "ask"
   const out = []
-  for (const step of steps) {
+  for (const step of sequence) {
     if (step.kind === "switch") {
       const to = pick(MODES.filter((each) => each !== mode))
       out.push({ kind: "switch", from: mode, to, during: next() < 0.5 })
       mode = to
     } else if (step.kind === "permission") {
       out.push({ ...step, answer: next() < 0.7 ? "allow" : "deny", mode })
-    } else if (step.kind === "reviews" || step.kind === "large") {
+    } else if (
+      step.kind === "reviews" ||
+      step.kind === "large" ||
+      step.kind === "model"
+    ) {
       // These are about cards being shown, so they run where the agent asks.
-      if (mode === "full") {
+      if (mode === "full" || (step.kind === "model" && mode !== "ask")) {
         out.push({ kind: "switch", from: mode, to: "ask", during: false })
         mode = "ask"
       }

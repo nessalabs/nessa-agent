@@ -1,5 +1,6 @@
 //! An exhausted invocation cannot acquire fresh output during a later run.
 use super::*;
+use nessa_sdk::application::agent_execution::providers::HarnessHostIdentity;
 
 #[tokio::test]
 async fn settled_observation_boundary_rejects_old_output_in_each_delivery_mode() {
@@ -225,6 +226,9 @@ struct FailedPreflight {
 }
 struct FailedPreflightEvents(ObservationFailureCause);
 impl AgentProvider for FailedPreflight {
+    fn harness_host_identity(&self) -> HarnessHostIdentity<'_> {
+        HarnessHostIdentity::local()
+    }
     fn identity(&self) -> ProviderIdentity {
         ProviderIdentity::new("preflight", "fixture", "local").unwrap()
     }

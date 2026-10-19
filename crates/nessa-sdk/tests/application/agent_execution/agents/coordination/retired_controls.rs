@@ -190,3 +190,75 @@ async fn retired_control_supervisor_failure_cannot_block_restored_attachment() {
     drop(old);
     agent.close(actor()).await.unwrap();
 }
+
+// #922 R1: unwind belongs to the admitted permit's captured attachment.
+#[tokio::test]
+async fn permit_unwind_fences_current_but_not_retired_attachment_or_ordinary_drop() {
+    for (execution_started, unwind, replacement) in [
+        (false, true, false),
+        (true, true, false),
+        (false, false, false),
+        (true, false, false),
+        (false, true, true),
+        (true, true, true),
+    ] {
+        let (agent, backend) = agent_with_backend().await;
+        let permit = agent.accept_control().unwrap();
+        if execution_started {
+            permit.native_handoff()().unwrap();
+        }
+        if replacement {
+            restore_attachment(&agent, &permit).await;
+        }
+        if unwind {
+            assert!(
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+                    let _permit = permit;
+                    panic!("fixture owner unwinds");
+                }))
+                .is_err()
+            );
+        } else {
+            drop(permit);
+        }
+        if unwind && !replacement {
+            assert!(matches!(agent.accept_control(), Err(AgentError::Closed)));
+        } else {
+            let current = agent
+                .accept_control()
+                .expect("ordinary drop and old attachment cannot fence current context");
+            assert_eq!(agent.run_control(current, async { Ok(()) }).await, Ok(()));
+        }
+        assert!(backend.closes.lock().unwrap().is_empty());
+        agent.close(actor()).await.unwrap();
+        assert_eq!(backend.closes.lock().unwrap().len(), 1);
+    }
+}
+
+#[tokio::test]
+async fn native_handoff_does_not_keep_retired_work_or_attachment_alive() {
+    for retired in ["work", "attachment", "stop"] {
+        let (agent, backend) = agent_with_backend().await;
+        let permit = agent.accept_control().unwrap();
+        let handoff = permit.native_handoff();
+        match retired {
+            "work" => {}
+            "attachment" => {
+                restore_attachment(&agent, &permit).await;
+                assert_eq!(handoff(), Err(AgentError::Closed));
+            }
+            "stop" => {
+                agent
+                    .inner
+                    .lifecycle
+                    .start_stop(SessionCloseRequest::Explicit(actor()));
+                assert_eq!(handoff(), Err(AgentError::Closed));
+            }
+            _ => unreachable!(),
+        }
+        drop(permit);
+        assert_eq!(handoff(), Err(AgentError::Closed));
+        assert_eq!(backend.executions.load(Ordering::SeqCst), 0);
+        agent.close(actor()).await.unwrap();
+    }
+}

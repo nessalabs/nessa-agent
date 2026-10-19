@@ -51,6 +51,8 @@ fn opened(id: &SessionId) -> (SessionChange, SessionSnapshot) {
             context: ProviderContext::Absent,
         },
         SessionSnapshot {
+            model_change: None,
+            current_configuration: None,
             id: id.clone(),
             provider,
             provider_context: ProviderContext::Absent,

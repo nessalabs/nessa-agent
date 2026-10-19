@@ -59,7 +59,11 @@ async fn every_request_carries_the_grant(provider: &dyn AgentProvider, root: &te
         .await
         .into_result()
         .unwrap();
-    let _ = opened.session.execute(prompt("again")).await.into_result();
+    let _ = opened
+        .session
+        .execute(prompt("again"), Arc::new(|| Ok(())))
+        .await
+        .into_result();
     let expected = json!([
         { "name": "first", "command": "/bin/stand-in", "args": ["mcp-relay", "first"],
           "env": [{ "name": "NESSA_MCP_SESSION", "value": "the-token" }] },
@@ -182,7 +186,11 @@ async fn each_open_reads_the_hosts_servers_and_keeps_them_through_a_relaunch() {
         .await
         .into_result()
         .unwrap();
-    let _ = opened.session.execute(prompt("again")).await.into_result();
+    let _ = opened
+        .session
+        .execute(prompt("again"), Arc::new(|| Ok(())))
+        .await
+        .into_result();
     assert_eq!(names(&recorded(&root, "resume")), ["first"]);
     // A new open gets the set as it is now.
     let next = provider.open(open("two")).await.unwrap();

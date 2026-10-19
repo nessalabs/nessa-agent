@@ -2,7 +2,7 @@ use super::sessions::AcpConfig;
 use crate::application::agent_execution::agents::AgentError;
 use crate::application::agent_execution::executions::ExecutionRequest;
 use crate::application::agent_execution::providers::{
-    ApprovalMode, NativeHookSuppressionCapability, PermissionDenialCapability,
+    ApprovalMode, ModelChangeTiming, NativeHookSuppressionCapability, PermissionDenialCapability,
     ProviderOperationCapabilities, ProviderPermissionDeferralCapability,
 };
 use crate::application::agent_execution::tools::ToolReviewInput;
@@ -86,6 +86,31 @@ pub(crate) trait AcpProfile: Send + Sync + 'static {
     /// session exists, in the order the provider must receive them. A profile
     /// that pins everything in its session parameters returns none.
     fn session_configuration(&self, session_id: &str) -> Vec<Value>;
+    /// Select one exact model while retaining the native session and active turn.
+    fn change_model(
+        &mut self,
+        _session_id: &str,
+        _capabilities: &EffectiveCapabilities,
+    ) -> Result<Value, AgentError> {
+        Err(AgentError::Unsupported("live model change".into()))
+    }
+    /// Retain every setting returned by the native model control.
+    fn retain_model_configuration(
+        &mut self,
+        _capabilities: &EffectiveCapabilities,
+        _mode: ApprovalMode,
+        _effort: Option<EffortLevel>,
+    ) -> Result<(), AgentError> {
+        Err(AgentError::Unsupported("live model change".into()))
+    }
+    /// Interpret a complete acknowledgement after a native model change.
+    fn confirm_model(
+        &mut self,
+        _result: &Value,
+        _capabilities: &EffectiveCapabilities,
+    ) -> Result<(ApprovalMode, Option<EffortLevel>, ModelChangeTiming), AgentError> {
+        Err(AgentError::Unsupported("live model change".into()))
+    }
     /// Admit a live preset change into this profile before its RPC is sent, so
     /// notifications preceding the reply are checked against the requested
     /// state. The caller must retire this generation if application is not

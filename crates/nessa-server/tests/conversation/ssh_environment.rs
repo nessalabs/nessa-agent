@@ -27,6 +27,9 @@ use nessa_protocol::lease::{
     decode, encode, Cleanup, CommandEnd, Data, FromEnvironment, GrantedTerms as WireTerms, Sandbox,
     ToEnvironment, KEEPALIVE_INTERVAL, SILENCE_LIMIT,
 };
+use nessa_sdk::application::agent_execution::providers::HarnessHostIdentity;
+use nessa_sdk::application::agent_execution::providers::{ApprovalMode, ModelChange};
+use nessa_sdk::application::agent_execution::traces::LocalTraceStore;
 use nessa_sdk::application::agent_execution::{
     agents::AgentError,
     providers::{
@@ -34,6 +37,7 @@ use nessa_sdk::application::agent_execution::{
         HarnessLaunch, HarnessProcess, ProviderIdentity, ProviderOpenFuture, ProviderOpenRequest,
     },
 };
+use nessa_sdk::domain::model_metadata::value_objects::EffortLevel;
 use nessa_sdk::domain::{
     agent_execution::leases::{
         AgentWork, EnvironmentRef, LeaseCleanup, LeaseDeadline, LeaseEndCause, LeaseGrants,
@@ -562,13 +566,39 @@ impl Audit {
 
 /// A binding that hands back itself on any host, remembering the host.
 struct Binding {
+    captured_host: Option<Arc<dyn HarnessHost>>,
     capabilities: EffectiveCapabilities,
     host: Arc<Mutex<Option<Arc<dyn HarnessHost>>>>,
     remote: bool,
 }
 impl AgentProvider for Binding {
+    fn harness_host_identity(&self) -> HarnessHostIdentity<'_> {
+        self.captured_host
+            .as_ref()
+            .map_or_else(HarnessHostIdentity::local, HarnessHostIdentity::hosted)
+    }
+    fn model_change_context(&self) -> Option<String> {
+        Some("fixture-host-context".into())
+    }
+    fn with_model_configuration(
+        &self,
+        mode: Option<ApprovalMode>,
+        effort: Option<EffortLevel>,
+        _traces: Option<Arc<LocalTraceStore>>,
+    ) -> Result<Arc<dyn AgentProvider>, AgentError> {
+        if mode.is_some() || effort.is_some() {
+            return Err(AgentError::Unsupported("fixture settings".into()));
+        }
+        Ok(Arc::new(Self {
+            captured_host: self.captured_host.clone(),
+            capabilities: self.capabilities.clone(),
+            host: self.host.clone(),
+            remote: self.remote,
+        }))
+    }
     fn identity(&self) -> ProviderIdentity {
-        ProviderIdentity::new("fixture", "model", "context").expect("a fixed identity is valid")
+        ProviderIdentity::new("fixture", self.capabilities.model().model_id(), "context")
+            .expect("a fixed identity is valid")
     }
     fn capabilities(&self) -> &EffectiveCapabilities {
         &self.capabilities
@@ -586,8 +616,9 @@ impl AgentProvider for Binding {
         if !self.remote {
             return Err(AgentError::Unsupported("local only".into()));
         }
-        *self.host.lock().unwrap() = Some(host);
+        *self.host.lock().unwrap() = Some(host.clone());
         Ok(Arc::new(Binding {
+            captured_host: Some(host),
             capabilities: self.capabilities.clone(),
             host: self.host.clone(),
             remote: true,
@@ -607,6 +638,7 @@ fn binding(remote: bool) -> (Arc<Binding>, GivenHost) {
     .clone();
     (
         Arc::new(Binding {
+            captured_host: None,
             capabilities,
             host: host.clone(),
             remote,
@@ -3339,4 +3371,78 @@ async fn a_lease_ending_for_one_cause_keeps_it_when_the_other_comes() {
             .count();
         assert_eq!(revoked, 1);
     }
+}
+
+// #922: the lease's host is authority, even when target adaptation happens later.
+#[tokio::test]
+async fn model_targets_and_normalization_retain_the_granted_host() {
+    let connector = Connector::new(Reach::Serving);
+    let environment = environment(connector.clone(), Arc::new(Audit::default()));
+    let (initial, given) = binding(true);
+    let id = lease();
+    let opened = environment
+        .open(&id, &terms("claude"), initial)
+        .await
+        .unwrap();
+    let original_host = given.lock().unwrap().clone().unwrap();
+    assert!(opened.provider.harness_host_identity() == HarnessHostIdentity::hosted(&original_host));
+    let (mut target, target_host) = binding(true);
+    Arc::get_mut(&mut target).unwrap().capabilities =
+        crate::conversation_test_support::Provider::new(Arc::new(
+            crate::conversation_test_support::ProviderFactory::default(),
+        ))
+        .with_model("second-model")
+        .capabilities()
+        .clone();
+    let wrapped = opened.hold.model_provider(target.clone()).unwrap();
+    assert!(ModelChange::between(opened.provider.as_ref(), wrapped.as_ref()).is_ok());
+    let adapted_host = target_host.lock().unwrap().clone().unwrap();
+    assert!(Arc::ptr_eq(&original_host, &adapted_host));
+    assert!(wrapped.harness_host_identity() == HarnessHostIdentity::hosted(&original_host));
+    assert!(ModelChange::between(opened.provider.as_ref(), target.as_ref()).is_err());
+    let normalized = wrapped.with_model_configuration(None, None, None).unwrap();
+    assert!(normalized.harness_host_identity() == HarnessHostIdentity::hosted(&original_host));
+    // Cleanup and a later launch use the same captured host, without another grant.
+    for host in [&original_host, &adapted_host] {
+        let mut process = host.start(HarnessLaunch::default()).unwrap();
+        process.input.write_all(b"same lease").await.unwrap();
+        assert_eq!(read_some(process.output.as_mut()).await, b"same lease");
+        process.input.shutdown().await.unwrap();
+        assert_eq!(
+            process
+                .control
+                .cleanup(Duration::from_millis(10), Duration::from_millis(100))
+                .await
+                .unwrap(),
+            CloseOutcome { forced: false }
+        );
+    }
+    assert_eq!(
+        opened.hold.end(LeaseEndCause::Closed).await,
+        LeaseRelease::Released(LeaseCleanup::Confirmed { forced: false })
+    );
+    let entries = connector.ledger.0.lock().unwrap().clone();
+    assert_eq!(
+        entries
+            .iter()
+            .filter(|e| matches!(e, LedgerEntry::Granted { .. }))
+            .count(),
+        1
+    );
+    assert_eq!(
+        entries
+            .iter()
+            .filter(|e| matches!(e, LedgerEntry::Ended { .. }))
+            .count(),
+        1
+    );
+    assert_eq!(
+        entries
+            .iter()
+            .filter(|e| matches!(e, LedgerEntry::Started { .. }))
+            .count(),
+        2
+    );
+    assert_eq!(connector.stopped.load(Ordering::SeqCst), 2);
+    connector.cut();
 }

@@ -7,6 +7,7 @@
 //! distinct identities.
 //!
 //! [`ProviderIdentity`]: crate::application::agent_execution::providers::ProviderIdentity
+
 use super::AcpConfig;
 use crate::domain::agent_execution::{
     permissions::{PermissionEffect, PermissionScopeView},
@@ -52,6 +53,19 @@ pub(crate) fn fingerprint(
     limits: TokenLimits,
     prompt: Option<&SystemPrompt>,
 ) -> String {
+    fingerprint_fields(config, Some(limits), prompt)
+}
+
+/// Execution inputs shared by model choices; leaves existing resume fingerprints unchanged.
+pub(crate) fn model_change_context(config: &AcpConfig, prompt: Option<&SystemPrompt>) -> String {
+    fingerprint_fields(config, None, prompt)
+}
+
+fn fingerprint_fields(
+    config: &AcpConfig,
+    limits: Option<TokenLimits>,
+    prompt: Option<&SystemPrompt>,
+) -> String {
     let mut hash = Sha256::new();
     field(
         &mut hash,
@@ -72,8 +86,10 @@ pub(crate) fn fingerprint(
     }
     field(&mut hash, config.workspace.as_os_str().as_encoded_bytes());
     hash.update([u8::from(config.tools_enabled)]);
-    hash.update(limits.max_context_window().to_be_bytes());
-    hash.update(limits.max_output().to_be_bytes());
+    if let Some(limits) = limits {
+        hash.update(limits.max_context_window().to_be_bytes());
+        hash.update(limits.max_output().to_be_bytes());
+    }
     hash.update((config.permissions.decisions().len() as u64).to_be_bytes());
     for decision in config.permissions.decisions() {
         hash.update([match decision.effect() {

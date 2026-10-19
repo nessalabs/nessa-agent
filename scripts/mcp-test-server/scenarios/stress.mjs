@@ -13,6 +13,7 @@
 export const STRESS = {
   report: "[Thread report]",
   reply: "stress reply",
+  model: "stress model witness",
   permission: "stress permission",
   reviews: "stress reviews",
   large: "stress large review",
@@ -37,6 +38,7 @@ const CUT_OFF = "[Nessa restarted while you were working"
 /** What a turn says, by kind. A check looks for these, so they are owned here. */
 export const SAYS = {
   echo: "Echo: ",
+  model: "Native prompt model: ",
   allowed: "Allowed.",
   denied: "Denied.",
   reviewed: "All reviews answered.",
@@ -104,6 +106,13 @@ export function stressScenario({
       {
         when: CUT_OFF,
         steps: [{ do: "text", chunks: [SAYS.resumed] }, { do: "end" }],
+      },
+      {
+        when: STRESS.model,
+        steps: [
+          { do: "text", chunks: [SAYS.model, "${configuration.model}"] },
+          { do: "end" },
+        ],
       },
       {
         when: STRESS.reply,

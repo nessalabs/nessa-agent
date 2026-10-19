@@ -2,6 +2,8 @@
 //! Default cleanup releases owned execution; explicit fault reports vary resource
 //! status independently of diagnostic text. Native input keeps its target's outcome.
 use super::*;
+use nessa_sdk::application::agent_execution::providers::HarnessHostIdentity;
+use nessa_sdk::application::agent_execution::providers::NativeExecutionHandoff;
 use std::{
     future::{poll_fn, Future},
     sync::{
@@ -101,6 +103,9 @@ struct WorkflowBackend {
     shutdowns: Mutex<Vec<SessionCloseRequest>>,
 }
 impl AgentProvider for WorkflowProvider {
+    fn harness_host_identity(&self) -> HarnessHostIdentity<'_> {
+        HarnessHostIdentity::local()
+    }
     fn identity(&self) -> ProviderIdentity {
         ProviderIdentity::new("workflow-conformance", "fixture", "local").unwrap()
     }
@@ -173,9 +178,17 @@ impl ProviderSessionBackend for WorkflowBackend {
             Ok(())
         })
     }
-    fn execute(&self, input: ExecutionRequest) -> ProviderExecutionFuture<'_> {
+    fn execute(
+        &self,
+        input: ExecutionRequest,
+        handoff: NativeExecutionHandoff,
+    ) -> ProviderExecutionFuture<'_> {
         let output = self.output.lock().unwrap().clone();
         Box::pin(async move {
+            if let Err(error) = handoff() {
+                return ProviderExecutionReply::Rejected(error);
+            }
+
             assert!(self
                 .target
                 .lock()
@@ -234,6 +247,7 @@ impl ProviderSessionBackend for WorkflowBackend {
         &'a self,
         target: ExecutionId,
         input: ExecutionRequest,
+        _capabilities: &'a EffectiveCapabilities,
         started: &'a (dyn Fn() + Send + Sync),
     ) -> ProviderOperationFuture<'a, SteeringOutcome> {
         Box::pin(async move {

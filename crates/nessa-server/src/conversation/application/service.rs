@@ -1,5 +1,6 @@
 mod agent_tools;
 mod creation;
+mod model_changes;
 mod mutation;
 mod thread_reports;
 mod workspace_windows;
@@ -77,6 +78,7 @@ use nessa_sdk::application::agent_execution::{
     },
     providers::{
         AgentProvider, ApprovalMode as ProviderApprovalMode, CloseOutcome, OperationCapabilities,
+        ProviderIdentity, ProviderOperationStage, SessionConfigurationKind,
     },
     sessions::{
         CommittedSession, LeaseRecordError, MessageCommitClock, SessionManager, SessionSnapshot,
@@ -464,6 +466,17 @@ impl ConversationAgents {
         }
         Ok(configured)
     }
+    /// Construct a valid target factory for a live model control. Ask is a
+    /// provisional catalogue preset, not a native permission-setting command;
+    /// the model acknowledgement owns the selected preset.
+    async fn resolve_model(
+        &self,
+        agent: AgentId,
+        model: &str,
+    ) -> Result<ConversationAgent, ConversationError> {
+        self.resolve_for(agent, model, ConversationApprovalMode::Ask)
+            .await
+    }
     async fn resolve_for(
         &self,
         agent: AgentId,
@@ -677,9 +690,8 @@ struct LiveConversation {
     /// The lease its agent runs under. Every close of the agent goes through
     /// it, so the lease's end is recorded with the close.
     lease: LiveLease,
-    /// The configured output reservation of the agent this conversation runs
-    /// on, read once when it was opened.
-    reserved_output_tokens: u32,
+    /// One acknowledged model binding and its configured admission reservation.
+    model_budget: Mutex<ModelBudget>,
     projection: Mutex<Projection>,
     watched: Mutex<HashSet<String>>,
     attachment_owner: Mutex<AttachmentOwner>,
@@ -700,6 +712,10 @@ struct LiveConversation {
     tool_source: Option<ToolSource>,
     /// The tool policies of the Drive turns admitted here.
     admitted_policies: Arc<AdmittedPolicies>,
+}
+struct ModelBudget {
+    identity: ProviderIdentity,
+    reserved_output_tokens: u32,
 }
 enum AttachmentOwner {
     Running(JoinHandle<()>),
@@ -1667,6 +1683,19 @@ impl ConversationService {
         id: &ConversationId,
         caller: &ConversationCaller,
     ) -> Result<Arc<LiveConversation>, ConversationError> {
+        if self.inner.metadata.pending_mode_change(id).await?.is_some()
+            || self
+                .inner
+                .metadata
+                .pending_model_change(id)
+                .await?
+                .is_some()
+        {
+            return self
+                .live_now(id, caller)
+                .await?
+                .ok_or_else(|| AgentError::StalePermission.into());
+        }
         match self.resolve_opening(id, caller, false).await {
             Ok((_, live)) => Ok(live),
             Err(Halt::Failed(ConversationError::McpApp(McpAppError::Cancelled))) => {
@@ -2138,9 +2167,12 @@ impl ConversationService {
                                     .publish(&attachment_id);
                             });
                             let live = Arc::new(LiveConversation {
+                                model_budget: Mutex::new(ModelBudget {
+                                    identity: agent.provider_identity(),
+                                    reserved_output_tokens: configured.reserved_output_tokens,
+                                }),
                                 agent,
                                 lease,
-                                reserved_output_tokens: configured.reserved_output_tokens,
                                 projection: Mutex::new(projection),
                                 watched: Mutex::new(HashSet::new()),
                                 attachment_owner: Mutex::new(AttachmentOwner::Running(owner)),
@@ -2329,32 +2361,67 @@ impl ConversationService {
             format!("recovery-{}", Uuid::new_v4()),
         )
         .map_err(|_| ConversationError::ApprovalModeUncertain)?;
+        self.retire_selection_session(id, &actor).await
+    }
+    async fn retire_selection_session(
+        &self,
+        id: &ConversationId,
+        actor: &ActionContext,
+    ) -> Result<(), ConversationError> {
         let slot = self.inner.conversations.lock().await.get(id).cloned();
         if let Some(slot) = slot {
-            // Past the budget the stop carries on and lets the slot go once
-            // the close is confirmed. Leaving it would keep the reopened
-            // agent, and the next submission would be admitted there.
-            // An agent let go whose record only was not saved answers that
-            // failure: the mode is not uncertain, the records are.
-            // The agent is opened again at once: what it owed stays owed.
-            self.stop_and_release(
-                id,
-                slot,
-                &actor,
-                &McpAppInitiator::System,
-                LeaseEndCause::Stopped,
-                AgentEnd::Suspend,
-            )
-            .await
-            .map_err(|stop| match stop {
-                StopFailure::Failed(error) if confirmed_despite(&error).is_some() => {
-                    ConversationError::Agent(error)
-                }
-                _ => ConversationError::ApprovalModeUncertain,
-            })?;
+            self.retire_selection_slot(id, slot, actor).await?;
         }
         Ok(())
     }
+
+    async fn retire_selection_slot(
+        &self,
+        id: &ConversationId,
+        slot: Arc<Slot>,
+        actor: &ActionContext,
+    ) -> Result<(), ConversationError> {
+        self.stop_and_release(
+            id,
+            slot,
+            actor,
+            &McpAppInitiator::System,
+            LeaseEndCause::Stopped,
+            AgentEnd::Suspend,
+        )
+        .await
+        .map_err(|stop| match stop {
+            StopFailure::Failed(error) if confirmed_despite(&error).is_some() => {
+                ConversationError::Agent(error)
+            }
+            _ => ConversationError::ApprovalModeUncertain,
+        })
+    }
+
+    /// Recovery may retry a retained stop; publication may not read it.
+    /// Capture the stopped slot before awaiting so cleanup cannot retarget a
+    /// replacement owner. Healthy attached owners are not retired here.
+    async fn finish_stopped_selection(&self, id: &ConversationId) -> Result<(), ConversationError> {
+        let stopped = self
+            .inner
+            .conversations
+            .lock()
+            .await
+            .get(id)
+            .cloned()
+            .filter(|slot| slot.stopping.load(Ordering::SeqCst));
+        let Some(slot) = stopped else {
+            return Ok(());
+        };
+        let actor = ActionContext::new(
+            "gateway",
+            "selection_recovery",
+            format!("recovery-{}", Uuid::new_v4()),
+        )
+        .map_err(|_| ConversationError::Unavailable)?;
+        self.retire_selection_slot(id, slot, &actor).await
+    }
+
     async fn recover_mode_change(
         &self,
         id: &ConversationId,
@@ -2368,6 +2435,118 @@ impl ConversationService {
             return Ok(());
         };
         let mut request = pending_for(id, &record, request)?;
+        if request.prior == request.requested {
+            match request.application {
+                None
+                | Some(
+                    ConversationModeApplication::Applied | ConversationModeApplication::Deferred,
+                ) => {}
+                Some(
+                    ConversationModeApplication::Refused | ConversationModeApplication::Uncertain,
+                ) => return Err(ConversationError::ApprovalModeUncertain),
+            }
+        }
+        if request.prior != request.requested {
+            self.finish_stopped_selection(id).await?;
+        }
+        let committed = self.committed_if_present_with_order(id).await?;
+        let configuration = committed
+            .as_ref()
+            .and_then(|(committed, _)| committed.snapshot())
+            .and_then(|snapshot| snapshot.current_configuration.as_ref());
+        if request.prior == request.requested
+            || configuration.is_some_and(|configuration| {
+                configuration.kind() == SessionConfigurationKind::ApprovalMode
+                    && configuration.actor().principal_id()
+                        == request.initiator_principal_id.as_str()
+                    && configuration.actor().surface_id() == request.initiator_surface_id
+                    && configuration.actor().request_id() == request.request_id
+                    && configuration.after().approval_mode()
+                        == Some(provider_approval_mode(request.requested))
+                    && configuration.before().is_some_and(|prior| {
+                        prior.approval_mode() == Some(provider_approval_mode(request.prior))
+                    })
+            })
+        {
+            let application = if request.prior == request.requested {
+                request
+                    .application
+                    .unwrap_or(ConversationModeApplication::Applied)
+            } else {
+                ConversationModeApplication::Applied
+            };
+            let observed = ConversationModeRequest {
+                application: Some(application),
+                ..request
+            };
+            let saved = self
+                .inner
+                .metadata
+                .observe_mode_application(id, &observed.request_id, application)
+                .await?;
+            if saved != observed {
+                return Err(ConversationError::ApprovalModeUncertain);
+            }
+            self.inner
+                .mode_audit
+                .record(
+                    observed.clone(),
+                    ConversationModeAuditPhase::RecoveryApplied,
+                )
+                .await
+                .map_err(|_| ConversationError::Audit)?;
+            if let Some(live) = self.live_now(id, caller).await? {
+                if live.agent.approval_mode() != Some(provider_approval_mode(observed.requested)) {
+                    if observed.prior == observed.requested {
+                        return Err(ConversationError::ApprovalModeUncertain);
+                    }
+                    self.retire_mode_session(id).await?;
+                }
+            }
+            let expected = ConversationModeRequest {
+                state: ConversationModeRequestState::Applied,
+                ..observed
+            };
+            let written = contain_mode_terminal(async {
+                self.inner
+                    .metadata
+                    .finish_mode_change(
+                        id,
+                        &expected.request_id,
+                        ConversationModeRequestState::Applied,
+                    )
+                    .await
+            })
+            .await;
+            let terminal = match written {
+                Ok(Ok(request)) => Some(request),
+                _ => contain_mode_terminal(async {
+                    self.inner
+                        .metadata
+                        .mode_change(id, &expected.request_id)
+                        .await
+                })
+                .await
+                .ok()
+                .and_then(Result::ok)
+                .flatten(),
+            };
+            if terminal.as_ref() != Some(&expected) {
+                return Err(ConversationError::ApprovalModeUncertain);
+            }
+            if let Some(live) = self.live_now(id, caller).await? {
+                live.projection
+                    .lock()
+                    .await
+                    .approval_mode(expected.requested);
+            }
+            return Ok(());
+        }
+        if configuration.is_some_and(|configuration| {
+            configuration.after().approval_mode() != Some(provider_approval_mode(request.prior))
+        }) {
+            return Err(ConversationError::ApprovalModeUncertain);
+        }
         self.retire_mode_session(id).await?;
         if request.application.is_none() {
             self.inner
@@ -2420,9 +2599,9 @@ impl ConversationService {
         Ok(())
     }
 
-    /// Change the preset only while this conversation is idle. The per-owner
-    /// admission lock remains held through durable intent, provider
-    /// verification, audit acknowledgement and terminal storage.
+    /// Change a native preset on the current owner, including during a turn.
+    /// The SDK enforces checked-turn safety; the per-owner admission lock
+    /// spans intent, native acknowledgement, audit and terminal storage.
     pub async fn set_approval_mode(
         &self,
         id: ConversationId,
@@ -2435,7 +2614,7 @@ impl ConversationService {
             let result = async move {
             let _admission = service.admit().await?;
             let _mode = service.inner.mode_changes.lock(&id).await;
-            let _actor = caller.actor()?;
+            let actor = caller.actor()?;
             let record = load_conversation(service.inner.metadata.as_ref(), &id)
                 .await?
                 .ok_or(ConversationError::NotFound)?;
@@ -2465,6 +2644,10 @@ impl ConversationService {
                 }
                 return saved_result(&existing);
             }
+            service.refuse_pending_model_change(&id, &caller).await?;
+            if service.inner.metadata.pending_mode_change(&id).await?.is_some() {
+                return Err(ConversationError::ApprovalModeUncertain);
+            }
             let agent = record.agent().ok_or(ConversationError::AgentUnsupported)?;
             service
                 .inner
@@ -2474,26 +2657,19 @@ impl ConversationService {
             let live_slot = service.inner.conversations.lock().await.get(&id).cloned();
             let live = if let Some(slot) = live_slot {
                 Some(service.wait_for_slot(&id, slot).await?)
+            } else if mode != record.approval_mode()
+                && service.committed_if_present_with_order(&id).await?.is_some_and(|(committed, _)| {
+                    committed.snapshot().is_some_and(|snapshot| snapshot.current_configuration.is_some())
+                })
+            {
+                // Retained SDK settings own the next attachment. Advance that
+                // owner through its normal native control before acknowledging
+                // metadata; Deferred cannot supersede its saved configuration.
+                Some(service.resolve(&id, &caller).await?)
             } else {
                 None
             };
             if let Some(live) = &live {
-                if !live.agent.idle_for_approval_change().await {
-                    service.inner.mode_audit.record(ConversationModeRequest {
-                        conversation_id: id.clone(),
-                        organization_id: caller.organization_id.clone(),
-                        request_id: caller.action_id.clone(),
-                        initiator_principal_id: caller.principal_id.clone(),
-                        initiator_surface_id: caller.surface_id.clone(),
-                        prior: record.approval_mode(),
-                        requested: mode,
-                        state: ConversationModeRequestState::NotApplied,
-                        application: Some(ConversationModeApplication::Refused),
-                        requested_at_ms: service.inner.clock.unix_milliseconds(),
-                    }, ConversationModeAuditPhase::AdmissionRefused)
-                    .await.map_err(|_| ConversationError::Audit)?;
-                    return Err(ConversationError::TurnRunning);
-                }
                 let _ = live.join_attachment_owner().await;
                 if live.agent.attachment_status().phase() != AttachmentPhase::Attached {
                     return Err(ConversationError::ApprovalModeUncertain);
@@ -2538,16 +2714,24 @@ impl ConversationService {
             if request != intent {
                 return Err(ConversationError::ApprovalModeUncertain);
             }
+            // The durable intent is visible before the native call can wait.
+            // Its overlay retains the committed preset and history cursor.
+            if intent.prior != intent.requested {
+                service.inner.live_changes.publish(&id);
+            }
             let application = match &live {
                 None => ConversationModeApplication::Deferred,
                 Some(_) if mode == intent.prior => ConversationModeApplication::Applied,
                 Some(live) => match live
                     .agent
-                    .set_approval_mode(provider_approval_mode(mode))
+                    .set_approval_mode(provider_approval_mode(mode), actor)
                     .await
                 {
                     Ok(()) => ConversationModeApplication::Applied,
-                    Err(_) => ConversationModeApplication::Uncertain,
+                    Err(failure) => match failure.stage() {
+                        ProviderOperationStage::BeforeEffect => ConversationModeApplication::Refused,
+                        ProviderOperationStage::EffectUncertain => ConversationModeApplication::Uncertain,
+                    },
                 },
             };
             match service
@@ -2558,7 +2742,9 @@ impl ConversationService {
                     Ok(_) => {},
                     Err(error) => {
                         drop(live);
-                        let _ = service.retire_mode_session(&id).await;
+                        if intent.prior != intent.requested {
+                            let _ = service.retire_mode_session(&id).await;
+                        }
                         return Err(error);
                     }
                 };
@@ -2586,15 +2772,15 @@ impl ConversationService {
                 }
                 return Err(ConversationError::ApprovalModeUncertain);
             }
-            let expected = ConversationModeRequest {
-                state: ConversationModeRequestState::Applied,
-                ..request
-            };
+            let state = if application == ConversationModeApplication::Refused {
+                ConversationModeRequestState::NotApplied
+            } else { ConversationModeRequestState::Applied };
+            let expected = ConversationModeRequest {state, ..request};
             // Keep the admitted owner through invocation and polling faults:
             // a lost terminal acknowledgement still needs durable settlement.
             let write = contain_mode_terminal(async {
                 service.inner.metadata.finish_mode_change(
-                    &id, &expected.request_id, ConversationModeRequestState::Applied,
+                    &id, &expected.request_id, state,
                 ).await
             }).await;
             let terminal = match write {
@@ -2605,13 +2791,19 @@ impl ConversationService {
             }.filter(|terminal| terminal == &expected);
             let Some(terminal) = terminal else {
                 drop(live);
-                // Already Applied means no pending request, so recovery alone
-                // would keep the stale held projection. Retirement comes first.
-                if service.retire_mode_session(&id).await.is_ok() {
+                // A changed selection may leave a stale held projection when
+                // the terminal acknowledgement is lost. An unchanged request
+                // owns no native effect and must not retire that owner.
+                if expected.prior == expected.requested
+                    || service.retire_mode_session(&id).await.is_ok()
+                {
                     let _ = service.recover_mode_change(&id, &caller).await;
                 }
                 return Err(ConversationError::ApprovalModeUncertain);
             };
+            if terminal.state == ConversationModeRequestState::NotApplied {
+                return Err(ConversationError::ApprovalModeNotApplied);
+            }
             if let Some(live) = live {
                 live.projection.lock().await.approval_mode(terminal.requested);
             }
@@ -2671,20 +2863,38 @@ impl ConversationService {
         opening: ReadOpening,
     ) -> Result<(ConversationView, Option<CommittedCursor>), ConversationError> {
         let _admission = self.admit().await?;
-        let _mode = self.inner.mode_changes.lock(&id).await;
+        // An explicit Open can recover a stopped owner; a follower may only
+        // publish a readable owner. The same ordering applies to both controls.
+        let ready = if matches!(opening, ReadOpening::Open) {
+            self.inner.mode_changes.try_lock(&id)
+        } else {
+            None
+        };
+        let _selection = if let Some(guard) = ready {
+            guard
+        } else {
+            if let Some(read) = self.pending_change_view(&id, &caller).await? {
+                return Ok(read);
+            }
+            self.inner.mode_changes.lock(&id).await
+        };
         match opening {
             ReadOpening::Open => {
-                if let Err(error) = self.recover_mode_change(&id, &caller).await {
-                    if let Some(read) = self.read_pending_mode_change(&id, &caller).await? {
+                let recovered = match self.recover_model_change(&id, &caller).await {
+                    Ok(()) => self.recover_mode_change(&id, &caller).await,
+                    Err(error) => Err(error),
+                };
+                if let Err(error) = recovered {
+                    // Read again after recovery: cleanup may have ended or
+                    // replaced the owner a preceding view would have captured.
+                    if let Some(read) = self.pending_change_view(&id, &caller).await? {
                         return Ok(read);
                     }
                     return Err(error);
                 }
             }
-            // Recovery stops and starts the agent; a follower only shows a
-            // pending change, and leaves recovery to a read or a send.
             ReadOpening::LiveOnly => {
-                if let Some(read) = self.read_pending_mode_change(&id, &caller).await? {
+                if let Some(read) = self.pending_change_view(&id, &caller).await? {
                     return Ok(read);
                 }
             }
@@ -2712,6 +2922,12 @@ impl ConversationService {
             .transpose()?
             .unwrap_or_default();
         let active = live.agent.active_execution_id();
+        let record = load_conversation(self.inner.metadata.as_ref(), &id)
+            .await?
+            .ok_or(ConversationError::NotFound)?;
+        let model_effect = self
+            .confirmed_model_effect(&record, committed.snapshot())
+            .await?;
         let mut projection = live.projection.lock().await;
         if projection.replace_committed(&committed, &order, active.as_ref()) {
             projection.transcript_state(committed.state().into());
@@ -2731,6 +2947,13 @@ impl ConversationService {
             agent_features: operation_capabilities.into(),
         });
         projection.lifecycle(lifecycle_view(&live.agent));
+        if let Some(effect) = model_effect {
+            projection.model_selection(
+                record.model().as_str().into(),
+                record.approval_mode(),
+                effect,
+            );
+        }
         let mut view = projection.read();
         let cursor = projection.committed_cursor();
         drop(projection);
@@ -2805,7 +3028,22 @@ impl ConversationService {
             .ok_or(ConversationError::NotFound)?;
         self.access().admit(&record, caller)?;
         let (committed, order) = self.committed_with_order(id).await?;
-        let projection = self.detached(id, &committed, &order);
+        let mut projection = self.detached(id, &committed, &order);
+        projection.selection(ConversationSelectionView {
+            agent: record.agent().ok_or(ConversationError::AgentUnsupported)?,
+            model: record.model().as_str().into(),
+            approval_mode: record.approval_mode(),
+        });
+        if let Some(effect) = self
+            .confirmed_model_effect(&record, committed.snapshot())
+            .await?
+        {
+            projection.model_selection(
+                record.model().as_str().into(),
+                record.approval_mode(),
+                effect,
+            );
+        }
         let read = (projection.read(), projection.committed_cursor());
         let (mut view, cursor) = self.read_only(read, &record, id, caller).await?;
         // A message opens it again, so images may be sent if this gateway
@@ -2822,13 +3060,26 @@ impl ConversationService {
         &self,
         id: &ConversationId,
     ) -> Result<(CommittedSession, Vec<ExecutionId>), ConversationError> {
+        self.committed_if_present_with_order(id)
+            .await?
+            .ok_or(ConversationError::NotFound)
+    }
+
+    /// Metadata-only creation and an admitted cold preset may precede the
+    /// first SDK record. Missing history is distinct from unreadable history.
+    async fn committed_if_present_with_order(
+        &self,
+        id: &ConversationId,
+    ) -> Result<Option<(CommittedSession, Vec<ExecutionId>)>, ConversationError> {
         let session_id = conversation_session(id);
-        let committed = self
+        let Some(committed) = self
             .inner
             .storage
             .read_committed(session_id.clone())
             .await?
-            .ok_or(ConversationError::NotFound)?;
+        else {
+            return Ok(None);
+        };
         if committed.id() != &session_id {
             return Err(ConversationError::Storage(StorageError::IdentityMismatch));
         }
@@ -2837,7 +3088,7 @@ impl ConversationService {
             .map(SessionSnapshot::pending_order)
             .transpose()?
             .unwrap_or_default();
-        Ok((committed, order))
+        Ok(Some((committed, order)))
     }
     /// The one fold of committed records with no agent: a fresh read-only
     /// projection, no execution active.
@@ -2879,6 +3130,19 @@ impl ConversationService {
         self.check_view_access(id, caller).await?;
         Ok((bound_view(view), cursor))
     }
+    /// Both journals exclude each other; this is the one pending-view lookup
+    /// used before waiting for a control and after explicit recovery.
+    async fn pending_change_view(
+        &self,
+        id: &ConversationId,
+        caller: &ConversationCaller,
+    ) -> Result<Option<(ConversationView, Option<CommittedCursor>)>, ConversationError> {
+        if let Some(read) = self.read_pending_model_change(id, caller).await? {
+            return Ok(Some(read));
+        }
+        self.read_pending_mode_change(id, caller).await
+    }
+
     async fn read_pending_mode_change(
         &self,
         id: &ConversationId,
@@ -2892,41 +3156,62 @@ impl ConversationService {
             return Ok(None);
         };
         let request = pending_for(id, &record, request)?;
-        let change = ConversationApprovalModeChangeView {
-            request_id: request.request_id,
-            requested_mode: request.requested.as_str().into(),
-            status: if request.application.is_some() {
-                ConversationApprovalModeChangeStatus::RecoveryRequired
-            } else {
-                ConversationApprovalModeChangeStatus::Changing
-            },
-        };
-        let slot = self.inner.conversations.lock().await.get(id).cloned();
+        let change =
+            (request.prior != request.requested).then(|| ConversationApprovalModeChangeView {
+                request_id: request.request_id,
+                requested_mode: request.requested.as_str().into(),
+                status: if request.application.is_some() {
+                    ConversationApprovalModeChangeStatus::RecoveryRequired
+                } else {
+                    ConversationApprovalModeChangeStatus::Changing
+                },
+            });
+        let slot = self.readable_slot(id).await?;
         let live = slot
             .as_ref()
             .and_then(|slot| slot.value.get())
             .and_then(|result| result.as_ref().ok())
             .cloned();
-        let (committed, order) = self.committed_with_order(id).await?;
-        let read = if let Some(live) = live {
-            let active = live.agent.active_execution_id();
-            let mut projection = live.projection.lock().await;
-            let accepted = projection.replace_committed(&committed, &order, active.as_ref());
-            if accepted {
-                projection.transcript_state(committed.state().into());
+        let committed = self.committed_if_present_with_order(id).await?;
+        let read = if let Some((committed, order)) = &committed {
+            if let Some(live) = &live {
+                let active = live.agent.active_execution_id();
+                let mut projection = live.projection.lock().await;
+                let accepted = projection.replace_committed(committed, order, active.as_ref());
+                if accepted {
+                    projection.transcript_state(committed.state().into());
+                }
+                (
+                    projection.read_with_mode_change(change.clone()),
+                    projection.committed_cursor(),
+                )
+            } else {
+                let projection = self.detached(id, committed, order);
+                (
+                    projection.read_with_mode_change(change),
+                    projection.committed_cursor(),
+                )
             }
-            (
-                projection.read_with_mode_change(Some(change.clone())),
-                projection.committed_cursor(),
-            )
         } else {
-            let projection = self.detached(id, &committed, &order);
-            (
-                projection.read_with_mode_change(Some(change)),
-                projection.committed_cursor(),
-            )
+            if live.is_some() {
+                return Err(ConversationError::ApprovalModeUncertain);
+            }
+            let projection =
+                Projection::new(id.to_string(), ConversationCapabilities::read_only(), None);
+            (projection.read_with_mode_change(change), None)
         };
-        self.read_only(read, &record, id, caller).await.map(Some)
+        self.pending_selection_read(
+            read,
+            &record,
+            id,
+            caller,
+            live.as_ref(),
+            committed
+                .as_ref()
+                .and_then(|(committed, _)| committed.snapshot()),
+        )
+        .await
+        .map(Some)
     }
     async fn check_view_access(
         &self,
@@ -3259,6 +3544,8 @@ impl ConversationService {
             };
             let _mode = service.inner.mode_changes.lock(&id).await;
             service.recover_mode_change(&id, &caller).await?;
+            service.recover_model_change(&id, &caller).await?;
+            service.refuse_pending_model_change(&id, &caller).await?;
             let actor = caller.actor()?;
             let (execution, message) = Self::canonical_user_message(
                 service.inner.limits.max_input_bytes,
@@ -3329,12 +3616,7 @@ impl ConversationService {
                             .invocations
                             .iter()
                             .find(|record| record.request.execution_id == execution)
-                            .map(|record| {
-                                (
-                                    record.request.user_message.app_model_context().to_vec(),
-                                    record.initiation.clone(),
-                                )
-                            })
+                            .map(|record| (record.request.clone(), record.initiation.clone()))
                     });
                 let (original, saved_initiation) = original.unzip();
                 let known = original.is_some();
@@ -3478,14 +3760,32 @@ impl ConversationService {
                     .await
                     .map_err(|_| ConversationError::Audit)?;
             }
-            // Reserve the full effective context budget consistently across retries.
-            // ACP owns hidden context/tokenization; this is a conservative admission
-            // reservation, not a claim about actual token usage or provider billing.
-            let limits = live.agent.capabilities().limits();
-            let reserved = live.reserved_output_tokens;
-            if reserved > limits.max_output() || reserved >= limits.max_context_window() {
-                return Err(ConversationError::InvalidInput.into());
-            }
+            // A saved request owns its admission budget after model changes.
+            // The incoming message is replaced below so SDK recovery still
+            // checks content, actor, initiation and operation conflicts.
+            let request = if let Some(original) = original {
+                original
+            } else {
+                // ACP owns hidden context/tokenization. Fresh submissions
+                // conservatively reserve the verified effective context budget.
+                let capabilities = live.agent.capabilities();
+                let limits = capabilities.limits();
+                let budget = live.model_budget.lock().await;
+                if budget.identity != live.agent.provider_identity() {
+                    return Err(ConversationError::ModelChangeUncertain.into());
+                }
+                let reserved = budget.reserved_output_tokens;
+                drop(budget);
+                if reserved > limits.max_output() || reserved >= limits.max_context_window() {
+                    return Err(ConversationError::InvalidInput.into());
+                }
+                ExecutionRequest {
+                    execution_id: execution.clone(),
+                    user_message: message.clone(),
+                    estimated_input_tokens: u64::from(limits.max_context_window() - reserved),
+                    reserved_output_tokens: reserved,
+                }
+            };
             // Just before the enqueue, still under the submission lock, which
             // every submission to this conversation takes: an app's message is
             // for the opening it was admitted in, its mount not released
@@ -3521,15 +3821,15 @@ impl ConversationService {
                 .take()
                 .filter(|(from, _)| std::sync::Weak::ptr_eq(from, &Arc::downgrade(&live)))
                 .map(|(_, took)| took);
-            let contexts = match original {
-                Some(original) => original,
-                None if idle => {
+            let contexts = match known {
+                true => request.user_message.app_model_context().to_vec(),
+                false if idle => {
                     let took = offered_before.unwrap_or_else(|| live.app_reviews.take_held());
                     let contexts = took.contexts();
                     taken = Some(took);
                     contexts
                 }
-                None => Vec::new(),
+                false => Vec::new(),
             };
             let message = message
                 .sent_by(writer.sender())
@@ -3543,10 +3843,8 @@ impl ConversationService {
                 );
             }
             let request = ExecutionRequest {
-                execution_id: execution,
                 user_message: message.clone(),
-                estimated_input_tokens: u64::from(limits.max_context_window() - reserved),
-                reserved_output_tokens: reserved,
+                ..request
             };
             // A fresh Drive turn names the grant and revision admission
             // read. The note verdict is taken before that grant is held, so
@@ -4149,7 +4447,7 @@ impl ConversationService {
                         .collect::<Result<Vec<_>, _>>()
                 })
                 .transpose()?;
-            let live = service.resolve(&id, &caller).await?;
+            let live = service.resolve_holding_reviews(&id, &caller).await?;
             // Only the question the person was shown: one asked again under
             // the same identities has a key of its own, and the agent that
             // holds it refuses another as stale.
@@ -6761,3 +7059,7 @@ mod creation_metadata_tests;
 #[cfg(test)]
 #[path = "../../../tests/conversation/approval_mode.rs"]
 mod approval_mode_tests;
+
+#[cfg(test)]
+#[path = "../../../tests/conversation/model_changes.rs"]
+mod model_change_tests;

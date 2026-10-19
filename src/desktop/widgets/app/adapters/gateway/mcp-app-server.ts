@@ -99,6 +99,8 @@ const outcomes: Readonly<Record<ConversationErrorCode, Outcome>> = {
   [ConversationErrorCode.ApprovalModeUnavailable]: "failed",
   [ConversationErrorCode.ApprovalModeNotApplied]: "failed",
   [ConversationErrorCode.ApprovalModeUncertain]: "failed",
+  [ConversationErrorCode.ModelChangeNotApplied]: "failed",
+  [ConversationErrorCode.ModelChangeUncertain]: "failed",
   [ConversationErrorCode.ApprovalRequestConflict]: "failed",
   [ConversationErrorCode.ConversationsNotConfigured]: "failed",
   [ConversationErrorCode.UnknownMethod]: "failed",

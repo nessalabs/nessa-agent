@@ -1,6 +1,8 @@
 //! Actual message bytes are validated independently of caller token estimates,
 //! and a message's images are refused by type before anything is accepted.
 use super::*;
+use nessa_sdk::application::agent_execution::providers::HarnessHostIdentity;
+use nessa_sdk::application::agent_execution::providers::NativeExecutionHandoff;
 use nessa_sdk::application::dto::ImageInputLimitsDto;
 use nessa_sdk::domain::common::value_objects::{ImageMediaType, Sha256Digest};
 use nessa_sdk::domain::model_metadata::value_objects::OfferedEffortLevels;
@@ -248,6 +250,9 @@ fn image_capabilities_ref(takes_text: bool) -> &'static EffectiveCapabilities {
     capabilities.get_or_init(|| image_capabilities(takes_text))
 }
 impl AgentProvider for ImageProvider {
+    fn harness_host_identity(&self) -> HarnessHostIdentity<'_> {
+        HarnessHostIdentity::local()
+    }
     fn identity(&self) -> ProviderIdentity {
         ProviderIdentity::new("anthropic", "fixture", "workspace").unwrap()
     }
@@ -280,14 +285,26 @@ impl ProviderSessionBackend for ImageBackend {
     fn operation_capabilities(&self) -> ProviderOperationCapabilities {
         self.agent
     }
-    fn validate_input(&self, _: &ExecutionRequest) -> Result<(), AgentError> {
+    fn validate_input(
+        &self,
+        _: &ExecutionRequest,
+        _: &EffectiveCapabilities,
+    ) -> Result<(), AgentError> {
         self.refuses.clone().map_or(Ok(()), Err)
     }
     fn prepare_invocation(&self) -> ProviderOperationFuture<'_, ()> {
         Box::pin(async { Ok(()) })
     }
-    fn execute(&self, input: ExecutionRequest) -> ProviderExecutionFuture<'_> {
+    fn execute(
+        &self,
+        input: ExecutionRequest,
+        handoff: NativeExecutionHandoff,
+    ) -> ProviderExecutionFuture<'_> {
         Box::pin(async move {
+            if let Err(error) = handoff() {
+                return ProviderExecutionReply::Rejected(error);
+            }
+
             self.executions.fetch_add(1, Ordering::SeqCst);
             let finished = ExecutionEvent::new(
                 input.execution_id,

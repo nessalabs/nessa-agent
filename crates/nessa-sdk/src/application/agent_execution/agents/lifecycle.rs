@@ -18,8 +18,8 @@ use crate::application::agent_execution::{
     executions::{AttachmentAuditCause, AttachmentAuditStage, ExecutionAuditRecord},
     permissions::ActionContext,
     providers::{
-        CleanupReport, OperationCapabilities, ProviderOpenControl, ProviderOperationFailure,
-        ProviderSessionState, SessionCloseRequest,
+        AgentProvider, CleanupReport, NativeExecutionHandoff, OperationCapabilities,
+        ProviderOpenControl, ProviderOperationFailure, ProviderSessionState, SessionCloseRequest,
     },
     sessions::{
         attachment::AttachmentLease, AttachedProvider, InvocationCancellationEvent,
@@ -156,7 +156,7 @@ enum WorkPhase {
     // Automatic attachment failure owns final settlement for this queued input.
     Settling,
     Active,
-    // The execute future was entered; provider dispatch may still be rejected.
+    // The serialized native executor accepted the input after preparation.
     Executing,
 }
 struct OwnedWork {
@@ -165,6 +165,12 @@ struct OwnedWork {
     // The first stop affecting this owner; later cleanup/close cannot replace its cause.
     cancellation: watch::Sender<Option<InvocationCancellationEvent>>,
 }
+#[derive(Clone)]
+pub(super) struct ActiveExecution {
+    work_generation: WorkGeneration,
+    pub(super) id: ExecutionId,
+    pub(super) configured: Arc<dyn AgentProvider>,
+}
 struct State {
     work_generation: WorkGeneration,
     provider_generation: ProviderGeneration,
@@ -172,7 +178,7 @@ struct State {
     provider_ready: bool,
     work_status: WorkStatus,
     cleanup: Option<Cleanup>,
-    active: Option<(WorkGeneration, ExecutionId)>,
+    active: Option<ActiveExecution>,
     next_work: u64,
     work: HashMap<u64, OwnedWork>,
     attachment_generation: u64,
@@ -261,56 +267,20 @@ pub(super) struct WorkPermit {
     owner: Arc<SessionLifecycle>,
     id: u64,
     binding: Mutex<(WorkGeneration, ProviderGeneration)>,
-    /// What the work was accepted on, read under the lock that granted the
-    /// permit. Close can detach that attachment, and a recovery can finish
-    /// opening, before the admission record is written; this stays what
-    /// accepted the work.
-    footing: Footing,
     stop: watch::Receiver<()>,
     cancellation: watch::Receiver<Option<InvocationCancellationEvent>>,
 }
 pub(super) struct AttachmentStart {
     pub(super) generation: u64,
-    /// The provider generation this attachment opens: one past the
-    /// attachment it replaces.
-    pub(super) provider_generation: u64,
     pub(super) cause: AttachmentCause,
     pub(super) record: AttachmentAuditRecord,
     pub(super) result: watch::Sender<Option<Result<(), AgentError>>>,
     pub(super) open_control: ProviderOpenControl,
     pub(super) started_evidence: watch::Sender<Option<Result<(), AgentError>>>,
 }
-/// An automatic recovery that is due or under way, read with the rest of a
-/// [`Footing`].
-#[derive(Clone, Copy, Debug)]
-pub(super) struct Recovery {
-    /// The provider generation of the attachment the recovery replaces.
-    lost: u64,
-}
-impl Recovery {
-    /// Whether a live change verified on `generation` is the one this
-    /// recovery runs at: the lost attachment's, or the recovery's own, which
-    /// the change is carried to as it opens. Either may be the one recorded
-    /// by the time it is read.
-    pub(super) fn carries(&self, generation: u64) -> bool {
-        generation == self.lost || generation == self.lost + 1
-    }
-}
-/// Where work accepted now runs, read under one lifecycle lock: a usable
-/// attachment's provider generation, or, with none, the automatic recovery
-/// it waits for, if that is what opens next.
-#[derive(Clone, Copy, Debug)]
-pub(super) enum Footing {
-    Attached(u64),
-    Detached(Option<Recovery>),
-}
 impl WorkPermit {
     pub(super) fn provider_generation(&self) -> u64 {
         self.provider_generation_value().0
-    }
-    /// What accepted the work when this permit was granted.
-    pub(super) fn footing(&self) -> Footing {
-        self.footing
     }
     fn provider_generation_value(&self) -> ProviderGeneration {
         self.binding.lock().expect("work binding").1
@@ -324,13 +294,46 @@ impl WorkPermit {
     pub(super) fn defer(&self) -> Result<(), AgentError> {
         self.owner.defer_active(self)
     }
-    pub(super) fn mark_execution_started(&self) {
-        let mut state = self.owner.state.lock().expect("session lifecycle");
-        state
-            .work
-            .get_mut(&self.id)
-            .expect("owned work permit")
-            .phase = WorkPhase::Executing;
+    pub(super) fn require_no_unstarted_work(&self) -> Result<(), AgentError> {
+        let state = self.owner.state.lock().expect("session lifecycle");
+        let unstarted = state.work.iter().any(|(id, work)| {
+            *id != self.id
+                && match work.phase {
+                    WorkPhase::Waiting | WorkPhase::Active | WorkPhase::Settling => true,
+                    WorkPhase::Executing => false,
+                }
+        });
+        if unstarted {
+            Err(AgentError::Busy)
+        } else {
+            Ok(())
+        }
+    }
+    pub(super) fn native_handoff(&self) -> NativeExecutionHandoff {
+        let owner = Arc::downgrade(&self.owner);
+        let id = self.id;
+        let (generation, provider_generation) = self.generations();
+        Arc::new(move || {
+            let owner = owner.upgrade().ok_or(AgentError::Closed)?;
+            let mut state = owner.state.lock().expect("session lifecycle");
+            if state.work_generation != generation
+                || state.provider_generation != provider_generation
+                || !matches!(state.work_status, WorkStatus::Open)
+            {
+                return Err(AgentError::Closed);
+            }
+            let work = state.work.get_mut(&id).ok_or(AgentError::Closed)?;
+            if work.work_generation != generation || work.cancellation.borrow().is_some() {
+                return Err(AgentError::Closed);
+            }
+            match work.phase {
+                WorkPhase::Active | WorkPhase::Executing => {
+                    work.phase = WorkPhase::Executing;
+                    Ok(())
+                }
+                WorkPhase::Waiting | WorkPhase::Settling => Err(AgentError::Closed),
+            }
+        })
     }
     pub(super) fn execution_started(&self) -> bool {
         let state = self.owner.state.lock().expect("session lifecycle");
@@ -360,52 +363,18 @@ impl WorkPermit {
 impl Drop for WorkPermit {
     fn drop(&mut self) {
         let mut state = self.owner.state.lock().expect("session lifecycle");
+        // An admitted owner's unwind requires cleanup even before native entry.
+        // The captured generations prevent a retired owner fencing its replacement.
+        if std::thread::panicking() {
+            self.owner.apply_control_state(
+                &mut state,
+                self,
+                &ProviderSessionState::CleanupRequired,
+            );
+        }
         state.work.remove(&self.id);
         self.owner.maybe_reopen(&mut state);
         self.owner.changed.send_replace(());
-    }
-}
-/// The usable attachment, or else whether the agent's own automatic
-/// recovery, not a caller's attachment, is the next one to run work: due,
-/// authorized, opening, or published and not yet ready. A caller that
-/// attaches first opens at the binding's preset instead; nothing in the
-/// gateway does while the agent recovers.
-fn footing_of(state: &State) -> Footing {
-    if let Some(generation) = usable_provider_generation(state) {
-        return Footing::Attached(generation);
-    }
-    if !matches!(state.work_status, WorkStatus::Open) {
-        return Footing::Detached(None);
-    }
-    let current = state.provider_generation.0;
-    let lost = match &state.attachment {
-        AttachmentState::Absent { recorded: true } if state.automatic_recovery_ready => {
-            Some(current)
-        }
-        AttachmentState::Authorized(authority)
-            if authority.cause == AttachmentCause::AutomaticRecovery =>
-        {
-            Some(current)
-        }
-        AttachmentState::Starting {
-            cause: AttachmentCause::AutomaticRecovery,
-            ..
-        }
-        | AttachmentState::Attached {
-            cause: AttachmentCause::AutomaticRecovery,
-            ..
-        } => current.checked_sub(1),
-        _ => None,
-    };
-    Footing::Detached(lost.map(|lost| Recovery { lost }))
-}
-
-fn usable_provider_generation(state: &State) -> Option<u64> {
-    match &state.attachment {
-        AttachmentState::Attached { .. } if state.provider_ready => {
-            Some(state.provider_generation.0)
-        }
-        _ => None,
     }
 }
 
@@ -589,16 +558,6 @@ impl SessionLifecycle {
             AttachmentState::Failed { failure, .. } => AttachmentPhase::Failed(failure.code()),
         }
     }
-    /// Where work accepted now would run ([`Footing`]).
-    pub(super) fn footing(&self) -> Footing {
-        footing_of(&self.state.lock().expect("session lifecycle"))
-    }
-    /// The provider generation of the usable attachment, if there is one. A
-    /// replacement attachment always has a later one.
-    pub(super) fn attached_generation(&self) -> Option<u64> {
-        let state = self.state.lock().expect("session lifecycle");
-        usable_provider_generation(&state)
-    }
     pub(super) fn supports_turn_cancel(&self) -> bool {
         let state = self.state.lock().expect("session lifecycle");
         match &state.attachment {
@@ -724,7 +683,6 @@ impl SessionLifecycle {
         });
         let start = AttachmentStart {
             generation: attachment_generation,
-            provider_generation: state.provider_generation.0 + 1,
             cause: authorization.cause,
             record: AttachmentAuditRecord {
                 session_id: self.session_id.clone(),
@@ -1173,11 +1131,9 @@ impl SessionLifecycle {
                 cancellation,
             },
         );
-        let footing = footing_of(&state);
         Ok(WorkPermit {
             owner: self.clone(),
             id,
-            footing,
             binding: Mutex::new((work_generation, state.provider_generation)),
             stop: self.stop.subscribe(),
             cancellation: cancellation_notice,
@@ -1254,8 +1210,8 @@ impl SessionLifecycle {
         let state = self.state.lock().expect("session lifecycle");
         if !state.provider_ready
             || !matches!(state.work_status, WorkStatus::Open)
-            || !state.active.as_ref().is_some_and(|(generation, id)| {
-                *generation == state.work_generation && id == execution
+            || !state.active.as_ref().is_some_and(|active| {
+                active.work_generation == state.work_generation && &active.id == execution
             })
         {
             return None;
@@ -1277,15 +1233,34 @@ impl SessionLifecycle {
             .expect("session lifecycle")
             .active
             .as_ref()
-            .map(|(_, id)| id.clone())
+            .map(|active| active.id.clone())
     }
-    pub(super) fn start_execution(&self, id: ExecutionId) -> Result<WorkGeneration, AgentError> {
+    pub(super) fn active_configuration(&self) -> Option<ActiveExecution> {
+        self.state.lock().expect("session lifecycle").active.clone()
+    }
+    pub(super) fn acknowledge_active_configuration(&self, configured: Arc<dyn AgentProvider>) {
+        let mut state = self.state.lock().expect("session lifecycle");
+        // The configuration control holds Scheduler through publication. A new
+        // invocation cannot replace this owner while the control awaits its ACK.
+        if let Some(active) = state.active.as_mut() {
+            active.configured = configured;
+        }
+    }
+    pub(super) fn start_execution(
+        &self,
+        id: ExecutionId,
+        configured: Arc<dyn AgentProvider>,
+    ) -> Result<WorkGeneration, AgentError> {
         let mut state = self.state.lock().expect("session lifecycle");
         if !matches!(state.work_status, WorkStatus::Open) {
             return Err(AgentError::Closed);
         }
         let work_generation = state.work_generation;
-        state.active = Some((work_generation, id));
+        state.active = Some(ActiveExecution {
+            work_generation,
+            id,
+            configured,
+        });
         Ok(work_generation)
     }
     pub(super) fn finish_execution(&self, work_generation: WorkGeneration) {
@@ -1293,7 +1268,7 @@ impl SessionLifecycle {
         if state
             .active
             .as_ref()
-            .is_some_and(|(active, _)| *active == work_generation)
+            .is_some_and(|active| active.work_generation == work_generation)
         {
             state.active = None;
         }

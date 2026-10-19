@@ -21,7 +21,8 @@
 use super::CloseOutcome;
 use crate::application::agent_execution::agents::AgentError;
 use std::{
-    collections::BTreeMap, ffi::OsString, future::Future, path::Path, pin::Pin, time::Duration,
+    collections::BTreeMap, ffi::OsString, future::Future, path::Path, pin::Pin, sync::Arc,
+    time::Duration,
 };
 use tokio::io::{AsyncRead, AsyncWrite};
 
@@ -83,3 +84,38 @@ pub trait HarnessHost: Send + Sync {
     /// [`AgentError::Closed`] once its connection is gone.
     fn start(&self, launch: HarnessLaunch) -> Result<HarnessProcess, AgentError>;
 }
+
+/// Borrowed identity of the host a provider factory uses for its harness.
+/// Local identities compare equal; hosted identities compare the captured Arc
+/// owner, independently of workspace spelling or launch configuration. This view
+/// exposes no host handle and carries no persistent identity across restarts.
+///
+/// ```
+/// use nessa_sdk::application::agent_execution::providers::HarnessHostIdentity;
+/// assert!(HarnessHostIdentity::local() == HarnessHostIdentity::local());
+/// ```
+#[derive(Clone, Copy)]
+pub struct HarnessHostIdentity<'host> {
+    host: Option<&'host Arc<dyn HarnessHost>>,
+}
+impl<'host> HarnessHostIdentity<'host> {
+    /// Assert that this factory starts its harness in this process's local environment.
+    pub const fn local() -> Self {
+        Self { host: None }
+    }
+    /// Borrow the factory's captured host owner without granting start authority.
+    /// The view cannot outlive the borrowed Arc and does not acquire another owner.
+    pub fn hosted(host: &'host Arc<dyn HarnessHost>) -> Self {
+        Self { host: Some(host) }
+    }
+}
+impl PartialEq for HarnessHostIdentity<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        match (self.host, other.host) {
+            (None, None) => true,
+            (Some(left), Some(right)) => Arc::ptr_eq(left, right),
+            _ => false,
+        }
+    }
+}
+impl Eq for HarnessHostIdentity<'_> {}

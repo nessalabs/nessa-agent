@@ -13,6 +13,10 @@
 //! before another command can reorder the remainder; it is not provider dispatch.
 //!
 //! SessionManager owns local session identity, saved evidence, and the storage lease.
+//! Explicit model/configuration controls retain before/after settings and their
+//! original actor through semantic records. `model_change` is the last model
+//! operation's recovery evidence; `current_configuration` is the latest setting
+//! used for restoration, including later approval and effort controls.
 //!
 //! ```text
 //! Agent -> SessionManager -> SessionStorageLease -> storage adapter

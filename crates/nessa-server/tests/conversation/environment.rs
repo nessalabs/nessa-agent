@@ -6,6 +6,9 @@ use crate::conversation::infrastructure::in_process_environment;
 use crate::conversation_test_support::{Provider, ProviderFactory};
 use nessa_sdk::application::agent_execution::executions::{ExecutionEvent, ExecutionUpdate};
 use nessa_sdk::application::agent_execution::permissions::ActionContext;
+use nessa_sdk::application::agent_execution::providers::{
+    HarnessHost, HarnessHostIdentity, HarnessLaunch, HarnessProcess,
+};
 use nessa_sdk::application::agent_execution::sessions::{
     EnvironmentPath, PublishedFile, StorageError,
 };
@@ -52,6 +55,9 @@ fn binding() -> Arc<dyn AgentProvider> {
 struct Traced(Arc<dyn AgentProvider>, Arc<LocalTraceStore>);
 
 impl AgentProvider for Traced {
+    fn harness_host_identity(&self) -> HarnessHostIdentity<'_> {
+        self.0.harness_host_identity()
+    }
     fn approval_mode(&self) -> Option<ApprovalMode> {
         self.0.approval_mode()
     }
@@ -494,6 +500,13 @@ struct Granting {
 
 struct Held;
 impl LeaseHold for Held {
+    fn model_provider(
+        &self,
+        binding: Arc<dyn AgentProvider>,
+    ) -> Result<Arc<dyn AgentProvider>, AgentError> {
+        Ok(binding)
+    }
+
     fn ends(&self) -> Option<EnvironmentFuture<'static, LeaseEndCause>> {
         None
     }
@@ -560,6 +573,150 @@ async fn a_granted_duration_is_recorded_as_the_deadline() {
     // The grant arrived 5s after the ask; the deadline runs from the ask.
     assert_eq!(clock.unix_milliseconds(), 1_005_000);
     assert_eq!(opening.terms.deadline, LeaseDeadline::At(1_060_000));
+}
+
+#[tokio::test]
+async fn a_model_target_and_its_normalized_factory_keep_the_original_lease_fence() {
+    use nessa_sdk::application::agent_execution::providers::ModelChange;
+    let factory = Arc::new(ProviderFactory::default());
+    let original = Arc::new(Provider::new(factory.clone()));
+    let opening = open_lease(
+        in_process_environment().as_ref(),
+        request(SandboxProfiles::HARNESS_DEFAULT),
+        original,
+        &At(0),
+    )
+    .await;
+    let fence = opening.fence.clone();
+    let lease = LiveLease::new(&opening);
+    let raw: Arc<dyn AgentProvider> =
+        Arc::new(Provider::new(factory.clone()).with_model("second-model"));
+    assert!(
+        ModelChange::between(fence.as_ref(), raw.as_ref()).is_err(),
+        "a raw registry factory carries no lease authority"
+    );
+    let wrapped = lease.model_provider(raw.clone()).unwrap();
+    assert!(ModelChange::between(fence.as_ref(), wrapped.as_ref()).is_ok());
+    let another = LeaseFence::new(
+        LeaseId::new("another-lease").unwrap(),
+        raw,
+        FencePhase::Live,
+    );
+    assert!(
+        ModelChange::between(fence.as_ref(), another.as_ref()).is_err(),
+        "same provider settings do not transfer another lease's authority"
+    );
+    let normalized = wrapped
+        .with_model_configuration(Some(ApprovalMode::Ask), None, None)
+        .unwrap();
+    fence.close();
+    for target in [wrapped, normalized] {
+        let refusal = target
+            .open(ProviderOpenRequest::without_startup_control(None))
+            .await
+            .err()
+            .expect("closed original lease refuses restore");
+        assert!(matches!(refusal.cause(), AgentError::Closed));
+    }
+    assert_eq!(
+        factory.open_calls.load(std::sync::atomic::Ordering::SeqCst),
+        0
+    );
+    assert!(lease.model_provider(binding()).is_err());
+}
+
+/// The wrapper fixture borrows its host exactly as hosted provider bindings do.
+struct Hosted {
+    inner: Arc<dyn AgentProvider>,
+    host: Arc<dyn HarnessHost>,
+}
+impl AgentProvider for Hosted {
+    fn harness_host_identity(&self) -> HarnessHostIdentity<'_> {
+        HarnessHostIdentity::hosted(&self.host)
+    }
+    fn approval_mode(&self) -> Option<ApprovalMode> {
+        self.inner.approval_mode()
+    }
+    fn effort_level(&self) -> Option<EffortLevel> {
+        self.inner.effort_level()
+    }
+    fn identity(&self) -> ProviderIdentity {
+        self.inner.identity()
+    }
+    fn capabilities(&self) -> &EffectiveCapabilities {
+        self.inner.capabilities()
+    }
+    fn model_change_context(&self) -> Option<String> {
+        self.inner.model_change_context()
+    }
+    fn with_model_configuration(
+        &self,
+        mode: Option<ApprovalMode>,
+        effort: Option<EffortLevel>,
+        traces: Option<Arc<LocalTraceStore>>,
+    ) -> Result<Arc<dyn AgentProvider>, AgentError> {
+        Ok(Arc::new(Self {
+            inner: self.inner.with_model_configuration(mode, effort, traces)?,
+            host: self.host.clone(),
+        }))
+    }
+    fn open(&self, request: ProviderOpenRequest) -> ProviderOpenFuture<'_> {
+        self.inner.open(request)
+    }
+}
+struct UnstartedHost;
+impl HarnessHost for UnstartedHost {
+    fn workspace(&self) -> &std::path::Path {
+        std::path::Path::new("/same-workspace")
+    }
+    fn start(&self, _: HarnessLaunch) -> Result<HarnessProcess, AgentError> {
+        panic!("host ownership checks must not launch a harness")
+    }
+}
+#[tokio::test]
+async fn hosted_lease_fence_and_normalization_delegate_the_captured_host_owner() {
+    use nessa_sdk::application::agent_execution::providers::ModelChange;
+    let host: Arc<dyn HarnessHost> = Arc::new(UnstartedHost);
+    let other: Arc<dyn HarnessHost> = Arc::new(UnstartedHost);
+    let factory = Arc::new(ProviderFactory::default());
+    let original = Arc::new(Hosted {
+        inner: Arc::new(Provider::new(factory.clone())),
+        host: host.clone(),
+    });
+    let fence = LeaseFence::new(
+        LeaseId::new("hosted-lease").unwrap(),
+        original,
+        FencePhase::Live,
+    );
+    assert!(fence.harness_host_identity() == HarnessHostIdentity::hosted(&host));
+    let make = |host| {
+        fence.with_inner(Arc::new(Hosted {
+            inner: Arc::new(Provider::new(factory.clone()).with_model("second-model")),
+            host,
+        }))
+    };
+    let target = make(host.clone());
+    let foreign = make(other);
+    assert!(ModelChange::between(fence.as_ref(), target.as_ref()).is_ok());
+    assert!(ModelChange::between(fence.as_ref(), foreign.as_ref()).is_err());
+    let normalized = target
+        .with_model_configuration(Some(ApprovalMode::Ask), None, None)
+        .unwrap();
+    assert!(normalized.harness_host_identity() == HarnessHostIdentity::hosted(&host));
+    fence.close();
+    let target: Arc<dyn AgentProvider> = target;
+    for provider in [target, normalized] {
+        let failure = provider
+            .open(ProviderOpenRequest::without_startup_control(None))
+            .await
+            .err()
+            .unwrap();
+        assert!(matches!(failure.cause(), AgentError::Closed));
+    }
+    assert_eq!(
+        factory.open_calls.load(std::sync::atomic::Ordering::SeqCst),
+        0
+    );
 }
 
 /// An opening asked after the lease began ending, but before its Agent was

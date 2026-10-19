@@ -48,6 +48,8 @@ async fn worker_projection_after_reload(
     );
     let session_id = SessionId::new("worker-projection").unwrap();
     let snapshot = SessionSnapshot {
+        model_change: None,
+        current_configuration: None,
         queue_history: Vec::new(),
         id: session_id.clone(),
         provider: ProviderIdentity::new("fixture", "model", "workspace").unwrap(),
@@ -605,6 +607,8 @@ async fn same_poll_policy_drift_prevents_prompt_and_native_steering_writes() {
                     worker_with_flushed_ready_frames(&[notification(update.clone())], prefix).await;
                 let mut execution =
                     ExecutionController::new(ExecutionSessionId::new("context").unwrap());
+                let handoffs = Arc::new(AtomicU64::new(0));
+                let handoff_count = handoffs.clone();
                 let (reply, result) = oneshot::channel();
                 let (steer_reply, steer_result) = oneshot::channel();
                 if matches!(dispatch, Dispatch::Steering) {
@@ -622,6 +626,7 @@ async fn same_poll_policy_drift_prevents_prompt_and_native_steering_writes() {
                         .send(Command::Steer(
                             ExecutionId::new("active").unwrap(),
                             steered(&*worker.config.clock, request()),
+                            Box::new(worker.capabilities.clone()),
                             steer_reply,
                         ))
                         .await
@@ -630,6 +635,10 @@ async fn same_poll_policy_drift_prevents_prompt_and_native_steering_writes() {
                     commands
                         .send(Command::ExecutionRequest(
                             dispatched(request(), None),
+                            Arc::new(move || {
+                                handoff_count.fetch_add(1, Ordering::SeqCst);
+                                Ok(())
+                            }),
                             reply,
                         ))
                         .await
@@ -656,6 +665,7 @@ async fn same_poll_policy_drift_prevents_prompt_and_native_steering_writes() {
                 assert!(worker.steering.is_none());
                 if matches!(dispatch, Dispatch::Prompt) {
                     assert!(worker.active.is_none());
+                    assert_eq!(handoffs.load(Ordering::SeqCst), 0);
                     let ProviderExecutionReply::Finished(report) = result.await.unwrap() else {
                         panic!("fatal policy failure must fence attachment");
                     };
@@ -687,6 +697,7 @@ async fn valid_ready_burst_larger_than_batch_preserves_prompt_dispatch() {
     commands
         .send(Command::ExecutionRequest(
             dispatched(request(), None),
+            Arc::new(|| Ok(())),
             reply,
         ))
         .await
@@ -755,6 +766,7 @@ async fn close_interrupts_ready_policy_backlog_without_dispatching_pending_promp
         commands
             .send(Command::ExecutionRequest(
                 dispatched(request(), None),
+                Arc::new(|| Ok(())),
                 reply,
             ))
             .await
@@ -809,7 +821,7 @@ async fn exhausted_task_budget_does_not_hide_ready_policy_frames() {
     let failure = worker
         .command(
             &mut execution,
-            Command::ExecutionRequest(dispatched(request(), None), reply),
+            Command::ExecutionRequest(dispatched(request(), None), Arc::new(|| Ok(())), reply),
         )
         .await
         .map_err(WorkerFailure::into_error);
@@ -852,6 +864,7 @@ async fn selected_operation_deadline_includes_ready_policy_validation() {
             commands
                 .send(Command::ExecutionRequest(
                     dispatched(request(), Some(clock.now() + Duration::from_secs(1))),
+                    Arc::new(|| Ok(())),
                     reply,
                 ))
                 .await
@@ -872,6 +885,7 @@ async fn selected_operation_deadline_includes_ready_policy_validation() {
                 .send(Command::Steer(
                     ExecutionId::new("active").unwrap(),
                     steered(&*worker.config.clock, request()),
+                    Box::new(worker.capabilities.clone()),
                     steer_reply,
                 ))
                 .await
@@ -954,7 +968,12 @@ async fn ready_completion_keeps_native_steering_prompt_fallback() {
     let operation = worker
         .command(
             &mut execution,
-            Command::Steer(ExecutionId::new("active").unwrap(), steering, reply),
+            Command::Steer(
+                ExecutionId::new("active").unwrap(),
+                steering,
+                Box::new(worker.capabilities.clone()),
+                reply,
+            ),
         )
         .await;
     worker
@@ -1005,7 +1024,12 @@ async fn interrupted_dispatch_receipt_retains_deadline_and_consumer_failure() {
         assert_eq!(
             promptly(worker.command(
                 &mut execution,
-                Command::Steer(ExecutionId::new("active").unwrap(), steering, reply)
+                Command::Steer(
+                    ExecutionId::new("active").unwrap(),
+                    steering,
+                    Box::new(worker.capabilities.clone()),
+                    reply
+                )
             ))
             .await
             .map_err(WorkerFailure::into_error),
@@ -1059,7 +1083,7 @@ async fn dropped_selected_caller_leaves_context_available_for_next_request() {
         worker
             .command(
                 &mut execution,
-                Command::ExecutionRequest(dispatched(request(), None), reply)
+                Command::ExecutionRequest(dispatched(request(), None), Arc::new(|| Ok(())), reply)
             )
             .await
             .map_err(WorkerFailure::into_error),
@@ -1075,7 +1099,7 @@ async fn dropped_selected_caller_leaves_context_available_for_next_request() {
         worker
             .command(
                 &mut execution,
-                Command::ExecutionRequest(dispatched(request(), None), reply)
+                Command::ExecutionRequest(dispatched(request(), None), Arc::new(|| Ok(())), reply)
             )
             .await
             .map_err(WorkerFailure::into_error),
@@ -1087,4 +1111,54 @@ async fn dropped_selected_caller_leaves_context_available_for_next_request() {
         .cleanup(Duration::ZERO, Duration::from_secs(2))
         .await
         .unwrap();
+}
+
+#[tokio::test]
+async fn native_handoff_follows_frame_checks_and_can_refuse_dispatch() {
+    for (output, frame_limit, refuse_handoff, expected_handoffs, expected) in [
+        (
+            10,
+            1,
+            false,
+            0,
+            AgentError::InvalidInput("encoded request exceeds frame limit".into()),
+        ),
+        (10, 65_536, true, 1, AgentError::Closed),
+    ] {
+        let (mut worker, _commands, _close, _events) = worker_with_ready_frames(&[], "").await;
+        worker.config.max_frame_bytes = frame_limit;
+        let mut execution = ExecutionController::new(ExecutionSessionId::new("context").unwrap());
+        let mut input = request();
+        input.reserved_output_tokens = output;
+        let calls = Arc::new(AtomicU64::new(0));
+        let handoff_calls = calls.clone();
+        let (reply, result) = oneshot::channel();
+        worker
+            .dispatch_execution(
+                &mut execution,
+                dispatched(input, None),
+                Arc::new(move || {
+                    handoff_calls.fetch_add(1, Ordering::SeqCst);
+                    if refuse_handoff {
+                        Err(AgentError::Closed)
+                    } else {
+                        Ok(())
+                    }
+                }),
+                reply,
+            )
+            .await
+            .unwrap_or_else(|error| panic!("{}", error.error()));
+        worker
+            .scope
+            .cleanup(Duration::ZERO, Duration::from_secs(2))
+            .await
+            .unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), expected_handoffs);
+        assert!(worker.active.is_none());
+        assert_eq!(worker.sequence, 0);
+        assert!(
+            matches!(result.await.unwrap(), ProviderExecutionReply::Rejected(error) if error == expected)
+        );
+    }
 }

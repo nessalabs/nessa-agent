@@ -1,5 +1,6 @@
 //! Valid receipts must still describe the exact review retained for the surface.
 use super::*;
+use nessa_sdk::application::agent_execution::providers::NativeExecutionHandoff;
 
 struct EvidenceBackend {
     answer: Option<PermissionResolution>,
@@ -12,7 +13,11 @@ impl ProviderSessionBackend for EvidenceBackend {
     fn prepare_invocation(&self) -> ProviderOperationFuture<'_, ()> {
         Box::pin(async { Ok(()) })
     }
-    fn execute(&self, _: ExecutionRequest) -> ProviderExecutionFuture<'_> {
+    fn execute(
+        &self,
+        _: ExecutionRequest,
+        _handoff: NativeExecutionHandoff,
+    ) -> ProviderExecutionFuture<'_> {
         Box::pin(async {
             ProviderExecutionReply::Rejected(AgentError::Unsupported("review fixture".into()))
         })

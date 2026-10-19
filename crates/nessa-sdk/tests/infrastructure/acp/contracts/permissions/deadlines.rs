@@ -439,7 +439,10 @@ async fn an_unrelated_command_already_queued_does_not_hold_a_due_deadline() {
     // Queue another prompt without letting the worker run, then reach the
     // deadline. The prompt is not an answer to the due review. Taking it
     // first waits on the unfinished frame and never settles the deadline.
-    let mut second = review.opened.session.execute(prompt("later"));
+    let mut second = review
+        .opened
+        .session
+        .execute(prompt("later"), Arc::new(|| Ok(())));
     let mut context = Context::from_waker(Waker::noop());
     assert!(second.as_mut().poll(&mut context).is_pending());
     review.clock.advance(Duration::from_secs(30));

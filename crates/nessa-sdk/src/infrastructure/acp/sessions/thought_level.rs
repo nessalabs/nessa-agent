@@ -167,3 +167,22 @@ pub(crate) fn selection(session_id: &str, id: &str, level: &EffortLevel) -> Valu
 #[cfg(test)]
 #[path = "../../../../tests/infrastructure/acp/sessions/thought_level.rs"]
 mod tests;
+
+/// Read the selected native effort after the model may have changed its offerings.
+pub(crate) fn selected(result: &Value, id: &str) -> Result<Option<EffortLevel>, AgentError> {
+    let Some(option) = thought_level(result, id)? else {
+        return Ok(None);
+    };
+    let current = option
+        .current
+        .ok_or_else(|| protocol("thought_level has no selected value"))?;
+    if !option.choices.contains(&current) {
+        return Err(protocol("selected thought_level is not offered"));
+    }
+    if current == "default" {
+        return Ok(None);
+    }
+    EffortLevel::new(current.to_owned())
+        .map(Some)
+        .map_err(|error| protocol(&error.to_string()))
+}
