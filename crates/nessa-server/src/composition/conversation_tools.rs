@@ -5,7 +5,7 @@ use crate::conversation::application::{
     EventProgress, ReportRegistration, RequestedAgent, RequestedConversation, SourcePermits,
     SubmissionMode, SubmittedMessage, ThreadEvent, ThreadReport, ThreadTurn, MAX_EVENT_READERS,
 };
-use crate::mcp_servers::application::{BuiltInFuture, BuiltInServer};
+use crate::mcp_servers::application::{BuiltInAnswer, BuiltInFuture, BuiltInServer};
 use nessa_protocol::agents::AgentId;
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_sdk::application::agent_execution::{
@@ -154,22 +154,30 @@ impl BuiltInServer for ConversationTools {
         let readers = self.readers.clone();
         Box::pin(async move {
             let (Some(service), Ok(source)) = (service, source) else {
-                return failed("agent_tools_unavailable");
+                return failed("agent_tools_unavailable").into();
             };
             // Bounded per source, not across the server, so the readers grow
             // with the agents.
             let _reader = if tool == "subscribe" {
                 match readers.try_acquire(&source) {
                     Some(permit) => Some(permit),
-                    None => return failed("subscription_capacity"),
+                    None => return failed("subscription_capacity").into(),
                 }
             } else {
                 None
             };
-            match run(service, source, call, tool, arguments, stop).await {
-                Ok(value) => answer(value),
-                Err(code) => failed(&code),
+            let mut delivered = None;
+            let result =
+                match run(service, source, call, tool, arguments, stop, &mut delivered).await {
+                    Ok(value) => answer(value),
+                    Err(code) => failed(&code),
+                };
+            // Only an answer that carries what was asked does anything once
+            // delivered.
+            if result["isError"] == true {
+                delivered = None;
             }
+            BuiltInAnswer { result, delivered }
         })
     }
 }
@@ -331,6 +339,7 @@ async fn run(
     tool: String,
     arguments: Value,
     stop: watch::Receiver<bool>,
+    delivered: &mut Option<Box<dyn FnOnce() + std::marker::Send>>,
 ) -> Result<Value, String> {
     match tool.as_str() {
         "create_thread" => {
@@ -566,18 +575,27 @@ async fn run(
             };
             // While this call waits on the turn, its reply is this call's
             // to take, and the turn's report holds back.
-            let _awaited = args.execution_id.as_ref().map(|execution| {
-                service.await_thread_turn(&target, execution, source.conversation())
+            let awaited = args.execution_id.clone().map(|execution| {
+                let held = service.await_thread_turn(&target, &execution, source.conversation());
+                (execution, held)
             });
-            follow(
-                &service,
-                target,
-                source.conversation().clone(),
-                source.caller(),
-                args,
-                control,
-            )
-            .await
+            let (value, whole) =
+                follow(&service, target.clone(), source.caller(), args, control).await?;
+            // The answer holds the turn's whole reply: once the caller has
+            // it, a report would only repeat it. Until then the report stays
+            // held, and an answer the caller never gets lets it go.
+            if let (true, Some((execution, held))) = (whole, awaited) {
+                let parent = source.conversation().clone();
+                *delivered = Some(Box::new(move || {
+                    tokio::spawn(async move {
+                        service
+                            .claim_thread_report(&target, &execution, &parent)
+                            .await;
+                        drop(held);
+                    });
+                }));
+            }
+            Ok(value)
         }
         _ => Err("unknown_tool".into()),
     }
@@ -685,14 +703,14 @@ impl SubscriptionControl {
 
 /// One retained reader per call. Cancellation drops its local future; physical
 /// SDK read ownership and admitted source audit delivery retain their own owners.
+/// Also says whether the answer holds the whole reply of the turn it names.
 async fn follow(
     service: &ConversationService,
     target: ConversationId,
-    source: ConversationId,
     caller: ConversationCaller,
     args: Follow,
     mut control: SubscriptionControl,
-) -> Result<Value, String> {
+) -> Result<(Value, bool), String> {
     let value = observe(service, &target, &caller, args, &mut control).await?;
     // This is the publication admission point for Page, Idle, and a retained
     // checkpoint at the observation deadline. An expired wait cannot certify
@@ -708,17 +726,12 @@ async fn follow(
         Err(SubscriptionEnd::Cancelled) => return Err("cancelled".into()),
         Err(SubscriptionEnd::Deadline) => return Err(code(ConversationError::Unavailable)),
     }
-    // A call waiting on the turn now holds its whole reply, in an answer
-    // that will be sent: a report would only repeat it.
-    if let Some(execution) = &control.execution {
-        let turn = &value["turn"];
-        if turn["finished"] == true && turn["replyCut"] == false && fits(&value) {
-            service
-                .claim_thread_report(&target, execution, &source)
-                .await;
-        }
-    }
-    Ok(value)
+    let turn = &value["turn"];
+    let whole = control.execution.is_some()
+        && turn["finished"] == true
+        && turn["replyCut"] == false
+        && fits(&value);
+    Ok((value, whole))
 }
 
 async fn observe(
@@ -1173,7 +1186,8 @@ mod tests {
                 json!({}),
                 stop,
             )
-            .await;
+            .await
+            .result;
         assert_eq!(value["isError"], true);
         assert_eq!(
             value["structuredContent"]["error"],

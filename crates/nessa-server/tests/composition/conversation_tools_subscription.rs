@@ -65,7 +65,7 @@ async fn source_admission_cancel_and_deadline_release_the_tool_reader_slot() {
             .expect("blocked source lookup must not retain the subscription")
             .unwrap();
         assert_eq!(
-            result["structuredContent"]["error"],
+            result.result["structuredContent"]["error"],
             if cancel {
                 "cancelled"
             } else {
@@ -214,7 +214,6 @@ async fn reader_open_reauthorization_and_read_obey_cancellation_and_setup_deadli
                 follow(
                     &owned,
                     id(),
-                    id(),
                     caller(),
                     Follow {
                         thread_id: id().to_string(),
@@ -276,7 +275,7 @@ async fn repeated_cancelled_observers_cannot_exceed_detached_source_capacity() {
             .await
             .expect("source cancellation must release the response")
             .unwrap();
-        assert_eq!(result["structuredContent"]["error"], "cancelled");
+        assert_eq!(result.result["structuredContent"]["error"], "cancelled");
         assert_eq!(
             tools.readers.held(&id()),
             0,
@@ -301,7 +300,7 @@ async fn repeated_cancelled_observers_cannot_exceed_detached_source_capacity() {
     .await
     .expect("physical source capacity refuses without waiting");
     assert_eq!(
-        result["structuredContent"]["error"],
+        result.result["structuredContent"]["error"],
         error_code(&ConversationError::Unavailable).as_str()
     );
     assert!(
@@ -332,7 +331,7 @@ async fn repeated_cancelled_observers_cannot_exceed_detached_source_capacity() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(result["structuredContent"]["error"], "cancelled");
+    assert_eq!(result.result["structuredContent"]["error"], "cancelled");
     drop(release_other);
     drop(metadata.metadata_load_gate.lock().unwrap().take());
     let owned = service.clone();
@@ -506,7 +505,6 @@ fn delivery_call(
         follow(
             &service,
             id(),
-            id(),
             caller(),
             Follow {
                 thread_id: id().to_string(),
@@ -519,6 +517,7 @@ fn delivery_call(
             SubscriptionControl::new(stop, wait, None),
         )
         .await
+        .map(|(value, _)| value)
     })
 }
 
@@ -720,7 +719,6 @@ async fn scripted_follow(
     let result = follow(
         &service,
         id(),
-        id(),
         caller(),
         Follow {
             thread_id: id().to_string(),
@@ -742,7 +740,7 @@ async fn scripted_follow(
     .await;
     assert_eq!(storage.opened.lock().unwrap().as_ref(), Some(&start));
     service.shutdown().await.unwrap();
-    result
+    result.map(|(value, _)| value)
 }
 
 #[tokio::test(start_paused = true)]

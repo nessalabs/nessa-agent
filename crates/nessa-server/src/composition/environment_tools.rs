@@ -173,40 +173,44 @@ impl BuiltInServer for EnvironmentTools {
         let service = self.service.get().cloned();
         let conversation = ConversationId::new(session.as_str());
         Box::pin(async move {
-            let (Some(service), Ok(conversation)) = (service, conversation) else {
-                return failed("this conversation's environment tools are not available now");
-            };
-            match tool.as_str() {
-                "environments_list" => match service.list_environments(&conversation).await {
-                    Ok(listed) => listing(&listed),
-                    Err(error) => failed(&error.to_string()),
-                },
-                "run" => {
-                    let call = match command_call(arguments, call) {
-                        Ok(call) => call,
-                        Err(problem) => return failed(&problem),
-                    };
-                    match service.run_command(&conversation, call, stop).await {
-                        Ok(answer) => answered(&answer),
-                        Err(error) => failed(call_error(&error)),
+            let result: Value = async move {
+                let (Some(service), Ok(conversation)) = (service, conversation) else {
+                    return failed("this conversation's environment tools are not available now");
+                };
+                match tool.as_str() {
+                    "environments_list" => match service.list_environments(&conversation).await {
+                        Ok(listed) => listing(&listed),
+                        Err(error) => failed(&error.to_string()),
+                    },
+                    "run" => {
+                        let call = match command_call(arguments, call) {
+                            Ok(call) => call,
+                            Err(problem) => return failed(&problem),
+                        };
+                        match service.run_command(&conversation, call, stop).await {
+                            Ok(answer) => answered(&answer),
+                            Err(error) => failed(call_error(&error)),
+                        }
                     }
+                    "artifacts_publish" => {
+                        let call = match publish_call(arguments, call) {
+                            Ok(call) => call,
+                            Err(problem) => return failed(&problem),
+                        };
+                        published(&service.publish_artifact(&conversation, call, stop).await)
+                    }
+                    "artifacts_fetch" => {
+                        let call = match fetch_call(arguments, call) {
+                            Ok(call) => call,
+                            Err(problem) => return failed(&problem),
+                        };
+                        fetched(&service.fetch_artifact(&conversation, call, stop).await)
+                    }
+                    _ => failed("no such tool"),
                 }
-                "artifacts_publish" => {
-                    let call = match publish_call(arguments, call) {
-                        Ok(call) => call,
-                        Err(problem) => return failed(&problem),
-                    };
-                    published(&service.publish_artifact(&conversation, call, stop).await)
-                }
-                "artifacts_fetch" => {
-                    let call = match fetch_call(arguments, call) {
-                        Ok(call) => call,
-                        Err(problem) => return failed(&problem),
-                    };
-                    fetched(&service.fetch_artifact(&conversation, call, stop).await)
-                }
-                _ => failed("no such tool"),
             }
+            .await;
+            result.into()
         })
     }
 }

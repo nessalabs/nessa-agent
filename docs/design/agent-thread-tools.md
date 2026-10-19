@@ -136,9 +136,11 @@ waits up to 30 s (its default) and answers `turn: {finished: true, outcome,
 reply}` as soon as the turn ends, at once if it already had; `finished: false`
 means it still runs. The reply is read as the report reads it
 (`thread_turn_end`), so both always agree. While such a call waits, the turn's
-report holds back (`await_thread_turn`); a call that returns the reply lets the
-report go (`claim_thread_report`), and one that gives up looks again so the
-report is sent as usual. Test:
+report holds back (`await_thread_turn`). Once the relay has written an answer
+holding the whole reply, the report is let go (`claim_thread_report`, run from
+the answer's `delivered` hook). A call that gives up, or whose answer is never
+written because it was cancelled or its caller went, looks again so the report
+is sent as usual. Test:
 `one_subscribe_naming_the_sent_turn_returns_its_reply_in_place_of_the_report`.
 
 To read a thread's events instead, call `subscribe({threadId, replay: true})`
