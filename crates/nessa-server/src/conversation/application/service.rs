@@ -6,7 +6,7 @@ use super::metadata_target::{load_conversation, validate_target};
 use super::session_key::conversation_session;
 use super::source_permits::SourcePermits;
 use super::{
-    app_reviews::{AppReviews, ReviewAnswer, ReviewAnswerer},
+    app_reviews::{AppReviews, ReviewAnswer, ReviewAnswerer, Taken},
     drive_tools::{checked_source, AdmittedPolicies, DriveToolHook, DriveTools},
     environment::{
         confirmed_despite, issue, open_lease, AgentEnd, LeaseIssueError, LeaseRequest, LiveLease,
@@ -661,6 +661,12 @@ enum SubmissionDelivery {
     Queued(QueueAdmission),
     Injected { evidence: SteeringEvidence },
 }
+/// What one message's offers took from its apps, and the agent they were
+/// offered to: kept from a refused offer for the next (`submit_admitted_as`).
+/// The agent is named by a weak reference: holding it would keep an agent
+/// that closed alive, its history leased, and the opening that replaces it
+/// would wait on that lease.
+type Carried = Arc<std::sync::Mutex<Option<(std::sync::Weak<LiveConversation>, Taken)>>>;
 struct LiveConversation {
     agent: Agent,
     /// The lease its agent runs under. Every close of the agent goes through
@@ -3175,7 +3181,12 @@ impl ConversationService {
         // as a stop may take. Every offer carries the same message identity,
         // so one the agent did take is answered with its own delivery
         // (`messages_sent_while_a_failed_turn_settles_are_not_refused_for_the_mode`).
+        // What an offer took from the apps and was refused with is offered
+        // again with the message, not reported dropped and then missing
+        // from it; should no offer be taken, it is reported dropped unsent
+        // as this goes (row C11).
         let deadline = std::time::Instant::now() + self.inner.deletion_budgets.stop;
+        let carried = Carried::default();
         let (asked, outcome) = loop {
             let (asked, submission) = self.submission_future(
                 id.clone(),
@@ -3185,6 +3196,7 @@ impl ConversationService {
                 mode,
                 writer.clone(),
                 held,
+                carried.clone(),
             );
             let outcome = tokio::spawn(submission).await;
             if !matches!(outcome, Ok(Err(Halt::Again(_)))) || std::time::Instant::now() >= deadline
@@ -3218,6 +3230,7 @@ impl ConversationService {
         mode: SubmissionMode,
         writer: Writer,
         held: bool,
+        carried: Carried,
     ) -> (
         Arc<AtomicBool>,
         impl Future<Output = Result<SubmissionReceipt, Halt>> + Send + 'static,
@@ -3489,12 +3502,22 @@ impl ConversationService {
             // What it took is this task's own: should the task end, however,
             // before the agent was asked, each is reported dropped unsent as
             // it goes (row C11).
+            // An earlier offer of this message to this same agent, refused
+            // to be offered again, took them already: they are offered again
+            // as they were. One taken from an agent since replaced, or not
+            // carried now, is reported dropped unsent as it goes.
             let mut taken = None;
-            let carried = match original {
+            let offered_before = carried
+                .lock()
+                .expect("carried contexts")
+                .take()
+                .filter(|(from, _)| std::sync::Weak::ptr_eq(from, &Arc::downgrade(&live)))
+                .map(|(_, took)| took);
+            let contexts = match original {
                 Some(original) => original,
                 None if idle => {
-                    let mut took = live.app_reviews.take_held();
-                    let contexts = took.take_contexts();
+                    let took = offered_before.unwrap_or_else(|| live.app_reviews.take_held());
+                    let contexts = took.contexts();
                     taken = Some(took);
                     contexts
                 }
@@ -3502,7 +3525,7 @@ impl ConversationService {
             };
             let message = message
                 .sent_by(writer.sender())
-                .with_app_model_context(carried)
+                .with_app_model_context(contexts)
                 .map_err(|_| ConversationError::InvalidInput)?;
             if let Some(rules) = service.inner.permission_rules.get() {
                 rules.arm(
@@ -3648,18 +3671,25 @@ impl ConversationService {
                 AgentError::ApprovalModeChanged => ConversationError::ApprovalModeNotApplied,
                 other => ConversationError::Agent(other),
             });
-            if let (Err(error), Some(took)) = (&delivery, taken) {
+            // Refused for now, to be offered again: what it took goes with
+            // the next offer (`a_message_offered_again_carries_the_contexts_it_took`).
+            let again = matches!(
+                delivery,
+                Err(ConversationError::ApprovalModeNotApplied
+                    | ConversationError::Agent(AgentError::Closed))
+            ) && !writer.is_app()
+                && !owner.stopping.load(Ordering::SeqCst);
+            if let (Err(error), Some(mut took)) = (&delivery, taken) {
                 if Reach::of_asked(error) == Reach::NotTaken {
-                    took.refused();
+                    took.handed_back();
+                    if again {
+                        *carried.lock().expect("carried contexts") =
+                            Some((Arc::downgrade(&live), took));
+                    }
                 }
             }
             let delivery = match delivery {
-                Err(
-                    error @ (ConversationError::ApprovalModeNotApplied
-                    | ConversationError::Agent(AgentError::Closed)),
-                ) if !writer.is_app() && !owner.stopping.load(Ordering::SeqCst) => {
-                    return Err(Halt::Again(error));
-                }
+                Err(error) if again => return Err(Halt::Again(error)),
                 delivery => delivery?,
             };
             // The agent has the message now, so the list says so — before the
