@@ -440,7 +440,12 @@ async fn unavailable_stop_receipts_cannot_acknowledge_a_declined_failed_report()
 /// and a claim before it is taken leaves nothing to take.
 #[tokio::test]
 async fn an_awaited_report_is_held_and_a_claim_calls_off_one_being_queued() {
-    let (service, _, _, _) = fixture(ConversationLimits::default());
+    let directory = tempfile::tempdir().unwrap();
+    let private = directory.path().join("reports");
+    nessa_local_storage::create_directory(&private).unwrap();
+    let store = Arc::new(LocalThreadReports::open(&private.join("reports.sqlite3")).unwrap());
+    let (service, provider, _, _) = fixture(ConversationLimits::default());
+    service.bind_thread_reports(store.clone());
     let child = ConversationId::new("00000000-0000-4000-8000-000000000001").unwrap();
     let parent = ConversationId::new("00000000-0000-4000-8000-000000000002").unwrap();
     let caller = ConversationCaller {
@@ -449,6 +454,14 @@ async fn an_awaited_report_is_held_and_a_claim_calls_off_one_being_queued() {
         surface_id: "panel".into(),
         action_id: "report-action".into(),
     };
+    service
+        .create(
+            parent.clone(),
+            caller.clone(),
+            RequestedConversation::default(),
+        )
+        .await
+        .unwrap();
     let reports = &service.inner.thread_reports;
     let finished = |_: &str, _: bool| Some("done".to_owned());
     for (work, report) in [("work", "report"), ("other", "report-2")] {
@@ -503,9 +516,20 @@ async fn an_awaited_report_is_held_and_a_claim_calls_off_one_being_queued() {
         taken[0].delivering.claimed(),
         "the queued report is called off"
     );
-    drop(taken);
+    service.deliver_report(taken.pop().unwrap()).await;
     assert!(reports.queuing.lock().unwrap().is_empty());
     assert_eq!(reports.delivering.load(Ordering::SeqCst), 0);
+    assert_eq!(store.pending().await.unwrap().len(), 1);
+    let live = service.resolve(&parent, &caller).await.unwrap();
+    assert!(live
+        .agent
+        .session_manager()
+        .snapshot()
+        .await
+        .unwrap()
+        .invocations
+        .is_empty());
+    assert!(provider.executions.lock().unwrap().is_empty());
 
     // Claimed before it is taken: no report is left to send.
     assert_eq!(
