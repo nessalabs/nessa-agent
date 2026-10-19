@@ -463,7 +463,15 @@ async fn an_awaited_report_is_held_and_a_claim_calls_off_one_being_queued() {
         .await
         .unwrap();
     let reports = &service.inner.thread_reports;
-    let finished = |_: &str, _: bool| Some("done".to_owned());
+    let finished = |execution: &str, _: bool| {
+        Some(report_text(
+            &child,
+            execution,
+            "completed",
+            Some("done".into()),
+            1000,
+        ))
+    };
     for (work, report) in [("work", "report"), ("other", "report-2")] {
         let report = ThreadReport {
             parent: parent.clone(),
