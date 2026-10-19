@@ -45,6 +45,10 @@ export const KNOBS = {
     default: 1,
     what: "turns that hand work to another thread and wait for its report",
   },
+  awaits: {
+    default: 1,
+    what: "turns that hand work to another thread and wait for its reply in one subscribe call",
+  },
   watches: {
     default: 1,
     what: "turns where the agent follows a thread with more reads at once than one conversation may hold",
@@ -112,6 +116,7 @@ export function plan(knobs) {
   add(knobs.fails, () => ({ kind: "fail" }))
   add(knobs.restarts, () => ({ kind: "restart" }))
   add(knobs.threads, () => ({ kind: "delegate" }))
+  add(knobs.awaits, () => ({ kind: "await" }))
   add(knobs.watches, () => ({ kind: "watch" }))
   add(knobs.switches, () => ({ kind: "switch" }))
   add(knobs.asides, () => ({ kind: "aside" }))

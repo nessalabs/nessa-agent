@@ -208,15 +208,17 @@ async fn reader_open_reauthorization_and_read_obey_cancellation_and_setup_deadli
             });
             let service = observing_service(metadata, storage);
             let (stop, stopped) = watch::channel(false);
-            let control = SubscriptionControl::new(stopped, 30000);
+            let control = SubscriptionControl::new(stopped, 30000, None);
             let owned = service.clone();
             let work = tokio::spawn(async move {
                 follow(
                     &owned,
                     id(),
+                    id(),
                     caller(),
                     Follow {
                         thread_id: id().to_string(),
+                        execution_id: None,
                         after: None,
                         replay: None,
                         wait_ms: Some(30000),
@@ -502,15 +504,17 @@ fn delivery_call(
         follow(
             &service,
             id(),
+            id(),
             caller(),
             Follow {
                 thread_id: id().to_string(),
+                execution_id: None,
                 after: None,
                 replay: None,
                 wait_ms: Some(wait),
                 limit: None,
             },
-            SubscriptionControl::new(stop, wait),
+            SubscriptionControl::new(stop, wait, None),
         )
         .await
     })
@@ -627,7 +631,7 @@ async fn already_observed_cancellation_refuses_delivery_before_polling_authoriza
     let (stop, mut stopped) = watch::channel(false);
     stop.send_replace(true);
     assert!(*stopped.borrow_and_update());
-    let mut control = SubscriptionControl::new(stopped, 0);
+    let mut control = SubscriptionControl::new(stopped, 0, None);
     let mut polled = false;
     let result = control
         .step_until(
@@ -712,9 +716,11 @@ async fn scripted_follow(
     let result = follow(
         &service,
         id(),
+        id(),
         caller(),
         Follow {
             thread_id: id().to_string(),
+            execution_id: None,
             after: match &start {
                 EventStart::After(cursor) => Some(cursor.encode()),
                 _ => None,
@@ -727,7 +733,7 @@ async fn scripted_follow(
             wait_ms: Some(wait),
             limit: None,
         },
-        SubscriptionControl::new(stopped, wait),
+        SubscriptionControl::new(stopped, wait, None),
     )
     .await;
     assert_eq!(storage.opened.lock().unwrap().as_ref(), Some(&start));

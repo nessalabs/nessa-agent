@@ -3,7 +3,7 @@ use crate::conversation::application::{
     error_code, event_error_code, project_events, validate_event_cursor, AgentToolRequest,
     ConversationCaller, ConversationError, ConversationEventError, ConversationService,
     EventProgress, ReportRegistration, RequestedAgent, RequestedConversation, SourcePermits,
-    SubmissionMode, SubmittedMessage, ThreadReport, MAX_EVENT_READERS,
+    SubmissionMode, SubmittedMessage, ThreadEvent, ThreadReport, MAX_EVENT_READERS,
 };
 use crate::mcp_servers::application::{BuiltInFuture, BuiltInServer};
 use nessa_protocol::agents::AgentId;
@@ -42,6 +42,10 @@ const MAX_LIMIT: usize = 100;
 const SUBSCRIPTION_SETUP_TIMEOUT: Duration = Duration::from_secs(10);
 /// The wait before retrying a read step every physical read worker refused.
 const READ_RETRY: Duration = Duration::from_millis(25);
+/// The most of a thread's reply one subscribe answer carries, within the
+/// answer's own 32 KiB with room for its events.
+const MAX_REPLY_BYTES: usize = 16 * 1024;
+const REPLY_CUT: &str = "\n[cut to fit]";
 
 pub(crate) struct ConversationTools {
     service: OnceLock<ConversationService>,
@@ -88,7 +92,7 @@ impl BuiltInServer for ConversationTools {
             }),
             json!({
                 "name": "send_message",
-                "description": "Send plain text in another thread of the same owner. queued (default) starts a queued turn; steering uses the existing steering semantics; passive records a note without starting or steering a turn. When a queued or steering message's turn ends, a report with the thread's outcome and final reply is queued into this conversation as a new turn (reportsBack: true), so there is no need to poll for it. Retry with identical thread, text and mode using the same requestId. Passive notes and active submissions retain separate existing operation namespaces.",
+                "description": "Send plain text in another thread of the same owner. queued (default) starts a queued turn; steering uses the existing steering semantics; passive records a note without starting or steering a turn. When a queued or steering message's turn ends, a report with the thread's outcome and final reply is queued into this conversation as a new turn (reportsBack: true), so there is no need to poll for it: end your turn and the report wakes you. To wait for the reply inside this turn instead, call subscribe once with this threadId and the returned executionId; the report is then not sent. Retry with identical thread, text and mode using the same requestId. Passive notes and active submissions retain separate existing operation namespaces.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -104,11 +108,12 @@ impl BuiltInServer for ConversationTools {
             }),
             json!({
                 "name": "subscribe",
-                "description": "Read a bounded batch of committed thread events and a cursor. Repeat with after to continue; omit after to start from now, or use replay:true after sending to include fast completions. Optionally wait for events. This call does not send a message, run an agent, or arrange a future model turn.",
+                "description": "Wait for a thread's turn, or read its events. To get the reply to a message you sent, pass the executionId send_message returned: the call waits (up to waitMs, default and most 30000) and returns turn: {finished: true, outcome, reply} as soon as that turn ends, even if it already had. If turn.finished is false it is still running: call again the same way, or end your turn and its report wakes you. Without executionId it returns the next committed events (metadata only, never empty while more are waiting) and a cursor; repeat with after to continue, omit after to start from now, or use replay:true to start from the beginning. A turn.ended event comes with turn: {outcome, reply}. This call does not send a message, run an agent, or arrange a future model turn.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
                         "threadId": {"type": "string"},
+                        "executionId": {"type": "string", "description": "Wait for this turn's end and return its reply. Mutually exclusive with replay."},
                         "after": {"type": "string"},
                         "replay": {"type": "boolean", "description": "Replay retained events from the beginning. Mutually exclusive with after. Use after send_message when no prior checkpoint exists."},
                         "waitMs": {"type": "integer", "minimum": 0, "maximum": MAX_WAIT_MS},
@@ -231,6 +236,8 @@ struct Stop {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Follow {
     thread_id: String,
+    #[serde(default, deserialize_with = "supplied")]
+    execution_id: Option<String>,
     #[serde(default, deserialize_with = "supplied")]
     after: Option<String>,
     #[serde(default, deserialize_with = "supplied")]
@@ -522,16 +529,26 @@ async fn run(
         "subscribe" => {
             let args: Follow = parse(arguments)?;
             let target = thread(&args.thread_id)?;
-            let wait = args.wait_ms.unwrap_or(0);
+            // Waiting on a turn is the point of naming it: one call should do.
+            let wait = args.wait_ms.unwrap_or(if args.execution_id.is_some() {
+                MAX_WAIT_MS
+            } else {
+                0
+            });
             let limit = args.limit.unwrap_or(DEFAULT_LIMIT);
             if wait > MAX_WAIT_MS
                 || !(1..=MAX_LIMIT).contains(&limit)
                 || (args.after.is_some() && args.replay.is_some())
+                || (args.execution_id.is_some() && args.replay.is_some())
+                || args
+                    .execution_id
+                    .as_ref()
+                    .is_some_and(|execution| execution.is_empty() || execution.len() > 256)
             {
                 return Err("invalid_request".into());
             }
             let action = identity(&source, &call, "subscribe");
-            let mut control = SubscriptionControl::new(stop, wait);
+            let mut control = SubscriptionControl::new(stop, wait, args.execution_id.clone());
             let admission = service.admit_agent_tool(
                 source,
                 call.clone(),
@@ -547,7 +564,20 @@ async fn run(
                 Ok(result) => result.map_err(code)?,
                 Err(ended) => return control.finish(&target, ended),
             };
-            follow(&service, target, source.caller(), args, control).await
+            // While this call waits on the turn, its reply is this call's
+            // to take, and the turn's report holds back.
+            let _awaited = args.execution_id.as_ref().map(|execution| {
+                service.await_thread_turn(&target, execution, source.conversation())
+            });
+            follow(
+                &service,
+                target,
+                source.conversation().clone(),
+                source.caller(),
+                args,
+                control,
+            )
+            .await
         }
         _ => Err("unknown_tool".into()),
     }
@@ -577,16 +607,20 @@ struct SubscriptionControl {
     prepare_by: Instant,
     wait_by: Option<Instant>,
     wait_ms: u64,
-    idle: Option<CommittedEventCursor>,
+    /// The furthest point read, where a call ended by its deadline resumes.
+    checkpoint: Option<CommittedEventCursor>,
+    /// The turn this call waits on, if it names one.
+    execution: Option<String>,
 }
 impl SubscriptionControl {
-    fn new(stop: watch::Receiver<bool>, wait_ms: u64) -> Self {
+    fn new(stop: watch::Receiver<bool>, wait_ms: u64, execution: Option<String>) -> Self {
         Self {
             stop,
             prepare_by: Instant::now() + SUBSCRIPTION_SETUP_TIMEOUT,
             wait_by: None,
             wait_ms,
-            idle: None,
+            checkpoint: None,
+            execution,
         }
     }
     async fn step<T>(&mut self, work: impl Future<Output = T>) -> Result<T, SubscriptionEnd> {
@@ -608,19 +642,27 @@ impl SubscriptionControl {
             result = work => Ok(result),
         }
     }
+    /// Everything up to `cursor` is read, and the wait for more begins.
     fn idle(&mut self, cursor: CommittedEventCursor) {
-        self.idle = Some(cursor);
+        self.checkpoint = Some(cursor);
         let wait_ms = self.wait_ms;
         self.wait_by
             .get_or_insert_with(|| Instant::now() + Duration::from_millis(wait_ms));
     }
+    fn waited_out(&self) -> bool {
+        self.wait_by.is_some_and(|by| Instant::now() >= by)
+    }
     fn finish(&self, target: &ConversationId, ended: SubscriptionEnd) -> Result<Value, String> {
         match ended {
             SubscriptionEnd::Cancelled => Err("cancelled".into()),
-            SubscriptionEnd::Deadline => match &self.idle {
-                Some(cursor) => Ok(
-                    json!({"threadId":target.to_string(),"events":[],"cursor":cursor.encode(),"more":false,"timedOut":self.wait_ms>0}),
-                ),
+            SubscriptionEnd::Deadline => match &self.checkpoint {
+                Some(cursor) => {
+                    let mut value = json!({"threadId":target.to_string(),"events":[],"cursor":cursor.encode(),"more":false,"timedOut":self.wait_ms>0});
+                    if let Some(execution) = &self.execution {
+                        value["turn"] = json!({"executionId":execution,"finished":false});
+                    }
+                    Ok(value)
+                }
                 None => Err("event_source_preparing".into()),
             },
         }
@@ -632,6 +674,7 @@ impl SubscriptionControl {
 async fn follow(
     service: &ConversationService,
     target: ConversationId,
+    source: ConversationId,
     caller: ConversationCaller,
     args: Follow,
     mut control: SubscriptionControl,
@@ -650,6 +693,14 @@ async fn follow(
         Ok(result) => result.map_err(code)?,
         Err(SubscriptionEnd::Cancelled) => return Err("cancelled".into()),
         Err(SubscriptionEnd::Deadline) => return Err(code(ConversationError::Unavailable)),
+    }
+    // This turn now holds the reply; a report would only repeat it.
+    if value["turn"]["finished"] == true {
+        if let Some(execution) = value["turn"]["executionId"].as_str() {
+            service
+                .claim_thread_report(&target, execution, &source)
+                .await;
+        }
     }
     Ok(value)
 }
@@ -671,6 +722,7 @@ async fn observe(
         None => EventStart::Now,
     };
     let mut progress = EventProgress::new(&start);
+    let mut looked = false;
     let limits =
         EventReadLimits::new(limit.min(16), 256 * 1024 * 1024).map_err(|_| "invalid_request")?;
     let opening = service.open_events(target.clone(), caller.clone(), start);
@@ -707,17 +759,112 @@ async fn observe(
                     .map_err(|error| event_error_code(&error).to_owned())?;
                 validate_event_cursor(target, page.captured_head())
                     .map_err(|error| event_error_code(&error).to_owned())?;
-                let events = project_events(target, page.events())
+                let mut events = project_events(target, page.events())
                     .map_err(|error| event_error_code(&error).to_owned())?;
+                let next = page.next().clone();
+                let caught_up = page.next() == page.captured_head();
+                if let Some(execution) = control.execution.clone() {
+                    // Look in its history first, for a turn that already ended;
+                    // after that, only when a turn ends or is withdrawn.
+                    let ends = !looked
+                        || events.iter().any(|event| {
+                            event.kind == "turn.ended" || event.status == Some("cancelled")
+                        });
+                    looked = true;
+                    if ends {
+                        match control
+                            .step(service.thread_turn_end(target, caller, &execution))
+                            .await
+                        {
+                            Ok(Some(end)) => {
+                                return Ok(answered(
+                                    target,
+                                    &events,
+                                    &next,
+                                    !caught_up,
+                                    turn_value(&execution, end),
+                                ))
+                            }
+                            Ok(None) => {}
+                            Err(ended) => return control.finish(target, ended),
+                        }
+                    }
+                    control.checkpoint = Some(next.clone());
+                    if caught_up {
+                        control.idle(next);
+                    }
+                    continue;
+                }
+                // A page of events this projection keeps out (message text,
+                // thinking) is read past, never answered as an empty page.
+                if events.is_empty() {
+                    control.checkpoint = Some(next.clone());
+                    if caught_up {
+                        control.idle(next);
+                        if control.waited_out() {
+                            return control.finish(target, SubscriptionEnd::Deadline);
+                        }
+                    }
+                    continue;
+                }
+                // One ended turn per answer, with its reply; the rest follows
+                // after its cursor.
+                let Some(end) = events.iter().position(|event| event.kind == "turn.ended") else {
+                    return Ok(
+                        json!({"threadId":target.to_string(),"events":events,"cursor":next.encode(),"more":!caught_up,"timedOut":false}),
+                    );
+                };
+                let more = end + 1 < events.len() || !caught_up;
+                events.truncate(end + 1);
+                let ended = &events[end];
+                let execution = ended.execution_id.clone().unwrap_or_default();
+                // Bounded on its own, as final authorization is: the page
+                // is read, so a deadline here is no idle checkpoint.
+                let reply = match control
+                    .step_until(
+                        service.thread_turn_end(target, caller, &execution),
+                        Instant::now() + SUBSCRIPTION_SETUP_TIMEOUT,
+                    )
+                    .await
+                {
+                    Ok(found) => found,
+                    Err(SubscriptionEnd::Cancelled) => return Err("cancelled".into()),
+                    Err(SubscriptionEnd::Deadline) => {
+                        return Err(code(ConversationError::Unavailable))
+                    }
+                };
+                let outcome = ended.outcome.unwrap_or("completed");
+                let turn = turn_value(&execution, reply.unwrap_or((outcome, None)));
                 return Ok(
-                    json!({"threadId":target.to_string(),"events":events,"cursor":page.next().encode(),"more":page.next()!=page.captured_head(),"timedOut":false}),
+                    json!({"threadId":target.to_string(),"events":events,"cursor":ended.cursor,"more":more,"timedOut":false,"turn":turn}),
                 );
             }
             EventRead::Idle(cursor) => {
                 validate_event_cursor(target, &cursor)
                     .map_err(|error| event_error_code(&error).to_owned())?;
+                if let Some(execution) = control.execution.clone() {
+                    if !looked {
+                        looked = true;
+                        match control
+                            .step(service.thread_turn_end(target, caller, &execution))
+                            .await
+                        {
+                            Ok(Some(end)) => {
+                                return Ok(answered(
+                                    target,
+                                    &[],
+                                    &cursor,
+                                    false,
+                                    turn_value(&execution, end),
+                                ))
+                            }
+                            Ok(None) => {}
+                            Err(ended) => return control.finish(target, ended),
+                        }
+                    }
+                }
                 control.idle(cursor);
-                if Instant::now() >= control.wait_by.expect("idle sets its deadline") {
+                if control.waited_out() {
                     return control.finish(target, SubscriptionEnd::Deadline);
                 }
                 if let Err(ended) = control.step(sleep(Duration::from_millis(250))).await {
@@ -726,6 +873,33 @@ async fn observe(
             }
         }
     }
+}
+
+fn answered(
+    target: &ConversationId,
+    events: &[ThreadEvent],
+    cursor: &CommittedEventCursor,
+    more: bool,
+    turn: Value,
+) -> Value {
+    json!({"threadId":target.to_string(),"events":events,"cursor":cursor.encode(),"more":more,"timedOut":false,"turn":turn})
+}
+
+/// An ended turn as an agent reads it: its outcome and final reply, cut to fit.
+fn turn_value(execution: &str, (outcome, reply): (&'static str, Option<String>)) -> Value {
+    let (reply, cut) = match reply {
+        Some(mut reply) if reply.len() > MAX_REPLY_BYTES => {
+            let mut end = MAX_REPLY_BYTES - REPLY_CUT.len();
+            while !reply.is_char_boundary(end) {
+                end -= 1;
+            }
+            reply.truncate(end);
+            reply.push_str(REPLY_CUT);
+            (Some(reply), true)
+        }
+        reply => (reply, false),
+    };
+    json!({"executionId":execution,"finished":true,"outcome":outcome,"reply":reply,"replyCut":cut})
 }
 
 #[cfg(test)]

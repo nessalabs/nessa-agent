@@ -107,6 +107,9 @@ struct Watch {
     report: ThreadReport,
     /// Saved by an earlier run of the gateway and loaded at start.
     restored: bool,
+    /// Sender calls waiting on this turn in their own turn: while one waits,
+    /// the reply is theirs to take and the report holds back.
+    awaited: usize,
 }
 
 /// Who a caller is to access: the rest of a caller is attribution.
@@ -146,6 +149,18 @@ pub(crate) struct ThreadReports {
     /// report sees the first one's watch, never its half-made state.
     registering: tokio::sync::Mutex<()>,
     store: OnceLock<Arc<dyn ThreadReportStore>>,
+    /// Reports being queued, by report: so a sender that read the reply in
+    /// its own turn meanwhile can still call one off before it is submitted.
+    queuing: Arc<Mutex<HashMap<String, Queuing>>>,
+}
+
+/// A report taken off its watch and not yet queued into its parent.
+struct Queuing {
+    child: ConversationId,
+    watched: String,
+    parent: ConversationId,
+    /// The sender read the reply itself: the report is not sent.
+    claimed: bool,
 }
 
 /// What a look found of one watched turn.
@@ -157,11 +172,29 @@ enum Watched {
     Waiting,
 }
 
-/// Counts one report being queued until dropped.
-struct Delivering(Arc<AtomicUsize>);
+/// Counts one report being queued, and holds its place in `queuing`, until
+/// dropped.
+struct Delivering {
+    count: Arc<AtomicUsize>,
+    queuing: Arc<Mutex<HashMap<String, Queuing>>>,
+    report: String,
+}
+impl Delivering {
+    fn claimed(&self) -> bool {
+        self.queuing
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(&self.report)
+            .is_some_and(|queuing| queuing.claimed)
+    }
+}
 impl Drop for Delivering {
     fn drop(&mut self) {
-        self.0.fetch_sub(1, Ordering::SeqCst);
+        self.queuing
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&self.report);
+        self.count.fetch_sub(1, Ordering::SeqCst);
     }
 }
 
@@ -171,7 +204,7 @@ struct Taken {
     child: ConversationId,
     report: ThreadReport,
     text: String,
-    _delivering: Delivering,
+    delivering: Delivering,
 }
 
 impl ThreadReports {
@@ -213,6 +246,7 @@ impl ThreadReports {
             execution,
             report,
             restored,
+            awaited: 0,
         });
         true
     }
@@ -225,6 +259,61 @@ impl ThreadReports {
                 watches.remove(child);
             }
         }
+    }
+
+    /// Count one more, or one fewer (`by` -1), sender call waiting on
+    /// `execution` in `child` for `parent`.
+    fn await_turn(
+        &self,
+        child: &ConversationId,
+        execution: &str,
+        parent: &ConversationId,
+        by: isize,
+    ) {
+        let mut watches = self.lock();
+        for watch in watches.get_mut(child).into_iter().flatten() {
+            if watch.execution == execution && &watch.report.parent == parent {
+                watch.awaited = watch.awaited.saturating_add_signed(by);
+            }
+        }
+    }
+
+    /// Let go of the watches on `execution` in `child` reporting to `parent`:
+    /// the reports let go. One already being queued is called off, unless its
+    /// parent has it already.
+    fn claim(
+        &self,
+        child: &ConversationId,
+        execution: &str,
+        parent: &ConversationId,
+    ) -> Vec<String> {
+        let mut watches = self.lock();
+        let mut claimed = Vec::new();
+        if let Some(list) = watches.get_mut(child) {
+            list.retain(|watch| {
+                let keep = watch.execution != execution || &watch.report.parent != parent;
+                if !keep {
+                    claimed.push(watch.report.execution.clone());
+                }
+                keep
+            });
+            if list.is_empty() {
+                watches.remove(child);
+            }
+        }
+        drop(watches);
+        for queuing in self
+            .queuing
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .values_mut()
+        {
+            if &queuing.child == child && queuing.watched == execution && &queuing.parent == parent
+            {
+                queuing.claimed = true;
+            }
+        }
+        claimed
     }
 
     /// Let go of every watch on, or reporting to, `id`, and of the fresh
@@ -304,15 +393,34 @@ impl ThreadReports {
             if !admitted.iter().any(|seen| person(seen) == person(caller)) {
                 return true;
             }
+            if watch.awaited > 0 {
+                return true;
+            }
             let Some(text) = finished(&watch.execution, watch.restored) else {
                 return true;
             };
             self.delivering.fetch_add(1, Ordering::SeqCst);
+            self.queuing
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .insert(
+                    watch.report.execution.clone(),
+                    Queuing {
+                        child: child.clone(),
+                        watched: watch.execution.clone(),
+                        parent: watch.report.parent.clone(),
+                        claimed: false,
+                    },
+                );
             taken.push(Taken {
                 child: child.clone(),
                 report: watch.report.clone(),
                 text,
-                _delivering: Delivering(self.delivering.clone()),
+                delivering: Delivering {
+                    count: self.delivering.clone(),
+                    queuing: self.queuing.clone(),
+                    report: watch.report.execution.clone(),
+                },
             });
             false
         });
@@ -376,6 +484,27 @@ impl ThreadReports {
     #[cfg(all(test, unix))]
     pub(crate) fn waiting(&self) -> usize {
         self.lock().values().map(Vec::len).sum::<usize>() + self.delivering.load(Ordering::SeqCst)
+    }
+}
+
+/// Holds a turn's report back while a sender call waits on it.
+pub struct AwaitedTurn {
+    service: ConversationService,
+    child: ConversationId,
+    execution: String,
+    parent: ConversationId,
+}
+impl Drop for AwaitedTurn {
+    fn drop(&mut self) {
+        self.service.inner.thread_reports.await_turn(
+            &self.child,
+            &self.execution,
+            &self.parent,
+            -1,
+        );
+        if tokio::runtime::Handle::try_current().is_ok() {
+            self.service.wake_thread_reports(&self.child);
+        }
     }
 }
 
@@ -471,6 +600,58 @@ impl ConversationService {
             ReportRegistration::Registered
         } else {
             ReportRegistration::AlreadyWaiting
+        }
+    }
+
+    /// How `execution` in `child` ended, as its report would tell it: the
+    /// outcome and the final reply, once its result is saved. `None` while it
+    /// runs, waits, or its history cannot be read now. A steering message is
+    /// answered by the turn it was delivered into.
+    pub async fn thread_turn_end(
+        &self,
+        child: &ConversationId,
+        caller: &ConversationCaller,
+        execution: &str,
+    ) -> Option<(&'static str, Option<String>)> {
+        let history = self.report_history(child, caller).await?;
+        match in_record(&history, invocation(&history, execution)?, false) {
+            Found::Finished(outcome, reply) => Some((outcome, reply)),
+            Found::Settling(saved) => saved,
+            Found::Waiting(_) => None,
+        }
+    }
+
+    /// A sender call waits on `execution` in `child` in its own turn: until
+    /// the returned guard is dropped, the turn's report holds back, so the
+    /// reply goes to the call. Dropping it looks again, so a turn that ended
+    /// without the call taking its reply is reported as usual.
+    pub fn await_thread_turn(
+        &self,
+        child: &ConversationId,
+        execution: &str,
+        parent: &ConversationId,
+    ) -> AwaitedTurn {
+        self.inner
+            .thread_reports
+            .await_turn(child, execution, parent, 1);
+        AwaitedTurn {
+            service: self.clone(),
+            child: child.clone(),
+            execution: execution.to_owned(),
+            parent: parent.clone(),
+        }
+    }
+
+    /// The sender already has `execution`'s reply, read in its own turn:
+    /// its report would only say it again, so it is let go.
+    pub async fn claim_thread_report(
+        &self,
+        child: &ConversationId,
+        execution: &str,
+        parent: &ConversationId,
+    ) {
+        for report in self.inner.thread_reports.claim(child, execution, parent) {
+            self.settle_saved(child, &report).await;
         }
     }
 
@@ -715,6 +896,10 @@ impl ConversationService {
                 .await
                 .map(|history| invocation(&history, &report.execution).is_some());
             if delivered == Some(true) {
+                break;
+            }
+            // The sender read the reply in its own turn meanwhile.
+            if taken.delivering.claimed() {
                 break;
             }
             if delivered == Some(false) {

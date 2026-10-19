@@ -18,6 +18,7 @@ test("every required step appears as often as its number says", () => {
   assert.equal(count("fail"), knobs.fails)
   assert.equal(count("restart"), knobs.restarts)
   assert.equal(count("delegate"), knobs.threads)
+  assert.equal(count("await"), knobs.awaits)
   assert.equal(count("aside"), knobs.asides)
   assert.equal(count("large"), knobs.large)
   assert.equal(count("park"), knobs.parks)
