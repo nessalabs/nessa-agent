@@ -1,3 +1,4 @@
+import type { ModelChoice } from "../../model/model-choice"
 import type { FailureDiagnostic } from "../../model/failure"
 /**
  * The workspace in the desktop store. Each case applies one use case from
@@ -239,6 +240,35 @@ const workspaceSlice = createSlice({
         model?: ModelRef
       }>,
     ) => sessions.sendFailed(state, payload),
+    modelChoiceAsked: (
+      state,
+      { payload }: PayloadAction<{ sessionId: string; choice: ModelChoice }>,
+    ) => {
+      if (!Object.hasOwn(state.sessions, payload.sessionId)) return
+      state.modelChoices[payload.sessionId] = payload.choice
+    },
+    modelChoiceSettled: (
+      state,
+      { payload }: PayloadAction<{ sessionId: string; choice: ModelChoice }>,
+    ) => {
+      const { sessionId, choice } = payload
+      if (
+        !Object.hasOwn(state.modelChoices, sessionId) ||
+        state.modelChoices[sessionId].requestId !== choice.requestId
+      )
+        return
+      state.modelChoices[sessionId] = choice
+    },
+    modelChoiceCleared: (
+      state,
+      { payload }: PayloadAction<{ sessionId: string; requestId: string }>,
+    ) => {
+      if (
+        Object.hasOwn(state.modelChoices, payload.sessionId) &&
+        state.modelChoices[payload.sessionId].requestId === payload.requestId
+      )
+        delete state.modelChoices[payload.sessionId]
+    },
     chooseModel: (state, { payload }: Payload<{ sessionId: string; model: ModelRef }>) =>
       sessions.chooseModel(state, payload),
     accessChosen: (

@@ -14,6 +14,7 @@ test("every required step appears as often as its number says", () => {
   const knobs = knobsFrom({ rounds: "40", seed: "9" }, {})
   const steps = plan(knobs)
   const count = (kind) => steps.filter((step) => step.kind === kind).length
+  assert.equal(count("model"), knobs.modelSwitches)
   assert.equal(count("stop"), knobs.stops)
   assert.equal(count("fail"), knobs.fails)
   assert.equal(count("restart"), knobs.restarts)
@@ -39,10 +40,12 @@ test("a failure is always followed by a reply, and a switch never picks the mode
       if (step.kind === "fail") assert.equal(steps[index + 1]?.kind, "reply")
       if (step.kind === "switch") {
         assert.notEqual(step.from, step.to)
-        assert.ok(["permission", "reviews", "large"].includes(steps[index + 1]?.kind))
+        assert.ok(
+          ["permission", "reviews", "large", "model"].includes(steps[index + 1]?.kind),
+        )
         assert.equal(steps[index + 1]?.mode, step.to)
       }
-      if (step.kind === "reviews" || step.kind === "large")
+      if (step.kind === "reviews" || step.kind === "large" || step.kind === "model")
         assert.notEqual(step.mode, "full")
     })
   }
@@ -60,4 +63,12 @@ test("numbers come from flags, then NESSA_STRESS_*, then defaults, and a bad one
   assert.throws(() => knobsFrom({ rounds: "-1" }, {}), /whole number/)
   assert.throws(() => knobsFrom({ seed: "x" }, {}), /whole number/)
   assert.match(describe(plan(knobsFrom({}, {}))), /^1\. /)
+})
+
+test("model switches have default and raised actual steps", () => {
+  assert.equal(plan(knobsFrom({}, {})).filter((s) => s.kind === "model").length, 1)
+  assert.equal(
+    plan(knobsFrom({ modelSwitches: "6" }, {})).filter((s) => s.kind === "model").length,
+    6,
+  )
 })

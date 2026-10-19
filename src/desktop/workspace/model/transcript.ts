@@ -1,3 +1,4 @@
+import type { ModelControl } from "./model-choice"
 import type { ModelRef } from "./workspace-index"
 import type { FailureDiagnostic } from "./failure"
 import type { SessionAccess } from "./access"
@@ -391,6 +392,7 @@ export interface Activity {
 }
 
 export interface Transcript {
+  readonly modelControl?: ModelControl
   readonly sessionId: string
   readonly messages: readonly Message[]
   readonly activity: Activity | null

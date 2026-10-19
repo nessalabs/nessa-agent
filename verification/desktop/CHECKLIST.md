@@ -804,6 +804,18 @@ in its sandbox". Every row of the bridge's design table is a jsdom test
   `approval-request.tsx`; the `sendMessage` routing in `dependencies.ts`.)
   The real gateway's message path in a browser is #550.
   _Check:_ `app-review.mjs --only message,message-card,message-overview,message-label,message-bidi --shots <dir>`.
+- [ ] **An established conversation changes model through its existing picker,
+  within the same provider.** The source-confirmed model remains shown while
+  the correlated control and authoritative source recovery settle;
+  refusal/recovery is explicit. An unsent draft,
+  original review and Stop survive the control. No automatic native retry.
+  _Check:_ model command/adapter tests; `conversation-stress.mjs`'s actual-window
+  model step (default `--modelSwitches 1`, raised `--modelSwitches 6`), both
+  harness profiles in focused runs; the next native prompt reports its model.
+  The existing chaos model action additionally races controls and checks no
+  pending model change remains; client-only chaos does not replace window proof.
+  Window stress opens each known conversation by its exact existing row ID;
+  equal titles across engines or conversations never choose the send target.
 - [ ] **The model is shown once, in the composer** — not in the pane header
   or the transcript heading. _Check:_ manual (and in shots from `responsive.mjs`).
 - [ ] **Composer controls never overlap**, down to the compact form.
@@ -1405,6 +1417,11 @@ says why where the conversations would be.
 - [ ] **No console error, page error or failed request** while any script
   runs. _Check:_ every script adds them to its failures; `smoke.mjs` reports them
   per layout as `console`.
+- The stress check's deliberate gateway restart may lose its WebKit socket.
+  With no earlier held errors and a proven resumed successor in both source
+  and window, only the already-held exact owned `/session` network-lost line
+  is labelled as the deliberate restart. Future lines and other endpoints
+  stay errors (`conversation-stress.mjs`, existing `reclassifyHeld` owner).
 - _Harmless:_ the first page in a fresh browser asks for `/favicon.ico` and
   gets a 404 (matched by source URL in `lib/selectors.mjs`,
   `harmlessConsole`). Chromium reports a request as failed with

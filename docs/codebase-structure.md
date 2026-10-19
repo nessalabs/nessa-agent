@@ -384,6 +384,12 @@ against a private scripted gateway.
   (`SessionAccessory`, drawn by the workspace's slot). Counts live in
   `src/desktop/model/counts.ts`. The preview is the window preference
   `useSubagentsPreview`, offered under Settings › Advanced › Experimental.
+- Same-provider model changes use the existing desktop picker and workspace
+  source. `model/model-choice.ts` owns the correlated choice value;
+  `adapters/store/model-commands.ts` owns capture and request settlement. Source
+  model/pending facts remain in the gateway transcript; access stays with its
+  existing owner. `model-commands.test.ts` and the real-window stress model step
+  exercise both acknowledgement/frame orders and retained drafts/reviews.
 - The desktop composer's Send and Stop controls have separate DOM identities
   (`src/desktop/ui/composer.tsx`). A gesture that began on one cannot invoke
   the replacement action after a source phase change; the unsent draft stays.

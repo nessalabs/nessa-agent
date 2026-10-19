@@ -12,6 +12,10 @@
 
 /** Every number the check takes: its default, and what it counts. */
 export const KNOBS = {
+  modelSwitches: {
+    default: 1,
+    what: "same-provider model choices through the actual composer picker",
+  },
   seed: { default: 1, what: "the plan's seed; the same seed gives the same plan" },
   rounds: {
     default: 16,
@@ -114,6 +118,7 @@ export function plan(knobs) {
   add(knobs.threads, () => ({ kind: "delegate" }))
   add(knobs.watches, () => ({ kind: "watch" }))
   add(knobs.switches, () => ({ kind: "switch" }))
+  add(knobs.modelSwitches, () => ({ kind: "model" }))
   add(knobs.asides, () => ({ kind: "aside" }))
   add(knobs.large, () => ({ kind: "large" }))
   add(knobs.parks, () => ({ kind: "park" }))
@@ -135,7 +140,11 @@ export function plan(knobs) {
       mode = to
     } else if (step.kind === "permission") {
       out.push({ ...step, answer: next() < 0.7 ? "allow" : "deny", mode })
-    } else if (step.kind === "reviews" || step.kind === "large") {
+    } else if (
+      step.kind === "reviews" ||
+      step.kind === "large" ||
+      step.kind === "model"
+    ) {
       // These are about cards being shown, so they run where the agent asks.
       if (mode === "full") {
         out.push({ kind: "switch", from: mode, to: "ask", during: false })

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import catalog from "../../../crates/nessa-sdk/data/models.json" with { type: "json" }
 /**
  * The conversation chaos check: seeded random actions from several connected
  * clients at once, against a real gateway with the scripted agent standing in
@@ -160,6 +161,12 @@ const EXPECTED = new Set([
  * it again, is told the agent closed; the person stops again once it is open.
  */
 const EXPECTED_FOR = {
+  // Native pre-effect refusal (including Busy), or an uncertain receipt that
+  // the final authoritative read must reconcile. Neither means it applied.
+  model: new Set(["model_change_not_applied", "model_change_uncertain"]),
+  // A concurrent access change may settle not-applied. The final source read
+  // must still show no pending configuration; this does not count as applied.
+  mode: new Set(["approval_mode_not_applied"]),
   answer: new Set(["conversation_closed"]),
   stop: new Set(["conversation_closed"]),
 }
@@ -303,6 +310,23 @@ const apply = {
     const option = permission.options.find((each) => each.effect === action.answer)
     if (!option) return
     await client.conversation.answer(targets[index], option.id)
+  },
+
+  async model(run, action, client) {
+    const id = run.slots[action.slot]
+    const requestId = randomUUID()
+    const view = await client.conversation.read(id)
+    const current = catalog.models.find((model) => model.modelId === view.runtime?.model)
+    const offered = catalog.models.filter(
+      (model) =>
+        model.provider === current?.provider && model.modelId !== current.modelId,
+    )
+    if (!offered.length)
+      throw new Error("no same-provider catalog target for model action")
+    const target = choose(run, action, offered)
+    const receipt = await client.conversation.setModel(id, target.modelId, { requestId })
+    if (receipt.requestId !== requestId || receipt.model !== target.modelId)
+      throw new Error("model receipt did not match its original request and target")
   },
 
   async mode(run, action, client) {
@@ -513,7 +537,8 @@ async function settle(run) {
         running.length ||
         view.pending.length ||
         view.questions.length ||
-        view.approvalModeChange
+        view.approvalModeChange ||
+        view.modelChange
       )
     }
     return false
@@ -581,7 +606,8 @@ async function check(run, { views, quiet }) {
         running.length ||
         view.pending.length ||
         view.permissions.length ||
-        view.approvalModeChange
+        view.approvalModeChange ||
+        view.modelChange
       )
         run.fail(
           `${id} is not at rest after ${SETTLE_MS / 1000} s: ${JSON.stringify({
@@ -591,6 +617,7 @@ async function check(run, { views, quiet }) {
             reviews: view.permissions.length,
             questions: view.questions.length,
             modeChange: view.approvalModeChange,
+            modelChange: view.modelChange,
           })}`,
         )
     }

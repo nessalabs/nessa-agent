@@ -1,3 +1,4 @@
+import type { ModelReceipt } from "../model/model-choice"
 import type { FailureDiagnostic } from "../model/failure"
 /**
  * What the workspace needs from whoever holds the sessions: the one port a
@@ -196,6 +197,13 @@ export interface WorkspaceSource {
    * records the stop as this window's authenticated caller.
    */
   stop(sessionId: string, initiator: Initiator): Promise<void>
+  /** Same-provider model control; the subscription owns confirmed display. */
+  setModel(
+    sessionId: string,
+    model: ModelRef,
+    requestId: string,
+    initiator: Initiator,
+  ): Promise<ModelReceipt>
   /**
    * Changes the approval preset the session's agent runs at (`access.ts`),
    * for every review decided after it. Resolves once the source has
@@ -235,6 +243,18 @@ export class WorkspaceSourceError extends Error {
     this.name = "WorkspaceSourceError"
     this.reason = reason
     this.stages = stages
+  }
+}
+
+/** A model control's uncertainty is preserved independently of its reason. */
+export class WorkspaceModelError extends WorkspaceSourceError {
+  constructor(
+    reason: WorkspaceFailureReason,
+    readonly uncertain: boolean,
+    diagnostic?: FailureDiagnostic,
+  ) {
+    super(reason, undefined, diagnostic)
+    this.name = "WorkspaceModelError"
   }
 }
 

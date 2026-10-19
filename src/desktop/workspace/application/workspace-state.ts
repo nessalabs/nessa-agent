@@ -1,3 +1,4 @@
+import type { ModelChoice } from "../model/model-choice"
 /**
  * The workspace as the window holds it: the source's index and the
  * transcripts it has loaded, the new sessions not yet started, where each
@@ -147,6 +148,7 @@ export interface WorkspaceState {
    */
   readonly answers: Readonly<Record<string, readonly Answer[]>>
   /** The model the person chose for a session's next message, by session. */
+  readonly modelChoices: Readonly<Record<string, ModelChoice>>
   readonly chosenModels: Readonly<Record<string, ModelRef>>
   /**
    * The access the person chose for a session, by session or new session,
@@ -322,6 +324,7 @@ export const initialWorkspace: WorkspaceState = {
   removed: [],
   answers: {},
   chosenModels: {},
+  modelChoices: {},
   accessChoices: {},
   composerText: {},
   panes: null,
@@ -581,9 +584,10 @@ export function focusedChannel(state: WorkspaceState): string | undefined {
   return sessionOf(state, sessionId)?.channelId ?? draftOf(state, sessionId)?.channelId
 }
 
-/** A draft may choose a model; after the first attempt its creation may already exist. */
+/** Drafts choose locally; established source sessions ask their same-provider control. */
 export function canChooseModel(state: WorkspaceState, sessionId: string): boolean {
-  return !!draftOf(state, sessionId)
+  const session = sessionOf(state, sessionId)
+  return !!draftOf(state, sessionId) || (!!session && knownToSource(session))
 }
 
 /** Draft choices do not override the source-owned model of an established session. */
@@ -615,6 +619,7 @@ export function forgetSession(state: WorkspaceState, sessionId: string): Workspa
     answers: without(state.answers, sessionId),
     chosenModels: without(state.chosenModels, sessionId),
     accessChoices: without(state.accessChoices, sessionId),
+    modelChoices: without(state.modelChoices, sessionId),
     composerText: without(state.composerText, sessionId),
     overview:
       state.overview.selected === sessionId

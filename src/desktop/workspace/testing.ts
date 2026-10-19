@@ -14,7 +14,7 @@ import type {
 import { defaultFilter, type AgentsFilter } from "./model/overview/filter"
 import type { WorkspaceFailureReason } from "./model/failure"
 import type { PaneRoom } from "../split-panes/model/pane-sizing"
-import { WorkspaceSourceError } from "./application/ports"
+import { WorkspaceSourceError, WorkspaceModelError } from "./application/ports"
 import { createQuestionFlights } from "./application/question-flights"
 import type {
   WorkspaceIndex,
@@ -263,6 +263,25 @@ export function fakeSource(index: WorkspaceIndex = testIndex()): FakeSource {
         emit({ kind: "transcript", transcript: next })
       }),
     // Like any source: the conversation saying the new access reaches subscribers first.
+    setModel: (sessionId, model, requestId, initiator) =>
+      answer("setModel", [sessionId, model, requestId, initiator], () => {
+        const old = summaries.get(sessionId)
+        if (!old) throw new WorkspaceSourceError("unknown-session")
+        const session = { ...old, model, revision: old.revision + 1 }
+        summaries.set(sessionId, session)
+        emit({ kind: "session", session })
+        return {
+          requestId,
+          model: model.modelId,
+          approvalMode: "ask" as const,
+          effect: "nextTurn" as const,
+          sourceReconciled: true,
+        }
+      }).catch((error) => {
+        if (error instanceof WorkspaceSourceError)
+          throw new WorkspaceModelError(error.reason, false, error.diagnostic)
+        throw error
+      }),
     setAccess: (sessionId, mode, initiator) =>
       answer("setAccess", [sessionId, mode, initiator], () => {
         if (archived.has(sessionId) || !summaries.has(sessionId))

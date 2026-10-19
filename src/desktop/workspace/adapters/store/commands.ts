@@ -1,3 +1,4 @@
+import { modelChanging } from "./model-commands"
 /**
  * The workspace's commands: what a person or an agent dispatches to drive the
  * window. The plain ones are the slice's actions, re-exported so this module
@@ -508,7 +509,8 @@ export function sendMessage({
   return async (dispatch, getState, { now, newId }) => {
     const content = text.trim()
     const model = modelForNextTurn(getState().workspace, sessionId)
-    if (!content || !model) return "not-asked"
+    if (!content || !model || modelChanging(getState().workspace, sessionId))
+      return "not-asked"
     const message: Message = {
       id: newId(),
       role: "user",
@@ -540,7 +542,7 @@ export function resendMessage({
       (message) => message.id === messageId && message.delivery?.state === "failed",
     )
     const model = modelForNextTurn(state, sessionId)
-    if (!refused || !model) return "not-asked"
+    if (!refused || !model || modelChanging(state, sessionId)) return "not-asked"
     dispatch(messageResent({ sessionId, messageId }))
     return dispatch(deliver(sessionId, refused, model, initiator))
   }
@@ -854,3 +856,5 @@ export {
 } from "./sharing-commands"
 
 export { chooseAccess, type AccessOutcome } from "./access-commands"
+
+export { changeModel } from "./model-commands"

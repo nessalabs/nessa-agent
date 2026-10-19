@@ -56,6 +56,7 @@
  *   pnpm test:e2e:stress -- --rounds 60 --parallel 12 --seed 7
  *   NESSA_STRESS_ROUNDS=60 pnpm test:e2e:stress # the same, from the environment
  */
+import catalog from "../../../crates/nessa-sdk/data/models.json" with { type: "json" }
 import { randomUUID } from "node:crypto"
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -81,7 +82,7 @@ import {
 } from "./lib/gateway-stack.mjs"
 import { main } from "./lib/run.mjs"
 import { writeView } from "./lib/scripted-evidence.mjs"
-import { composerControls, css, offeredLabel } from "./lib/selectors.mjs"
+import { composerControls, css, offeredLabel, selectorFor } from "./lib/selectors.mjs"
 import { Follower } from "./lib/stress-followers.mjs"
 import { KNOBS, describe, knobsFrom, plan, random } from "./lib/stress-plan.mjs"
 
@@ -244,11 +245,10 @@ async function untilTurn(run, conversationId, at, ready, seconds = 60) {
 
 const ended = (turn) => turnEnded(turn.status)
 
-/** Opens `title`'s conversation in the window, and waits for its composer. */
-async function open(page, title) {
+/** Opens the exact source conversation in the window, even when titles repeat. */
+async function open(page, conversationId) {
   await page
-    .locator(css.sessionRow, { hasText: title })
-    .first()
+    .locator(selectorFor.sessionListRowFor(conversationId))
     .click({ timeout: 15_000 })
   await dock(page).locator("textarea").waitFor({ timeout: 15_000 })
 }
@@ -446,6 +446,109 @@ const prompt = (run, phrase, step, extra = "") =>
   `${phrase} r${step.index}${extra} s${run.knobs.seed}`
 
 const steps = {
+  async model(run, step, failures) {
+    const picker = dock(run.page).locator(css.modelChip)
+    if (await picker.isDisabled()) {
+      failures.push("the established conversation's model picker is disabled")
+      return
+    }
+    const before = await readWithReviews(run.client, run.main.id)
+    const current = catalog.models.find(
+      (model) => model.modelId === before.runtime?.model,
+    )
+    const target =
+      current &&
+      catalog.models.find(
+        (model) =>
+          model.provider === current.provider && model.modelId !== current.modelId,
+      )
+    if (!target)
+      throw new CannotRun("no second catalog model in this conversation's provider")
+    const text = prompt(run, STRESS.permission, step)
+    const seen = await send(run, run.main.id, text, failures)
+    if (!(await card(run.page))) {
+      failures.push("no original review before model change")
+      return
+    }
+    const waiting = await readWithReviews(run.client, run.main.id)
+    const original = waiting.permissions.map((review) => ({
+      review: review.review,
+      executionId: review.executionId,
+      options: review.options,
+    }))
+    const draft = prompt(run, STRESS.model, step)
+    const box = dock(run.page).locator("textarea")
+    await box.fill(draft)
+    await picker.click()
+    const photograph = run.evidence && !run.modelPhotographed
+    if (photograph)
+      await run.page.screenshot({
+        path: join(run.evidence, `model-${run.engine}-picker.png`),
+        scale: "css",
+      })
+    const options = run.page.locator(css.modelOption)
+    await options.filter({ hasText: target.displayName }).first().click()
+    const confirmed = await waitFor(async () => {
+      const view = await readWithReviews(run.client, run.main.id)
+      return view.runtime?.model === target.modelId && !view.modelChange ? view : null
+    }, 15_000)
+    if (!confirmed) {
+      failures.push("the window's model choice was not confirmed by the gateway")
+      return
+    }
+    if (
+      !(await waitFor(
+        async () =>
+          (await picker.getAttribute("aria-label"))?.includes(target.displayName),
+        5_000,
+      ))
+    )
+      failures.push("the picker did not show the source-confirmed model")
+    if (photograph) {
+      await run.page.screenshot({
+        path: join(run.evidence, `model-${run.engine}-confirmed-review-draft.png`),
+        scale: "css",
+      })
+      run.modelPhotographed = true
+    }
+    const unchanged = confirmed.permissions.map((review) => ({
+      review: review.review,
+      executionId: review.executionId,
+      options: review.options,
+    }))
+    if (JSON.stringify(original) !== JSON.stringify(unchanged))
+      failures.push("model change replaced the original review or its choices")
+    if ((await box.inputValue()) !== draft)
+      failures.push("model change lost the unsent draft")
+    if (
+      !(await dock(run.page)
+        .getByRole(...composerControls.stop)
+        .count())
+    )
+      failures.push("model change removed Stop while its original turn waits")
+    await answerCard(run, run.main.id, "allow", failures, "Report the rows")
+    await settled(run, run.main.id, seen, text, "completed", failures)
+    if ((await box.inputValue()) !== draft)
+      failures.push("answering the original review lost the model-change draft")
+    const next = await send(run, run.main.id, draft, failures)
+    await settled(run, run.main.id, next, draft, "completed", failures)
+    await expectShown(run.page, `${SAYS.model}${target.modelId}`, failures)
+    if (run.evidence)
+      writeFileSync(
+        join(run.evidence, `model-${run.engine ?? "window"}-${step.index}.json`),
+        JSON.stringify(
+          {
+            before: current.modelId,
+            after: target.modelId,
+            original,
+            confirmed: confirmed.runtime,
+            effect: confirmed.modelChangeEffect,
+          },
+          null,
+          2,
+        ),
+      )
+  },
   async reply(run, step, failures) {
     const text = prompt(run, STRESS.reply, step)
     const seen = await send(run, run.main.id, text, failures)
@@ -584,6 +687,7 @@ const steps = {
         )
         return
       }
+      const cleanBeforeRestart = run.opened.heldErrorCount === 0
       // The window retries its socket while the gateway is down; each refused
       // attempt logs a console error that is the restart, not a fault.
       run.opened.noteHarmless(
@@ -619,6 +723,15 @@ const steps = {
       if (!/restarted/i.test(resumed.userText))
         failures.push("the resumed turn does not say Nessa restarted")
       await expectShown(run.page, SAYS.resumed, failures, 60_000)
+      // WebKit reports the socket killed by this owned restart differently.
+      // Reclassify only held evidence after recovery, never future failures.
+      if (cleanBeforeRestart && failures.length === 0) {
+        const lost = `console.error: WebSocket connection to '${new URL("/session", run.stack.endpoint).href}' failed: The network connection was lost.`
+        run.opened.reclassifyHeld(
+          (line) => line === lost,
+          (line) => `${line} (gateway deliberately restarted with ${step.signal})`,
+        )
+      }
     })
   },
 
@@ -660,13 +773,12 @@ const steps = {
       run.client.conversation.prepare(conversationId, first),
     )
     await settled(run, conversationId, new Set(), first, "completed", failures)
-    const title = await titleOf(run, conversationId)
-    await open(run.page, title)
+    await open(run.page, conversationId)
     const second = prompt(run, STRESS.reply, step, " aside again")
     const seen = await send(run, conversationId, second, failures)
     await settled(run, conversationId, seen, second, "completed", failures)
     await expectShown(run.page, `${SAYS.echo}${second}`, failures)
-    await open(run.page, run.main.title)
+    await open(run.page, run.main.id)
   },
 
   async park(run, step, failures) {
@@ -699,7 +811,7 @@ const steps = {
     }
     // A person opens the parked conversation and writes in it: the window
     // shows it with no agent running, and Send starts one.
-    await open(run.page, await titleOf(run, conversationId))
+    await open(run.page, conversationId)
     const second = prompt(run, STRESS.reply, step, " after parking")
     const seen = await send(
       run,
@@ -721,7 +833,7 @@ const steps = {
       failures.push(`the next message left the lease ${after?.lease?.state ?? "missing"}`)
     else if (!(after.lease.revision > (before.lease?.revision ?? 0)))
       failures.push("the next message ran on the parked agent's lease, not a new one")
-    await open(run.page, run.main.title)
+    await open(run.page, run.main.id)
   },
 
   async long(run, step, failures) {
@@ -800,12 +912,12 @@ const steps = {
         )
     }
     // A person opens the long conversation and writes in it.
-    await open(run.page, await titleOf(run, conversationId))
+    await open(run.page, conversationId)
     const last = prompt(run, STRESS.reply, step, " after the long answers")
     const seen = await send(run, conversationId, last, failures)
     await settled(run, conversationId, seen, last, "completed", failures)
     await expectShown(run.page, `${SAYS.echo}${last}`, failures)
-    await open(run.page, run.main.title)
+    await open(run.page, run.main.id)
   },
 }
 
@@ -891,16 +1003,6 @@ function watched(turn, failures) {
   if (!waited.length) failures.push("no read at all was taken")
   if (waited.some((each) => each.timedOut !== true && !each.events?.length))
     failures.push("a read that was taken neither waited nor returned events")
-}
-
-async function titleOf(run, conversationId) {
-  const title = await waitFor(async () => {
-    const { conversations } = await run.client.conversation.list({})
-    return conversations.find((each) => each.conversationId === conversationId)?.title
-  }, 15_000)
-  if (!title)
-    throw new CannotRun(`conversation ${conversationId} has no title to find it by`)
-  return title
 }
 
 /**
@@ -1075,6 +1177,8 @@ await main(
         ],
       })
       const run = new Run(stack, opened, knobs)
+      run.evidence = options.evidence
+      run.engine = engine
       const base = { engine, layout }
       let followers = []
       try {
@@ -1084,8 +1188,8 @@ await main(
         await run.client.conversation.create({ conversationId: id, agent: stack.agent })
         await run.client.conversation.submit(run.client.conversation.prepare(id, first))
         await settled(run, id, new Set(), first, "completed", setup)
-        run.main = { id, title: await titleOf(run, id) }
-        await open(run.page, run.main.title)
+        run.main = { id }
+        await open(run.page, run.main.id)
         if (setup.length) {
           rep.add({ name: "setup", ...base, failures: setup })
           return

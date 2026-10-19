@@ -426,7 +426,10 @@ async function scenarioTurn({ sessionId, prompt: blocks }) {
     const outcome = await runSteps(matched.steps, {
       agent,
       sessionId,
-      saved: new Map([["prompt", { text }]]),
+      saved: new Map([
+        ["prompt", { text }],
+        ["configuration", { model: session.values.model }],
+      ]),
       cancelled: () => state.cancelled,
       untilCancelled: () =>
         state.cancelled
