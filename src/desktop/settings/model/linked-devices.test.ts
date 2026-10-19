@@ -1,5 +1,5 @@
 /**
- * Settings › Linked devices, one test at least per ordering row L1–L21.
+ * Settings › Linked devices, one test at least per ordering row L1–L25.
  * L1 (no gateway) is the tab's. L8's "cancel does not create" and L20's
  * credential filter are the adapter's; the rows they share with the reducer
  * are here.
@@ -9,8 +9,11 @@ import {
   approvable,
   canPair,
   canPoll,
+  canToggle,
   initialLinkedDevicesState,
   linkedDevicesReducer,
+  linkingNoticeText,
+  linkingShown,
   noticeText,
   sentences,
   type Enrollment,
@@ -54,6 +57,7 @@ const wireCodes = [
   "pairing_not_found",
   "pairing_busy",
   "pairing_unavailable",
+  "pairing_address_in_use",
   "pairing_slot_occupied",
   "pairing_capacity",
   "pairing_conflict",
@@ -68,13 +72,14 @@ const wireCodes = [
 ]
 
 describe("linked devices", () => {
-  it("L2: linking off shows how to turn it on, and does not offer pairing", () => {
+  it("L2: linking off offers the switch, and does not offer pairing", () => {
     const state = connected({ ok: true, value: { kind: "off" } })
     expect(state.linking).toBe("off")
     expect(state.pending).toBeNull()
     expect(canPair(state)).toBe(false)
     expect(sentences.notConfigured).toMatch(/off/)
-    expect(sentences.enable).toContain("127.0.0.1:47650")
+    expect(canToggle(state)).toBe(true)
+    expect(linkingShown(state)).toBe(false)
   })
 
   it("L3: a refused owner is said in plain words, with no devices", () => {
@@ -471,7 +476,11 @@ describe("linked devices", () => {
   it("L18: every refusal has a sentence, and none of them is a wire code", () => {
     const kinds = Object.keys(noticeText) as NoticeKind[]
     expect(kinds.length).toBeGreaterThan(0)
-    const text = [...Object.values(noticeText), ...Object.values(sentences)].join("\n")
+    const text = [
+      ...Object.values(noticeText),
+      ...Object.values(linkingNoticeText),
+      ...Object.values(sentences),
+    ].join("\n")
     for (const code of wireCodes) expect(text).not.toContain(code)
   })
 
@@ -623,5 +632,233 @@ describe("linked devices", () => {
     }
     const cancelling = reduce(hidden, { type: "cancel" })
     expect(cancelling.pending).toMatchObject({ kind: "cancel", invitationId: other })
+  })
+
+  describe("the Native linking switch", () => {
+    const off = () => connected({ ok: true, value: { kind: "off" } })
+
+    it("L23: restarting holds the new value until a read after the drop", () => {
+      const asked = reduce(off(), { type: "setLinking", enabled: true })
+      expect(asked.pending).toEqual({ kind: "setLinking", enabled: true, seq: 2 })
+      expect(canToggle(asked)).toBe(false)
+      const restarting = reduce(asked, {
+        type: "answered",
+        seq: 2,
+        outcome: { ok: true, value: { enabled: true, applies: "restarting" } },
+      })
+      expect(restarting.switching).toEqual({
+        enabled: true,
+        dropped: false,
+        confirmed: true,
+      })
+      expect(restarting.linkingNotice).toBe("restarting")
+      expect(linkingShown(restarting)).toBe(true)
+      expect(canToggle(restarting)).toBe(false)
+      expect(canPoll({ ...restarting, linking: "on" })).toBe(false)
+      // The connection drops, then comes back to the restarted gateway.
+      const back = reduce(restarting, { type: "unreachable" }, { type: "connected" })
+      expect(back.switching).toEqual({ enabled: true, dropped: true, confirmed: true })
+      expect(back.pending).toEqual({ kind: "read", seq: 3 })
+      const read = reduce(back, {
+        type: "answered",
+        seq: 3,
+        outcome: { ok: true, value: { kind: "on", enrollments: [], devices: [] } },
+      })
+      expect(read.linking).toBe("on")
+      expect(read.switching).toBeNull()
+      expect(read.linkingNotice).toBeNull()
+      expect(canPair(read)).toBe(true)
+      expect(canToggle(read)).toBe(true)
+    })
+
+    it("L23: a read before the drop does not end the restart", () => {
+      const restarting = reduce(
+        off(),
+        { type: "setLinking", enabled: true },
+        {
+          type: "answered",
+          seq: 2,
+          outcome: { ok: true, value: { enabled: true, applies: "restarting" } },
+        },
+      )
+      const early = linkedDevicesReducer(
+        { ...restarting, pending: { kind: "read", seq: 3 }, seq: 3 },
+        { type: "answered", seq: 3, outcome: { ok: true, value: { kind: "off" } } },
+      )
+      expect(early.switching).toEqual({ enabled: true, dropped: false, confirmed: true })
+      expect(linkingShown(early)).toBe(true)
+    })
+
+    it("L24: an answer lost to the restart holds the switch like restarting", () => {
+      const asked = reduce(on(), { type: "setLinking", enabled: false })
+      const lost = reduce(
+        asked,
+        { type: "unreachable" },
+        {
+          type: "answered",
+          seq: 2,
+          outcome: { ok: false, failure: { kind: "unanswered" } },
+        },
+      )
+      expect(lost.switching).toEqual({ enabled: false, dropped: true, confirmed: false })
+      expect(lost.linkingNotice).toBeNull()
+      expect(linkingShown(lost)).toBe(false)
+      const back = reduce(lost, { type: "connected" })
+      const read = reduce(back, {
+        type: "answered",
+        seq: 3,
+        outcome: { ok: true, value: { kind: "off" } },
+      })
+      expect(read.switching).toBeNull()
+      expect(read.linking).toBe("off")
+      expect(read.linkingNotice).toBeNull()
+    })
+
+    it("L24: a restart not seen through within its wait lets go and says so", () => {
+      const restarting = reduce(
+        off(),
+        { type: "setLinking", enabled: true },
+        {
+          type: "answered",
+          seq: 2,
+          outcome: { ok: true, value: { enabled: true, applies: "restarting" } },
+        },
+        { type: "unreachable" },
+      )
+      const stalled = reduce(restarting, { type: "switchStalled" })
+      expect(stalled.switching).toBeNull()
+      expect(stalled.linkingNotice).toBe("stalled")
+      expect(linkingShown(stalled)).toBe(false)
+      expect(stalled.pending).toBeNull()
+      expect(linkingNoticeText.stalled).toMatch(/saved/)
+      // The gateway comes back after all: its read speaks, not the stall.
+      const back = reduce(stalled, { type: "connected" })
+      expect(back.linkingNotice).toBeNull()
+      expect(back.pending).toEqual({ kind: "read", seq: 3 })
+      // Still connected when the wait ends: it reads at once.
+      const connectedStall = reduce(
+        off(),
+        { type: "setLinking", enabled: true },
+        {
+          type: "answered",
+          seq: 2,
+          outcome: { ok: true, value: { enabled: true, applies: "restarting" } },
+        },
+        { type: "switchStalled" },
+      )
+      expect(connectedStall.pending).toEqual({ kind: "read", seq: 3 })
+      expect(reduce(off(), { type: "switchStalled" })).toEqual(off())
+    })
+
+    it("L24: the wait ending while the returned gateway's read is out leaves that read to answer", () => {
+      const reading = reduce(
+        off(),
+        { type: "setLinking", enabled: true },
+        {
+          type: "answered",
+          seq: 2,
+          outcome: { ok: true, value: { enabled: true, applies: "restarting" } },
+        },
+        { type: "unreachable" },
+        { type: "connected" },
+      )
+      expect(reading.pending).toEqual({ kind: "read", seq: 3 })
+      expect(reduce(reading, { type: "switchStalled" })).toBe(reading)
+      const read = reduce(reading, {
+        type: "answered",
+        seq: 3,
+        outcome: { ok: true, value: { kind: "on", enrollments: [], devices: [] } },
+      })
+      expect(read.switching).toBeNull()
+      expect(read.linkingNotice).toBeNull()
+    })
+
+    it("L24: a lost answer past the wait does not claim the change was saved", () => {
+      const lost = reduce(
+        on(),
+        { type: "setLinking", enabled: false },
+        {
+          type: "answered",
+          seq: 2,
+          outcome: { ok: false, failure: { kind: "unanswered" } },
+        },
+        { type: "switchStalled" },
+      )
+      expect(lost.linkingNotice).toBe("unconfirmed")
+      expect(linkingNoticeText.unconfirmed).not.toMatch(/saved/)
+      // Still connected: the wait's read answers, and the notice goes.
+      expect(lost.pending).toEqual({ kind: "read", seq: 3 })
+      const read = reduce(lost, {
+        type: "answered",
+        seq: 3,
+        outcome: { ok: true, value: { kind: "on", enrollments: [], devices: [] } },
+      })
+      expect(read.linkingNotice).toBeNull()
+    })
+
+    it("L25: a refusal is said under the switch, which shows the gateway's state", () => {
+      const refused = reduce(
+        off(),
+        { type: "setLinking", enabled: true },
+        {
+          type: "answered",
+          seq: 2,
+          outcome: { ok: false, failure: { kind: "addressInUse" } },
+        },
+      )
+      expect(refused.linkingNotice).toBe("addressInUse")
+      expect(refused.linking).toBe("off")
+      expect(linkingShown(refused)).toBe(false)
+      expect(refused.pending).toEqual({ kind: "read", seq: 3 })
+      expect(linkingNoticeText.addressInUse).toMatch(/port/)
+    })
+
+    it("L25: busy is said as another change, not another pairing", () => {
+      const busy = reduce(
+        off(),
+        { type: "setLinking", enabled: true },
+        { type: "answered", seq: 2, outcome: { ok: false, failure: { kind: "busy" } } },
+      )
+      expect(busy.linkingNotice).toBe("linkingBusy")
+      expect(linkingNoticeText.linkingBusy).not.toMatch(/pairing/)
+      const audit = reduce(
+        off(),
+        { type: "setLinking", enabled: true },
+        {
+          type: "answered",
+          seq: 2,
+          outcome: { ok: false, failure: { kind: "auditUnavailable" } },
+        },
+      )
+      expect(audit.linkingNotice).toBe("auditUnavailable")
+      expect(audit.pending).toEqual({ kind: "read", seq: 3 })
+    })
+
+    it("L25: unchanged says nothing more and reads again", () => {
+      const same = reduce(
+        on(),
+        { type: "setLinking", enabled: false },
+        {
+          type: "answered",
+          seq: 2,
+          outcome: { ok: true, value: { enabled: false, applies: "unchanged" } },
+        },
+      )
+      expect(same.linkingNotice).toBeNull()
+      expect(same.switching).toBeNull()
+      expect(same.pending).toEqual({ kind: "read", seq: 3 })
+    })
+
+    it("the switch is not offered while unknown, refused, unreachable or busy", () => {
+      expect(canToggle(initialLinkedDevicesState())).toBe(false)
+      expect(canToggle(connected({ ok: true, value: { kind: "refused" } }))).toBe(false)
+      expect(canToggle(reduce(off(), { type: "unreachable" }))).toBe(false)
+      const busy = reduce(on(), { type: "pair" })
+      expect(canToggle(busy)).toBe(false)
+      expect(reduce(busy, { type: "setLinking", enabled: false })).toBe(busy)
+      // Flipping to the value it already has sends nothing.
+      const same = on()
+      expect(reduce(same, { type: "setLinking", enabled: true })).toBe(same)
+    })
   })
 })

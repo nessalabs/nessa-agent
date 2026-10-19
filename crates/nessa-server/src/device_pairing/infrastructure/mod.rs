@@ -13,6 +13,7 @@
 //! connection --> protected (framed tls_stream) --> ProtectedSessions (product)
 //! connection --> tls_stream --> EnvironmentPeers (paired environments)
 //! runtime  --> registration (one code registration at a time)
+//! linking_audit --> application's LinkingAudit (pairing.setLinking's records)
 //! owner_commands --> runtime (owner side only; the product socket's handle)
 //! runtime --> FenceCapture (after pairing.cancel commits; a failure leaves it)
 //! receivers --> conversation receiver authority (application's PairingReceivers)
@@ -25,6 +26,8 @@
 mod connection;
 mod environment_peers;
 mod identity;
+#[cfg(unix)]
+mod linking_audit;
 mod listener;
 mod owner_admission;
 mod owner_commands;
@@ -39,6 +42,8 @@ pub use connection::{
 };
 pub use environment_peers::EnvironmentPeers;
 pub use identity::{restore_gateway_identity, GatewayIdentityError};
+#[cfg(unix)]
+pub use linking_audit::DurableLinkingAudit;
 pub use listener::{Accepted, EnrollmentAccept, NativeEnrollmentListener, TcpEnrollmentAccept};
 pub use owner_commands::{InvitationEntropy, InvitationEntropySource, PairingOwnerCommands};
 pub use protected::{ProtectedConnection, ProtectedSessions};

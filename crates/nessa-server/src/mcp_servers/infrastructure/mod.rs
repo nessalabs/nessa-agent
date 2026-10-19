@@ -35,7 +35,7 @@ pub use built_in::{MAX_BUILT_IN_CALLS, MAX_BUILT_IN_LINE_BYTES};
 #[cfg(unix)]
 pub use config_store::OsConfigFiles;
 pub use config_store::{
-    ConfigCheck, ConfigFiles, ConfigJsonStore, ConfigParse, Published, LOCK_WAIT,
+    ConfigCheck, ConfigFiles, ConfigJson, ConfigJsonStore, ConfigParse, Published, LOCK_WAIT,
 };
 pub use grants::{ConversationGrants, OsTokens, TokenSource};
 pub use http_client::ReqwestExchange;

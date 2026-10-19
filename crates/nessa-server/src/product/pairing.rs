@@ -205,6 +205,55 @@ pub(super) fn owner_status(record: &PairingRecord) -> PairingOwnerStatus {
     }
 }
 
+/// `pairing.setLinking`: answered whether or not native pairing runs now,
+/// because turning it on is how it comes to run. The socket has already asked
+/// Cedar for `credential.manage`; what to save and whether to start again is
+/// the `NativeLinking` port's.
+pub(super) async fn set_linking(
+    state: &ProductRouteState,
+    session: &AuthenticatedSession,
+    frame: RequestFrame,
+) -> OutgoingMessage {
+    use crate::device_pairing::application::{LinkingApply, LinkingCaller, LinkingError};
+    use nessa_protocol::product::generated::{
+        PairingLinkingApply, PairingSetLinkingParams, PairingSetLinkingResult,
+    };
+    let Ok(params) = serde_json::from_value::<PairingSetLinkingParams>(frame.params) else {
+        return failure(&frame.id, "invalid_request");
+    };
+    let Some(linking) = state.native_linking.as_ref() else {
+        return failure(&frame.id, PairingErrorCode::PairingUnavailable.as_str());
+    };
+    let context = session.context();
+    let caller = LinkingCaller {
+        organization_id: context.organization_id().as_str().to_owned(),
+        principal_id: context.principal_id().as_str().to_owned(),
+        credential_id: context.credential_id().as_str().to_owned(),
+    };
+    match linking.set(caller, params.enabled).await {
+        Ok(change) => success(
+            &frame.id,
+            &PairingSetLinkingResult {
+                enabled: change.enabled,
+                applies: match change.applies {
+                    LinkingApply::Unchanged => PairingLinkingApply::Unchanged,
+                    LinkingApply::Restarting => PairingLinkingApply::Restarting,
+                },
+            },
+        ),
+        Err(error) => failure(
+            &frame.id,
+            match error {
+                LinkingError::Busy => PairingErrorCode::PairingBusy,
+                LinkingError::AddressInUse => PairingErrorCode::PairingAddressInUse,
+                LinkingError::Unavailable => PairingErrorCode::PairingUnavailable,
+                LinkingError::AuditUnavailable => PairingErrorCode::PairingAuditUnavailable,
+            }
+            .as_str(),
+        ),
+    }
+}
+
 fn initiator_kind(kind: PairingInitiatorKind) -> WireInitiator {
     WireInitiator {
         kind,
