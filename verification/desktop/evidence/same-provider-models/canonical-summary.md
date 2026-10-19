@@ -1,6 +1,7 @@
-Source: `b725d56f042cd177c928e8bc7fc057144063c952`, assembled immutable main281b.
-Own gateway SHA256: `5691a36b0d357fbe0866fbb8a522be13030987bf42948bad3bd64e91c8016cb2`.
-Production and canonical-program bytes remain equal at final checker source3955.
+Source: `81311484005f40cd6a48aafee535be2ad9d07876`, assembled immutable main5813.
+Canonical gateway SHA256: `25b647ca5e09eaada808532001f5bc3446a04e94f8911c80dc914cdf59bd2deb`.
+Later stress/chaos gateway SHA256: `47d7ec4c56cebaf485a61ff9751124d048097150a4b94aa14aca5f752f1c629d` (own native_enrollment integration build before journeys).
+Fixture-only final correction preserves production and canonical-program source; artifacts are not claimed byte-equal.
 
 Verdict: pass
 
@@ -12,4 +13,4 @@ Verdict: pass
 
 Relevant log lines:
 
-- console chromium: requestfailed: http://127.0.0.1:61668/browser/check net::ERR_ABORTED (aborted after a 204 response, #485) (harmless)
+- console chromium: requestfailed: http://127.0.0.1:60321/browser/check net::ERR_ABORTED (aborted after a 204 response, #485) (harmless)

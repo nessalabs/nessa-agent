@@ -1,57 +1,65 @@
 # Same-provider model control: current assembly
 
-Runtime source `3955c6eb6360f1e7a4e5e09b98080e8d57c70e06`, on immutable main
-`281b57c7dacc39e43ed666dfc695de154c3383be` (read_window), UI pin
-`0794a41bb1482aa7e677fd2b7012874bcc3e29b2`. This evidence update changes no
-behavior. [Qualification](qualification.json) keeps exact source/binary/photo
-hashes, controls, historical failures and limits; [canonical summary](canonical-summary.md)
-keeps the current gateway journeys.
+Runtime source `246765ad9fe4475cded0b5878cb66c55f1b07caa`, on immutable main
+`5813f349a08e2f3ab1fd585d9ab775655d7e957b` (Native linking Settings); UI pin
+`0794a41bb1482aa7e677fd2b7012874bcc3e29b2`. This update changes only evidence.
+[Qualification](qualification.json) keeps exact source/artifact/photo hashes,
+controls and historical limits; [canonical summary](canonical-summary.md) keeps
+the current rebuilt gateway journeys.
 
-The integration preserves window publication/Cedar/reconnect identities and the
-independent model request/target, authoritative confirmation, uncertain Send
-fence, original review, draft and Stop. The existing generator derives **76 ready
-methods /77 including authentication**. Stress opens conversations by exact ID.
-Default Claude retains **one window step**; focused Codex explicitly uses **zero**.
+The integration preserves model request/target/source confirmation, uncertain
+Send fence, original review/draft/Stop, exact-ID window navigation, and incoming
+window publication and Native linking/Cedar/config-lock/audit/self-exec ownership.
+The existing generator derives **77 ready methods /78 including authentication**.
+Full Claude retains **windows1/linkings1**; focused Codex explicitly uses **both0**.
+Native settings tests touch only owned ephemeral ci configuration and an allocated
+loopback native port; they never change the installed app or its configuration.
 
-Current production assembly: full frontend **4,922 tests /369 files**, targeted
-workspace **25**, model owner **12**, wire model **2** (not the earlier inferred
-seven), cold preset **7**, protocol **170+4+2 runtime /2 doctests**, and strict
-four-package all-target Clippy passed. Canonical **three programs ×both engines**
-and Claude default **51/51** ran on `b725d56f0`; subsequent changes touch only
-ADR/CHECKLIST/stress-checker, with production/client/protocol/pin/binary bytes
-verified identical. Default51 is retained at its actual source, not relabelled.
-Final checker source passed Claude six **58/58**, focused Codex one **8/8** and
-six **18/18**, both engines; chaos **2/2**. Fresh Linux CI and whole-assembly
-review remain required. No performance claim or new whole6838 run is made.
+Current assembly passed full frontend **4,936 tests /369 files**, normal checks
+and build; native linking **11**, self-restart **9**, runtime-config selection
+**16**, shared config MCP application **50**, pairing-audit **5**, actual native
+owner routes **13**, model owner **12**, wire model **2**, cold preset **7**,
+protocol **170+4+2 runtime /2 doctests**, strict four-package all-target Clippy
+and format. Two zero-selection setup attempts are excluded from qualification.
+Canonical **three programs ×both engines** ran on source813; the later delta
+changes only ADR/CHECKLIST/Linked devices fixture, with production bytes unchanged.
 
-Two checker defects were demonstrated and corrected: earlier pause text could
-satisfy restart's generic completion witness before browser recovery; the final
-witness requires the current source-confirmed successor plus completion in one
-existing60s poll. Actual held-frame before/omission reject and fixed/restored
-hold. A controlled owned outage captured WebKit's exact “Could not connect to
-the server.” line between clean-before and identity-proven recovery. Only that
-already-held exact owned-endpoint literal, alongside the existing lost-connection
-literal, is classified. Actual recorded-interval omission rejects; synthetic
-prior/wrong-endpoint/neighbor/future/unproven-recovery controls remain errors.
+The fixture originally failed **2/16** because it did not answer automatic
+`workspace.publish`. Explicit per-connection publication support fixed it:
+**16/16** both engines; sole admission omission **2/16** rejects; exact restored
+**16/16**. Nine additional private-fixture socket controls are **synthetic**,
+including unknown-method rejection and UUID/revision/stale/connection receipts.
+No global catch, product policy relaxation or pairing assertion was removed.
 
-Original failed Linux CI39208371137 and local44/59,32/46,58/59 records remain
-failed historical evidence. The controlled outage does not reconstruct the
-uncaptured original58/59 event time. Parent cold3442/4docs and SDK53 fixture
-results remain separately source-qualified. No raw journals, gateway state,
-authentication material or keys are included.
+Final normal tracked programs passed Claude default **53/53**, raised six
+**62/62**, focused Codex one **8/8**, six **18/18**, both engines; chaos **2/2**.
+Full Claude proves real Settings on/off config readback/same-PID self-exec and
+subsequent window send, read_window, model prompt witness and preserved review.
+The native owner-route integration build replaced the gateway executable before
+stress: canonical and stress/chaos artifacts have **separate recorded hashes**.
+They are both owned current-source builds; no byte-equality claim is made.
+
+Older failed Linux CI39208371137, main281b local44/59,32/46,58/59 and the current
+fixture2/16 remain failed historical records. Earlier restart identity and exact
+held-console controls remain source-attributed; their classifier stays only in
+`steps.restart`, never borrowed by the new Settings linking step. Controlled
+outage evidence is not reconstruction of uncaptured original error times.
+Parent cold3442/4docs and SDK53 fixtures remain separately source-qualified; no
+new whole6838 run or performance claim is made. Fresh whole review and actual
+Linux CI remain required before merge. No raw journals/auth/config/keys are included.
 
 ## Current inspected screenshots
 
-- **Claude/WebKit**, six-switch full run, first-switch snapshot: confirmed
-  Fable5.1, subsequent-responses text, draft and Stop. The original review is
-  offscreen; preservation/answer is asserted by the real window check.
+- **Claude/WebKit**, full default run: confirmed Fable5.1,
+  subsequent-responses text, draft and Stop. Original review is offscreen;
+  preservation/answer is asserted by the real window check.
 - **Codex/Chromium**, one-switch run: original real ApprovalCard/actor, draft,
   confirmed GPT-6 Astra, next-turn text and Stop visible.
 - **Codex/WebKit**, six-switch run, first-switch snapshot: the same visible
-  original card/draft/model/Stop; all six operations are proved by assertions.
+  original card/draft/model/Stop; six operations are proved by assertions.
 
-These are actual desktop components with scripted harness data, not proof of
-installed-app version parity. All three photos were visually inspected.
+These are actual desktop components with scripted native harness data, not
+proof of installed-app frontend parity. All three photos were visually inspected.
 
 ![Claude: confirmed model, draft and Stop; review offscreen](claude-webkit.png)
 

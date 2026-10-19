@@ -1,70 +1,88 @@
 {
-  "qualified_runtime_source_commit": "3955c6eb6360f1e7a4e5e09b98080e8d57c70e06",
-  "qualified_runtime_tree": "a0428db5c0bfcb13466969cefc15b60b579bcdac",
-  "base": "281b57c7dacc39e43ed666dfc695de154c3383be",
+  "qualified_runtime_source_commit": "246765ad9fe4475cded0b5878cb66c55f1b07caa",
+  "qualified_runtime_tree": "3bcc02942dbbc5c0a29979e8bc9929df1c92e740",
+  "base": "5813f349a08e2f3ab1fd585d9ab775655d7e957b",
   "ui_pin": "0794a41bb1482aa7e677fd2b7012874bcc3e29b2",
-  "source_manifest_sha256": "74c536e4a4542da64b003bb10e9c0303f6bb3fa4e1a1230bb463d874384856a2",
-  "gateway_sha256": "5691a36b0d357fbe0866fbb8a522be13030987bf42948bad3bd64e91c8016cb2",
-  "gateway_build_source": "b725d56f042cd177c928e8bc7fc057144063c952",
+  "source_manifest_sha256": "1085db436bc7b42578b478f7a187194fa5a9da042c691aeb6e5a3b370f7e5c12",
+  "gateway_sha256": "47d7ec4c56cebaf485a61ff9751124d048097150a4b94aa14aca5f752f1c629d",
+  "gateway_build_source": "246765ad9fe4475cded0b5878cb66c55f1b07caa",
   "full_frontend": {
-    "source": "b725d56f042cd177c928e8bc7fc057144063c952",
-    "public_tests": 4922,
+    "source": "81311484005f40cd6a48aafee535be2ad9d07876",
+    "public_tests": 4936,
     "files": 369,
     "all_normal_stages": "pass",
-    "source_scope": "All production/client/protocol/pin bytes equal qualified runtime; only ADR/CHECKLIST/stress-checker changed afterward."
+    "source_scope": "Final delta afterward is only ADR/CHECKLIST/linked-devices fixture. Production/client/protocol/pin bytes remain equal; scoped checker format/lint/syntax passed."
   },
   "current_scoped_checks": {
-    "workspace_selected": 25,
+    "native_linking": 11,
+    "self_restart": 9,
+    "runtime_config_selection": 16,
+    "shared_config_MCP_application": 50,
+    "pairing_audit_lib": 5,
+    "native_enrollment_owner_routes": {
+      "passed": 13,
+      "filtered": 104
+    },
     "model_owner_selected": 12,
     "wire_model_selected": 2,
-    "wire_filtered": 3327,
     "cold_preset_selected": 7,
     "protocol_runtime": [170, 4, 2],
     "protocol_doctests": 2,
     "strict_server_clippy": "four packages/all-targets/-D warnings PASS",
-    "planner_and_page_line_tests": 31,
-    "protocol_manifest_methods": 77,
-    "ready_methods": 76
+    "server_format": "pass",
+    "planner_tests": 7,
+    "protocol_manifest_methods": 78,
+    "ready_methods": 77,
+    "setup_not_qualification": [
+      "config_store lib filter selected0",
+      "mcp_servers::tests::settings selected0; corrected using current compiled test list"
+    ]
   },
   "canonical": {
-    "source": "b725d56f042cd177c928e8bc7fc057144063c952",
+    "source": "81311484005f40cd6a48aafee535be2ad9d07876",
     "programs": ["mcp-apps-gateway", "gateway-window", "scripted-scenarios"],
     "engines": ["chromium", "webkit"],
     "verdict": "pass",
-    "current_source_scope": "Canonical programs and production source unchanged by subsequent stress-checker corrections."
+    "gateway_sha256": "25b647ca5e09eaada808532001f5bc3446a04e94f8911c80dc914cdf59bd2deb",
+    "current_source_scope": "Canonical and production source unchanged by subsequent fixture-only correction."
   },
   "window_stress": {
     "claude_default": {
-      "source": "b725d56f042cd177c928e8bc7fc057144063c952",
-      "passed": 51,
+      "source": "246765ad9fe4475cded0b5878cb66c55f1b07caa",
+      "passed": 53,
       "model_steps": 1,
-      "windows": 1
+      "windows": 1,
+      "linkings": 1
     },
     "claude_raised_six": {
-      "source": "3955c6eb6360f1e7a4e5e09b98080e8d57c70e06",
-      "passed": 58,
+      "source": "246765ad9fe4475cded0b5878cb66c55f1b07caa",
+      "passed": 62,
       "model_steps": 6,
-      "windows": 1
+      "windows": 1,
+      "linkings": 1
     },
     "codex_one": {
-      "source": "3955c6eb6360f1e7a4e5e09b98080e8d57c70e06",
+      "source": "246765ad9fe4475cded0b5878cb66c55f1b07caa",
       "passed": 8,
       "model_steps": 1,
-      "windows": 0
+      "windows": 0,
+      "linkings": 0
     },
     "codex_six": {
-      "source": "3955c6eb6360f1e7a4e5e09b98080e8d57c70e06",
+      "source": "246765ad9fe4475cded0b5878cb66c55f1b07caa",
       "passed": 18,
       "model_steps": 6,
-      "windows": 0
+      "windows": 0,
+      "linkings": 0
     },
     "engines": ["chromium", "webkit"],
     "channel": "bundled",
     "positive_model_preset": "Real access shield confirms Ask before original review; real picker/native prompt witness/draft/review/Stop retained.",
-    "coverage_limit": "Default Claude retains pre-checker-fix source attribution; focused Codex is explicitly model-only, no Codex read_window claim."
+    "native_linking_scope": "Full Claude uses real Settings on/off, ephemeral owned ci config/allocatedloopbackport, config readback and samePID selfexec; no installed native configuration touched.",
+    "coverage_limit": "Focused Codex is explicitly model-only, no Codex read_window/nativeLink claim. Current linking step kept incoming semantics; no copied restart console classification."
   },
   "chaos": {
-    "source": "3955c6eb6360f1e7a4e5e09b98080e8d57c70e06",
+    "source": "246765ad9fe4475cded0b5878cb66c55f1b07caa",
     "passed": 2,
     "seeds": 2,
     "no_pending_model_or_mode_change": true
@@ -115,13 +133,13 @@
     "cold_server_docs": 4,
     "sdk_unsupported_ack_focused_fixture_tests": 53,
     "source_equivalence_receipt_sha256": "68e001c14513239614124a69e95a7d87201409bbec158bd90a90d6178f4d06f7",
-    "note": "Parent cold3442/4docs and SDK53 fixture receipts remain separately source-qualified; current cold7 rerun above. No new6838/all-package run. Incoming read_window changed service composition, not cold/native implementations; SDK import-only correction preserved implementation."
+    "note": "Parent cold3442/4docs and SDK53 negativefixture receipts remain separately source-qualified; current cold7 rerun above. No new6838/all-package run; new native-linking/root/sharedconfig owners have current selected checks and real ephemeral Settings selfexec stress."
   },
   "historical_evidence": {
     "source_commit": "414ce25f3afa381665bf47bc0ea757069f126dfd",
     "frontend_files": 365,
     "frontend_passed": 4906,
-    "frontend_note": "Historical4906 evidence only; current b725 fullfrontend4922 is recorded separately.",
+    "frontend_note": "Historical4906 and281b4922 are not current5813 results; current813 frontend4936 is recorded separately.",
     "backend_union_passed": 6838,
     "backend_union_ignored": 36,
     "backend_union_doctests": 69,
@@ -150,18 +168,18 @@
   ],
   "photos": {
     "claude-webkit.png": {
-      "sha256": "d076d4180009dbd2f5db67f4d6ef91cff0cca0fced0f855d139c61307646ef10",
-      "actual_source": "/tmp/nessa-975-281b-recovered-claude-raised/model-webkit-confirmed-review-draft.png",
+      "sha256": "71b1f6d1fec2977bc47ce73270020352adf3a13270008e3fa484753505a4f3c1",
+      "actual_source": "/tmp/nessa-975-5813-corrected-claude-default/model-webkit-confirmed-review-draft.png",
       "visually_inspected": true
     },
     "codex-chromium.png": {
-      "sha256": "22c2dba89c1afedae74742912ab40dc1bec85fe0decd4825e5535a5759008683",
-      "actual_source": "/tmp/nessa-975-281b-recovered-codex-model-1/model-chromium-confirmed-review-draft.png",
+      "sha256": "59390bd33fe34aaf52f534e80241eaba05d0322e84623622bd6ea1ab92dec92e",
+      "actual_source": "/tmp/nessa-975-5813-corrected-codex-model-1/model-chromium-confirmed-review-draft.png",
       "visually_inspected": true
     },
     "codex-webkit.png": {
-      "sha256": "f237c0ca2bbd4cab816b64e5163351dfa396ac523976553e4dc770694a34f405",
-      "actual_source": "/tmp/nessa-975-281b-recovered-codex-model-6/model-webkit-confirmed-review-draft.png",
+      "sha256": "2b46e142836bc7b455fc2d23bb802e2e853dde2d6ea378d456befc4f47287e95",
+      "actual_source": "/tmp/nessa-975-5813-corrected-codex-model-6/model-webkit-confirmed-review-draft.png",
       "visually_inspected": true
     }
   },
@@ -170,5 +188,67 @@
   "installed_app_parity_verified": false,
   "actual_linux_ci_required_before_merge": true,
   "fresh_whole_assembly_review_required": true,
-  "performance_claim": false
+  "performance_claim": false,
+  "gateway_artifact_provenance": {
+    "canonical": {
+      "sourceHead": "81311484005f40cd6a48aafee535be2ad9d07876",
+      "binary": "/Users/nessa/.codex/worktrees/922-backend-controls/nessa-agent/target/debug/nessa",
+      "sha256": "25b647ca5e09eaada808532001f5bc3446a04e94f8911c80dc914cdf59bd2deb",
+      "size": 162607736,
+      "mtimeNs": 1792401861324424418,
+      "gatewayPreparation": "own canonical cargo build -p nessa-server on frozen813 native-linking assembly"
+    },
+    "window_stress_and_chaos": {
+      "sourceHead": "246765ad9fe4475cded0b5878cb66c55f1b07caa",
+      "binary": "/Users/nessa/.codex/worktrees/922-backend-controls/nessa-agent/target/debug/nessa",
+      "sha256": "47d7ec4c56cebaf485a61ff9751124d048097150a4b94aa14aca5f752f1c629d",
+      "size": 162661272,
+      "mtimeNs": 1792403111848893298,
+      "buildOwner": "cargo test -p nessa-server --test native_enrollment owner_routes built own package binaries before window journeys",
+      "buildInterval": {
+        "start": 1792403085.28192,
+        "end": 1792403118.2746408
+      },
+      "firstWindowProgramStart": 1792403118.5026848,
+      "subsequentProgramCommandsHaveNoBuild": true,
+      "MCP_LIVE_NESSAOverride": false
+    },
+    "note": "Own native_enrollment integration test rebuilt package executable before the first stress journey; canonical and later journeys used distinct artifacts. Current hash/mtime recorded after journeys; owned build interval precedes all stress/chaos commands, which contain no builds. No same-binary assertion."
+  },
+  "linked_devices_fixture": {
+    "before": "2/16 FAIL",
+    "fixed": "16/16 PASS",
+    "sole_publication_admission_omission": "2/16 FAIL",
+    "exact_restored": "16/16 PASS",
+    "failure_cause": "Actual window publication was omitted by existing fixture;14 rows failed only unexpected workspace.publish. No product/UI defect claim.",
+    "support": "Explicit canonical UUID/safe nonnegative revision receipt; per-connection latest publication; stale same-window revision returns held revision/appliedfalse. Existing unknown-method rejection and pairing assertions retained.",
+    "synthetic_socket_controls": {
+      "passed": 9,
+      "scope": "Temporary VM invokes existing private scriptedGateway route; no production exports/framework or realgateway/policy validation claim",
+      "cases": [
+        "exact receipt",
+        "stale revision",
+        "same revision",
+        "differentwindow replaces connection publication",
+        "canonicalUUID",
+        "safe revision",
+        "negative revision",
+        "newconnection state",
+        "explicitunknown method recorded refusal"
+      ]
+    }
+  },
+  "linked_devices_browser": {
+    "source": "246765ad9fe4475cded0b5878cb66c55f1b07caa",
+    "passed": 16,
+    "engines": ["chromium", "webkit"],
+    "scope": "Existing whole scripted program; fixture data, not real native configuration."
+  },
+  "main5813_fixture_failures_retained": [
+    {
+      "source": "81311484005f40cd6a48aafee535be2ad9d07876",
+      "result": "linked-devices2/16; only unknown workspace.publish; original and sole-admission omission retained, not relabelled"
+    }
+  ],
+  "old_restart_controls_scope": "The retained identity/console controls were qualified on main281b source; their exact owning hunk remains at current source. No borrowed classifier or outage helper was added to new Settings linking step."
 }
