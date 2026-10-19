@@ -332,7 +332,9 @@ export class Follower {
       await sleep(250)
     } while (Date.now() < deadline)
     if (turns(read) !== turns(this.view.frame?.view))
-      this.fail("its view of the main conversation is not the one a read gives")
+      this.fail(
+        `its view of the main conversation is not the one a read gives (read ${read?.transcriptState ?? "failed"} ${turns(read)}; view ${turns(this.view.frame?.view)})`,
+      )
     // The list is judged against a list read now, not against the main
     // conversation being in it: the run may have archived that one.
     const ids = (conversations) => JSON.stringify([...conversations].sort())

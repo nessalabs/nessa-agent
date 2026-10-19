@@ -1465,6 +1465,43 @@ fn committed_partial_progress_cannot_be_replaced_by_an_older_complete_read() {
     assert!(!projection.read().capabilities.permissions);
 }
 
+/// A reader's receiver let go starts over from the beginning, so its next
+/// read is behind the view a longer read already gave, and is refused. The
+/// head it saw past that view's is not: the view is behind the history now,
+/// and says so, so its reader reads on instead of waiting for a commit that
+/// already happened. A refused read that saw no newer head changes nothing
+/// (`older_committed_read_cannot_replace_a_newer_terminal_view`).
+#[test]
+fn a_read_behind_the_view_that_saw_a_newer_head_marks_it_stale() {
+    let mut projection = projection();
+    let newer = completed_snapshot("execution", Vec::new());
+    assert!(projection.replace_committed(
+        &committed("incarnation", 3, 3, 3, Some(&newer)),
+        &[],
+        None
+    ));
+    projection.transcript_state(ConversationTranscriptState::Complete);
+    let shown = projection.read();
+
+    let older = completed_snapshot("earlier", Vec::new());
+    assert!(!projection.replace_committed(
+        &committed("incarnation", 1, 1, 4, Some(&older)),
+        &[],
+        None
+    ));
+    let behind = projection.read();
+    assert_eq!(
+        behind.transcript_state,
+        ConversationTranscriptState::Stale,
+        "a head past the view's was seen"
+    );
+    assert_eq!(
+        serde_json::to_value(&behind.messages).unwrap(),
+        serde_json::to_value(&shown.messages).unwrap(),
+        "the newer view is kept"
+    );
+}
+
 /// Options that each decide this one request.
 fn once_options() -> PermissionOptions {
     PermissionOptions::new(
