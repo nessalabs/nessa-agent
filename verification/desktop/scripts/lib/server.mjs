@@ -123,6 +123,8 @@ function exited(proc) {
  * environment — never reusing one already running, whose environment is not
  * this caller's (a check that points the dev server's `/browser` proxy at a
  * gateway of its own, `NESSA_BROWSER_GATEWAY_URL`). Returns `{ url, close }`.
+ * `options.isolateCache` gives this process a temporary dependency cache;
+ * server-cache.test.mjs checks isolation and cleanup after process exit.
  */
 export async function startDevServer(options, env) {
   const port = await freePort()
@@ -137,24 +139,40 @@ export async function startDevServer(options, env) {
  */
 async function devServer(port, options, env = process.env) {
   const url = `http://127.0.0.1:${port}/desktop.html`
-  const proc = child(
-    vite,
-    ["--host", "127.0.0.1", "--port", String(port), "--strictPort"],
-    options,
-    env,
-  )
-  if (!(await waitFor(url, 60_000, proc))) {
-    proc.kill()
-    await exited(proc)
-    throw new CannotRun(`dev server did not answer at ${url}\n${proc.tail()}`)
+  const cacheDir = options.isolateCache
+    ? mkdtempSync(join(tmpdir(), "nessa-desktop-vite-"))
+    : undefined
+  let proc
+  const close = async () => {
+    try {
+      if (proc && proc.exitCode === null && proc.signalCode === null) {
+        proc.kill()
+        await exited(proc)
+      }
+    } finally {
+      if (cacheDir) rmSync(cacheDir, { recursive: true, force: true })
+    }
   }
-  await warm(url)
-  return {
-    url,
-    close: async () => {
-      proc.kill()
-      await exited(proc)
-    },
+  try {
+    proc = child(
+      cacheDir ? process.execPath : vite,
+      cacheDir
+        ? [
+            join(repoRoot, "verification/desktop/scripts/lib/dev-server.mjs"),
+            String(port),
+            cacheDir,
+          ]
+        : ["--host", "127.0.0.1", "--port", String(port), "--strictPort"],
+      options,
+      env,
+    )
+    if (!(await waitFor(url, 60_000, proc)))
+      throw new CannotRun(`dev server did not answer at ${url}\n${proc.tail()}`)
+    await warm(url)
+    return { url, close }
+  } catch (error) {
+    await close()
+    throw error
   }
 }
 
