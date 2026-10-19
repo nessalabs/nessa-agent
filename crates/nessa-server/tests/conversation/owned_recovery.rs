@@ -416,6 +416,13 @@ struct WithheldHold {
     ended: Arc<Mutex<HashSet<LeaseId>>>,
 }
 impl LeaseHold for WithheldHold {
+    fn model_provider(
+        &self,
+        binding: Arc<dyn AgentProvider>,
+    ) -> Result<Arc<dyn AgentProvider>, AgentError> {
+        self.inner.model_provider(binding)
+    }
+
     fn ends(&self) -> Option<EnvironmentFuture<'static, LeaseEndCause>> {
         self.inner.ends()
     }
