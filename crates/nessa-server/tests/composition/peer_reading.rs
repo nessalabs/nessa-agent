@@ -1404,21 +1404,35 @@ async fn records_land_in_turn_order() {
 /// and the forget goes ahead.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_stalled_audit_never_holds_an_owner_command() {
-    stalled_audit(None, false).await;
+    stalled_audit(None, false, None).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_late_audit_intent_does_not_spend_the_next_forgets_stop_window() {
-    stalled_audit(Some(PROMPT + PROMPT / 2), false).await;
+    stalled_audit(Some(PROMPT + PROMPT / 2), false, None).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[should_panic(expected = "forget stopped the captured read")]
 async fn an_ended_read_cannot_prove_a_forget_stopped_it() {
-    stalled_audit(None, true).await;
+    stalled_audit(None, true, None).await;
 }
 
-async fn stalled_audit(late_write: Option<Duration>, end_read_before_forget: bool) {
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_current_audit_intent_does_not_spend_the_forgets_stop_window() {
+    stalled_audit(None, false, Some(5)).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_current_audit_outcome_does_not_spend_the_forgets_stop_window() {
+    stalled_audit(None, false, Some(6)).await;
+}
+
+async fn stalled_audit(
+    late_write: Option<Duration>,
+    end_read_before_forget: bool,
+    delayed_current_sequence: Option<u64>,
+) {
     let directory = tempfile::tempdir().unwrap();
     let a = Peer::with_held_record(&directory.path().join("a")).await;
     let record_hold = a.record_hold.as_ref().unwrap().clone();
@@ -1429,12 +1443,17 @@ async fn stalled_audit(late_write: Option<Duration>, end_read_before_forget: boo
     let _release_first = ReleaseStall(stall.clone());
     let late = Stall::new(4);
     let release_late = ReleaseStall(late.clone());
+    let current = Stall::new(delayed_current_sequence.unwrap_or(5));
+    let release_current = ReleaseStall(current.clone());
     let before_write = {
-        let (first, late) = (stall.hook(), late.hook());
+        let (first, late, current) = (stall.hook(), late.hook(), current.hook());
         Arc::new(move |sequence| {
             first(sequence);
             if late_write.is_some() {
                 late(sequence);
+            }
+            if delayed_current_sequence.is_some() {
+                current(sequence);
             }
         })
     };
@@ -1524,13 +1543,42 @@ async fn stalled_audit(late_write: Option<Duration>, end_read_before_forget: boo
             "ending a read did not ask for a stop"
         );
     }
-    tokio::time::timeout(PROMPT, b.peers.forget(key, &b.owner))
+    let current_release = tokio::spawn(async move {
+        if delayed_current_sequence.is_some() {
+            current.until_reached().await;
+            tokio::time::sleep(PROMPT + PROMPT / 2).await;
+        }
+        drop(release_current);
+    });
+    let forget = tokio::spawn({
+        let (peers, owner) = (b.peers.clone(), b.owner.clone());
+        async move { peers.forget(key, &owner).await }
+    });
+    // The current intent must be durable before the owner may stop the
+    // read. Its writer delay, like the old prefix's, is not preemption.
+    let intent_kept = tokio::time::timeout(AUDIT_DEADLINE, async {
+        while audit.handled_sequence() < 5 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+    let stopped_in_time = if intent_kept.is_ok() {
+        tokio::time::timeout(PROMPT, async {
+            while !read_stop.is_stopped() || b.peers.active_read_stop(&key).is_some() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
         .await
-        .expect("forget stops the read")
-        .unwrap();
-    // Joining the poller also stops cycles; retain the owner's fact first.
+        .is_ok()
+    } else {
+        false
+    };
+    // Joining the poller also stops cycles; retain the owner's fact first,
+    // including when preemption failed. Release and join before asserting.
     let stopped_captured_read = read_stop.is_stopped();
     record_hold.release();
+    let forgotten = tokio::time::timeout(WAIT, forget).await;
+    current_release.await.unwrap();
     tokio::time::timeout(WAIT, poller.join()).await.unwrap();
     tokio::time::timeout(WAIT, a.record_source.shutdown())
         .await
@@ -1556,6 +1604,19 @@ async fn stalled_audit(late_write: Option<Duration>, end_read_before_forget: boo
     drop(relay);
     stop(a).await;
     assert!(stopped_captured_read, "forget stopped the captured read");
+    assert!(intent_kept.is_ok(), "the current intent was kept");
+    assert!(
+        stopped_in_time,
+        "forget released the captured read within its stop window"
+    );
+    forgotten
+        .expect("forget completed after the read was released")
+        .unwrap()
+        .unwrap();
+    assert!(
+        b.peers.list().await.unwrap().is_empty(),
+        "the peer is removed"
+    );
 }
 
 fn filler() -> PeerAuditRecord {
