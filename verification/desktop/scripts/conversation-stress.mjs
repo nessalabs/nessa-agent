@@ -23,6 +23,9 @@
  *               and started again; the turn is resumed and the window follows
  *   delegate    the agent creates a thread and messages it; the thread's
  *               report comes back as a turn of its own
+ *   await       the agent messages a thread and waits for it with one
+ *               subscribe call naming the sent turn: the thread's reply comes
+ *               back in that call, and no report follows
  *   aside       another conversation is opened in the window and talked to
  *   watch       the agent reads a new thread with more reads at once than
  *               one conversation may hold: some wait, the rest are refused,
@@ -791,6 +794,41 @@ const steps = {
     else if (report.status !== "completed")
       failures.push(`the report's turn ended ${report.status}`)
     else await expectShown(run.page, SAYS.report, failures)
+  },
+
+  async await(run, step, failures) {
+    const text = prompt(run, STRESS.await, step)
+    const seen = await send(run, run.main.id, text, failures)
+    const { turn } = await settled(run, run.main.id, seen, text, "completed", failures)
+    if (!turn) return
+    const said = (turn.parts ?? []).map((part) => part.text ?? "").join("")
+    const found = new RegExp(`${SAYS.awaited}([0-9a-f-]+): (.*)`, "s").exec(said)
+    const reply = `${SAYS.echo}${STRESS.reply} awaited by the parent`
+    if (!found) {
+      failures.push(
+        `the await turn did not say what it waited for: ${said.slice(0, 160)}`,
+      )
+      return
+    }
+    if (!found[2].startsWith(reply))
+      failures.push(
+        `one subscribe call did not return the thread's reply: ${found[2].slice(0, 160)}`,
+      )
+    await expectShown(run.page, `${SAYS.awaited}${found[1]}: ${reply}`, failures)
+    // The reply came back in the call, so no report wakes the conversation.
+    // A report would be queued as soon as the thread's turn settled, which
+    // was before the call returned.
+    await sleep(3_000)
+    const view = await run.client.conversation.read(run.main.id)
+    if (
+      view.messages.some(
+        (each) =>
+          !seen.has(each.executionId) &&
+          each.userText.startsWith(STRESS.report) &&
+          each.userText.includes(found[1]),
+      )
+    )
+      failures.push("a report followed the reply the agent already took with subscribe")
   },
 
   async watch(run, step, failures) {

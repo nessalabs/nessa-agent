@@ -7,6 +7,7 @@
 //!   initialize ──▶ its protocol version and its tools capability
 //!   tools/list ──▶ BuiltInServer::tools
 //!   tools/call ──▶ BuiltInServer::call(session, call, tool, arguments, stop) ──▶ its result
+//!     written ──▶ its delivered hook (a cancelled call's is dropped uncalled)
 //!   notifications/cancelled ──▶ that call's stop
 //!   the stand-in gone, or its grant revoked ──▶ every call's stop ──▶ the end
 //! ```
@@ -17,7 +18,7 @@
 //! ends the connection. Stopping a call asks it to stop; it records its own
 //! end, whether or not anyone is left to read its answer.
 use super::grants::ConversationGrants;
-use crate::mcp_servers::application::BuiltInServer;
+use crate::mcp_servers::application::{BuiltInAnswer, BuiltInServer};
 use nessa_sdk::domain::agent_execution::sessions::SessionId;
 use serde_json::{json, Value};
 use std::{collections::HashMap, io, sync::Arc};
@@ -49,7 +50,7 @@ pub(crate) async fn serve(
     if grants.owner(&token).is_none() {
         return;
     }
-    let (answers, mut answered) = mpsc::channel::<(String, Value)>(MAX_BUILT_IN_CALLS);
+    let (answers, mut answered) = mpsc::channel::<(String, BuiltInAnswer)>(MAX_BUILT_IN_CALLS);
     // Each running call's stop, by its request id as JSON.
     let mut calls: HashMap<String, watch::Sender<bool>> = HashMap::new();
     let mut line = Vec::new();
@@ -64,18 +65,19 @@ pub(crate) async fn serve(
                     }
                 }
             }
-            Some((id, result)) = answered.recv() => {
+            Some((id, answer)) = answered.recv() => {
                 let Some(stop) = calls.remove(&id) else { continue };
                 // A call its caller cancelled is not answered.
                 if *stop.borrow() {
                     continue;
                 }
                 let id: Value = serde_json::from_str(&id).unwrap_or(Value::Null);
-                if write(&mut output, &json!({"jsonrpc": "2.0", "id": id, "result": result}))
-                    .await
-                    .is_err()
-                {
+                let message = json!({"jsonrpc": "2.0", "id": id, "result": answer.result});
+                if write(&mut output, &message).await.is_err() {
                     break;
+                }
+                if let Some(delivered) = answer.delivered {
+                    delivered();
                 }
             }
             changed = revocations.changed() => {
@@ -95,7 +97,7 @@ fn handle(
     server: &Arc<dyn BuiltInServer>,
     session: &SessionId,
     calls: &mut HashMap<String, watch::Sender<bool>>,
-    answers: &mpsc::Sender<(String, Value)>,
+    answers: &mpsc::Sender<(String, BuiltInAnswer)>,
     message: &[u8],
 ) -> Option<Value> {
     let Ok(message) = serde_json::from_slice::<Value>(message) else {
