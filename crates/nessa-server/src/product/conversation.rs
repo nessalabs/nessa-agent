@@ -681,8 +681,8 @@ async fn answer(
 }
 
 /// A refused conversation command — any method, reads included — as one
-/// warning in the gateway log, at the socket's answer to every request:
-/// admission, share commands, a check answering its own code, and an error
+/// warning in the gateway log, at the socket's answer to every request,
+/// passive record reads included: admission, share commands, a check answering its own code, and an error
 /// alike. Only the method and the wire code; the causes a code keeps only
 /// one of are the line `trace_refusal_causes` writes beside it. A read's own
 /// span may also have warned.

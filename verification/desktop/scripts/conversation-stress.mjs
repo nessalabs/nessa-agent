@@ -256,6 +256,25 @@ async function untilTurn(run, conversationId, at, ready, seconds = 60) {
   return { view, turn }
 }
 
+/**
+ * Reads `conversationId` until `ready` holds for its whole view, which may
+ * have no turns: a conversation whose first submit was refused has none.
+ */
+async function untilView(run, conversationId, ready, seconds = 60) {
+  const end = Date.now() + seconds * 1000
+  let view
+  do {
+    try {
+      view = await readWithReviews(run.client, conversationId)
+      if (ready(view)) return { view }
+    } catch (error) {
+      log(`read ${conversationId}: ${error.message}`)
+    }
+    await sleep(200)
+  } while (Date.now() < end)
+  return { view }
+}
+
 const ended = (turn) => turnEnded(turn.status)
 
 /** Opens `title`'s conversation in the window, and waits for its composer. */
@@ -470,16 +489,23 @@ async function startedBeside(run, client, step, n, failures) {
   const first = prompt(run, STRESS.reply, step, ` burst ${n}`)
   try {
     await client.conversation.create({ conversationId, agent: run.stack.agent })
-    await client.conversation.submit(client.conversation.prepare(conversationId, first))
   } catch (error) {
-    // Already a failure; a refused start has no turn for the rest check to
-    // wait a minute on.
     failures.push(
       `a conversation started beside the window's was refused: ${explain(error)}`,
     )
     return
   }
+  // Once it exists the rest check sweeps it, even if the submit's answer is
+  // lost while its turn runs.
   run.checked.push(conversationId)
+  try {
+    await client.conversation.submit(client.conversation.prepare(conversationId, first))
+  } catch (error) {
+    failures.push(
+      `a conversation started beside the window's was refused: ${explain(error)}`,
+    )
+    return
+  }
   await settled(
     { ...run, client },
     conversationId,
@@ -1076,11 +1102,10 @@ async function background(run, n) {
 async function atRest(run, ids) {
   const failures = []
   for (const conversationId of ids) {
-    const { view } = await untilTurn(
+    const { view } = await untilView(
       run,
       conversationId,
-      0,
-      (_turn, current) => current.messages.every(ended) && current.pending.length === 0,
+      (current) => current.messages.every(ended) && current.pending.length === 0,
       60,
     )
     if (!view) {

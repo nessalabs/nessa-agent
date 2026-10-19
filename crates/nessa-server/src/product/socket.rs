@@ -1585,6 +1585,21 @@ async fn dispatch_passive_read(
     lease: RecordReadLease,
     deadline: Instant,
 ) -> (WireResponse, Option<RecordReadLease>) {
+    let method = frame.method.clone();
+    let answered = answer_passive_read(state, session, frame, lease, deadline).await;
+    if let WireResponse::Ordinary(response) = &answered.0 {
+        super::conversation::trace_refused_command(&method, response);
+    }
+    answered
+}
+
+async fn answer_passive_read(
+    state: &ProductRouteState,
+    session: &AuthenticatedSession,
+    frame: RequestFrame,
+    lease: RecordReadLease,
+    deadline: Instant,
+) -> (WireResponse, Option<RecordReadLease>) {
     let request_id = frame.id.clone();
     let reading = async move {
         let (current, _) = match current_identity_inner(state, session).await {
