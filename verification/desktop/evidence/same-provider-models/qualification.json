@@ -1,34 +1,85 @@
 {
-  "qualified_source_commit": "414ce25f3afa381665bf47bc0ea757069f126dfd",
-  "base": "571c1bb501ffe36fdc6018c2e0f93b4f078b84e2",
+  "qualified_source_commit": "e22bddb2be72e9a19306f5ab0f9db4b870541a73",
+  "qualified_source_tree": "6634a8dcaf855718dd5d9b08c173de98842f8dc2",
+  "base": "caf742c46d3dddaf410a4129de283bcbec6638ad",
+  "portable_checker_commit": "fd587d0ce",
   "ui_pin": "0794a41bb1482aa7e677fd2b7012874bcc3e29b2",
-  "ui_manifest_sha256": "a643e6740b575c84d3c6e7a66b99b706d6fe894372d583fca41c82adc8a2b631",
-  "backend_receipt_sha256": "131e7a48b549f733b02cf0dbf404992f2aa567c7172067d9ba970980f782cb48",
-  "backend_runtime_union": {
-    "passed": 6838,
-    "ignored": 36,
-    "doctests": 69,
-    "note": "Source-qualified union; original failed runs and narrowly migrated fixtures retained separately."
+  "source_manifest_sha256": "e7f0ef6767dfe4ec472bd65bde489b506aab1a72633d2542aea541bd33dc925c",
+  "gateway_sha256": "fd4845fdb5388742bffa72d6c9ff1a6802ab693a19bf00c82357dfcde99744c2",
+  "current_scoped_checks": {
+    "plan_and_chaos_plan_tests": 13,
+    "synthetic_collector_controls": 6,
+    "independent_omission_rejections": [
+      "stable model partition",
+      "Ask preparation",
+      "mode-only unavailable outcome (synthetic collector)"
+    ],
+    "backup_library_selected": 6,
+    "backup_library_filtered": 3310,
+    "backup_cli": 5,
+    "strict_server_clippy": "nessa-server,nessa-protocol,nessa-client-core,nessa-device-client; all-targets; -D warnings"
   },
-  "frontend": {
-    "files": 365,
-    "passed": 4906
-  },
-  "canonical": "three programs in Chromium and WebKit",
-  "chaos": {
-    "passed": 2,
-    "seeds": 2
+  "canonical": {
+    "programs": ["mcp-apps-gateway", "gateway-window", "scripted-scenarios"],
+    "engines": ["chromium", "webkit"],
+    "verdict": "pass"
   },
   "window_stress": {
-    "claude_default": 48,
-    "claude_raised_six": 62,
-    "codex_one": 9,
-    "codex_six": 19,
-    "engines": ["chromium", "webkit"]
+    "claude_default": 51,
+    "claude_raised_six": 58,
+    "codex_one": 8,
+    "codex_six": 18,
+    "engines": ["chromium", "webkit"],
+    "channel": "bundled",
+    "model_steps_default": 1,
+    "model_steps_raised": 6,
+    "positive_model_preset": "Ask confirmed by actual access control before original review",
+    "note": "Actual current row counts; original preset work runs first. Empty console diagnostics do not add a row."
   },
-  "smoke": 33,
-  "composer": 3,
+  "chaos": {
+    "passed": 2,
+    "seeds": 2,
+    "no_pending_model_or_mode_change": true
+  },
+  "parent_backend_source_qualified": {
+    "cold_public_matrix": 7,
+    "cold_server_runtime": 3442,
+    "cold_server_ignored": 13,
+    "cold_server_docs": 4,
+    "sdk_unsupported_ack_focused_fixture_tests": 53,
+    "source_equivalence_receipt_sha256": "68e001c14513239614124a69e95a7d87201409bbec158bd90a90d6178f4d06f7",
+    "note": "Parent source-qualified receipts, not rerun by this UI sequence. Newcaf backup covered separately; not a new6838/all-package run."
+  },
+  "historical_evidence": {
+    "source_commit": "414ce25f3afa381665bf47bc0ea757069f126dfd",
+    "frontend_files": 365,
+    "frontend_passed": 4906,
+    "frontend_note": "Earlier source-qualified frontend; current portable delta is checker/docs only. No new fullfrontend claim.",
+    "backend_union_passed": 6838,
+    "backend_union_ignored": 36,
+    "backend_union_doctests": 69,
+    "backend_note": "Original source-qualified union only; not a current repeated full suite.",
+    "failed_ci_run": "39208371137",
+    "failed_ci_merge": "c38785ae421cc6bc8f824f8c319fcf1a57dac642",
+    "failed_ci_note": "Linux Auto\u2192Fable acknowledged unsupported preset, conservative cancellation/reopen; original exact thrown error uncaptured. Original stress/follower/chaos failures retained, not relabelled."
+  },
+  "photos": {
+    "claude-webkit.png": {
+      "sha256": "ff5da89a29fcde43fa39f4fde1632dbd20483357f7206d82e1089fb3067d1712",
+      "actual_source": "/tmp/nessa-975-portable-final-claude-default/model-webkit-confirmed-review-draft.png"
+    },
+    "codex-chromium.png": {
+      "sha256": "49b4224eaf9f7ea940e49835322b6d654ba1c1fe049a1ec32feaa906ff3fbf1d",
+      "actual_source": "/tmp/nessa-975-portable-final-codex-model-1/model-chromium-confirmed-review-draft.png"
+    },
+    "codex-webkit.png": {
+      "sha256": "4e55df8d5f5fae91793d91cc75b09e66eb1b091b2d83c43696b53478fcfc749b",
+      "actual_source": "/tmp/nessa-975-portable-final-codex-model-6/model-webkit-confirmed-review-draft.png"
+    }
+  },
   "historical_failures_preserved": true,
   "synthetic_controls_are_not_browser_evidence": true,
-  "installed_app_parity_verified": false
+  "installed_app_parity_verified": false,
+  "actual_linux_ci_required_before_merge": true,
+  "performance_claim": false
 }
