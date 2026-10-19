@@ -2649,6 +2649,15 @@ impl ConversationService {
             let live_slot = service.inner.conversations.lock().await.get(&id).cloned();
             let live = if let Some(slot) = live_slot {
                 Some(service.wait_for_slot(&id, slot).await?)
+            } else if mode != record.approval_mode()
+                && service.committed_if_present_with_order(&id).await?.is_some_and(|(committed, _)| {
+                    committed.snapshot().is_some_and(|snapshot| snapshot.current_configuration.is_some())
+                })
+            {
+                // Retained SDK settings own the next attachment. Advance that
+                // owner through its normal native control before acknowledging
+                // metadata; Deferred cannot supersede its saved configuration.
+                Some(service.resolve(&id, &caller).await?)
             } else {
                 None
             };

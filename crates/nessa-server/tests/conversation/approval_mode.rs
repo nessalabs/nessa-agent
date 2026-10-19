@@ -1,8 +1,8 @@
 //! Current mode intent, terminal and retirement publication through public service APIs.
 use super::*;
 use crate::conversation_test_support::{
-    fixture, mode_fixture, mode_fixture_with_summaries, MemoryRepository, MemorySummaries,
-    ModeReadbackFault, ModeRecordChange, ModeTerminalFault, ProviderFactory,
+    fixture, mode_agents, mode_fixture, mode_fixture_with_summaries, MemoryRepository,
+    MemorySummaries, ModeReadbackFault, ModeRecordChange, ModeTerminalFault, ProviderFactory,
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use std::time::Duration;
@@ -1924,5 +1924,259 @@ async fn an_answer_to_a_conversation_with_no_agent_live_is_stale_and_opens_nothi
         "{withdrawn:?}"
     );
     assert_eq!(provider.open_calls.load(Ordering::SeqCst), opens);
+    service.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn review_cold_preset_after_durable_configuration_is_applied() {
+    let (service, provider, _repository, _, _) = mode_fixture();
+    let id = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
+    service
+        .create(id.clone(), caller(), RequestedConversation::default())
+        .await
+        .unwrap();
+    service.read(id.clone(), caller()).await.unwrap();
+    service
+        .set_approval_mode(id.clone(), caller(), ConversationApprovalMode::Auto)
+        .await
+        .unwrap();
+    let initial = service.live_now(&id, &caller()).await.unwrap().unwrap();
+    assert_eq!(
+        initial.agent.approval_mode(),
+        Some(ProviderApprovalMode::Auto)
+    );
+    drop(initial);
+    service.close(id.clone(), caller()).await.unwrap();
+    assert!(service.live_now(&id, &caller()).await.unwrap().is_none());
+    let acknowledged = service
+        .set_approval_mode(id.clone(), caller(), ConversationApprovalMode::Full)
+        .await
+        .unwrap();
+    assert_eq!(acknowledged, ConversationApprovalMode::Full);
+    let reopened = service.read(id.clone(), caller()).await;
+    let live = service.live_now(&id, &caller()).await.unwrap();
+    let actual = live.as_ref().map(|v| v.agent.approval_mode());
+    let updates = provider.mode_updates.lock().unwrap().clone();
+    drop(live);
+    service.shutdown().await.unwrap();
+    assert!(reopened.is_ok(), "acknowledged cold preset must reopen: {reopened:?}; actual={actual:?}; updates={updates:?}");
+    assert_eq!(
+        actual,
+        Some(Some(ProviderApprovalMode::Full)),
+        "acknowledged Full reopened another durable preset; updates={updates:?}"
+    );
+}
+
+// A model control also creates current_configuration. Returning to the fixture's
+// initial model keeps its declared Full preset support, without widening that
+// fixture's deliberately Ask-only second model.
+async fn cold_preset_preserves_durable_owner(saved_model: bool, restart: bool) {
+    use nessa_protocol::conversation::domain::ConversationModelId;
+    use nessa_sdk::application::agent_execution::executions::ExecutionAuditRecord;
+    let (mut service, provider, repository, execution_audit, mode_audit) = mode_fixture();
+    let id = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
+    service
+        .create(id.clone(), caller(), RequestedConversation::default())
+        .await
+        .unwrap();
+    service.read(id.clone(), caller()).await.unwrap();
+    if saved_model {
+        for model in ["second-model", "test"] {
+            service
+                .set_model(
+                    id.clone(),
+                    caller(),
+                    ConversationModelId::new(model).unwrap(),
+                )
+                .await
+                .unwrap();
+        }
+    } else {
+        service
+            .set_approval_mode(id.clone(), caller(), ConversationApprovalMode::Auto)
+            .await
+            .unwrap();
+    }
+    let saved_model_record = service
+        .live_now(&id, &caller())
+        .await
+        .unwrap()
+        .unwrap()
+        .agent
+        .session_manager()
+        .snapshot()
+        .await
+        .unwrap()
+        .model_change;
+    let storage = service.inner.storage.clone();
+    if restart {
+        service.shutdown().await.unwrap();
+        let (mut replacement, _, _, _, _) = mode_fixture();
+        let inner = Arc::get_mut(&mut replacement.inner).unwrap();
+        inner.storage = storage;
+        inner.metadata = repository.clone();
+        inner.agents = mode_agents(provider.clone(), execution_audit.clone());
+        inner.mode_audit = mode_audit.clone();
+        service = replacement;
+    } else {
+        service.close(id.clone(), caller()).await.unwrap();
+    }
+    assert!(service.live_now(&id, &caller()).await.unwrap().is_none());
+    let actor = caller();
+    let acknowledged = service
+        .set_approval_mode(id.clone(), actor.clone(), ConversationApprovalMode::Full)
+        .await;
+    let reopened = service.read(id.clone(), caller()).await;
+    let live = service.live_now(&id, &caller()).await.unwrap();
+    let native = live.as_ref().map(|live| live.agent.approval_mode());
+    let snapshot = match live.as_ref() {
+        Some(live) => live.agent.session_manager().snapshot().await,
+        None => None,
+    };
+    drop(live);
+    let sent = service
+        .submit(
+            id.clone(),
+            caller(),
+            "after-cold-preset".into(),
+            SubmittedMessage {
+                text: "after cold preset".into(),
+                ..SubmittedMessage::default()
+            },
+            SubmissionMode::Queue,
+        )
+        .await;
+    let admitted = execution_audit
+        .records
+        .lock()
+        .unwrap()
+        .iter()
+        .find_map(|record| match record {
+            ExecutionAuditRecord::QueueAdmitted(record)
+                if record.execution_id().as_str() == "after-cold-preset" =>
+            {
+                Some(record.approval_mode())
+            }
+            _ => None,
+        });
+    let request = repository
+        .mode_change(&id, &actor.action_id)
+        .await
+        .unwrap()
+        .unwrap();
+    let committed = repository.load(&id).await.unwrap().unwrap();
+    let updates = provider.mode_updates.lock().unwrap().clone();
+    let pending = repository.pending_mode_change(&id).await.unwrap();
+    service.shutdown().await.unwrap();
+    assert_eq!(acknowledged.unwrap(), ConversationApprovalMode::Full);
+    assert!(reopened.is_ok(), "reopen: {reopened:?}");
+    assert_eq!(
+        native,
+        Some(Some(ProviderApprovalMode::Full)),
+        "saved_model={saved_model}, restart={restart}, native updates={updates:?}"
+    );
+    assert_eq!(committed.approval_mode(), ConversationApprovalMode::Full);
+    assert_eq!(
+        request.application,
+        Some(ConversationModeApplication::Applied)
+    );
+    assert_eq!(request.state, ConversationModeRequestState::Applied);
+    assert!(pending.is_none());
+    assert_eq!(updates.last(), Some(&ProviderApprovalMode::Full));
+    assert!(sent.is_ok(), "fresh admission: {sent:?}");
+    assert_eq!(admitted, Some(Some(ProviderApprovalMode::Full)));
+    let snapshot = snapshot.unwrap();
+    assert_eq!(
+        snapshot
+            .current_configuration
+            .unwrap()
+            .after()
+            .approval_mode(),
+        Some(ProviderApprovalMode::Full)
+    );
+    assert_eq!(snapshot.model_change.is_some(), saved_model);
+    assert_eq!(snapshot.model_change, saved_model_record);
+    assert_eq!(snapshot.provider.model_id(), "test");
+}
+
+#[tokio::test]
+async fn cold_preset_after_saved_preset_and_close_agrees_with_admission() {
+    cold_preset_preserves_durable_owner(false, false).await;
+}
+#[tokio::test]
+async fn cold_preset_after_saved_preset_and_restart_agrees_with_admission() {
+    cold_preset_preserves_durable_owner(false, true).await;
+}
+#[tokio::test]
+async fn cold_preset_after_saved_model_and_close_agrees_with_admission() {
+    cold_preset_preserves_durable_owner(true, false).await;
+}
+#[tokio::test]
+async fn cold_preset_after_saved_model_and_restart_agrees_with_admission() {
+    cold_preset_preserves_durable_owner(true, true).await;
+}
+
+#[tokio::test]
+async fn cold_preset_without_sdk_configuration_remains_deferred() {
+    let (service, provider, repository, _, _) = mode_fixture();
+    let id = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
+    service
+        .create(id.clone(), caller(), RequestedConversation::default())
+        .await
+        .unwrap();
+    service.close(id.clone(), caller()).await.unwrap();
+    assert!(service.live_now(&id, &caller()).await.unwrap().is_none());
+    let opens = provider.open_calls.load(Ordering::SeqCst);
+    let actor = caller();
+    service
+        .set_approval_mode(id.clone(), actor.clone(), ConversationApprovalMode::Full)
+        .await
+        .unwrap();
+    assert_eq!(provider.open_calls.load(Ordering::SeqCst), opens);
+    assert_eq!(
+        repository
+            .mode_change(&id, &actor.action_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .application,
+        Some(ConversationModeApplication::Deferred)
+    );
+    let view = service.read(id.clone(), caller()).await.unwrap();
+    assert_eq!(
+        view.selection.unwrap().approval_mode,
+        ConversationApprovalMode::Full
+    );
+    let live = service.live_now(&id, &caller()).await.unwrap().unwrap();
+    let mode = live.agent.approval_mode();
+    drop(live);
+    service.shutdown().await.unwrap();
+    assert_eq!(mode, Some(ProviderApprovalMode::Full));
+    assert!(provider.mode_updates.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn cold_preset_unchanged_with_saved_configuration_does_not_open() {
+    let (service, provider, _, _, _) = mode_fixture();
+    let id = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
+    service
+        .create(id.clone(), caller(), RequestedConversation::default())
+        .await
+        .unwrap();
+    service.read(id.clone(), caller()).await.unwrap();
+    service
+        .set_approval_mode(id.clone(), caller(), ConversationApprovalMode::Auto)
+        .await
+        .unwrap();
+    service.close(id.clone(), caller()).await.unwrap();
+    let opens = provider.open_calls.load(Ordering::SeqCst);
+    let updates = provider.mode_updates.lock().unwrap().clone();
+    service
+        .set_approval_mode(id.clone(), caller(), ConversationApprovalMode::Auto)
+        .await
+        .unwrap();
+    assert!(service.live_now(&id, &caller()).await.unwrap().is_none());
+    assert_eq!(provider.open_calls.load(Ordering::SeqCst), opens);
+    assert_eq!(*provider.mode_updates.lock().unwrap(), updates);
     service.shutdown().await.unwrap();
 }
