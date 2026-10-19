@@ -9,7 +9,6 @@ export function AllClear() {
   return (
     <EmptyState
       className="agents-clear"
-      data-reflow="all-clear"
       role="status"
       title={
         <>
