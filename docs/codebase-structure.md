@@ -1115,6 +1115,36 @@ package list and installed-package check remain with
 Its adjacent root-level `cloud-startup.test.mjs` exercises cold preparation, warm
 reconciliation, clean login/child shells, missing components and failed receipts.
 
+It also owns `just` (pinned by `just_version`, built from crates.io into the
+cloud root), which the public launch recipes and `scripts/launch-order.test.mjs`
+run, and sets `NESSA_BROWSER_CHANNEL=bundled` so the desktop checks use
+Playwright's Chromium without `--channel bundled`: no Google Chrome is installed.
+
+Where the network refuses Playwright's download hosts (`cdn.playwright.dev`,
+`playwright.download.prss.microsoft.com`), the recipe falls back to the Chromium
+the sandbox already ships in `PLAYWRIGHT_BROWSERS_PATH`: it links that build under
+the revision this checkout's Playwright expects in `<cloud root>/browsers`,
+points `PLAYWRIGHT_BROWSERS_PATH` there and records `browsers=sandbox-chromium`.
+WebKit has no stand-in, so WebKit checks (and `pnpm test:e2e:scripted`, which
+runs both engines) need those hosts allowed. A stalled download never falls back.
+
+Claude Code cloud sessions with only this repository run the recipe from the
+SessionStart hook in `.claude/settings.json` (`.claude/hooks/session-start.sh`),
+which hands `env.sh` to the session. A session with several repositories loads
+no repository hooks; its cloud environment's setup script runs the recipe
+instead, against the attached checkout:
+
+```bash
+#!/bin/bash
+for repo in /home/*/nessa-agent "$HOME/nessa-agent" "$PWD"; do
+  [ -f "$repo/scripts/cloud-startup.sh" ] && break
+done
+bash "$repo/scripts/cloud-startup.sh" setup "$repo" || echo 'Nessa cloud setup failed' >&2
+```
+
+The sandbox runs as root, so the tests that assert a refused permission or a
+foreign owner fail there and pass in CI; that is not a missing tool.
+
 The bootstrap persists the selected PATH in one owned helper. It records a
 container-minted identity, preexisting identity/previous receipt, actual entry
 mode, task source, provisioning source/hashes and per-step reuse in
