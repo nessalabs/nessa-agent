@@ -82,7 +82,27 @@ Affected checks passed **409 unique runtime tests /7 ignored**, **57 SDK
 doctests**, exact seven-package all-target strict Clippy/format and strict SDK
 docs. This SDK-only correction does not claim a new frontend/browser/full6838
 run. Built-in factories already preserve the flag; no vendor or installed-app
-failure is claimed. Fresh whole R5 and current-head CI remain required.
+failure is claimed. Fresh whole review and current-head CI remain required.
+
+## R5 effort settlement correction
+
+Source `ca898be66` routes the native effort outcome and local configuration result
+through one bounded terminal audit attempt under the original scheduler/permit.
+Known native ACK remains Applied even when storage or retention fails; the primary
+failure and CleanupRequired remain returned, with a later audit error appended.
+Post-ACK retention-factory panic uses the same settlement owner. No new audit,
+configuration or policy owner was added.
+
+Actual public before: **5 failures /3 positives**; fixed **8 pass**. Private
+sole-terminal omission reproduces **5 failures /3 positives**; exact fresh
+restoration passes **8**. Public faults cover storage, retention refusal/panic,
+combined audit errors and unverified native results, preserving original actor,
+levels/generation, durable-state meaning, fenced admission and cleanup once.
+Affected **98 unique runtime tests**, **57 SDK doctests**, exact seven-package
+all-target strict Clippy/format and strict SDK docs pass. Audit failure is an
+attempt, not claimed delivery; runtime destruction can prevent future polling.
+Earlier frontend/browser/native evidence retains its source scope. Fresh whole
+review and actual current-head CI remain required.
 
 ## Earlier inspected screenshots
 

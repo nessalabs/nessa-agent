@@ -314,5 +314,31 @@
     "sdk_doctests": 57,
     "strict_checks": "Exact seven-package all-target Clippy -D warnings, fmt and strict SDK docs pass.",
     "limits": "No new frontend/browser/full6838 run for this SDK-only check. Prior evidence retains source scope. New whole R5/current CI required."
+  },
+  "effort_settlement_correction": {
+    "source": "ca898be66",
+    "owner": "Existing effort change separates native outcome from local storage/retention result, then one bounded terminal audit attempt under original scheduler/permit.",
+    "native_ack": "Applied means native verified, not durable saved. Primary local failure retains CleanupRequired; terminal audit error appended primary-first.",
+    "public_before": {
+      "failed": 5,
+      "positive_passed": 3
+    },
+    "fixed": 8,
+    "private_sole_terminal_omission": {
+      "failed": 5,
+      "positive_passed": 3
+    },
+    "private_exact_recompiled_restore": 8,
+    "proofs": "Public Agent plus forwarding real InMemoryStorage: save failure/success, returned retention refusal/panic, combined audit failures, unverified native/panic. Original attribution, known ACK, primary error, committed snapshot at failed return, admission fence and cleanup once.",
+    "affected_unique_runtime": {
+      "effort": 15,
+      "models": 59,
+      "native_effort": 23,
+      "configuration_relation": 1,
+      "total": 98
+    },
+    "sdk_doctests": 57,
+    "strict_checks": "Exact seven-package all-target Clippy -D warnings/fmt and strict SDK docs pass.",
+    "limits": "Terminal audit failure is attempted, not delivered; owning runtime destruction may prevent later polling. No repeated frontend/browser/full6838; prior scopes unchanged. Fresh whole review/current CI required."
   }
 }
