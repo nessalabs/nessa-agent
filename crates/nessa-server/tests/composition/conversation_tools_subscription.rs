@@ -450,7 +450,9 @@ impl CommittedEventReader for DeliveryReader {
                     next.clone(),
                     SessionChange::LocalSettlement {
                         execution_id: ExecutionId::new("finished").unwrap(),
-                        before: None,
+                        // A settlement update, not a turn's end: these pages
+                        // are about cursors, not the reply an end looks up.
+                        before: Some(Ok(ExecutionOutcome::Completed)),
                         after: Ok(ExecutionOutcome::Completed),
                         local_outcome: None,
                     },
@@ -687,7 +689,9 @@ fn progress_page(incarnation: &str, position: u64, index: u64) -> EventRead {
         next.clone(),
         SessionChange::LocalSettlement {
             execution_id: ExecutionId::new("trailing").unwrap(),
-            before: None,
+            // A settlement update, not a turn's end: these pages are about
+            // cursors, not the reply an end looks up.
+            before: Some(Ok(ExecutionOutcome::Completed)),
             after: Ok(ExecutionOutcome::Completed),
             local_outcome: None,
         },
@@ -825,4 +829,30 @@ async fn follow_retains_now_idle_progress_through_preparing_and_valid_trailing_e
         progress_cursor("captured", 9, Some(1)).encode()
     );
     assert_eq!(first["events"][0]["executionId"], "trailing");
+}
+
+/// A turn's end whose history cannot be read now is refused, so the caller
+/// asks again from its cursor, never told the turn ended without a reply.
+#[tokio::test(start_paused = true)]
+async fn an_ended_turn_whose_history_cannot_be_read_is_refused_not_answered_without_a_reply() {
+    let next = progress_cursor("incarnation", 1, Some(1));
+    let ended = CommittedEvent::change(
+        next.clone(),
+        SessionChange::LocalSettlement {
+            execution_id: ExecutionId::new("ended").unwrap(),
+            before: None,
+            after: Ok(ExecutionOutcome::Completed),
+            local_outcome: None,
+        },
+    );
+    let page = EventRead::Page(
+        CommittedEventPage::new(vec![ended], next, progress_cursor("incarnation", 1, None))
+            .unwrap(),
+    );
+    assert_eq!(
+        scripted_follow(EventStart::Beginning, vec![page], 0)
+            .await
+            .unwrap_err(),
+        "temporarily_unavailable"
+    );
 }

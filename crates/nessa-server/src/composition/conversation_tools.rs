@@ -92,7 +92,7 @@ impl BuiltInServer for ConversationTools {
             }),
             json!({
                 "name": "send_message",
-                "description": "Send plain text in another thread of the same owner. queued (default) starts a queued turn; steering uses the existing steering semantics; passive records a note without starting or steering a turn. When a queued or steering message's turn ends, a report with the thread's outcome and final reply is queued into this conversation as a new turn (reportsBack: true), so there is no need to poll for it: end your turn and the report wakes you. To wait for the reply inside this turn instead, call subscribe once with this threadId and the returned executionId; the report is then not sent. Retry with identical thread, text and mode using the same requestId. Passive notes and active submissions retain separate existing operation namespaces.",
+                "description": "Send plain text in another thread of the same owner. queued (default) starts a queued turn; steering uses the existing steering semantics; passive records a note without starting or steering a turn. When a queued or steering message's turn ends, a report with the thread's outcome and final reply is queued into this conversation as a new turn (reportsBack: true), so there is no need to poll for it: end your turn and the report wakes you. To wait for the reply inside this turn instead, call subscribe once with this threadId and the returned executionId; the report is then not sent, unless it was already queued before that call. Retry with identical thread, text and mode using the same requestId. Passive notes and active submissions retain separate existing operation namespaces.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -855,8 +855,12 @@ async fn observe(
                         return Err(code(ConversationError::Unavailable))
                     }
                 };
-                let outcome = ended.outcome.unwrap_or("completed");
-                let turn = turn_value(&execution, reply.unwrap_or((outcome, None)));
+                // An ended turn whose history cannot be read now is not a
+                // turn without a reply: the caller asks again from its cursor.
+                let Some(end) = reply else {
+                    return Err(code(ConversationError::Unavailable));
+                };
+                let turn = turn_value(&execution, end);
                 return Ok(
                     json!({"threadId":target.to_string(),"events":events,"cursor":ended.cursor,"more":more,"timedOut":false,"turn":turn}),
                 );
