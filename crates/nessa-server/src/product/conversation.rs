@@ -55,7 +55,7 @@ use nessa_sdk::application::agent_execution::{
         MutationOutcome, MutationReceipt, MutationStage,
     },
     permissions::{is_remember_option, PermissionCaller, PermissionSelectionState},
-    sessions::{NoteDelivery, NoteRetirementReason, NoteState, StorageError},
+    sessions::{NoteDelivery, NoteRetirementReason, NoteState},
 };
 use nessa_sdk::domain::agent_execution::executions::Initiation;
 use serde_json::{json, Value};
@@ -667,61 +667,20 @@ pub(crate) async fn dispatch(
     }
 }
 
-/// A refused conversation command — create, send, stop and the rest — as a
-/// warning in the gateway log: the method, the wire code, and what the code
-/// collapses. Reads, the index and its pages already warn on their own spans.
-/// Only refusals answered as errors are here; an access or admission check
-/// that answers its own code before the command runs is not. Like a read's
-/// hint, never a `Display` string: those carry transport text and paths.
+/// A refused conversation command — any method, reads included — as a
+/// warning in the gateway log at the one place every refusal answered as an
+/// error passes: the method, the wire code, and every cause behind it, since
+/// the code keeps only one. A read's own span may also have warned; this
+/// line is the boundary's, so a refusal before or after that span is not
+/// lost. An access or admission check that answers its own code before the
+/// command runs is not here.
 fn trace_command_refusal(method: &str, error: &ConversationError) {
-    if matches!(
-        method,
-        "conversation.read" | "conversation.list" | "conversation.observe"
-    ) {
-        return;
-    }
     tracing::warn!(
         method,
         code = error_code(error).as_str(),
-        hint = command_refusal_hint(error),
-        storage = evidence_storage_hint(error),
+        causes = %super::refusal_causes::refusal_causes(error),
         "conversation command refused",
     );
-}
-
-/// The storage failure behind a refusal for missing admission evidence,
-/// which its hint names only as a channel; an audit failure beside it
-/// already took the wire code.
-fn evidence_storage_hint(error: &ConversationError) -> Option<&'static str> {
-    match error {
-        ConversationError::AdmissionEvidence {
-            storage: Some(error),
-            ..
-        } => Some(storage_hint(error)),
-        _ => None,
-    }
-}
-
-/// The part of a refusal its wire code does not say, where one is known.
-fn command_refusal_hint(error: &ConversationError) -> Option<&'static str> {
-    match error {
-        ConversationError::Metadata => Some("metadata"),
-        ConversationError::AdmissionEvidence {
-            audit: Some(_),
-            storage: Some(_),
-        } => Some("evidence-audit-and-storage"),
-        ConversationError::AdmissionEvidence { audit: Some(_), .. } => Some("evidence-audit"),
-        ConversationError::AdmissionEvidence {
-            storage: Some(_), ..
-        } => Some("evidence-storage"),
-        ConversationError::Storage(error)
-        | ConversationError::Agent(AgentError::Storage(error))
-        | ConversationError::PermissionAnswer {
-            error: AgentError::Storage(error),
-            ..
-        } => Some(storage_hint(error)),
-        error => read_refusal_hint(error),
-    }
 }
 
 /// Refuse a review's or a question's key that is not 32 lowercase hex
@@ -1387,29 +1346,6 @@ fn trace_conversation_observe(error: Option<&ConversationError>) {
         hint = read_refusal_hint(error),
         "conversation index page refused",
     );
-}
-
-/// Which storage failure `conversation_storage_unavailable` stood for: `busy`
-/// is a lease or owner someone else holds, `io` the store refusing or failing
-/// the work. Every variant named, so a new one is named here too.
-fn storage_hint(error: &StorageError) -> &'static str {
-    match error {
-        StorageError::Closed => "storage-closed",
-        StorageError::ReadCapacity => "storage-read-capacity",
-        StorageError::ReadWorkerPanicked => "storage-read-worker",
-        StorageError::DiagnosticLimit => "storage-diagnostic-limit",
-        StorageError::ShutdownFailures(_) => "storage-shutdown",
-        StorageError::Busy => "storage-busy",
-        StorageError::Io(_) => "storage-io",
-        StorageError::Corrupt(_) => "storage-corrupt",
-        StorageError::Store(_) => "storage-store",
-        StorageError::AnotherVersion { .. } => "storage-another-version",
-        StorageError::IdentityMismatch => "storage-identity",
-        StorageError::ChangesRequired => "storage-changes-required",
-        StorageError::Unresolved => "storage-unresolved",
-        StorageError::TooLarge => "storage-too-large",
-        StorageError::CommittedReadUnavailable => "storage-committed-read",
-    }
 }
 
 /// A static hint already on the error, where the wire code collapses several
