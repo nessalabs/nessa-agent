@@ -211,6 +211,7 @@ enum Normalization {
     PanicAdjusted,
     PanicPreflight,
     IgnoreMode,
+    AskOnly,
     IgnoreEffort,
     ChangeHost,
     ChangeHostAdjusted,
@@ -268,6 +269,9 @@ impl AgentProvider for Provider {
             && mode != self.approval_mode()
         {
             panic!("fixture panics only when normalizing adjusted ACK");
+        }
+        if matches!(self.normalization, Normalization::AskOnly) && mode != Some(ApprovalMode::Ask) {
+            return Err(AgentError::Unsupported("target accepts Ask only".into()));
         }
         if self.normalization_failure {
             return Err(AgentError::Unsupported(
@@ -1141,6 +1145,70 @@ async fn ignored_acknowledged_settings_fence_without_committing_model() {
             .is_err());
         agent.close(close_action()).await.unwrap();
     }
+}
+
+#[tokio::test]
+async fn unsupported_acknowledged_target_preset_fences_without_committing_model() {
+    let (agent, prior, _) = prepared(None).await;
+    let mut chosen = (*target(&prior)).clone();
+    chosen.normalization = Normalization::AskOnly;
+    *prior.backend.model_mode.lock().unwrap() = ApprovalMode::Auto;
+    let failure = agent
+        .set_model(Arc::new(chosen), close_action())
+        .await
+        .unwrap_err();
+    assert_eq!(
+        failure.error(),
+        &AgentError::Unsupported("target accepts Ask only".into())
+    );
+    assert_eq!(failure.stage(), ProviderOperationStage::EffectUncertain);
+    assert_eq!(
+        failure.session_state(),
+        &ProviderSessionState::CleanupRequired
+    );
+    assert_eq!(prior.backend.model_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(agent.provider_identity(), prior.identity());
+    assert_eq!(agent.approval_mode(), Some(ApprovalMode::Ask));
+    let snapshot = agent.session_manager().snapshot().await.unwrap();
+    assert!(snapshot.model_change.is_none());
+    assert!(snapshot.current_configuration.is_none());
+    assert_eq!(snapshot.provider, prior.identity());
+    assert!(matches!(
+        agent
+            .enqueue(
+                input("after-unsupported-target-ack", 1),
+                Submitter::owner(close_action())
+            )
+            .await,
+        Err(AgentError::Closed)
+    ));
+    let controls = prior
+        .backend
+        .audit
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(|record| match record {
+            ExecutionAuditRecord::ConfigurationControlled(record) => Some(record.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        controls
+            .iter()
+            .map(|record| record.stage())
+            .collect::<Vec<_>>(),
+        [
+            ConfigurationControlStage::Requested,
+            ConfigurationControlStage::Failed
+        ]
+    );
+    assert!(controls
+        .iter()
+        .all(|record| record.actor() == &close_action() && record.acknowledged().is_none()));
+    assert_eq!(prior.backend.closes.load(Ordering::SeqCst), 0);
+    agent.close(close_action()).await.unwrap();
+    assert_eq!(prior.backend.closes.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]
