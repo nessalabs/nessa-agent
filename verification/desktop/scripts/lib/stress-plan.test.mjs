@@ -23,6 +23,8 @@ test("every required step appears as often as its number says", () => {
   assert.equal(count("aside"), knobs.asides)
   assert.equal(count("large"), knobs.large)
   assert.equal(count("park"), knobs.parks)
+  assert.equal(count("rename"), knobs.renames)
+  assert.equal(count("delete"), knobs.deletes)
   assert.equal(count("fresh"), knobs.fresh)
   assert.equal(count("window"), knobs.windows)
   assert.equal(count("linking"), knobs.linkings)

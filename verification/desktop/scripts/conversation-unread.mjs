@@ -145,6 +145,11 @@ function unreadGateway(seen) {
         })
         return
       }
+      // The window tells the gateway what it shows; held as sent.
+      if (frame.method === "workspace.publish") {
+        send({ ok: true, payload: { revision: frame.params?.revision, applied: true } })
+        return
+      }
       seen.unexpected.push(frame.method ?? "frame")
       send({ ok: false, error: { code: "invalid_request", message: "not this check" } })
     })

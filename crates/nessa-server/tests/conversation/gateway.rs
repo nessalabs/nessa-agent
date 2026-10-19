@@ -228,6 +228,7 @@ mod gateway {
                 "conversation.receipt",
                 "conversation.archive",
                 "conversation.unarchive",
+                "conversation.rename",
                 "conversation.delete",
                 "conversation.setApprovalMode",
             ] {
@@ -359,6 +360,7 @@ mod gateway {
             "conversation.stop",
             "conversation.archive",
             "conversation.unarchive",
+            "conversation.rename",
             "conversation.delete",
         ] {
             send_command(
@@ -421,9 +423,13 @@ mod gateway {
             response(&mut peer).await["error"]["code"],
             "temporarily_unavailable"
         );
-        // Archiving and unarchiving are controls: they wait for the control
-        // pool, not the requests' or the deletes'.
-        for method in ["conversation.archive", "conversation.unarchive"] {
+        // Archiving, unarchiving and renaming are controls: they wait for the
+        // control pool, not the requests' or the deletes'.
+        for method in [
+            "conversation.archive",
+            "conversation.unarchive",
+            "conversation.rename",
+        ] {
             send_command(&peer, method, method, target(method));
             assert_eq!(
                 response(&mut peer).await["error"]["code"],
@@ -800,6 +806,10 @@ mod gateway {
             ),
             ("conversation.close", target("close")),
             ("conversation.archive", target("archive-3")),
+            (
+                "conversation.rename",
+                json!({"conversationId":id,"requestId":"rename","title":"Gone"}),
+            ),
         ] {
             let refused = chat_request(&state, &panel, method, params).await;
             assert_eq!(
@@ -832,6 +842,113 @@ mod gateway {
             );
         }
         assert_eq!(provider.open_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn rename_answers_as_a_mutation_and_refuses_a_title_the_domain_would_not_hold() {
+        let (service, _, _, _) = chat_fixture();
+        let state = chat_state().with_conversations(Arc::new(service));
+        let owner = chat_session(&state, "owner-phone").await;
+        let id = "00000000-0000-4000-8000-00000000000b";
+        let rename = |request: &str, title: &str| {
+            json!({"conversationId":id,"requestId":request,"title":title})
+        };
+        assert!(
+            chat_request(
+                &state,
+                &owner,
+                "conversation.create",
+                json!({"conversationId":id,"requestId":"create"}),
+            )
+            .await
+            .ok
+        );
+        // Nothing said yet, so nothing listed, and nothing to rename.
+        let reply = chat_request(&state, &owner, "conversation.rename", rename("rename-0", "Lisbon")).await;
+        assert_eq!(
+            reply.payload,
+            Some(json!({"requestId": "rename-0", "applied": false}))
+        );
+        let send = |request: &str, text: &str| {
+            json!({"conversationId":id,"requestId":request,"executionId":request,"text":text,"attachments":[],"files":[]})
+        };
+        assert!(
+            chat_request(&state, &owner, "conversation.send", send("send-1", "hello"))
+                .await
+                .ok
+        );
+        for (request, title, applied) in [
+            ("rename-1", "Lisbon in May", true),
+            ("rename-1", "Lisbon in May", false),
+            ("rename-2", "hello", true),
+            ("rename-3", "Lisbon in May", true),
+        ] {
+            let reply =
+                chat_request(&state, &owner, "conversation.rename", rename(request, title)).await;
+            assert_eq!(
+                reply.payload,
+                Some(json!({"requestId": request, "applied": applied})),
+                "{request} {title}"
+            );
+        }
+        // What the domain would not hold as a title is refused before anything
+        // is read: the gateway does not tidy a title up for the client.
+        let too_long = "a".repeat(49);
+        for title in ["", " Lisbon", "Lisbon ", "Lisbon  in May", "Lisbon\nin May", too_long.as_str()] {
+            let refused =
+                chat_request(&state, &owner, "conversation.rename", rename("bad", title)).await;
+            assert_eq!(refused.error.unwrap().code, "invalid_request", "{title:?}");
+        }
+        let untitled = chat_request(
+            &state,
+            &owner,
+            "conversation.rename",
+            json!({"conversationId":id,"requestId":"bad"}),
+        )
+        .await;
+        assert_eq!(untitled.error.unwrap().code, "invalid_request");
+        // At its bound in characters, not bytes.
+        let widest = "😀".repeat(48);
+        let reply = chat_request(&state, &owner, "conversation.rename", rename("rename-4", &widest)).await;
+        assert_eq!(
+            reply.payload,
+            Some(json!({"requestId": "rename-4", "applied": true}))
+        );
+        assert!(
+            chat_request(&state, &owner, "conversation.rename", rename("rename-5", "Lisbon in May"))
+                .await
+                .ok
+        );
+        // A later message keeps the title somebody chose.
+        assert!(
+            chat_request(&state, &owner, "conversation.send", send("send-2", "And Porto?"))
+                .await
+                .ok
+        );
+        let listed = chat_request(&state, &owner, "conversation.list", json!({}))
+            .await
+            .payload
+            .unwrap();
+        assert_eq!(listed["conversations"][0]["conversationId"], id);
+        assert_eq!(listed["conversations"][0]["title"], "Lisbon in May");
+        let read = chat_request(&state, &owner, "conversation.read", json!({"conversationId":id}))
+            .await
+            .payload
+            .unwrap();
+        assert_eq!(read["title"], "Lisbon in May");
+        // Somebody else cannot rename it, and is told nothing about it; nor
+        // can anyone rename what was never created.
+        let other = chat_session(&state, "other").await;
+        let refused = chat_request(&state, &other, "conversation.rename", rename("theirs", "Mine")).await;
+        assert_eq!(refused.error.unwrap().code, "conversation_not_found");
+        let unknown = chat_request(
+            &state,
+            &owner,
+            "conversation.rename",
+            json!({"conversationId":"00000000-0000-4000-8000-00000000000c","requestId":"unknown","title":"Lisbon"}),
+        )
+        .await;
+        assert_eq!(unknown.error.unwrap().code, "conversation_not_found");
     }
 
     #[tokio::test]

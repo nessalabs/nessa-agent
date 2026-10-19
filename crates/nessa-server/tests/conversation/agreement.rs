@@ -77,6 +77,27 @@ fn a_read_states_the_same_title_bound_as_the_list() {
 }
 
 #[test]
+fn a_rename_states_the_title_bound_the_domain_keeps() {
+    let schema = schema();
+    let title = &schema["$defs"]["ConversationRenameParams"]["properties"]["title"];
+    // Both count characters (code points): the schema's `maxLength` is the
+    // domain's own bound, and the byte bound fits it at four bytes each.
+    assert_eq!(
+        title["maxLength"].as_u64(),
+        Some(ConversationTitle::MAX_CHARS as u64)
+    );
+    assert_eq!(
+        title["x-utf8MaxBytes"].as_u64(),
+        Some(ConversationTitle::MAX_CHARS as u64 * 4)
+    );
+    // And a renamed title fits wherever a title is shown.
+    let shown = schema["$defs"]["ConversationSummary"]["properties"]["title"]["x-utf8MaxBytes"]
+        .as_u64()
+        .unwrap();
+    assert!(title["x-utf8MaxBytes"].as_u64().unwrap() <= shown);
+}
+
+#[test]
 fn a_tool_states_the_mcp_name_and_structured_result_bounds_the_view_keeps() {
     let schema = schema();
     let tool = &schema["$defs"]["ConversationTool"]["properties"];

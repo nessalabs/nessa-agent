@@ -143,6 +143,20 @@ export const nessaIcons: DesktopIconFamily = {
       <Dot x={10} y={12.9} r={0.95} />
     </>,
   ),
+  // A box with its lid, and the slot of its handle.
+  archive: drawn(
+    <>
+      <rect x="3.5" y="4" width="13" height="3.5" rx="1.25" />
+      <path d="M4.75 7.5v6.75c0 .97.78 1.75 1.75 1.75h7c.97 0 1.75-.78 1.75-1.75V7.5M8.5 10.5h3" />
+    </>,
+  ),
+  // A bin with its lid and handle.
+  delete: drawn(
+    <>
+      <path d="M4 6h12M8.25 6V4.75c0-.41.34-.75.75-.75h2c.41 0 .75.34.75.75V6" />
+      <path d="M5.5 6l.7 8.6c.07.8.74 1.4 1.54 1.4h4.52c.8 0 1.47-.6 1.54-1.4L14.5 6M8.5 9v4M11.5 9v4" />
+    </>,
+  ),
 
   // On send's filled disc a slightly firmer line keeps the arrow from thinning out.
   send: drawn(<path d="M10 15.5v-11M5.5 9 10 4.5 14.5 9" />, 1.6),

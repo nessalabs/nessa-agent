@@ -44,7 +44,7 @@
 
 .share-quiet,
 .share-reason,
-.share-notes {
+.share-empty {
   margin: 0;
   color: var(--muted-foreground);
 }
@@ -54,11 +54,17 @@
   flex: 1 1 12rem;
 }
 
-.share-notes {
+/* The empty state's one line, its link following the words. */
+.share-empty {
   display: flex;
-  flex-direction: column;
-  gap: var(--spacing);
-  padding-inline-start: calc(var(--spacing) * 4);
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: calc(var(--spacing) * 1.5);
+}
+
+.share-link {
+  height: auto;
+  padding: 0;
 }
 
 /* A live region, so it stays mounted; empty, it takes no room and no gap. */

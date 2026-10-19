@@ -70,3 +70,13 @@ test("shrinking stops at its budget and keeps the input when no cut fails", asyn
   assert.equal(tried, 5)
   assert.equal(calls, 5)
 })
+
+test("a rename says what it types", () => {
+  const renames = actions(knobsFrom({ waves: "60", width: "6" }, {})).filter(
+    (action) => action.kind === "rename",
+  )
+  assert.ok(renames.length > 0)
+  for (const action of renames)
+    assert.ok(["plain", "folded", "long"].includes(action.title))
+  assert.match(describe(renames), /rename (plain|folded|long) c\d/)
+})

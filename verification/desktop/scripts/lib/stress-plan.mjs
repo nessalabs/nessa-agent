@@ -65,6 +65,14 @@ export const KNOBS = {
     default: 1,
     what: "conversations left idle until the gateway parks their agent, then talked to again",
   },
+  renames: {
+    default: 1,
+    what: "conversations renamed from a row's More menu, then talked to under the new title",
+  },
+  deletes: {
+    default: 1,
+    what: "conversations deleted from a row's More menu, once asked",
+  },
   fresh: {
     default: 2,
     what: "conversations started from a new session's home in the window, their first message sent there",
@@ -139,6 +147,8 @@ export function plan(knobs) {
   add(knobs.asides, () => ({ kind: "aside" }))
   add(knobs.large, () => ({ kind: "large" }))
   add(knobs.parks, () => ({ kind: "park" }))
+  add(knobs.renames, () => ({ kind: "rename" }))
+  add(knobs.deletes, () => ({ kind: "delete" }))
   add(knobs.fresh, () => ({ kind: "fresh" }))
   add(knobs.windows, () => ({ kind: "window" }))
   add(knobs.linkings, () => ({ kind: "linking" }))

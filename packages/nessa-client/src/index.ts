@@ -405,6 +405,7 @@ export type {
 export { CatalogueReadErrorCode } from "./generated/product.js"
 
 export {
+  conversationTitle,
   prepareSubmission,
   preparedSubmissionFields,
 } from "./presentation/conversation-api.js"

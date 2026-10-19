@@ -111,15 +111,13 @@ export const presetCopy: Record<
   custom: { label: "Custom", description: "Tools you allow and deny by name." },
 }
 
-/** What a policy does not stop, said beside the Drive controls (nessa_ui#128). */
-export const driveNotes = {
-  unasked:
-    "Calls the agent doesn’t ask about aren’t checked: Claude reads files without asking, and Codex runs commands in its read-only sandbox without asking. A deny pattern doesn’t stop those.",
-  hosts:
-    "Commands run only on hosts this grant names and the gateway allows. With none checked, they run nowhere.",
-  enforceable:
-    "Drive works only while this conversation is in Ask mode, the agent’s own hooks are off, and the agent isn’t OpenCode. Otherwise the gateway refuses the device’s turns.",
-} as const
+/**
+ * What a policy does not stop, said beside the Drive controls (nessa_ui#128).
+ * The one note there: what the hosts and the conversation's mode allow is
+ * said by the controls and the gateway's refusal (`changeFailureCopy`).
+ */
+export const driveNote =
+  "Calls the agent doesn’t ask about aren’t checked: Claude reads files without asking, and Codex runs commands in its read-only sandbox without asking. A deny pattern doesn’t stop those."
 
 /** A host's list, said in words: "devbox and build", or "nowhere". */
 function hostsLine(hosts: readonly string[]): string {

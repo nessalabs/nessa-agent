@@ -142,6 +142,21 @@ export type ConversationSubmission = Readonly<ConversationReceipt> & {
 }
 
 /** Agent conversation commands. Creation and message admission failures expose NessaConversationMutationError.retry(). Controls expose NessaConversationControlError with uncertain effect status and require a fresh read before another deliberate action. Read returns a bounded full replacement view, suitable for serialized polling. */
+/**
+ * The title the gateway keeps for what a person typed to rename a
+ * conversation, or `null` when nothing is left to call it: one line, every
+ * run of whitespace or control characters one space, none at either end, cut
+ * to the published maximum of code points. The gateway refuses any other
+ * title (`invalid_request`), so pass this to `rename`. It folds at least what
+ * the gateway calls whitespace or a control character, so what it returns
+ * the gateway always takes.
+ */
+export function conversationTitle(text: string): string | null {
+  const line = text.replace(/[\s\p{Cc}]+/gu, " ").trim()
+  const cut = Array.from(line).slice(0, bounds.maxConversationRenameCharacters)
+  return cut.join("").trimEnd() || null
+}
+
 export type ConversationApi = {
   /** Create or reopen a conversation. The gateway answers when the original attachment is ready. IDs are generated when options are omitted. */
   create: (options?: ConversationCreateOptions) => Promise<ConversationCreateResult>
@@ -309,6 +324,12 @@ export type ConversationApi = {
   /** Undo `archive`. `applied` is false when it was not archived. */
   unarchive: (
     conversationId: string,
+    options?: ConversationActionOptions,
+  ) => Promise<ConversationMutationResult>
+  /** Rename a conversation: `list()` and `read()` show `title` from now on, and a later message does not rename it back. `title` must be one the gateway keeps, as `conversationTitle` makes it; the gateway refuses anything else with `invalid_request`. `applied` is false when it already has that title, or when the gateway has no summary for it, as for `archive`. */
+  rename: (
+    conversationId: string,
+    title: string,
     options?: ConversationActionOptions,
   ) => Promise<ConversationMutationResult>
   /**
@@ -1015,6 +1036,18 @@ export function createConversationApi(
     archive: (id, options) => action(ProductMethod.ConversationArchive, id, {}, options),
     unarchive: (id, options) =>
       action(ProductMethod.ConversationUnarchive, id, {}, options),
+    // Not through `action`: its text bound is not a title's, and the gateway
+    // owns what a title may be.
+    rename: (id, title, options = {}) => {
+      validConversationId(id)
+      const requestId = boundedText(options.requestId ?? newId(), "Request ID", 256)
+      return mutate(
+        ProductMethod.ConversationRename,
+        { conversationId: id, requestId, title },
+        (value) => conversationMutation(value, requestId),
+        false,
+      )
+    },
     delete: (id, options) =>
       action(ProductMethod.ConversationDelete, id, {}, options, false, {
         atLeastMs: conversationDeleteTimeoutMs,
