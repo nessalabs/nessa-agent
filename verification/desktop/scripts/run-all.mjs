@@ -50,6 +50,7 @@ const functional = [
   "panel-list-follow",
   "linked-devices",
   "share-dialog",
+  "session-rows",
   "settings-page",
   "widgets",
   "subagents",

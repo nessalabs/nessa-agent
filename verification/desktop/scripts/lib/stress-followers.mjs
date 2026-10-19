@@ -64,8 +64,10 @@ export class Follower {
    * `connect` makes a new client; `limits` is the published
    * `subscriptionLimits`; `random` the run's seeded generator.
    */
-  constructor({ n, connect, limits, random, mainId }) {
+  constructor({ n, connect, limits, random, mainId, deleted = new Set() }) {
     this.n = n
+    /** Conversations the run deleted: their streams end, and they are let go. */
+    this.deleted = deleted
     this.connect = connect
     this.limits = limits
     this.random = random
@@ -101,7 +103,7 @@ export class Follower {
   }
 
   /** `open` until it succeeds; a restart can refuse it for a while. */
-  async retry(what, open) {
+  async retry(what, open, conversationId) {
     const deadline = Date.now() + 120_000
     let last
     while (Date.now() < deadline) {
@@ -109,6 +111,7 @@ export class Follower {
         return await open(await this.live())
       } catch (error) {
         last = error
+        if (this.gone(conversationId)) return null
         // Its own bookkeeping is wrong; waiting does not change that.
         if (REFUSED.has(error?.code)) break
         await sleep(500)
@@ -118,6 +121,17 @@ export class Follower {
       `${what} could not be opened again: ${last?.code ?? ""} ${last?.message ?? last}`,
     )
     return null
+  }
+
+  /**
+   * Whether `conversationId` is one the run deleted: however its stream ends
+   * or its follow is refused from then on, it is let go, its events no longer
+   * compared, since a deleted conversation has none to compare with.
+   */
+  gone(conversationId) {
+    if (!this.deleted.has(conversationId)) return false
+    this.events.delete(conversationId)
+    return true
   }
 
   ended(what, end, lost) {
@@ -171,30 +185,34 @@ export class Follower {
     // Only the stream opened last applies events; a stopped one is ignored.
     const token = {}
     held.token = token
-    const subscription = await this.retry(`events of ${conversationId}`, (client) =>
-      client.subscriptions.events(
-        conversationId,
-        {
-          batch: (batch) => {
-            if (held.token !== token) return
-            for (const event of batch.events) {
-              if (held.seen.has(event.id))
-                this.fail(`${conversationId}: event ${event.id} came twice`)
-              held.seen.add(event.id)
-              held.ids.push(event.id)
-            }
-            held.cursor = batch.cursor
+    const subscription = await this.retry(
+      `events of ${conversationId}`,
+      (client) =>
+        client.subscriptions.events(
+          conversationId,
+          {
+            batch: (batch) => {
+              if (held.token !== token) return
+              for (const event of batch.events) {
+                if (held.seen.has(event.id))
+                  this.fail(`${conversationId}: event ${event.id} came twice`)
+                held.seen.add(event.id)
+                held.ids.push(event.id)
+              }
+              held.cursor = batch.cursor
+            },
+            ended: (end) => {
+              if (held.token !== token) return
+              if (this.gone(conversationId)) return
+              this.ended(`events of ${conversationId}`, end, () => {
+                held.lost = true
+                held.subscription = null
+              })
+            },
           },
-          ended: (end) => {
-            if (held.token !== token) return
-            this.ended(`events of ${conversationId}`, end, () => {
-              held.lost = true
-              held.subscription = null
-            })
-          },
-        },
-        held.cursor ? { after: held.cursor } : { replay: true },
-      ),
+          held.cursor ? { after: held.cursor } : { replay: true },
+        ),
+      conversationId,
     )
     held.subscription = subscription
     return subscription
@@ -203,6 +221,7 @@ export class Follower {
   /** Stop following `conversationId` for a moment, then follow it again from its cursor. */
   async churn(conversationId) {
     const held = this.events.get(conversationId)
+    if (!held) return
     const subscription = held.subscription
     held.subscription = null
     held.token = null
@@ -272,7 +291,7 @@ export class Follower {
         // Fill this connection's room with conversations not followed yet.
         for (const id of this.list.conversations) {
           if (this.stopping || this.held() >= this.limits.conversationTargets) break
-          if (!this.events.has(id)) await this.follow(id)
+          if (!this.events.has(id) && !this.deleted.has(id)) await this.follow(id)
         }
         const followed = [...this.events.keys()]
         const roll = this.random()
@@ -303,6 +322,7 @@ export class Follower {
    */
   async check(reader) {
     for (const [conversationId, held] of this.events) {
+      if (this.gone(conversationId)) continue
       let expected
       try {
         expected = await replayEvents(reader, conversationId)

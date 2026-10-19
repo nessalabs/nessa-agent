@@ -39,6 +39,7 @@ use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_protocol::agents::AgentId;
 use nessa_protocol::conversation::domain::{
     ConversationApprovalMode, ConversationId, ConversationModelId, ConversationSummary,
+    ConversationTitle,
 };
 use nessa_protocol::conversation::{
     projection::{
@@ -4540,6 +4541,50 @@ impl ConversationService {
                 .summaries
                 .record(&id, previous.after_archiving(archived))
                 .await?;
+            Ok(true)
+        })
+        .await
+    }
+
+    /// Rename the conversation: what `list` and a read call it from now on.
+    /// A later message does not rename it back
+    /// ([`ConversationSummary::after_renaming`]). Returns whether this changed
+    /// it; `false` when it already has that title, including a repeat of the
+    /// same request, and for a conversation nothing was said in, which is
+    /// listed nowhere and is left so, as [`Self::archive`] leaves it.
+    ///
+    /// A person's decision like archiving, so failing to read or write it
+    /// fails the command with the store's typed error
+    /// (`a_rename_that_cannot_be_written_fails_visibly`).
+    pub async fn rename(
+        &self,
+        id: ConversationId,
+        caller: ConversationCaller,
+        title: ConversationTitle,
+    ) -> Result<bool, ConversationError> {
+        let service = self.clone();
+        supervised(async move {
+            let _admission = service.admit().await?;
+            caller.actor()?;
+            // Under the summary lock, for the reason `archive` gives.
+            let _writes = service.inner.summary_writes.lock(&id).await;
+            let record = load_conversation(service.inner.metadata.as_ref(), &id)
+                .await?
+                .ok_or(ConversationError::NotFound)?;
+            service.access().admit(&record, &caller)?;
+            let Some(previous) = service.inner.summaries.load(&id).await? else {
+                return Ok(false);
+            };
+            if previous.title() == Some(&title) {
+                return Ok(false);
+            }
+            service
+                .inner
+                .summaries
+                .record(&id, previous.after_renaming(title))
+                .await?;
+            // The store's write wakes the list; a view shows the title too.
+            service.inner.live_changes.publish(&id);
             Ok(true)
         })
         .await

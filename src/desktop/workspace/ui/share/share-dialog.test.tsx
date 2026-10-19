@@ -15,7 +15,7 @@ import { createQuestionFlights } from "../../application/question-flights"
 import { inMemorySharing } from "../../adapters/in-memory/in-memory-sharing"
 import { closeShare, openShare, readShares } from "../../adapters/store/commands"
 import { fakeSource, keptFilter, roomyGrid, settle } from "../../testing"
-import { driveNotes } from "./share-copy"
+import { driveNote } from "./share-copy"
 import { ShareDialogHost } from "./share-dialog"
 
 /** A fixed clock, so a grant's time is the same on every run. */
@@ -37,6 +37,10 @@ beforeEach(() => {
       removeEventListener: () => {},
       dispatchEvent: () => false,
     })) as typeof window.matchMedia
+  // The read's loading text sweeps on Web Animations, which jsdom has not.
+  Element.prototype.animate ??= function () {
+    return { cancel() {}, finished: Promise.resolve() } as unknown as Animation
+  }
   globalThis.ResizeObserver ??= class {
     observe() {}
     unobserve() {}
@@ -138,11 +142,33 @@ describe("the share dialog", () => {
     expect(dialog()).toBeNull()
     await open(store)
     expect(dialog()?.getAttribute("data-share-state")).toBe("read")
-    expect(dialog()?.textContent).toContain("Not shared with any device yet.")
+    // Nothing shared says itself: no group, no line, no Done beside the ×.
+    expect(dialog()?.querySelector("[data-share-grants]")).toBeNull()
+    expect(dialog()?.querySelector('[data-share-action="close"]')).toBeNull()
     await act(async () => {
       store.dispatch(closeShare())
     })
     expect(dialog()).toBeNull()
+  })
+
+  it("with no linked device, says so in one line and offers the way to link one", async () => {
+    const opened: unknown[] = []
+    const record = (event: Event) =>
+      opened.push(event instanceof CustomEvent ? event.detail : undefined)
+    window.addEventListener("nessa:open-settings", record)
+    try {
+      const store = await render(inMemorySharing({ now: testNow, targets: [] }))
+      await open(store)
+      expect(find("[data-share-targets]").textContent).toBe(
+        "No linked devices yet.Link a Device",
+      )
+      expect(dialog()?.querySelector('[data-share-action="submit"]')).toBeNull()
+      await click(find('[data-share-action="link-device"]'))
+      expect(dialog()).toBeNull()
+      expect(opened).toEqual(["devices"])
+    } finally {
+      window.removeEventListener("nessa:open-settings", record)
+    }
   })
 
   it("shares Read with a chosen device, lists it, and revokes it", async () => {
@@ -233,10 +259,7 @@ describe("the share dialog", () => {
     await choose("[data-share-targets]", "-phone")
     expect(dialog()?.querySelector("[data-share-drive]")).toBeNull()
     await choose("[data-share-role]", "Drive")
-    const notes = find("[data-share-notes]").textContent ?? ""
-    expect(notes).toContain(driveNotes.unasked)
-    expect(notes).toContain(driveNotes.hosts)
-    expect(notes).toContain(driveNotes.enforceable)
+    expect(find("[data-share-notes]").textContent).toBe(driveNote)
     expect(hostBoxes()).toHaveLength(2)
     await click(box(1))
     await choose("[data-share-presets]", "No shell")
@@ -686,7 +709,8 @@ describe("the share dialog", () => {
     expect(failure.getAttribute("data-share-read-failure")).toBe("choices")
     expect(failure.textContent).toContain("couldn’t list your linked devices")
     expect(dialog()?.querySelector("[data-share-form]")).toBeNull()
-    expect(submit().disabled).toBe(true)
+    // Nothing to share with is read, so nothing offers to share.
+    expect(dialog()?.querySelector('[data-share-action="submit"]')).toBeNull()
     const row = find('[data-share-grant="sample-phone"]')
     expect(row.querySelector('[data-share-action="change"]')).toBeNull()
     await click(within(row, '[data-share-action="revoke"]'))

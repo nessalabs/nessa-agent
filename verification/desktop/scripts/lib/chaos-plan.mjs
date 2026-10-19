@@ -79,6 +79,11 @@ export const ASKS = [
 /** What a steering message asks: only turns that end on their own. */
 const STEERS = ["reply", "permission", "pause"]
 const MODES = ["ask", "auto", "full"]
+/**
+ * What a rename types: a plain title, one with runs of whitespace and a
+ * control character to fold, and one longer than a title may be.
+ */
+const TITLES = ["plain", "folded", "long"]
 
 /**
  * Each kind of action and how often it is drawn. `restart` is not drawn; its
@@ -95,6 +100,7 @@ const WEIGHTS = {
   reorder: 3,
   close: 2,
   archive: 3,
+  rename: 3,
   read: 8,
 }
 
@@ -138,6 +144,7 @@ export function actions(knobs) {
       else if (kind === "mode") action.to = pick(MODES)
       else if (kind === "stop") action.which = next() < 0.6 ? "running" : "queued"
       else if (kind === "archive") action.undo = next() < 0.5
+      else if (kind === "rename") action.title = pick(TITLES)
       out.push(action)
     }
   }
@@ -155,6 +162,7 @@ export function describe(list) {
         action.to ??
         action.which ??
         action.signal ??
+        action.title ??
         (action.kind === "archive" ? (action.undo ? "undo" : "") : "")
       const where =
         action.kind === "restart" ? "" : ` c${action.slot} by ${action.client}`

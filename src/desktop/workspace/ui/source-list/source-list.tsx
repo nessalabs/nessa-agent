@@ -30,6 +30,7 @@ import { ChannelRow } from "./channel-row"
 import "./source-list.css"
 import { tooltip } from "../../../ui/tooltip"
 import { OverviewRow } from "./overview-row"
+import { useRowFocusKept } from "../row-focus"
 
 /**
  * The sidebar's source list: sections of channels on a glass pane, with the
@@ -49,6 +50,7 @@ export const SourceList = memo(function SourceList({
   const open = useWorkspaceSelector(selectSidebarOpen)
   const sections = useWorkspaceSelector(selectSections)
   const treeRef = useRef<HTMLElement>(null)
+  useRowFocusKept(treeRef, "[data-row]")
   const dispatch = useWorkspaceDispatch()
   const besideKey = useBesideKey()
   const peek = useSidebarPeek()
