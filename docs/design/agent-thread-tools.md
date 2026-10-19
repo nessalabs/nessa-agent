@@ -149,7 +149,9 @@ and continue with the returned `cursor` as `after` until `more` is false; use
 projection leaves out (message text, thinking) is read past, never answered
 empty with `more: true`, which once had an agent walk a streamed reply one
 invisible page at a time. An answer ends at the first `turn.ended`, which comes
-with `turn: {outcome, reply}`.
+with `turn: {outcome, reply}`. That is the turn's settled end, the one its
+report carries, so it can be ahead of the event's own local outcome when
+settlement replaced it; the settlement events follow after the cursor.
 
 ## Source authority
 
