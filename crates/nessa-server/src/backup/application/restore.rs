@@ -126,8 +126,14 @@ pub fn stage_quarantine(
     let target = request.quarantine;
     let kind = request.facts.kind;
     let policies = decide(policy, &request.facts, audit, target)?;
+    let recorded = Recorded {
+        audit,
+        target,
+        initiator: kind,
+        policies: &policies,
+    };
     if let Err(error) = paths_are_distinct(request.quarantine, request.live) {
-        return Err(stop(audit, target, kind, &policies, error));
+        return Err(recorded.stop(error));
     }
     if let Err(error) = verify_bundle(
         request.format,
@@ -135,18 +141,12 @@ pub fn stage_quarantine(
         request.verifier,
         request.limits,
     ) {
-        return Err(stop(
-            audit,
-            target,
-            kind,
-            &policies,
-            verification_fault(error),
-        ));
+        return Err(recorded.stop(verification_fault(error)));
     }
     let later = match request.later_inventory {
         Some(text) => match later_reader.read_later(text) {
             Ok(log) => Some(log),
-            Err(error) => return Err(stop(audit, target, kind, &policies, error)),
+            Err(error) => return Err(recorded.stop(error)),
         },
         None => None,
     };
@@ -157,7 +157,7 @@ pub fn stage_quarantine(
         later.as_ref(),
     ) {
         Ok(prepared) => prepared,
-        Err(error) => return Err(stop(audit, target, kind, &policies, error)),
+        Err(error) => return Err(recorded.stop(error)),
     };
     let hashes = prepared
         .files
@@ -169,38 +169,28 @@ pub fn stage_quarantine(
         .collect::<Vec<_>>();
     let journal = match encode_journal(prepared.freshness, &prepared.leases, &hashes) {
         Ok(journal) => journal,
-        Err(error) => return Err(stop(audit, target, kind, &policies, error)),
+        Err(error) => return Err(recorded.stop(error)),
     };
     let mut staging = match layout.begin(request.quarantine, request.live) {
         Ok(staging) => staging,
-        Err(error) => return Err(stop(audit, target, kind, &policies, error)),
+        Err(error) => return Err(recorded.stop(error)),
     };
     for (path, bytes) in &prepared.files {
         if let Err(error) = staging.write(path, bytes) {
             drop(staging);
-            return Err(stop(audit, target, kind, &policies, error));
+            return Err(recorded.stop(error));
         }
     }
     if let Err(error) = staging.finish(&journal) {
         let _ = layout.remove_tree(request.quarantine);
-        return Err(stop(audit, target, kind, &policies, error));
+        return Err(recorded.stop(error));
     }
-    if write_audit(
-        audit, target, "absent", "verified", "sealed", kind, "effect", &policies,
-    )
-    .is_err()
+    if recorded
+        .write("absent", "verified", "sealed", "effect")
+        .is_err()
     {
         let _ = layout.remove_tree(request.quarantine);
-        let _ = write_audit(
-            audit,
-            target,
-            "verified",
-            "absent",
-            RestoreFault::Audit.cause(),
-            kind,
-            "effect",
-            &policies,
-        );
+        let _ = recorded.write("verified", "absent", RestoreFault::Audit.cause(), "effect");
         return Err(RestoreFault::Audit);
     }
     Ok(StageReport {
@@ -231,54 +221,47 @@ pub fn accept_quarantine(
     let target = request.quarantine;
     let kind = request.facts.kind;
     let policies = decide(policy, &request.facts, audit, target)?;
+    let recorded = Recorded {
+        audit,
+        target,
+        initiator: kind,
+        policies: &policies,
+    };
     if let Err(error) = paths_are_distinct(request.quarantine, request.live) {
-        return Err(stop(audit, target, kind, &policies, error));
+        return Err(recorded.stop(error));
     }
     let loaded = match layout.load(request.quarantine) {
         Ok(loaded) => loaded,
-        Err(error) => return Err(stop(audit, target, kind, &policies, error)),
+        Err(error) => return Err(recorded.stop(error)),
     };
     let journal = match read_journal(&loaded.journal) {
         Ok(journal) => journal,
-        Err(error) => return Err(stop(audit, target, kind, &policies, error)),
+        Err(error) => return Err(recorded.stop(error)),
     };
     let deferred = match deferred_lines(layout, request.quarantine) {
         Ok(lines) => lines,
-        Err(error) => return Err(stop(audit, target, kind, &policies, error)),
+        Err(error) => return Err(recorded.stop(error)),
     };
     if let Err(error) = seal_matches(&journal, &loaded, &deferred) {
-        return Err(stop(audit, target, kind, &policies, error));
+        return Err(recorded.stop(error));
     }
     if let Err(error) = receipts_cover(&journal, request.receipts) {
-        return Err(stop(audit, target, kind, &policies, error));
+        return Err(recorded.stop(error));
     }
     match layout.exists(request.live) {
         Ok(true) => {
-            return Err(stop(
-                audit,
-                target,
-                kind,
-                &policies,
-                RestoreFault::LiveOccupied,
-            ));
+            return Err(recorded.stop(RestoreFault::LiveOccupied));
         }
         Ok(false) => {}
-        Err(error) => return Err(stop(audit, target, kind, &policies, error)),
+        Err(error) => return Err(recorded.stop(error)),
     }
     if let Err(error) = layout.promote(request.quarantine, request.live) {
-        return Err(stop(audit, target, kind, &policies, error));
+        return Err(recorded.stop(error));
     }
-    if write_audit(
-        audit,
-        request.live,
-        "verified",
-        "live",
-        "accepted",
-        kind,
-        "effect",
-        &policies,
-    )
-    .is_err()
+    if recorded
+        .at(request.live)
+        .write("verified", "live", "accepted", "effect")
+        .is_err()
     {
         return Err(RestoreFault::Audit);
     }
@@ -310,108 +293,85 @@ pub fn open_deferred_conversation(
     let target = request.root;
     let kind = request.facts.kind;
     let policies = decide(policy, &request.facts, audit, target)?;
+    let recorded = Recorded {
+        audit,
+        target,
+        initiator: kind,
+        policies: &policies,
+    };
     let loaded = match layout.load(request.root) {
         Ok(loaded) => loaded,
-        Err(error) => return Err(stop(audit, target, kind, &policies, error)),
+        Err(error) => return Err(recorded.stop(error)),
     };
     if read_journal(&loaded.journal).is_err() {
-        return Err(stop(audit, target, kind, &policies, RestoreFault::Tamper));
+        return Err(recorded.stop(RestoreFault::Tamper));
     }
     let lines = match deferred_lines(layout, request.root) {
         Ok(lines) => lines,
-        Err(error) => return Err(stop(audit, target, kind, &policies, error)),
+        Err(error) => return Err(recorded.stop(error)),
     };
     let expected = match deferred_for_open(&lines, request.conversation_id) {
         Ok(line) => line,
-        Err(error) => return Err(stop(audit, target, kind, &policies, error)),
+        Err(error) => return Err(recorded.stop(error)),
     };
     let relative = match deferred_session_name(request.conversation_id) {
         Ok(relative) => relative,
-        Err(error) => return Err(stop(audit, target, kind, &policies, error)),
+        Err(error) => return Err(recorded.stop(error)),
     };
     let final_path = match join_relative(request.root, &relative) {
         Ok(path) => path,
-        Err(error) => return Err(stop(audit, target, kind, &policies, error)),
+        Err(error) => return Err(recorded.stop(error)),
     };
     let present = match layout.exists(&final_path) {
         Ok(present) => present,
-        Err(error) => return Err(stop(audit, target, kind, &policies, error)),
+        Err(error) => return Err(recorded.stop(error)),
     };
     if present {
         return match source.inspect(request.conversation_id, &final_path) {
             Ok(cut) if cut.size == expected.size && cut.digest == expected.digest => {
-                write_audit(
-                    audit,
-                    target,
-                    "available",
-                    "available",
-                    "already",
-                    kind,
-                    "effect",
-                    &policies,
-                )?;
+                recorded.write("available", "available", "already", "effect")?;
                 Ok(OpenReport {
                     size: cut.size,
                     digest: cut.digest,
                     already_present: true,
                 })
             }
-            Ok(_) => Err(stop(
-                audit,
-                target,
-                kind,
-                &policies,
-                RestoreFault::SessionDiffers,
-            )),
-            Err(error) => Err(stop(audit, target, kind, &policies, source_fault(error))),
+            Ok(_) => Err(recorded.stop(RestoreFault::SessionDiffers)),
+            Err(error) => Err(recorded.stop(source_fault(error))),
         };
     }
     let temp = match layout.session_temp(request.root, &relative) {
         Ok(temp) => temp,
-        Err(error) => return Err(stop(audit, target, kind, &policies, error)),
+        Err(error) => return Err(recorded.stop(error)),
     };
     if let Err(error) = layout.remove_file(&temp) {
-        return Err(stop(audit, target, kind, &policies, error));
+        return Err(recorded.stop(error));
     }
     if let Err(error) = source.write_session(request.conversation_id, &temp, progress) {
         let _ = layout.remove_file(&temp);
-        return Err(stop(audit, target, kind, &policies, source_fault(error)));
+        return Err(recorded.stop(source_fault(error)));
     }
     let cut = match source.inspect(request.conversation_id, &temp) {
         Ok(cut) => cut,
         Err(error) => {
             let _ = layout.remove_file(&temp);
-            return Err(stop(audit, target, kind, &policies, source_fault(error)));
+            return Err(recorded.stop(source_fault(error)));
         }
     };
     if cut.size != expected.size || cut.digest != expected.digest {
         let _ = layout.remove_file(&temp);
-        return Err(stop(
-            audit,
-            target,
-            kind,
-            &policies,
-            RestoreFault::SourceChanged,
-        ));
+        return Err(recorded.stop(RestoreFault::SourceChanged));
     }
-    if write_audit(
-        audit,
-        target,
-        "deferred",
-        "available",
-        "fetched",
-        kind,
-        "effect",
-        &policies,
-    )
-    .is_err()
+    if recorded
+        .write("deferred", "available", "fetched", "effect")
+        .is_err()
     {
         let _ = layout.remove_file(&temp);
         return Err(RestoreFault::Audit);
     }
     if let Err(error) = layout.publish_file(&temp, &final_path) {
         let _ = layout.remove_file(&temp);
-        return Err(stop(audit, target, kind, &policies, error));
+        return Err(recorded.stop(error));
     }
     Ok(OpenReport {
         size: cut.size,
@@ -500,9 +460,13 @@ fn decide(
         InventoryDecision::Allow { policies } => ("allow", policies.clone(), false),
         InventoryDecision::Deny(denial) => ("deny", denial_policies(denial), true),
     };
-    write_audit(
-        audit, target, "absent", "absent", "decision", facts.kind, name, &policies,
-    )?;
+    Recorded {
+        audit,
+        target,
+        initiator: facts.kind,
+        policies: &policies,
+    }
+    .write("absent", "absent", "decision", name)?;
     if denied {
         return Err(RestoreFault::Denied);
     }
@@ -516,48 +480,44 @@ fn denial_policies(denial: &InventoryDenial) -> Vec<String> {
     }
 }
 
-fn stop(
-    audit: &dyn RestoreAudit,
-    target: &Path,
-    initiator: &str,
-    policies: &[String],
-    error: RestoreFault,
-) -> RestoreFault {
-    let _ = write_audit(
-        audit,
-        target,
-        "unchanged",
-        "unchanged",
-        error.cause(),
-        initiator,
-        "effect",
-        policies,
-    );
-    error
+#[derive(Clone, Copy)]
+struct Recorded<'a> {
+    audit: &'a dyn RestoreAudit,
+    target: &'a Path,
+    initiator: &'a str,
+    policies: &'a [String],
 }
 
-fn write_audit(
-    audit: &dyn RestoreAudit,
-    target: &Path,
-    before: &str,
-    after: &str,
-    cause: &str,
-    initiator: &str,
-    decision: &str,
-    policies: &[String],
-) -> Result<(), RestoreFault> {
-    let target = target.display().to_string();
-    audit
-        .append(&RestoreEvidence {
-            target: &target,
-            before,
-            after,
-            cause,
-            initiator,
-            decision,
-            policies,
-        })
-        .map_err(|_| RestoreFault::Audit)
+impl Recorded<'_> {
+    fn at<'a>(&'a self, target: &'a Path) -> Recorded<'a> {
+        Recorded { target, ..*self }
+    }
+
+    fn stop(&self, error: RestoreFault) -> RestoreFault {
+        let _ = self.write("unchanged", "unchanged", error.cause(), "effect");
+        error
+    }
+
+    fn write(
+        &self,
+        before: &str,
+        after: &str,
+        cause: &str,
+        decision: &str,
+    ) -> Result<(), RestoreFault> {
+        let target = self.target.display().to_string();
+        self.audit
+            .append(&RestoreEvidence {
+                target: &target,
+                before,
+                after,
+                cause,
+                initiator: self.initiator,
+                decision,
+                policies: self.policies,
+            })
+            .map_err(|_| RestoreFault::Audit)
+    }
 }
 
 fn verification_fault(_error: VerificationFailure) -> RestoreFault {
