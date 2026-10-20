@@ -93,6 +93,19 @@ pub use saved::{
 };
 pub use subscribe::{ConversationFeed, FeedEvent, SubscribeError};
 
+/// Weak-link and metered scheduling report.
+///
+/// Copies one real record source into a private cache twice: unpaced, and
+/// paced at 8,000 payload bytes per second. Both reopen at the same
+/// downloaded and applied positions. Pace waits are the schedule's virtual
+/// clock. `relayPreambleBytes` is the encoded reader `Connect` and `Joined`
+/// frames, not payload and not TLS. The size table's p50 and p95 are order
+/// statistics of that table. A phone radio, operating-system sleep, and a
+/// sampled production percentile are listed under `notMeasured`.
+pub fn weak_link_report() -> serde_json::Value {
+    crate::read_only_sync::infrastructure::measure::report()
+}
+
 /// The catalogue selector, not a grant of read authority. The authenticated
 /// session and the existing source authorizer enforce the selected scope.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
