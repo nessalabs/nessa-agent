@@ -392,32 +392,40 @@ export function controlledAnimationFrames(): {
   /** Runs the callbacks queued now, not the frame they themselves ask for. */
   runFrame: () => void
   restore: () => void
+  /** Where each callback still queued was asked for. Empty once it has run. */
+  pendingStacks: () => readonly string[]
 } {
   const queued = new Map<number, FrameRequestCallback>()
+  const stacks = new Map<number, string>()
   let next = 1
   const request = window.requestAnimationFrame
   const cancel = window.cancelAnimationFrame
   window.requestAnimationFrame = (callback) => {
     const id = next++
     queued.set(id, callback)
+    stacks.set(id, new Error("animation frame").stack ?? "")
     return id
   }
   window.cancelAnimationFrame = (id) => {
     queued.delete(id)
+    stacks.delete(id)
   }
   return {
     pending: () => queued.size,
+    pendingStacks: () => [...stacks.values()],
     runFrame() {
       // A callback can cancel one queued beside it; that one does not run.
       for (const id of [...queued.keys()]) {
         const callback = queued.get(id)
         if (callback === undefined) continue
         queued.delete(id)
+        stacks.delete(id)
         callback(performance.now())
       }
     },
     restore() {
       queued.clear()
+      stacks.clear()
       window.requestAnimationFrame = request
       window.cancelAnimationFrame = cancel
     },
