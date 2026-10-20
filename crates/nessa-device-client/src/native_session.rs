@@ -1118,11 +1118,14 @@ impl NativeDeviceSession {
             .map_err(Into::into)
     }
     /// Stored presence of one conversation. Absence is not a tombstone.
+    /// `conversation` must be a canonical conversation id.
     pub fn catalogue_presence(
         &self,
         stamp: Arc<NativePhoneStamp>,
         conversation: String,
     ) -> Result<NativeCataloguePresence, NativeCallError> {
+        let _parsed =
+            ConversationId::new(&conversation).map_err(|_| NativeCallError::InvalidArgument)?;
         self.value
             .catalogue_presence(&stamp.stamp(), &conversation)
             .map(NativeCataloguePresence::from)

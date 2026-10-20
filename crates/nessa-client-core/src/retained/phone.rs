@@ -142,6 +142,16 @@ impl Default for PhoneLease {
 }
 
 impl RetainedCache {
+    fn receiver_purged(&mut self, receiver: &str) -> Result<bool, ReadFailure> {
+        let Ok(resource) = ResourceId::new(receiver) else {
+            return Ok(false);
+        };
+        Ok(self
+            .cache
+            .purge_receipt(&resource)
+            .map_err(|error| cache_failure(&error))?
+            .is_some())
+    }
     /// One conversation's stored catalogue identity. This reads the cache and
     /// does not contact the gateway. A conversation a page did not mention is
     /// left as it was stored.
@@ -152,17 +162,16 @@ impl RetainedCache {
     ) -> Result<CataloguePresence, ReadFailure> {
         let receiver_id = Id::new(receiver).map_err(|_| ReadFailure::Protocol)?;
         let conversation_id = Id::new(conversation).map_err(|_| ReadFailure::Protocol)?;
-        if let Ok(resource) = ResourceId::new(receiver) {
-            if self
-                .cache
-                .purge_receipt(&resource)
-                .map_err(|error| cache_failure(&error))?
-                .is_some()
-            {
-                return Ok(CataloguePresence::Tombstone);
-            }
+        if self.receiver_purged(receiver)? {
+            return Ok(CataloguePresence::Tombstone);
         }
         let Some(scope) = self.catalogue_scope(&receiver_id)? else {
+            // A purge can commit after the check above and delete catalogue
+            // progress in that same commit. Absence is only the state with no
+            // scope and still no receipt.
+            if self.receiver_purged(receiver)? {
+                return Ok(CataloguePresence::Tombstone);
+            }
             return Ok(CataloguePresence::Absent);
         };
         self.cache

@@ -1,11 +1,11 @@
 //! Foreign passive correlation preserves the existing owners' exact values.
 use super::*;
-use nessa_client_core::retained::ArtifactFault;
 use crate::test_support::PrivateFixture;
 use nessa_auth::domain::{
     pairing::{AttemptId, ConsentIntentId, DisclosedConsent, InvitationId},
     AudienceId, CredentialId, OrganizationId, Resource, ResourceId,
 };
+use nessa_client_core::retained::ArtifactFault;
 use nessa_local_storage::create_directory_beneath;
 use nessa_sync::replication::domain::MAX_ID_BYTES;
 use std::{io::ErrorKind, net::TcpListener, path::Path, sync::Arc};
@@ -195,6 +195,33 @@ fn follow_rejects_a_cursor_outside_the_published_contract_before_it_dials() {
         Some("99999999999999999999".to_owned())
     )
     .is_err());
+}
+
+#[test]
+fn a_catalogue_presence_id_that_is_not_a_conversation_dials_nothing() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let address = listener.local_addr().unwrap();
+    let root = PrivateFixture::new();
+    create_directory_beneath(root.path(), Path::new("private")).unwrap();
+    let session = NativeDeviceSession::open(
+        root.path().to_str().unwrap().to_owned(),
+        "private".to_owned(),
+        address.to_string(),
+    )
+    .unwrap();
+    let stamp = Arc::new(NativePhoneStamp {
+        value: PhoneStamp::issue(1, "receiver-a"),
+    });
+    assert!(matches!(
+        session.catalogue_presence(stamp.clone(), "receiver".to_owned()),
+        Err(NativeCallError::InvalidArgument)
+    ));
+    assert!(matches!(
+        session.catalogue_presence(stamp, "00000000-0000-4000-8000-000000000001".to_owned()),
+        Err(NativeCallError::Session { .. })
+    ));
+    assert_eq!(listener.accept().unwrap_err().kind(), ErrorKind::WouldBlock);
 }
 
 #[test]
