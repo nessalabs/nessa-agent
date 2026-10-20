@@ -315,20 +315,17 @@ Experimental turns it on; the rail stands beside the workspace in
   loader before 3 s; still loading at 3 s, the kit's `LoadingText` sweeps
   "Loading Files" with no panel or border around it. _Check:_
   `columns.mjs --only rail-loading`.
-- [ ] **The window's controls stand in the workspace's corner, never over
-  the rail**: with the rail open the traffic lights move in by the rail's
-  width, into the first column's corner as with the rail closed, and the
-  titlebar's controls start where they end; closed or off, both are back at
-  the window's edge. _Check:_ `conversation-stress.mjs` step `rail` (what the
-  page asks the host, and where the titlebar starts);
-  `cargo test -p nessa-app --no-default-features --test traffic_lights` for
-  the buttons following the lead in a real AppKit window (macOS).
+- [ ] **The open rail holds the traffic lights in its top row**: in the macOS
+  window the lights never move; the open rail is wide enough for them, its
+  items and toggle are centred under them, and the first card starts as far
+  past the green button as the red one is from the window's edge. Open,
+  closed or off, the titlebar's first control starts where the lights end.
+  _Check:_ `conversation-stress.mjs` step `rail` (the fake host makes the page
+  macOS; `columns.mjs` keeps the browser's rail).
 - [ ] **The titlebar's controls never pass under the window's controls while
-  the rail opens or closes**: they jump with the traffic lights, so every frame
-  draws them where they were or where they land, never between. _Check:_
-  `columns.mjs --only titlebar-steady`. In the macOS window the page's frame
-  and the native buttons' move reach the screen separately, so one frame may
-  show the controls before the buttons have jumped; check a rail toggle by eye.
+  the rail opens or closes**: every frame draws them between where they were
+  and where they land, both clear of the lights. _Check:_
+  `columns.mjs --only titlebar-steady`.
 - [ ] **Toggling the rail moves things by transform only**: the width lands at
   once and FlipScope plays the columns back, so no frame lays text out again.
   _Check:_ `perf-budget.mjs` (production build) — not yet run for the rail.

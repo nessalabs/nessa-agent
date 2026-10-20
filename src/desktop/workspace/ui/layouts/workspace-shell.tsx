@@ -31,7 +31,6 @@ import { draggedEdge } from "../../../model/side-column"
 import { EdgePeekStrip } from "../../../ui/edge-peek-strip"
 import { HistoryButtons } from "../../../ui/history-buttons"
 import { ResizeEdge } from "../../../ui/resize-edge"
-import { useWindowControlsLead } from "../../../ui/window-controls"
 import { workspaceDragOptions } from "../../adapters/dom/split-panes-drag"
 import { FlipScope, useSplitPanesDrag, type SplitPanesSource } from "../../../split-panes"
 import { useFocusFollowsPane } from "../../adapters/dom/focus"
@@ -99,7 +98,8 @@ import {
   SideRailButton,
   RailView,
   railItems,
-  RAIL_WIDTH,
+  railWidth,
+  holdsWindowControls,
 } from "../chrome/side-rail"
 import { WorkspaceTitlebar } from "../chrome/workspace-titlebar"
 import { OverviewLayer } from "../overview/overview-layer"
@@ -347,6 +347,7 @@ export function WorkspaceShell({
   const listWidth = region.sessionList
     ? columnWidth(chrome.sessionListWidth, sessionListLimits, fullWidth)
     : 0
+  const rail = railWidth(hostKind)
   // The rail is the first column to give way for room (`railFits`): it is drawn
   // only where it folds nothing the person has open. A full view has no columns.
   const railRoom =
@@ -360,14 +361,11 @@ export function WorkspaceShell({
       },
       fullWidth,
       columns,
-      RAIL_WIDTH,
+      rail,
     )
   const railDrawn = railOffered && railOpen && railRoom
   // The rail stands beside the workspace, not in it: the columns fit what is left.
-  const windowWidth = fullWidth - (railDrawn ? RAIL_WIDTH : 0)
-  // The window's own controls sit in the workspace's corner, so with the rail
-  // open they stand beside it too, never straddling the first column's edge.
-  useWindowControlsLead(railDrawn ? RAIL_WIDTH : 0)
+  const windowWidth = fullWidth - (railDrawn ? rail : 0)
   useFitOnResize(windowWidth, columns, (width) =>
     dispatch(
       fitToWindow({ windowWidth: width, sidebarWidth, sessionListWidth: listWidth }),
@@ -472,6 +470,9 @@ export function WorkspaceShell({
                   className="workspace-window"
                   data-rail={!railOffered ? "off" : railDrawn ? "open" : "closed"}
                   data-rail-view={shownRailItem?.id}
+                  data-rail-holds={
+                    holdsWindowControls(hostKind) ? "window-controls" : undefined
+                  }
                   data-host={hostKind}
                   data-surface={browserSurface ? "browser" : "window"}
                   data-desktop-theme={theme}
@@ -479,7 +480,7 @@ export function WorkspaceShell({
                   // The person's own choice, apart from a fold for room: the
                   // rail's toggle hides only with a sidebar they closed.
                   data-sidebar-chosen={chrome.sidebar.open ? "open" : "closed"}
-                  style={{ "--rail-width": `${RAIL_WIDTH}px` } as CSSProperties}
+                  style={{ "--rail-width": `${rail}px` } as CSSProperties}
                 >
                   {/* The light behind the window spans the rail too, so the
                       rail and the workspace stand on one ground. */}

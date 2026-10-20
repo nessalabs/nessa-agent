@@ -49,7 +49,6 @@ export {
   loadAssignedSurfaceCredential,
   loadAssignedGatewayEndpoint,
   flushCompositor,
-  leadWindowControls,
   onFocusComposer,
   onGatewayStartup,
   onLinkNotOpened,

@@ -8,7 +8,6 @@ import { Provider } from "react-redux"
 import {
   askReviewNoticeAccess,
   host,
-  leadWindowControls,
   loadAssignedGatewayEndpoint,
   onReviewNoticeOpened,
   reviewNoticeAccess,
@@ -30,7 +29,6 @@ import { SiteIconProvider } from "./workspace/ui/transcript/site-icon"
 import { hostGateway } from "./adapters/host-gateway"
 import { workspaceBackend, type WorkspaceBackend } from "./model/workspace-backend"
 import { seededWindow } from "./seeded-window"
-import { WindowControlsProvider } from "./ui/window-controls"
 import {
   LinkedDevicesProvider,
   McpServersProvider,
@@ -152,12 +150,6 @@ bindConversationTitles((conversationId) => {
 store.dispatch(followWorkspace())
 void store.dispatch(loadWorkspace())
 
-// The host keeps where it last put the window's controls across a reload;
-// nothing drawn yet stands beside them, so they start at the window's edge.
-void leadWindowControls(0).catch((error: unknown) => {
-  console.error("[nessa] could not move the window's controls", error)
-})
-
 const container = document.getElementById("root")
 if (!container) throw new Error("missing #root")
 
@@ -180,13 +172,11 @@ createRoot(container).render(
                             <PermissionRulesProvider
                               gateway={dependencies.permissionRules}
                             >
-                              <WindowControlsProvider lead={leadWindowControls}>
-                                <DesktopWindow
-                                  hostKind={host.kind}
-                                  browserSurface={host.kind === "browser"}
-                                  inspectable={import.meta.env.DEV}
-                                />
-                              </WindowControlsProvider>
+                              <DesktopWindow
+                                hostKind={host.kind}
+                                browserSurface={host.kind === "browser"}
+                                inspectable={import.meta.env.DEV}
+                              />
                             </PermissionRulesProvider>
                           </NativeHooksProvider>
                         </HeldFilesProvider>

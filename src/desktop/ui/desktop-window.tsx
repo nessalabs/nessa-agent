@@ -12,7 +12,6 @@ import { selectFailure } from "../workspace/adapters/store/selectors"
 import { startupFailureCode } from "../workspace/ui/startup-failure"
 import { DesktopApp } from "./desktop-app"
 import { StartupFallback } from "./startup-fallback"
-import { WindowControlsCovered } from "./window-controls"
 
 /**
  * The window: the workspace in the layout chosen in Settings › Workspace ›
@@ -50,16 +49,13 @@ export function DesktopWindow({
         className="desktop-window-under"
         inert={settings.open || startup !== null || undefined}
       >
-        {/* Covered, it leaves the window's controls to what is over it. */}
-        <WindowControlsCovered covered={settings.open || startup !== null}>
-          {layout === "classic" ? (
-            <DesktopApp {...props} />
-          ) : layout === "sidebar" ? (
-            <SessionsInSidebar {...props} />
-          ) : (
-            <ThreeColumns {...props} />
-          )}
-        </WindowControlsCovered>
+        {layout === "classic" ? (
+          <DesktopApp {...props} />
+        ) : layout === "sidebar" ? (
+          <SessionsInSidebar {...props} />
+        ) : (
+          <ThreeColumns {...props} />
+        )}
       </div>
       <SettingsHost
         {...props}

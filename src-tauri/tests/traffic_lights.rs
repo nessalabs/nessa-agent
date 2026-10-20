@@ -75,7 +75,7 @@ mod on_a_real_window {
     use objc2_app_kit::{NSApplication, NSWindow};
     use objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSSize, NSString};
 
-    use super::traffic_lights::{buttons, lead, watch, LEFT, ROW_CENTRE};
+    use super::traffic_lights::{buttons, watch, LEFT, ROW_CENTRE};
 
     // NSWindowStyleMask, as `"titleBarStyle": "Overlay"` builds the window.
     const TITLED: usize = 1;
@@ -152,36 +152,6 @@ mod on_a_real_window {
         spin();
         expect_on_row(&window, "after the frame view laid out again", &before);
 
-        // The side rail opens: the page's first column starts 48pt in, and the
-        // buttons follow it into that column's corner and stay there.
-        lead(&window, 48.0, main).expect("the buttons follow the column");
-        spin();
-        expect_at(&window, "led by the rail", &before, LEFT + 48.0);
-        window.setFrame_display(
-            NSRect::new(NSPoint::new(160.0, 160.0), NSSize::new(1200.0, 760.0)),
-            true,
-        );
-        spin();
-        expect_at(
-            &window,
-            "led by the rail, after a resize",
-            &before,
-            LEFT + 48.0,
-        );
-        assert!(
-            lead(&window, f64::NAN, main).is_err(),
-            "a lead that is not a distance is refused"
-        );
-        assert!(
-            lead(&window, -1.0, main).is_err(),
-            "a negative lead is refused"
-        );
-        spin();
-        expect_at(&window, "after a refused lead", &before, LEFT + 48.0);
-        lead(&window, 0.0, main).expect("the buttons return to the window's edge");
-        spin();
-        expect_on_row(&window, "the rail closed again", &before);
-
         window.close();
     }
 
@@ -215,11 +185,6 @@ mod on_a_real_window {
     }
 
     fn expect_on_row(window: &NSWindow, when: &str, before: &str) {
-        expect_at(window, when, before, LEFT)
-    }
-
-    /// On the row, with the close button's left edge `left_edge` points in.
-    fn expect_at(window: &NSWindow, when: &str, before: &str, left_edge: f64) {
         let found = measure(window);
         assert_eq!(
             found.len(),
@@ -235,8 +200,8 @@ mod on_a_real_window {
             );
             if index == 0 {
                 assert!(
-                    (left - left_edge).abs() <= 0.5,
-                    "{when}: the close button starts at {left:.1}pt, not {left_edge}"
+                    (left - LEFT).abs() <= 0.5,
+                    "{when}: the close button starts at {left:.1}pt, not {LEFT}"
                 );
             }
         }

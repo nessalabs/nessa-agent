@@ -7,8 +7,7 @@
 /**
  * Installed before the page's own scripts, as Tauri installs its IPC. The
  * endpoint and credential commands answer as the scenario says, and are
- * counted (the endpoint's asks timed too); where the page asks the window's
- * controls to stand is kept (`__fakeHostLeads`); every other command waits
+ * counted (the endpoint's asks timed too); every other command waits
  * forever, as an unanswered host does.
  *
  * With `notices`, the host also keeps the system's review notices as
@@ -30,7 +29,6 @@ export function gatewayHost({ endpoint, credential, notices = false }) {
   window.__fakeHostAsked = asked
   // When each endpoint ask came, in the page's `performance.now()`.
   window.__fakeHostAskTimes = []
-  window.__fakeHostLeads = []
   window.__TAURI_INTERNALS__ = {
     transformCallback: (callback) => {
       const id = ++callbacks
@@ -52,12 +50,6 @@ export function gatewayHost({ endpoint, credential, notices = false }) {
         return credential === null
           ? Promise.reject(notProvisioned)
           : Promise.resolve(credential)
-      }
-      // Where the page asked the window's controls to stand, in order, as
-      // `traffic_lights.rs` would place them.
-      if (command === "lead_window_controls") {
-        window.__fakeHostLeads.push(args?.by)
-        return Promise.resolve()
       }
       return new Promise(() => {})
     },
