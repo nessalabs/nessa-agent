@@ -19,7 +19,8 @@ use std::path::{Path, PathBuf};
 
 use super::ports::{
     DeferredSessionSource, FetchProgress, InventoryDecision, InventoryDenial, LeaseReceipts,
-    RestoreAudit, RestoreEvidence, RestoreFacts, RestorePolicyEvaluator, SessionSourceError,
+    RestoreAudit, RestoreEvidence, RestoreFacts, RestorePolicyEvaluator, SessionCut,
+    SessionSourceError,
 };
 use super::verification::{
     authenticated_bundle, ManifestMacVerifier, VerificationFailure, VerificationLimits,
@@ -45,6 +46,10 @@ pub trait QuarantineLayout {
     fn remove_file(&self, path: &Path) -> Result<(), RestoreFault>;
     fn exists(&self, path: &Path) -> Result<bool, RestoreFault>;
     fn canonicalize(&self, path: &Path) -> Result<PathBuf, RestoreFault>;
+    /// The path after `.` and `..` are removed and an existing ancestor is resolved.
+    fn anchor(&self, path: &Path) -> Result<PathBuf, RestoreFault>;
+    /// Stream size and fingerprint of one session file.
+    fn session_cut(&self, path: &Path, conversation_id: &str) -> Result<SessionCut, RestoreFault>;
 }
 
 /// A partial directory. Dropping it without [`Staging::finish`] removes it.
@@ -128,14 +133,22 @@ pub fn stage_quarantine(
 ) -> Result<StageReport, RestoreFault> {
     let label = request.quarantine.display().to_string();
     let kind = request.facts.kind;
-    let policies = decide(policy, &request.facts, audit, &label)?;
+    let policies = decide(policy, &request.facts, audit, &label, "absent", "absent")?;
     let recorded = Recorded {
         audit,
         target: &label,
         initiator: kind,
         policies: &policies,
     };
-    if let Err(error) = paths_are_distinct(request.quarantine, request.live) {
+    let quarantine = match layout.anchor(request.quarantine) {
+        Ok(path) => path,
+        Err(error) => return Err(recorded.stop(error)),
+    };
+    let live = match layout.anchor(request.live) {
+        Ok(path) => path,
+        Err(error) => return Err(recorded.stop(error)),
+    };
+    if let Err(error) = paths_are_distinct(&quarantine, &live) {
         return Err(recorded.stop(error));
     }
     let authenticated = match authenticated_bundle(
@@ -176,7 +189,7 @@ pub fn stage_quarantine(
         Ok(journal) => journal,
         Err(error) => return Err(recorded.stop(error)),
     };
-    let mut staging = match layout.begin(request.quarantine, request.live) {
+    let mut staging = match layout.begin(&quarantine, &live) {
         Ok(staging) => staging,
         Err(error) => return Err(recorded.stop(error)),
     };
@@ -187,17 +200,17 @@ pub fn stage_quarantine(
         }
     }
     if let Err(error) = staging.finish(&journal) {
-        let _ = layout.remove_tree(request.quarantine);
+        let _ = layout.remove_tree(&quarantine);
         return Err(recorded.stop(error));
     }
     if recorded
         .write("absent", "verified", "sealed", "effect")
         .is_err()
     {
-        if layout.remove_tree(request.quarantine).is_ok() {
+        if layout.remove_tree(&quarantine).is_ok() {
             let _ = recorded.write("verified", "absent", RestoreFault::Audit.cause(), "effect");
         } else {
-            let _ = layout.remove_file(&request.quarantine.join("journal.txt"));
+            let _ = layout.remove_file(&quarantine.join("journal.txt"));
         }
         return Err(RestoreFault::Audit);
     }
@@ -228,17 +241,32 @@ pub fn accept_quarantine(
 ) -> Result<AcceptReport, RestoreFault> {
     let label = request.quarantine.display().to_string();
     let kind = request.facts.kind;
-    let policies = decide(policy, &request.facts, audit, &label)?;
+    let policies = decide(
+        policy,
+        &request.facts,
+        audit,
+        &label,
+        "verified",
+        "verified",
+    )?;
     let recorded = Recorded {
         audit,
         target: &label,
         initiator: kind,
         policies: &policies,
     };
-    if let Err(error) = paths_are_distinct(request.quarantine, request.live) {
+    let quarantine = match layout.anchor(request.quarantine) {
+        Ok(path) => path,
+        Err(error) => return Err(recorded.stop(error)),
+    };
+    let live = match layout.anchor(request.live) {
+        Ok(path) => path,
+        Err(error) => return Err(recorded.stop(error)),
+    };
+    if let Err(error) = paths_are_distinct(&quarantine, &live) {
         return Err(recorded.stop(error));
     }
-    let loaded = match layout.load(request.quarantine) {
+    let loaded = match layout.load(&quarantine) {
         Ok(loaded) => loaded,
         Err(error) => return Err(recorded.stop(error)),
     };
@@ -246,30 +274,33 @@ pub fn accept_quarantine(
         Ok(journal) => journal,
         Err(error) => return Err(recorded.stop(error)),
     };
-    let deferred = match deferred_lines(layout, request.quarantine) {
+    let deferred = match deferred_lines(layout, &quarantine) {
         Ok(lines) => lines,
         Err(error) => return Err(recorded.stop(error)),
     };
     if let Err(error) = seal_matches(&journal, &loaded, &deferred) {
         return Err(recorded.stop(error));
     }
+    if let Err(error) = sessions_match(layout, &quarantine, &deferred, &loaded.extras) {
+        return Err(recorded.stop(error));
+    }
     let attestations = match attested(&journal, request.receipts) {
         Ok(text) => text,
         Err(error) => return Err(recorded.stop(error)),
     };
-    match layout.exists(request.live) {
+    match layout.exists(&live) {
         Ok(true) => {
             return Err(recorded.stop(RestoreFault::LiveOccupied));
         }
         Ok(false) => {}
         Err(error) => return Err(recorded.stop(error)),
     }
-    if let Err(error) = layout.promote(request.quarantine, request.live) {
+    if let Err(error) = layout.promote(&quarantine, &live) {
         return Err(recorded.stop(error));
     }
-    let live = request.live.display().to_string();
+    let live_label = live.display().to_string();
     if recorded
-        .at(&live)
+        .at(&live_label)
         .record("verified", "live", "accepted", "effect", &attestations)
         .is_err()
     {
@@ -302,7 +333,14 @@ pub fn open_deferred_conversation(
 ) -> Result<OpenReport, RestoreFault> {
     let label = format!("{} {}", request.root.display(), request.conversation_id);
     let kind = request.facts.kind;
-    let policies = decide(policy, &request.facts, audit, &label)?;
+    let policies = decide(
+        policy,
+        &request.facts,
+        audit,
+        &label,
+        "deferred",
+        "deferred",
+    )?;
     let recorded = Recorded {
         audit,
         target: &label,
@@ -384,7 +422,11 @@ pub fn open_deferred_conversation(
         .write("deferred", "available", "fetched", "effect")
         .is_err()
     {
-        let _ = layout.remove_file(&final_path);
+        if layout.remove_file(&final_path).is_err() {
+            let mut rejected = final_path.as_os_str().to_owned();
+            rejected.push(".rejected");
+            let _ = layout.publish_file(&final_path, Path::new(&rejected));
+        }
         return Err(RestoreFault::Audit);
     }
     Ok(OpenReport {
@@ -469,11 +511,44 @@ fn join_relative(root: &Path, relative: &str) -> Result<PathBuf, RestoreFault> {
     Ok(path)
 }
 
+fn sessions_match(
+    layout: &dyn QuarantineLayout,
+    root: &Path,
+    deferred: &[DeferredLine],
+    extras: &[String],
+) -> Result<(), RestoreFault> {
+    for extra in extras {
+        let path = join_relative(root, extra)?;
+        let mut matched = false;
+        for line in deferred {
+            let Ok(name) = deferred_session_name(&line.conversation_id) else {
+                return Err(RestoreFault::Tamper);
+            };
+            if name != *extra {
+                continue;
+            }
+            let cut = layout
+                .session_cut(&path, &line.conversation_id)
+                .map_err(|_| RestoreFault::Tamper)?;
+            if cut.size != line.size || cut.digest != line.digest {
+                return Err(RestoreFault::Tamper);
+            }
+            matched = true;
+        }
+        if !matched {
+            return Err(RestoreFault::Tamper);
+        }
+    }
+    Ok(())
+}
+
 fn decide(
     policy: &dyn RestorePolicyEvaluator,
     facts: &RestoreFacts<'_>,
     audit: &dyn RestoreAudit,
     target: &str,
+    before: &str,
+    after: &str,
 ) -> Result<Vec<String>, RestoreFault> {
     let decision = policy.evaluate(facts);
     let (name, policies, denied) = match &decision {
@@ -486,7 +561,7 @@ fn decide(
         initiator: facts.kind,
         policies: &policies,
     }
-    .write("absent", "absent", "decision", name)?;
+    .write(before, after, "decision", name)?;
     if denied {
         return Err(RestoreFault::Denied);
     }

@@ -41,7 +41,9 @@ the result is a visible audit failure, not a second rename back.
 ## Invariants
 
 - The quarantine path and the live path are different absolute paths, and
-  neither is a prefix of the other. `a_restore_refuses_to_use_live_data_as_quarantine`
+  neither is a prefix of the other, after `.` and `..` are removed and an
+  existing ancestor is resolved. `a_restore_refuses_to_use_live_data_as_quarantine`,
+  `paths_and_receipts_are_constrained`
 - A failure before the rename does not create the live path and does not
   modify a sentinel beside it. `a_tampered_bundle_does_not_touch_live_data`,
   `a_partial_copy_removes_quarantine_and_leaves_live_data`

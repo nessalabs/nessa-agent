@@ -4,7 +4,7 @@
 //! these functions what to keep.
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 
 use super::encoding::{decode_identity, encode_identity};
 use super::record::{checked_identity, Fingerprint, MAX_NAME_BYTES};
@@ -225,14 +225,37 @@ pub fn metadata_omitted(
 }
 
 /// The two roots of a restore. Neither may be the other, or sit inside it.
+/// `.` and `..` are collapsed before the comparison.
 pub fn paths_are_distinct(quarantine: &Path, live: &Path) -> Result<(), RestoreFault> {
-    if !quarantine.is_absolute() || !live.is_absolute() {
-        return Err(RestoreFault::Paths);
-    }
-    if quarantine == live || quarantine.starts_with(live) || live.starts_with(quarantine) {
+    let quarantine = normalized_root(quarantine)?;
+    let live = normalized_root(live)?;
+    if quarantine == live || quarantine.starts_with(&live) || live.starts_with(&quarantine) {
         return Err(RestoreFault::Paths);
     }
     Ok(())
+}
+
+/// An absolute path with `.` and `..` removed. A `..` above the root is refused.
+pub fn normalized_root(path: &Path) -> Result<PathBuf, RestoreFault> {
+    if !path.is_absolute() {
+        return Err(RestoreFault::Paths);
+    }
+    let mut normal = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !normal.pop() {
+                    return Err(RestoreFault::Paths);
+                }
+            }
+            other => normal.push(other.as_os_str()),
+        }
+    }
+    if !normal.is_absolute() {
+        return Err(RestoreFault::Paths);
+    }
+    Ok(normal)
 }
 
 /// One file the quarantine seal covers. `path` is relative and uses `/`.
@@ -620,6 +643,10 @@ mod tests {
         );
         assert_eq!(
             paths_are_distinct(Path::new("q"), Path::new("live")).unwrap_err(),
+            RestoreFault::Paths
+        );
+        assert_eq!(
+            paths_are_distinct(&root.join("parent").join("..").join("live"), &live).unwrap_err(),
             RestoreFault::Paths
         );
         assert!(receipt_is_usable("stopped-host-1"));

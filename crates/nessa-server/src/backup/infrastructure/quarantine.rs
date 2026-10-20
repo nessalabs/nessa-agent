@@ -21,11 +21,11 @@ use crate::backup::application::{
     VerificationSource,
 };
 use crate::backup::domain::{
-    credential_is_fenced, encode_deferred, fresher_fences, leases_to_interrupt, metadata_omitted,
-    paths_are_distinct, relative_path_is_safe, share_grant_is_fenced, CredentialKind,
-    DeferredEntry, DeferredLine, DeletionFence, DeletionLog, Fingerprint, LeaseMark,
-    ManifestListing, MetadataFacts, MetadataRow, RestoreFault, SealedFile, StoreKind,
-    IDENTITY_BODY, MAX_NAME_BYTES, REPLAY_BODY,
+    conversation_is_fenced, credential_is_fenced, encode_deferred, fresher_fences,
+    leases_to_interrupt, metadata_omitted, normalized_root, paths_are_distinct,
+    relative_path_is_safe, share_grant_is_fenced, CredentialKind, DeferredEntry, DeferredLine,
+    DeletionFence, DeletionLog, Fingerprint, LeaseMark, ManifestListing, MetadataFacts,
+    MetadataRow, RestoreFault, SealedFile, StoreKind, IDENTITY_BODY, MAX_NAME_BYTES, REPLAY_BODY,
 };
 
 use super::log::{authenticate_inventory, exclusive, persist};
@@ -72,7 +72,11 @@ impl CutMaterializer for DirectoryMaterializer {
         let mut deferred = Vec::new();
         for store in listing.stores() {
             for line in store.deferred() {
-                deferred.push(deferred_line(line)?);
+                let row = deferred_line(line)?;
+                if conversation_is_fenced(&row.conversation_id, &fence_list) {
+                    continue;
+                }
+                deferred.push(row);
             }
             let mut lease_files = Vec::new();
             for record in store.records().iter().filter(|record| record.is_public()) {
@@ -115,18 +119,25 @@ impl CutMaterializer for DirectoryMaterializer {
                 per_file.push((identity, text, events));
             }
             let open = leases_to_interrupt(&folded);
-            let mut announced = Vec::new();
-            for (identity, text, events) in per_file {
-                let mut here = Vec::new();
+            let mut last_open = Vec::new();
+            for (index, (_, _, events)) in per_file.iter().enumerate() {
                 for (id, mark) in events {
-                    if mark == LeaseMark::Opened
-                        && open.iter().any(|existing| existing == &id)
-                        && !announced.iter().any(|existing| existing == &id)
-                    {
-                        here.push(id.clone());
-                        announced.push(id);
+                    if *mark != LeaseMark::Opened || !open.iter().any(|existing| existing == id) {
+                        continue;
+                    }
+                    if let Some(slot) = last_open.iter_mut().find(|(existing, _)| existing == id) {
+                        *slot = (id.clone(), index);
+                    } else {
+                        last_open.push((id.clone(), index));
                     }
                 }
+            }
+            for (index, (identity, text, _)) in per_file.into_iter().enumerate() {
+                let here = last_open
+                    .iter()
+                    .filter(|(_, at)| *at == index)
+                    .map(|(id, _)| id.clone())
+                    .collect::<Vec<_>>();
                 files.push((
                     format!("records/{}/{}", StoreKind::LeaseRecords.as_str(), identity),
                     interrupt_leases(&text, &here)?,
@@ -483,6 +494,37 @@ impl QuarantineLayout for DirectoryQuarantine {
 
     fn canonicalize(&self, path: &Path) -> Result<PathBuf, RestoreFault> {
         path.canonicalize().map_err(|_| RestoreFault::Unreadable)
+    }
+
+    fn anchor(&self, path: &Path) -> Result<PathBuf, RestoreFault> {
+        let normal = normalized_root(path)?;
+        let mut prefix = normal.clone();
+        let mut rest = Vec::new();
+        while !prefix.exists() {
+            let Some(name) = prefix.file_name().map(|name| name.to_os_string()) else {
+                return Err(RestoreFault::Paths);
+            };
+            rest.push(name);
+            if !prefix.pop() {
+                return Err(RestoreFault::Paths);
+            }
+        }
+        let mut anchored = prefix
+            .canonicalize()
+            .map_err(|_| RestoreFault::Unreadable)?;
+        for name in rest.into_iter().rev() {
+            anchored.push(name);
+        }
+        Ok(anchored)
+    }
+
+    fn session_cut(&self, path: &Path, conversation_id: &str) -> Result<SessionCut, RestoreFault> {
+        let stream =
+            inspect_conversation(path, conversation_id).map_err(|_| RestoreFault::Tamper)?;
+        Ok(SessionCut {
+            size: stream.size,
+            digest: Fingerprint::from_digest(stream.digest),
+        })
     }
 }
 
