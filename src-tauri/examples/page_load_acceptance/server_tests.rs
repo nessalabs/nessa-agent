@@ -59,6 +59,16 @@ fn fragmented_control_does_not_receive_an_early_response() {
 }
 
 #[test]
+fn a_complete_header_returned_after_the_deadline_is_refused() {
+    let result = control_request(|buffer, remaining| {
+        thread::sleep(remaining + Duration::from_millis(20));
+        buffer[..CONTROL.len()].copy_from_slice(CONTROL);
+        Ok(CONTROL.len())
+    });
+    assert_eq!(result.unwrap_err().kind(), io::ErrorKind::TimedOut);
+}
+
+#[test]
 fn other_requests_do_not_publish_a_control_witness() {
     for request in [
         b"GET /other HTTP/1.1\r\n\r\n".as_slice(),

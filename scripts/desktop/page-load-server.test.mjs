@@ -34,7 +34,7 @@ test("native load HTTP control handles fragmented and refused requests within it
     assert.equal(compiled.status, 0, compiled.stderr || compiled.error?.message)
     const run = spawnSync(binary, [], { encoding: "utf8", timeout: 8_000 })
     assert.equal(run.status, 0, run.stdout + run.stderr || run.error?.message)
-    assert.match(run.stdout, /test result: ok\. 6 passed; 0 failed;/)
+    assert.match(run.stdout, /test result: ok\. 7 passed; 0 failed;/)
   } finally {
     rmSync(directory, { recursive: true, force: true })
   }

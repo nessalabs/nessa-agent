@@ -85,6 +85,9 @@ fn control_request(
             return Err(io::ErrorKind::TimedOut.into());
         }
         let length = read(&mut request[used..], remaining)?;
+        if Instant::now() >= deadline {
+            return Err(io::ErrorKind::TimedOut.into());
+        }
         if length == 0 {
             return Err(io::ErrorKind::UnexpectedEof.into());
         }

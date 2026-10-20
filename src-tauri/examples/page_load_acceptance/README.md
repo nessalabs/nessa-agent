@@ -14,6 +14,7 @@ header, rather than the first chunk returned by `read`.
 | --- | --- | --- |
 | Complete control GET | Record the request witness, then send 200 | `complete_control_records_the_request_before_success` |
 | Control header split across TCP reads | Wait within the same read budget; record only the complete request | `fragmented_control_does_not_receive_an_early_response` |
+| Complete final read returns after the deadline | Refuse without a witness or success response | `a_complete_header_returned_after_the_deadline_is_refused` |
 | Different path or method | 404, no control witness | `other_requests_do_not_publish_a_control_witness` |
 | EOF before the header ends | No success response or witness | `incomplete_and_oversized_headers_cannot_publish_success` |
 | Header past 8192 bytes | Refuse within the bound, no success or witness | `incomplete_and_oversized_headers_cannot_publish_success` |
