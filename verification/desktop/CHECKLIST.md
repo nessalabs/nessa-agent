@@ -326,7 +326,9 @@ Experimental turns it on; the rail stands beside the workspace in
 - [ ] **The titlebar's controls never pass under the window's controls while
   the rail opens or closes**: they jump with the traffic lights, so every frame
   draws them where they were or where they land, never between. _Check:_
-  `columns.mjs --only titlebar-steady`.
+  `columns.mjs --only titlebar-steady`. In the macOS window the page's frame
+  and the native buttons' move reach the screen separately, so one frame may
+  show the controls before the buttons have jumped; check a rail toggle by eye.
 - [ ] **Toggling the rail moves things by transform only**: the width lands at
   once and FlipScope plays the columns back, so no frame lays text out again.
   _Check:_ `perf-budget.mjs` (production build) — not yet run for the rail.

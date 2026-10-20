@@ -348,9 +348,15 @@ async function setSideRail(page, on, failures) {
     10_000,
   )
   const now = await quietControls(page)
-  if (!drawn || now.leads.at(-1) !== 0)
+  if (!drawn)
     failures.push(
-      `under Settings the rail is ${now.rail} and the window's controls lead by ${now.leads.at(-1)}, not 0`,
+      on && now.rail === "closed"
+        ? "the window had no room for the side rail"
+        : `under Settings the rail is ${now.rail}, not ${on ? "open" : "off"}`,
+    )
+  if (now.leads.at(-1) !== 0)
+    failures.push(
+      `under Settings the window's controls lead by ${now.leads.at(-1)}, not 0`,
     )
   await page.getByRole("button", { name: names.leaveSettings }).first().click()
   await page.waitForSelector(css.settings, { state: "detached", timeout: 10_000 })
