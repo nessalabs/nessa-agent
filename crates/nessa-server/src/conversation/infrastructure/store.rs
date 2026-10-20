@@ -29,7 +29,7 @@ use nessa_auth::domain::{OrganizationId, PrincipalId, MAX_IDENTIFIER_BYTES};
 use nessa_local_database::rusqlite::{
     params, Connection, Error, OptionalExtension, Row, TransactionBehavior,
 };
-use nessa_local_database::{rusqlite, OpenError, Schema};
+use nessa_local_database::{rusqlite, OpenError, Schema, Upgrade};
 use nessa_protocol::agents::AgentId;
 use nessa_protocol::conversation::domain::{
     conversation_catalogue_schema, conversation_catalogue_stream, ConversationApprovalMode,
@@ -102,6 +102,18 @@ impl GrantWritePause {
 
 /// The tables and their version, defined once.
 const DEFINITION: &str = include_str!("schema.sql");
+
+/// What brings a file from an older build to [`DEFINITION`]'s version, one
+/// version at a time. Each only adds what that version added.
+static UPGRADES: [Upgrade; 2] = [
+    Upgrade::new(6, include_str!("schema_upgrades/6.sql")),
+    Upgrade::new(7, include_str!("schema_upgrades/7.sql")),
+];
+
+/// The metadata schema, with the steps that bring an older file to it.
+fn schema() -> Result<Schema, OpenError> {
+    Schema::new(DEFINITION)?.with_upgrades(&UPGRADES)
+}
 
 /// One owner's conversations that a list shows, newest summary first, at most
 /// `?4` of them. The index on `(organization, owner)` finds the owner's rows,
@@ -179,7 +191,7 @@ impl LocalConversationStore {
     /// it whether starting again could help
     /// (docs/adr/todo/202-versioned-local-datasets.md).
     pub fn open(path: &Path) -> Result<Self, OpenError> {
-        let connection = nessa_local_database::open(path, &Schema::new(DEFINITION)?)?;
+        let connection = nessa_local_database::open(path, &schema()?)?;
         model_changes::validate_shape(&connection)?;
         connection.set_prepared_statement_cache_capacity(cached::STATEMENTS);
         Ok(Self {

@@ -7,15 +7,18 @@
  *        │                         the one owner of every name, description
  *        │                         and what search finds
  *        ▼
- *   ui/settings-view.tsx ──▶ ui/settings-tabs.tsx ──▶ ui/settings-controls.tsx
- *   (the surface: sidebar,    (each tab's rows, wired   (Group, Row, ItemRow,
- *    the page's bar, tabs,     to the preferences and    SettingGroup and the
- *    search, focus)            the workspace it sets)    controls, over the UI
- *        │                                               kit's settings group,
- *        ▼                                               row, switch and
- *   ui/settings-masthead.tsx                             segmented control)
- *   (a page's title, its one
- *    line, its tabs)
+ *   ui/settings-view.tsx ──▶ ui/use-settings-surface.ts ──▶ ui/settings-layout.tsx
+ *   (open, close, ⌘,)        (sidebar, chords, place,     (the markup)
+ *                             focus, scroll)
+ *        │
+ *        ▼
+ *   ui/settings-tabs.tsx ──▶ ui/settings-controls.tsx
+ *   (each tab's rows, wired   (Group, Row, ItemRow,
+ *    to the preferences)       over the UI kit's)
+ *        │
+ *        ▼
+ *   ui/settings-masthead.tsx
+ *   (a page's title, its one line, its tabs)
  *                                    │
  *                                    ▼
  *   ui/integrations-tab.tsx ──▶ model/mcp-servers.ts ◀── adapters/mcp-servers-gateway.ts

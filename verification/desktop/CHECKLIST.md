@@ -324,9 +324,18 @@ Experimental turns it on; the rail stands beside the workspace in
   loader before 3 s; still loading at 3 s, the kit's `LoadingText` sweeps
   "Loading Files" with no panel or border around it. _Check:_
   `columns.mjs --only rail-loading`.
+- [ ] **The open rail holds the traffic lights in its top row**: in the macOS
+  window the lights never move; the open rail is wide enough for them, its
+  items are centred under them, and so is its toggle, open or closed; the
+  first card starts as far past the green button as the red one is from the
+  window's edge. Open, closed or off, the titlebar's first control starts
+  where the lights end. _Check:_ `conversation-stress.mjs` step `rail` (the
+  fake host makes the page macOS; `columns.mjs` keeps the browser's rail);
+  `side-rail.test.tsx` ties the rail's width to `traffic_lights.rs` and
+  `styles.css`.
 - [ ] **The titlebar's controls never pass under the window's controls while
   the rail opens or closes**: every frame draws them between where they were
-  and where they land — still, in the macOS window. _Check:_
+  and where they land. _Check:_
   `columns.mjs --only titlebar-steady`.
 - [ ] **Toggling the rail moves things by transform only**: the width lands at
   once and FlipScope plays the columns back, so no frame lays text out again.
@@ -1528,7 +1537,11 @@ says why where the conversations would be.
   and different-remote replacements are measured at 360, 600 and 1440 pixels
   in both engines.
   _Check:_ `local-tab-lifetimes.mjs`; ordering rows LT1/LT6/LT7 in
-  [local tab lifetimes](../../docs/design/local-tab-identities.md).
+  [local tab lifetimes](../../docs/design/local-tab-identities.md). Follow,
+  stop and close counts are read from the fixture owner
+  (`__localTabLifetimes.snapshot` in
+  [live owner reads](../../docs/design/live-owner-reads.md)), not from
+  attributes the last render copied.
 
 ## Committed transcript controls
 
@@ -1913,6 +1926,9 @@ the table in `docs/design/read-grants.md` › "Dialog state and order".
   naming 3 answers "Shared.".
 - [ ] **Tab stays in the dialog; Escape closes it and focus is back on the
   session's row.** _Check:_ `focus` (waits for that end state, 3 s).
+- [ ] **A pinned session under a folded sidebar gets that focus on the list's
+  row, not the inert sidebar copy.** _Check:_ `focus-pinned` (the sample
+  workspace, which can pin; the gateway keeps no pin).
 - [ ] **The panel fits the window.** _Check:_ `fit-1200`, `fit-420`; with
   `--shots <dir>`, screenshots of the grants, Drive form, budget, refusal,
   changed refusal and the narrow panel.

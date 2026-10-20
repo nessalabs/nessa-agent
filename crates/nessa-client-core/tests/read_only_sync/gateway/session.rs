@@ -9,7 +9,9 @@ use crate::read_only_sync::application::{
     Cancellation, GatewayConnector, GatewayError, GatewayPolicy, GatewayStream,
 };
 use crate::retained::{ReadFailure, ReadStop, ReaderAccess, ReaderRole, RetainedCache};
-use nessa_auth::adapters::pairing::{NativeIdentity, NativeTransport, OsEntropy};
+use nessa_auth::adapters::pairing::{
+    NativeIdentity, NativeTransport, OsEntropy, PairingCryptoError,
+};
 use nessa_auth::application::ports::Clock as WallClock;
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_protocol::clock::Clock;
@@ -264,7 +266,7 @@ fn native_peer_answering(
     script: impl FnOnce(&mut PeerSocket) + Send + 'static,
 ) -> (Endpoint, Peer) {
     prepare_then_start(
-        || -> Result<_, nessa_auth::adapters::pairing::PairingCryptoError> {
+        || -> Result<_, PairingCryptoError> {
             let gateway = NativeIdentity::generate(&mut OsEntropy)?;
             let device = NativeIdentity::generate(&mut OsEntropy)?;
             Ok((gateway, device))

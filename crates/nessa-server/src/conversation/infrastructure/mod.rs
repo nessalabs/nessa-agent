@@ -182,6 +182,10 @@ pub use audit::{DurableExecutionAudit, ExecutionAuditFileWriter};
 mod store_tests;
 
 #[cfg(test)]
+#[path = "../../../tests/conversation/store_upgrades.rs"]
+mod store_upgrade_tests;
+
+#[cfg(test)]
 pub(crate) use record_read::TestReadGate;
 
 mod agent_tool_audit;

@@ -26,6 +26,7 @@ import type { Transcript } from "./model/transcript"
 import { atWork, emptyTranscript } from "./model/transcript"
 import { panesOf, type Pane, type PaneLayout } from "../split-panes/model/pane-layout"
 import { paneItemOf } from "./model/pane-item"
+import { loadWorkspace } from "./adapters/store/commands"
 
 /**
  * What a pane shows, as a test reads it: a session's id, or a widget as
@@ -376,6 +377,22 @@ export async function settle(times = 5): Promise<void> {
   for (let index = 0; index < times; index++) await Promise.resolve()
 }
 
+/** The index loaded, which is where a command test starts. */
+export async function ready(source = fakeSource()) {
+  const store = testStore(source)
+  await store.dispatch(loadWorkspace())
+  await settle()
+  return { store, source }
+}
+
+/** What the panes show, as a list of session ids. */
+export const shown = (store: ReturnType<typeof testStore>) =>
+  shownIn(store.getState().workspace.panes)
+
+/** A session's outbox, or none. */
+export const outboxOf = (store: ReturnType<typeof testStore>, sessionId: string) =>
+  store.getState().workspace.outbox[sessionId] ?? []
+
 /**
  * Animation frames a test runs itself.
  *
@@ -392,32 +409,40 @@ export function controlledAnimationFrames(): {
   /** Runs the callbacks queued now, not the frame they themselves ask for. */
   runFrame: () => void
   restore: () => void
+  /** Where each callback still queued was asked for. Empty once it has run. */
+  pendingStacks: () => readonly string[]
 } {
   const queued = new Map<number, FrameRequestCallback>()
+  const stacks = new Map<number, string>()
   let next = 1
   const request = window.requestAnimationFrame
   const cancel = window.cancelAnimationFrame
   window.requestAnimationFrame = (callback) => {
     const id = next++
     queued.set(id, callback)
+    stacks.set(id, new Error("animation frame").stack ?? "")
     return id
   }
   window.cancelAnimationFrame = (id) => {
     queued.delete(id)
+    stacks.delete(id)
   }
   return {
     pending: () => queued.size,
+    pendingStacks: () => [...stacks.values()],
     runFrame() {
       // A callback can cancel one queued beside it; that one does not run.
       for (const id of [...queued.keys()]) {
         const callback = queued.get(id)
         if (callback === undefined) continue
         queued.delete(id)
+        stacks.delete(id)
         callback(performance.now())
       }
     },
     restore() {
       queued.clear()
+      stacks.clear()
       window.requestAnimationFrame = request
       window.cancelAnimationFrame = cancel
     },
