@@ -12,7 +12,12 @@ import { EscapeScopesProvider } from "../../adapters/dom/widget-escape"
 import { sessionListLimits, type ColumnLimits } from "../../model/window-fit"
 import type { WindowArrangement } from "../../model/shown-window"
 import { IconButton } from "../../../ui/icon-button"
-import { SideRail, SideRailButton, RailView, RAIL_WIDTH } from "../chrome/side-rail"
+import {
+  SideRail,
+  SideRailButton,
+  RailView,
+  holdsWindowControls,
+} from "../chrome/side-rail"
 import { WorkspaceTitlebar } from "../chrome/workspace-titlebar"
 import { OverviewLayer } from "../overview/overview-layer"
 import { PaneGrid } from "../panes/pane-grid"
@@ -65,6 +70,7 @@ export function WorkspaceLayout(model: WorkspaceWindowModel) {
     railOffered,
     railDrawn,
     railRoom,
+    railWidth,
     railItem,
     shownRailItem,
     sidebarOpen,
@@ -113,6 +119,9 @@ export function WorkspaceLayout(model: WorkspaceWindowModel) {
                   className="workspace-window"
                   data-rail={!railOffered ? "off" : railDrawn ? "open" : "closed"}
                   data-rail-view={shownRailItem?.id}
+                  data-rail-holds={
+                    holdsWindowControls(hostKind) ? "window-controls" : undefined
+                  }
                   data-host={hostKind}
                   data-surface={browserSurface ? "browser" : "window"}
                   data-desktop-theme={theme}
@@ -120,8 +129,13 @@ export function WorkspaceLayout(model: WorkspaceWindowModel) {
                   // The person's own choice, apart from a fold for room: the
                   // rail's toggle hides only with a sidebar they closed.
                   data-sidebar-chosen={sidebarChosenOpen ? "open" : "closed"}
-                  style={{ "--rail-width": `${RAIL_WIDTH}px` } as CSSProperties}
+                  style={{ "--rail-width": `${railWidth}px` } as CSSProperties}
                 >
+                  {/* The light behind the window spans the rail too, so the
+                      rail and the workspace stand on one ground. */}
+                  <div className="desktop-ambient" aria-hidden="true">
+                    <span className="desktop-grain" />
+                  </div>
                   {railOffered ? (
                     <>
                       <SideRail open={railDrawn} active={railItem} onPick={onPickRail} />
@@ -156,9 +170,6 @@ export function WorkspaceLayout(model: WorkspaceWindowModel) {
                       } as CSSProperties
                     }
                   >
-                    <div className="desktop-ambient" aria-hidden="true">
-                      <span className="desktop-grain" />
-                    </div>
                     {sidebarOpen ? null : (
                       <EdgePeekStrip peek={peek} onDragOut={onRevealSidebar} />
                     )}

@@ -64,7 +64,7 @@ import {
 } from "../../../split-panes/model/pane-layout"
 import type { SwitcherRow } from "../../model/session-search"
 import { columnWidth, railFits, sessionListLimits } from "../../model/window-fit"
-import { railItems, RAIL_WIDTH, type RailItem } from "../chrome/side-rail"
+import { railItems, railWidth, type RailItem } from "../chrome/side-rail"
 import type { SwitcherMode } from "../quick-switcher/quick-switcher"
 import { type ShortcutCommand, type WorkspaceFrame } from "../workspace-frame"
 import { workspaceShortcuts } from "./shortcuts"
@@ -241,7 +241,7 @@ function useShownArrangement(region: SidebarRegion) {
   }, [dispatch, region.arrangement])
 }
 
-function useWorkspaceChrome(region: SidebarRegion) {
+function useWorkspaceChrome(region: SidebarRegion, hostKind: HostKind) {
   const dispatch = useWorkspaceDispatch()
   const chrome = useWorkspaceSelector(selectChrome)
   const sidebarOpen = useWorkspaceSelector(selectSidebarOpen)
@@ -269,6 +269,9 @@ function useWorkspaceChrome(region: SidebarRegion) {
   const listWidth = region.sessionList
     ? columnWidth(chrome.sessionListWidth, sessionListLimits, fullWidth)
     : 0
+  // The rail is wider where it holds the window's own controls. One width
+  // for the fit and for the column the layout draws.
+  const rail = railWidth(hostKind)
   // The rail is the first column to give way for room (`railFits`): it is drawn
   // only where it folds nothing the person has open. A full view has no columns.
   const railRoom =
@@ -282,11 +285,11 @@ function useWorkspaceChrome(region: SidebarRegion) {
       },
       fullWidth,
       columns,
-      RAIL_WIDTH,
+      rail,
     )
   const railDrawn = railOffered && railOpen && railRoom
   // The rail stands beside the workspace, not in it: the columns fit what is left.
-  const windowWidth = fullWidth - (railDrawn ? RAIL_WIDTH : 0)
+  const windowWidth = fullWidth - (railDrawn ? rail : 0)
   useFitOnResize(windowWidth, columns, (width) =>
     dispatch(
       fitToWindow({ windowWidth: width, sidebarWidth, sessionListWidth: listWidth }),
@@ -303,6 +306,7 @@ function useWorkspaceChrome(region: SidebarRegion) {
     railOffered,
     railDrawn,
     railRoom,
+    railWidth: rail,
     railItem,
     shownRailItem,
     setRailItem,
@@ -427,6 +431,8 @@ export interface WorkspaceWindowModel {
   railOffered: boolean
   railDrawn: boolean
   railRoom: boolean
+  /** Pixels the open rail takes, the same width the columns were fitted less of. */
+  railWidth: number
   railItem: string
   shownRailItem: RailItem | undefined
   sidebarOpen: boolean
@@ -465,7 +471,7 @@ export function useWorkspaceWindow({
   const root = useRef<HTMLDivElement>(null)
   const [theme] = useThemePreference()
   const store = useWorkspaceStore()
-  const chrome = useWorkspaceChrome(region)
+  const chrome = useWorkspaceChrome(region, hostKind)
   const dragging = useColumnDrag(region, root, chrome.listOpen)
   const switching = useWorkspaceSwitcher(region, root, chrome.shownRailItem)
   useFocusFollowsPane(store, root)
@@ -512,6 +518,7 @@ export function useWorkspaceWindow({
     railOffered: chrome.railOffered,
     railDrawn: chrome.railDrawn,
     railRoom: chrome.railRoom,
+    railWidth: chrome.railWidth,
     railItem: chrome.railItem,
     shownRailItem: chrome.shownRailItem,
     sidebarOpen: chrome.sidebarOpen,

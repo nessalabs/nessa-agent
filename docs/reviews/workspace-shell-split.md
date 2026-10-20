@@ -1,9 +1,16 @@
 # Local review — workspace shell split
 
-Reviewed head: `6ba841fc602b4abdf9fdd1a547e24cdf44f8261e` on
-`cursor/workspace-shell-split-3bfb`. Base: `main` at
-`7b429791ec294ead4952ec86dde67d284d5aa9e9`. Working tree clean at review.
+Reviewed head: `d9ce0f870` on `cursor/workspace-shell-split-3bfb`, the
+split rebased onto `main` at `a8dfeceb0` (the same tree as
+`6ba841fc602b4abdf9fdd1a547e24cdf44f8261e` before that rebase, with the
+shell conflict kept as the thin coordinator). Working tree clean at review.
 Brief: [the design note](../design/workspace-shell-split.md#review-brief).
+
+After this review, the rail geometry that landed in that main commit was
+carried into the split: `railWidth(hostKind)` is the width both the fit and
+`--rail-width` use, `data-rail-holds` is set from `holdsWindowControls`, and
+the window light spans the rail. That is the behavior already on main, not a
+new state.
 
 ## What was inspected
 
