@@ -102,8 +102,10 @@ pub use subscribe::{ConversationFeed, FeedEvent, SubscribeError};
 /// frames, not payload and not TLS. The size table's p50 and p95 are order
 /// statistics of that table. A phone radio, operating-system sleep, and a
 /// sampled production percentile are listed under `notMeasured`.
-pub fn weak_link_report() -> serde_json::Value {
-    crate::read_only_sync::infrastructure::measure::report()
+///
+/// Await this on the caller's runtime. It does not start a second one.
+pub async fn weak_link_report() -> serde_json::Value {
+    crate::read_only_sync::infrastructure::measure::report().await
 }
 
 /// The catalogue selector, not a grant of read authority. The authenticated

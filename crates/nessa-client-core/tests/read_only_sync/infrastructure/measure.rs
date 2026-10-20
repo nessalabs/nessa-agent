@@ -3,7 +3,12 @@ use super::report;
 
 #[test]
 fn paced_and_unpaced_keep_the_same_bytes_and_reopen() {
-    let report = report();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("measurement runtime");
+    // Awaited on this runtime. A `block_on` inside the report would panic here.
+    let report = runtime.block_on(report());
     assert_eq!(report["profilesMatch"], true);
     let unpaced = &report["profiles"][0];
     let paced = &report["profiles"][1];

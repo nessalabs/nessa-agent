@@ -130,7 +130,9 @@ struct Flight {
 }
 
 /// The schedule. Fields stay private; each event returns a new value.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// Not cloned. A copied schedule would be a second authority over the same
+/// allowance and the same in-flight quantum. A fresh link starts from [`LinkSpec`].
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) struct LinkSchedule {
     route: Route,
     presence: Presence,

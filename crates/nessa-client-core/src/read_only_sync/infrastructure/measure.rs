@@ -82,15 +82,10 @@ impl RecordSource for CountingSource {
 
 /// The harness report. One JSON object: profiles, the size table, and the
 /// rows that copy nothing.
-pub(crate) fn report() -> Value {
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("measurement runtime");
-    runtime.block_on(report_async())
-}
-
-async fn report_async() -> Value {
+///
+/// The caller owns the runtime. This function awaits; it does not build a
+/// runtime or call `block_on`, so it can run inside a Tokio task.
+pub(crate) async fn report() -> Value {
     let root = std::env::temp_dir().join(format!("nessa-weak-link-{}", uuid::Uuid::new_v4()));
     let _remove = Remove(&root);
     nessa_local_storage::create_directory(&root).expect("measurement directory");

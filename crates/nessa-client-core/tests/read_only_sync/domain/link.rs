@@ -77,6 +77,44 @@ fn unreachable_outranks_sleep_reconnect_and_backpressure() {
     ));
 }
 
+fn metered(remaining: u64) -> LinkSchedule {
+    LinkSchedule::new(LinkSpec {
+        billing: Billing::Metered { remaining },
+        ..schedule_spec()
+    })
+}
+
+fn closed_pace(kept: u64) -> LinkSchedule {
+    let paced = LinkSchedule::new(LinkSpec {
+        pace_bytes_per_second: NonZeroU64::new(8_000),
+        ..schedule_spec()
+    });
+    let (paced, _) = paced.admit(&[transcript()]);
+    let (paced, _) = paced.finish(kept);
+    paced
+}
+
+fn closed_metered_pace() -> LinkSchedule {
+    let paced = LinkSchedule::new(LinkSpec {
+        billing: Billing::Metered { remaining: 100 },
+        pace_bytes_per_second: NonZeroU64::new(8_000),
+        ..schedule_spec()
+    });
+    let (paced, _) = paced.admit(&[transcript()]);
+    let (paced, _) = paced.finish(1);
+    paced
+}
+
+fn lost_during_copy() -> LinkSchedule {
+    let (schedule, _) = schedule().admit(&[transcript()]);
+    schedule.connection_lost()
+}
+
+fn asleep_and_unreachable() -> LinkSchedule {
+    let (schedule, _) = schedule().admit(&[transcript()]);
+    schedule.sleep().unreachable()
+}
+
 fn schedule_spec() -> LinkSpec {
     LinkSpec {
         route: Route::Direct,
@@ -119,33 +157,39 @@ fn deferral_order_is_unreachable_then_reconnect_then_sleep_then_pace() {
             .1,
         Admit::Defer(Deferral::Sleep)
     ));
-    let paced = LinkSchedule::new(LinkSpec {
-        pace_bytes_per_second: NonZeroU64::new(8_000),
-        ..schedule_spec()
-    });
-    let (paced, _) = paced.admit(&candidates);
-    let (paced, settled) = paced.finish(1);
+    let (paced, settled) = {
+        let paced = LinkSchedule::new(LinkSpec {
+            pace_bytes_per_second: NonZeroU64::new(8_000),
+            ..schedule_spec()
+        });
+        let (paced, _) = paced.admit(&candidates);
+        paced.finish(1)
+    };
     assert!(matches!(settled, Settle::Settled { wait_ms: 1_000, .. }));
+    let _ = paced;
     assert!(matches!(
-        paced.clone().admit(&candidates).1,
+        closed_pace(1).admit(&candidates).1,
         Admit::Defer(Deferral::Backpressure)
     ));
     assert!(matches!(
-        paced.pace_elapsed().admit(&candidates).1,
+        closed_pace(1).pace_elapsed().admit(&candidates).1,
         Admit::Go { .. }
     ));
 
-    let metered = LinkSchedule::new(LinkSpec {
-        billing: Billing::Metered { remaining: 100 },
-        pace_bytes_per_second: NonZeroU64::new(8_000),
-        ..schedule_spec()
-    });
-    let (metered, admit) = metered.admit(&candidates);
-    assert!(matches!(admit, Admit::Go { .. }));
-    let (metered, settled) = metered.finish(1);
+    let (metered, settled) = {
+        let metered = LinkSchedule::new(LinkSpec {
+            billing: Billing::Metered { remaining: 100 },
+            pace_bytes_per_second: NonZeroU64::new(8_000),
+            ..schedule_spec()
+        });
+        let (metered, admit) = metered.admit(&candidates);
+        assert!(matches!(admit, Admit::Go { .. }));
+        metered.finish(1)
+    };
     assert!(matches!(settled, Settle::Settled { wait_ms: 1_000, .. }));
+    let _ = metered;
     assert_eq!(
-        metered.clone().sleep().admit(&candidates).1,
+        closed_metered_pace().sleep().admit(&candidates).1,
         Admit::Defer(Deferral::Sleep)
     );
     let unknown = Candidate {
@@ -153,7 +197,7 @@ fn deferral_order_is_unreachable_then_reconnect_then_sleep_then_pace() {
         ..transcript()
     };
     assert_eq!(
-        metered.admit(&[unknown]).1,
+        closed_metered_pace().admit(&[unknown]).1,
         Admit::Defer(Deferral::Backpressure)
     );
 }
@@ -182,31 +226,27 @@ fn metered_unknown_quote_blocks_a_cheaper_candidate() {
 
 #[test]
 fn finish_and_cancel_leave_the_allowance_minus_what_was_kept() {
-    let metered = LinkSchedule::new(LinkSpec {
-        billing: Billing::Metered { remaining: 2_000 },
-        ..schedule_spec()
-    });
     let quoted = Candidate {
         quote: Quote::Known(400),
         ..transcript()
     };
-    let (admitted, _) = metered.clone().admit(std::slice::from_ref(&quoted));
+    let (admitted, _) = metered(2_000).admit(std::slice::from_ref(&quoted));
     assert_eq!(admitted.remaining(), Some(1_600));
     let (finished, _) = admitted.finish(100);
     assert_eq!(finished.remaining(), Some(1_900));
 
-    let (admitted, _) = metered.clone().admit(std::slice::from_ref(&quoted));
+    let (admitted, _) = metered(2_000).admit(std::slice::from_ref(&quoted));
     let (cancelled, _) = admitted.cancel(100);
     assert_eq!(cancelled.remaining(), Some(1_900));
 
-    let (admitted, _) = metered.clone().admit(std::slice::from_ref(&quoted));
+    let (admitted, _) = metered(2_000).admit(std::slice::from_ref(&quoted));
     let (cancelled, _) = admitted.cancel(0);
     assert_eq!(cancelled.remaining(), Some(2_000));
 
-    let (admitted, _) = metered.clone().admit(std::slice::from_ref(&quoted));
+    let (admitted, _) = metered(2_000).admit(std::slice::from_ref(&quoted));
     let (over, _) = admitted.finish(900);
     assert_eq!(over.remaining(), Some(1_100));
-    let (admitted, _) = metered.admit(std::slice::from_ref(&quoted));
+    let (admitted, _) = metered(2_000).admit(std::slice::from_ref(&quoted));
     let (over, _) = admitted.finish(u64::MAX);
     assert_eq!(over.remaining(), Some(0));
     let raised = over.with_allowance(0).expect("idle");
@@ -264,13 +304,11 @@ fn open_transcript_outranks_catalogue_history_and_artifact() {
 
 #[test]
 fn loss_during_the_quantum_reconnects_after_cancel() {
-    let (schedule, _) = schedule().admit(&[transcript()]);
-    let schedule = schedule.connection_lost();
     assert!(matches!(
-        schedule.clone().admit(&[transcript()]).1,
+        lost_during_copy().admit(&[transcript()]).1,
         Admit::InFlight
     ));
-    let (schedule, settled) = schedule.cancel(25);
+    let (schedule, settled) = lost_during_copy().cancel(25);
     assert!(matches!(
         settled,
         Settle::Settled {
@@ -280,24 +318,24 @@ fn loss_during_the_quantum_reconnects_after_cancel() {
         }
     ));
     assert!(matches!(
-        schedule.clone().admit(&[transcript()]).1,
+        schedule.admit(&[transcript()]).1,
         Admit::Defer(Deferral::Reconnect)
     ));
-    let (schedule, admit) = schedule.backoff_elapsed().admit(&[transcript()]);
+    let (schedule, admit) = lost_during_copy()
+        .cancel(25)
+        .0
+        .backoff_elapsed()
+        .admit(&[transcript()]);
     assert!(matches!(admit, Admit::Go { .. }));
     let _ = schedule;
 }
 
 #[test]
 fn finish_from_idle_does_not_charge() {
-    let metered = LinkSchedule::new(LinkSpec {
-        billing: Billing::Metered { remaining: 10 },
-        ..schedule_spec()
-    });
-    let (settled, outcome) = metered.clone().finish(4);
+    let (settled, outcome) = metered(10).finish(4);
     assert_eq!(outcome, Settle::Idle);
     assert_eq!(settled.remaining(), Some(10));
-    let (settled, outcome) = metered.cancel(4);
+    let (settled, outcome) = metered(10).cancel(4);
     assert_eq!(outcome, Settle::Idle);
     assert_eq!(settled.remaining(), Some(10));
 }
@@ -313,18 +351,21 @@ fn relay_does_not_change_who_is_admitted() {
 
 #[test]
 fn pace_stays_closed_until_the_caller_says_so() {
-    let paced = LinkSchedule::new(LinkSpec {
-        pace_bytes_per_second: NonZeroU64::new(8_000),
-        ..schedule_spec()
-    });
-    let (paced, _) = paced.admit(&[transcript()]);
-    let (paced, settled) = paced.finish(8_001);
+    let (paced, settled) = {
+        let paced = LinkSchedule::new(LinkSpec {
+            pace_bytes_per_second: NonZeroU64::new(8_000),
+            ..schedule_spec()
+        });
+        let (paced, _) = paced.admit(&[transcript()]);
+        paced.finish(8_001)
+    };
     assert!(matches!(settled, Settle::Settled { wait_ms: 2_000, .. }));
+    let _ = paced;
     assert!(matches!(
-        paced.clone().admit(&[transcript()]).1,
+        closed_pace(8_001).admit(&[transcript()]).1,
         Admit::Defer(Deferral::Backpressure)
     ));
-    let (open, _) = paced.pace_elapsed().admit(&[transcript()]);
+    let (open, _) = closed_pace(8_001).pace_elapsed().admit(&[transcript()]);
     let (open, settled) = open.finish(0);
     assert!(matches!(settled, Settle::Settled { wait_ms: 0, .. }));
     assert!(matches!(open.admit(&[transcript()]).1, Admit::Go { .. }));
@@ -372,13 +413,11 @@ fn no_candidate_copies_nothing() {
 
 #[test]
 fn sleep_or_unreachable_during_a_quantum_applies_at_the_next_admit() {
-    let (schedule, _) = schedule().admit(&[transcript()]);
-    let schedule = schedule.sleep().unreachable();
     assert!(matches!(
-        schedule.clone().admit(&[transcript()]).1,
+        asleep_and_unreachable().admit(&[transcript()]).1,
         Admit::InFlight
     ));
-    let (schedule, settled) = schedule.finish(5);
+    let (schedule, settled) = asleep_and_unreachable().finish(5);
     assert!(matches!(
         settled,
         Settle::Settled {
@@ -387,9 +426,10 @@ fn sleep_or_unreachable_during_a_quantum_applies_at_the_next_admit() {
         }
     ));
     assert!(matches!(
-        schedule.clone().admit(&[transcript()]).1,
+        schedule.admit(&[transcript()]).1,
         Admit::Defer(Deferral::Unreachable)
     ));
+    let (schedule, _) = asleep_and_unreachable().finish(5);
     assert!(matches!(
         schedule.reachable().admit(&[transcript()]).1,
         Admit::Defer(Deferral::Sleep)

@@ -37,14 +37,16 @@ fn unreachable_sleep_reconnect_and_backpressure_copy_nothing() {
         calls.set(calls.get() + 1);
         1
     };
-    let metered = LinkSchedule::new(LinkSpec {
-        billing: Billing::Metered { remaining: 10 },
-        ..spec()
-    });
+    let metered = || {
+        LinkSchedule::new(LinkSpec {
+            billing: Billing::Metered { remaining: 10 },
+            ..spec()
+        })
+    };
     for schedule in [
-        metered.clone().unreachable(),
-        metered.clone().connection_lost(),
-        metered.clone().sleep(),
+        metered().unreachable(),
+        metered().connection_lost(),
+        metered().sleep(),
     ] {
         let (_, admit, settled) =
             run_quantum(schedule, &[transcript(Quote::Known(4))], &mut quantum);
@@ -54,7 +56,7 @@ fn unreachable_sleep_reconnect_and_backpressure_copy_nothing() {
     assert_eq!(calls.get(), 0);
 
     let (_, admit, settled) = run_quantum(
-        metered,
+        metered(),
         &[
             transcript(Quote::Unknown),
             Candidate {
