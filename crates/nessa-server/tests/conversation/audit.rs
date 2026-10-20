@@ -859,6 +859,8 @@ fn audit_maps_a_declined_review_as_a_claim_about_a_tool_nobody_was_offered() {
         .unwrap()
         .contains("stdin write failed"));
     assert_eq!(value["outcome"], "continue");
+    assert_eq!(value["before"], "running");
+    assert_eq!(value["after"], "running");
     assert!(value.get("stop").is_none());
 }
 
@@ -879,6 +881,8 @@ fn audit_maps_a_stopping_refusal_as_the_cause_of_the_stop() {
         .unwrap(),
     ));
     assert_eq!(value["outcome"], "end_turn");
+    assert_eq!(value["before"], "running");
+    assert_eq!(value["after"], "stopped");
     assert_eq!(value["origin"]["kind"], "rule");
     assert_eq!(value["origin"]["ruleId"], "refuse-shell");
     assert_eq!(value["origin"]["revision"], "3");
@@ -901,6 +905,8 @@ fn audit_maps_a_stopping_refusal_as_the_cause_of_the_stop() {
         .unwrap(),
     ));
     assert_eq!(closed["outcome"], "close_session");
+    assert_eq!(closed["before"], "running");
+    assert_eq!(closed["after"], "closed");
     assert!(closed.get("stop").is_none());
 
     let late = record_value(&ExecutionAuditRecord::LateProviderResult(

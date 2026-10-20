@@ -15,7 +15,9 @@ use super::view::{
     ConversationTranscriptState, ConversationUnreadable, ConversationView, NativeHooksChoice,
     MAX_STRUCTURED_CONTENT_BYTES,
 };
-use nessa_sdk::application::agent_execution::permissions::CancellationOrigin;
+use nessa_sdk::application::agent_execution::permissions::{
+    ApprovalRuleReference, CancellationOrigin, DeclinedReview, PermissionCancellation,
+};
 use nessa_sdk::application::agent_execution::{
     agents::AgentError,
     executions::{ExecutionEvent, ExecutionUpdate, SubmissionMode},
@@ -32,9 +34,9 @@ use nessa_sdk::domain::agent_execution::tools::McpTool;
 use nessa_sdk::domain::agent_execution::{
     executions::{ExecutionId, ExecutionOutcome, InvocationStage, MessageKind},
     permissions::{
-        PendingQuestion, PendingReview, PermissionEffect, PermissionReviewDeadline,
-        PermissionScope, RefusalOutcome, ReviewDecline, ReviewDeclineId, ReviewDeclineReason,
-        ReviewDeclineStage,
+        PendingQuestion, PendingReview, PermissionCancellationReasonView, PermissionEffect,
+        PermissionReviewDeadline, PermissionScope, PermissionStateView, RefusalOutcome,
+        ReviewDecline, ReviewDeclineId, ReviewDeclineReason, ReviewDeclineStage,
     },
     questions::{AnswerShape, MAX_OPEN_QUESTIONS},
     tools::{ToolContentView, ToolKind, ToolStatus},
@@ -343,7 +345,42 @@ fn deadline_notice(effect: PermissionEffect, reason: &str) -> String {
     };
     format!("{verb}: {reason}")
 }
-fn decline_notice(decline: &ReviewDecline, delivery: ReviewDeclineStage) -> String {
+fn decline_reason(reason: ReviewDeclineReason) -> &'static str {
+    match reason {
+        ReviewDeclineReason::ToolNotReviewable => "That tool is not reviewable here.",
+        ReviewDeclineReason::UnreadableRequest => "The request could not be read safely.",
+        ReviewDeclineReason::UnusableOptions => "The request offered no usable choices.",
+    }
+}
+
+fn stopped_tool(name: Option<&str>) -> &str {
+    name.unwrap_or("the requested tool")
+}
+
+/// The sentence for a configured stop. The rule and the tool come from the
+/// event, not from the audit sink.
+fn stopping_rule_notice(decline: &ReviewDecline, rule: &ApprovalRuleReference) -> String {
+    let verb = match decline.outcome() {
+        RefusalOutcome::EndTurn => "stopped this turn",
+        RefusalOutcome::CloseSession => "closed the session",
+        RefusalOutcome::Continue => "declined a tool review",
+    };
+    format!(
+        "Nessa {verb} before {} ran because rule {} (revision {}) refused it. {}",
+        stopped_tool(decline.declared()),
+        rule.rule_id(),
+        rule.revision(),
+        decline_reason(decline.reason()),
+    )
+}
+
+fn decline_notice(review: &DeclinedReview) -> String {
+    if let Some(rule) = review.rule() {
+        // The stop is published once, before the turn finishes. A later
+        // delivery stage stays in the audit. The sentence keeps the rule.
+        return stopping_rule_notice(review.decline(), rule);
+    }
+    let decline = review.decline();
     let target = decline
         .declared()
         .map(|tool| format!(" labeled {tool}"))
@@ -353,36 +390,54 @@ fn decline_notice(decline: &ReviewDecline, delivery: ReviewDeclineStage) -> Stri
         ReviewDeclineReason::UnreadableRequest => "the request could not be read safely",
         ReviewDeclineReason::UnusableOptions => "the request offered no usable choices",
     };
-    let delivery = match decline.outcome() {
-        RefusalOutcome::Continue => match delivery {
-            ReviewDeclineStage::Selected => {
-                "Nessa has not confirmed writing the refusal to the agent."
-            }
-            ReviewDeclineStage::WriteConfirmed => "",
-            ReviewDeclineStage::WriteUnconfirmed => {
-                "Nessa could not confirm writing the refusal to the agent."
-            }
-            ReviewDeclineStage::WriteNotAttempted => {
-                "Nessa did not attempt to write the refusal to the agent."
-            }
-        },
-        // The stop is published once, before the turn finishes. A later
-        // delivery stage would be output after that finish, so the write
-        // stays in the audit and the panel keeps the reason.
-        RefusalOutcome::EndTurn | RefusalOutcome::CloseSession => "",
-    };
-    let stopped = match decline.outcome() {
-        RefusalOutcome::Continue => "",
-        RefusalOutcome::EndTurn => " The turn stopped because of that refusal.",
-        RefusalOutcome::CloseSession => " The session closed because of that refusal.",
+    let delivery = match review.stage() {
+        ReviewDeclineStage::Selected => "Nessa has not confirmed writing the refusal to the agent.",
+        ReviewDeclineStage::WriteConfirmed => "",
+        ReviewDeclineStage::WriteUnconfirmed => {
+            "Nessa could not confirm writing the refusal to the agent."
+        }
+        ReviewDeclineStage::WriteNotAttempted => {
+            "Nessa did not attempt to write the refusal to the agent."
+        }
     };
     let mut text = format!("Nessa declined a tool review{target} because {reason}.");
     if !delivery.is_empty() {
         text.push(' ');
         text.push_str(delivery);
     }
-    text.push_str(stopped);
     text
+}
+
+/// A hook that ended the turn or closed the session. Continue stays quiet
+/// here: the turn is still running. A review id that is not a notice id is
+/// skipped, because the client rejects the whole view for one bad notice id.
+fn hook_stop_notice(cancellation: &PermissionCancellation) -> Option<(String, String)> {
+    let PermissionStateView::Cancelled { reason } = cancellation.request().state() else {
+        return None;
+    };
+    let PermissionCancellationReasonView::Custom(custom) = reason.view() else {
+        return None;
+    };
+    let outcome = custom.hook_stop()?;
+    let id = ReviewDeclineId::new(cancellation.request().id().as_str()).ok()?;
+    let verb = match outcome {
+        RefusalOutcome::EndTurn => "stopped this turn",
+        RefusalOutcome::CloseSession => "closed the session",
+        RefusalOutcome::Continue => return None,
+    };
+    let tool = cancellation.input().name.as_str();
+    let tool = if tool.is_empty() {
+        "the requested tool"
+    } else {
+        tool
+    };
+    Some((
+        id.as_str().to_owned(),
+        format!(
+            "Nessa {verb} before {tool} ran because a hook refused it: {}.",
+            custom.explanation()
+        ),
+    ))
 }
 // A provider report owns dispatched settlement. Before dispatch, the retained
 // terminal result owns automatic-attachment failure, including its primary cause
@@ -1173,9 +1228,9 @@ impl Projection {
                     })
                 }
             }
-            ExecutionUpdate::ReviewDeclined(observation) => {
-                let notice_id = observation.id().as_str();
-                let text = decline_notice(observation.decline(), observation.stage());
+            ExecutionUpdate::ReviewDeclined(review) => {
+                let notice_id = review.id().as_str();
+                let text = decline_notice(review);
                 if let Some(position) = self.view.messages[index]
                     .parts
                     .iter()
@@ -1207,6 +1262,28 @@ impl Projection {
                     })
                 }
             }
+            ExecutionUpdate::PermissionCancelled(cancellation) => hook_stop_notice(cancellation)
+                .and_then(|(notice_id, text)| {
+                    let already = self.view.messages[index]
+                        .parts
+                        .iter()
+                        .any(|part| part.kind == "local_notice" && part.notice_id == notice_id);
+                    if already {
+                        return None;
+                    }
+                    let bounded = clipped(&text, available);
+                    if bounded.len() != text.len() {
+                        self.view.truncated = true;
+                    }
+                    Some(ConversationPart {
+                        message_id: None,
+                        offset,
+                        kind: "local_notice".into(),
+                        text: bounded,
+                        tool_id: String::new(),
+                        notice_id,
+                    })
+                }),
             _ => None,
         };
         if let Some(part) = part {
@@ -1242,8 +1319,8 @@ impl Projection {
                     self.view.messages[index].status = ConversationMessageStatus::Running;
                 }
             }
-            ExecutionUpdate::ReviewDeclined(observation) => {
-                if observation.decline().outcome() == RefusalOutcome::Continue {
+            ExecutionUpdate::ReviewDeclined(review) => {
+                if review.decline().outcome() == RefusalOutcome::Continue {
                     self.view.messages[index].status = ConversationMessageStatus::Running;
                 }
             }

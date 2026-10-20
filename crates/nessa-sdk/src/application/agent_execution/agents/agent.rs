@@ -303,6 +303,39 @@ fn effective_hook_outcome(
     }
 }
 
+/// The gateway log for a hook that stopped the turn: the tool, which hook, and why.
+///
+/// A continue is not logged here. Tool arguments are not logged.
+fn log_hook_stop(
+    event: &ExecutionEvent,
+    index: Option<usize>,
+    reason: &str,
+    outcome: RefusalOutcome,
+) {
+    if !matches!(
+        outcome,
+        RefusalOutcome::EndTurn | RefusalOutcome::CloseSession
+    ) {
+        return;
+    }
+    let tool = match event.update() {
+        ExecutionUpdate::PermissionRequested { input, .. } if !input.name.is_empty() => {
+            input.name.as_str()
+        }
+        _ => "<unnamed>",
+    };
+    tracing::warn!(
+        tool,
+        hook = index
+            .map(|index| index.to_string())
+            .as_deref()
+            .unwrap_or("runtime"),
+        reason,
+        ?outcome,
+        "a hook refused a tool and stopped the turn"
+    );
+}
+
 fn hook_attribution(
     event: &ExecutionEvent,
     index: Option<usize>,
@@ -2532,6 +2565,7 @@ impl Agent {
         };
         let (reason, outcome) = (refusal.reason(), refusal.outcome());
         if outcome == RefusalOutcome::CloseSession {
+            log_hook_stop(event, index, reason, RefusalOutcome::CloseSession);
             let recorded = wait
                 .run(self.withdraw_hook_refusal(
                     session,
@@ -2565,6 +2599,7 @@ impl Agent {
             deny_option(event).is_some(),
             self.supports_turn_cancel(),
         );
+        log_hook_stop(event, index, reason, effective);
         let delivered = wait
             .run(self.deliver_hook_refusal(session, event, index, reason, effective))
             .await;
@@ -3182,6 +3217,76 @@ mod hook_wait_tests {
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
             assert!(!entered.load(Ordering::SeqCst), "the hook did not run");
         });
+    }
+
+    #[test]
+    fn a_hook_stop_log_names_the_tool_and_the_hook_and_not_the_arguments() {
+        use crate::domain::agent_execution::executions::ExecutionId;
+        use crate::domain::agent_execution::permissions::{
+            PermissionDecision, PermissionOfferPolicy, PermissionOption, PermissionOptions,
+        };
+        use crate::domain::agent_execution::tools::{ToolCallId, ToolObservation};
+        use std::io::{self, Write};
+        use std::sync::Mutex;
+        #[derive(Clone, Default)]
+        struct Log(Arc<Mutex<Vec<u8>>>);
+        impl Write for Log {
+            fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        let event = ExecutionEvent::new(
+            ExecutionId::new("execution").unwrap(),
+            ExecutionUpdate::PermissionRequested {
+                id: PermissionId::new("7").unwrap(),
+                tool_id: ToolCallId::new("tool").unwrap(),
+                observation: ToolObservation::default(),
+                input: ToolReviewInput {
+                    name: "bash".into(),
+                    arguments_json: r#"{"secret":"do-not-log"}"#.into(),
+                },
+                options: PermissionOptions::new(
+                    vec![PermissionOption::new(
+                        PermissionOptionId::new("deny").unwrap(),
+                        "Deny",
+                        PermissionDecision::new(PermissionEffect::Deny, PermissionScope::request()),
+                    )
+                    .unwrap()],
+                    &PermissionOfferPolicy::once_only(),
+                )
+                .unwrap(),
+                deadline: None,
+            },
+        );
+        let capture = |outcome: RefusalOutcome| {
+            let captured = Log::default();
+            let writer = captured.clone();
+            let subscriber = tracing_subscriber::fmt()
+                .without_time()
+                .with_ansi(false)
+                .with_writer(move || writer.clone())
+                .finish();
+            tracing::subscriber::with_default(subscriber, || {
+                log_hook_stop(&event, Some(2), "shell is blocked", outcome);
+            });
+            let bytes = captured.0.lock().unwrap().clone();
+            String::from_utf8(bytes).unwrap()
+        };
+        let stopped = capture(RefusalOutcome::EndTurn);
+        assert!(stopped.contains("bash"), "{stopped}");
+        assert!(stopped.contains("shell is blocked"), "{stopped}");
+        assert!(
+            stopped.contains("a hook refused a tool and stopped the turn"),
+            "{stopped}"
+        );
+        assert!(stopped.contains("2"), "{stopped}");
+        assert!(!stopped.contains("do-not-log"), "{stopped}");
+        assert!(!stopped.contains("arguments"), "{stopped}");
+        assert!(capture(RefusalOutcome::Continue).is_empty());
     }
 
     #[test]

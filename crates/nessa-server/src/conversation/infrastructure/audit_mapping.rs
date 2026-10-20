@@ -428,11 +428,21 @@ fn declined(record: &ReviewDeclineRecord) -> Value {
             "grantedBy":actor(rule.granted_by()),
         }),
     };
+    // The turn was running when the tool was about to run. Continue leaves it
+    // running. A stop ends the turn. A close ends the session. The provider's
+    // later result is a different record.
+    let after = match decline.outcome() {
+        RefusalOutcome::Continue => "running",
+        RefusalOutcome::EndTurn => "stopped",
+        RefusalOutcome::CloseSession => "closed",
+    };
     json!({
         "kind":"review_declined",
         "sessionId":record.session_id().as_str(),
         "executionId":record.execution_id().as_str(),
         "declineId":record.id().as_str(),
+        "before":"running",
+        "after":after,
         "declaredTool":decline.declared(),
         "reason":match decline.reason() {
             ReviewDeclineReason::ToolNotReviewable => "tool_not_reviewable",

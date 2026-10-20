@@ -28,7 +28,9 @@ use nessa_sdk::application::agent_execution::executions::{
     ExecutionController, ExecutionEvent, ExecutionRequest, ExecutionUpdate,
     SubmissionMode as InvocationSubmissionMode,
 };
-use nessa_sdk::application::agent_execution::permissions::{ActionContext, CancellationOrigin};
+use nessa_sdk::application::agent_execution::permissions::{
+    ActionContext, ApprovalRuleReference, CancellationOrigin, DeclinedReview,
+};
 use nessa_sdk::application::agent_execution::providers::{
     ExecutionReport, OperationCapabilities, ProviderIdentity, ProviderSessionState,
 };
@@ -43,12 +45,12 @@ use nessa_sdk::domain::agent_execution::executions::{
     MessageId, QueueMutation, SchedulingCause,
 };
 use nessa_sdk::domain::agent_execution::permissions::{
-    PendingQuestion, PendingReview, PermissionApplicationId, PermissionCancellationReason,
-    PermissionDecision, PermissionEffect, PermissionId, PermissionOfferPolicy, PermissionOption,
-    PermissionOptionId, PermissionOptions, PermissionReviewDeadline, PermissionScope,
-    PermissionSessionId, PermissionToolClass, ReviewContent, ReviewDecline, ReviewDeclineId,
-    ReviewDeclineObservation, ReviewDeclineReason, ReviewDeclineStage, MAX_OPEN_REVIEWS,
-    STANDARD_DENY_REASON, STANDARD_STOP_REASON,
+    CustomPermissionCancellationReason, PendingQuestion, PendingReview, PermissionApplicationId,
+    PermissionCancellationReason, PermissionDecision, PermissionEffect, PermissionId,
+    PermissionOfferPolicy, PermissionOption, PermissionOptionId, PermissionOptions,
+    PermissionReviewDeadline, PermissionScope, PermissionSessionId, PermissionToolClass,
+    RefusalOutcome, ReviewContent, ReviewDecline, ReviewDeclineId, ReviewDeclineReason,
+    ReviewDeclineStage, MAX_OPEN_REVIEWS, STANDARD_DENY_REASON, STANDARD_STOP_REASON,
 };
 use nessa_sdk::domain::agent_execution::prompts::{PromptText, UserMessage};
 use nessa_sdk::domain::agent_execution::questions::{
@@ -2266,34 +2268,63 @@ fn shown(events: Vec<ExecutionEvent>) -> ConversationView {
     projection.read()
 }
 
-fn refusal(tool: &str) -> ReviewDeclineObservation {
-    ReviewDeclineObservation::selected(
+fn refusal(tool: &str) -> DeclinedReview {
+    DeclinedReview::selected(
         ReviewDeclineId::new("1").unwrap(),
         ReviewDecline::new(
             Some(tool),
             ReviewDeclineReason::ToolNotReviewable,
-            nessa_sdk::domain::agent_execution::permissions::RefusalOutcome::Continue,
+            RefusalOutcome::Continue,
         ),
+        None,
     )
+    .unwrap()
 }
 
-fn declined(observation: ReviewDeclineObservation) -> ExecutionEvent {
-    event(ExecutionUpdate::ReviewDeclined(observation))
+fn declined(review: DeclinedReview) -> ExecutionEvent {
+    event(ExecutionUpdate::ReviewDeclined(review))
 }
 
-#[test]
-fn a_stopping_refusal_says_why_the_turn_stopped() {
-    use nessa_sdk::domain::agent_execution::permissions::RefusalOutcome;
-    let ended = ReviewDeclineObservation::selected(
+fn stopping_rule() -> ApprovalRuleReference {
+    ApprovalRuleReference::new(
+        "refuse-shell",
+        "3",
+        ActionContext::new("host", "policy", "grant").unwrap(),
+    )
+    .unwrap()
+}
+
+fn stopped_review(outcome: RefusalOutcome) -> DeclinedReview {
+    DeclinedReview::selected(
         ReviewDeclineId::new("4").unwrap(),
         ReviewDecline::new(
             Some("Bash"),
             ReviewDeclineReason::ToolNotReviewable,
-            RefusalOutcome::EndTurn,
+            outcome,
         ),
-    );
+        Some(stopping_rule()),
+    )
+    .unwrap()
+}
+
+fn local_notice(
+    message: &crate::conversation::view::ConversationMessage,
+) -> &crate::conversation::view::ConversationPart {
+    message
+        .parts
+        .iter()
+        .find(|part| part.kind == "local_notice")
+        .expect("the turn has a notice")
+}
+
+#[test]
+fn a_stopping_refusal_says_why_the_turn_stopped() {
+    let ended = stopped_review(RefusalOutcome::EndTurn);
     let mut snapshot = review_snapshot(vec![
         declined(ended),
+        event(ExecutionUpdate::Message(MessageChunk::text(
+            "still talking",
+        ))),
         event(ExecutionUpdate::Finished(ExecutionOutcome::Cancelled)),
     ]);
     snapshot.invocations[0].result = Some(Ok(ExecutionOutcome::Cancelled));
@@ -2306,19 +2337,139 @@ fn a_stopping_refusal_says_why_the_turn_stopped() {
     let view = projection.read();
     let message = &view.messages[0];
     assert_eq!(message.status, ConversationMessageStatus::Cancelled);
-    let notice = message
+    let notice = local_notice(message);
+    assert_eq!(
+        notice.text,
+        "Nessa stopped this turn before Bash ran because rule refuse-shell (revision 3) refused it. That tool is not reviewable here."
+    );
+    assert_eq!(notice.notice_id, "4");
+    let closed = shown(vec![declined(
+        DeclinedReview::selected(
+            ReviewDeclineId::new("8").unwrap(),
+            ReviewDecline::new(
+                None,
+                ReviewDeclineReason::UnusableOptions,
+                RefusalOutcome::CloseSession,
+            ),
+            Some(stopping_rule()),
+        )
+        .unwrap(),
+    )]);
+    assert_eq!(
+        local_notice(&closed.messages[0]).text,
+        "Nessa closed the session before the requested tool ran because rule refuse-shell (revision 3) refused it. The request offered no usable choices."
+    );
+}
+
+#[test]
+fn a_hook_stop_names_the_tool_and_the_hook_reason() {
+    let session = ExecutionSessionId::new("provider-session").unwrap();
+    let execution = ExecutionId::new("execution").unwrap();
+    let permission = PermissionId::new("7").unwrap();
+    let reason = PermissionCancellationReason::custom(
+        CustomPermissionCancellationReason::hook_refusal_for_test(
+            &session,
+            &execution,
+            &permission,
+            RefusalOutcome::EndTurn,
+            "shell is blocked",
+        )
+        .unwrap(),
+    );
+    let origin = CancellationOrigin::Client(
+        ActionContext::new("permission-review-hook", "0", permission.as_str()).unwrap(),
+    );
+    let view = shown(vec![
+        review("{}".into()),
+        cancelled_review(reason, origin.clone()),
+    ]);
+    let notice = local_notice(&view.messages[0]);
+    assert_eq!(
+        notice.text,
+        "Nessa stopped this turn before write_file ran because a hook refused it: shell is blocked."
+    );
+    assert_eq!(notice.notice_id, "7");
+    assert!(!notice.text.contains("{"));
+
+    let continued = PermissionCancellationReason::custom(
+        CustomPermissionCancellationReason::hook_refusal_for_test(
+            &session,
+            &execution,
+            &permission,
+            RefusalOutcome::Continue,
+            "not this tool",
+        )
+        .unwrap(),
+    );
+    let quiet = shown(vec![
+        review("{}".into()),
+        cancelled_review(continued, origin.clone()),
+    ]);
+    assert!(quiet.messages[0]
         .parts
         .iter()
-        .find(|part| part.kind == "local_notice")
-        .expect("the stop has a notice");
-    assert!(
-        notice
-            .text
-            .contains("The turn stopped because of that refusal."),
-        "{}",
-        notice.text
+        .all(|part| part.kind != "local_notice"));
+
+    let unnamed = PermissionId::new("not-a-notice").unwrap();
+    let hidden = PermissionCancellationReason::custom(
+        CustomPermissionCancellationReason::hook_refusal_for_test(
+            &session,
+            &execution,
+            &unnamed,
+            RefusalOutcome::CloseSession,
+            "close it",
+        )
+        .unwrap(),
     );
-    assert!(!notice.text.is_empty());
+    let ExecutionUpdate::PermissionRequested {
+        tool_id,
+        observation,
+        input,
+        options,
+        ..
+    } = review("{}".into()).update().clone()
+    else {
+        unreachable!()
+    };
+    let requested = event(ExecutionUpdate::PermissionRequested {
+        id: unnamed.clone(),
+        tool_id: tool_id.clone(),
+        observation: observation.clone(),
+        input: input.clone(),
+        options: options.clone(),
+        deadline: None,
+    });
+    let mut owner = ExecutionController::new(session);
+    owner.begin_execution(execution.clone()).unwrap();
+    owner
+        .request_permission(
+            &execution,
+            unnamed.clone(),
+            ToolCallUpdate::new(tool_id, None, None, None, None, None),
+            input,
+            options,
+            None,
+        )
+        .unwrap();
+    let cancelled = owner
+        .cancel_permission(
+            &execution,
+            &unnamed,
+            hidden,
+            CancellationOrigin::Client(
+                ActionContext::new("permission-review-hook", "runtime", unnamed.as_str()).unwrap(),
+            ),
+        )
+        .unwrap()
+        .unwrap();
+    let skipped = shown(vec![
+        requested,
+        event(ExecutionUpdate::PermissionCancelled(cancelled)),
+    ]);
+    assert!(skipped.messages[0]
+        .parts
+        .iter()
+        .all(|part| part.kind != "local_notice"));
 }
 
 fn text_len(message: &crate::conversation::view::ConversationMessage) -> usize {

@@ -11,6 +11,7 @@ use crate::application::agent_execution::{
         limits::validate_observation_id, ExecutionEvent, ExecutionRequest, ExecutionUpdate,
         SubmissionMode,
     },
+    permissions::{ApprovalRuleReference, DeclinedReview},
     providers::{ExecutionReport, ProviderIdentity},
     sessions::{
         storage::{InvocationRecord, StorageError, SubmissionAcknowledgement},
@@ -22,8 +23,8 @@ use crate::domain::{
         executions::{ExecutionId, MessageChunk, MessageId, MessageKind},
         permissions::{
             PermissionEffect, PermissionId, PermissionReviewDeadline, PermissionToolClass,
-            RefusalOutcome, ReviewDecline, ReviewDeclineId, ReviewDeclineObservation,
-            ReviewDeclineReason, ReviewDeclineStage,
+            RefusalOutcome, ReviewDecline, ReviewDeclineId, ReviewDeclineReason,
+            ReviewDeclineStage,
         },
         prompts::{
             AppModelContext as DomainAppModelContext, ImageReference, LinkedFile, McpAppSource,
@@ -261,6 +262,9 @@ pub(super) enum Update<T = String> {
         reason: DeclineReason,
         outcome: DeclineOutcome,
         delivery: DeclineDelivery,
+        /// Present exactly when `outcome` stops the turn or closes the session.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rule: Option<StoppingRule>,
     },
     PermissionRequested {
         id: String,
@@ -351,6 +355,15 @@ impl From<SavedEffect> for PermissionEffect {
         }
     }
 }
+/// The configured rule that required a stop, saved with the declined review.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct StoppingRule {
+    pub(super) rule_id: String,
+    pub(super) revision: String,
+    pub(super) granted_by: Actor,
+}
+
 #[derive(Serialize, Deserialize)]
 pub(super) enum DeclineReason {
     ToolNotReviewable,
@@ -476,25 +489,30 @@ impl<'a> From<&'a ExecutionEvent> for Event<&'a str> {
                 ExecutionUpdate::PermissionCancelled(cancellation) => {
                     Update::PermissionCancelled(cancellation.into())
                 }
-                ExecutionUpdate::ReviewDeclined(observation) => Update::ReviewDeclined {
-                    id: observation.id().as_str().into(),
-                    tool: observation.decline().declared().map(str::to_owned),
-                    reason: match observation.decline().reason() {
+                ExecutionUpdate::ReviewDeclined(review) => Update::ReviewDeclined {
+                    id: review.id().as_str().into(),
+                    tool: review.decline().declared().map(str::to_owned),
+                    reason: match review.decline().reason() {
                         ReviewDeclineReason::ToolNotReviewable => DeclineReason::ToolNotReviewable,
                         ReviewDeclineReason::UnreadableRequest => DeclineReason::UnreadableRequest,
                         ReviewDeclineReason::UnusableOptions => DeclineReason::UnusableOptions,
                     },
-                    outcome: match observation.decline().outcome() {
+                    outcome: match review.decline().outcome() {
                         RefusalOutcome::Continue => DeclineOutcome::Continue,
                         RefusalOutcome::EndTurn => DeclineOutcome::EndTurn,
                         RefusalOutcome::CloseSession => DeclineOutcome::CloseSession,
                     },
-                    delivery: match observation.stage() {
+                    delivery: match review.stage() {
                         ReviewDeclineStage::Selected => DeclineDelivery::Selected,
                         ReviewDeclineStage::WriteConfirmed => DeclineDelivery::WriteConfirmed,
                         ReviewDeclineStage::WriteUnconfirmed => DeclineDelivery::WriteUnconfirmed,
                         ReviewDeclineStage::WriteNotAttempted => DeclineDelivery::WriteNotAttempted,
                     },
+                    rule: review.rule().map(|rule| StoppingRule {
+                        rule_id: rule.rule_id().into(),
+                        revision: rule.revision().into(),
+                        granted_by: rule.granted_by().into(),
+                    }),
                 },
                 ExecutionUpdate::PermissionRequested {
                     id,
@@ -675,29 +693,57 @@ impl Event {
                 reason,
                 outcome,
                 delivery,
-            } => ExecutionUpdate::ReviewDeclined(ReviewDeclineObservation::restore(
-                ReviewDeclineId::new(id).map_err(corrupt)?,
-                ReviewDecline::restore(
-                    tool,
-                    match reason {
-                        DeclineReason::ToolNotReviewable => ReviewDeclineReason::ToolNotReviewable,
-                        DeclineReason::UnreadableRequest => ReviewDeclineReason::UnreadableRequest,
-                        DeclineReason::UnusableOptions => ReviewDeclineReason::UnusableOptions,
-                    },
-                    match outcome {
-                        DeclineOutcome::Continue => RefusalOutcome::Continue,
-                        DeclineOutcome::EndTurn => RefusalOutcome::EndTurn,
-                        DeclineOutcome::CloseSession => RefusalOutcome::CloseSession,
-                    },
+                rule,
+            } => {
+                let outcome = match outcome {
+                    DeclineOutcome::Continue => RefusalOutcome::Continue,
+                    DeclineOutcome::EndTurn => RefusalOutcome::EndTurn,
+                    DeclineOutcome::CloseSession => RefusalOutcome::CloseSession,
+                };
+                let rule = rule
+                    .map(|rule| {
+                        ApprovalRuleReference::new(
+                            rule.rule_id,
+                            rule.revision,
+                            rule.granted_by.decode()?,
+                        )
+                        .map_err(corrupt)
+                    })
+                    .transpose()?;
+                ExecutionUpdate::ReviewDeclined(
+                    DeclinedReview::restore(
+                        ReviewDeclineId::new(id).map_err(corrupt)?,
+                        ReviewDecline::restore(
+                            tool,
+                            match reason {
+                                DeclineReason::ToolNotReviewable => {
+                                    ReviewDeclineReason::ToolNotReviewable
+                                }
+                                DeclineReason::UnreadableRequest => {
+                                    ReviewDeclineReason::UnreadableRequest
+                                }
+                                DeclineReason::UnusableOptions => {
+                                    ReviewDeclineReason::UnusableOptions
+                                }
+                            },
+                            outcome,
+                        )
+                        .map_err(corrupt)?,
+                        match delivery {
+                            DeclineDelivery::Selected => ReviewDeclineStage::Selected,
+                            DeclineDelivery::WriteConfirmed => ReviewDeclineStage::WriteConfirmed,
+                            DeclineDelivery::WriteUnconfirmed => {
+                                ReviewDeclineStage::WriteUnconfirmed
+                            }
+                            DeclineDelivery::WriteNotAttempted => {
+                                ReviewDeclineStage::WriteNotAttempted
+                            }
+                        },
+                        rule,
+                    )
+                    .map_err(corrupt)?,
                 )
-                .map_err(corrupt)?,
-                match delivery {
-                    DeclineDelivery::Selected => ReviewDeclineStage::Selected,
-                    DeclineDelivery::WriteConfirmed => ReviewDeclineStage::WriteConfirmed,
-                    DeclineDelivery::WriteUnconfirmed => ReviewDeclineStage::WriteUnconfirmed,
-                    DeclineDelivery::WriteNotAttempted => ReviewDeclineStage::WriteNotAttempted,
-                },
-            )),
+            }
             Update::PermissionRequested {
                 id,
                 tool,

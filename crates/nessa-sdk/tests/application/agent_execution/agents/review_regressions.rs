@@ -1285,14 +1285,18 @@ async fn custom_storage_cannot_give_a_review_and_a_decline_one_identity() {
                 options,
                 deadline: None,
             }];
-            let declined = ExecutionUpdate::ReviewDeclined(ReviewDeclineObservation::selected(
-                ReviewDeclineId::new(decline).unwrap(),
-                ReviewDecline::new(
-                    Some("Write"),
-                    ReviewDeclineReason::ToolNotReviewable,
-                    RefusalOutcome::Continue,
-                ),
-            ));
+            let declined = ExecutionUpdate::ReviewDeclined(
+                DeclinedReview::selected(
+                    ReviewDeclineId::new(decline).unwrap(),
+                    ReviewDecline::new(
+                        Some("Write"),
+                        ReviewDeclineReason::ToolNotReviewable,
+                        RefusalOutcome::Continue,
+                    ),
+                    None,
+                )
+                .unwrap(),
+            );
             events.insert(if before { 0 } else { 1 }, declined);
             events.push(ExecutionUpdate::PermissionCancelled(cancellation));
             for (at, update) in events.into_iter().enumerate() {
