@@ -782,6 +782,16 @@ fn copy_sync_and_match(
     }
     let next = AtomicUsize::new(0);
     let cancel = AtomicBool::new(false);
+    let copy = CopyAttempt {
+        plan: &plan,
+        next: &next,
+        cancel: &cancel,
+        queue: &queue,
+        copies: &copies,
+        syncs: &syncs,
+        hooks,
+    };
+    let attempt = &copy;
     #[cfg(test)]
     let ledger = current_ledger();
     thread::scope(|scope| {
@@ -797,17 +807,7 @@ fn copy_sync_and_match(
                 sync_queued_files(queue, syncs, progress, hooks);
             });
         }
-        let copy = CopyAttempt {
-            plan: &plan,
-            next: &next,
-            cancel: &cancel,
-            queue: &queue,
-            copies: &copies,
-            syncs: &syncs,
-            hooks,
-        };
         for _ in 0..workers {
-            let attempt = &copy;
             #[cfg(test)]
             let ledger = ledger.clone();
             scope.spawn(move || {
