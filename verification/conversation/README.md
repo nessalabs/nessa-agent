@@ -52,5 +52,8 @@ current authority. The cropped screenshot lives in
 query it restores another. Both mount the production `useConversation` follow
 and controls over a gated close port. `local-tab-lifetimes.mjs` measures fresh
 local identity, old follow cleanup, replacement follow, original close target,
-and replacement notices at 360, 600 and 1440 pixels in both engines. The
+and replacement notices at 360, 600 and 1440 pixels in both engines. Follow,
+stop and close counts are the fixture's (`__localTabLifetimes.snapshot`), read
+when the check runs, not attributes copied at the last render
+([live owner reads](../../docs/design/live-owner-reads.md)). The
 fixture is served in development and is excluded from product assets.
