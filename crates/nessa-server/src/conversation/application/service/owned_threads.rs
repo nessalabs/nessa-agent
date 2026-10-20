@@ -4,7 +4,7 @@
 //! -> prepare ordinary conversation -> install existing gate -> Ready. Stop uses
 //! the same admission boundary when capturing its exact execution selection.
 
-use super::super::environment::{confirmed_despite, AgentEnd};
+use super::super::environment::AgentEnd;
 use super::super::AgentToolSource;
 use super::mutation::SubmittedCommand;
 use super::{
@@ -57,20 +57,22 @@ struct PreparationResources {
 /// The original opening owner confirmed it acquired nothing. Retain its
 /// immutable result so later slot removal/reopening cannot supply that fact.
 struct UnacquiredPreparation {
-    opening: Arc<super::Slot>,
+    opening: Arc<super::OpeningResources>,
+    deadline: Duration,
 }
 #[async_trait]
 impl ChildResources for UnacquiredPreparation {
     async fn close(&self, _: &LifetimeCause, _: &Initiator) -> ResourceReport {
-        match self.opening.value.get() {
-            Some(Err(failure)) if !failure.holds => ResourceReport {
+        if self.opening.released(self.deadline).await {
+            ResourceReport {
                 physical: PhysicalFact::Released,
                 evidence: EvidenceFact::Acknowledged,
-            },
-            _ => ResourceReport {
+            }
+        } else {
+            ResourceReport {
                 physical: PhysicalFact::Failed,
                 evidence: EvidenceFact::Pending,
-            },
+            }
         }
     }
 }
@@ -410,7 +412,7 @@ impl ConversationService {
     async fn cold_owned_resources(
         &self,
         id: &ConversationId,
-        acquisition: Option<&std::sync::OnceLock<bool>>,
+        acquisition: Option<&super::OpeningResources>,
     ) -> ResourceReport {
         let unknown = ResourceReport {
             physical: PhysicalFact::Failed,
@@ -422,7 +424,10 @@ impl ConversationService {
         let Some((committed, _)) = committed else {
             // No persisted attachment history exists. Only this exact completed
             // opening can establish non-acquisition; a missing Slot cannot.
-            return if acquisition.and_then(std::sync::OnceLock::get) == Some(&false) {
+            return if match acquisition {
+                Some(owner) => owner.released(self.inner.deletion_budgets.stop).await,
+                None => false,
+            } {
                 ResourceReport {
                     physical: PhysicalFact::Released,
                     evidence: EvidenceFact::Acknowledged,
@@ -437,7 +442,10 @@ impl ConversationService {
         ) && committed
             .snapshot()
             .is_none_or(|snapshot| snapshot.lease.is_none())
-            && acquisition.and_then(std::sync::OnceLock::get) == Some(&false)
+            && match acquisition {
+                Some(owner) => owner.released(self.inner.deletion_budgets.stop).await,
+                None => false,
+            }
         {
             return ResourceReport {
                 physical: PhysicalFact::Released,
@@ -486,7 +494,7 @@ impl ConversationService {
         &self,
         id: &ConversationId,
         actor: &ActionContext,
-        acquisition: Option<Arc<std::sync::OnceLock<bool>>>,
+        acquisition: Option<Arc<super::OpeningResources>>,
     ) -> Result<Option<Arc<dyn OwnedLifetime>>, ConversationError> {
         let Some(ownership) = self.inner.ownership.get() else {
             return Ok(None);
@@ -732,7 +740,8 @@ impl ChildFactory for Factory {
                     PrepareFailure {
                         failure: PortFailure::Rejected,
                         cleanup: Some(Arc::new(UnacquiredPreparation {
-                            opening: held.opening,
+                            opening: held.opening.acquisition.clone(),
+                            deadline: service.inner.deletion_budgets.stop,
                         })),
                     }
                 }
@@ -763,7 +772,7 @@ impl InitialSubmit for NoInitialTurn {
 struct Resources {
     service: Weak<Inner>,
     id: ConversationId,
-    acquisition: Option<Arc<std::sync::OnceLock<bool>>>,
+    acquisition: Option<Arc<super::OpeningResources>>,
 }
 #[async_trait]
 impl ChildResources for Resources {
@@ -817,6 +826,15 @@ impl ChildResources for Resources {
         // A pending or failed opening may retain a newer physical hold before
         // its lease is published. Historical cleanup cannot release that owner.
         let Some(live) = slot.value.get().and_then(|live| live.as_ref().ok()) else {
+            if slot
+                .value
+                .get()
+                .is_some_and(|result| result.as_ref().is_err_and(|failure| !failure.holds))
+            {
+                return service
+                    .cold_owned_resources(&self.id, Some(&slot.acquisition))
+                    .await;
+            }
             return failed;
         };
         let close = live
@@ -829,16 +847,16 @@ impl ChildResources for Resources {
                 AgentEnd::Close,
             )
             .await;
-        match close {
-            Ok(_) => ResourceReport {
+        match (live.lease.cleanup(), close) {
+            (Some(_), Ok(_)) => ResourceReport {
                 physical: PhysicalFact::Released,
                 evidence: EvidenceFact::Acknowledged,
             },
-            Err(error) if confirmed_despite(&error).is_some() => ResourceReport {
+            (Some(_), Err(_)) => ResourceReport {
                 physical: PhysicalFact::Released,
                 evidence: EvidenceFact::Failed,
             },
-            Err(_) => failed,
+            (None, _) => failed,
         }
     }
 }

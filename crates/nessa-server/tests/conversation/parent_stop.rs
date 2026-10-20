@@ -35,6 +35,9 @@ use std::sync::Mutex;
 use tokio::sync::Notify;
 #[path = "parent_stop/placement.rs"]
 mod placement;
+#[cfg(unix)]
+#[path = "parent_stop/preparation.rs"]
+mod preparation;
 pub(super) async fn bind(
     service: &ConversationService,
     storage: &Arc<RecordStorage>,

@@ -967,6 +967,8 @@ pub(crate) struct LiveLease {
     lease: LeaseId,
     fence: Arc<LeaseFence>,
     hold: Option<Arc<dyn LeaseHold>>,
+    release: tokio::sync::Mutex<Option<LeaseRelease>>,
+    cleanup: Mutex<Option<LeaseCleanup>>,
 }
 impl LiveLease {
     pub(crate) fn new(opening: &LeaseOpening) -> Self {
@@ -974,7 +976,47 @@ impl LiveLease {
             lease: opening.lease.clone(),
             fence: opening.fence.clone(),
             hold: opening.hold.clone(),
+            release: tokio::sync::Mutex::new(None),
+            cleanup: Mutex::new(None),
         }
+    }
+
+    /// Join this hold's release owner. Unanswered attempts retain that owner;
+    /// confirmed answers are reused without another physical End.
+    async fn release(&self, cause: LeaseEndCause, deadline: Duration) -> LeaseRelease {
+        tokio::time::timeout(deadline, async {
+            let mut retained = self.release.lock().await;
+            if let Some(release) = *retained {
+                return release;
+            }
+            let release = match &self.hold {
+                None => LeaseRelease::ByAgentClose,
+                Some(hold) => hold.end(cause).await,
+            };
+            if release != LeaseRelease::Unanswered {
+                *retained = Some(release);
+            }
+            release
+        })
+        .await
+        .unwrap_or(LeaseRelease::Unanswered)
+    }
+
+    /// Called only after SDK preparation established no provider hold. The
+    /// surrounding environment may still own resources before LeaseIssued.
+    pub(crate) async fn release_preparation(&self, deadline: Duration) -> bool {
+        self.fence.ending();
+        let released =
+            self.release(LeaseEndCause::Closed, deadline).await != LeaseRelease::Unanswered;
+        if released {
+            self.fence.close();
+        }
+        released
+    }
+    /// The environment/agent cleanup owner publishes physical evidence apart
+    /// from the close's independent storage or audit result.
+    pub(crate) fn cleanup(&self) -> Option<LeaseCleanup> {
+        *self.cleanup.lock().unwrap()
     }
 
     /// A target factory fenced by this exact lease. The SDK still compares
@@ -1150,12 +1192,7 @@ impl LiveLease {
                 close.await
             }
         };
-        let release = match &self.hold {
-            None => LeaseRelease::ByAgentClose,
-            Some(hold) => tokio::time::timeout(cleanup_deadline, hold.end(cause))
-                .await
-                .unwrap_or(LeaseRelease::Unanswered),
-        };
+        let release = self.release(cause, cleanup_deadline).await;
         let confirmed = confirmed_cleanup(&result);
         let evidence = match release {
             LeaseRelease::ByAgentClose => confirmed.map(|outcome| LeaseCleanup::Confirmed {
@@ -1174,6 +1211,7 @@ impl LiveLease {
             }),
             LeaseRelease::Unanswered => None,
         };
+        *self.cleanup.lock().unwrap() = evidence;
         match evidence {
             Some(cleanup) => self.cleaned(manager, cleanup).await,
             None => self.interrupt(manager).await,

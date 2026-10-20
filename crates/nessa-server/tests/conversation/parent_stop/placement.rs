@@ -386,9 +386,10 @@ async fn a_root_without_completed_nonacquisition_cannot_claim_absence() {
         let coordinator = bind(&service, &storage, &root, true).await;
         let target = id();
         let acquisition = fact.map(|value| {
-            let receipt = Arc::new(std::sync::OnceLock::new());
+            let receipt =
+                Arc::new(crate::conversation::application::service::OpeningResources::default());
             if let Some(value) = value {
-                receipt.set(value).unwrap();
+                receipt.completion.set(value).unwrap();
             }
             receipt
         });
@@ -428,8 +429,9 @@ async fn an_earlier_root_absence_cannot_release_a_later_held_lease() {
     let (service, storage, metadata) = fixture(&root, provider.clone());
     let coordinator = bind(&service, &storage, &root, true).await;
     let target = id();
-    let acquisition = Arc::new(std::sync::OnceLock::new());
-    acquisition.set(false).unwrap();
+    let acquisition =
+        Arc::new(crate::conversation::application::service::OpeningResources::default());
+    acquisition.completion.set(false).unwrap();
     // Model a completed initial no-hold opening, then a genuine later opening
     // on the same still-Open root. The original bound adapter keeps its receipt.
     service
@@ -558,8 +560,9 @@ async fn a_root_nonacquisition_receipt_cannot_replace_a_failed_history_read() {
         Arc::get_mut(&mut service.inner).unwrap().storage = fault.clone();
         let coordinator = bind(&service, &storage, &root, true).await;
         let target = id();
-        let acquisition = Arc::new(std::sync::OnceLock::new());
-        acquisition.set(false).unwrap();
+        let acquisition =
+            Arc::new(crate::conversation::application::service::OpeningResources::default());
+        acquisition.completion.set(false).unwrap();
         service
             .ownership_gate(&target, &caller("bind").actor().unwrap(), Some(acquisition))
             .await

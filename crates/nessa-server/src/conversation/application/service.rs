@@ -2,7 +2,9 @@ mod agent_tools;
 mod creation;
 mod model_changes;
 mod mutation;
+mod opening_resources;
 mod owned_threads;
+use opening_resources::OpeningResources;
 mod parent_stop;
 mod thread_report_admission;
 mod thread_reports;
@@ -697,7 +699,7 @@ struct LiveConversation {
     agent: Agent,
     /// The lease its agent runs under. Every close of the agent goes through
     /// it, so the lease's end is recorded with the close.
-    lease: LiveLease,
+    lease: Arc<LiveLease>,
     /// One acknowledged model binding and its configured admission reservation.
     model_budget: Mutex<ModelBudget>,
     projection: Mutex<Projection>,
@@ -766,7 +768,7 @@ struct OpeningFailure {
 struct Slot {
     /// Lightweight completed acquisition fact, published by this opening before
     /// Slot removal. Root cleanup retains this fact without retaining an Agent.
-    acquisition: Arc<std::sync::OnceLock<bool>>,
+    acquisition: Arc<OpeningResources>,
     value: OnceCell<Result<Arc<LiveConversation>, OpeningFailure>>,
     ready: Notify,
     started: AtomicBool,
@@ -788,7 +790,7 @@ struct Slot {
 impl Slot {
     fn new(now_ms: u64) -> Self {
         Self {
-            acquisition: Arc::new(std::sync::OnceLock::new()),
+            acquisition: Arc::new(OpeningResources::default()),
             value: OnceCell::new(),
             ready: Notify::new(),
             started: AtomicBool::new(false),
@@ -2087,6 +2089,8 @@ impl ConversationService {
                                 }
                             };
                             let (environment, opening) = selection?;
+                            let lease = Arc::new(LiveLease::new(&opening));
+                            owner.acquisition.acquired(lease.clone());
                             let tool_source = checked_source(agent);
                             let agent = Agent::prepare(
                                 opening.fence.clone(),
@@ -2187,7 +2191,7 @@ impl ConversationService {
                                 // Nothing was attached; the Agent holds only
                                 // the history, which its close lets go of.
                                 let closed = if retained {
-                                    LiveLease::new(&opening)
+                                    lease
                                         .close(
                                             &agent,
                                             LeaseEndCause::Closed,
@@ -2211,7 +2215,6 @@ impl ConversationService {
                                 let holds = agent.may_hold_provider_resources();
                                 return Err(OpeningFailure { cause, holds });
                             }
-                            let lease = LiveLease::new(&opening);
                             let authorization = agent
                                 .authorize_attachment(AttachmentRequest::CallerRequested(actor.clone()))
                                 .map_err(|error| OpeningFailure {
@@ -2343,10 +2346,10 @@ impl ConversationService {
                                 })
                             }
                         };
-                        let _ = owner.acquisition.set(match &result {
-                            Ok(_) => true,
-                            Err(failure) => failure.holds,
-                        });
+                        match &result {
+                            Ok(_) => { owner.acquisition.transferred(); owner.acquisition.complete(true, service.inner.deletion_budgets.stop).await; }
+                            Err(failure) => owner.acquisition.complete(failure.holds, service.inner.deletion_budgets.stop).await,
+                        }
                         result
                     })
                     .await;
