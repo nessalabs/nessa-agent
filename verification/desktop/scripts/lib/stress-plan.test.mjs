@@ -28,6 +28,7 @@ test("every required step appears as often as its number says", () => {
   assert.equal(count("fresh"), knobs.fresh)
   assert.equal(count("window"), knobs.windows)
   assert.equal(count("linking"), knobs.linkings)
+  assert.equal(count("table"), knobs.tables)
   assert.equal(count("notice"), knobs.notices)
   assert.equal(count("reviews"), 1)
   assert.equal(count("long"), 1)
@@ -102,6 +103,7 @@ test("the legacy seed preserves the existing non-model work's relative order", (
       {
         windows: "0",
         linkings: "0",
+        tables: "0",
         notices: "0",
         awaits: "0",
         fresh: "0",
