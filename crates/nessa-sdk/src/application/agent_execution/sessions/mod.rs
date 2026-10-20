@@ -13,6 +13,11 @@
 //! before another command can reorder the remainder; it is not provider dispatch.
 //!
 //! SessionManager owns local session identity, saved evidence, and the storage lease.
+//! Hosts can use [`SessionManager::prepare_for_lease_record`] to record a refused
+//! lease before an Agent exists. This shares the evidence preparation owner while
+//! preserving saved provider identity and queue state. Ordinary Agent preparation
+//! still owns provider restoration; both intents flush retained writes before
+//! reloading the history.
 //! Explicit model/configuration controls retain before/after settings and their
 //! original actor through semantic records. `model_change` is the last model
 //! operation's recovery evidence; `current_configuration` is the latest setting

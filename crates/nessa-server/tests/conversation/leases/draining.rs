@@ -127,15 +127,54 @@ async fn acknowledged_before_next_placement(fail_once: bool) {
         .close(harness.id.clone(), caller("final-close"))
         .await
         .unwrap();
-    let final_lease = harness.lease().await;
-    assert_eq!(
-        final_lease
-            .records()
-            .iter()
-            .filter(|record| matches!(record, LeaseRecord::Refused { .. }))
-            .count(),
-        1
-    );
+    use nessa_sdk::application::agent_execution::sessions::{
+        CommittedEventData, EventRead, EventReadLimits, EventStart,
+    };
+    let mut history = harness
+        .storage
+        .inner
+        .events(
+            SessionId::new(harness.id.to_string()).unwrap(),
+            EventStart::Beginning,
+        )
+        .await
+        .unwrap();
+    let mut saved_refusals = Vec::new();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            match history
+                .read(EventReadLimits::new(64, 1024 * 1024).unwrap())
+                .await
+                .unwrap()
+            {
+                EventRead::Preparing => {}
+                EventRead::Page(page) => {
+                    for event in page.events() {
+                        match event.data() {
+                            CommittedEventData::Change(SessionChange::Lease(
+                                record @ LeaseRecord::Refused { .. },
+                            )) => saved_refusals.push(record.clone()),
+                            CommittedEventData::Change(_) => {}
+                            CommittedEventData::Gap(_) => {
+                                panic!("the fixture history must be fully readable")
+                            }
+                        }
+                    }
+                }
+                EventRead::Idle(_) => break,
+            }
+        }
+    })
+    .await
+    .unwrap();
+    // Replay the complete persisted history, including the refusal superseded
+    // by workerB's issuance. CurrentLease intentionally retains only B.
+    let expected = lease
+        .records()
+        .iter()
+        .find(|record| matches!(record, LeaseRecord::Refused { .. }))
+        .unwrap();
+    assert_eq!(saved_refusals, vec![expected.clone()]);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

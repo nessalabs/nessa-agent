@@ -601,10 +601,10 @@ impl SessionManager {
     /// supplies the initial identity only for a conversation with no history.
     /// A later `Agent::prepare` still checks its selected provider normally.
     ///
-    /// The manager retains its exclusive storage lease. Acknowledge retained
-    /// records through their existing save operation before later preparation,
-    /// which reloads storage rather than merging unsaved evidence. Mutable
-    /// access excludes concurrent preparation. Dropping this unattached manager
+    /// The manager retains its exclusive storage lease. Preparation flushes
+    /// retained decisions through their existing save owner before reloading
+    /// storage; a failed flush leaves those decisions retained and returns an
+    /// error. Mutable access excludes concurrent preparation. Dropping this unattached manager
     /// releases storage access; no provider resources have been acquired.
     ///
     /// # Errors
@@ -631,6 +631,9 @@ impl SessionManager {
         provider: &dyn AgentProvider,
         preparation: Preparation,
     ) -> Result<ProviderContext, AgentError> {
+        catch_storage_operation(|| Box::pin(self.flush_observed()))
+            .await
+            .map_err(AgentError::Storage)?;
         let saved = catch_storage_operation(|| self.storage_lease.load())
             .await
             .map_err(StorageError::bounded)

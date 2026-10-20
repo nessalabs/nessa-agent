@@ -589,6 +589,7 @@ async fn settlement_failure_retains_the_storage_failure_wrapper() {
 struct FaultLease {
     inner: Box<dyn SessionStorageLease>,
     fail_save: AtomicBool,
+    panic_save: AtomicBool,
     changes: std::sync::Mutex<Vec<Vec<SessionChange>>>,
 }
 impl SessionStorageLease for FaultLease {
@@ -600,6 +601,10 @@ impl SessionStorageLease for FaultLease {
         binding: SessionSaveGeneration,
         units: Vec<SessionSaveUnit>,
     ) -> StorageFuture<'_, SessionSaveReceipt> {
+        assert!(
+            !self.panic_save.load(Ordering::SeqCst),
+            "injected save constructor panic"
+        );
         self.changes.lock().unwrap().push(
             units
                 .iter()
@@ -655,6 +660,7 @@ async fn manager(previous_turns: usize) -> (SessionManager, Arc<FaultLease>, Exe
     let lease = Arc::new(FaultLease {
         inner: storage.open(id.clone()).await.unwrap(),
         fail_save: AtomicBool::new(false),
+        panic_save: AtomicBool::new(false),
         changes: std::sync::Mutex::new(Vec::new()),
     });
     let active = invocation("active", false);
@@ -2218,4 +2224,156 @@ mod note_records {
             errors.iter().map(ToString::to_string).collect();
         assert_eq!(messages.len(), errors.len());
     }
+}
+
+/// The refusal has no executable provider context; none may be consulted.
+struct RecordOnlyProvider;
+impl AgentProvider for RecordOnlyProvider {
+    fn harness_host_identity(
+        &self,
+    ) -> crate::application::agent_execution::providers::HarnessHostIdentity<'_> {
+        panic!("record preparation cannot acquire a provider host")
+    }
+    fn identity(&self) -> ProviderIdentity {
+        ProviderIdentity::new("different", "other", "elsewhere").unwrap()
+    }
+    fn capabilities(
+        &self,
+    ) -> &crate::domain::effective_capabilities::value_objects::EffectiveCapabilities {
+        panic!("record preparation cannot acquire provider capabilities")
+    }
+    fn open(
+        &self,
+        _: ProviderOpenRequest,
+    ) -> crate::application::agent_execution::providers::ProviderOpenFuture<'_> {
+        panic!("record preparation cannot open a provider")
+    }
+}
+
+#[tokio::test]
+async fn evidence_preparation_preserves_retained_refusal_across_failed_save_and_reload() {
+    use crate::domain::agent_execution::leases::{
+        AgentWork, EnvironmentRef, LeaseDeadline, LeaseGrants, LeaseId, LeaseRefusal,
+        LeaseRevision, LeaseTerms, LeaseWork, SandboxProfile,
+    };
+    let (mut manager, lease, _) = manager(0).await;
+    let queued_actor = ActionContext::new("person", "panel", "queued-before-refusal").unwrap();
+    manager
+        .begin_with_scheduling(
+            invocation("queued-before-refusal", false).request,
+            Submitter::owner(queued_actor.clone()),
+            InvocationSchedulingEvent {
+                kind: InvocationKind::Queued,
+                target: None,
+                before: None,
+                stage: InvocationStage::Queued,
+                cause: SchedulingCause::Submitted,
+                actor: Some(queued_actor.clone()),
+            },
+            SubmissionMode::Queued,
+            NoteIntake::default(),
+            None,
+        )
+        .await
+        .unwrap();
+    manager
+        .record_queue_admission(
+            ExecutionId::new("queued-before-refusal").unwrap(),
+            InvocationKind::Queued,
+            queued_actor,
+        )
+        .await
+        .unwrap();
+    let before = manager.snapshot().await.unwrap();
+    assert!(!super::super::queue_validation::replay(&before)
+        .unwrap()
+        .is_empty());
+    let refusal = LeaseRecord::Refused {
+        lease: LeaseId::new("refused-before-placement").unwrap(),
+        revision: LeaseRevision::FIRST,
+        terms: LeaseTerms {
+            environment: EnvironmentRef::Here,
+            work: LeaseWork::Agent(AgentWork::new("fixture", "model").unwrap()),
+            sandbox: SandboxProfile::HarnessDefault,
+            grants: LeaseGrants::Opening,
+            deadline: LeaseDeadline::UntilEnded,
+        },
+        refusal: LeaseRefusal::EnvironmentUnreachable,
+        actor: ActionContext::new("person", "panel", "original-opening").unwrap(),
+    };
+    lease.fail_save.store(true, Ordering::SeqCst);
+    let commit = manager
+        .record_lease(|_| (vec![refusal.clone()], ()))
+        .await
+        .unwrap();
+    assert!(commit.saved.is_err());
+    assert!(matches!(
+        manager.prepare_for_lease_record(&RecordOnlyProvider).await,
+        Err(AgentError::Storage(StorageError::Io(_)))
+    ));
+    assert_eq!(
+        manager
+            .evidence
+            .lock()
+            .await
+            .observed()
+            .unwrap()
+            .lease
+            .as_ref()
+            .unwrap()
+            .records(),
+        std::slice::from_ref(&refusal)
+    );
+    assert!(manager.snapshot().await.unwrap().lease.is_none());
+    lease.panic_save.store(true, Ordering::SeqCst);
+    assert!(matches!(
+        manager.prepare_for_lease_record(&RecordOnlyProvider).await,
+        Err(AgentError::Storage(StorageError::Io(_)))
+    ));
+    assert_eq!(
+        manager
+            .evidence
+            .lock()
+            .await
+            .observed()
+            .unwrap()
+            .lease
+            .as_ref()
+            .unwrap()
+            .records(),
+        std::slice::from_ref(&refusal)
+    );
+    lease.panic_save.store(false, Ordering::SeqCst);
+    lease.fail_save.store(false, Ordering::SeqCst);
+    manager
+        .prepare_for_lease_record(&RecordOnlyProvider)
+        .await
+        .unwrap();
+    let saved = manager.snapshot().await.unwrap();
+    assert_eq!(
+        saved.lease.as_ref().unwrap().records(),
+        std::slice::from_ref(&refusal)
+    );
+    assert_eq!(saved.provider, before.provider);
+    assert_eq!(saved.provider_context, before.provider_context);
+    assert_eq!(saved.queue_history, before.queue_history);
+    assert_eq!(
+        lease
+            .inner
+            .load()
+            .await
+            .unwrap()
+            .snapshot()
+            .unwrap()
+            .lease
+            .as_ref()
+            .unwrap()
+            .records(),
+        &[refusal]
+    );
+    // Recording a refusal confers no authority to restore another provider.
+    assert!(matches!(
+        manager.prepare(&RecordOnlyProvider).await,
+        Err(AgentError::Storage(StorageError::IdentityMismatch))
+    ));
 }
