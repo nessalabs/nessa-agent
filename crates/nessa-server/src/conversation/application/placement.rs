@@ -214,16 +214,28 @@ impl Reserved {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    /// `serving`, each worker's leases counting those reserved there.
-    fn counted(
-        &self,
+    /// The worker `choose` picks from `serving`, each worker's leases
+    /// counting those reserved there, reserved for one more lease in the
+    /// same step: two openings choosing at once each count the other's.
+    /// `None` when `choose` picks none, and nothing is reserved.
+    fn reserve(
+        self: &Arc<Self>,
         mut serving: Vec<(PeerEnvironment, WorkerLoad)>,
-    ) -> Vec<(PeerEnvironment, WorkerLoad)> {
-        let reserved = self.lock();
+        choose: impl FnOnce(&[(PeerEnvironment, WorkerLoad)]) -> Option<PeerEnvironment>,
+    ) -> Option<(PeerEnvironment, Reservation)> {
+        let mut reserved = self.lock();
         for (peer, load) in &mut serving {
             load.leases += reserved.get(peer).copied().unwrap_or(0);
         }
-        serving
+        let worker = choose(&serving)?;
+        *reserved.entry(worker).or_insert(0) += 1;
+        Some((
+            worker,
+            Reservation {
+                reserved: self.clone(),
+                worker,
+            },
+        ))
     }
 }
 
@@ -231,16 +243,6 @@ impl Reserved {
 pub(crate) struct Reservation {
     reserved: Arc<Reserved>,
     worker: PeerEnvironment,
-}
-
-impl Reservation {
-    fn take(reserved: &Arc<Reserved>, worker: PeerEnvironment) -> Self {
-        *reserved.lock().entry(worker).or_insert(0) += 1;
-        Self {
-            reserved: reserved.clone(),
-            worker,
-        }
-    }
 }
 
 impl Drop for Reservation {
@@ -581,35 +583,45 @@ impl Environments {
         }
         let (peers, bindings) = self.pool()?;
         let bound = bindings.binding(conversation).await?;
-        let serving = self.reserved.counted(peers.serving());
-        let stays = bound.as_ref().filter(|bound| {
+        let stays = |serving: &[(PeerEnvironment, WorkerLoad)], bound: &WorkerBinding| {
             !avoid.contains(&bound.worker)
                 && serving
                     .iter()
                     .any(|(peer, load)| *peer == bound.worker && !load.draining)
-        });
-        let binding = match (stays, least_loaded(&serving, avoid)) {
-            (Some(bound), _) => bound.clone(),
-            (None, Some(worker)) => {
-                let binding = WorkerBinding {
-                    worker,
-                    // What it held elsewhere is not on this worker.
-                    context: None,
-                };
-                bindings.bind(conversation, &binding).await?;
-                tracing::info!(
-                    conversation_id = %conversation,
-                    from = bound.as_ref().map(|bound| bound.worker.name()),
-                    to = worker.name(),
-                    "a conversation placed on any worker is bound to one"
-                );
-                binding
+        };
+        // Choosing and reserving are one step, so openings choosing at once
+        // spread over the workers.
+        let reserved = self.reserved.reserve(peers.serving(), |serving| {
+            match bound.as_ref().filter(|bound| stays(serving, bound)) {
+                Some(bound) => Some(bound.worker),
+                None => least_loaded(serving, avoid),
             }
-            (None, None) => bound.ok_or(ConversationError::Unavailable)?,
+        });
+        let (binding, reservation) = match reserved {
+            Some((worker, reservation)) => match &bound {
+                Some(bound) if bound.worker == worker => (bound.clone(), Some(reservation)),
+                _ => {
+                    let binding = WorkerBinding {
+                        worker,
+                        // What it held elsewhere is not on this worker.
+                        context: None,
+                    };
+                    // A binding not written lets the reservation go.
+                    bindings.bind(conversation, &binding).await?;
+                    tracing::info!(
+                        conversation_id = %conversation,
+                        from = bound.as_ref().map(|bound| bound.worker.name()),
+                        to = worker.name(),
+                        "a conversation placed on any worker is bound to one"
+                    );
+                    (binding, Some(reservation))
+                }
+            },
+            None => (bound.ok_or(ConversationError::Unavailable)?, None),
         };
         Ok(LeasePlace {
             environment: peers.environment(&binding.worker),
-            _reservation: Some(Reservation::take(&self.reserved, binding.worker)),
+            _reservation: reservation,
             context: Some(Arc::new(WorkerContext {
                 conversation: conversation.clone(),
                 bindings: bindings.clone(),

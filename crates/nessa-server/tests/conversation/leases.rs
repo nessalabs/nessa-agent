@@ -7315,13 +7315,22 @@ fn pool_harness(
     [Arc<PoolWorker>; 2],
     Arc<crate::conversation::infrastructure::FileBindings>,
 ) {
-    let workers = [PoolWorker::new(1), PoolWorker::new(2)];
     let bindings = Arc::new(
         crate::conversation::infrastructure::FileBindings::new(
             root.join("conversations").join("bindings"),
         )
         .unwrap(),
     );
+    let (harness, workers) = pool_harness_with(root, bindings.clone());
+    (harness, workers, bindings)
+}
+
+#[cfg(unix)]
+fn pool_harness_with(
+    root: &Path,
+    bindings: Arc<dyn crate::conversation::application::ConversationBindings>,
+) -> (Harness, [Arc<PoolWorker>; 2]) {
+    let workers = [PoolWorker::new(1), PoolWorker::new(2)];
     let placements =
         Arc::new(FilePlacements::new(root.join("conversations").join("placements")).unwrap());
     let provider = Arc::new(ProviderFactory::default());
@@ -7329,12 +7338,53 @@ fn pool_harness(
     let harness = harness_in(
         root,
         Environments::new(in_process_environment(), BTreeMap::new(), placements)
-            .with_peers(Arc::new(TwoWorkers(workers.clone())), bindings.clone()),
+            .with_peers(Arc::new(TwoWorkers(workers.clone())), bindings),
         DELETION_BUDGETS.stop,
         provider,
         binding,
     );
-    (harness, workers, bindings)
+    (harness, workers)
+}
+
+/// Bindings whose every write after the first fails.
+#[cfg(unix)]
+struct BindsOnce {
+    bindings: crate::conversation::infrastructure::FileBindings,
+    written: AtomicBool,
+}
+
+#[cfg(unix)]
+impl crate::conversation::application::ConversationBindings for BindsOnce {
+    fn bind<'a>(
+        &'a self,
+        conversation: &'a ConversationId,
+        binding: &'a crate::conversation::application::WorkerBinding,
+    ) -> EnvironmentFuture<'a, Result<(), crate::conversation::application::PlacementError>> {
+        if self.written.swap(true, Ordering::SeqCst) {
+            return Box::pin(async {
+                Err(crate::conversation::application::PlacementError::Unavailable)
+            });
+        }
+        self.bindings.bind(conversation, binding)
+    }
+    fn binding<'a>(
+        &'a self,
+        conversation: &'a ConversationId,
+    ) -> EnvironmentFuture<
+        'a,
+        Result<
+            Option<crate::conversation::application::WorkerBinding>,
+            crate::conversation::application::PlacementError,
+        >,
+    > {
+        self.bindings.binding(conversation)
+    }
+    fn erase<'a>(
+        &'a self,
+        conversation: &'a ConversationId,
+    ) -> EnvironmentFuture<'a, Result<(), crate::conversation::application::PlacementError>> {
+        self.bindings.erase(conversation)
+    }
 }
 
 #[cfg(unix)]
@@ -7468,6 +7518,38 @@ async fn a_pool_worker_that_refuses_and_still_serves_is_not_left_for_another() {
     assert_eq!(kinds(&lease), ["refused"]);
     assert_eq!((w1.asked(), w2.asked()), (1, 0));
     assert_eq!(harness.bound(&bindings).await.unwrap().worker, w1.peer);
+}
+
+/// A worker that refuses as it drains, when the other cannot be bound: the
+/// refusal already given is the opening's, and is recorded as one.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_refusal_left_for_a_worker_that_cannot_be_bound_is_still_recorded() {
+    let root = tempfile::tempdir().unwrap();
+    let bindings = Arc::new(BindsOnce {
+        bindings: crate::conversation::infrastructure::FileBindings::new(
+            root.path().join("conversations").join("bindings"),
+        )
+        .unwrap(),
+        written: AtomicBool::new(false),
+    });
+    let (harness, [w1, w2]) = pool_harness_with(root.path(), bindings.clone());
+    *w1.refuse.lock().unwrap() = Some(LeaseRefusal::EnvironmentUnreachable);
+    w1.drains.store(true, Ordering::SeqCst);
+    assert!(matches!(
+        harness.create_on(super::POOL).await,
+        Err(ConversationError::LeaseRefused(
+            LeaseRefusal::EnvironmentUnreachable
+        ))
+    ));
+    let lease = harness.lease().await;
+    assert_eq!(kinds(&lease), ["refused"]);
+    assert_eq!((w1.asked(), w2.asked()), (1, 0));
+    use crate::conversation::application::ConversationBindings;
+    assert_eq!(
+        bindings.binding(&harness.id).await.unwrap().unwrap().worker,
+        w1.peer
+    );
 }
 
 /// Only one worker, refusing as it drains: it is asked once, and its

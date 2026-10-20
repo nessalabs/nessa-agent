@@ -1928,15 +1928,26 @@ impl ConversationService {
                             // before the lease this opening ends with.
                             let mut left = Vec::new();
                             let (environment, opening) = loop {
-                                let place = service
+                                let place = match service
                                     .inner
                                     .environment
                                     .for_lease(&id, &avoid)
                                     .await
-                                    .map_err(|cause| OpeningFailure {
-                                        cause,
-                                        holds: false,
-                                    })?;
+                                {
+                                    Ok(place) => place,
+                                    // Another worker could not be placed: the
+                                    // refusal already given stands, and is
+                                    // recorded as any refusal is.
+                                    Err(_) if !left.is_empty() => {
+                                        break left.pop().expect("one refusal left");
+                                    }
+                                    Err(cause) => {
+                                        return Err(OpeningFailure {
+                                            cause,
+                                            holds: false,
+                                        })
+                                    }
+                                };
                                 let worker =
                                     place.context.as_ref().map(|context| context.worker());
                                 // No other worker to ask: the refusal it gave stands.

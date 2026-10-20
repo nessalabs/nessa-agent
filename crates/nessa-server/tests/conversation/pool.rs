@@ -347,11 +347,15 @@ async fn leases_chosen_at_once_are_spread_before_any_reaches_its_worker() {
     let other = ConversationId::new("6d1b0a3f-2e4c-4d8b-9f70-3c0e5b2d8f41").unwrap();
     pool.placed().await;
     pool.environments.place(&other, Some(POOL)).await.unwrap();
-    // Neither lease has reached its worker's connection yet.
-    let first = pool.lease(&[]).await.unwrap();
-    let second = pool.environments.for_lease(&other, &[]).await.unwrap();
-    assert!(pool.is(&first, worker(1)));
-    assert!(pool.is(&second, worker(2)));
+    // Neither lease has reached its worker's connection yet, and both are
+    // chosen at once: each reads its binding before either chooses.
+    let (first, second) = tokio::join!(pool.lease(&[]), pool.environments.for_lease(&other, &[]));
+    let (first, second) = (first.unwrap(), second.unwrap());
+    // Whichever chose first took the lowest key; the other, the next.
+    assert!(
+        (pool.is(&first, worker(1)) && pool.is(&second, worker(2)))
+            || (pool.is(&first, worker(2)) && pool.is(&second, worker(1)))
+    );
     // Let go once asked: the connection counts them from then on.
     drop((first, second));
     let third = ConversationId::new("7e2c1b4a-3f5d-4e9c-8a81-4d1f6c3e9a52").unwrap();

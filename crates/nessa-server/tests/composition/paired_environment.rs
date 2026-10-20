@@ -542,7 +542,7 @@ async fn a_paired_environment_dials_in_serves_and_stops_at_revocation() {
 
 /// The organization's budget is shared by every paired environment: with
 /// one command allowed, a second is refused busy before the environment is
-/// asked, and runs once the first lets its place go.
+/// asked, and runs once the first's lease has ended on the environment.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_organization_budget_refuses_a_command_past_it_until_one_ends() {
     let directory = tempfile::tempdir().unwrap();
@@ -583,7 +583,15 @@ async fn an_organization_budget_refuses_a_command_past_it_until_one_ends() {
         .await
         .unwrap();
     assert_eq!(ran.stdout, b"held");
-    assert_eq!(budgets.running(), (0, 0));
+    // Its place is given back once the host has let its lease go, not as
+    // its hold is: until then the worker may still hold the work.
+    tokio::time::timeout(WAIT, async {
+        while budgets.running() != (0, 0) {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
     assert_eq!(a.echo(e.peer, "after").await.unwrap().stdout, b"after");
 }
 
