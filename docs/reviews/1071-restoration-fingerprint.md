@@ -107,3 +107,53 @@ state table and invariant 7:
 
 The stress step restarts with both the runtime directory moved and `PATH`
 changed. The desktop model and the reopen sentence are unchanged.
+
+## Implementation review
+
+Reviewed head `9e405df5e` on `cursor/restoration-fingerprint-de61`, base
+`main`, clean tree. The checkout is the implementation of the design note,
+including the scope revision above.
+
+Intended behavior: a moved executable, changed arguments, or a change to
+`PATH`, `TMPDIR`, `USER`, `LOGNAME`, `CODEX_PATH`, or
+`CLAUDE_CODE_EXECUTABLE` does not change the restoration fingerprint, so a
+saved conversation resumes. Those inputs are the warm-up launch
+fingerprint. A context-only mismatch still opens a fresh native session. A
+different provider name or model is still refused, with nothing launched.
+The desktop shows the conversation's model and says the chat cannot be
+reopened when that refusal is what the window has.
+
+Inspected:
+
+- `fingerprint` and `launch_fingerprint` in
+  `crates/nessa-sdk/src/infrastructure/acp/sessions/identity.rs`, and
+  `AcpConfig::runtime_environment` plus the disjoint-key check.
+- The three ACP bindings, `CredentialedClaudeProvider`, and the lease fence,
+  each returning the launch fingerprint rather than the empty default.
+- `split_runtime_environment` in composition, and
+  `runtime_fingerprint_for` used by both warm-up call sites.
+- `SessionManager` rows S1–S6, unchanged by this revision except for which
+  inputs reach S3.
+- The product view's `model` field and the desktop sentence, already on the
+  branch.
+- The stress drift step, which moves the runtime and changes `PATH`.
+
+Agreement: `ProviderIdentity` owns the restoration decision.
+`launch_fingerprint` is not part of it. Warm-up owns the launch key and
+reads both through `runtime_fingerprint_for`, so a moved runtime re-warms
+and a saved conversation still resumes. `prepare` still owns S1 and S2.
+`attach` still owns which session id is passed to `open`.
+
+Revert probes, each restored before the next, and the test re-run green
+after the last restore:
+
+- Hashing the executable in `fingerprint_fields` failed
+  `plumbing_environment_does_not_change_the_fingerprint` at the moved
+  executable's identity comparison.
+- Hashing `runtime_environment` failed the same test at the `PATH`
+  comparison.
+- Hashing the arguments failed the same test at the argument comparison.
+
+No finding at any priority. Not re-run in this review: the full default
+stress plan, and the macOS page-load and Windows device-client jobs, which
+failed on the head for reasons outside this diff.
