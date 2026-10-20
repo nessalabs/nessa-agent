@@ -2,8 +2,10 @@ import {
   Fragment,
   memo,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
+  useState,
   useSyncExternalStore,
   type CSSProperties,
   type ReactNode,
@@ -97,10 +99,21 @@ export const SplitPanes = memo(function SplitPanes({
     source.subscribe,
     () => source.layout()?.columns ?? null,
   )
+  const gridRef = useRef<HTMLDivElement>(null)
+  // What is on screen lags the layout by one frame. The frame that commits a
+  // split, a resize, or a drop runs its script only; the next frame lays the
+  // new boxes out. The first paint uses the layout the grid mounted with.
+  const [drawn, setDrawn] = useState(columns)
   const { panes, edges } = useMemo(
-    () => (columns ? placements(columns) : noPlacements),
-    [columns],
+    () => (drawn ? placements(drawn) : noPlacements),
+    [drawn],
   )
+  useLayoutEffect(() => {
+    if (drawn === columns) return
+    const next = columns
+    const id = requestAnimationFrame(() => setDrawn(next))
+    return () => cancelAnimationFrame(id)
+  }, [columns, drawn])
   const multi = panes.length > 1
   // In the order the panes were opened, not where they sit: a pane is placed
   // by its fractions, so its node never moves in the document, and a moved
@@ -114,7 +127,6 @@ export const SplitPanes = memo(function SplitPanes({
       })),
     [panes, multi],
   )
-  const gridRef = useRef<HTMLDivElement>(null)
   // Tab follows the panes as they are seen, not as they were opened.
   const tabOrder = useMemo(() => paneTabOrder(() => source.layout()), [source])
   useEffect(() => {

@@ -117,6 +117,10 @@ const grid = () => {
   return found
 }
 
+/** The frame after a column change, which is when the grid paints it. */
+const nextPaint = () =>
+  act(async () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())))
+
 it("puts the frame on the host's own pane root, with nothing around it", async () => {
   await mounted(fakeSource(two()))
   const panes = [...grid().children].filter((child) => child.matches(".host-pane"))
@@ -140,6 +144,17 @@ it("shows the host's empty state while there are no panes", async () => {
   expect(grid().hasAttribute(marks.multi)).toBe(false)
 })
 
+it("paints a new arrangement on the frame after it commits", async () => {
+  const layout = two()
+  const fake = fakeSource(layout)
+  await mounted(fake)
+  await fake.change(splitPane(layout, 2, "bottom", "c"))
+  // The commit's own turn keeps the boxes already painted.
+  expect(grid().querySelectorAll(".host-pane")).toHaveLength(2)
+  await nextPaint()
+  expect(grid().querySelectorAll(".host-pane")).toHaveLength(3)
+})
+
 it("renders again when the arrangement changes, and not when only focus moves", async () => {
   const layout = two()
   const fake = fakeSource(layout)
@@ -148,7 +163,11 @@ it("renders again when the arrangement changes, and not when only focus moves", 
   await fake.change(focusPane(layout, 2))
   expect(renders).toEqual([])
   await fake.change(splitPane(layout, 2, "bottom", "c"))
-  expect(renders.length).toBeGreaterThan(0)
+  // The commit re-renders the boxes already painted. The new pane waits a frame.
+  expect(renders.every((key) => key < 3)).toBe(true)
+  expect(host.querySelectorAll(".host-pane")).toHaveLength(2)
+  await nextPaint()
+  expect(renders.some((key) => key !== 1 && key !== 2)).toBe(true)
   expect(host.querySelectorAll(".host-pane")).toHaveLength(3)
 })
 
@@ -196,8 +215,10 @@ it("asks nothing of an edge moved with no room measured, or with the layout gone
   gone.withhold()
   await nudge()
   expect(gone.asked.resized).toEqual([])
-  // Said: the grid shows the host's empty state, and no edge.
+  // Said: the grid shows the host's empty state on the next frame, and no edge.
   await gone.change(null)
+  expect(grid().querySelector('[role="separator"]')).not.toBeNull()
+  await nextPaint()
   expect(grid().querySelector('[role="separator"]')).toBeNull()
   expect(grid().querySelector(".host-empty")).not.toBeNull()
 })

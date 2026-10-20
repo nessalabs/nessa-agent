@@ -557,6 +557,43 @@ const body = {
         })
       }
     }
+    try {
+      await page.waitForFunction(
+        () =>
+          [...document.querySelectorAll(".desktop-night-scene")].some((scene) => {
+            const box = scene.getBoundingClientRect()
+            return (
+              box.width > 0 && box.height > 0 && scene.hasAttribute("data-scene-complete")
+            )
+          }),
+        null,
+        { timeout: 1000, polling: "raf" },
+      )
+    } catch {
+      failures.push("night scene did not finish laying out after the split settled")
+    }
+    const scenes = await page.evaluate(() =>
+      [...document.querySelectorAll(".desktop-night-scene")].map((scene) => {
+        const box = scene.getBoundingClientRect()
+        const layers = scene.querySelector(".desktop-night-scene-layers")
+        return {
+          shown: box.width > 0 && box.height > 0,
+          ready: scene.hasAttribute("data-scene-ready"),
+          complete: scene.hasAttribute("data-scene-complete"),
+          skipped: getComputedStyle(scene).contentVisibility === "hidden",
+          width: layers ? layers.getBoundingClientRect().width : 0,
+        }
+      }),
+    )
+    const shown = scenes.filter((scene) => scene.shown)
+    if (shown.length === 0) failures.push("no night scene was shown after the split")
+    for (const scene of shown) {
+      if (!scene.ready || !scene.complete)
+        failures.push("night scene stayed unready after the split settled")
+      if (scene.skipped)
+        failures.push("night scene text stayed skipped after the split settled")
+      if (scene.width < 1) failures.push("night scene text has no width")
+    }
     return { runs, failures }
   },
 

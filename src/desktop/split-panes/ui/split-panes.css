@@ -68,7 +68,8 @@
   min-width: 0;
 }
 
-/* A pane at its placement: the frame's custom properties, as the grid's fractions. */
+/* A pane at its placement: the frame's custom properties, as the grid's
+   fractions. `paneBox` in model/pane-sizing.ts computes this same box. */
 .split-panes-grid > [data-pane-key] {
   position: absolute;
   left: calc((100% - (var(--cn) - 1) * var(--g)) * var(--cx) + var(--ci) * var(--g));

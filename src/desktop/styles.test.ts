@@ -451,6 +451,43 @@ it("keeps the list and the panes under the Agents overview laid out", () => {
   expect(overview).not.toMatch(/\.workspace-(?:list|chat)\b/)
 })
 
+it("places a pane with the formula paneBox computes", () => {
+  const sheet = readFileSync(
+    new URL("./split-panes/ui/split-panes.css", import.meta.url),
+    "utf8",
+  )
+  const body = sheet
+    .slice(sheet.indexOf(".split-panes-grid > [data-pane-key] {"))
+    .split("}")[0]
+  expect(body).toContain(
+    "left: calc((100% - (var(--cn) - 1) * var(--g)) * var(--cx) + var(--ci) * var(--g))",
+  )
+  expect(body).toContain("width: calc((100% - (var(--cn) - 1) * var(--g)) * var(--cw))")
+  expect(body).toContain(
+    "top: calc((100% - (var(--rn) - 1) * var(--g)) * var(--ry) + var(--ri) * var(--g))",
+  )
+  expect(body).toContain("height: calc((100% - (var(--rn) - 1) * var(--g)) * var(--rh))")
+})
+
+it("lays night-scene text out on the frame after its box is measured", () => {
+  const waiting = styles
+    .slice(styles.indexOf(".desktop-night-scene:not([data-scene-ready])"))
+    .split("}")[0]
+  expect(waiting).toMatch(/content-visibility:\s*hidden/)
+  const dimOnly = styles
+    .slice(
+      styles.indexOf(".desktop-night-scene[data-scene-ready]:not([data-scene-complete])"),
+    )
+    .split("}")[0]
+  expect(dimOnly).toContain(":not([data-dim])")
+  expect(dimOnly).toMatch(/content-visibility:\s*hidden/)
+  const layers = styles
+    .slice(styles.indexOf(".desktop-night-scene-layers {"))
+    .split("}")[0]
+  expect(layers).toMatch(/width:\s*max-content/)
+  expect(layers).toMatch(/contain:\s*layout paint style/)
+})
+
 it("keeps a conversation's sliver of the header still, beneath the text, and out of short panes", () => {
   const body = (selector: string) => styles.slice(styles.indexOf(selector)).split("}")[0]
   expect(styles).toContain(".desktop-header[data-sliver] {")

@@ -466,8 +466,13 @@ it("previews the outcome of the layout the source holds, and commits it through 
   await liftOntoTwo()
   expect(said()).toBe("Swap with Pane b")
   pointer("pointerup", 827, 400)
-  // The pointerup turn flies the copy and does not commit: the commit lays
-  // the new arrangement out, and that layout is the next frame's.
+  // The pointerup turn flies the copy and does not commit. The callback it
+  // queues only schedules the commit: Chromium would run that callback
+  // before the pointerup frame paints.
+  expect(fake.state.drops).toEqual([])
+  await act(
+    async () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
+  )
   expect(fake.state.drops).toEqual([])
   await frames()
   expect(fake.state.drops).toEqual([

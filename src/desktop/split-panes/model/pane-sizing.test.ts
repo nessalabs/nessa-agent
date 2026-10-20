@@ -12,6 +12,7 @@ import {
   edgeSides,
   fits,
   fitted,
+  paneBox,
   placements,
   resizeEdge,
 } from "./pane-sizing"
@@ -67,6 +68,42 @@ describe("placements", () => {
       [keyOf(layout, "a"), keyOf(layout, "b")],
       [keyOf(layout, "b"), keyOf(layout, "c")],
     ])
+  })
+})
+
+describe("the box a placement draws", () => {
+  const grid = { left: 0, top: 0, width: 1100, height: 800 }
+
+  it("draws two equal columns with the gutter between them", () => {
+    const placed = placements(threePanes().columns).panes
+    expect(paneBox(placed[0]!, grid)).toEqual({
+      left: 0,
+      top: 0,
+      width: 546,
+      height: 800,
+    })
+    expect(paneBox(placed[1]!, grid)).toEqual({
+      left: 554,
+      top: 0,
+      width: 546,
+      height: 396,
+    })
+    expect(paneBox(placed[2]!, grid)).toEqual({
+      left: 554,
+      top: 404,
+      width: 546,
+      height: 396,
+    })
+  })
+
+  it("draws one pane across the whole grid", () => {
+    const placed = placements(singlePane("a").columns).panes[0]!
+    expect(paneBox(placed, { left: 12, top: 4, width: 900, height: 600 })).toEqual({
+      left: 12,
+      top: 4,
+      width: 900,
+      height: 600,
+    })
   })
 })
 

@@ -10,8 +10,8 @@
  *
  * Preparation runs after the press's paint and reads the room once. Carrying
  * updates compositor transforms and the accepted proposal. Release commits
- * that proposal on the next frame only while its layout, watched values and
- * carried item are still held. Cancellation and cleanup retain resource
+ * that proposal on the frame after the pointerup frame paints, and only
+ * while its layout, watched values and carried item are still held. Cancellation and cleanup retain resource
  * identity so a late frame or finished flight cannot affect a newer drag.
  * The target is announced as it changes. Reduced motion follows the same
  * phases with zero-duration flights.
@@ -46,8 +46,7 @@ import {
   type Targets,
 } from "../../model/drop"
 import type { PaneKey, PaneLayout, Zone } from "../../model/pane-layout"
-import { paneLimits } from "../../model/pane-layout"
-import { placements, type PanePlacement, type PaneRoom } from "../../model/pane-sizing"
+import { paneBox, placements, type PaneRoom } from "../../model/pane-sizing"
 import { durationToken, motionToken } from "../../../adapters/motion"
 import { classes, gridOf, marks, reflectMark } from "./marks"
 
@@ -238,25 +237,12 @@ function settledBox(column: Element): Box {
   }
 }
 
-/** Where a placement is drawn in a grid laid out at `grid`, as the stylesheet draws it. */
-function drawn(placement: PanePlacement, grid: Box): Box {
-  const g = paneLimits.gutter
-  const width = grid.width - (placement.columns - 1) * g
-  const height = grid.height - (placement.rows - 1) * g
-  return {
-    left: grid.left + width * placement.x + placement.column * g,
-    top: grid.top + height * placement.y + placement.row * g,
-    width: width * placement.width,
-    height: height * placement.height,
-  }
-}
-
-/** Every pane's box in `layout`, laid out in `grid`. */
+/** Every pane's box in `layout`, laid out in `grid` by `paneBox`. */
 function boxes(layout: PaneLayout, grid: Box): Map<PaneKey, Box> {
   return new Map(
     placements(layout.columns).panes.map((placement) => [
       placement.key,
-      drawn(placement, grid),
+      paneBox(placement, grid),
     ]),
   )
 }
@@ -554,6 +540,10 @@ export function useSplitPanesDrag(
     }
     /** Drops the pending commit's frame and its listeners, if a drop is waiting on one. */
     let releaseDrop: (() => void) | null = null
+    /** A drop's unmark, run after `commitDrop` has read the room. */
+    let heldUnmark: (() => void) | null = null
+    /** Resolves a drop's preview release if the commit never runs. */
+    let endPreview: (() => void) | null = null
 
     /** Releases the preview without hiding the conversations it moves. */
     const releaseReflow = () => reflectMark(scope, marks.reflow, false)
@@ -1163,12 +1153,13 @@ export function useSplitPanesDrag(
     }
 
     /**
-     * Ends what the page marked for a drag. What it marked goes at once, or —
-     * for a drop, `later` — a frame on, so the commit's own flight measures the
-     * page as the preview left it rather than laying it out again first.
-     * Whatever a drag left selected goes with it.
+     * Ends what the page marked for a drag. The shield and the selection go
+     * at once. The marks go now, two frames on (`later`, a cancel's flight
+     * home), or when the caller says (`held`, a drop's commit — after it has
+     * read the room, so that read is not a layout of a tree this just
+     * dirtied). Whatever a drag left selected goes with it.
      */
-    const tidy = (made: Made, later = false) => {
+    const tidy = (made: Made, later: boolean | "held" = false) => {
       const { drawing, pressed, shield } = made
       cancelAnimationFrame(drawing.frame)
       window.clearTimeout(drawing.still)
@@ -1187,6 +1178,12 @@ export function useSplitPanesDrag(
         releaseReflow()
         holdGlass(false)
         announcer.textContent = ""
+      }
+      if (later === "held") {
+        heldUnmark = () => {
+          if (ownsDragResources(phase, made)) unmark()
+        }
+        return
       }
       // A frame after the one that commits the drop.
       if (later)
@@ -1230,8 +1227,7 @@ export function useSplitPanesDrag(
      * The room, the panes or the view changed (`at-once`): the copy and the
      * preview go now, and the change plays as it would with no drag.
      * Flying home keeps the preview's cheap paint for two frames (`tidy`'s
-     * `later`), the same handoff a drop uses, so this turn does not also
-     * restore blur and shadows.
+     * `later`), so this turn does not also restore blur and shadows.
      */
     const cancel = (made: Made, how: "home" | "at-once") => {
       if (how === "at-once") {
@@ -1241,10 +1237,10 @@ export function useSplitPanesDrag(
       preview(made, null, null)
       const back = flyTo(made, made.home, true)
       scope.removeAttribute(marks.takesSpare)
-      // The preview's cheap paint stays two frames, the same handoff a drop
-      // uses, so this turn does not also restore blur and shadows
-      // (`drag.test.tsx`). A flight that finishes after a newer drag owns the
-      // page leaves that drag alone (`split-panes-drag.test.tsx`).
+      // The preview's cheap paint stays two frames, so this turn does not
+      // also restore blur and shadows (`drag.test.tsx`). A flight that
+      // finishes after a newer drag owns the page leaves that drag alone
+      // (`split-panes-drag.test.tsx`).
       tidy(made, true)
       void back.finished
         .catch(() => undefined)
@@ -1255,19 +1251,22 @@ export function useSplitPanesDrag(
         })
     }
 
-    /** Let go with a zone shown: the copy flies, and what is shown is committed on the next frame. */
+    /**
+     * Let go with a zone shown: the copy flies, and the layout commits on
+     * the frame after this one has painted.
+     */
     const drop = (made: Made, what: Carried, aim: Aim) => {
       const { ghost, room, drawing } = made
       // The copy flies from the pointer into the place it takes. That place
-      // was drawn while carrying; the flight does not read the page.
+      // was drawn while carrying, from `paneBox`; the flight does not read the page.
       const flight = drawing.landing ? flyTo(made, drawing.landing, false) : null
-      tidy(made, true)
-      // The commit lays the panes out at their new sizes, and FlipScope reads
-      // that layout in the same turn (`play`). On pointerup that read shared
-      // the frame with this flight and ran past the frame budget. One frame
-      // on, the preview is still up — tidy waits two — so the commit's flight
-      // measures through it. `drag.test.tsx` holds that the commit is not in
-      // the pointerup turn.
+      tidy(made, "held")
+      // Chromium runs an animation callback queued from the pointerup handler
+      // before that frame paints, so the commit waits one callback further.
+      // The unmark runs after `commitDrop` reads the room, and the preview
+      // release is the last callback of that frame; nothing between the read
+      // and the paint forces layout. `drag.test.tsx` holds that the pointerup
+      // turn and its own callback do not commit.
       // The frame commits the preview, not whatever the panes became while it
       // waited: a resize, a watched change, or a carried item let go. The
       // dropping phase ignores those, so the frame itself checks.
@@ -1289,37 +1288,65 @@ export function useSplitPanesDrag(
       const unsubscribe = source.subscribe(() => {
         if (!proposalHolds()) refuse()
       })
-      const frame = requestAnimationFrame(() => {
+      let outer = 0
+      let inner = 0
+      // The preview lets go on the frame that paints the new boxes, after
+      // that paint is in the DOM and before the browser lays it out.
+      let previewDone = false
+      let finishPreview = () => {}
+      const previewReleased = new Promise<void>((resolve) => {
+        finishPreview = () => {
+          if (previewDone) return
+          previewDone = true
+          if (endPreview === finishPreview) endPreview = null
+          if (ownsDragResources(phase, made)) {
+            scope.removeAttribute(marks.takesSpare)
+            releasePreview()
+          }
+          resolve()
+        }
+        endPreview = finishPreview
+      })
+      const commit = () => {
+        inner = 0
         release()
-        if (!ownsDragResources(phase, made)) return
-        if (accept && proposalHolds()) {
-          source.commitDrop({ carried: what, target: aim.target, zone: aim.zone, room })
+        const finish = heldUnmark
+        heldUnmark = null
+        if (!ownsDragResources(phase, made)) {
+          finishPreview()
           return
         }
-        // The preview was the arrangement this frame is not committing.
-        scope.removeAttribute(marks.takesSpare)
-        releasePreview()
+        // The grid paints a column change on the frame after it commits, so
+        // this script does not share a frame with that layout. The grid queues
+        // its callback during this commit; the preview lets go in the callback
+        // queued just after, on that same frame, before it paints.
+        if (accept && proposalHolds()) {
+          source.commitDrop({ carried: what, target: aim.target, zone: aim.zone, room })
+        } else {
+          // The preview was the arrangement this frame is not committing.
+          scope.removeAttribute(marks.takesSpare)
+          releasePreview()
+        }
+        finish?.()
+        requestAnimationFrame(() => finishPreview())
+      }
+      outer = requestAnimationFrame(() => {
+        outer = 0
+        if (!ownsDragResources(phase, made)) {
+          release()
+          finishPreview()
+          return
+        }
+        inner = requestAnimationFrame(commit)
       })
       const release = () => {
-        cancelAnimationFrame(frame)
+        cancelAnimationFrame(outer)
+        cancelAnimationFrame(inner)
         window.removeEventListener("resize", refuse)
         unsubscribe()
         if (releaseDrop === release) releaseDrop = null
       }
       releaseDrop = release
-      // Whatever `FlipScope` did not measure through — a drop that changed no
-      // arrangement — lets go a frame on.
-      const previewReleased = new Promise<void>((resolve) => {
-        requestAnimationFrame(() =>
-          requestAnimationFrame(() => {
-            if (ownsDragResources(phase, made)) {
-              scope.removeAttribute(marks.takesSpare)
-              releasePreview()
-            }
-            resolve()
-          }),
-        )
-      })
       // The owner stays through the commit's frame even when its flight is instant.
       void Promise.all([
         (flight?.finished ?? Promise.resolve()).catch(() => undefined),
@@ -1562,6 +1589,7 @@ export function useSplitPanesDrag(
       document.removeEventListener("selectstart", onSelectStart)
       stopWaiting()
       releaseDrop?.()
+      endPreview?.()
       const made = phase.kind === "idle" ? null : phase.made
       if (made) releaseMade(made)
       reflectMark(scope, marks.reflow, false)

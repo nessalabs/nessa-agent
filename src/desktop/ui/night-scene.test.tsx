@@ -77,10 +77,33 @@ async function scene(still = false) {
 it("uses the observed content height without synchronous layout reads, and disconnects", async () => {
   const { root, host, frame, resize, computedStyle, disconnect } = await scene()
   expect(frame.hasAttribute("data-measured")).toBe(false)
+  resize(0)
+  expect(frame.hasAttribute("data-measured")).toBe(true)
+  expect(frame.hasAttribute("data-scene-ready")).toBe(false)
+  expect(frame.hasAttribute("data-scene-complete")).toBe(false)
+  await act(
+    async () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
+  )
+  expect(frame.hasAttribute("data-scene-ready")).toBe(false)
   resize(290)
   expect(frame.style.getPropertyValue("--night-scene-scale")).toBe("1")
   expect(frame.style.getPropertyValue("--night-scene-em")).toBe("10px")
   expect(frame.hasAttribute("data-measured")).toBe(true)
+  expect(frame.hasAttribute("data-scene-ready")).toBe(false)
+  await act(
+    async () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
+  )
+  expect(frame.hasAttribute("data-scene-ready")).toBe(false)
+  await act(
+    async () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
+  )
+  expect(frame.hasAttribute("data-scene-ready")).toBe(true)
+  expect(frame.hasAttribute("data-scene-complete")).toBe(false)
+  expect(frame.querySelector("[data-dim]")?.textContent?.length).toBeGreaterThan(0)
+  await act(
+    async () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
+  )
+  expect(frame.hasAttribute("data-scene-complete")).toBe(true)
   resize(145)
   expect(frame.style.getPropertyValue("--night-scene-scale")).toBe("0.5")
   expect(frame.style.getPropertyValue("--night-scene-em")).toBe("5px")

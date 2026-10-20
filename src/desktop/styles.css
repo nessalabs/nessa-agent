@@ -678,6 +678,21 @@ html:not(.dark) [data-surface] {
   visibility: visible;
 }
 
+/* The lines wait two frames after that measurement: the measurement's own
+   frame, then the frame that focuses a new pane. Until then their style
+   and layout are skipped; the box itself keeps the height above. */
+.desktop-night-scene:not([data-scene-ready]) {
+  content-visibility: hidden;
+}
+
+/* The ready frame lays out only the dim layer. Rain, the lit layer, and
+   steam lay out on the frame after, once the dim width is fixed. */
+.desktop-night-scene[data-scene-ready]:not([data-scene-complete])
+  .desktop-night-scene-layers
+  > :not([data-dim]) {
+  content-visibility: hidden;
+}
+
 /*
  * A chosen picture fills the same box as the scene, covering it, and blends in
  * the same way: fading in under the titlebar and out toward both sides and
@@ -946,6 +961,10 @@ html:not(.dark) [data-surface] {
       var(--night-scene-sill-rows) * 1em
   );
   left: 50%;
+  /* The lines' own width, cropped by the scene. A pane growing sideways
+     does not lay them out again. */
+  width: max-content;
+  contain: layout paint style;
   display: grid;
   transform: translateX(-50%) scale(var(--night-scene-scale, 1));
   transform-origin: 50% calc(var(--night-scene-sill-rows) * 1em);

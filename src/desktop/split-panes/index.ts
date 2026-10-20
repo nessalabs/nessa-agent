@@ -22,6 +22,9 @@
  *   model/pane-layout.ts ◀── model/pane-sizing.ts ◀── model/drop.ts ◀── model/drag.ts
  * ```
  *
+ * `paneBox` in `model/pane-sizing.ts` is the pixel box the stylesheet draws.
+ * The drag asks it for a landing box and does not read that rect from the page.
+ *
  * An arrow points from what uses to what it uses. A host takes what it uses
  * from here; any module may import the pure model's files, and a host's own
  * model and use cases, which may not import React, must; a test may take
