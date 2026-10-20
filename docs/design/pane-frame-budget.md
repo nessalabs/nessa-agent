@@ -152,6 +152,56 @@ flowchart LR
   dim --> rest["next frame: rain, lit layer, steam"]
 ```
 
+## The click that has no script
+
+Traced on this head, production Chromium, columns, 1000×560, 4× CPU
+throttle, invalidation tracking on (`devtools.timeline` and
+`disabled-by-default-devtools.timeline.invalidationTracking`). The click
+is the subagents stack. `performance.now()` just before it was 2024 ms.
+The trace's `pointerover` / `click` are the input task. Nothing in the
+app writes an attribute in that task.
+
+What the browser does there is a forced style recalc
+(`Blink.ForcedStyleAndLayout`), inside the input task, of 544 elements
+(`UpdateLayoutTree`). The invalidation is scheduled on
+`article.workspace-pane` for `:hover`. The set says every descendant
+might be invalid (`allDescendantsMightBeInvalid`), and it names 23
+selectors, all of the form `.group-hover/…:is(:where(.group/…):hover *)`
+(and the same shape for `:focus-within` on the pane header). The `*` is
+the subject Blink invalidates, so hovering the pane restyles the pane.
+The long-animation-frame record shows no script because that work is not
+a script: the handlers are under the attribution threshold, and the
+recalc is inside the input task rather than in the frame's later style
+phase (that phase is the 2–3 ms the record does report). Layout in that
+forced update is a handful of objects. Deleting every generated rule
+whose selector is a hovered or focused ancestor plus `*` removes the
+544-element pass. `contain: layout style paint` on the pane body, the
+transcript, and the session list leaves the 544-element pass in place.
+
+The box paint is one message-port task because it is one React commit.
+The grid's `setDrawn` and the window's painted reads both call `setState`
+from animation callbacks in the same frame, and React 19 runs those as
+one `performWorkUntilDeadline` (`Q` in the scheduler). A trace of that
+commit shows one Render and one Commit that include `SplitPanes`,
+`FittedWindow`, and `WidgetPane`, then clears `data-spare-held` and
+inserts the pane shell. Style then visits 419 elements and layout is not
+partial (16 dirty objects, 777 in the document). The widget body mounts
+on the frame after that. A transition does not split it: the store
+update is not a transition update, and the profiler shows one commit.
+Putting the window on a later frame was measured; the port stayed about
+60 ms, because the geometry change is in the grid's commit.
+
+| Structure | Click (544 elements, no script) | Box paint (one port, 419 elements, full layout) |
+| --- | --- | --- |
+| Split the React update (transition or a later commit) | The hover recalc is not a React update. | A transition does not move a store update. A later commit for the window was measured and the port stayed about 60 ms. |
+| `contain` or `content-visibility` on pane bodies and the session list | Measured. The 544-element pass is unchanged. `content-visibility: hidden` on a conversation body is the visibility contract this note already refuses. | Measured. The 419-element pass is unchanged. |
+| Fewer elements matching the changed selectors | This is the pass. The 23 selectors match every descendant of a hovered pane. Naming the utility as the subject matches that element only. | The box frame's invalidation names the sidebar, the list, and the column bars. Deleting the `*` rules does not remove the 419-element pass or the full layout: those follow the sidebar leaving the row and the pane's size changing. |
+| Precompute the folded layout and flip a class | The click writes no fold class. The 544-element pass is `:hover`, and it remains until the `*` rules are gone. | A class that changes used widths still lays the row out. The fold is already a class (`data-sidebar`, `data-spare-held`); the cost is that the class changes geometry. |
+
+The click's root cause is the universal selector. Naming the utility as
+the subject (`limitGroupSelectors`) is that fix. It does not claim the
+box frame.
+
 ## Alternatives
 
 - Reading the landing box with `getBoundingClientRect` after the commit.
@@ -240,7 +290,8 @@ flowchart LR
   overview layer skipping a render whose inputs did not change, the
   scene-ready and scene-complete marks and the layer rules,
   the tests that lock those, the settled assertion in `columns.mjs`
-  `content-visible`, and this note.
+  `content-visible`, the rewrite that names the utility as the subject of
+  a generated group or peer selector (`limitGroupSelectors`), and this note.
 - Outside that scope: `FlipScope`'s read when the flight duration is
   nonzero, blanking a conversation, and issues 965, 981, 1038, 1039, 1030,
   1034, 345, 337, and 746.
