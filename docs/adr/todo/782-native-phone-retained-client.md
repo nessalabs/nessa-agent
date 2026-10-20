@@ -170,3 +170,62 @@ changes verification only, not callback production behavior.
 | --- | --- | --- |
 | Persisted non-deleted catalogue entry has malformed metadata | CacheDamaged; saved progress is unchanged and recovery requires purge/resync | public_catalogue_refuses_corrupt_metadata_without_advancing_saved_progress |
 | Cache unavailable before a write | Cache; no claim that a commit occurred | uncertain_cache_commit_is_distinct_from_a_pre_effect_failure |
+
+## Phone publication, deletion reconciliation, and held-file freshness
+
+Slices for owner reads (#783), enrollment purge (#785) and the C/Swift session (#789) are on main. This slice is the phone repository those slices left open: one publication lease over the existing enrollment, retained read and saved projection, plus held-file freshness and catalogue presence. It does not add a second fold, checkpoint, purge policy or fetch algorithm. The product iOS application is not in this repository; physical-device execution stays unverified.
+
+```mermaid
+flowchart LR
+    Phone[Phone caller] --> Lease[PhoneLease]
+    Lease --> Session[Existing native session]
+    Session --> Enrollment[Enrollment and purge]
+    Session --> Read[RetainedCache read and subscribe]
+    Session --> Saved[Saved catalogue and transcript]
+    Session --> Fetch[Existing held-file fetch]
+    Read --> Cache[(Private SQLite cache)]
+    Saved --> Cache
+    Fetch --> Gateway[Pinned gateway artifact.read]
+```
+
+### Invariants
+
+- A stamp names one generation and one receiver. `accept` returns that receiver's saved rows only while the lease still has that pair.
+- The same issued receiver keeps the generation. A different receiver, a successful terminal purge, or session close advances it. The previous stamp then fails and no bytes are read.
+- Close is permanent for that session. A successful purge only releases the receiver, so a later enrollment in the same session can bind the next one.
+- Catalogue presence is one stored identity. A live row is Live. A deletion fence or receiver purge receipt is Tombstone. No row and no fence is Absent. A page that does not mention a chat does not write a tombstone.
+- A deletion whose commit did not land leaves the previous row. Presence after that failure is the previous state, not Tombstone.
+- A withdrawn grant removes the local row and writes no fence. Presence is Absent, so the chat can return with a later grant.
+- `LocalMatch` means the output file already had the named size and digest. No range was asked. It is not a new gateway hold.
+- `GatewayConfirmed` means this run's ranges were answered and the part, read back from disk, matched the digest. A partial part, a wrong range, or a digest mismatch is a fault. `reached` on that fault is not freshness.
+- The fetch reports the monotonic elapsed time of that fetch. That duration is not model-generation latency.
+- `conversation.subscribe` remains the live view. It still does not advance the checkpoint. Command recovery stays in the outbox.
+
+### State
+
+| State | Event | Result | Evidence |
+| --- | --- | --- | --- |
+| Unbound | `bind` receiver A | Stamp generation 1 for A | `binding_the_same_receiver_keeps_the_stamp_and_replacement_refuses_it` |
+| Bound A | `bind` A again | Same stamp | same |
+| Bound A | `bind` B | New stamp; A's stamp is Replaced and reads nothing | same, and `a_replaced_receiver_stamp_reads_nothing_and_dials_nothing` |
+| Bound A | successful terminal purge | Receiver released; A's stamp is Unbound/Replaced; a later `bind` B is admitted | `a_purge_releases_the_receiver_and_a_later_bind_is_admitted` |
+| Bound | session close | Closed; `bind` stays closed | `close_refuses_the_stamp_and_a_later_bind` |
+| Live row | page that omits that row | Stays Live | `catalogue_presence_names_a_fence_and_not_an_absent_row` |
+| Live row | deletion commit aborts | Stays Live | `a_deletion_that_does_not_commit_is_not_a_tombstone` |
+| Live row | deletion fence commits | Tombstone | `catalogue_presence_names_a_fence_and_not_an_absent_row` |
+| Live row | withdraw, no fence | Absent | same |
+| No catalogue row | presence | Absent | same |
+| Receiver purge receipt | presence, rows gone | Tombstone | same |
+| Output already the file | fetch | LocalMatch, source not asked | `a_file_already_on_disk_is_a_local_match_and_asks_nothing` |
+| Gateway answers every range and the digest matches | fetch | GatewayConfirmed | `a_gateway_answer_is_fresh_only_when_the_digest_matches` |
+| Short answer or wrong digest | fetch | Fault, not fresh | same |
+| Stale stamp | fetch or saved read | Fenced, connector not called | `a_replaced_receiver_stamp_reads_nothing_and_dials_nothing` |
+| Bound, file not on disk | fetch | The connector's typed failure, one dial | `a_missing_file_reports_the_connector_failure` |
+
+### Alternatives that lose
+
+- A second Swift checkpoint or fold. The shared cache already owns progress, tombstones and projection. A copy will disagree.
+- Treating a missing inbox row as deleted. Owner and granted catalogues omit rows for reasons other than deletion: a partial page, a grant filter, a withdraw. The deletion fence is the tombstone. Absence is not.
+- Confirming a file because a part is already complete. The existing fetch asks the last range again so a part cannot stand in for the gateway. Reporting that part as fresh would undo that rule.
+- Blocking the UI thread on the fetch. The session methods stay synchronous and the existing Swift worker admits them off the UI queue. This slice does not add a second queue.
+- Rebuilding #783, #785 and #789. Those pulls are merged. This slice starts from current main.
