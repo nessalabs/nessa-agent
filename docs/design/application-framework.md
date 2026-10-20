@@ -166,39 +166,92 @@ flowchart TD
 
 ## What this proposes
 
-One package. One integration principal. One application process, which
-holds the socket. The plugin and the standalone window are views on that
-process. A second process is a second socket; an operation stays in the
-process that accepted it.
+One package. One integration principal. One install row, owned by the
+gateway. One process. The process holds the one gateway socket and every
+operation. The plugin view, the standalone window, and a harness tool
+call ask that row to attach. The gateway is the only starter.
 
 ```mermaid
 flowchart TD
   owner[Owner]
   grant[Access grant on the principal]
   cedar[Cedar]
-  process[Application process]
+  row[Install row on the gateway]
+  process[The one application process]
   plugin[Plugin view]
   standalone[Standalone window]
+  harness[Harness tool call]
   mount[MCP App mount of a tool call]
   gateway[Gateway]
   owner --> grant
   grant --> cedar
   cedar --> gateway
-  process --> gateway
-  plugin --> process
-  standalone --> process
+  owner --> row
+  row -->|start when the endpoint is absent| process
+  plugin -->|attach| row
+  standalone -->|attach| row
+  harness -->|attach| row
+  process -->|one socket| gateway
   mount --> gateway
 ```
 
 The plugin view is the widget window place, drawn in the sandbox, opened
-with no tool call. The desktop host starts the process and proxies the
-frame. The frame does not receive the secret (row H1). The standalone
-window is a view in that same process when the package is started on its
-own. The MCP App mount stays a tool call on the caller's session, drawn
-by the desktop with the panel token, as today.
+with no tool call. The host asks the gateway to attach and proxies the
+frame. It does not exec the package. The frame does not receive the
+secret (row H1). The standalone window is the same attach. The MCP
+App mount stays a tool call on the caller's session, drawn by the
+desktop with the panel token, as today.
 
 Third-party code is the sandbox or this process. The `native` widget kind
 stays the trusted views the window registers in composition.
+
+## One process
+
+The application process is the only process that runs the package's
+operations, and it holds the one gateway socket. The gateway owns the
+install row and is the only starter. A plugin view, a standalone window,
+and a harness tool call reach that process by asking the row to attach.
+None of them execs the package. Opening the plugin while the standalone
+window is already up is an attach, not a second start. Each installed
+package has its own row, its own process, and its own socket. A second
+package is a second row. It is not a second process for the first.
+
+The row names the package, the one version, the UI document, the process
+entry, and the endpoint. The endpoint is a loopback record of the same
+kind as the gateway's `gateway-endpoint.json`
+(`packages/nessa-client/src/transport/local-gateway-endpoint.ts`): a
+private file, and a record whose process does not answer is absent. The
+gateway treats that record as absent and starts the process (R6). That
+is not the gateway client's error when the gateway itself does not
+answer. This plan does not add a
+second discovery protocol.
+
+The desktop and the standalone window do not read the endpoint in
+order to start. They ask the gateway to attach, and the gateway returns
+the live endpoint. The gateway's own tool path reads the row and dials
+that endpoint. Attach then follows the record.
+
+- The endpoint is live. The caller joins the process that published it.
+  The desktop loads the UI into the plugin frame, or the standalone
+  window loads the same UI. The harness dials the endpoint as a remote
+  MCP URL. No process is started.
+- The endpoint is absent. The gateway starts the process entry from the
+  row, once. The process publishes the endpoint before it accepts a view
+  or a tool call, then authenticates. The caller then attaches.
+- A second start is already in flight, or it finds the endpoint live. It
+  exits before `session.authenticate`. The process that published the
+  endpoint keeps the socket.
+
+The socket in the state table is that gateway session. A harness
+connection is a client of the published endpoint. Two harness sessions
+are two of those connections, and still one process and one gateway
+socket. A harness session ending closes its connection. The process
+stays.
+
+A stored stdio server is a different process: one child per harness
+session, ended with that session (`open_admitted` in
+`crates/nessa-server/src/mcp_servers/infrastructure/relay.rs`). The
+application process is not that child.
 
 ## Authentication
 
@@ -300,8 +353,8 @@ read.
 
 Registering an operation as an MCP tool is explicit. An unregistered name
 is not a tool. A registered tool travels the gateway's existing MCP path
-to Claude or Codex, once the running process is stored as a remote
-MCP server.
+to Claude or Codex. The remote server's URL is the row's endpoint. If
+that endpoint is absent, R2 starts the process before the dial.
 Its UI, when the tool declares one, is the MCP App mount already built,
 on the caller's session. The turn's tool policy is unchanged.
 
@@ -333,7 +386,10 @@ flat status such as "granted" is not a state.
 | Principal | absent, or present as an active member |
 | Credential | none, current, or closed (revoked or expired), per credential |
 | Grant on resource R | absent, or active at an epoch |
-| Socket | closed, or open on one credential |
+| Install row | absent, or present at one version |
+| Endpoint | absent, or live |
+| Process | down, or up — at most one |
+| Socket | the process's one socket, closed or open |
 | View | absent, or live with an id |
 | Window place | empty, or showing one widget |
 | Operation | idle, running, or uncertain |
@@ -352,11 +408,23 @@ flat status such as "granted" is not a state.
 | A8 | socket open, grant R absent | read or follow R, or list it | unchanged | Cedar refuses; no row created |
 | A9 | grant R active | owner revokes R | grant R absent | sockets stay; the next admission misses R |
 | A10 | credential current, its socket open | revoke or expire that credential | credential closed, that socket closed | **built** close reasons; other credentials' sockets stay; grants and epochs stay |
-| A11 | principal present | owner uninstalls | principal absent | credentials closed, grants removed, sockets closed |
+| A11 | principal present | owner uninstalls | principal absent, install row absent, process down | credentials closed, grants removed, sockets closed; a row from slice 2 is removed and its process is stopped |
 | A12 | credential current, no grants | authenticate | socket open | A8 on every conversation |
 
 A4 applies again for a second conversation. The result is a second row.
-A9 on one row leaves the other.
+A9 on one row leaves the other. A6 is the process's socket. A second
+process is R4: it exits before this authenticate.
+
+### The install row
+
+| Row | Before | Event | After | Effect |
+| --- | --- | --- | --- | --- |
+| R1 | no row | owner installs a directory | row present, endpoint absent, process down | one version |
+| R2 | endpoint absent | plugin, window, or a tool call asks to attach | process up, endpoint live, one socket | the gateway starts the process entry once; the caller does not exec |
+| R3 | endpoint live | another of those asks, including the plugin while the window is up | unchanged | it attaches; no second process and no second gateway socket |
+| R4 | endpoint absent | two starts at once | one process up | one in-flight start; the process that publishes the endpoint keeps the socket; the other exits before `session.authenticate` |
+| R5 | process up | the process exits | process down; endpoint absent if the process removed the file | a clean exit removes the endpoint file; the attempt record remains (O9); the next attach is R2; a file left behind is R6 |
+| R6 | endpoint present, process does not answer | the gateway reads it | endpoint absent | then R2; the caller still does not exec |
 
 ### Views, the window, and context
 
@@ -370,7 +438,7 @@ A9 on one row leaves the other.
 | U6 | S live | the selection changes | S live | S's context is replaced |
 | U7 | S live | S closes | S absent | S's context is dropped |
 | H1 | the frame is showing the plugin view | the frame reads its document and its bridge messages | unchanged | the credential bytes are not among them |
-| M5 | package installed, window place empty or occupied | the person opens the plugin entry | window place shows the plugin | no tool call |
+| M5 | install row present | the person opens the plugin entry | window place shows the plugin | R2 or R3; no tool call; the desktop asks the row to attach and does not exec |
 | M6 built | window place showing any widget | `openWidget` to the window, or M5 | window place shows the new widget | the previous view closes, so U7 applies to it; a tool-call mount that lost the window is still that tool call |
 
 ### The operation
@@ -383,7 +451,7 @@ A9 on one row leaves the other.
 | O4 | process up | the operation names only a Nessa resource the grant does not admit | idle | refused before the effect; the refusal is the stored outcome |
 | O5 | admitted | the grant epoch changes | running | this attempt keeps the epoch it read |
 | O6 | — | a tool call for a name that was not registered | — | not a tool |
-| O7 | registered, process up | a turn calls the tool | one remote MCP connection to that process | the harness session ending closes the connection; the process stays; the mount, if the tool has UI, is the caller's |
+| O7 | registered | a turn calls the tool | one remote MCP connection to that process | if the endpoint is absent, R2 runs first; the URL is the endpoint, not a stdio command; the session ending closes the connection; the process stays; the mount, if the tool has UI, is the caller's |
 | O8 | process up | the operation writes app-owned data and names a Nessa resource | running, or idle | Cedar is asked first; a refusal writes neither and is stored |
 | O9 | running or uncertain | the process exits | the attempt record remains | no second effect is started by the exit |
 | O10 | record holds the outcome | the process starts again and the same request id and body arrive | idle | the stored outcome is the ack |
@@ -413,9 +481,12 @@ Each rule names the rows that hold it.
    credential holds `server.read` and `conversation.read`. It is not the
    panel token and not a peer gateway. Rows A1, A2, A6.
 4. A UI action runs on the one live view it names. Rows U1–U5.
-5. The process that accepted an operation owns it. The attempt record
-   survives that process exiting, and a restart does not apply the effect
-   twice. Rows O1–O3, O9–O11.
+5. The gateway's install row owns the one process that runs every
+   operation. A plugin view, a standalone window, and a tool call attach
+   to it and do not exec. The gateway starts that process when the
+   endpoint is absent. A second start exits before it opens a socket.
+   The attempt record survives the process exiting, and the next start
+   does not apply the effect twice. Rows R1–R6, O1–O3, O9–O11.
 6. A view's context does not outlive that view. Rows U6, U7, M6.
 7. An MCP App mount stays the tool call it is, on the caller's session.
    Rows M1–M4.
@@ -425,9 +496,9 @@ Each rule names the rows that hold it.
 10. A registered tool is a remote MCP connection to the running
     application process, on the gateway's Claude and Codex path.
     OpenCode is not added. A stdio launch is not this tool. Row O7.
-11. The install list, when the packaging slice adds a file, has one
-    version. Another version is refused and not rewritten. Startup does
-    not delete it. Alpha: no migration.
+11. The install list slice 2 writes has one version. Another version is
+    refused and not rewritten. Startup does not delete it. Alpha: no
+    migration.
 
 ## Packaging
 
@@ -440,18 +511,21 @@ The package is a directory: a manifest (display name, process entry, UI
 entry), the public actions, and the UI document the sandbox loads. The
 owner installs it on this gateway. The install list is the owner's,
 beside the stored MCP servers, not a channel of the updater. The first
-install is a local path. A signed feed is out of scope.
+install is a local path. That install is one owner action: it mints the
+principal in [Authentication](#authentication) and writes the row in
+[One process](#one-process). The row is how every entry point reaches
+the process, and it lands before any view. A signed feed is out of scope.
 
 A stored stdio server is one process per harness session, ended with
 that session (`open_admitted` in
 `crates/nessa-server/src/mcp_servers/infrastructure/relay.rs`). The
-application process is not that child. Its tools are stored as a remote
-server aimed at the process already running. The session's end closes
-the connection.
+application process is not that child. Its tools are a remote server
+whose URL is the row's endpoint. If that endpoint is absent, R2 starts
+the process before the dial. The session's end closes the connection.
 
-`nessa init` is the last slice. It scaffolds `examples/dashboard`'s
-shape against a gateway the developer already runs. Until then, the
-example is started by hand.
+`nessa init` scaffolds a directory the install command already accepts.
+Views do not wait on the scaffold. They install a directory of that shape
+with the same command.
 
 First-party research views stay MCP servers in `nessa-extensions`
 ([ADR 344](../adr/done/344-mcp-ui.md)). This plan does not move them
@@ -461,44 +535,59 @@ into the desktop tree.
 
 The dashboard, in order, once the slices have landed:
 
-1. The web view authenticates as the application and reads the one
-   granted conversation. Another conversation is refused, and so is a
-   list of the rest (A6–A8, A12).
+1. The process authenticates as the application. The page it serves
+   reads the one granted conversation and does not open a gateway
+   socket. Another conversation is refused, and so is a list of the rest
+   (A6–A8, A12, R3).
 2. Chart selection runs on the open view and is refused when that view
    is closed, with nothing saved (U1, U2, U4).
 3. Save runs with no view open. Dropping the view leaves the
    acknowledgement uncertain until the process answers. A retry with a
    different body is refused (O1–O3).
-4. The save is an MCP tool only after it is registered and the running
-   process is stored as a remote server. An unregistered name is not
-   listed. Ending the harness session does not stop the process (O6, O7).
-5. The plugin entry opens the dashboard with no tool call. Opening it
-   while a tool-call widget has the window replaces that widget and
-   drops its view context. Closing the entry does not stop the process
-   (M5, M6, O2, U7).
-6. The standalone window is a view of the same process and the same
-   principal. A second process does not take over an operation the first
-   accepted.
+4. The save is an MCP tool only after it is registered. The remote
+   server's URL is the row's endpoint, and an absent endpoint starts the
+   process once before the dial. An unregistered name is not listed.
+   Ending the harness session does not stop the process (O6, O7, R2).
+5. The plugin entry opens the dashboard with no tool call. The desktop
+   asks the row to attach and does not exec, including when the
+   standalone window already has the process up. Opening it while a
+   tool-call widget has the window place replaces that widget and drops
+   its view context. Closing the entry does not stop the process
+   (M5, M6, R3, O2, U7).
+6. The standalone window asks the same row to attach and does not exec.
+   When the process is already up, the window joins it and does not open
+   an application socket. When the endpoint is absent, the gateway starts
+   the process once and the window joins that process (R2, R3).
 7. `nessa init` produces a package that can do 1.
 
 ## Slices
 
 Each slice is its own issue. None of them is this pull request.
-Dependencies run downward.
+Each slice depends only on slices above it.
 
 | Slice | Delivers | Rows |
 | --- | --- | --- |
-| 1. Principal, grant, and admission ([#1052](https://github.com/nessalabs/nessa-agent/issues/1052)) | Install mints the active member and the application registration. A credential holding `server.read` and `conversation.read`. `conversation.share` accepts that registration and refuses a browser token. No-binding admission asks Cedar with the registration fact: no registration keeps today's owner fallback; an application registration matches a principal-subject grant or is refused. `mcp.*` stays off this principal. | A1–A12, M4 |
-| 2. Connected web view ([#1053](https://github.com/nessalabs/nessa-agent/issues/1053)) | `examples/dashboard` as a page on the application process. `@nessa/client` on that process only. Renders the granted conversation. No desktop import. | A6–A8, A12 |
-| 3. Action contract and the dashboard save ([#1054](https://github.com/nessalabs/nessa-agent/issues/1054)) | `packages/nessa-app`. UI action, operation, the attempt record, service entry, explicit MCP registration, the import test. | U1–U7, O1–O11 |
-| 4. Plugin entry ([#1055](https://github.com/nessalabs/nessa-agent/issues/1055)) | The window place opens the package's UI with no tool call. The host proxies. H1. M6 against a tool-call widget already in the window. Mounts stay M1–M3. | H1, M5, M6, U6, U7 |
-| 5. Standalone window ([#1056](https://github.com/nessalabs/nessa-agent/issues/1056)) | The same process shows its own window. A second process is a second socket and does not adopt the first's operation. | A6, acceptance 6 |
-| 6. `nessa init` and install ([#1057](https://github.com/nessalabs/nessa-agent/issues/1057)) | Scaffold, local install, the versioned install list. A registered tool is a remote MCP URL of the running process, not a stdio child of the harness session. | rule 11, O7 |
+| 1. Principal, grant, and admission ([#1052](https://github.com/nessalabs/nessa-agent/issues/1052)) | The active member and the application registration. A credential holding `server.read` and `conversation.read`. `conversation.share` accepts that registration and refuses a browser token. No-binding admission asks Cedar with the registration fact: no registration keeps today's owner fallback; an application registration matches a principal-subject grant or is refused. `mcp.*` stays off this principal. | A1–A12, M4 |
+| 2. Install row and the one process ([#1067](https://github.com/nessalabs/nessa-agent/issues/1067)) | The gateway owns the versioned row: UI document, process entry, and the endpoint. The gateway is the only starter. Attach is R2–R6. The remote MCP URL is that endpoint. A stdio child of a harness session is not this process. | R1–R6, rule 11, O7 |
+| 3. Connected web view ([#1053](https://github.com/nessalabs/nessa-agent/issues/1053)) | `examples/dashboard` is a page the process serves. The page does not open a gateway socket. It renders the granted conversation. No desktop import. | A6–A8, A12, R3 |
+| 4. Action contract and the dashboard save ([#1054](https://github.com/nessalabs/nessa-agent/issues/1054)) | `packages/nessa-app`. UI action, operation, the attempt record, explicit MCP registration, the import test. UI actions run on the page slice 3 serves. The process from slice 2 runs the operations. | U1–U7, O1–O11 |
+| 5. Plugin entry ([#1055](https://github.com/nessalabs/nessa-agent/issues/1055)) | The window place asks the row to attach and does not exec, whether or not the endpoint is already live. H1. M6 against a tool-call widget already in the window place. Mounts stay M1–M3. | H1, M5, M6, R2, R3, U6, U7 |
+| 6. Standalone window ([#1056](https://github.com/nessalabs/nessa-agent/issues/1056)) | The window asks the same row to attach and does not exec. A live endpoint is a join. An absent endpoint is the gateway's one start, then the same join. | R2, R3, acceptance 6 |
+| 7. `nessa init` ([#1057](https://github.com/nessalabs/nessa-agent/issues/1057)) | The scaffold writes a directory slice 2 already installs. It does not add a second start. | acceptance 7 |
 
-Slice 3 lists tool descriptors and the attempt record. The live harness
-call is slice 6. [#1057](https://github.com/nessalabs/nessa-agent/issues/1057)
-as filed says the tool is launched through the stored-server path. O7 is
-the contract: a remote URL of the process already running.
+[#1067](https://github.com/nessalabs/nessa-agent/issues/1067) is the
+install row. It is not a later packaging step that the views assume.
+[#1057](https://github.com/nessalabs/nessa-agent/issues/1057) as filed
+still bundles that install, the versioned list, and a stored-server
+launch with the scaffold, and it says it depends on the action contract.
+Those moved to #1067. What remains of #1057 is the scaffold. O7's tool
+is the endpoint, not a stdio launch.
+[#1055](https://github.com/nessalabs/nessa-agent/issues/1055) as filed
+says the host starts the process. M5 and R3 are the contract: the
+desktop asks the row to attach and does not exec.
+[#1056](https://github.com/nessalabs/nessa-agent/issues/1056) as filed
+says a second process is a second socket. R2 and R3 replace that: the
+window joins the process the gateway started.
 
 ## Alternatives
 
@@ -544,8 +633,19 @@ a second app needs them.
 
 **Ship packages through the Tauri updater.** The updater replaces the
 desktop binary. The install list sits beside stored MCP servers. The
-tool route is a remote URL, not a stdio command, because stdio's process
-ends with the harness session.
+tool route is the row's endpoint, not a stdio command, because stdio's
+process ends with the harness session.
+
+**Let each entry point start the package.** The desktop would spawn a
+process when the plugin opens, and the standalone window would spawn
+another if it did not find one. Those are two sockets and two attempt
+records. The gateway is the only starter. A plugin opened while the
+window is already up attaches (R3). A second start exits before it
+authenticates (R4).
+
+**Make the plugin and the standalone window mutually exclusive.** That
+drops the rendezvous by allowing only one of the two views. Both views
+attach to the one process.
 
 **One grant for the catalogue.** A grant by channel, by a folder of
 chats, or by default sync is already refused. Two conversations are two
