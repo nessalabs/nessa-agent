@@ -793,12 +793,12 @@ export function fakeGateway(
       observers.add(handler)
       return () => observers.delete(handler)
     },
-    onEvent(event: string, handler: (payload: unknown) => void) {
+    on(event: string, handler: (payload: never) => void) {
       const handlers = eventListeners.get(event) ?? new Set()
-      handlers.add(handler)
+      handlers.add(handler as (payload: unknown) => void)
       eventListeners.set(event, handlers)
       return () => {
-        handlers.delete(handler)
+        handlers.delete(handler as (payload: unknown) => void)
       }
     },
     close() {

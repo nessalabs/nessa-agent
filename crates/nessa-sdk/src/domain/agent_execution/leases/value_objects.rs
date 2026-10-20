@@ -636,10 +636,13 @@ pub enum LeaseRefusal {
     /// runs as many leases or commands as its budget allows.
     EnvironmentBusy,
     /// The environment had no copy of this build, and runs on a system or
-    /// processor this build cannot run on, so none was installed there.
+    /// processor this build has no copy for (its own executable, or a
+    /// release's build of it for that platform), so none was installed there.
     EnvironmentPlatformUnsupported,
     /// The environment had no copy of this build, and installing one failed:
-    /// what arrived did not verify, did not run, or could not be stored.
+    /// the release build for its platform could not be downloaded or was not
+    /// the one pinned, or what arrived did not verify, did not run, or could
+    /// not be stored.
     EnvironmentInstallFailed,
     /// The environment cannot run this agent: its binding cannot start its
     /// harness elsewhere, or the environment has no runtime configured for it.
