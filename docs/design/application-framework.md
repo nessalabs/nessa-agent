@@ -378,7 +378,11 @@ today is `Explicit` or `Superseded`. A process exit has no owner and no
 Expiry is not one of these commits: the issuance already holds
 `expires_at`. After the close deadline, the signal proceeds without
 that claim (S0b). Every later pass attempts the same close again. S2
-waits for it. Diagnostic logs are not this record.
+waits for it. Diagnostic logs are not this record. The lifecycle audit is an
+append-only log the gateway owns, outside the package directory and
+outside the row. S3 appends the transition to absent and the row is
+then gone. A restart reads the rows that still exist. It does not
+rebuild a row, a tool list, or an attempt from the log.
 
 The owner's install is one command with one request id. The record is
 written `preparing` under the canonical identity, with that id, the one
@@ -715,19 +719,21 @@ become an operation and does not write the package's data.
 
 An operation runs in the process. Closing every view leaves it running.
 The acknowledgement is the process's. A view that has gone does not
-report success (O3). The same request id and the same body are the same
-attempt. A second body under that request id is refused, and the first
-attempt is left as it was.
+report success (O3). The same request id and the same body, under the current installation's
+principal, are the same attempt. A second body under that request id is
+refused, and the first attempt is left as it was. A phase stored under
+any other principal is not this attempt (O12).
 
-The attempt is a record in the process's own store: request id, body,
-and phase. The phase is the outbox. It is not the dashboard document.
-[The attempt](#the-attempt) is every phase. For app-owned data the write
-and its receipt are one commit in that store, so there is no gap between
-the effect and the receipt. For a Nessa resource the process stores the
-gateway receipt before it acknowledges, and a restart repeats that
-effect's request id. The gateway already treats that id as the same
-command. Restart reads the phase and performs only an effect that has
-no receipt (O9–O11).
+The attempt is a record in the process's own store: the principal id,
+the request id, the body, and the phase. The phase is the outbox. It is
+not the dashboard document. [The attempt](#the-attempt) is every phase.
+For app-owned data the write and its receipt are one commit in that
+store, under that principal, so there is no gap between the effect and
+the receipt. For a Nessa resource the process stores the gateway receipt
+before it acknowledges, and a restart of the same installation repeats
+that effect's request id. The gateway treats the calling principal and
+that id as the same command. Restart reads the current principal's phase
+and performs only an effect that has no receipt (O9–O11).
 
 The package's own dashboard record is app-owned data. Cedar is not asked
 for an operation that names no Nessa resource, because the record is not
@@ -737,14 +743,20 @@ gateway command, once. A refusal of that command before any receipt
 writes no app effect (row O8). An admitted command keeps the epoch in
 its receipt (O5).
 
-Registering an operation as an MCP tool is explicit. An unregistered name
-is not a tool. A registered tool travels the gateway's existing MCP path
-to Claude or Codex. The gateway dials the row's endpoint with the
-endpoint capability. The harness does not receive the URL or the
-capability. If that endpoint is not live, R2 starts the process before
-the dial, and only when the record is installed, the directory opens,
-the credential is not current, and any start identity is confirmed
-ended. Any other phase waits for the pass. Its UI, when the tool
+Registering an operation as an MCP tool is explicit data in the
+package manifest: the tool name, the input schema, and whether it has a
+UI. I3 copies that list onto the install record. The process is not
+executed to discover it, and a registration the process performs is not
+the list. K2 publishes the copy into the live set before any agent,
+including while the process is down, so a call can see the tool and
+then R2. A name that is not on the record is not a tool. A listed tool
+travels the gateway's existing MCP path to Claude or Codex as a
+stand-in. The gateway dials the row's endpoint with the endpoint
+capability. The harness does not receive the URL or the capability. If
+that endpoint is not live, R2 starts the process before the dial, and
+only when the record is installed, the directory opens, the credential
+is not current, and any start identity is confirmed ended. Any other
+phase waits for the pass and does not exec. Its UI, when the tool
 declares one, is the MCP App mount already built, on the caller's
 session. The turn's tool policy is unchanged. The dial is E1.
 
@@ -784,7 +796,9 @@ flat status such as "granted" is not a state.
 | Secret delivery | not delivered, or written on the pipe. The secret is not stored |
 | Start identity | none, or pid plus creation time not yet confirmed ended, or confirmed ended |
 | Deadline | none, or a finite instant stored on the record |
-| Attempt phase | absent, opened, a prefix of receipts, done, refused, or incomplete |
+| Attempt phase | absent, opened, a prefix of receipts, done, refused, or incomplete, and only inside the current installation |
+| Installation | the principal id minted for this install, or none |
+| Tool descriptors | absent, or the manifest copy stored on the install record |
 | Process | down, or up — at most one |
 | Socket | the process's one socket, closed or open |
 | View | absent, or live with an id |
@@ -838,15 +852,15 @@ one line of it.
 | Row | Before | Event | After | Deadline | Effect |
 | --- | --- | --- | --- | --- | --- |
 | I0 | a caller path, no record yet | owner installs | one canonical directory identity, or refused | the command's install deadline, before any record exists | the identity is the opened directory; if the open has not returned by that deadline the command returns not-success and writes nothing; a path that is not a directory writes nothing; two spellings are one identity |
-| I1 | no record and no registration for that identity | the install continues, one request id | record preparing, that id, that identity, one version, no principal, install deadline stored | stored here; not extended by a restart | nothing is minted until this write commits; this write is the only creating write for the identity; the audit is in this commit; a second command resumes this record |
+| I1 | no record and no registration for that identity, and the manifest's tool server name is not in the gateway's name set | the install continues, one request id | record preparing, that id, that identity, one version, no principal, that server name reserved, install deadline stored | stored here; not extended by a restart | nothing is minted until this write commits; this write is the only creating write for the identity and for that server name; the name set is the install records, the stored MCP servers, and the built-in server names; K5 is the same write when the name is already in the set, and then this row does not commit; the audit is in this commit; a second command resumes this record |
 | I2 | record preparing, endpoint file absent, credential not current, directory is a package, registry has no receipt for the id | reconciliation or the install command continues | registry receipt and one principal (A1), record still preparing | the caller's wait is I7; this row still runs after that | the registry commit that mints the principal includes its audit, and a failed registry commit leaves preparing and no principal; I4 is not this row |
 | I2a | record preparing, endpoint file absent, credential not current, directory is a package, registry receipt exists, principal not yet on the record | reconciliation or the install command continues | that principal on the record, record still preparing | the caller's wait is I7; this row still runs after that | it does not mint another; I4 is not this row; a repeat does not append a second audit |
-| I3 | record preparing, endpoint file absent, credential not current, directory is a package, principal present | reconciliation or the install command continues | record installed, endpoint not live, process down, credential not current | the caller's wait is I7; this row still runs after that | the command returns success; I4 is not this row; the audit is in this commit |
+| I3 | record preparing, endpoint file absent, credential not current, directory is a package, principal present, server name already reserved by this record | reconciliation or the install command continues | record installed, endpoint not live, process down, credential not current, tool descriptors copied, and the server published when the gateway is already running | the caller's wait is I7; this row still runs after that | the command returns success; the descriptors are the manifest's explicit tools, copied in this commit; the process is not executed to discover them; a gateway that is already running publishes the server in this same commit; K2 is that publish when the gateway itself is starting; K5 is not this row; I4 is not this row; the audit is in this commit |
 | I4 | record preparing, endpoint file absent, credential not current, directory is not a package | the install command or reconciliation | record absent; the principal and its registration are removed if a receipt exists | none; this is the refusal | checked before I2, on the command as well as the pass; the command returns refused; the request id stays consumed; the same id does not mint again; the audit is in this commit |
-| I5 | no record, an application registration names this identity | reconciliation or a later install | record preparing around that principal; an endpoint file with no stored start identity is removed | none | no second principal; a pid in that file is not signalled and not adopted; a current process credential for the principal is closed as `Revoked` / `ProcessExit`, initiator system, without a signal; the runtime exits when that credential closes and does not publish again; the audit is in this commit |
-| X1 | record preparing, and an endpoint file is present or a process credential is current | reconciliation or the install command continues | record still preparing; the endpoint file is absent; a current process credential is closed | none | no stored start identity, so no signal and no adopt; the close is `Revoked` / `ProcessExit`, initiator system; then I4, I2, I2a, or I3; a pid in the file is not signalled |
+| I5 | no record, an application registration names this identity, and the manifest's tool server name is not in the name set | reconciliation or a later install | record preparing around that principal, that server name reserved; an endpoint file with no stored start identity is removed | none | no second principal; the name reservation is the same set as I1; K5 is this write when the name is already taken, and then this row does not commit; a pid in that file is not signalled and not adopted; a current process credential for the principal is closed as `Revoked` / `ProcessExit`, initiator system, without a signal; the runtime exits when that credential closes and does not publish again; the audit is in this commit |
+| X1 | record preparing, and an endpoint file is present or a process credential is current | reconciliation or the install command continues | record still preparing; the endpoint file is absent; a current process credential is closed | none | no stored start identity, so no signal and no adopt; the close is `Revoked` / `ProcessExit`, initiator system; then the preparing line, which is I4, I2, I2a, or I3; a pid in the file is not signalled |
 | I6 | no record, that request id's receipt exists, no registration | the same id is presented | unchanged | none | the id stays consumed; no audit of a new install |
-| I7 | record preparing, install deadline passed, a caller is still waiting | the deadline | record unchanged | this is the caller's timeout | the command returns not-success; one audit, cause deadline, initiator system; the pass still runs X1, I2, I2a, I3, or I4; a retry of the same id resumes those rows and does not mint |
+| I7 | record preparing, install deadline passed, a caller is still waiting | the deadline | record unchanged | this is the caller's timeout | the command returns not-success; one audit, cause deadline, initiator system; the pass still runs X1, I2, I2a, I3, or I4; this record already reserved its server name at I1, so K5 is not this row; a retry of the same id resumes those rows and does not mint |
 | V1 | a record exists for this identity | owner installs again | unchanged when the version differs; the same record when the version is the same | none | a different version is refused and not rewritten; the same version does not mint and does not start a second process |
 | D1 | record present, the stored directory does not open | start or reconciliation | no second record; the phase row still runs | the release deadline from T1, or the publication deadline from T2, and the death deadline if stopping | R2 is refused; R6, R8, R9, and a stop still run; uninstall still runs |
 | T1 | record installed, directory opens, endpoint not live, credential not current, start identity confirmed ended or none | a start begins | record starting, no start identity yet, release deadline stored | stored here; not extended by a restart | this write commits before exec; R2 does not begin again; a current credential is R9 or R6, not this row; a leftover file is not a live process; the audit is in this commit |
@@ -867,8 +881,8 @@ one line of it.
 | S1b | that start identity still matches after the death deadline | reconciliation | that process is killed; if it still matches after the kill deadline, the phase stays | the kill deadline stored with the stop, not extended by a restart | R2 does not run; the next pass retries the kill; the original stop cause stays |
 | S1c | record stopping or uninstalling, the ended confirmation is not stored yet, and the re-read finds no process with the stored pid and creation time, or the creation time mismatches, or no start identity was stored | reconciliation | ended confirmation stored, endpoint file absent | none | this re-read is the confirmation later rows require; a missing endpoint file while the re-read still finds the process is S1; not a `preparing` or in-flight `starting` record; the audit is in this commit; a failed confirmation write retries and does not undo the signal |
 | S2 | record stopping, credential not current, ended confirmation stored | reconciliation continues | record installed, process down, credential closed or none | none | S1c stores that confirmation, and this row matches after that commit; a later attach may R2; grants stay; the audit is in this commit |
-| S3 | record uninstalling, ended confirmation stored, credential not current | reconciliation continues | record absent, principal absent, grants removed, credentials closed | none | S1c stores that confirmation, and this row matches after that commit; the same uninstall id resumes here; a retry does not install; the audit is in this commit |
-| R1 | no record | owner installs a directory | I0, then I1 or I5, then I4 or I2 or I2a, then I3 | I7 ends the caller's wait; the pass continues | one version; a different version of an existing identity is V1; a crash resumes the same request id; I6 does not install |
+| S3 | record uninstalling, ended confirmation stored, credential not current | reconciliation continues | record absent, principal absent, grants removed, credentials closed, that principal's command receipts removed | none | S1c stores that confirmation, and this row matches after that commit; the registry commit runs first and removes the principal, its grants, its credentials, and the command receipts keyed by that principal; the install row is removed only after that commit returns; a crash after the registry commit resumes here, the principal is already absent, and I5 does not adopt it; a crash before the registry commit is still this installation; the principal id is not reused; files left in the package directory are not attempts, tools, or an endpoint once that commit has returned; the same uninstall id resumes here; a retry does not install; the audit stays in the gateway log; the audit is in this commit |
+| R1 | no record | owner installs a directory | I0, then I1 or K5 or I5, then I4 or I2 or I2a, then I3 | I7 ends the caller's wait; the pass continues | one version; a different version of an existing identity is V1; a server name already in the name set is K5, and I1 and I5 do not commit; a crash resumes the same request id; I6 does not install |
 | R2 | record installed, directory opens, endpoint not live, credential not current, start identity confirmed ended or none | plugin, window, or a tool call asks to attach | T1, then T2, then T3, then T4 | T8 bounds the publication | the caller does not exec and does not dial; preparing, starting, stopping, and uninstalling are not this row; a current credential is R9 or R6, not a start; a crash resumes T3, T3d, T4, T5, T6, T7, T8, T9, or R8 instead of a second exec; R6 is the row when a start identity is stored and not confirmed ended |
 | R3 | record installed, endpoint live, credential current, start identity matches | another of those asks, including the plugin while the window is up | unchanged | none | the gateway dials with the current endpoint capability (E1) and the host renders the document the gateway fetched; the caller does not receive the URL or the capability; a closed socket under that current credential is A13. A13 rotates the capability only when the gateway no longer holds it; a gateway that still holds the secret dials with that secret; starting, stopping, and uninstalling are not this row; a mismatched creation time is not this join |
 | R4 | record starting, or a start already in flight | a second start | unchanged | the in-flight deadline | the second exits before it execs, before it issues, and before `session.authenticate` |
@@ -876,7 +890,12 @@ one line of it.
 | R6 | record installed at the start of the pass, endpoint not live, start identity stored and not confirmed ended | the gateway reads it | record stopping, that start identity, close, death, and kill deadlines stored | those deadlines | a missing file and a process that does not answer are both this row; cause process exit, initiator system; S0p when the credential is current, otherwise S1; not R2 and not R9; a file whose pid and creation time are not the stored identity is not adopted; the audit is in this commit |
 | R8 | record installed, endpoint live, credential not current, start identity matches; or record starting, credential revoked or expired, start identity matches, and either the endpoint is live or the re-read still finds that process | reconciliation, or the socket expiry arm | record stopping, the stored start identity when one exists, close, death, and kill deadlines stored, credential still not current | those deadlines stored here | the socket arm at `expires_at`, and a restart that finds the endpoint live after `expires_at`, are this row; an installed record whose endpoint is not live is R6 or the steady R2 cell; a starting record whose credential is none is the issuance table, not this row; cause expiry when that instant has passed, otherwise reconciliation; initiator system; no registry write for expiry; S0 and S0p do not run; S1 signals only a matching start identity; not T3, T3d, T4, T6, T7, T8, or T9; the audit is in this commit |
 | R9 | record installed, endpoint not live, credential current, start identity confirmed ended or none was stored | reconciliation | record stopping, the stored start identity when one exists, close, death, and kill deadlines stored | those deadlines | cause process exit, initiator system; then S0p; not R2; R6 is the row when the identity is stored and not yet confirmed ended; the audit is in this commit |
-| R7 | gateway starts, or an attach finds a record that is not the R3 join | reconciliation | each record at the one row the matrix names, or still starting under T7 | each stored deadline | one pass, in the matrix order; I2–I7, X1, D1, T3d, T4–T9, S0, S0p, S0u, S0b, S1–S3, R6, R8, R9; no second principal and no exec; the pass does not wait past a stored deadline; R2 is not this pass |
+| R7 | gateway starts, or an attach finds a record that is not the R3 join | reconciliation | each record at the one row the matrix names, or still starting under T7 | each stored deadline | one pass, in the matrix order; I2–I7, X1, D1, T3d, T4–T9, S0, S0p, S0u, S0b, S1–S3, R6, R8, R9; no second principal and no exec; the pass does not wait past a stored deadline; R2 is not this pass; at gateway start the pass finishes, including S0p and S2 when a current credential is being closed, and then K2 is the one publish, before any agent |
+| K5 | no record, and the manifest's tool server name is already in the gateway's name set: another install record, a stored MCP server, or a built-in name | the install's creating write, or reconciliation that would prepare around an existing registration | no record, name not reserved, live set unchanged | none | I1 and I5 do not commit; it runs before a preparing record exists; the command returns refused; the request id stays consumed; the process is not executed |
+| K2 | reconciliation has finished for this start, and composition has not yet built an agent | gateway start | the live MCP set includes one stand-in per record whose phase is installed or starting, and no server for any other phase | none | this is the one publish at gateway start, in `composition::mcp_servers`, beside configured servers, before any agent (`crates/nessa-server/src/composition/mcp_servers.rs`); the descriptors are the copy on the record, not a fresh read of the manifest and not a registration the process performs; the stand-in does not carry the loopback URL; each server name has one owner in the name set, so this publish does not choose between two claimants; K4 does not also publish at this start |
+| K6 | a stored MCP server save uses the server name on an install record | `mcpServers.save` | the save is refused, and the application server stays | none | the name has one owner while the record exists. K5 is the other direction, an install against a name already stored |
+| K3 | a record enters stopping or uninstalling, or S3 has removed it | that commit | that server is absent from the live set | none | the replacement is the same publish a stored-server change uses; a call already inside the gateway still obeys R2 and does not start; being listed is not permission to start |
+| K4 | S2 commits the record installed, and the gateway is already running | that commit | the server is listed again from the descriptors on the record | none | the manifest is not re-read; the process is not executed; at gateway start K2 is the publish instead, after the pass, including a record this pass returned to installed |
 
 ### Which transition runs
 
@@ -902,7 +921,7 @@ same line.
 
 | Phase | Endpoint | Credential | Start identity | Gateway | The one transition |
 | --- | --- | --- | --- | --- | --- |
-| preparing | file absent | not current | none | either | I4 when the directory is not a package; otherwise I2, then I2a, then I3. I7 returns the caller and is not this line |
+| preparing | file absent | not current | none | either | I4 when the directory is not a package; otherwise I2, then I2a, then I3. The server name was reserved at I1. I7 returns the caller and is not this line |
 | preparing | file present, or the credential is current | any | none | either | X1, then the install chain. No signal |
 | installed | not live | not current | confirmed ended, or none | either | an attach asks: R2. The pass leaves the record and does not exec. D1 refuses the start when the directory does not open |
 | installed | not live | not current | stored, not confirmed ended | either | R6, then the stopping line. No registry close |
@@ -939,10 +958,12 @@ same line.
 | uninstalling | either | not current | re-read finds no such process, or the creation time mismatches, or none was stored, and the confirmation is not stored yet | either | S1c, and after that commit S3 |
 | uninstalling | either | not current | confirmation stored | either | S3 |
 
-An absent record is I5 when an application registration names the
-identity, I6 when the request id's receipt exists and the registration
-is gone, and otherwise idle until R1. I5 removes an endpoint file and
-does not signal the pid in it.
+An absent record is K5 when a registration names the identity and the
+server name is already in the name set, I5 when that registration names
+the identity and the name is free, I6 when the request id's receipt
+exists and the registration is gone, and otherwise idle until R1. I5
+removes an endpoint file and does not signal the pid in it. I5 reserves
+the server name.
 
 S0, S0p, and S0u are one close each. The stored cause picks one. S0b is
 that close when the attempt does not return and the close deadline has
@@ -962,8 +983,8 @@ A line that names a second row commits the first, and the same pass
 continues with the close and the signal. A crash after that commit
 resumes at the close. The order inside one pass:
 
-1. Absent: I5, else I6, else idle.
-2. Preparing: X1 when an endpoint file is present or a credential is current, then I4 if the directory is not a package, else I2, else I2a, else I3. I7 may return the caller without replacing the line.
+1. Absent: K5 when a registration exists and the server name is already in the name set, else I5, else I6, else idle. An owner install of a directory with no registration is R1, which is I1 or K5.
+2. Preparing: X1 when an endpoint file is present or a credential is current, then I4 if the directory is not a package, else I2, else I2a, else I3. I7 may return the caller without replacing the line. I3 copies the tool descriptors and publishes the server when the gateway is already running. The server name was reserved at I1.
 3. Installed or starting, matching R8: R8. R8's starting arm is a revoked or expired credential whose re-read still finds the process, or a live endpoint with that credential. Credential none, and a missing child, are not this step.
 4. Starting, identity stored, and the re-read finds no process with that pid and creation time, or the creation time mismatches: T6. This step is before T3, T3d, T8, and T9.
 5. Starting, no start identity, credential not current: T5, unless this start is in flight and the release deadline has not passed, which stays on T2. That holds when the gateway process is still up and the issuer is already gone.
@@ -981,7 +1002,12 @@ resumes at the close. The order inside one pass:
 17. Then S1, S1b, or S1c. S2 and S3 match only after S1c has stored the ended confirmation, and the same pass continues after that commit.
 
 When step 3 through 15 writes `stopping` or `uninstalling`, the pass
-commits that write and continues at step 16.
+commits that write and continues at step 16. At gateway start, K2 is the one publish after the pass: it lists a
+record the pass left `installed` or `starting`, and it omits one the
+pass left `stopping`, `uninstalling`, or absent. On an already-running
+gateway, K4 lists a record when S2 commits it `installed`, I3 publishes
+when that commit runs, and K3 withdraws a record that enters `stopping`,
+`uninstalling`, or absent. K4 does not publish again at gateway start.
 
 ### Issuance and the live child
 
@@ -1040,6 +1066,61 @@ that step rather than on a later pass. The matrix line is the match the
 pass uses. This table is that line read along the re-read. Slice 2
 tests the matrix.
 
+### Records across a restart and a reinstall
+
+The process being down, and the package directory still being on disk,
+are two different facts. A restart has to list tools and finish a phase
+without the process. A reinstall of the same directory is a new
+principal, and files the old process left behind are not that principal's
+authority.
+
+Four invariants hold on every row below.
+
+Anything the gateway must read while the process is down lives in the
+gateway's store. The install record, the registry, and the tool
+descriptors on the record are that store. A registration that exists
+only in the process cannot be what starts the process.
+
+The live MCP set is a projection of those records. Composition publishes
+it before any agent, from configured servers and from records whose
+phase is `installed` or `starting`. The matrix remains the one phase
+match. K2 does not choose a second lifecycle row.
+
+An attempt, its receipts, and the gateway command are scoped by the
+installation's principal id. The start pipe carries that id. The process
+opens that namespace and no other. The gateway's command receipt is the
+pair the registry already uses for an issue, issuer principal and
+request id. A previous installation's files are not an ack and are not
+a Cedar decision.
+
+The package directory is the package. After S3, a file that remains
+there is not an endpoint, not a tool list, not an attempt, and not a
+credential. The dashboard document may remain as the package's own data.
+It is not a receipt. The receipt is the attempt row in the current
+namespace.
+
+| Record | Where it lives | Gateway restart, process down | Gateway restart, process up | S3 | Reinstall of the same directory |
+| --- | --- | --- | --- | --- | --- |
+| Install row | gateway | R7 reads it | R7, then A13 when the endpoint is live and the credential is current | row removed | a new row and a new principal |
+| Principal, grants, credential verifiers, command receipts | registry | R6 or R9 closes a current credential through S0p in that same pass. Any other record's registry rows stay | the same close when R6 or R9 matches. A13 runs only when the credential stays current and the endpoint is live | the registry commit runs before the install row is removed | a new principal, no grants, no old receipts |
+| Tool descriptors | the copy on the install row, taken at I3 | K2 lists the phase the pass left. When S0p's close returns in that pass, S2 leaves the record installed and K2 lists it; a call then R2s. When the close does not return, the record stays stopping, K2 omits it, and K4 lists it when a later pass reaches S2. A record left starting is listed and the call waits. A call does not R2 while stopping | K2 lists a record left installed or starting. A call dials when the endpoint is live. A call on starting with the endpoint not live waits for that pass and does not dial | K3 withdraws the server | I3 copies the descriptors and publishes the server in that commit, because the gateway is already running |
+| Endpoint capability secret | gateway memory | absent. The process is not up, so the next start is T3, not E4 | E9 when the record is installed, the endpoint is live, the credential is current, and the gateway holds no secret. R8 drops it and does not rotate. R6 and R9 do not dial | dropped | minted at the next T3 |
+| Process secret and endpoint verifier | that process's memory | absent | A13 when the credential is current and the endpoint is live. R8, R6, and R9 stop that process and do not reuse the secret as a new start | gone with the process | minted at the next T3 |
+| Endpoint file | package directory | not authority. The process is down, so the endpoint is not live | live only while that process answers | removed. A file that remains meets X1 on the next prepare and is not adopted | not adopted |
+| Attempt phase | package directory, namespace is the principal id | the same namespace. O9–O11 | the same namespace | after the registry commit the old namespace is not current, even if the row is still uninstalling. Before that commit this is still the same installation. The files may remain either way | the new principal's namespace is empty. The old phase is not O10 |
+| Dashboard document | package directory | the package's data | the package's data | remains the package's data | not a receipt. A new attempt writes its receipt under the new principal |
+| Lifecycle audit | gateway log | evidence. It is not a row | evidence | the absent transition stays in the log. The row is not rebuilt from it | not an installation |
+
+A cell names one treatment. The live set lists a server only for
+`installed` and `starting`. `preparing`, `stopping`, `uninstalling`, and
+absent contribute no server. The server name is reserved in one
+gateway name set at I1, or that write is K5 and no record is created.
+The set includes install records, stored MCP servers, and built-in
+names. K6 refuses a stored-server save that takes a name already in
+the set. A dashboard document is the
+package's layout. A conversation is read through the gateway under the
+current grant, so a document left from the previous principal is not a
+second read of that conversation.
 
 ### Views, the window, and context
 
@@ -1065,12 +1146,13 @@ tests the matrix.
 | O3 | running, attempt record stored | the caller disconnects before the ack | uncertain | the same request id and the same body are this attempt; a different body is refused and this attempt stays |
 | O4 | process up | the operation names only a Nessa resource the grant does not admit | idle | refused before the effect; the refusal is the stored outcome |
 | O5 | a gateway receipt is stored | the grant epoch changes | running | this attempt keeps the epoch in that receipt; a command with no receipt has not read an epoch yet |
-| O6 | — | a tool call for a name that was not registered | — | not a tool |
-| O7 | registered | a turn calls the tool | one gateway dial to that process | if the endpoint is not live and R2's before matches, R2 runs first; otherwise the pass runs and the call does not exec; that wait ends at the stored deadline; the gateway dials with the endpoint capability; the harness does not receive the URL or the capability; the dial is not a stdio command; the session ending closes that dial; the process stays; the mount, if the tool has UI, is the caller's |
+| O6 | — | a tool call for a name that is not on the install record, or for a server K2 did not publish | — | not a tool. A name only the process knows is this row |
+| O7 | the name is on the record and the server is in the live set | a turn calls the tool | one gateway dial to that process | the server was listed before the call, including when the process was down; if the endpoint is not live and R2's before matches, R2 runs first; otherwise the pass runs and the call does not exec; that wait ends at the stored deadline; the gateway dials with the endpoint capability; the harness does not receive the URL or the capability; the dial is not a stdio command; the session ending closes that dial; the process stays; the mount, if the tool has UI, is the caller's |
 | O8 | process up, no attempt stored for that request id | the operation writes app-owned data and names a Nessa resource | opened, then the phase table | the body lists every Nessa effect before any app effect; Cedar runs inside the first gateway command; a refusal of that command, with no receipt yet, stores refused and writes no app effect; a crash continues from the phase the store committed |
 | O9 | any stored phase | the process exits | that phase remains | the exit starts no effect and is not an ack |
-| O10 | phase done, refused, or incomplete | the process starts again and the same request id and body arrive | idle | that stored outcome is the ack; a phase that still lacks a receipt is O11 |
-| O11 | phase opened, or a prefix of receipts | the process starts again and the same body arrives | that phase, advanced only by a missing effect | the first effect with no receipt runs; a stored receipt is not performed again; a different body is refused and the phase stays |
+| O10 | phase done, refused, or incomplete, and its installation id is the current principal | the process starts again and the same request id and body arrive | idle | that stored outcome is the ack; a phase that still lacks a receipt is O11; a phase stored under any other principal is O12 |
+| O11 | phase opened, or a prefix of receipts, under the current principal | the process starts again and the same body arrives | that phase, advanced only by a missing effect | the first effect with no receipt runs; a stored receipt is not performed again; a different body is refused and the phase stays; another installation's phase is O12 |
+| O12 | a phase is stored under a principal id that is not the current installation | a read of that phase | the old phase unchanged, and not loaded | the old phase is ignored. It is not an ack, not continued, and not a Cedar decision. The current principal's namespace is a different row: an invoke there is absent until it stores its own phase |
 
 ### The attempt
 
@@ -1083,9 +1165,14 @@ request id. Two request ids for one operation would leave a crash
 between them with no single outcome.
 
 The app write and its receipt are one commit in the process store,
-keyed by the request id and that effect's place in the body. The
-gateway command uses the request id joined with its place. The gateway
-treats that id as the same command. Cedar runs inside that command,
+keyed by the installation's principal id, the request id, and that
+effect's place in the body. The dashboard document is not that receipt.
+The gateway command uses the request id joined with its place, and the
+receipt key is the calling principal together with that id, the pair
+`issue_receipts` already uses (`issuer_principal_id`, `request_id` in
+`crates/nessa-auth/src/adapters/local/registry.rs`). The gateway
+treats that pair as the same command. A different principal does not
+match it. Cedar runs inside that command,
 once, as the gateway's existing admission. The process does not ask
 Cedar ahead of the command and does not keep a second answer. A replay
 that finds the receipt does not send the command again, so it does not
@@ -1113,8 +1200,9 @@ is absent, and replay sends the same id.
 | a prefix of receipts | the next Nessa command is refused | phase incomplete, naming the receipts and the refusal. No compensation. That outcome is the ack |
 | a prefix of receipts, and the next effect is the app write | the process commits | the write and the receipt commit together. The last receipt makes the phase done |
 | a prefix of receipts, or opened with no Nessa effect left | the app write fails as a typed refusal | phase incomplete when a receipt already exists; phase refused when none does. No compensation |
-| opened, or a prefix that still lacks the app receipt | the app commit crashes | the receipt is absent, so replay retries the upsert. The upsert key is the request id and the effect's place |
-| done, refused, or incomplete | replay of the same body | that stored outcome is the ack. No effect |
+| opened, or a prefix that still lacks the app receipt | the app commit crashes | the receipt is absent, so replay retries the upsert. The upsert key is the principal id, the request id, and the effect's place |
+| done, refused, or incomplete, under the current principal | replay of the same body | that stored outcome is the ack. No effect |
+| any phase under a different principal | a read of that phase | O12. Ignored. The current namespace's own row is the invoke |
 | any stored phase | replay of a different body | refused. The phase is unchanged (O3) |
 | any stored phase | the process exits | the phase remains (O9). The exit is not an ack |
 
@@ -1170,9 +1258,12 @@ Each rule names the rows that hold it.
 9. The frame does not receive the process credential, the endpoint
    capability, or the endpoint URL. It does not dial the package port.
    Row H1, and E5.
-10. A registered tool is a remote MCP connection to the running
-    application process, on the gateway's Claude and Codex path.
-    OpenCode is not added. A stdio launch is not this tool. Row O7.
+10. A registered tool is a server in the live MCP set, built from the
+    descriptors on the install record before any agent, including while
+    the process is down. A call then dials the running process, or R2
+    starts it when the record is installed and the endpoint is not live.
+    OpenCode is not added. A stdio launch is not this tool. The process
+    does not register the set. Rows I3, K2–K6, O6, O7.
 11. The install list slice 2 writes has one version. Another version is
     refused and not rewritten (V1). Reconciliation does not delete an
     installed version. Alpha: no migration.
@@ -1239,14 +1330,23 @@ Each rule names the rows that hold it.
     the gateway dials. The caller does not receive the capability. E7
     drops it, and E9 rotates it. Rows E1–E10, H1, A13, R3, O7.
 17. An operation that names more than one effect has one attempt, one
-    body, and one phase. Nessa effects run before app effects. The app
-    write and its receipt commit in the process store. The gateway
-    effect is one derived request id, and its receipt is stored before
-    the ack. Replay performs only an effect that has no receipt, and it
-    does not ack a phase that still lacks one. A refusal stored before
-    any receipt writes no effect. A refusal after a receipt is
-    incomplete: that receipt stays, and nothing is undone. Rows O3, O4,
-    O8–O11, and the attempt phase table.
+    body, and one phase, under the installation's principal id. Nessa
+    effects run before app effects. The app write and its receipt commit
+    in the process store. The gateway effect is one derived request id
+    scoped by that principal, and its receipt is stored before the ack.
+    Replay performs only an effect that has no receipt, and it does not
+    ack a phase that still lacks one. A phase stored under any other
+    principal is not an ack. A refusal stored before any receipt writes
+    no effect. A refusal after a receipt is incomplete: that receipt
+    stays, and nothing is undone. Rows O3, O4, O8–O12, and the attempt
+    phase table.
+18. The current installation is the principal id on the install record.
+    Tool descriptors and command receipts live in the gateway's store.
+    Attempt files live in the package directory and are an attempt only
+    under that id. A restart rebuilds the live set before any agent. A
+    reinstall is a new principal, and the previous principal's files and
+    receipts are not that installation. Rows I3, K2–K6, S3, O10, O12,
+    and the record table.
 
 ## Packaging
 
@@ -1344,9 +1444,9 @@ Each slice depends only on slices above it.
 | Slice | Delivers | Rows |
 | --- | --- | --- |
 | 1. Principal, grant, and admission ([#1052](https://github.com/nessalabs/nessa-agent/issues/1052)) | The active member and the application registration, with no process secret returned. The mint is idempotent on the install request id and on the canonical directory identity, both stored on the registration. Share, unshare, the share list, the cursor, and the command receipt name `principalId`. The grant key is that principal and one conversation. Cedar forbids product `credential.issue` for this registration and permits only the start path. No-binding admission asks Cedar with the registration fact: no registration keeps today's owner fallback; an application registration matches a principal-subject grant or is refused. `mcp.*` stays off this principal. | A1, A4, A5, A7–A9, A11, A12, A14, M4, rule 13 |
-| 2. Install row and the one process ([#1067](https://github.com/nessalabs/nessa-agent/issues/1067)) | One record per canonical directory, in `preparing`, `installed`, `starting`, `stopping`, and `uninstalling`. The identity is the opened directory, taken before the creating write. Startup and every attach run one reconciliation pass. A `starting` record stays on T2, T3, or T7 while its deadline has not passed and the re-read still finds the child. T6, T3d, T9, and R8 stop it earlier. A passed publication deadline is T8, except the T9 break. T3 issues only when that re-read finds the child, and the pipe write re-reads again. A secret that cannot be delivered is discarded, the request id is not retried, and the credential closes as `ProcessExit` (T3d). The gateway is the only starter. It stores a release deadline before exec, then the pid and the OS creation time before it releases the child and before `application-start`, injects the secret once on the pipe, and does not store it. It writes `stopping`, that start identity, and the close, death, and kill deadlines before it closes the credential. It signals only a process whose pid and creation time still match, and only after the close or the close deadline. A later pass still attempts a close the deadline did not finish. A restart does not move a stored deadline. A passed install deadline returns the command and the pass still finishes the phase. Another version is refused. Each phase change commits its audit record in that same write. Expiry does not add a registry cause. A process exit closes through S0p (`ProcessExit`, initiator system), not as an owner revoke. An owner uninstall closes through S0u. The matrix is the one match for every phase, endpoint, credential, start identity, and gateway combination, including an `installed` live endpoint whose credential expired while the gateway was down (R8). A current credential on an installed live endpoint re-authenticates in the same process. A start whose earlier credential is already closed still issues (A2). Uninstall writes `uninstalling` and resumes until the record and the principal are gone. The gateway is the only dialer of that process. It dials with an endpoint capability whose secret stays in the gateway. The desktop, the harness, the frame, and other packages do not receive it. E9 rotates it, and only when a restart has dropped the secret, before the gateway dials again. A socket drop that leaves the secret in the gateway does not rotate. A stdio child of a harness session is not this process. | A2, A3, A6, A10, A11, A13, I0–I7, I2a, X1, V1, D1, T1–T9, T3d, E1–E10, S0–S3, S0p, S0u, S0b, S1b, S1c, R1–R9, rule 11, rule 12, rule 14, rule 15, rule 16, O7 |
+| 2. Install row and the one process ([#1067](https://github.com/nessalabs/nessa-agent/issues/1067)) | One record per canonical directory, in `preparing`, `installed`, `starting`, `stopping`, and `uninstalling`. The identity is the opened directory, taken before the creating write. Startup and every attach run one reconciliation pass. A `starting` record stays on T2, T3, or T7 while its deadline has not passed and the re-read still finds the child. T6, T3d, T9, and R8 stop it earlier. A passed publication deadline is T8, except the T9 break. T3 issues only when that re-read finds the child, and the pipe write re-reads again. A secret that cannot be delivered is discarded, the request id is not retried, and the credential closes as `ProcessExit` (T3d). The gateway is the only starter. It stores a release deadline before exec, then the pid and the OS creation time before it releases the child and before `application-start`, injects the secret once on the pipe, and does not store it. It writes `stopping`, that start identity, and the close, death, and kill deadlines before it closes the credential. It signals only a process whose pid and creation time still match, and only after the close or the close deadline. A later pass still attempts a close the deadline did not finish. A restart does not move a stored deadline. A passed install deadline returns the command and the pass still finishes the phase. Another version is refused. Each phase change commits its audit record in that same write. Expiry does not add a registry cause. A process exit closes through S0p (`ProcessExit`, initiator system), not as an owner revoke. An owner uninstall closes through S0u. The matrix is the one match for every phase, endpoint, credential, start identity, and gateway combination, including an `installed` live endpoint whose credential expired while the gateway was down (R8). A current credential on an installed live endpoint re-authenticates in the same process. A start whose earlier credential is already closed still issues (A2). Uninstall writes `uninstalling` and resumes until the record and the principal are gone. The gateway is the only dialer of that process. It dials with an endpoint capability whose secret stays in the gateway. The desktop, the harness, the frame, and other packages do not receive it. E9 rotates it, and only when a restart has dropped the secret, before the gateway dials again. A socket drop that leaves the secret in the gateway does not rotate. Tool descriptors are copied from the manifest onto the record at I3. Composition publishes that copy into the live set before any agent, for a record that is installed or starting, including while the process is down. The process does not register that set. A stdio child of a harness session is not this process. | A2, A3, A6, A10, A11, A13, I0–I7, I2a, X1, V1, D1, K2–K6, T1–T9, T3d, E1–E10, S0–S3, S0p, S0u, S0b, S1b, S1c, R1–R9, rule 11, rule 12, rule 14, rule 15, rule 16, rule 18, O7 |
 | 3. Connected web view ([#1053](https://github.com/nessalabs/nessa-agent/issues/1053)) | `examples/dashboard` is a page the process serves. The page does not open a gateway socket. It renders the granted conversation. No desktop import. | A6–A8, A12, R3 |
-| 4. Action contract and the dashboard save ([#1054](https://github.com/nessalabs/nessa-agent/issues/1054)) | `packages/nessa-app`. UI action, operation, the attempt outbox, explicit MCP registration, the import test. One request id, one body, one phase. A mixed operation lists Nessa effects before app effects. Replay performs only an effect with no receipt and does not ack a partial phase. UI actions run on the page slice 3 serves. The process from slice 2 runs the operations. | U1–U7, O1–O11, rule 17, the attempt phase table |
+| 4. Action contract and the dashboard save ([#1054](https://github.com/nessalabs/nessa-agent/issues/1054)) | `packages/nessa-app`. UI action, operation, the attempt outbox, explicit MCP registration, the import test. One request id, one body, one phase, namespaced by the installation's principal id. A mixed operation lists Nessa effects before app effects. Replay performs only an effect with no receipt and does not ack a partial phase. A previous installation's phase is not an ack. UI actions run on the page slice 3 serves. The process from slice 2 runs the operations. | U1–U7, O1–O12, rule 17, rule 18, the attempt phase table |
 | 5. Plugin entry ([#1055](https://github.com/nessalabs/nessa-agent/issues/1055)) | The window place asks the row to attach and does not exec, whether or not the endpoint is already live. H1. M6 against a tool-call widget already in the window place. Mounts stay M1–M3. | H1, M5, M6, R2, R3, U6, U7 |
 | 6. Standalone window ([#1056](https://github.com/nessalabs/nessa-agent/issues/1056)) | The window asks the same row to attach and does not exec. A live endpoint with a current credential is a join the gateway dials. The window does not open a socket to the package port and does not receive the endpoint capability. An endpoint that is not live, once the record is installed, the directory opens, the credential is not current, and any start identity is confirmed ended, is the gateway's one start, then the same join. | R2, R3, R7, R8, E1, E5, acceptance 6 |
 | 7. `nessa init` ([#1057](https://github.com/nessalabs/nessa-agent/issues/1057)) | The scaffold writes a directory slice 2 already installs. It does not add a second start. | acceptance 7 |
@@ -1372,8 +1472,9 @@ launch with the scaffold, and it says it depends on the action contract.
 Those moved to #1067. What remains of #1057 is the scaffold. O7's tool
 is a gateway dial to the endpoint, not a stdio launch.
 [#1054](https://github.com/nessalabs/nessa-agent/issues/1054) as filed
-does not yet say the attempt outbox. The attempt phase table is the
-contract.
+does not yet say the attempt outbox or the installation namespace.
+The attempt phase table is the contract. #1067 as filed does not yet
+say the tool descriptors or the live-set publish. K2 is the contract.
 [#1055](https://github.com/nessalabs/nessa-agent/issues/1055) as filed
 says the host starts the process. M5 and R3 are the contract: the
 desktop asks the row to attach and does not exec.
@@ -1602,6 +1703,28 @@ sends the id only when the receipt is absent.
 **Split a mixed operation into two attempts.** A crash between them has
 no single outcome, and the caller cannot tell which half ran. One
 request id, one body, one phase.
+
+**Let the process register its tools when it starts.** The live set is
+built before any agent, and the process is down when a call has to be
+able to start it. The descriptors are on the install record from I3.
+K2 publishes that copy.
+
+**Execute the package at gateway start to discover its tools.** Listing
+would be a start. The gateway is the only starter, and it starts on R2
+after the tool is already listed. The manifest is data.
+
+**Re-read the manifest into the live set on every restart.** A disk edit
+would change the listed tools with no install. The record's copy is the
+installation. K2 reads the record.
+
+**Delete the attempt files and treat that as the uninstall.** S3 can
+return before the directory delete, and the directory is the package.
+The principal id is the namespace. A file under any other id is not an
+attempt. Deleting the files is cleanup, not the check.
+
+**Key an attempt by the request id alone.** The same id after a new
+principal would return the old outcome and skip the gateway command and
+Cedar. The attempt and the command receipt both take the principal id.
 
 ## Out of scope
 
