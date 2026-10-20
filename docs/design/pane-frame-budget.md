@@ -105,8 +105,10 @@ starts the measured row.
    unpainted until the next frame. The grain comes back the frame after
    that paint, and the composer's blur the frame after the grain. A drag's
    copy does not paint the night scene. A pane change does not render the
-   sidebar unless the reveal itself changed, and it does not render the
-   night scene or the overview unless their own inputs changed.
+   shell. The fitted window renders it, and the columns bail while the
+   sidebar they paint is unchanged. It does not render the sidebar unless
+   the reveal itself changed, and it does not render the night scene or
+   the overview unless their own inputs changed.
 
 Conversation bodies stay in layout through measuring, flying, and reflow.
 The product flight stays zero-duration. A nonzero flight may still read
@@ -199,9 +201,10 @@ flowchart LR
   for that wait so a folded sidebar stays in the row, the side-column fit
   waiting one frame when the pane count changes, the sidebar paint waiting
   that same frame when the count changes (`useDrawnAfterColumnChange`,
-  passed into the source list), the edge peek's stable controls, the night
-  scene and the overview layer skipping a render whose inputs did not
-  change, the scene-ready and scene-complete marks and the layer rules,
+  passed into the source list), the edge peek's stable controls, the shell
+  leaving a pane change to the fitted window, the night scene and the
+  overview layer skipping a render whose inputs did not change, the
+  scene-ready and scene-complete marks and the layer rules,
   the tests that lock those, the settled assertion in `columns.mjs`
   `content-visible`, and this note.
 - Outside that scope: `FlipScope`'s read when the flight duration is
