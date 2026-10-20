@@ -3205,6 +3205,84 @@ async fn a_command_s_refused_publish_is_listed_and_the_command_still_ends() {
         .any(|record| { matches!(record, LeaseRecord::CommandEnded { .. }) }));
 }
 
+/// Row C20: `run` lists at most the lease's file budget. A file offered
+/// past that is answered `budgetExceeded`, unread, and not listed, and
+/// the command's end is still recorded.
+#[tokio::test]
+async fn a_command_lists_at_most_its_file_budget_of_publications() {
+    let root = tempfile::tempdir().unwrap();
+    let host = CommandHost::publishing();
+    let attachments = Arc::new(MemoryAttachments::default());
+    let harness = with_command_host_keeping(
+        root.path(),
+        host.clone(),
+        Some(devbox_policy()),
+        Some(attachments.clone()),
+    );
+    harness.create().await;
+    let _go = harness.running_turn().await;
+    let service = harness.service.clone();
+    let id = harness.id.clone();
+    let running = tokio::spawn(async move {
+        let (_caller, stop) = tokio::sync::watch::channel(false);
+        service
+            .run_command(&id, command("devbox", &["echo", "hi"], "call-1"), stop)
+            .await
+    });
+    let sender = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let Some(sender) = host.take_offer() {
+                return sender;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the command's publish point");
+    let listed = super::ArtifactBudget::LEASE.files as usize;
+    let mut answers = Vec::with_capacity(listed + 1);
+    for index in 0..=listed {
+        let (answered, answer) = tokio::sync::oneshot::channel();
+        let mut sent = offer(&format!("note-{index}.txt"), None, move |outcome| {
+            let _ = answered.send(outcome);
+        });
+        sent.file.path = format!("note-{index}.txt");
+        sender.send(sent).await.unwrap();
+        answers.push(answer);
+    }
+    drop(sender);
+    for (index, answer) in answers.into_iter().enumerate() {
+        let outcome = tokio::time::timeout(Duration::from_secs(5), answer)
+            .await
+            .expect("the publish was answered")
+            .unwrap();
+        let reason = if index < listed {
+            CollectionRefusal::Invalid
+        } else {
+            CollectionRefusal::BudgetExceeded
+        };
+        assert_eq!(outcome, Collection::Refused { reason }, "{index}");
+    }
+    host.finish
+        .send_replace(Some(CommandExit::Exited { code: 0 }));
+    let CommandAnswer::Ran {
+        result,
+        recorded: true,
+        ..
+    } = running.await.unwrap().unwrap()
+    else {
+        panic!("the command ran");
+    };
+    assert!(attachments.published.lock().unwrap().is_empty());
+    assert_eq!(result.published.len(), listed);
+    assert!(result.published.iter().all(|publication| {
+        matches!(
+            publication.outcome,
+            super::PublicationOutcome::Refused(CollectionRefusal::Invalid)
+        )
+    }));
+}
+
 #[tokio::test]
 async fn l14_a_command_runs_for_the_persons_turn_under_its_agent_lease_and_its_end_is_recorded() {
     let root = tempfile::tempdir().unwrap();

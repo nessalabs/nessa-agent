@@ -45,7 +45,7 @@ use crate::conversation::application::{
 };
 use crate::conversation::domain::{ToolCall, ToolPolicy, ToolSource};
 use nessa_protocol::conversation::domain::ConversationId;
-use nessa_protocol::lease::Collection;
+use nessa_protocol::lease::{Collection, CollectionRefusal};
 use nessa_sdk::application::agent_execution::{
     permissions::ActionContext,
     sessions::{CurrentLease, InvocationRecord, LeaseRecord, SessionSnapshot},
@@ -411,7 +411,25 @@ impl ConversationService {
                 ArtifactBudget::LEASE,
             );
             tokio::spawn(async move {
+                // The same bound as files one lease may keep. Past it, a
+                // refusal is answered and not listed: the result does not
+                // grow for as long as the command keeps publishing.
+                let listed = ArtifactBudget::LEASE.files as usize;
                 while let Some(offer) = offers.recv().await {
+                    if published
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .len()
+                        >= listed
+                    {
+                        offer
+                            .answer
+                            .answer(Collection::Refused {
+                                reason: CollectionRefusal::BudgetExceeded,
+                            })
+                            .await;
+                        continue;
+                    }
                     let outcome = collector
                         .collect(offer, &live.agent, &live.lease, &live.publishes)
                         .await;

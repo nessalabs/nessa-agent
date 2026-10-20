@@ -5867,10 +5867,11 @@ async fn a_command_stopped_for_a_revocation_never_holds_serving_open_once_the_ga
 
 /// A drain ends every lease held, each recorded `draining` before its end:
 /// a harness's lease is said `Ending{drained}` and its `End` answered with
-/// what that took, a running command is stopped and answers its `Ran`, one
-/// never run ends holding nothing, and a grant crossing it is refused
-/// `draining`. Serving stays open until the gateway has asked the `End` of
-/// every lease drained, then ends by itself.
+/// what that took, a running command is stopped and answers its `Ran` and
+/// stays held until its `End`, one never run ends holding nothing, and a
+/// grant crossing it is refused `draining`. Serving stays open until the
+/// gateway has asked the `End` of every lease drained, the running command
+/// included, then ends by itself.
 #[tokio::test]
 async fn k1_a_drain_ends_every_lease_recorded_then_serving_ends_once_answered() {
     let mut gateway = revocable(Arc::new(MemoryLedger::default()));
@@ -5913,6 +5914,15 @@ async fn k1_a_drain_ends_every_lease_recorded_then_serving_ends_once_answered() 
             ..
         })
     ));
+    // Its `Ran` leaves it held. Serving waits for its `End`, which closes
+    // the publish point the gateway asked for.
+    assert_eq!(
+        gateway.ended(COMMAND).await,
+        FromEnvironment::Ended {
+            lease: COMMAND.into(),
+            cleanup: Cleanup::Confirmed { forced: true },
+        }
+    );
     // Asked once the drain is said, a grant crosses it.
     gateway
         .send(ToEnvironment::Grant {
@@ -6125,10 +6135,12 @@ async fn k1_a_revocation_after_a_drain_ends_the_lease_once_as_drained() {
         .any(|entry| matches!(entry, LedgerEntry::Revoking { .. })));
 }
 
-/// A drain that leaves only a running command ends serving once that
-/// command's `Ran` is said, with no `End` to wait for: the gateway asks none.
+/// Row C21: a drain that leaves only a running command keeps serving open
+/// after that command's `Ran`, until the gateway's `End`. Closing on the
+/// answer would shut the publish point as a loss while that `End` was still
+/// coming.
 #[tokio::test]
-async fn k1_a_drain_ends_serving_once_its_last_command_answers() {
+async fn k1_a_drain_waits_for_the_end_of_a_command_that_already_answered() {
     let mut gateway = revocable(Arc::new(MemoryLedger::default()));
     assert_eq!(gateway.next().await, hello());
     gateway.send(grant_command(COMMAND, &["wait"], None)).await;
@@ -6149,9 +6161,18 @@ async fn k1_a_drain_ends_serving_once_its_last_command_answers() {
             ..
         }
     ));
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(!gateway.served.is_finished());
+    assert_eq!(
+        gateway.ended(COMMAND).await,
+        FromEnvironment::Ended {
+            lease: COMMAND.into(),
+            cleanup: Cleanup::Confirmed { forced: true },
+        }
+    );
     tokio::time::timeout(Duration::from_secs(5), &mut gateway.served)
         .await
-        .expect("serving ends once the command answered, with nothing more asked")
+        .expect("serving ends once the command's End is answered")
         .unwrap();
     assert!(gateway.ledger.entries().contains(&LedgerEntry::Ended {
         lease: COMMAND.into(),

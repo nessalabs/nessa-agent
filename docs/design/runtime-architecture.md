@@ -649,7 +649,7 @@ sequenceDiagram
 
 **Command leases publish** ([#766](https://github.com/nessalabs/nessa-agent/issues/766)).
 
-A command lease gets the same publish point a harness lease gets. The host opens it when the command is granted and passes its address into the cleared environment as `NESSA_ARTIFACTS`, and only then. The process publishes through that point; the host stages, records, and offers the file on the command lease's route, the same frames a harness uses. The gateway keeps it with an artifact collector of the command's own, a fresh per-lease budget, and records it before `CommandEnded`. `run` lists every file: held, already held, or refused.
+A command lease gets the same publish point a harness lease gets. The host opens it when the command is granted and passes its address into the cleared environment as `NESSA_ARTIFACTS`, and only then. The process publishes through that point; the host stages, records, and offers the file on the command lease's route, the same frames a harness uses. The gateway keeps it with an artifact collector of the command's own, a fresh per-lease budget, and records it before `CommandEnded`. `run` lists each file it kept or refused, at most the lease's file budget: held, already held, or refused. One offered past that list is answered `budgetExceeded` and not listed.
 
 The cause is one value. The conversation's artifact record and the attachment hold both name the command lease, and the actor is the person the command runs for (the `CommandIssued` actor, the tool call as the request). A record is admitted only while that command is still in the live parent lease's commands. Once `CommandEnded` drops the command, the file is historical and kept as written, as a file under an earlier agent lease is.
 
@@ -665,6 +665,8 @@ No new Cedar action. The command was already admitted by `command.run`. Publishi
 | C17 | The command's `Ran` arrives and no End was asked | End is asked after every file already offered is answered. The route stays until the host's `Ended`, so a copy still being read is read through, and the host closes the publish point. The publication stream ends with `Ran`, so collecting does not wait for `Ended` |
 | C18 | A later command is granted while an earlier one's `End` is not yet processed | The earlier command stays, and its publish point stays open, until its own `End` or the connection is lost |
 | C19 | The host never closes the publication stream, or the caller is gone, while files are still being collected | Collection stops at the publish-call bound, or at once when the caller is gone. What was already kept is listed, and the command's end is still recorded |
+| C20 | A file is offered after `run` already lists the lease's file budget of publications | Answered `budgetExceeded`, nothing read, and not listed. What was already listed stays. The command still ends |
+| C21 | The host drains after a command's `Ran` and before its `End` | The command stays held and its publish point stays open. Serving ends once that `End` is asked |
 
 Invariants:
 
@@ -673,6 +675,8 @@ Invariants:
 - `route.command` stays true for a command lease that publishes. Having a publish channel does not make it an agent lease.
 - The cleared environment gains `NESSA_ARTIFACTS` only when a point opened. It does not gain the harness's variables.
 - A command served through the relay and the same command served directly leave the same command-ledger checkpoint: granted, started, ran, ended (`docs/design/auth/relay.md` RL14).
+- A drain stays open while a command lease is still held, including one whose `Ran` was already said. Its `End` is what lets serving finish.
+- `run` lists at most the lease file budget (`artifact.environment_files`). A file offered past that is answered `budgetExceeded`, unread, and not listed.
 
 Alternatives that lose:
 

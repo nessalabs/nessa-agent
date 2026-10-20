@@ -583,8 +583,9 @@ pub(crate) async fn serve<R, W>(
                 continue;
             }
             read = within(&*timer, wake, stream.next()) => read,
-            // A command's `Ran` needs no `End`: draining, its end alone may
-            // leave nothing to serve.
+            // A command's `Ran` is recorded: look again. It stays held
+            // until the gateway's `End`, so draining does not finish on
+            // the answer alone.
             () = finished.notified(), if served.draining => continue,
         };
         let body = match read {
@@ -2060,10 +2061,12 @@ impl Served {
     /// drained, each recorded `draining` first, as a revocation is, and say
     /// `Ending{drained}` for each harness lease, so the gateway asks its
     /// `End` and gets this end's cleanup rather than finding it lost. A
-    /// running command is stopped and answers with its `Ran`; one granted
-    /// and never run ends holding nothing, and serving waits for the
-    /// gateway's `Run` of it (answered never started) or its `End`. Nothing
-    /// more is admitted. Nothing here waits; asked twice, it acts once.
+    /// running command is stopped and answers with its `Ran`, and stays
+    /// held until the gateway's `End`: closing on the answer would shut
+    /// its publish point as a loss while that `End` was still coming. One
+    /// granted and never run ends holding nothing, and serving waits for
+    /// the gateway's `Run` of it (answered never started) or its `End`.
+    /// Nothing more is admitted. Nothing here waits; asked twice, it acts once.
     fn drain(&mut self) {
         if std::mem::replace(&mut self.draining, true) {
             return;
@@ -2140,18 +2143,18 @@ impl Served {
     }
 
     /// Whether a drain has left nothing to serve: no lease held, no command
-    /// running, the `End` of every lease this side ended unasked asked, the
-    /// `Run` or `End` of every command it ended unrun sent, and every answer
-    /// queued here handed to the writer. Answers already handed
-    /// on, or still awaiting an end's record, reach the gateway before the
-    /// stream closes.
+    /// still held (a finished one included, until its `End`), the `End` of
+    /// every lease this side ended unasked asked, the `Run` or `End` of
+    /// every command it ended unrun sent, and every answer queued here
+    /// handed to the writer. Answers already handed on, or still awaiting
+    /// an end's record, reach the gateway before the stream closes.
     fn drained(&self) -> bool {
         self.draining
             && self.leases.is_empty()
+            && self.commands.is_empty()
             && self.unended.is_empty()
             && self.unrun.is_empty()
             && self.outgoing.is_empty()
-            && !self.commands.values().any(HeldCommand::runs)
     }
 
     /// The gateway is gone: end every lease it held as lost, and wait for
