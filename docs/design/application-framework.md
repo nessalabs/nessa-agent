@@ -267,14 +267,48 @@ token stays the owner's. A `gateway:<key>` credential stays a peer.
 
 The owner installs the package, which mints that principal, its active
 membership, and an application registration. Install does not issue a
-credential and does not return a secret.
+credential and does not return a secret. The principal id is the name
+share uses. A credential id is not.
 
-The gateway issues the process credential when it starts the process,
-and the gateway is the only issuer of that credential. The process
-presents the secret. It does not call `credential.issue` or
-`credential.revoke`. `hold.person` already permits an integration to
-hold `server.read` and `conversation.read`. The issue does not put
-`conversation.write` or `credential.manage` on it.
+The application principal is the subject of a grant. The grant key is
+the one [access grants](access-grants.md) already gives an integration:
+subject kind `principal`, that principal id, one conversation. The key
+does not include a credential id. A process credential issued later is
+asked the same grant. Replacing that credential does not move the key.
+
+`conversation.share` and `conversation.unshare` take exactly one target.
+`ConversationShareParams` requires `credentialId` today, and that field
+is the paired device or peer gateway, as `credential.list` names it. An
+application registration is `principalId`, the id A1 minted. Both
+fields, or neither, is `invalid_request`. A `credentialId` of this
+principal is not a target and not an alias: it is not a paired device.
+The command receipt is bound to the principal id. A retry that names a
+credential, or another principal, is `invalid_request`.
+`conversation.shares` returns `principalId` on that row and no
+`credentialId`. The cursor resumes by `grantedAtMs` and that same
+target. The change journal stores the principal id and no credential id.
+Unshare finds the row by that principal id. It is not found by a
+credential the way a paired revoke is.
+
+Product `credential.issue` does not mint a credential for this
+principal. `issue.member` permits an integration member on every issue
+path today
+(`crates/nessa-auth/src/adapters/cedar/policies.cedar`). `issue_sync`
+always uses `IssuePath::ProductIssue`. Slice 1 passes the registration
+fact into `may_issue`. Cedar forbids the issue when that fact is set
+and the path is not the start. Rust gathers the fact and the path and
+acts on that answer. It does not compare the registration itself. The
+path is the gateway's fact
+(`IssuePath`), not a field of the command. The start uses a new path,
+`application-start`, which is not `ProductIssue`. Cedar permits that
+path for this registration. No product command selects it. A caller
+with `credential.manage` gets no secret and no second socket (A14).
+
+The process presents the secret the start injected. It does not call
+`credential.issue` or `credential.revoke`. `hold.person` already
+permits an integration to hold `server.read` and `conversation.read`.
+The start's issue does not put `conversation.write` or
+`credential.manage` on it.
 
 The issue uses a new request id. The registry stores the verifier only
 (`crates/nessa-auth/src/adapters/local/registry.rs`). The secret is in
@@ -286,14 +320,15 @@ install row, the endpoint file, or a credential file. The process reads
 it into memory before it publishes the endpoint. The frame does not see
 the pipe (H1).
 
-That secret's lifetime is the process. The start closes any earlier
-process credential for this principal before it issues, because that
-secret died with the earlier process. The process then has one current
-credential. A start that finds the old credential already closed still
-issues. That replacement is not the webhook's refusal of a second
-credential, and it is not surface provisioning. Surface provisioning is
-the panel token's rotation, and it supersedes whatever credential the
-principal holds. The grant is on the principal.
+That secret's lifetime is the process. The start path closes any
+earlier process credential for this principal before it issues, because
+that secret died with the earlier process. The process then has one
+current credential, and the grants stay on the principal. A start that
+finds the old credential already closed still issues. A product issue
+does not. This is not surface provisioning, which is the panel token's
+rotation and supersedes whatever credential the principal holds. A
+webhook's refusal of a second credential, while its own registration is
+current, is that proposal's rule. This principal is not a webhook.
 
 While the process is up and the credential is current, a dropped socket
 is that process authenticating again with the secret it holds. The
@@ -327,14 +362,12 @@ the principal-subject permits for a principal that has an application
 registration. Rust gathers the registration, the row, and the action,
 and acts on Cedar's answer.
 
-`conversation.share` accepts a principal that has an application
-registration or, when that slice exists, a webhook registration. It
-does not accept a browser token, which has neither. The application
-target does not need a process credential yet. Install can share before
-the first start, and the credential a later start issues is asked that
-grant. The check does not read a webhook URL or a package path. The two
-registrations are two kinds of one record per principal. Each command
-refuses a principal that already has the other kind.
+The share above is how an application registration is named. A webhook
+registration, when that slice exists, keeps the target that proposal
+gives it. This check does not read a webhook URL or a package path, and
+it does not accept a browser token, which has neither registration. The
+two registrations are two kinds of one record per principal. Each
+command refuses a principal that already has the other kind.
 
 A directory grant (`write`, `exec`) stays the directory slice of #888.
 
@@ -345,7 +378,7 @@ sequenceDiagram
   participant Gateway
   participant Cedar
   participant Frame as Sandboxed frame
-  Owner->>Gateway: Install the package and share one conversation
+  Owner->>Gateway: Install, then share naming the principal id
   Gateway->>Cedar: Ask before writing the grant
   Note over Gateway,Process: An attach finds the endpoint absent
   Gateway->>Gateway: Issue; the secret stays in this start
@@ -445,23 +478,26 @@ flat status such as "granted" is not a state.
 | Row | Before | Event | After | Effect |
 | --- | --- | --- | --- | --- |
 | A1 | principal absent | owner installs | principal present, application registration written, credential none, no grants | membership active |
-| A2 | credential none, process down | the gateway's start issues, new request id | one credential current, secret held by that process | verifier stored; the secret is not on the row, the endpoint, or a later read of that request id |
-| A3 | a process credential current, process down, secret absent | the next start | that credential closed, one new credential current, secret held by the new process | the new request id is not the old one; the closed secret is not replayed |
-| A4 | principal present, application registration written | owner shares conversation R, Cedar permits | grant R active | no receiver and no process secret; the epoch of that commit |
+| A2 | credential none, process down | the gateway's start issues on `application-start`, new request id | one credential current, secret held by that process | not `ProductIssue`; verifier stored; the secret is not on the row, the endpoint, or a later read of that request id |
+| A3 | a process credential current, process down, secret absent | the next start, same path | that credential closed, one new credential current, secret held by the new process | grants stay on the principal; the new request id is not the old one; the closed secret is not replayed |
+| A4 | principal present, application registration written, credential none | owner shares conversation R, naming `principalId`, Cedar permits | grant R active, keyed by that principal | no `credentialId` on the row, the list, the cursor, or the receipt; the epoch of that commit |
+| A14 | application registration present | product `credential.issue` for that principal, any caller, new request id | unchanged | Cedar forbids; no credential and no secret; `issue.member` does not decide this |
 | A5 | grant R active | owner shares a set Cedar denies | unchanged | nothing written; the policy ids |
 | A6 | credential current | that credential authenticates | its socket open | inactive membership is refused, as `AuthenticateSession` does today |
 | A7 | socket open, grant R active | read or follow R | unchanged | Cedar permits; the epoch just read is stamped |
 | A8 | socket open, grant R absent | read or follow R, or list it | unchanged | Cedar refuses; no row created |
-| A9 | grant R active | owner revokes R | grant R absent | sockets stay; the next admission misses R |
+| A9 | grant R active | owner unshares, naming `principalId` | grant R absent | a `credentialId` does not find this row; sockets stay; the next admission misses R |
 | A10 | credential current, socket open, process up, endpoint live | revoke or expire that credential | credential closed, socket closed, process down, endpoint absent | **built** close reasons; grants and epochs stay; the next attach is R2, not R3 |
 | A13 | process up, endpoint live, socket closed, credential current, secret held by the process | the socket drops and the gateway is back | socket open | the process authenticates with the secret it holds; no issue, no injection, no second process |
 | A11 | principal present | owner uninstalls | principal absent, install row absent, process down | credentials closed, grants removed, sockets closed; a row from slice 2 is removed and its process is stopped |
 | A12 | credential current, no grants | authenticate | socket open | A8 on every conversation |
 
-A4 applies again for a second conversation. The result is a second row.
-A9 on one row leaves the other. A6 is the process's socket. A second
-process is R4: it exits before this authenticate. A10 does not leave
-the endpoint live. A13 is the same process and the same credential.
+A4 applies again for a second conversation. The result is a second row,
+still keyed by the principal. A9 on one row leaves the other. A6 is the
+process's socket. A second process is R4: it exits before this
+authenticate. A10 does not leave the endpoint live. A13 is the same
+process and the same credential. A14 is every product issue, including
+one from the owner.
 
 ### The install row
 
@@ -523,8 +559,9 @@ Each rule names the rows that hold it.
    registration, which is how `nessa auth token` writes today. It does
    not match an application registration. Rows A7, A8, A12, O4, O8.
 2. One grant is one principal, one resource, the capability set, and the
-   constraints. A second conversation is a second row. A4 applied twice,
-   then A9 on one of them.
+   constraints. The key does not include a credential. A second
+   conversation is a second row. A4 applied twice, then A9 on one of
+   them.
 3. The process credential names an active integration member and holds
    `server.read` and `conversation.read`. It is not the panel token and
    not a peer gateway. Rows A1, A2, A6.
@@ -549,11 +586,17 @@ Each rule names the rows that hold it.
     refused and not rewritten. Startup does not delete it. Alpha: no
     migration.
 12. The process credential's secret is held by that process and nowhere
-    else. A start issues it and injects it on the start pipe. A live
-    endpoint is a current credential. Revoke, expiry, and process exit
-    end that credential and the endpoint together. A socket that drops
-    under a current credential is the process authenticating again, not
-    a new issue. Rows A2, A3, A6, A10, A13, R2, R3, R5.
+    else. The start path issues it and injects it on the start pipe. A
+    product issue does not. A live endpoint is a current credential.
+    Revoke, expiry, and process exit end that credential and the endpoint
+    together. A socket that drops under a current credential is the
+    process authenticating again, not a new issue. Rows A2, A3, A6, A10,
+    A13, A14, R2, R3, R5.
+13. The application principal is the subject. Share, unshare, the share
+    list, the cursor, and the command receipt name that principal, not a
+    credential. Product `credential.issue` does not mint a credential for
+    it. The only issue is the gateway start's path, and that path is not
+    a product command. Rows A2, A3, A4, A9, A14.
 
 ## Packaging
 
@@ -591,13 +634,16 @@ into the desktop tree.
 
 The dashboard, in order, once the slices have landed:
 
-1. The process authenticates as the application with the secret the
-   start injected. The page it serves reads the one granted conversation
-   and does not open a gateway socket. Another conversation is refused,
-   and so is a list of the rest. Revoking the credential removes the
-   endpoint, and the next open authenticates with a new one. A gateway
-   restart that leaves the process up re-authenticates with the secret
-   the process still holds (A6–A8, A10, A12, A13, R2, R3).
+1. The owner shares the conversation by `principalId` before any
+   process credential exists. A product `credential.issue` for that
+   principal is refused. The process then authenticates with the secret
+   the start path injected, and the page it serves reads that
+   conversation and does not open a gateway socket. Another conversation
+   is refused, and so is a list of the rest. Revoking the credential
+   removes the endpoint, and the next open authenticates with a new one
+   against the same grant. A gateway restart that leaves the process up
+   re-authenticates with the secret the process still holds (A4, A6–A8,
+   A10, A12–A14, R2, R3).
 2. Chart selection runs on the open view and is refused when that view
    is closed, with nothing saved (U1, U2, U4).
 3. Save runs with no view open. Dropping the view leaves the
@@ -626,8 +672,8 @@ Each slice depends only on slices above it.
 
 | Slice | Delivers | Rows |
 | --- | --- | --- |
-| 1. Principal, grant, and admission ([#1052](https://github.com/nessalabs/nessa-agent/issues/1052)) | The active member and the application registration at install, with no process secret returned. Issue and revoke of an integration credential holding `server.read` and `conversation.read`, so a start can issue and can close the one it replaces. `conversation.share` accepts that registration and refuses a browser token. No-binding admission asks Cedar with the registration fact: no registration keeps today's owner fallback; an application registration matches a principal-subject grant or is refused. `mcp.*` stays off this principal. | A1, A4–A9, A11, A12, M4 |
-| 2. Install row and the one process ([#1067](https://github.com/nessalabs/nessa-agent/issues/1067)) | The gateway owns the versioned row: UI document, process entry, and the endpoint. The gateway is the only starter and the only issuer of the process credential. A start injects the secret on the process pipe and does not store it. Credential closure stops the process and removes the endpoint. A current credential re-authenticates in the same process. Uninstall removes the row and stops the process. The remote MCP URL is that endpoint. A stdio child of a harness session is not this process. | A2, A3, A6, A10, A11, A13, R1–R6, rule 11, rule 12, O7 |
+| 1. Principal, grant, and admission ([#1052](https://github.com/nessalabs/nessa-agent/issues/1052)) | The active member and the application registration at install, with no process secret returned. Share, unshare, the share list, the cursor, and the command receipt name `principalId`. The grant key is that principal and one conversation. Cedar forbids product `credential.issue` for this registration and permits only the start path. No-binding admission asks Cedar with the registration fact: no registration keeps today's owner fallback; an application registration matches a principal-subject grant or is refused. `mcp.*` stays off this principal. | A1, A4, A5, A7–A9, A11, A12, A14, M4, rule 13 |
+| 2. Install row and the one process ([#1067](https://github.com/nessalabs/nessa-agent/issues/1067)) | The gateway owns the versioned row: UI document, process entry, and the endpoint. The gateway is the only starter. Its start calls `application-start` and no product issue. It injects the secret on the process pipe and does not store it. Credential closure stops the process and removes the endpoint. A current credential re-authenticates in the same process. Uninstall removes the row and stops the process. The remote MCP URL is that endpoint. A stdio child of a harness session is not this process. | A2, A3, A6, A10, A11, A13, R1–R6, rule 11, rule 12, O7 |
 | 3. Connected web view ([#1053](https://github.com/nessalabs/nessa-agent/issues/1053)) | `examples/dashboard` is a page the process serves. The page does not open a gateway socket. It renders the granted conversation. No desktop import. | A6–A8, A12, R3 |
 | 4. Action contract and the dashboard save ([#1054](https://github.com/nessalabs/nessa-agent/issues/1054)) | `packages/nessa-app`. UI action, operation, the attempt record, explicit MCP registration, the import test. UI actions run on the page slice 3 serves. The process from slice 2 runs the operations. | U1–U7, O1–O11 |
 | 5. Plugin entry ([#1055](https://github.com/nessalabs/nessa-agent/issues/1055)) | The window place asks the row to attach and does not exec, whether or not the endpoint is already live. H1. M6 against a tool-call widget already in the window place. Mounts stay M1–M3. | H1, M5, M6, R2, R3, U6, U7 |
@@ -638,9 +684,10 @@ Each slice depends only on slices above it.
 install row and the start that issues the process credential. It is not
 a later packaging step that the views assume.
 [#1052](https://github.com/nessalabs/nessa-agent/issues/1052) as filed
-issues the credential at install and returns the secret once. The
-process credential is issued at the start, and the secret is not
-returned to the owner.
+issues the credential at install, returns the secret once, and does not
+name `principalId` on share. The process credential is the start path.
+Share names the principal A1 minted. Product issue is refused. The
+running gateway's only caller of the start path is slice 2.
 [#1057](https://github.com/nessalabs/nessa-agent/issues/1057) as filed
 still bundles that install, the versioned list, and a stored-server
 launch with the scaffold, and it says it depends on the action contract.
@@ -710,8 +757,8 @@ credential, read back by the desktop. A package file would be a second
 persisted bearer. Revoke would have to delete it, or the next start
 would present a dead secret. Surface provisioning is that panel
 rotation, and it supersedes the principal's credentials. The process
-credential is an ordinary issue, and its secret lives only as long as
-the process.
+credential is the start path, not that rotation, and its secret lives
+only as long as the process.
 
 **Leave the process up after the credential closes.** The endpoint
 would stay live. The next attach would be R3 and would join a process
@@ -733,11 +780,22 @@ attach to the one process.
 chats, or by default sync is already refused. Two conversations are two
 rows.
 
-**One share check owned by whichever slice merges first.** Share accepts
-a principal that has an application registration or a webhook
-registration, and it does not read a URL. The registration record is
-the one place a principal is one of those, or neither, and neither is a
-browser token.
+**Share by creating a credential first.** `credentialId` could then be
+filled in. Install would return a secret again, and a product issue
+would still mint a second bearer beside the start. The principal id
+already exists at A1. Share names that.
+
+**Let `issue.member` mint the application credential.** It permits an
+integration member on the product path. The caller with
+`credential.manage` would hold a secret the start did not inject, and
+that secret is a second socket. Cedar forbids that path. The start's
+path is not the product command.
+
+**One share check owned by whichever slice merges first.** An
+application share names `principalId`. A webhook keeps the target its
+own proposal gives it. Neither check reads a URL. The registration
+record is the one place a principal is one of those, or neither, and
+neither is a browser token.
 
 ## Out of scope
 
