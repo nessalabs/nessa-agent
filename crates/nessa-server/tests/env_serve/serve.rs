@@ -3316,6 +3316,49 @@ async fn a_command_lease_ends_a_file_still_unanswered() {
     )));
 }
 
+/// Row C18: granting another command does not close a finished command's
+/// publish point. That point stays until the finished command's own End.
+#[tokio::test]
+async fn a_later_grant_leaves_a_finished_commands_publish_point_open() {
+    let (mut gateway, outbox) = Gateway::publishing();
+    assert_eq!(gateway.next().await, hello());
+    gateway
+        .send(grant_command(COMMAND, &["echo", "a"], None))
+        .await;
+    assert!(matches!(
+        gateway.next().await,
+        FromEnvironment::Granted { .. }
+    ));
+    gateway
+        .send(ToEnvironment::Run {
+            lease: COMMAND.into(),
+        })
+        .await;
+    assert!(matches!(gateway.next().await, FromEnvironment::Ran { .. }));
+    let other = "0b7d3a1e-0000-4000-8000-0000000000c2";
+    gateway
+        .send(grant_command(other, &["echo", "b"], None))
+        .await;
+    assert!(matches!(
+        gateway.next().await,
+        FromEnvironment::Granted { lease, .. } if lease == other
+    ));
+    assert!(
+        outbox.closed.lock().unwrap().is_empty(),
+        "the finished command's point was closed by the later grant"
+    );
+    gateway
+        .send(ToEnvironment::End {
+            lease: COMMAND.into(),
+        })
+        .await;
+    assert!(matches!(
+        gateway.next().await,
+        FromEnvironment::Ended { lease, .. } if lease == COMMAND
+    ));
+    assert_eq!(outbox.closed.lock().unwrap().as_slice(), &[COMMAND]);
+}
+
 /// Each command lease refusal is typed and recorded: a host not configured
 /// for commands, a command no lease can hold, an id already used, and an
 /// audit that cannot record it.
