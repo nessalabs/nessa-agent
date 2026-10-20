@@ -2,6 +2,10 @@
  * The local-tab fixture's live follow, stop and close counts.
  * `evaluate` runs in the page. The counts are read from the fixture owner
  * there (`window.__localTabLifetimes`), not from a rendered attribute.
+ * Types: `lifetime-snapshot.d.mts`.
+ *
+ * @param {(read: () => import("./lifetime-snapshot.d.mts").LifetimeSnapshotRead | null) => Promise<unknown>} evaluate
+ * @returns {Promise<import("./lifetime-snapshot.d.mts").LifetimeSnapshotRead>}
  */
 export async function readLifetimeCounters(evaluate) {
   const read = await evaluate(() => {

@@ -57,7 +57,10 @@ behind.
 Invariants:
 
 - One owner, `createLifetimeCounters`, published as
-  `window.__localTabLifetimes.snapshot`. The verifier calls that.
+  `window.__localTabLifetimes.snapshot`. The verifier calls that through
+  `readLifetimeCounters` (`verification/desktop/scripts/lib/lifetime-snapshot.mjs`).
+  The controlled test imports the same function. Its types are the sibling
+  `lifetime-snapshot.d.mts`, the split `scripts/nessa-ui-paths.mjs` already uses.
 - The snapshot is a copy. Reading it does not require another render.
 - Identity, phase, notices and overflow stay on the document. The diagnostic
   counts do not.
