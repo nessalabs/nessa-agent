@@ -28,20 +28,21 @@ use nessa_sdk::domain::agent_execution::questions::MAX_OPEN_QUESTIONS;
 use serde_json::json;
 use std::sync::Arc;
 
-#[test]
-fn subsequent_response_model_effect_survives_the_product_wire_view() {
+#[tokio::test]
+async fn subsequent_response_model_effect_survives_the_product_wire_view() {
     confirmed_effect(
         ConversationModelChangeEffect::SubsequentResponses,
         "subsequentResponses",
-    );
+    )
+    .await;
 }
 
-#[test]
-fn next_turn_model_effect_survives_the_product_wire_view() {
-    confirmed_effect(ConversationModelChangeEffect::NextTurn, "nextTurn");
+#[tokio::test]
+async fn next_turn_model_effect_survives_the_product_wire_view() {
+    confirmed_effect(ConversationModelChangeEffect::NextTurn, "nextTurn").await;
 }
 
-fn confirmed_effect(effect: ConversationModelChangeEffect, expected: &str) {
+async fn confirmed_effect(effect: ConversationModelChangeEffect, expected: &str) {
     let unused = Arc::new(UnusedAuthority);
     let mut state = ProductRouteState::new(
         ResourceId::new("gateway").unwrap(),
@@ -91,19 +92,21 @@ fn confirmed_effect(effect: ConversationModelChangeEffect, expected: &str) {
         ConversationApprovalMode::Ask,
         effect,
     );
-    let wire = wire_view(&state, projection.read()).expect("confirmed model must have a wire view");
+    let wire = wire_view(&state, projection.read())
+        .await
+        .expect("confirmed model must have a wire view");
     let value = serde_json::to_value(wire).unwrap();
     assert_eq!(value["modelChangeEffect"], expected);
     assert_eq!(value["approvalMode"], "ask");
     assert_eq!(value["runtime"]["model"], "selected-model");
     assert_eq!(value["runtime"]["modelName"], "Selected model");
     assert!(value.get("modelChange").is_none());
-    wire_control_budget(&mut state, &mut projection, effect);
+    wire_control_budget(&mut state, &mut projection, effect).await;
 }
 
 // The base projection reserves room for catalog enrichment. Test the real
 // product payload and public RPC encoder against the transport's own bound.
-fn wire_control_budget(
+async fn wire_control_budget(
     state: &mut ProductRouteState,
     projection: &mut Projection,
     effect: ConversationModelChangeEffect,
@@ -134,6 +137,7 @@ fn wire_control_budget(
     view.messages = (0..40)
         .map(|index| ConversationMessage {
             authentication_required: None,
+            usage_limit: None,
             required_work_failed: None,
             parts: Vec::new(),
             steering_offset: None,
@@ -167,7 +171,7 @@ fn wire_control_budget(
     assert!(serde_json::to_vec(&view).unwrap().len() > MAX_VIEW_BYTES);
     let bounded = bound_view(view);
     assert!(serde_json::to_vec(&bounded).unwrap().len() <= MAX_VIEW_BYTES);
-    let wire = wire_view(state, bounded).unwrap();
+    let wire = wire_view(state, bounded).await.unwrap();
     let value = serde_json::to_value(&wire).unwrap();
     assert_eq!(value["permissions"], permissions);
     assert_eq!(value["questions"], questions);

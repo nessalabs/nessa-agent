@@ -63,6 +63,12 @@ export interface ConversationListFollower {
 export interface ConversationEffects {
   /** Apply an offered preset on an idle conversation and return the committed choice. */
   setApprovalMode(conversationId: string, mode: ApprovalMode): Promise<ApprovalMode>
+  /**
+   * Turn this gateway's usage-limit continuation preference on or off.
+   * It is shared by every conversation. On schedules a continuation for each
+   * currently blocked eligible turn. Off cancels open schedules.
+   */
+  setUsageLimitAutoContinue(enabled: boolean): Promise<boolean>
   create(
     conversationId: string,
     selection?: ConversationSelection,

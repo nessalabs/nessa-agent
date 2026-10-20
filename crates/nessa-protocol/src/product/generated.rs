@@ -587,6 +587,16 @@ pub struct AttachmentBeginResult {
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationUsageLimit {
+    pub provider: String,
+    pub recovery: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resets_at_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_resuming: Option<bool>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConversationMessage {
     pub execution_id: String,
     pub user_text: String,
@@ -601,6 +611,8 @@ pub struct ConversationMessage {
     pub authentication_required: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub required_work_failed: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage_limit: Option<ConversationUsageLimit>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub steering_target: Option<String>,
     pub parts: Vec<ConversationPart>,
@@ -747,6 +759,8 @@ pub struct ConversationView {
     pub approval_mode_change: Option<ApprovalModeChange>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_change: Option<ModelChange>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage_limit_auto_continue: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_change_effect: Option<ModelChangeEffect>,
 }
@@ -1907,6 +1921,18 @@ pub struct AgentOption {
     pub agent: String,
     pub default_model: String,
     pub models: Vec<AgentModelOption>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationSetUsageLimitAutoContinueParams {
+    pub request_id: String,
+    pub enabled: bool,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationSetUsageLimitAutoContinueResult {
+    pub request_id: String,
+    pub enabled: bool,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -3197,6 +3223,8 @@ pub mod product_method {
     pub const AGENTS_SUBSCRIBE: &str = "agents.subscribe";
     pub const AGENTS_UNSUBSCRIBE: &str = "agents.unsubscribe";
     pub const CONVERSATION_SET_APPROVAL_MODE: &str = "conversation.setApprovalMode";
+    pub const CONVERSATION_SET_USAGE_LIMIT_AUTO_CONTINUE: &str =
+        "conversation.setUsageLimitAutoContinue";
     pub const AGENTS_INSTALL_OPTIONS: &str = "agents.installOptions";
     pub const AGENTS_INSTALL: &str = "agents.install";
     pub const CONVERSATION_CATALOGUE_HEAD: &str = "conversation.catalogueHead";
@@ -3429,7 +3457,7 @@ pub fn wire_shape_product_session_ready(value: &Value) -> bool {
         }) && object.get("methods").is_some_and(|field| {
             let _ = field;
             field.as_array().is_some_and(|items| {
-                items.len() <= 78
+                items.len() <= 79
                     && items.iter().all(|item| {
                         let _ = item;
                         item.is_string()
@@ -3490,6 +3518,7 @@ pub const PRODUCT_READY_METHODS: &[&str] = &[
     "agents.subscribe",
     "agents.unsubscribe",
     "conversation.setApprovalMode",
+    "conversation.setUsageLimitAutoContinue",
     "agents.installOptions",
     "agents.install",
     "conversation.catalogueHead",
@@ -3554,6 +3583,7 @@ pub fn action_for_method(method: &str) -> Option<&'static str> {
         | "credential.list"
         | "credential.revoke"
         | "agents.setNativeHooks"
+        | "conversation.setUsageLimitAutoContinue"
         | "mcpServers.list"
         | "mcpServers.save"
         | "mcpServers.remove"

@@ -545,6 +545,40 @@ it("names the tab as the gateway does, unless somebody renamed it", () => {
   expect(applyView(renamed, { ...view, title: "Flights to Lisbon" }).title).toBe("Trip")
 })
 
+it("carries a usage limit without the provider failure sentence", () => {
+  const result = applyView(conversation("tab"), {
+    ...view,
+    pending: [],
+    usageLimitAutoContinue: true,
+    messages: [
+      {
+        ...view.messages[0]!,
+        status: "failed",
+        parts: [],
+        usageLimit: {
+          provider: "claude",
+          recovery: "timed_reset",
+          resetsAtMs: 1_800_000_000_000,
+          autoResuming: true,
+        },
+      },
+    ],
+  })
+  const assistant = result.turns.find((turn) => turn.from === "assistant")
+  expect(assistant).toMatchObject({
+    from: "assistant",
+    usageLimit: {
+      provider: "claude",
+      recovery: "timed_reset",
+      resetsAtMs: 1_800_000_000_000,
+      autoResuming: true,
+    },
+    status: "failed",
+  })
+  expect(assistant).not.toHaveProperty("error")
+  expect(result.remote?.usageLimitAutoContinue).toBe(true)
+})
+
 it("carries authentication-required evidence separately from its diagnostic", () => {
   const result = applyView(conversation("tab"), {
     ...view,

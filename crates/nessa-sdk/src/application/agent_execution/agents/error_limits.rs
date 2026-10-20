@@ -41,6 +41,10 @@ impl AgentError {
                     bytes = bytes
                         .saturating_add(diagnostic.as_ref().map_or(0, |value| value.as_str().len()))
                 }
+                Self::UsageLimitReached(limit) => {
+                    bytes = bytes
+                        .saturating_add(limit.diagnostic().map_or(0, |value| value.as_str().len()))
+                }
                 Self::Storage(error)
                 | Self::StorageDuringClose { error, .. }
                 | Self::StorageInitialization { error, .. }

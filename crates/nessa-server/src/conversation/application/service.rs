@@ -2,6 +2,7 @@ mod agent_tools;
 mod creation;
 mod model_changes;
 mod mutation;
+mod scheduled_messages;
 mod thread_reports;
 mod workspace_windows;
 use super::metadata_target::{load_conversation, validate_target};
@@ -100,6 +101,9 @@ use nessa_sdk::domain::agent_execution::{
     sessions::ExecutionSessionId,
 };
 use nessa_sdk::domain::common::value_objects::{ImageMediaType, Sha256Digest};
+pub use scheduled_messages::{
+    ScheduleActor, ScheduleDraft, ScheduledMessage, ScheduledMessageStore,
+};
 use std::{
     collections::{HashMap, HashSet},
     future::Future,
@@ -844,6 +848,10 @@ struct Inner {
     workspace_windows: Arc<super::WorkspaceWindows>,
     /// Agent sends waiting to report their thread's finished turn.
     thread_reports: thread_reports::ThreadReports,
+    /// One-shot continuations after a provider usage limit.
+    scheduled_messages: OnceLock<Arc<dyn scheduled_messages::ScheduledMessageStore>>,
+    /// Wakes the continuation loop when a row is accepted or the preference changes.
+    schedule_wakeup: Notify,
     /// Decides every command's admission to a conversation.
     access_policy: Arc<dyn ConversationAccessPolicyEvaluator>,
     limits: ConversationLimits,
@@ -1363,6 +1371,8 @@ impl ConversationService {
                 )),
                 workspace_windows: super::WorkspaceWindows::new(),
                 thread_reports: Default::default(),
+                scheduled_messages: OnceLock::new(),
+                schedule_wakeup: Notify::new(),
                 access_policy,
                 limits,
                 conversations: Mutex::new(HashMap::new()),

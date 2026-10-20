@@ -598,6 +598,13 @@ export function gatewayEffects(
         throw controlFailure(error)
       }
     },
+    async setUsageLimitAutoContinue(enabled) {
+      try {
+        return (await api().setUsageLimitAutoContinue(enabled)).enabled
+      } catch (error) {
+        throw controlFailure(error)
+      }
+    },
     create(conversationId, selection?: ConversationSelection) {
       const existing = creations.get(conversationId)
       if (existing) return existing

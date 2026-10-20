@@ -34,6 +34,7 @@ import type {
   ConversationReorderResult,
   ConversationRevokePermissionRuleResult,
   ConversationSetApprovalModeResult,
+  ConversationSetUsageLimitAutoContinueResult,
   ConversationSetModelResult,
   ConversationCapability,
   ConversationShareResult,
@@ -62,6 +63,7 @@ import {
   conversationMutation,
   conversationReorder,
   conversationApprovalMode,
+  conversationUsageLimitAutoContinue,
   conversationModel,
   conversationShareResult,
   conversationShares,
@@ -168,6 +170,16 @@ export type ConversationApi = {
     mode: ApprovalMode,
     options?: ConversationActionOptions,
   ) => Promise<ConversationSetApprovalModeResult>
+  /**
+   * Turn this gateway's usage-limit continuation preference on or off.
+   * The preference is shared by every conversation on this gateway.
+   * Turning it on schedules a continuation for each currently blocked
+   * eligible turn. Turning it off cancels open schedules.
+   */
+  setUsageLimitAutoContinue: (
+    enabled: boolean,
+    options?: ConversationActionOptions,
+  ) => Promise<ConversationSetUsageLimitAutoContinueResult>
   /** Change model within this provider. Acknowledgement describes the native effect boundary. */
   setModel: (
     conversationId: string,
@@ -822,6 +834,17 @@ export function createConversationApi(
         { conversationId: id, requestId, mode },
         (value) => conversationApprovalMode(value, requestId, mode),
         false,
+      )
+    },
+    setUsageLimitAutoContinue: async (enabled, options = {}) => {
+      const requestId = boundedText(options.requestId ?? newId(), "Request ID", 256)
+      return conversationUsageLimitAutoContinue(
+        await session.request(ProductMethod.ConversationSetUsageLimitAutoContinue, {
+          requestId,
+          enabled,
+        }),
+        requestId,
+        enabled,
       )
     },
     list: async (options = {}) =>

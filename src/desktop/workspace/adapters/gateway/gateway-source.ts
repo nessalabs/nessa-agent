@@ -167,6 +167,7 @@ export interface GatewayClient {
     | "answerQuestion"
     | "stop"
     | "setApprovalMode"
+    | "setUsageLimitAutoContinue"
     | "setModel"
     | "read"
     | "archive"
@@ -1569,6 +1570,12 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
           held(sessionId)
           return connected.conversation.setApprovalMode(sessionId, mode)
         })
+      }),
+    setUsageLimitAutoContinue: (enabled, _initiator) =>
+      within(async (live) => {
+        await dispatch(live, (connected) =>
+          connected.conversation.setUsageLimitAutoContinue(enabled),
+        )
       }),
     setModel: (sessionId, { provider, modelId }, requestId, _initiator) =>
       within(async (live) => {

@@ -505,6 +505,14 @@ impl ConversationService {
     /// is decided after it returns, and an agent another holder of the lock
     /// closed or replaced meanwhile is left to it.
     pub(super) async fn after_settle(&self, id: &ConversationId, live: Arc<LiveConversation>) {
+        // A usage limit owes nothing, so the retry below does not run. The
+        // continuation, when the preference allows it, is a separate row.
+        self.consider_usage_limit(
+            id,
+            false,
+            super::scheduled_messages::ScheduleActor::system(),
+        )
+        .await;
         if self.inner.unfinished_turns.get().is_none()
             || self.inner.retirement.get().is_some()
             || !self.unfinished_marked().contains_key(id)

@@ -26,6 +26,7 @@ import { TranscriptNotes } from "./transcript-note"
 import { UnreadableOverflowLine, UnreadableParts } from "./unreadable-part"
 import { MessageMarkdown } from "@nessa-ui/react/message-markdown"
 import { ProviderSignInCard } from "../../provider-authentication/ui/provider-sign-in"
+import { UsageLimitCard } from "./usage-limit-card"
 import { TranscriptDivider } from "@nessa-ui/react/transcript-divider"
 
 import {
@@ -52,6 +53,7 @@ export function Transcript({
   onOpenPaste,
   onProviderSignIn,
   canSignInToProvider,
+  onUsageLimitAutoContinue,
 }: {
   conversation: Conversation
   ground: "paper" | "ink"
@@ -63,6 +65,8 @@ export function Transcript({
   onOpenPaste: (text: string) => void
   onProviderSignIn?: (provider: "claude" | "codex") => Promise<void>
   canSignInToProvider?: () => Promise<boolean>
+  /** Turns this gateway's usage-limit continuation preference on or off. */
+  onUsageLimitAutoContinue?: (enabled: boolean) => Promise<void>
 }) {
   // Scoped to the conversation, so a key that happens to recur in the next
   // tab does not open that tab's sheet.
@@ -151,9 +155,16 @@ export function Transcript({
               const sourceTurn = conversation.turns.find(
                 (turn) => turn.id === row.sourceTurnId && turn.from === "assistant",
               )
+              const latest = conversation.turns.at(-1)
               const recovery =
                 sourceTurn?.from === "assistant" && sourceTurn.authenticationRequired
                   ? sourceTurn
+                  : undefined
+              const usageLimit =
+                latest?.from === "assistant" &&
+                sourceTurn?.from === "assistant" &&
+                sourceTurn.id === latest.id
+                  ? sourceTurn.usageLimit
                   : undefined
               return (
                 <React.Fragment key={row.key}>
@@ -212,6 +223,14 @@ export function Transcript({
                     conversationId={conversation.serverConversationId}
                     files={published.byRow.get(row.key) ?? []}
                   />
+                  {usageLimit ? (
+                    <UsageLimitCard
+                      key={`${row.key}:usage-limit`}
+                      limit={usageLimit}
+                      enabled={conversation.remote?.usageLimitAutoContinue === true}
+                      onChange={onUsageLimitAutoContinue}
+                    />
+                  ) : null}
                   {provider &&
                   offersAuthenticationRecovery(
                     recovery?.executionId,
@@ -228,7 +247,11 @@ export function Transcript({
                         <TurnStatus status={row.status} />
                       ) : null}
                     </React.Fragment>
-                  ) : (
+                  ) : usageLimit &&
+                    !(
+                      sourceTurn?.from === "assistant" &&
+                      sourceTurn.requiredWorkFailed === true
+                    ) ? null : (
                     <TurnStatus key={`${row.key}:status`} status={row.status} />
                   )}
                   <UnreadableParts parts={unreadable.byRow.get(row.key) ?? []} />

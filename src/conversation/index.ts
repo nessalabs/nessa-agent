@@ -29,6 +29,7 @@ export { ConversationQueue } from "./ui/conversation-queue"
 export { ConversationList } from "./ui/conversation-list"
 export { commandErrorCleared } from "./adapters/store/history"
 export { Transcript } from "./ui/transcript"
+export { UsageLimitCard } from "./ui/usage-limit-card"
 // Files a conversation holds, read back verified and shown: the panel's
 // transcripts and the desktop window's alike.
 export { HeldFilesProvider } from "./ui/held-files"
@@ -61,6 +62,7 @@ export {
   placePublished,
   type HistoryExtent,
   type Note,
+  type UsageLimitNotice,
   type HeldFile,
   type HeldFileFailure,
   type PublishedFile,

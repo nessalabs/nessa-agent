@@ -34,9 +34,10 @@ use nessa_protocol::product::generated::{
     ConversationReorderParams, ConversationRevokePermissionRuleParams,
     ConversationRevokePermissionRuleResult, ConversationSendParams,
     ConversationSetApprovalModeParams, ConversationSetApprovalModeResult,
-    ConversationSetModelParams, ConversationSetModelResult, ConversationStopParams,
-    ConversationSummary, ConversationView as WireConversationView, ModelChangeEffect,
-    PermissionRule, PermissionRuleEffect, MAX_REVIEW_RANGE_BYTES,
+    ConversationSetModelParams, ConversationSetModelResult,
+    ConversationSetUsageLimitAutoContinueParams, ConversationSetUsageLimitAutoContinueResult,
+    ConversationStopParams, ConversationSummary, ConversationView as WireConversationView,
+    ModelChangeEffect, PermissionRule, PermissionRuleEffect, MAX_REVIEW_RANGE_BYTES,
 };
 use nessa_protocol::product::generated::{
     ConversationMessageDelivery, ConversationMessageParams, ConversationMessageReceipt,
@@ -223,6 +224,19 @@ async fn answer(
                             }
                             ConversationModelChangeEffect::NextTurn => ModelChangeEffect::NextTurn,
                         },
+                    },
+                ))
+            }
+            "conversation.setUsageLimitAutoContinue" => {
+                let params = params!(ConversationSetUsageLimitAutoContinueParams);
+                let enabled = service
+                    .set_usage_limit_auto_continue(params.enabled, caller(params.request_id.clone()))
+                    .await?;
+                Ok(success(
+                    &frame.id,
+                    &ConversationSetUsageLimitAutoContinueResult {
+                        request_id: params.request_id,
+                        enabled,
                     },
                 ))
             }
@@ -944,7 +958,7 @@ pub(super) async fn read_view(
     // caller is sent.
     trace_conversation_read(id, read.as_ref().err());
     let (view, cursor) = read?;
-    Ok((wire_view(state, view)?, cursor))
+    Ok((wire_view(state, view).await?, cursor))
 }
 
 /// The list `conversation.list` answers; a list subscription's frame is this
@@ -1192,7 +1206,7 @@ pub(super) fn conversation_id(value: &str) -> Result<ConversationId, Conversatio
 /// view clock as the view is made: the timeline each deadline's `dueAtMs` was
 /// promised on, so a client measures the deadline against that rather than
 /// its own clock (`a_view_carries_the_gateways_time_from_its_clock`).
-fn wire_view(
+async fn wire_view(
     state: &ProductRouteState,
     view: ApplicationConversationView,
 ) -> Result<WireConversationView, ConversationError> {
@@ -1223,6 +1237,7 @@ fn wire_view(
     {
         return Err(ConversationError::ApprovalModeUnavailable);
     }
+    let conversation_id = view.conversation_id.clone();
     let mut value = serde_json::to_value(view).map_err(|_| ConversationError::Unavailable)?;
     let fields = value
         .as_object_mut()
@@ -1251,6 +1266,31 @@ fn wire_view(
             json!(model.max_context_window_tokens),
         );
         runtime.insert("reasoning".into(), Value::Bool(model.reasoning));
+    }
+    if let Some(service) = state.conversations.as_ref() {
+        let enabled = service.usage_limit_auto_continue().await.unwrap_or(false);
+        fields.insert("usageLimitAutoContinue".into(), json!(enabled));
+        if let Ok(id) = ConversationId::new(&conversation_id) {
+            if let Ok(Some(open)) = service.usage_limit_schedule(&id).await {
+                if let Some(messages) = fields.get_mut("messages").and_then(Value::as_array_mut) {
+                    for message in messages {
+                        let Some(object) = message.as_object_mut() else {
+                            continue;
+                        };
+                        if object.get("executionId").and_then(Value::as_str)
+                            != Some(open.causal_execution.as_str())
+                        {
+                            continue;
+                        }
+                        if let Some(limit) =
+                            object.get_mut("usageLimit").and_then(Value::as_object_mut)
+                        {
+                            limit.insert("autoResuming".into(), json!(true));
+                        }
+                    }
+                }
+            }
+        }
     }
     serde_json::from_value(value).map_err(|_| ConversationError::Unavailable)
 }

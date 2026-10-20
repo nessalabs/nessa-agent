@@ -389,6 +389,10 @@ const apply = {
     else await client.conversation.archive(id)
   },
 
+  async usageContinue(_run, action, client) {
+    await client.conversation.setUsageLimitAutoContinue(action.enabled === true)
+  },
+
   async rename(run, action, client) {
     const { conversationTitle } = await import("@nessa/client")
     const typed = {

@@ -125,7 +125,18 @@ pub(in crate::infrastructure::acp) fn check_initialize<P: AcpProfile>(
 /// bounded diagnostic context, so it cannot decide lifecycle behavior or grow
 /// through an untrusted response.
 pub(in crate::infrastructure::acp) fn provider_failure(phase: &str, error: RpcError) -> AgentError {
-    let diagnostic = error.message.map(ProviderDiagnostic::new);
+    provider_failure_with(phase, error, None)
+}
+
+pub(in crate::infrastructure::acp) fn provider_failure_with(
+    phase: &str,
+    error: RpcError,
+    observed: Option<&super::usage_limit::ObservedRateLimit>,
+) -> AgentError {
+    let diagnostic = error
+        .message
+        .as_ref()
+        .map(|message| ProviderDiagnostic::new(message.clone()));
     match &diagnostic {
         Some(message) => {
             tracing::warn!(
@@ -145,12 +156,19 @@ pub(in crate::infrastructure::acp) fn provider_failure(phase: &str, error: RpcEr
     // ACP schema), unlike a generic JSON-RPC provider code. Keep that meaning
     // at this adapter boundary; custom providers keep their generic errors.
     if error.code == -32000 {
-        AgentError::AuthenticationRequired { diagnostic }
-    } else {
-        AgentError::Provider {
-            code: error.code,
-            diagnostic,
-        }
+        return AgentError::AuthenticationRequired { diagnostic };
+    }
+    if let Some(limit) = super::usage_limit::classify(super::usage_limit::UsageLimitFrame {
+        code: error.code,
+        message: error.message.as_deref(),
+        data: error.data.as_ref(),
+        observed,
+    }) {
+        return AgentError::UsageLimitReached(limit);
+    }
+    AgentError::Provider {
+        code: error.code,
+        diagnostic,
     }
 }
 
@@ -337,14 +355,19 @@ enum PromptReply {
     Failed(AgentError),
     Outcome(ExecutionOutcome),
 }
-fn prompt_reply(message: &Envelope) -> Result<PromptReply, AgentError> {
+fn prompt_reply(
+    message: &Envelope,
+    observed: Option<&super::usage_limit::ObservedRateLimit>,
+) -> Result<PromptReply, AgentError> {
     if let Some(error) = message.error.as_ref() {
-        return Ok(PromptReply::Failed(provider_failure(
+        return Ok(PromptReply::Failed(provider_failure_with(
             "prompt",
             RpcError {
                 code: error.code,
                 message: error.message.clone(),
+                data: error.data.clone(),
             },
+            observed,
         )));
     }
     let result = message
@@ -445,6 +468,8 @@ struct Worker<P> {
     permission_sequence: Arc<AtomicU64>,
     question_sequence: Arc<AtomicU64>,
     active: Option<ActiveExecution>,
+    /// Claude rate-limit object observed on the turn that is running.
+    observed_rate_limit: super::usage_limit::ObservedRateLimit,
     steering: Option<PendingSteering>,
     steering_supported: bool,
     /// The connected agent advertised `promptCapabilities.image` at initialize.
@@ -589,6 +614,7 @@ pub(in crate::infrastructure::acp) async fn run<P: AcpProfile>(
         permission_sequence,
         question_sequence,
         active: None,
+        observed_rate_limit: super::usage_limit::ObservedRateLimit::default(),
         steering: None,
         steering_supported: false,
         agent_accepts_images: false,
@@ -2029,6 +2055,7 @@ impl<P: AcpProfile> Worker<P> {
             return Ok(());
         }
         self.sequence = id;
+        self.observed_rate_limit = super::usage_limit::ObservedRateLimit::default();
         tracing::info!(target: "nessa_sdk::timing", session_id = execution.id().as_str(),
             execution_id = execution_id.as_str(), "agent prompt dispatch started");
         self.active = Some(ActiveExecution {
@@ -2626,7 +2653,7 @@ impl<P: AcpProfile> Worker<P> {
         if message.id != Some(RpcId::Number(active.id)) {
             return Err(json_rpc::protocol("response for a different prompt").into());
         }
-        match prompt_reply(&message)? {
+        match prompt_reply(&message, Some(&self.observed_rate_limit))? {
             PromptReply::Failed(error) => {
                 // Keep the reply until teardown has recorded pending cancellations.
                 self.provider_result = Some(Err(error.clone()));
@@ -2780,6 +2807,13 @@ impl<P: AcpProfile> Worker<P> {
             }
             "usage_update" => {
                 self.traces.usage(super::usage::reported_usage(update));
+                if let Some(rate_limit) = update
+                    .get("_meta")
+                    .and_then(|meta| meta.get("_claude/rateLimit"))
+                    .filter(|value| value.is_object())
+                {
+                    self.observed_rate_limit.claude = Some(rate_limit.clone());
+                }
                 return Ok(());
             }
             "agent_message_chunk" | "agent_thought_chunk" | "tool_call" | "tool_call_update" => {
@@ -3650,7 +3684,7 @@ impl<P: AcpProfile> Worker<P> {
         stopped: StoppedPrompt,
         message: &Envelope,
     ) -> Result<(), WorkerFailure> {
-        let reply = match prompt_reply(message) {
+        let reply = match prompt_reply(message, Some(&self.observed_rate_limit)) {
             Ok(reply) => reply,
             Err(error) => {
                 self.fail_stopped_reply(stopped, error.clone());
@@ -3735,7 +3769,7 @@ impl<P: AcpProfile> Worker<P> {
         execution_id: ExecutionId,
         message: &Envelope,
     ) -> Result<(), WorkerFailure> {
-        let reply = prompt_reply(message)?;
+        let reply = prompt_reply(message, Some(&self.observed_rate_limit))?;
         self.record_parsed_late_reply(session_id, execution_id, reply)
             .await
     }

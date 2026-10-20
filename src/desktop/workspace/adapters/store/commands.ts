@@ -104,4 +104,5 @@ export {
   shareSession,
 } from "./sharing-commands"
 export { chooseAccess, type AccessOutcome } from "./access-commands"
+export { setUsageLimitAutoContinue } from "./usage-limit-commands"
 export { changeModel } from "./model-commands"

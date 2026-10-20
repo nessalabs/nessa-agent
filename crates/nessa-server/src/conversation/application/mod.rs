@@ -324,8 +324,9 @@ pub use service::{
     ConversationLimits, ConversationService, DeletionsLeft, FailureBackoff, McpAppCall,
     McpAppContextUpdate, McpAppMessage, McpAppRead, McpAppResource, PendingReport,
     QuestionChoiceInput, ReadOpening, ReportRegistration, RequestedAgent, RequestedConversation,
-    SubmissionMode, ThreadReport, ThreadReportStore, ThreadTurn, MAX_APP_CALLS,
-    MAX_LISTED_CONVERSATIONS, MAX_RESOURCE_META_BYTES,
+    ScheduleActor, ScheduleDraft, ScheduledMessage, ScheduledMessageStore, SubmissionMode,
+    ThreadReport, ThreadReportStore, ThreadTurn, MAX_APP_CALLS, MAX_LISTED_CONVERSATIONS,
+    MAX_RESOURCE_META_BYTES,
 };
 pub use service::{CommandAnswer, CommandCall, CommandCallError, EnvironmentListing, HERE};
 pub(crate) use service::{ExportAdmission, ExportHoldFailure};

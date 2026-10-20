@@ -581,6 +581,14 @@ function captureControl(source: Control): Control {
   return Object.freeze(command)
 }
 
+/** Turns this gateway's usage-limit continuation preference on or off. */
+export const setUsageLimitAutoContinue = createAsyncThunk<void, boolean, ThunkConfig>(
+  "conversation/setUsageLimitAutoContinue",
+  async (enabled, { extra }) => {
+    await extra.conversation.setUsageLimitAutoContinue(enabled)
+  },
+)
+
 export const controlConversation = createAsyncThunk<
   void,
   { id: string; control: Control },

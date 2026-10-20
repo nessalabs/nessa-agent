@@ -21,6 +21,7 @@ export const STRESS = {
   pause: "stress pause",
   cut: "stress cut",
   fail: "stress fail",
+  limit: "stress usage limit",
   delegate: "stress delegate",
   await: "stress await",
   watch: "stress watch",
@@ -256,6 +257,15 @@ export function stressScenario({
         steps: [
           { do: "text", chunks: [SAYS.beforeFailure] },
           { do: "fail", message: SAYS.failure },
+        ],
+      },
+      {
+        when: STRESS.limit,
+        steps: [
+          {
+            do: "fail",
+            message: "You've hit your weekly limit",
+          },
         ],
       },
       {

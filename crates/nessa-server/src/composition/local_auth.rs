@@ -1360,6 +1360,17 @@ async fn conversations(
                 )
             })?,
     ));
+    let scheduled_messages_path = root.join("scheduled-chat-messages.sqlite3");
+    service.bind_scheduled_messages(Arc::new(
+        crate::conversation::infrastructure::LocalScheduledMessages::open(&scheduled_messages_path)
+            .map_err(|cause| {
+                RunError::opening(
+                    crate::core::Dataset::ScheduledMessages,
+                    &scheduled_messages_path,
+                    cause,
+                )
+            })?,
+    ));
     conversation_tools.attach(service.clone());
     // A note's author is checked against the same grant table the socket
     // admits it by (row J23).
