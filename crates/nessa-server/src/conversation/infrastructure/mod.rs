@@ -103,7 +103,7 @@ pub(crate) use environment::in_process as in_process_environment;
 #[cfg(any(unix, test))]
 mod placements;
 #[cfg(any(unix, test))]
-pub(crate) use placements::FilePlacements;
+pub(crate) use placements::{FileBindings, FilePlacements};
 mod catalogue_changes;
 mod receiver_authority;
 // Only the Unix gateway composes it, and only a Unix host serves it: it is

@@ -416,7 +416,8 @@ pub(super) fn touched(
     base.saturating_add(match change {
         SessionChange::Opened { .. }
         | SessionChange::ModelChanged(_)
-        | SessionChange::ConfigurationChanged(_) => snapshot_header(snapshot),
+        | SessionChange::ConfigurationChanged(_)
+        | SessionChange::ProviderIdentityChanged { .. } => snapshot_header(snapshot),
         SessionChange::InputAccepted(_) => {
             if include_input {
                 record.map_or(0, invocation)

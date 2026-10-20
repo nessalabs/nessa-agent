@@ -147,7 +147,7 @@ impl ConversationService {
         id: &ConversationId,
     ) -> Result<Vec<EnvironmentListing>, ConversationError> {
         let environments = &self.inner.environment;
-        let current = environments.placement(id).await?;
+        let current = environments.runs_on(id).await?;
         let initiator = match self.live(id).await {
             Some(live) => {
                 let snapshot = live.agent.session_manager().snapshot().await;

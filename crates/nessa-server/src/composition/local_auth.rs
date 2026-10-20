@@ -309,6 +309,10 @@ pub(super) async fn product_state(
                         read_work_budget: limits.read_work_budget(),
                         live_conversations: limits.live_conversations(),
                         agent_idle: limits.agent_idle(),
+                        organization: crate::conversation::application::OrganizationBudgets::new(
+                            limits.organization_leases(),
+                            limits.organization_commands(),
+                        ),
                         ssh_hosts: settings.ssh_hosts()?,
                         command_policy: settings.command_policy()?,
                         serving,
@@ -620,6 +624,8 @@ struct ConversationSettings {
     live_conversations: usize,
     /// How long an idle agent nobody watches runs before it is parked.
     agent_idle: Option<std::time::Duration>,
+    /// What the paired environments may run at once, together.
+    organization: crate::conversation::application::OrganizationBudgets,
     /// The SSH hosts a conversation may be created on.
     ssh_hosts: Vec<SshDestination>,
     /// Where the agent may run commands; `None` grants it no environment
@@ -961,6 +967,7 @@ async fn conversations(
         read_work_budget,
         live_conversations,
         agent_idle,
+        organization,
         ssh_hosts,
         command_policy,
         serving,
@@ -1270,8 +1277,14 @@ async fn conversations(
         )),
         None => Arc::new(NoMcpToolUis),
     };
-    let (environment, environment_peers) =
-        environments(&root, &ssh_hosts, command_policy, clock.clone(), serving)?;
+    let (environment, environment_peers) = environments(
+        &root,
+        &ssh_hosts,
+        command_policy,
+        clock.clone(),
+        serving,
+        organization,
+    )?;
     let dependencies = ConversationDependencies {
         agents: ConversationAgents::from_source(configured, selected, resolver.clone())
             .map_err(|error| RunError::Agent(error.to_string()))?,
@@ -1419,6 +1432,7 @@ fn environments(
     commands: Option<crate::conversation::domain::CommandPolicy>,
     clock: Arc<dyn Clock>,
     serving: Option<ServingAuth>,
+    organization: crate::conversation::application::OrganizationBudgets,
 ) -> Result<(Environments, Option<PairedParts>), RunError> {
     use super::paired_environments::{ListenerEnvironments, RegistryServing};
     use crate::conversation::infrastructure::{
@@ -1426,9 +1440,11 @@ fn environments(
             DurableEnvironmentAudit, HostInstaller, OpenSshConnector, PeerEnvironments,
             SshEnvironment, SshTimings,
         },
-        CedarCommandPolicyEvaluator, FilePlacements,
+        CedarCommandPolicyEvaluator, FileBindings, FilePlacements,
     };
     let placements = FilePlacements::new(root.join("placements"))
+        .map_err(|error| RunError::Agent(error.to_string()))?;
+    let bindings = FileBindings::new(root.join("bindings"))
         .map_err(|error| RunError::Agent(error.to_string()))?;
     let mut environments: BTreeMap<String, Arc<dyn crate::conversation::application::Environment>> =
         BTreeMap::new();
@@ -1451,6 +1467,7 @@ fn environments(
             }),
             audit.clone(),
             SshTimings::default(),
+            organization,
         ))),
         _ => None,
     };
@@ -1479,7 +1496,7 @@ fn environments(
         Arc::new(placements),
     );
     if let Some(peers) = &peers {
-        environments = environments.with_peers(peers.clone());
+        environments = environments.with_peers(peers.clone(), Arc::new(bindings));
     }
     // Who may run which commands where is the command policy's, answered by
     // Cedar over the configured hosts and programs (ADR 803 step 4).
@@ -1496,12 +1513,18 @@ fn environments(
                 as Arc<dyn crate::device_pairing::infrastructure::EnvironmentPeers>,
             crate::product::ConnectedEnvironments {
                 changes,
+                // The pool first, while any worker of it takes new work.
                 names: Arc::new(move || {
-                    use crate::conversation::application::PairedEnvironments;
-                    connected
+                    use crate::conversation::application::{PairedEnvironments, POOL};
+                    let workers: Vec<String> = connected
                         .connected()
                         .iter()
                         .map(nessa_sdk::domain::agent_execution::leases::PeerEnvironment::name)
+                        .collect();
+                    let pool = connected.serving().iter().any(|(_, load)| !load.draining);
+                    pool.then(|| POOL.to_owned())
+                        .into_iter()
+                        .chain(workers)
                         .collect()
                 }),
             },

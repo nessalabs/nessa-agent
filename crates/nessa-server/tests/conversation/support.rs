@@ -1676,6 +1676,10 @@ pub(crate) struct Provider {
     configured_capabilities: EffectiveCapabilities,
     approval_mode: ApprovalMode,
     model: String,
+    /// What its identity's context fingerprints: here, `test`; started on a
+    /// host ([`AgentProvider::on_host`]), that host's workspace, as a real
+    /// binding's fingerprint takes the workspace it works in.
+    context: String,
 }
 impl Provider {
     pub(crate) fn new(factory: Arc<ProviderFactory>) -> Self {
@@ -1685,6 +1689,7 @@ impl Provider {
             configured_capabilities,
             approval_mode: ApprovalMode::Ask,
             model: "test".into(),
+            context: "test".into(),
         }
     }
     pub(crate) fn with_model(mut self, model: &str) -> Self {
@@ -1720,7 +1725,16 @@ impl AgentProvider for Provider {
         Some(self.approval_mode)
     }
     fn identity(&self) -> ProviderIdentity {
-        ProviderIdentity::new("gateway-test", &self.model, "test").unwrap()
+        ProviderIdentity::new("gateway-test", &self.model, &self.context).unwrap()
+    }
+    fn on_host(
+        &self,
+        host: Arc<dyn nessa_sdk::application::agent_execution::providers::HarnessHost>,
+    ) -> Result<Arc<dyn AgentProvider>, AgentError> {
+        Ok(Arc::new(Self {
+            context: host.workspace().display().to_string(),
+            ..self.clone()
+        }))
     }
     fn capabilities(&self) -> &EffectiveCapabilities {
         &self.configured_capabilities

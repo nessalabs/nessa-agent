@@ -602,12 +602,30 @@ impl SessionManager {
             saved.into_checked(&self.id).map_err(AgentError::Storage)?;
         let compacted = saved;
         let identity = provider.identity();
-        if compacted
-            .as_ref()
-            .is_some_and(|snapshot| snapshot.provider != identity)
-        {
-            return Err(AgentError::Storage(StorageError::IdentityMismatch));
-        }
+        // The context fingerprint binds a saved provider context, so it must
+        // match only where that context is restored. A history whose saved
+        // context is not restored here (none was saved, or it was saved
+        // where this provider does not start, such as another worker) goes
+        // on under this provider's fingerprint: the same provider and model.
+        let moved = match &compacted {
+            Some(snapshot) if snapshot.provider != identity => {
+                let restores = snapshot
+                    .provider_context
+                    .recorded()
+                    .is_some_and(|saved| provider.restores_saved_context(saved));
+                if restores
+                    || snapshot.provider.name() != identity.name()
+                    || snapshot.provider.model_id() != identity.model_id()
+                {
+                    return Err(AgentError::Storage(StorageError::IdentityMismatch));
+                }
+                Some(SessionChange::ProviderIdentityChanged {
+                    before: snapshot.provider.clone(),
+                    after: identity.clone(),
+                })
+            }
+            _ => None,
+        };
         let created = compacted.is_none();
         let restore_queue = match &compacted {
             Some(snapshot) => !super::queue_validation::replay(snapshot)
@@ -625,6 +643,7 @@ impl SessionManager {
         } else {
             Vec::new()
         };
+        changes.extend(moved);
         if restore_queue {
             changes.push(SessionChange::QueueDecision(QueueHistoryRecord {
                 mutation: QueueMutation::Restored,
@@ -683,6 +702,8 @@ impl SessionManager {
         // Held until this returns: every path that keeps what the open
         // launched arms the lease first, so an observer never sees neither.
         let _open = self.attachment.opening();
+        // Saved context is restored only where it was saved: a provider that
+        // starts elsewhere opens new context, recorded in its place below.
         let restore = self
             .evidence
             .lock()
@@ -691,7 +712,8 @@ impl SessionManager {
             .expect("prepared session evidence")
             .provider_context
             .recorded()
-            .cloned();
+            .cloned()
+            .filter(|saved| provider.restores_saved_context(saved));
         let opening = catch_unwind(AssertUnwindSafe(|| {
             provider.open(ProviderOpenRequest::new(
                 self.id.clone(),

@@ -134,7 +134,7 @@ impl ConversationService {
         let environments = &self.inner.environment;
         // Where the agent runs now is the only lease it holds; the name is
         // compared as `environments_list` gives it.
-        let placed = match environments.placement(id).await {
+        let placed = match environments.runs_on(id).await {
             Ok(placed) => placed,
             Err(_) => return refused(PublishCallRefusal::EnvironmentNotLeased),
         };

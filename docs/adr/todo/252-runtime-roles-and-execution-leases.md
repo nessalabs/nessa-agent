@@ -229,8 +229,14 @@ Environments lane, in order:
   [#792](https://github.com/nessalabs/nessa-agent/pull/792) (isolation)). Environment-only gateways
   per organization in containers. *Gate:* two-organization isolation
   across leases, artifacts, tools and audit. Pools of workers per
-  organization and organization budgets are
-  [#791](https://github.com/nessalabs/nessa-agent/issues/791).
+  organization (`peer:any`, a durable binding per conversation, an explicit
+  drain signal so a replacement can serve beside the old worker) and
+  organization budgets on leases and commands are
+  [#791](https://github.com/nessalabs/nessa-agent/issues/791); resuming a
+  moved conversation's provider session is
+  [#1040](https://github.com/nessalabs/nessa-agent/issues/1040), and an
+  organization budget on artifact bytes
+  [#1041](https://github.com/nessalabs/nessa-agent/issues/1041).
 
 Phone lane, beside it, already sliced and unchanged:
 [#263](https://github.com/nessalabs/nessa-agent/issues/263) pairing and

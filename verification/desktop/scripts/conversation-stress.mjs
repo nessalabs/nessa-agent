@@ -67,6 +67,14 @@
  *               saves config.json and starts itself again in the same
  *               process, the window comes back to the new state, and the
  *               message sent after it is answered
+ *   pool        native linking is turned on in Settings and two real
+ *               `nessa env dial` workers pair with the gateway; a
+ *               conversation created on `peer:any` is bound to one of them
+ *               and stays there while it serves; that worker is stopped with
+ *               SIGTERM, drains and exits, and the next message sent in the
+ *               window binds the conversation to the other, with new provider
+ *               context, as the window's heading and the binding both say;
+ *               both workers stop and linking is turned off again
  *
  * Meanwhile `--parallel` background conversations take turns through the
  * gateway (every third one a watch), and `--followers` other clients follow
@@ -109,6 +117,7 @@ import { gatewayHost } from "./lib/fake-host.mjs"
 import {
   connectClient,
   panelTarget,
+  scriptedLaunch,
   startGatewayStack,
   waitFor,
 } from "./lib/gateway-stack.mjs"
@@ -134,8 +143,14 @@ import {
 } from "./lib/stress-conversation.mjs"
 import { observeGatewayRestarts } from "./lib/stress-restart.mjs"
 import { KNOBS, describe, knobsFrom, plan, random } from "./lib/stress-plan.mjs"
+import { startWorker } from "./lib/stress-workers.mjs"
 
 const INSTANCE = "conversation-stress"
+/**
+ * The environment that places a conversation on any of the gateway's paired
+ * workers (`POOL` in crates/nessa-server/src/conversation/application/placement.rs).
+ */
+const POOL = "peer:any"
 
 const meta = {
   name: "conversation-stress",
@@ -882,62 +897,209 @@ const steps = {
   },
 
   async linking(run, step, failures) {
-    const gateway = run.stack.gateway
-    const config = join(gateway.directory, "ci", "instances", INSTANCE, "config.json")
     await run.exclusive(async () => {
-      const pid = gateway.server.pid
-      if (!(await run.page.$(css.settings))) await run.page.keyboard.press(keys.settings)
-      await run.page.locator(css.settingsCategory, { hasText: names.connections }).click()
-      await run.page.locator(css.settingsTab, { hasText: names.linkedDevices }).click()
-      for (const enabled of [true, false]) {
-        const want = enabled ? "on" : "off"
-        const before = await waitFor(
-          async () =>
-            (await run.page.locator(css.linked).getAttribute("data-linked")) ===
-            (enabled ? "off" : "on"),
-          30_000,
-        )
-        if (!before) {
-          failures.push(`linking was not ${enabled ? "off" : "on"} before the switch`)
-          return
-        }
-        await run.restartConsole.during(run.opened, async () => {
-          const before = failures.length
-          const old = run.client
-          run.restarts += 1
-          await run.page.locator(`${css.linked} [role='switch']`).click()
-          const shown = await waitFor(
-            async () =>
-              (await run.page.locator(css.linked).getAttribute("data-linked")) === want,
-            60_000,
-          )
-          if (!shown) failures.push(`the window did not come back with linking ${want}`)
-          old.close()
-          run.client = await connectClient(gateway, INSTANCE, "panel")
-          const answered = await run.client.pairing.pending().then(
-            () => "on",
-            (error) =>
-              error?.refusal === "pairing_not_configured" ? "off" : String(error),
-          )
-          if (answered !== want)
-            failures.push(`the gateway answers linking ${answered}, not ${want}`)
-          const saved = JSON.parse(readFileSync(config, "utf8")).native
-          if (
-            (saved?.enabled !== false) !== enabled ||
-            saved?.listenAddress !== run.nativeAddress
-          )
-            failures.push(`config.json holds native ${JSON.stringify(saved)}`)
-          if (gateway.server.pid !== pid || gateway.server.exitCode !== null)
-            failures.push("the gateway did not start again in the same process")
-          return failures.length === before
-        })
-      }
-      // Esc does not close Settings; its back control returns to the app.
-      await run.page.getByRole("button", { name: "Back to nessa Agent" }).first().click()
-      await run.page.waitForSelector(css.settings, { state: "detached", timeout: 10_000 })
+      await openLinkedDevices(run.page)
+      for (const enabled of [true, false])
+        if (!(await switchLinking(run, enabled, failures))) return
+      await closeSettings(run.page)
     })
     // The restarted gateway still answers the conversation, in the window.
     if (failures.length === 0) await steps.reply(run, step, failures)
+  },
+
+  async pool(run, step, failures) {
+    // Workers dial the gateway's native listener, which is off in this run
+    // until a step turns it on: a person does it in Settings, here as in
+    // the `linking` step, and turns it off again once the workers are gone.
+    const linked = await run.exclusive(async () => {
+      await openLinkedDevices(run.page)
+      const on = await switchLinking(run, true, failures)
+      if (on) await closeSettings(run.page)
+      return on
+    })
+    if (!linked) return
+    const workers = []
+    let owner
+    try {
+      // Pairing is the owner's: the panel's credential cannot approve.
+      owner = await connectClient(run.stack.gateway, INSTANCE, "owner")
+      const launch = scriptedLaunch(run.stack.agent, { scenario: run.stack.scenario })
+      for (const label of ["a", "b"])
+        workers.push(
+          await startWorker({
+            owner,
+            address: run.nativeAddress,
+            agent: run.stack.agent,
+            launch,
+            label: `${label}${step.index}`,
+            connected: async (name) =>
+              (await offers(run, (environments) => environments.includes(name))).includes(
+                name,
+              ),
+          }),
+        )
+      const offered = await offers(run, (environments) =>
+        workers.every((each) => environments.includes(each.name)),
+      )
+      if (offered?.[0] !== POOL) {
+        failures.push(
+          `the gateway offers ${JSON.stringify(offered)}, not ${POOL} first and both workers`,
+        )
+        return
+      }
+      const conversationId = randomUUID()
+      await run.client.conversation.create({
+        conversationId,
+        agent: run.stack.agent,
+        environment: POOL,
+      })
+      const first = prompt(run, STRESS.reply, step, " pool")
+      await run.client.conversation.submit(
+        run.client.conversation.prepare(conversationId, first),
+      )
+      const { view: before } = await settled(
+        run,
+        conversationId,
+        new Set(),
+        first,
+        "completed",
+        failures,
+      )
+      if (failures.length) return
+      const bound = bindingOf(run, conversationId)
+      const from = workers.find((each) => each.name === bound?.worker)
+      const to = workers.find((each) => each !== from)
+      if (!from || !bound.context) {
+        failures.push(
+          `the pool conversation is bound as ${JSON.stringify(bound)}, not to a worker with its context`,
+        )
+        return
+      }
+      if (before.lease?.environment !== "peer" || before.lease?.host !== from.name)
+        failures.push(`its lease runs on ${before.lease?.host}, not ${from.name}`)
+      // A person opens it and writes in it: it stays on the worker it is bound to.
+      await openStressConversation(
+        run.page,
+        conversationId,
+        await titleOf(run, conversationId),
+      )
+      await expectShown(run.page, await placeOf(from), failures)
+      const stays = prompt(run, STRESS.reply, step, " pool stays")
+      const kept = await send(
+        run,
+        conversationId,
+        stays,
+        failures,
+        new Set(before.messages.map((each) => each.executionId)),
+      )
+      const { view: still } = await settled(
+        run,
+        conversationId,
+        kept,
+        stays,
+        "completed",
+        failures,
+      )
+      await expectShown(run.page, `${SAYS.echo}${stays}`, failures)
+      if (JSON.stringify(bindingOf(run, conversationId)) !== JSON.stringify(bound))
+        failures.push(
+          `a message moved the conversation off its serving worker: ${JSON.stringify(bindingOf(run, conversationId))}`,
+        )
+      if (failures.length) return
+      // Its worker is stopped the way a container runtime stops it: it
+      // drains, ends its lease, and exits on its own.
+      const drainedAt = Date.now()
+      if (!(await from.stop("SIGTERM", 30_000))) {
+        failures.push(`worker ${from.label} did not drain and exit within 30 s`)
+        return
+      }
+      if (from.process.exitCode !== 0)
+        failures.push(
+          `worker ${from.label} exited ${from.process.exitCode ?? from.process.signalCode} after draining`,
+        )
+      log(`pool: worker ${from.label} drained in ${Date.now() - drainedAt} ms`)
+      const left = await offers(
+        run,
+        (environments) =>
+          !environments.includes(from.name) && environments.includes(to.name),
+      )
+      if (!left || left[0] !== POOL)
+        failures.push(`after the drain the gateway offers ${JSON.stringify(left)}`)
+      // The gateway's view of it, once the drain's end of its lease is
+      // there. A view asked while the gateway closes the agent that lease
+      // ran is refused, as a read across a restart is; the next one is not.
+      const lease = await waitFor(async () => {
+        try {
+          const { lease } = await followedOnce(run, conversationId)
+          return lease?.state === "ended" ? lease : null
+        } catch (error) {
+          log(`view ${conversationId}: ${explain(error)}`)
+          return null
+        }
+      }, 30_000)
+      if (
+        lease?.state !== "ended" ||
+        lease.cause !== "stopped" ||
+        lease.host !== from.name
+      )
+        failures.push(`the drained lease is ${JSON.stringify(lease)}, not ended stopped`)
+      // The next message moves it: another worker, a new provider context.
+      const moves = prompt(run, STRESS.reply, step, " pool moves")
+      const moved = await send(
+        run,
+        conversationId,
+        moves,
+        failures,
+        new Set(still?.messages.map((each) => each.executionId)),
+      )
+      const { view: after } = await settled(
+        run,
+        conversationId,
+        moved,
+        moves,
+        "completed",
+        failures,
+      )
+      const rebound = bindingOf(run, conversationId)
+      if (rebound?.worker !== to.name)
+        failures.push(`after the drain it is bound to ${rebound?.worker}, not ${to.name}`)
+      if (!rebound?.context || rebound.context === bound.context)
+        failures.push(
+          `after the move its provider context is ${rebound?.context}, not a new one`,
+        )
+      if (failures.length) return
+      await expectShown(run.page, `${SAYS.echo}${moves}`, failures)
+      await expectShown(run.page, await placeOf(to), failures)
+      if (after?.lease?.state !== "live" || after.lease.host !== to.name)
+        failures.push(
+          `after the move its lease is ${after?.lease?.state} on ${after?.lease?.host}`,
+        )
+      // With no worker serving, the gateway refuses to read it
+      // (`environment_not_configured`), so it is checked at rest here, while
+      // one serves, and not in `run.checked` for the run's own rest check.
+      failures.push(...(await atRest(run, [conversationId])))
+      const stopped = Date.now()
+      if (!(await to.stop("SIGTERM", 30_000)))
+        failures.push(`worker ${to.label} did not drain and exit within 30 s`)
+      else if (to.process.exitCode !== 0)
+        failures.push(
+          `worker ${to.label} exited ${to.process.exitCode ?? to.process.signalCode} after draining`,
+        )
+      log(`pool: worker ${to.label} drained in ${Date.now() - stopped} ms`)
+      await openStressConversation(run.page, run.main.id, run.main.title)
+    } finally {
+      // Nothing the step started outlives it, whatever went wrong.
+      for (const each of workers) {
+        if (run.evidence)
+          writeFileSync(join(run.evidence, `worker-${each.label}.log`), each.log())
+        await each.close()
+      }
+      owner?.close()
+      await run.exclusive(async () => {
+        await openLinkedDevices(run.page)
+        if (await switchLinking(run, false, failures)) await closeSettings(run.page)
+      })
+    }
   },
 
   async delegate(run, step, failures) {
@@ -1693,6 +1855,118 @@ async function reopened(run, conversationId) {
   return { ms, view, reads }
 }
 
+/** Opens Settings › Connections › Linked devices, as a person does. */
+async function openLinkedDevices(page) {
+  if (!(await page.$(css.settings))) await page.keyboard.press(keys.settings)
+  await page.locator(css.settingsCategory, { hasText: names.connections }).click()
+  await page.locator(css.settingsTab, { hasText: names.linkedDevices }).click()
+}
+
+/** Leaves Settings: Esc does not close it; its back control returns to the app. */
+async function closeSettings(page) {
+  await page.getByRole("button", { name: "Back to nessa Agent" }).first().click()
+  await page.waitForSelector(css.settings, { state: "detached", timeout: 10_000 })
+}
+
+/**
+ * Turns native linking `enabled` with the switch on the Linked devices tab,
+ * already open. The gateway saves config.json and starts itself again in
+ * the same process; the window comes back to the new state, and the run's
+ * client is connected again. Resolves whether all of that held. Called with
+ * nothing else in flight (`run.exclusive`).
+ */
+async function switchLinking(run, enabled, failures) {
+  const gateway = run.stack.gateway
+  const config = join(gateway.directory, "ci", "instances", INSTANCE, "config.json")
+  const pid = gateway.server.pid
+  const want = enabled ? "on" : "off"
+  const before = await waitFor(
+    async () =>
+      (await run.page.locator(css.linked).getAttribute("data-linked")) ===
+      (enabled ? "off" : "on"),
+    30_000,
+  )
+  if (!before) {
+    failures.push(`linking was not ${enabled ? "off" : "on"} before the switch`)
+    return false
+  }
+  let held = false
+  await run.restartConsole.during(run.opened, async () => {
+    const before = failures.length
+    const old = run.client
+    run.restarts += 1
+    await run.page.locator(`${css.linked} [role='switch']`).click()
+    const shown = await waitFor(
+      async () =>
+        (await run.page.locator(css.linked).getAttribute("data-linked")) === want,
+      60_000,
+    )
+    if (!shown) failures.push(`the window did not come back with linking ${want}`)
+    old.close()
+    run.client = await connectClient(gateway, INSTANCE, "panel")
+    const answered = await run.client.pairing.pending().then(
+      () => "on",
+      (error) => (error?.refusal === "pairing_not_configured" ? "off" : String(error)),
+    )
+    if (answered !== want)
+      failures.push(`the gateway answers linking ${answered}, not ${want}`)
+    const saved = JSON.parse(readFileSync(config, "utf8")).native
+    if (
+      (saved?.enabled !== false) !== enabled ||
+      saved?.listenAddress !== run.nativeAddress
+    )
+      failures.push(`config.json holds native ${JSON.stringify(saved)}`)
+    if (gateway.server.pid !== pid || gateway.server.exitCode !== null)
+      failures.push("the gateway did not start again in the same process")
+    held = failures.length === before
+    return held
+  })
+  return held
+}
+
+/**
+ * The places the gateway offers a new conversation (`agents.list`
+ * `environments`), once `holds` is true of them; what they last were after
+ * 30 s otherwise. A worker that connects or leaves changes them.
+ */
+const offers = (run, holds) =>
+  waitFor(async () => {
+    const { environments } = await run.client.agents.list()
+    return holds(environments) ? environments : null
+  }, 30_000).then(
+    (environments) =>
+      environments ?? run.client.agents.list().then((each) => each.environments),
+  )
+
+/**
+ * Which worker of the pool holds `conversationId` now, as the gateway keeps
+ * it: `bindings/<id>.json` beside its conversations, `{ worker, context }`.
+ * `null` when it has none.
+ */
+function bindingOf(run, conversationId) {
+  const file = join(
+    run.stack.gateway.directory,
+    "ci",
+    "instances",
+    INSTANCE,
+    "conversations",
+    "bindings",
+    `${conversationId}.json`,
+  )
+  try {
+    return JSON.parse(readFileSync(file, "utf8"))
+  } catch (error) {
+    if (error.code === "ENOENT") return null
+    throw error
+  }
+}
+
+/** What the window's heading names `worker` by, in the client's words. */
+async function placeOf(worker) {
+  const { environmentPlace } = await import("@nessa/client")
+  return environmentPlace(worker.name)
+}
+
 /**
  * The first view frame of `conversationId` from a view subscription, which
  * never opens an agent. Closed at once: a follower keeps its agent from
@@ -1983,6 +2257,7 @@ async function startStack(options) {
     knobs,
     agent: options.agent,
     nativeAddress,
+    scenario,
     endpoint: stack.gateway.url.replace(/^http/, "ws"),
   }))
 }

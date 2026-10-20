@@ -23,6 +23,7 @@ use crate::application::agent_execution::{
     traces::LocalTraceStore,
 };
 use crate::domain::agent_execution::executions::ExecutionId;
+use crate::domain::agent_execution::sessions::ExecutionSessionId;
 use crate::domain::effective_capabilities::value_objects::EffectiveCapabilities;
 use std::sync::Arc;
 
@@ -314,6 +315,15 @@ pub trait AgentProvider: Send + Sync {
     /// given. Every other provider stays off.
     fn native_hooks_allowed(&self) -> bool {
         false
+    }
+    /// Whether the place this factory opens sessions in holds `saved`, the
+    /// provider context this session saved, so attaching restores it. The
+    /// default does. A factory whose harness starts somewhere that never
+    /// opened `saved` (another machine than the one that did) says no:
+    /// attaching then opens new context and records it in place of the
+    /// saved one, rather than asking to restore what is not there.
+    fn restores_saved_context(&self, _saved: &ExecutionSessionId) -> bool {
+        true
     }
     /// Live host owner retained by this factory and its configuration clones.
     /// Local factories explicitly assert local execution; hosted factories borrow

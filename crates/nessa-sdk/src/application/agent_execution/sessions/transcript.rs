@@ -34,7 +34,6 @@ pub(crate) struct CommittedTransactionState {
     applied: u64,
     facts: u64,
     evidence: records::ProviderEvidence,
-    context_witness: Option<(usize, usize)>,
 }
 impl CommittedTransactionState {
     pub(crate) fn undo_len(&self) -> usize {
@@ -128,13 +127,11 @@ impl CommittedTranscript {
             applied: self.applied,
             facts: self.facts,
             evidence: self.continuation.evidence,
-            context_witness: self.continuation.context_witness,
         }
     }
     pub(crate) fn restore_transaction(&mut self, state: CommittedTransactionState) {
         self.continuation.rollback(state.undo);
         self.continuation.evidence = state.evidence;
-        self.continuation.context_witness = state.context_witness;
         self.applied = state.applied;
         self.facts = state.facts;
     }
@@ -166,9 +163,9 @@ impl CommittedTranscript {
     }
     /// Drop the changes staged after `mark` without moving the fact count.
     ///
-    /// Provider evidence and the context witness are part of that suffix, so
-    /// a unit that staged a permission cancellation and then failed does not
-    /// leave the witness pointing at the rolled-back event.
+    /// Provider evidence is part of that suffix, so a unit that staged an
+    /// observation and then failed leaves no evidence of the rolled-back
+    /// event behind.
     pub(crate) fn abandon_staged(&mut self, state: &mut CommittedTransactionState, mark: usize) {
         let extra = state.undo.split_off(mark);
         self.continuation.rollback(extra);
