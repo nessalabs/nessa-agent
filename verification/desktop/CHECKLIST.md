@@ -1559,6 +1559,19 @@ says why where the conversations would be.
   gateway/SDK tests own current-state admission. The primitive and ordering
   table are [question targets](../../docs/design/question-targets.md).
 
+- [ ] **A Markdown table in a reply keeps every word whole and scrolls when wide.**
+  _Check:_ `conversation-stress.mjs`'s `table` step (knob `tables`) sends from
+  the window's composer; the scripted agent streams a narrow and a wide table.
+  Once the last cell is drawn and the reveal has finished, both tables show
+  their data rows once each and no short run ("Price", "$16.99", "Runtime",
+  "Format") is split across lines, even under the transcript's
+  `overflow-wrap: anywhere`. The narrow table fits the reply; the wide one
+  scrolls in its own panel, fades its right side (`data-hidden-right`) and
+  moves the fade left once scrolled to its end. The gateway's view holds the
+  answer exactly as streamed. Chromium in the PR job; WebKit with the stress
+  load run. The table itself is nessa_ui's `MessageMarkdown` / `Table`
+  (`edgeFade`), with its own story checks.
+
 ### Onboarding readiness recovery
 
 `node verification/desktop/scripts/onboarding-readiness.mjs` drives the real
