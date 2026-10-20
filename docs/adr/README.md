@@ -93,6 +93,7 @@ this table. None of it changes implementation or approval status.
 | — | [782 — Native phone retained client](todo/782-native-phone-retained-client.md) | Proposed typed owner-device retained/cache boundary, native phone bindings and repository integration over the shared receiver. Issue #782 owns implementation and platform/failure evidence |
 | — | [716 — Open a chat when a record cannot be read](todo/716-open-a-chat-when-a-record-cannot-be-read.md) | A saved record that cannot be read is one transcript line; the chat opens on the records that can. Fatal only for a decoded `Opened` naming another session before a snapshot exists; a foreign record scope becomes one gap, and an unread position is retryable |
 | — | [921 — Close product method classification at the gateway](todo/921-close-product-method-classification.md) | Proposed generated `ProductMethod` identity and one exhaustive gateway-owned handler, response-lane, execution-capacity and admission plan. [Source catalogue and migration plan](../design/product-method-classification.md) hold implementation detail; runtime behavior is unchanged |
+| — | [270 — Quarantined restore](todo/270-quarantined-restore.md) | Accepted. Quarantine, seal, then rename onto an empty live path; deferred conversations are fetched on open and checked against the cut's fingerprint. Ordering table: [quarantined restore](../design/quarantined-restore.md) |
 
 Auth API readiness and operating-bound work is complete. The
 [current Rust SDK](../../crates/nessa-sdk/docs/agent_execution/README.md) provides
