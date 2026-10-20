@@ -14,13 +14,14 @@
  * The gateway must be stopped: this writes the file it holds.
  */
 import { readdirSync } from "node:fs"
-import { join } from "node:path"
+import { join, sep } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 
 /** The conversation metadata file under a gateway's data directory. */
 export function metadataFile(directory) {
-  const found = readdirSync(directory, { recursive: true }).filter((each) =>
-    String(each).endsWith(join("conversations", "metadata.sqlite3")),
+  const found = readdirSync(directory, { recursive: true }).filter(
+    (each) =>
+      String(each).split(sep).slice(-2).join("/") === "conversations/metadata.sqlite3",
   )
   if (found.length !== 1)
     throw new Error(`expected one conversation metadata file, found ${found.length}`)

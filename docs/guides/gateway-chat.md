@@ -118,9 +118,11 @@ agent for the rest of its life, so changing `selected` moves new conversations
 only.
 
 Conversation metadata is one private database, `conversations/metadata.sqlite3`
-([ADR 196](../adr/done/196-conversation-metadata-database.md)). Nessa is in
-alpha and keeps no migrations. A namespace an earlier build wrote
-conversations into has them deleted once, with the gateway stopped: its whole
+([ADR 196](../adr/done/196-conversation-metadata-database.md)). A file at
+version 6 or 7 is brought to the current version when the gateway opens it,
+keeping every conversation ([ADR 202](../adr/todo/202-versioned-local-datasets.md),
+"Migrations"). A namespace an older build wrote conversations into is refused
+and has them deleted once, with the gateway stopped: its whole
 `conversations/` directory and its `attachments/`. The JSON directories alone
 are not enough — audit records, histories and uploads are keyed by the same
 conversation identities, and an identity created again beside its old creation
