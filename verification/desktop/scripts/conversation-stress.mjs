@@ -93,6 +93,7 @@ import { turnEnded } from "../../../scripts/mcp-test-server/evidence.mjs"
 import {
   SAYS,
   STRESS,
+  TABLE_LINES,
   WATCH_CALLS,
   stressScenario,
 } from "../../../scripts/mcp-test-server/scenarios/stress.mjs"
@@ -1290,6 +1291,91 @@ const steps = {
       15_000,
     )
     if (!hidden) failures.push("the window still lists the deleted conversation")
+  },
+
+  async table(run, step, failures) {
+    const text = prompt(run, STRESS.table, step)
+    const seen = await send(run, run.main.id, text, failures)
+    const { turn } = await settled(run, run.main.id, seen, text, "completed", failures)
+    if (!turn) return
+    // The gateway keeps the answer as it streamed: every line, in order, once.
+    const said = (turn.parts ?? []).map((part) => part.text ?? "").join("")
+    if (
+      !said.startsWith(`${SAYS.table}${text}`) ||
+      !said.includes(TABLE_LINES.join("\n"))
+    )
+      failures.push(`the table answer came back as ${JSON.stringify(said.slice(0, 120))}`)
+    // The window draws both tables in the agent's message, and draws them
+    // whole: no word split across lines, the narrow table inside the reply,
+    // the wide one scrolling in its own panel with its hidden side faded.
+    const message = run.page
+      .locator('.workspace-message[data-role="agent"]')
+      .filter({ hasText: `${SAYS.table}${text}` })
+    const tables = message.locator('[data-slot="markdown-table"]')
+    const drawn = await waitFor(async () => (await tables.count()) === 2, 15_000)
+    if (!drawn) {
+      failures.push(`the window drew ${await tables.count()} of 2 tables`)
+      return
+    }
+    const words = ["Price", "$16.99", "CAD", "$150", "Runtime", "Format", "Projectionist"]
+    const measured = await message.evaluate((element, words) => {
+      const lines = (root, word) => {
+        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
+        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+          const at = node.textContent.indexOf(word)
+          if (at < 0) continue
+          const range = document.createRange()
+          range.setStart(node, at)
+          range.setEnd(node, at + word.length)
+          return new Set([...range.getClientRects()].map((rect) => Math.round(rect.top)))
+            .size
+        }
+        return 0
+      }
+      const reply = element.getBoundingClientRect()
+      return [...element.querySelectorAll('[data-slot="markdown-table"]')].map(
+        (table) => {
+          const port = table.querySelector('[data-slot="table-container"]')
+          return {
+            split: words.filter((word) => lines(table, word) > 1),
+            hidden: port.scrollWidth - port.clientWidth,
+            within: table.getBoundingClientRect().right <= reply.right + 1,
+            fadedRight: table.hasAttribute("data-more-right"),
+          }
+        },
+      )
+    }, words)
+    for (const [index, table] of measured.entries()) {
+      if (table.split.length)
+        failures.push(
+          `table ${index + 1} split ${JSON.stringify(table.split)} across lines`,
+        )
+      if (!table.within) failures.push(`table ${index + 1} is wider than the reply`)
+    }
+    const [narrow, wide] = measured
+    if (narrow.hidden > 1 || narrow.fadedRight)
+      failures.push(`the narrow table scrolls (${narrow.hidden} px hidden)`)
+    if (wide.hidden <= 1 || !wide.fadedRight)
+      failures.push(
+        `the wide table does not scroll in its panel (${wide.hidden} px hidden, faded: ${wide.fadedRight})`,
+      )
+    if (run.evidence)
+      await message.screenshot({
+        path: join(run.evidence, `table-${run.engine ?? "window"}.png`),
+      })
+    // Scrolled to its end, the fade moves to the side now hidden.
+    const last = tables.nth(1)
+    await last
+      .locator('[data-slot="table-container"]')
+      .evaluate((port) => port.scrollTo({ left: port.scrollWidth }))
+    const moved = await waitFor(
+      async () =>
+        (await last.getAttribute("data-more-left")) !== null &&
+        (await last.getAttribute("data-more-right")) === null,
+      5_000,
+    )
+    if (!moved)
+      failures.push("scrolled to its end, the wide table did not fade its left side")
   },
 
   async long(run, step, failures) {
