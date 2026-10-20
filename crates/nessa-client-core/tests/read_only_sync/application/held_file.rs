@@ -5,8 +5,8 @@ use super::*;
 use crate::read_only_sync::domain::HELD_FILE_RANGE_BYTES;
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_sdk::domain::common::value_objects::{MediaType, Sha256Digest};
-use std::cell::RefCell;
 use std::collections::VecDeque;
+use std::sync::Mutex;
 
 const RANGE: usize = HELD_FILE_RANGE_BYTES as usize;
 
@@ -63,16 +63,17 @@ impl HeldFileSource for Source {
 }
 
 #[derive(Default)]
-struct Pauses(RefCell<Vec<Duration>>);
+struct Pauses(Mutex<Vec<Duration>>);
 impl Pause for Pauses {
     fn pause(&self, delay: Duration) {
-        self.0.borrow_mut().push(delay);
+        self.0.lock().expect("pause record").push(delay);
     }
 }
 impl Pauses {
     fn millis(&self) -> Vec<u64> {
         self.0
-            .borrow()
+            .lock()
+            .expect("pause record")
             .iter()
             .map(|delay| delay.as_millis() as u64)
             .collect()

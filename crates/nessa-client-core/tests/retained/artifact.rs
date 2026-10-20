@@ -2,7 +2,7 @@
 //! when the part on disk matches the named digest.
 use super::{
     confirmed_held_file, local_held_file, ArtifactFaultKind, ArtifactFreshness, ArtifactRequest,
-    ReadFailure, ReadStop, Sleep, StoppedSource,
+    Pause, ReadFailure, ReadStop, StoppedSource,
 };
 use crate::read_only_sync::application::held_file::{HeldFileSource, RangeAnswer};
 use crate::read_only_sync::application::GatewayError;
@@ -13,6 +13,12 @@ use sha2::{Digest, Sha256};
 use std::fs;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
+
+struct Still;
+impl Pause for Still {
+    fn pause(&self, _: Duration) {}
+}
 
 const CONVERSATION: &str = "00000000-0000-4000-8000-000000000001";
 const MEDIA: &str = "application/octet-stream";
@@ -108,7 +114,7 @@ fn a_gateway_answer_is_fresh_only_when_the_digest_matches() {
     };
     let fresh = confirmed_held_file(
         &mut source,
-        &Sleep,
+        &Still,
         &request(&conversation, &digest, &output),
     )
     .unwrap()
@@ -133,7 +139,7 @@ fn a_gateway_answer_is_fresh_only_when_the_digest_matches() {
     };
     let fault = confirmed_held_file(
         &mut source,
-        &Sleep,
+        &Still,
         &request(&conversation, &digest, &output),
     )
     .unwrap()
@@ -151,7 +157,7 @@ fn a_gateway_answer_is_fresh_only_when_the_digest_matches() {
     };
     let fault = confirmed_held_file(
         &mut source,
-        &Sleep,
+        &Still,
         &request(&conversation, &digest, &output),
     )
     .unwrap()
@@ -182,7 +188,7 @@ fn a_stopped_source_is_not_a_fresh_file_and_asks_nothing() {
     let digest = digest_of(bytes);
     let fault = confirmed_held_file(
         &mut source,
-        &Sleep,
+        &Still,
         &request(&conversation, &digest, &output),
     )
     .unwrap()

@@ -192,13 +192,13 @@ flowchart LR
 
 - A stamp names one generation and one receiver. `accept` returns that receiver's saved rows only while the lease still has that pair.
 - The same issued receiver keeps the generation. A different receiver, a successful terminal purge, or session close advances it. The previous stamp then fails and no bytes are read.
-- Close is permanent for that session. A successful purge only releases the receiver, so a later enrollment in the same session can bind the next one.
+- Close is permanent for that session. A successful purge only releases the receiver, so a later enrollment in the same session can bind the next one. That release happens when the purge succeeded, including when the status has no observation. No observation and no successful purge leaves the bound receiver in place.
 - Catalogue presence is one stored identity. A live row is Live. A deletion fence or receiver purge receipt is Tombstone. No row and no fence is Absent. A page that does not mention a chat does not write a tombstone.
 - A deletion whose commit did not land leaves the previous row. Presence after that failure is the previous state, not Tombstone.
 - A withdrawn grant removes the local row and writes no fence. Presence is Absent, so the chat can return with a later grant.
 - `LocalMatch` means the output file already had the named size and digest. No range was asked. It is not a new gateway hold.
 - `GatewayConfirmed` means this run's ranges were answered and the part, read back from disk, matched the digest. A partial part, a wrong range, or a digest mismatch is a fault. `reached` on that fault is not freshness.
-- The fetch reports the monotonic elapsed time of that fetch. That duration is not model-generation latency.
+- The fetch reports the monotonic elapsed time of that fetch, including a local match that never dials. That duration is the session or cache clock, not model-generation latency. Busy-range retries wait on the injected pause; production composition uses `ThreadPause`.
 - `conversation.subscribe` remains the live view. It still does not advance the checkpoint. Command recovery stays in the outbox.
 
 ### State
@@ -209,6 +209,8 @@ flowchart LR
 | Bound A | `bind` A again | Same stamp | same |
 | Bound A | `bind` B | New stamp; A's stamp is Replaced and reads nothing | same, and `a_replaced_receiver_stamp_reads_nothing_and_dials_nothing` |
 | Bound A | successful terminal purge | Receiver released; A's stamp is Unbound/Replaced; a later `bind` B is admitted | `a_purge_releases_the_receiver_and_a_later_bind_is_admitted` |
+| Bound A | successful purge and no observation | Unbound; the credential may remain, and a later bind advances the generation | `a_successful_purge_releases_the_publication_without_an_observation` |
+| Output already the file | session fetch | LocalMatch, source not asked, elapsed is the session clock | `a_local_match_reports_the_session_clock` |
 | Bound | session close | Closed; `bind` stays closed | `close_refuses_the_stamp_and_a_later_bind` |
 | Live row | page that omits that row | Stays Live | `catalogue_presence_names_a_fence_and_not_an_absent_row` |
 | Live row | deletion commit aborts | Stays Live | `a_deletion_that_does_not_commit_is_not_a_tombstone` |

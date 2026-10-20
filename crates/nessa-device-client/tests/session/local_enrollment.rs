@@ -116,6 +116,7 @@ fn compose(
         address: "127.0.0.1:9".parse().unwrap(),
         wall: Arc::new(Wall),
         clock: Arc::new(Monotonic::new()),
+        pause: Arc::new(ThreadPause),
         runtime: Builder::new_current_thread().enable_all().build().unwrap(),
         product: ProductDependencies::default(),
     })

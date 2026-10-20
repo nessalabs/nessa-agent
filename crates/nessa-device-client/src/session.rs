@@ -26,10 +26,11 @@ use nessa_client_core::{
         ProductWake, ThreadProductWake,
     },
     retained::{
-        ArtifactFetch, ArtifactRequest, CataloguePresence, FeedEvent, PhoneFence, PhoneLease,
-        PhoneStamp, ReadFailure, ReadReport, ReadStop, RetainedCache, RetainedCataloguePage,
-        RetainedDeviceReader, RetainedEnrollmentClient, RetainedEnrollmentStatus,
-        RetainedOwnerStatus, RetainedPurge, RetainedTranscript, HANDSHAKE,
+        ArtifactFetch, ArtifactRequest, CataloguePresence, FeedEvent, Pause, PhoneFence,
+        PhoneLease, PhoneStamp, ReadFailure, ReadReport, ReadStop, RetainedCache,
+        RetainedCataloguePage, RetainedDeviceReader, RetainedEnrollmentClient,
+        RetainedEnrollmentStatus, RetainedOwnerStatus, RetainedPurge, RetainedTranscript,
+        ThreadPause, HANDSHAKE,
     },
 };
 use nessa_protocol::{
@@ -414,6 +415,7 @@ struct Driver {
     path: PathBuf,
     wall: Arc<dyn WallClock>,
     clock: Arc<dyn Clock>,
+    pause: Arc<dyn Pause>,
     cache: Option<RetainedCache>,
     received: Option<DisclosedConsent>,
     product: ProductDependencies,
@@ -431,6 +433,7 @@ struct Dependencies {
     address: SocketAddr,
     wall: Arc<dyn WallClock>,
     clock: Arc<dyn Clock>,
+    pause: Arc<dyn Pause>,
     runtime: Runtime,
     product: ProductDependencies,
 }
@@ -508,21 +511,20 @@ impl Driver {
     fn remember(&mut self, status: &NativePairingStatus) {
         self.received = status.consent().cloned();
     }
-    fn note_native(&mut self, status: &NativePairingStatus, purged: bool) {
-        match status {
-            NativePairingStatus::Active { receiver, .. } if !purged => {
-                let _ = self.lease.bind(receiver.as_str());
-            }
-            NativePairingStatus::Terminal { .. } if purged => self.lease.release_receiver(),
-            _ => {}
+    /// A successful purge releases the bound receiver before any observation is
+    /// required. An active observation binds only when this operation did not purge.
+    fn note_publication(&mut self, observation: Option<&NativePairingStatus>, purged: bool) {
+        if purged {
+            self.lease.release_receiver();
+            return;
+        }
+        if let Some(NativePairingStatus::Active { receiver, .. }) = observation {
+            let _ = self.lease.bind(receiver.as_str());
         }
     }
     fn note_binding(&mut self, status: &SessionStatus) {
-        let Some(native) = status.observation() else {
-            return;
-        };
         let purged = matches!(status.purge(), Some(Ok(_)));
-        self.note_native(native, purged);
+        self.note_publication(status.observation(), purged);
     }
     fn select_reader(
         &self,
@@ -887,6 +889,7 @@ impl NativeSession {
             address,
             wall,
             clock,
+            pause: Arc::new(ThreadPause),
             connector: Arc::new(SocketConnector),
             entropy: Arc::new(OsEntropyFactory),
             runtime,
@@ -900,6 +903,7 @@ impl NativeSession {
             address,
             wall,
             clock,
+            pause,
             connector,
             entropy,
             runtime,
@@ -932,6 +936,7 @@ impl NativeSession {
                 path,
                 wall,
                 clock,
+                pause,
                 cache: None,
                 received: None,
                 product,
@@ -1037,7 +1042,7 @@ impl NativeSession {
             )
             .map_err(SessionFailure::Enrollment)?;
         driver.remember(&status);
-        driver.note_native(&status, false);
+        driver.note_publication(Some(&status), false);
         Ok(status)
     }
     /// Existing exact-operation retry owner decides eligibility before a new attempt.
@@ -1065,7 +1070,7 @@ impl NativeSession {
             ))
             .map_err(SessionFailure::Enrollment)?;
         driver.remember(outcome.retried());
-        driver.note_native(outcome.retried(), false);
+        driver.note_publication(Some(outcome.retried()), false);
         Ok(outcome)
     }
     /// Fresh pinned status retains per-operation purge and outer worker failure.
@@ -1360,10 +1365,12 @@ impl NativeSession {
         }
         let driver = operation.driver();
         driver.accept_publication(stamp)?;
+        let started = driver.clock.elapsed_ms();
         if let Some(outcome) =
             nessa_client_core::retained::local_held_file(request).map_err(SessionFailure::Cache)?
         {
-            return Ok(ArtifactFetch::decided(outcome, 0));
+            let elapsed = driver.clock.elapsed_ms().saturating_sub(started);
+            return Ok(ArtifactFetch::decided(outcome, elapsed));
         }
         let status = driver.status();
         driver.accept_publication(stamp)?;
@@ -1375,6 +1382,7 @@ impl NativeSession {
         if selected.reader.receiver() != stamp.receiver() {
             return Err(SessionFailure::Fenced(PhoneFence::Replaced));
         }
+        let pause = Arc::clone(&driver.pause);
         driver
             .cache()
             .map_err(SessionFailure::Cache)?
@@ -1383,6 +1391,7 @@ impl NativeSession {
                 &stop,
                 Duration::from_secs(5),
                 request,
+                pause.as_ref(),
             )
             .map_err(SessionFailure::Cache)
     }

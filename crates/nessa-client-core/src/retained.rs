@@ -90,10 +90,11 @@ mod phone;
 mod relay;
 mod saved;
 mod subscribe;
+pub use crate::read_only_sync::application::held_file::Pause;
 pub use active::RetainedDeviceReader;
 pub use artifact::{
     local_held_file, ArtifactFault, ArtifactFaultKind, ArtifactFetch, ArtifactFileStep,
-    ArtifactFreshness, ArtifactRequest,
+    ArtifactFreshness, ArtifactRequest, ThreadPause,
 };
 pub use device::{RetainedEnrollmentClient, RetainedEnrollmentStatus, RetainedPurge};
 pub use phone::{CataloguePresence, PhoneFence, PhoneLease, PhoneStamp};

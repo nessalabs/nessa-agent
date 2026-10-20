@@ -46,8 +46,10 @@ pub(crate) trait HeldFileSource {
     fn read(&mut self, file: &HeldFile, range: HeldRange) -> Result<RangeAnswer, GatewayError>;
 }
 
-/// Waits between retries of a busy range.
-pub(crate) trait Pause {
+/// Waits between retries of a busy range. Callers inject the wait so a test
+/// can refuse to sleep.
+pub trait Pause: Send + Sync {
+    /// Wait `delay` before the same range is asked again.
     fn pause(&self, delay: Duration);
 }
 

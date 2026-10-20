@@ -13,7 +13,7 @@ use nessa_auth::{
 use nessa_client_core::retained::{ArtifactFreshness, ArtifactRequest};
 use nessa_local_storage::create_directory_beneath;
 use std::fs;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 struct Refusing {
     calls: AtomicUsize,
@@ -62,7 +62,16 @@ struct Opened {
     connector: Arc<Refusing>,
     session: NativeSession,
 }
+struct Steps(AtomicU64);
+impl Clock for Steps {
+    fn elapsed_ms(&self) -> u64 {
+        self.0.fetch_add(7, Ordering::SeqCst)
+    }
+}
 fn opened() -> Opened {
+    compose_opened(Arc::new(Monotonic::new()))
+}
+fn compose_opened(clock: Arc<dyn Clock>) -> Opened {
     let root = PrivateFixture::new();
     create_directory_beneath(root.path(), Path::new("private")).unwrap();
     let state = Arc::new(FilePairingState::open(root.path(), Path::new("private")).unwrap());
@@ -77,7 +86,8 @@ fn opened() -> Opened {
         connector: connector.clone(),
         entropy: Arc::new(OsEntropyFactory),
         wall: Arc::new(Wall),
-        clock: Arc::new(Monotonic::new()),
+        clock,
+        pause: Arc::new(ThreadPause),
         runtime: Builder::new_current_thread().enable_all().build().unwrap(),
         product: ProductDependencies::default(),
     })
@@ -134,7 +144,6 @@ fn a_replaced_receiver_stamp_reads_nothing_and_dials_nothing() {
         fetched.outcome(),
         Ok(ArtifactFreshness::LocalMatch { bytes: 2 })
     );
-    assert_eq!(fetched.elapsed_ms(), 0);
     assert!(matches!(
         session.fetch_artifact(&first, &request, ReadStop::new()),
         Err(SessionFailure::Fenced(PhoneFence::Replaced))
@@ -169,5 +178,67 @@ fn a_missing_file_reports_the_connector_failure() {
         )))
     ));
     assert_eq!(connector.calls.load(Ordering::SeqCst), 1);
+    session.close().unwrap();
+}
+
+#[test]
+fn a_successful_purge_releases_the_publication_without_an_observation() {
+    let Opened {
+        root: _root,
+        session,
+        ..
+    } = opened();
+    let conversation = ConversationId::new("00000000-0000-4000-8000-000000000001").unwrap();
+    let first = session.bind_saved_receiver().unwrap();
+    {
+        let mut operation = session.enter(None).unwrap();
+        operation.driver().note_publication(None, false);
+    }
+    assert_eq!(session.publication().unwrap(), first);
+    {
+        let mut operation = session.enter(None).unwrap();
+        operation.driver().note_publication(None, true);
+    }
+    assert!(matches!(
+        session.publication(),
+        Err(SessionFailure::Fenced(PhoneFence::Unbound))
+    ));
+    let second = session.bind_saved_receiver().unwrap();
+    assert_ne!(second.generation(), first.generation());
+    assert!(matches!(
+        session.published_transcript(&first, &conversation, Uuid::nil()),
+        Err(SessionFailure::Fenced(PhoneFence::Replaced))
+    ));
+    session.close().unwrap();
+}
+
+#[test]
+fn a_local_match_reports_the_session_clock() {
+    let Opened {
+        root,
+        connector,
+        session,
+        ..
+    } = compose_opened(Arc::new(Steps(AtomicU64::new(0))));
+    let stamp = session.bind_saved_receiver().unwrap();
+    let conversation = ConversationId::new("00000000-0000-4000-8000-000000000001").unwrap();
+    let output = root.path().join("private/held.bin");
+    fs::write(&output, b"ab").unwrap();
+    let request = ArtifactRequest::new(
+        &conversation,
+        "sha256:fb8e20fc2e4c3f248c60c39bd652f3c1347298bb977b8b4d5903b85055620603",
+        "application/octet-stream",
+        2,
+        &output,
+    );
+    let fetched = session
+        .fetch_artifact(&stamp, &request, ReadStop::new())
+        .unwrap();
+    assert_eq!(
+        fetched.outcome(),
+        Ok(ArtifactFreshness::LocalMatch { bytes: 2 })
+    );
+    assert_eq!(fetched.elapsed_ms(), 7);
+    assert_eq!(connector.calls.load(Ordering::SeqCst), 0);
     session.close().unwrap();
 }

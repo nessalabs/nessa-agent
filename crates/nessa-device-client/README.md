@@ -47,9 +47,12 @@ Current development surface:
 The explicit saved selector grants no connection, enrollment or command
 permission. The phone publication lease (`PhoneLease`) is what a later saved
 read or held-file fetch must present. A stamp from an earlier receiver reads
-nothing and does not dial. Catalogue presence reads one stored identity;
+nothing and does not dial. A successful purge releases that receiver even when
+the status carries no observation. Catalogue presence reads one stored identity;
 absence is not a tombstone. Held-file freshness is either a local digest match,
-with no range asked, or a gateway confirmation of the part on disk. The native session and compound
+with no range asked, or a gateway confirmation of the part on disk. Elapsed time
+on either path is the session clock. Busy-range retries wait on the pause the
+session was composed with. The native session and compound
 refresh API have run against paired records through generated Swift on macOS.
 `swift/NativeSessionWorker.swift` supplies pre-queue admission, cancellation latches
 and a shared physical close task around generated calls. The release Apple package

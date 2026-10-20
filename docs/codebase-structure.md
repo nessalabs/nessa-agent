@@ -2251,7 +2251,8 @@ execution. `retained/phone.rs` is the phone publication lease and catalogue
 presence: a stamp reads only its bound receiver, and a missing catalogue row
 is not a tombstone. `retained/artifact.rs` fetches one held file through the
 existing range owner and reports local integrity separately from a gateway
-confirmation. The product iOS application is not in this repository.
+confirmation. Busy-range retries wait on an injected pause; `ThreadPause` is
+the operating-system wait, and session composition supplies it. The product iOS application is not in this repository.
 `src/outbox/` keeps a typed phone
 send before `conversation.send` and reads `conversation.receipt` before any
 later send; its ordering is [phone outbox](design/phone-outbox.md). The phone
@@ -2468,8 +2469,10 @@ accepts the protocol clock at composition; `open` keeps the production default.
 Core's `retained/active.rs` validates fresh status against the current immutable
 issued record before product selection. Release Apple packaging is verified.
 `NativeSession` binds a `PhoneLease` to the issued receiver and refuses a
-replaced stamp before a saved read or held-file fetch. Catalogue presence and
-artifact freshness are on that same session. This module does not supply native
+replaced stamp before a saved read or held-file fetch. A successful purge
+releases the lease even when the status has no observation. Catalogue presence and
+artifact freshness are on that same session. A local match reports the session
+clock. This module does not supply native
 authority from a panel token or an arbitrary saved cache target. Physical-device
 execution remains unverified.
 

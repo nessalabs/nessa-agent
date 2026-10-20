@@ -120,6 +120,7 @@ fn compose_product(
         entropy: Arc::new(OsEntropyFactory),
         wall: Arc::new(Wall),
         clock,
+        pause: Arc::new(ThreadPause),
         runtime: Builder::new_current_thread().enable_all().build().unwrap(),
         product: ProductDependencies {
             connector,
@@ -665,6 +666,7 @@ fn close_during_issued_load_fences_provisional_installation_and_preserves_privat
             entropy: Arc::new(OsEntropyFactory),
             wall: Arc::new(Wall),
             clock: Arc::new(Monotonic::new()),
+            pause: Arc::new(ThreadPause),
             runtime: Builder::new_current_thread().enable_all().build().unwrap(),
             product: ProductDependencies {
                 connector: network.clone(),
@@ -1046,6 +1048,7 @@ fn poisoned_parent_drain_preserves_distinct_faults_and_joins_before_private_rele
             entropy: Arc::new(OsEntropyFactory),
             wall: Arc::new(Wall),
             clock: Arc::new(Monotonic::new()),
+            pause: Arc::new(ThreadPause),
             runtime: Builder::new_current_thread().enable_all().build().unwrap(),
             product: ProductDependencies {
                 connector: Arc::new(CleanupConnector { gate: gate.clone() }),
@@ -1177,6 +1180,7 @@ fn exact_private_failure_conflicting_records_and_pending_only_refuse_without_con
             entropy: Arc::new(OsEntropyFactory),
             wall: Arc::new(Wall),
             clock: Arc::new(Monotonic::new()),
+            pause: Arc::new(ThreadPause),
             runtime: Builder::new_current_thread().enable_all().build().unwrap(),
             product: ProductDependencies {
                 connector: connector.clone(),
@@ -1238,6 +1242,7 @@ fn retained_refresh_admits_while_foreign_event_waiter_owns_its_original_child() 
         entropy: Arc::new(OsEntropyFactory),
         wall: Arc::new(Wall),
         clock: clock.clone(),
+        pause: Arc::new(ThreadPause),
         runtime: Builder::new_current_thread().enable_all().build().unwrap(),
         product: ProductDependencies {
             connector: Arc::new(LocalProductConnector),
@@ -1523,6 +1528,7 @@ fn closed_registration_gate_prevents_worker_start_and_native_connect() {
             entropy: Arc::new(OsEntropyFactory),
             wall: Arc::new(Wall),
             clock: Arc::new(Monotonic::new()),
+            pause: Arc::new(ThreadPause),
             runtime: Builder::new_current_thread().enable_all().build().unwrap(),
             product: ProductDependencies {
                 connector: network.clone(),

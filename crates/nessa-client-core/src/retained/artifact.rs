@@ -4,6 +4,7 @@
 //! of the gateway. Gateway freshness is only the run whose ranges were
 //! answered and whose part, read back from disk, matched the named digest.
 //! Elapsed time is this fetch on the retained clock, not model generation.
+//! Busy retries wait on the injected pause.
 
 use super::{failure, ReadFailure, ReadStop, ReaderAccess, RetainedCache, Stopping};
 use crate::read_only_sync::application::held_file::{
@@ -101,6 +102,16 @@ impl ArtifactFault {
     }
 }
 
+/// Waits on the operating system's clock between retries of a busy range.
+/// Session composition injects this, or a test double, into the fetch.
+#[derive(Debug, Default)]
+pub struct ThreadPause;
+impl Pause for ThreadPause {
+    fn pause(&self, delay: Duration) {
+        std::thread::sleep(delay);
+    }
+}
+
 /// One fetch's freshness or fault, and how long it took on the caller's clock.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ArtifactFetch {
@@ -122,13 +133,6 @@ impl ArtifactFetch {
     /// Monotonic milliseconds spent in this fetch. Not model-generation latency.
     pub fn elapsed_ms(self) -> u64 {
         self.elapsed_ms
-    }
-}
-
-struct Sleep;
-impl Pause for Sleep {
-    fn pause(&self, delay: Duration) {
-        std::thread::sleep(delay);
     }
 }
 
@@ -294,6 +298,7 @@ impl RetainedCache {
         stop: &Arc<ReadStop>,
         budget: Duration,
         request: &ArtifactRequest<'_>,
+        pause: &dyn Pause,
     ) -> Result<ArtifactFetch, ReadFailure> {
         let started = self.clock.elapsed_ms();
         let elapsed = |cache: &Self| cache.clock.elapsed_ms().saturating_sub(started);
@@ -314,7 +319,7 @@ impl RetainedCache {
             source: GatewayConnection::new(session),
             stop: stop.clone(),
         };
-        let outcome = confirmed_held_file(&mut source, &Sleep, request)?;
+        let outcome = confirmed_held_file(&mut source, pause, request)?;
         Ok(ArtifactFetch {
             outcome,
             elapsed_ms: elapsed(self),
