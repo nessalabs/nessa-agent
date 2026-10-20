@@ -429,12 +429,15 @@ fn declined(record: &ReviewDeclineRecord) -> Value {
         }),
     };
     // The turn was running when the tool was about to run. Continue leaves it
-    // running. A stop ends the turn. A close ends the session. The provider's
-    // later result is a different record.
+    // running. An end-turn has already finished that execution locally, so
+    // the record says stopped. A close-session is the requested close:
+    // cleanup can still be unconfirmed when this record is written, and the
+    // confirmed transition is the separate session_closed record. The
+    // provider's later result is a different record.
     let after = match decline.outcome() {
         RefusalOutcome::Continue => "running",
         RefusalOutcome::EndTurn => "stopped",
-        RefusalOutcome::CloseSession => "closed",
+        RefusalOutcome::CloseSession => "closing",
     };
     json!({
         "kind":"review_declined",

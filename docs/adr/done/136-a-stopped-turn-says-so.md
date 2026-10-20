@@ -46,10 +46,12 @@ A hook stop is not relabelled as a rule. The cancellation already names the
 hook. When its code is an end-turn or a close-session hook refusal, and its
 review id is a notice id, the panel says the turn stopped or the session
 closed, names the tool, and quotes the hook's reason. That notice is a hook
-notice. A declined-review notice is a review notice. `ReviewDeclineId` and
-`PermissionId` are different identities, so the same decimal may name both
-in one turn. The wire carries which decision the notice is. Neither sentence
-replaces the other.
+notice. A declined-review notice is a review notice. A deadline that settled
+its review is a deadline notice. `ReviewDeclineId` and `PermissionId` are
+different identities, and admission checks each within its own type, so the
+same decimal may name a decline, a permission, and that permission's deadline
+in one turn. The wire carries which decision the notice is. No sentence
+replaces another.
 
 The gateway log for a configured stop names the rule id, its revision, and
 the tool. The hook stop log names the tool, the hook index or `runtime`, and
@@ -60,8 +62,11 @@ the grantor.
 
 The audit record for the decline says the turn was `running` before the
 decision. After a continue it is still `running`. After an end-turn it is
-`stopped`. After a close it is `closed`. The provider's later result stays a
-separate late-result record.
+`stopped`, because that execution has already been finished locally. After a
+close-session it is `closing`: the record is the requested close, and cleanup
+can still be unconfirmed. The confirmed session transition is the separate
+`session_closed` record, whose after is `closed`. The provider's later result
+stays a separate late-result record.
 
 ## Ordering
 
@@ -80,7 +85,8 @@ first matching row is what happens.
 | A hook close-session | The withdrawal is recorded while the session can still record it, then the session is closed. The panel sentence is that cancellation. |
 | A hook returns continue, or an end-turn the binding cannot perform and so records as continue | No stop sentence. The turn keeps running. |
 | A hook stop's review id is not a notice id | No notice is added, because a notice id that the client rejects would drop the whole view. The cancellation and its audit remain. |
-| A hook stop's permission id equals a declined-review id in the same turn | Both notices stay. They are different decisions. The hook sentence is not dropped, and a later review update does not rewrite the hook sentence. |
+| A hook stop's permission id equals a declined-review id in the same turn | Both notices stay. They are different decisions. The hook sentence is not dropped, and a later review update does not rewrite the hook sentence. Admission accepts the history. |
+| A deadline settlement's permission id equals a declined-review id in the same turn | Both notices stay. The deadline sentence is a deadline notice. A later review update does not rewrite it. |
 | Provider notification of the stop fails | The local notice and the local outcome stay. The notification failure is its own log line. |
 
 ## Invariants
@@ -95,8 +101,11 @@ first matching row is what happens.
   using the turn.
 - General logs name the rule or the hook and the tool. They do not include
   tool arguments.
-- A review notice and a hook notice are different notices. The same decimal
-  may name both. The notice kind is what tells them apart.
+- A review notice, a hook notice, and a deadline notice are different
+  notices. The same decimal may name each of them. The notice kind is what
+  tells them apart. Admission rejects a repeated permission id, and a
+  repeated decline id. It does not reject a permission id that equals a
+  decline id.
 
 ## Alternatives considered
 
@@ -112,6 +121,14 @@ first matching row is what happens.
 - Record a hook stop as `ApprovalBasis::Rule`. A hook has an index and a
   reason, not a configured revision and a grant. Relabelling it would name
   the wrong initiator.
+- Keep permission ids and decline ids in one sequence so a deadline notice
+  cannot repeat a decline's id. That made the independent notice kinds
+  unreachable for any adapter or restored history that assigned the same
+  decimal, and it rejected a history the panel can show. The deadline's own
+  notice kind is what keeps the sentences apart.
+- Record a close-session decline as `after: closed`. The decline is written
+  when the close is requested. The session can still be unconfirmed. The
+  confirmed transition already has its own `session_closed` record.
 
 ## Review brief
 

@@ -906,7 +906,8 @@ fn audit_maps_a_stopping_refusal_as_the_cause_of_the_stop() {
     ));
     assert_eq!(closed["outcome"], "close_session");
     assert_eq!(closed["before"], "running");
-    assert_eq!(closed["after"], "closed");
+    // Requested close. The confirmed session transition is session_closed.
+    assert_eq!(closed["after"], "closing");
     assert!(closed.get("stop").is_none());
 
     let late = record_value(&ExecutionAuditRecord::LateProviderResult(
