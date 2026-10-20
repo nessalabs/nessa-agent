@@ -162,6 +162,7 @@ export const SplitPanes = memo(function SplitPanes({
     <div
       className={classes.grid}
       {...{ [marks.grid]: "" }}
+      {...(drawn !== columns ? { [marks.pending]: "" } : {})}
       ref={gridRef}
       {...{ [marks.multi]: multi || undefined }}
       onKeyDown={tabOrder}

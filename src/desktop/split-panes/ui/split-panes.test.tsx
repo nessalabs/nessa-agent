@@ -158,7 +158,10 @@ it("paints a new arrangement on the frame after it commits", async () => {
   await fake.change(splitPane(layout, 2, "bottom", "c"))
   // The commit's own turn keeps the boxes already painted, and so do the
   // two frames after it: a drop's copy lets go, then a column title glides.
+  // The grid is pending until that paint, so a host can hold the width the
+  // new boxes will take.
   expect(grid().querySelectorAll(".host-pane")).toHaveLength(2)
+  expect(grid().hasAttribute(marks.pending)).toBe(true)
   await act(
     async () =>
       new Promise<void>((resolve) =>
@@ -170,6 +173,7 @@ it("paints a new arrangement on the frame after it commits", async () => {
     async () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
   )
   expect(grid().querySelectorAll(".host-pane")).toHaveLength(3)
+  expect(grid().hasAttribute(marks.pending)).toBe(false)
   // That paint skips scene text. The frame after shows it again.
   expect(grid().hasAttribute(marks.painting)).toBe(true)
   await nextPaint()

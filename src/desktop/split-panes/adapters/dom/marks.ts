@@ -68,6 +68,12 @@ export const marks = {
   takesSpare: "data-drag-takes-spare",
   /** On the grid while it is painting a column change. Scene text waits one frame (`styles.css`). */
   painting: "data-split-painting",
+  /**
+   * On the grid from a column change until the new boxes paint. The workspace
+   * keeps the sidebar's width for that wait, so folding it does not reflow
+   * the conversation early (`chrome.css`).
+   */
+  pending: "data-split-pending",
 } as const
 
 /** The module's own elements a host may style or find. */

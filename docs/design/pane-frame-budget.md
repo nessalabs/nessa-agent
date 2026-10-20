@@ -44,6 +44,15 @@ deferring `fitToWindow` does not move it. The page paints the fold on the
 next frame (`useDrawnAfterColumnChange`), and the new boxes wait until the
 frame after the title's glide.
 
+The click still re-rendered the sidebar. `useEdgePeek` returned a new
+object on every shell render, the shell renders when the panes change, and
+that object is the sidebar's context value, which bypasses the columns'
+memo. The fold then took the sidebar out of the flex row while the grid
+was still painting one pane, so that pane widened and its text laid out,
+and laid out again when the new boxes arrived. The grid is
+`data-split-pending` until those boxes paint, and a hold of the sidebar's
+width keeps the conversation's measure until then.
+
 ## States
 
 | State | Event | Result |
@@ -81,13 +90,16 @@ starts the measured row.
 5. A column change paints three frames after the commit that recorded it.
    The next frame is when a drop's copy lets go and when a side column's
    fold is painted. A spare fold is already in state (`arranged`); a resize
-   still folds before paint (`useFitOnResize`). The frame after that is the
-   column title's glide. The grid mounted with whatever layout it first
-   read; that first paint does not wait. The paint frame marks the grid
-   `data-split-painting`, and scene text that has already laid out stays
-   unpainted until the next frame. The grain comes back the frame after
-   that paint, and the composer's blur the frame after the grain. A drag's
-   copy does not paint the night scene.
+   still folds before paint (`useFitOnResize`). Until the new boxes paint,
+   the grid is `data-split-pending` and the workspace holds the folded
+   sidebar's width, so the conversation does not change measure on the fold.
+   The frame after the fold is the column title's glide. The grid mounted
+   with whatever layout it first read; that first paint does not wait. The
+   paint frame marks the grid `data-split-painting`, and scene text that has
+   already laid out stays unpainted until the next frame. The grain comes
+   back the frame after that paint, and the composer's blur the frame after
+   the grain. A drag's copy does not paint the night scene. A pane change
+   does not render the sidebar unless the reveal itself changed.
 
 Conversation bodies stay in layout through measuring, flying, and reflow.
 The product flight stays zero-duration. A nonzero flight may still read
@@ -155,6 +167,12 @@ flowchart LR
   `--desktop-column-title-block` before the move. The boxes still wait
   one more frame: the glide and the new boxes are each a layout of their
   own.
+- Rendering the pane change as a transition. Selectors read an external
+  store, and that store's updates stay on the click's turn, so the
+  transition would not move the render.
+- Letting the fold widen the conversation, since the new boxes follow.
+  The widen is its own frame, and that frame lays the text out. Holding
+  the width costs one empty flex item and no second layout of the text.
 
 ## Review brief
 
@@ -166,11 +184,13 @@ flowchart LR
   ≤ 50 ms unrounded. A shown night scene has laid out its text once the
   open has settled. A drop commits on the frame after pointerup paints.
 - Owned scope: `paneBox`, the drop's two callbacks, the grid painting a
-  column change three frames later, the side-column fit waiting one frame
-  when the pane count changes, the sidebar paint waiting that same frame
-  when the count changes (`useDrawnAfterColumnChange`, passed into the
-  source list), the scene-ready and scene-complete marks and the layer
-  rules, the tests that lock those, the settled assertion in `columns.mjs`
+  column change three frames later and marking that wait
+  `data-split-pending`, the side-column fit waiting one frame when the
+  pane count changes, the sidebar paint waiting that same frame when the
+  count changes (`useDrawnAfterColumnChange`, passed into the source
+  list), the spare-width hold, the edge peek's stable controls, the
+  scene-ready and scene-complete marks and the layer rules, the tests
+  that lock those, the settled assertion in `columns.mjs`
   `content-visible`, and this note.
 - Outside that scope: `FlipScope`'s read when the flight duration is
   nonzero, blanking a conversation, and issues 965, 981, 1038, 1039, 1030,
