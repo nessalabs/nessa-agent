@@ -2311,6 +2311,12 @@ check.
 `crates/nessa-server/examples/protected_sync_bench.rs` is a non-CI harness that runs the same flow
 against a real `nessa server` and real client processes and reports timings and
 bytes on the wire as JSON.
+`crates/nessa-client-core/examples/weak_link_measure.rs` prints the #262 schedule
+report. `read_only_sync/domain/link.rs` decides who may copy; `read_only_sync/application/link.rs`
+runs one page only after that decision. The example copies a real SDK record
+source into the private cache, unpaced and at 8,000 payload bytes per second,
+then reopens the cache. The table is [weak-link scheduling](design/weak-link-scheduling.md).
+One recorded run is [weak-link-measurements.json](design/weak-link-measurements.json).
 
 The client incoming wire admission uses `packages/nessa-client/src/protocol/unique-json.ts` for decoded object-key uniqueness before `parseWireMessage` delegates grammar/value conversion to JSON.parse.
 
