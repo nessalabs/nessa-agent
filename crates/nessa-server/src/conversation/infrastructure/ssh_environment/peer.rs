@@ -47,7 +47,9 @@ use super::{
     connector::{ArtifactTransport, LeaseConnection},
     environment::{SshEnvironment, SshTimings},
 };
-use crate::conversation::application::{Environment, EnvironmentFuture, PairedEnvironments};
+use crate::conversation::application::{
+    Environment, EnvironmentFuture, OrganizationBudgets, PairedEnvironments, WorkerLoad,
+};
 use nessa_auth::application::{pairing::DeviceConnectionProof, ports::AccessError};
 use nessa_sdk::domain::agent_execution::leases::PeerEnvironment;
 use std::{
@@ -76,6 +78,8 @@ pub(crate) struct PeerEnvironments {
     credentials: Arc<dyn ServingCredentials>,
     audit: Arc<dyn EnvironmentAudit>,
     timings: SshTimings,
+    /// The organization budget all of them share.
+    budgets: OrganizationBudgets,
     peers: Mutex<BTreeMap<PeerEnvironment, Arc<SshEnvironment>>>,
     /// How many times which of them are connected has changed. Each
     /// environment moves it as its connection is admitted, ends, or is
@@ -88,11 +92,13 @@ impl PeerEnvironments {
         credentials: Arc<dyn ServingCredentials>,
         audit: Arc<dyn EnvironmentAudit>,
         timings: SshTimings,
+        budgets: OrganizationBudgets,
     ) -> Self {
         Self {
             credentials,
             audit,
             timings,
+            budgets,
             peers: Mutex::new(BTreeMap::new()),
             connections: watch::Sender::new(0),
         }
@@ -146,6 +152,7 @@ impl PeerEnvironments {
                     self.audit.clone(),
                     self.timings,
                     self.connections.clone(),
+                    self.budgets.clone(),
                 ))
             })
             .clone()
@@ -171,8 +178,18 @@ impl PairedEnvironments for PeerEnvironments {
                 self.audit.clone(),
                 self.timings,
                 self.connections.clone(),
+                self.budgets.clone(),
             )),
         }
+    }
+
+    fn serving(&self) -> Vec<(PeerEnvironment, WorkerLoad)> {
+        self.peers
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .filter_map(|(peer, environment)| environment.load().map(|load| (*peer, load)))
+            .collect()
     }
 
     fn connected(&self) -> Vec<PeerEnvironment> {

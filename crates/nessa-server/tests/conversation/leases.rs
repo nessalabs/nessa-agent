@@ -5456,7 +5456,7 @@ fn k3_own_worker(
     w: nessa_sdk::domain::agent_execution::leases::PeerEnvironment,
     w_host: Arc<dyn Environment>,
 ) -> Arc<dyn crate::conversation::application::PairedEnvironments> {
-    use crate::conversation::application::PairedEnvironments;
+    use crate::conversation::application::{PairedEnvironments, WorkerLoad};
     use crate::conversation::infrastructure::ssh_environment::{
         DurableEnvironmentAudit, PeerEnvironments, ServingCredentials, SshTimings,
     };
@@ -5493,6 +5493,17 @@ fn k3_own_worker(
             connected.extend(self.registry.connected());
             connected
         }
+        fn serving(&self) -> Vec<(PeerEnvironment, WorkerLoad)> {
+            let mut serving = vec![(
+                self.w,
+                WorkerLoad {
+                    leases: 0,
+                    draining: false,
+                },
+            )];
+            serving.extend(self.registry.serving());
+            serving
+        }
     }
     Arc::new(OwnWorker {
         w,
@@ -5501,6 +5512,7 @@ fn k3_own_worker(
             Arc::new(Serving),
             DurableEnvironmentAudit::new(root.join("environments"), Arc::new(TestClock)).unwrap(),
             SshTimings::default(),
+            Default::default(),
         ),
     })
 }
@@ -5524,7 +5536,15 @@ async fn k3_the_agents_tools_reach_only_this_gateways_own_worker() {
     let provider = Arc::new(ProviderFactory::default());
     let binding = Arc::new(Provider::new(provider.clone()));
     let environments = Environments::new(in_process_environment(), BTreeMap::new(), placements)
-        .with_peers(k3_own_worker(root.path(), w, host.clone()))
+        .with_peers(
+            k3_own_worker(root.path(), w, host.clone()),
+            Arc::new(
+                crate::conversation::infrastructure::FileBindings::new(
+                    root.path().join("conversations").join("bindings"),
+                )
+                .unwrap(),
+            ),
+        )
         .with_commands(commands(&CommandPolicy::new(
             [w.name(), x.name()],
             None,
@@ -5620,7 +5640,15 @@ async fn k3_artifacts_move_only_on_this_gateways_own_worker() {
             BTreeMap::new(),
             placements,
         )
-        .with_peers(k3_own_worker(root.path(), w, host.clone()))
+        .with_peers(
+            k3_own_worker(root.path(), w, host.clone()),
+            Arc::new(
+                crate::conversation::infrastructure::FileBindings::new(
+                    root.path().join("conversations").join("bindings"),
+                )
+                .unwrap(),
+            ),
+        )
         .with_publish_wait(PUBLISH_CALL_WAIT)
         .with_fetch_wait(PUBLISH_CALL_WAIT),
         DELETION_BUDGETS.stop,
@@ -7146,4 +7174,302 @@ async fn a_saved_drive_turn_is_retried_after_its_grant_is_revoked() {
         .filter(|turn| turn.request.execution_id.as_str() == "driven")
         .collect();
     assert_eq!(driven.len(), 1);
+}
+
+/// A worker of the pool, for the conversation service: it grants as
+/// [`Substitute`] does until it is set to refuse, and a refusal it gives
+/// while `drains` is set marks it draining, as a `Refused{draining}` marks
+/// its link. Its harness starts on it in a workspace of its own
+/// (`/workers/<byte>`), so its agent's identity is the binding's on that
+/// workspace, as a real worker's is.
+#[cfg(unix)]
+struct PoolWorker {
+    peer: nessa_sdk::domain::agent_execution::leases::PeerEnvironment,
+    inner: Substitute,
+    refuse: Mutex<Option<LeaseRefusal>>,
+    drains: AtomicBool,
+    draining: AtomicBool,
+}
+
+#[cfg(unix)]
+impl PoolWorker {
+    fn new(byte: u8) -> Arc<Self> {
+        Arc::new(Self {
+            peer: nessa_sdk::domain::agent_execution::leases::PeerEnvironment::new([byte; 32]),
+            inner: Substitute::new(SandboxProfiles::HARNESS_DEFAULT),
+            refuse: Mutex::new(None),
+            drains: AtomicBool::new(false),
+            draining: AtomicBool::new(false),
+        })
+    }
+
+    fn asked(&self) -> usize {
+        self.inner.opened.load(Ordering::SeqCst)
+    }
+}
+
+#[cfg(unix)]
+impl Environment for PoolWorker {
+    fn declaration(&self) -> EnvironmentDeclaration {
+        EnvironmentDeclaration {
+            environment: EnvironmentRef::Peer(self.peer),
+            sandbox: self.inner.sandbox,
+        }
+    }
+    fn open<'a>(
+        &'a self,
+        lease: &'a LeaseId,
+        grant: &'a LeaseTerms,
+        binding: Arc<dyn AgentProvider>,
+    ) -> EnvironmentFuture<'a, Result<EnvironmentLease, LeaseRefusal>> {
+        let refusal = *self.refuse.lock().unwrap();
+        match refusal {
+            Some(refusal) => {
+                self.inner.opened.fetch_add(1, Ordering::SeqCst);
+                if self.drains.load(Ordering::SeqCst) {
+                    self.draining.store(true, Ordering::SeqCst);
+                }
+                Box::pin(async move { Err(refusal) })
+            }
+            None => {
+                let host = Arc::new(WorkerHost(std::path::PathBuf::from(format!(
+                    "/workers/{}",
+                    self.peer.key()[0]
+                ))));
+                let on_host = binding.on_host(host).expect("the test binding moves");
+                self.inner.open(lease, grant, on_host)
+            }
+        }
+    }
+    fn account<'a>(&'a self, lease: &'a LeaseId) -> EnvironmentFuture<'a, Option<LeaseCleanup>> {
+        self.inner.account(lease)
+    }
+}
+
+/// Where a [`PoolWorker`]'s harness works. Nothing is started on it: the
+/// test binding opens in process and only reads the workspace.
+#[cfg(unix)]
+struct WorkerHost(std::path::PathBuf);
+
+#[cfg(unix)]
+impl nessa_sdk::application::agent_execution::providers::HarnessHost for WorkerHost {
+    fn workspace(&self) -> &Path {
+        &self.0
+    }
+    fn start(
+        &self,
+        _launch: nessa_sdk::application::agent_execution::providers::HarnessLaunch,
+    ) -> Result<nessa_sdk::application::agent_execution::providers::HarnessProcess, AgentError>
+    {
+        Err(AgentError::Unsupported(
+            "nothing starts on a test worker".into(),
+        ))
+    }
+}
+
+/// Two workers of the pool, each saying whether it is draining.
+#[cfg(unix)]
+struct TwoWorkers([Arc<PoolWorker>; 2]);
+
+#[cfg(unix)]
+impl crate::conversation::application::PairedEnvironments for TwoWorkers {
+    fn environment(
+        &self,
+        peer: &nessa_sdk::domain::agent_execution::leases::PeerEnvironment,
+    ) -> Arc<dyn Environment> {
+        self.0
+            .iter()
+            .find(|worker| worker.peer == *peer)
+            .expect("one of the two")
+            .clone()
+    }
+    fn connected(&self) -> Vec<nessa_sdk::domain::agent_execution::leases::PeerEnvironment> {
+        self.0.iter().map(|worker| worker.peer).collect()
+    }
+    fn serving(
+        &self,
+    ) -> Vec<(
+        nessa_sdk::domain::agent_execution::leases::PeerEnvironment,
+        crate::conversation::application::WorkerLoad,
+    )> {
+        self.0
+            .iter()
+            .map(|worker| {
+                (
+                    worker.peer,
+                    crate::conversation::application::WorkerLoad {
+                        leases: 0,
+                        draining: worker.draining.load(Ordering::SeqCst),
+                    },
+                )
+            })
+            .collect()
+    }
+}
+
+#[cfg(unix)]
+fn pool_harness(
+    root: &Path,
+) -> (
+    Harness,
+    [Arc<PoolWorker>; 2],
+    Arc<crate::conversation::infrastructure::FileBindings>,
+) {
+    let workers = [PoolWorker::new(1), PoolWorker::new(2)];
+    let bindings = Arc::new(
+        crate::conversation::infrastructure::FileBindings::new(
+            root.join("conversations").join("bindings"),
+        )
+        .unwrap(),
+    );
+    let placements =
+        Arc::new(FilePlacements::new(root.join("conversations").join("placements")).unwrap());
+    let provider = Arc::new(ProviderFactory::default());
+    let binding = Arc::new(Provider::new(provider.clone()));
+    let harness = harness_in(
+        root,
+        Environments::new(in_process_environment(), BTreeMap::new(), placements)
+            .with_peers(Arc::new(TwoWorkers(workers.clone())), bindings.clone()),
+        DELETION_BUDGETS.stop,
+        provider,
+        binding,
+    );
+    (harness, workers, bindings)
+}
+
+#[cfg(unix)]
+impl Harness {
+    async fn bound(
+        &self,
+        bindings: &crate::conversation::infrastructure::FileBindings,
+    ) -> Option<crate::conversation::application::WorkerBinding> {
+        use crate::conversation::application::ConversationBindings;
+        bindings.binding(&self.id).await.unwrap()
+    }
+
+    fn last_open(
+        &self,
+    ) -> (
+        nessa_sdk::domain::agent_execution::sessions::ExecutionSessionId,
+        Option<nessa_sdk::domain::agent_execution::sessions::ExecutionSessionId>,
+    ) {
+        self.provider
+            .provider_opens
+            .lock()
+            .unwrap()
+            .last()
+            .cloned()
+            .unwrap()
+    }
+}
+
+/// A conversation on any worker runs on one, keeps it, and when that worker
+/// refuses its next lease as it drains, the opening is asked of the other:
+/// the agent opens new context there, which the binding then holds, and
+/// the next opening there restores it. Each worker's harness works in its
+/// own workspace, so the agent's identity differs between them in its
+/// context fingerprint alone: the history goes on under the second's, and
+/// stays readable and sendable.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_pool_conversation_whose_worker_drains_as_it_is_asked_opens_on_another() {
+    let root = tempfile::tempdir().unwrap();
+    let (harness, [w1, w2], bindings) = pool_harness(root.path());
+    harness.create_on(super::POOL).await.unwrap();
+    harness.turn("turn-1").await;
+    let (first_context, restored) = harness.last_open();
+    assert_eq!(restored, None);
+    assert_eq!((w1.asked(), w2.asked()), (1, 0));
+    assert_eq!(
+        harness.bound(&bindings).await,
+        Some(crate::conversation::application::WorkerBinding {
+            worker: w1.peer,
+            context: Some(first_context.clone()),
+        })
+    );
+    harness
+        .service
+        .close(harness.id.clone(), caller("close"))
+        .await
+        .unwrap();
+
+    // Still serving when it is chosen; its refusal says it is draining.
+    *w1.refuse.lock().unwrap() = Some(LeaseRefusal::EnvironmentUnreachable);
+    w1.drains.store(true, Ordering::SeqCst);
+    harness.turn("turn-2").await;
+    assert_eq!((w1.asked(), w2.asked()), (2, 1));
+    let (moved_context, restored) = harness.last_open();
+    // What it opened on the first worker is not on this one.
+    assert_eq!(restored, None);
+    assert_ne!(moved_context, first_context);
+    assert_eq!(
+        harness.bound(&bindings).await,
+        Some(crate::conversation::application::WorkerBinding {
+            worker: w2.peer,
+            context: Some(moved_context.clone()),
+        })
+    );
+    harness
+        .service
+        .close(harness.id.clone(), caller("close"))
+        .await
+        .unwrap();
+
+    let moved = harness.snapshot().await.provider;
+    assert_eq!(
+        (moved.name(), moved.model_id(), moved.context()),
+        ("gateway-test", "test", "/workers/2")
+    );
+
+    harness.turn("turn-3").await;
+    assert_eq!((w1.asked(), w2.asked()), (2, 2));
+    assert_eq!(harness.last_open().1, Some(moved_context));
+    harness
+        .service
+        .read(harness.id.clone(), caller("read"))
+        .await
+        .unwrap();
+}
+
+/// A worker that refuses a lease and still serves (busy, say) is not left:
+/// the refusal stands and the conversation stays bound to it.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_pool_worker_that_refuses_and_still_serves_is_not_left_for_another() {
+    let root = tempfile::tempdir().unwrap();
+    let (harness, [w1, w2], bindings) = pool_harness(root.path());
+    // Creating it opens its agent, which is refused.
+    *w1.refuse.lock().unwrap() = Some(LeaseRefusal::EnvironmentBusy);
+    assert!(matches!(
+        harness.create_on(super::POOL).await,
+        Err(ConversationError::LeaseRefused(
+            LeaseRefusal::EnvironmentBusy
+        ))
+    ));
+    let lease = harness.lease().await;
+    assert_eq!(kinds(&lease), ["refused"]);
+    assert_eq!((w1.asked(), w2.asked()), (1, 0));
+    assert_eq!(harness.bound(&bindings).await.unwrap().worker, w1.peer);
+}
+
+/// Only one worker, refusing as it drains: it is asked once, and its
+/// refusal is the opening's, not asked again of the same worker.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_pool_worker_that_drains_with_no_other_to_ask_is_asked_once() {
+    let root = tempfile::tempdir().unwrap();
+    let (harness, [w1, w2], bindings) = pool_harness(root.path());
+    w2.draining.store(true, Ordering::SeqCst);
+    *w1.refuse.lock().unwrap() = Some(LeaseRefusal::EnvironmentUnreachable);
+    w1.drains.store(true, Ordering::SeqCst);
+    assert!(matches!(
+        harness.create_on(super::POOL).await,
+        Err(ConversationError::LeaseRefused(
+            LeaseRefusal::EnvironmentUnreachable
+        ))
+    ));
+    let lease = harness.lease().await;
+    assert_eq!(kinds(&lease), ["refused"]);
+    assert_eq!((w1.asked(), w2.asked()), (1, 0));
+    assert_eq!(harness.bound(&bindings).await.unwrap().worker, w1.peer);
 }

@@ -13,7 +13,9 @@ use super::peer_reading_tests::{inputs, owned, uuid, NoAgents, WAIT};
 use super::runtime_config::NativeConfig;
 use crate::app::dependencies::RuntimeDependencies;
 use crate::conversation::application::LeaseRelease;
-use crate::conversation::application::{CommandResult, EnvironmentFuture, PairedEnvironments};
+use crate::conversation::application::{
+    CommandResult, EnvironmentFuture, OrganizationBudgets, PairedEnvironments, WorkerLoad,
+};
 use crate::conversation::infrastructure::ssh_environment::{
     DurableEnvironmentAudit, PeerEnvironments, ServingCredentials, SshTimings,
 };
@@ -114,15 +116,31 @@ impl Gateway {
 
     /// As [`Self::start`], its paired environments kept with `timings`.
     async fn start_with(root: &Path, timings: SshTimings) -> Self {
-        Self::start_at(root, timings, None).await
+        Self::start_at(root, timings, None, OrganizationBudgets::default()).await
+    }
+
+    /// As [`Self::start`], its paired environments sharing `budgets`.
+    async fn start_budgeted(root: &Path, budgets: OrganizationBudgets) -> Self {
+        Self::start_at(root, SshTimings::default(), None, budgets).await
     }
 
     /// As [`Self::start`], registered at `relay` as `native.relay` has it.
     async fn start_relayed(root: &Path, relay: RelayAddress) -> Self {
-        Self::start_at(root, SshTimings::default(), Some(relay)).await
+        Self::start_at(
+            root,
+            SshTimings::default(),
+            Some(relay),
+            OrganizationBudgets::default(),
+        )
+        .await
     }
 
-    async fn start_at(root: &Path, timings: SshTimings, relay: Option<RelayAddress>) -> Self {
+    async fn start_at(
+        root: &Path,
+        timings: SshTimings,
+        relay: Option<RelayAddress>,
+        budgets: OrganizationBudgets,
+    ) -> Self {
         let (gateway, organization) = (uuid(), uuid());
         let (auth, session, owner) = owned(root, &gateway, &organization).await;
         let receivers = Arc::new(
@@ -163,6 +181,7 @@ impl Gateway {
             gate.clone(),
             DurableEnvironmentAudit::new(root.join("environments"), Arc::new(SystemClock)).unwrap(),
             timings,
+            budgets,
         ));
         let prepared = prepared.with_environments(Arc::new(ListenerEnvironments(peers.clone())));
         let state = ProductRouteState::new(
@@ -519,6 +538,53 @@ async fn a_paired_environment_dials_in_serves_and_stops_at_revocation() {
     .err()
     .expect("a revoked environment is refused");
     assert_eq!(refused.kind(), ErrorKind::PermissionDenied);
+}
+
+/// The organization's budget is shared by every paired environment: with
+/// one command allowed, a second is refused busy before the environment is
+/// asked, and runs once the first lets its place go.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_organization_budget_refuses_a_command_past_it_until_one_ends() {
+    let directory = tempfile::tempdir().unwrap();
+    let budgets = OrganizationBudgets::new(None, Some(1));
+    let a = Gateway::start_budgeted(&directory.path().join("a"), budgets.clone()).await;
+    let e = a
+        .pair(
+            &directory.path().join("e-state"),
+            ConsentClass::PeerEnvironment,
+        )
+        .await;
+    let stream = dial(
+        a.native.to_string(),
+        None,
+        e.identity.clone(),
+        e.pin,
+        clock(),
+    )
+    .await
+    .unwrap();
+    let _serving = serving(&directory.path().join("e"), e.pin, stream);
+    a.until_connected(e.peer, true).await;
+
+    let environment = a.peers.environment(&e.peer);
+    let commands = environment.commands().unwrap();
+    let work = CommandWork::new(vec!["echo".into(), "held".into()], None, 5_000).unwrap();
+    let held = tokio::time::timeout(WAIT, commands.grant(&LeaseId::new(uuid()).unwrap(), &work))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(budgets.running(), (0, 1));
+    assert_eq!(
+        a.echo(e.peer, "past").await.unwrap_err(),
+        CommandRefusal::Environment(LeaseRefusal::EnvironmentBusy)
+    );
+    let (_stop, stopped) = watch::channel(None);
+    let ran = tokio::time::timeout(WAIT, held.hold.run(work.timeout_ms(), stopped))
+        .await
+        .unwrap();
+    assert_eq!(ran.stdout, b"held");
+    assert_eq!(budgets.running(), (0, 0));
+    assert_eq!(a.echo(e.peer, "after").await.unwrap().stdout, b"after");
 }
 
 /// Row I4 end to end: E serves the gateway it dialed only what E's owner
@@ -1298,11 +1364,31 @@ async fn k1_a_paired_environment_drains_and_both_sides_record_its_cleanup() {
     })
     .await
     .expect("the harness starts");
+    // The pool reads what each worker carries off its connection.
+    assert_eq!(
+        a.peers.serving(),
+        [(
+            e.peer,
+            WorkerLoad {
+                leases: 1,
+                draining: false
+            }
+        )]
+    );
     let ends = opened
         .hold
         .ends()
         .expect("a paired environment's lease can end there");
     host.drain.send_replace(true);
+    // E says it is draining before anything else, so the pool sends it no
+    // new lease while it is still connected.
+    tokio::time::timeout(WAIT, async {
+        while !a.peers.serving().iter().any(|(_, load)| load.draining) {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("a draining environment is marked so");
     // A system stop, as the gateway retiring is: never a lost lease.
     assert_eq!(
         tokio::time::timeout(WAIT, ends).await.expect("E ends it"),

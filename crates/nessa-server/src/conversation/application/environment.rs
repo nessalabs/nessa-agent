@@ -37,6 +37,7 @@
 //! This module is the application's. The in-process adapter, the only one
 //! today, is `conversation::infrastructure::environment`; nothing in
 //! `product/` names either.
+use super::placement::WorkerContext;
 use futures_util::FutureExt;
 use nessa_auth::application::ports::Clock;
 use nessa_protocol::lease::{CollectionRefusal, FetchRefusal, PublishRefusal};
@@ -62,6 +63,7 @@ use nessa_sdk::domain::{
             LeaseGrants, LeaseId, LeasePhase, LeaseRefusal, LeaseRevision, LeaseTerms, LeaseWork,
             SandboxProfile, SandboxProfiles,
         },
+        sessions::ExecutionSessionId,
     },
     effective_capabilities::value_objects::EffectiveCapabilities,
     model_metadata::value_objects::EffortLevel,
@@ -362,11 +364,25 @@ pub(crate) struct LeaseOpening {
 /// recorded as the deadline it gives from `clock` read before the lease is
 /// asked for: the earliest the environment's own deadline can be, so the
 /// environment's expiry, which is the authority, never comes before it.
+#[cfg(test)]
 pub(crate) async fn open_lease(
     environment: &dyn Environment,
     request: LeaseRequest,
     binding: Arc<dyn AgentProvider>,
     clock: &dyn Clock,
+) -> LeaseOpening {
+    open_lease_on(environment, request, binding, clock, None).await
+}
+
+/// [`open_lease`], on a worker of the pool whose provider contexts `context`
+/// knows: the fence restores a saved context only where that worker opened
+/// it, and tells `context` of each one a session opens there.
+pub(crate) async fn open_lease_on(
+    environment: &dyn Environment,
+    request: LeaseRequest,
+    binding: Arc<dyn AgentProvider>,
+    clock: &dyn Clock,
+    context: Option<Arc<WorkerContext>>,
 ) -> LeaseOpening {
     let declaration = environment.declaration();
     let lease = LeaseId::new(uuid::Uuid::new_v4().to_string())
@@ -429,7 +445,7 @@ pub(crate) async fn open_lease(
     };
     match admitted {
         Ok((terms, opened)) => LeaseOpening {
-            fence: LeaseFence::new(lease.clone(), opened.provider, FencePhase::Live),
+            fence: LeaseFence::new(lease.clone(), opened.provider, FencePhase::Live, context),
             lease,
             terms,
             refusal: None,
@@ -437,7 +453,7 @@ pub(crate) async fn open_lease(
             workspace: opened.workspace,
         },
         Err(refusal) => LeaseOpening {
-            fence: LeaseFence::new(lease.clone(), binding, FencePhase::Closed),
+            fence: LeaseFence::new(lease.clone(), binding, FencePhase::Closed, None),
             lease,
             terms: terms(request.sandbox, LeaseDeadline::UntilEnded),
             refusal: Some(refusal),
@@ -498,12 +514,21 @@ pub(crate) struct LeaseFence {
     state: Arc<Mutex<FenceState>>,
     /// True once the lease is no longer Live, for what waits on that.
     not_live: tokio::sync::watch::Sender<bool>,
+    /// On a worker of the pool, the provider contexts that worker opened;
+    /// `None` wherever else the lease runs.
+    context: Option<Arc<WorkerContext>>,
 }
 impl LeaseFence {
-    fn new(lease: LeaseId, inner: Arc<dyn AgentProvider>, phase: FencePhase) -> Arc<Self> {
+    fn new(
+        lease: LeaseId,
+        inner: Arc<dyn AgentProvider>,
+        phase: FencePhase,
+        context: Option<Arc<WorkerContext>>,
+    ) -> Arc<Self> {
         Arc::new(Self {
             lease,
             inner,
+            context,
             not_live: tokio::sync::watch::Sender::new(phase != FencePhase::Live),
             state: Arc::new(Mutex::new(FenceState {
                 phase,
@@ -522,6 +547,7 @@ impl LeaseFence {
             inner,
             state: self.state.clone(),
             not_live: self.not_live.clone(),
+            context: self.context.clone(),
         })
     }
     fn state(&self) -> std::sync::MutexGuard<'_, FenceState> {
@@ -585,6 +611,14 @@ impl AgentProvider for LeaseFence {
     fn native_hooks_allowed(&self) -> bool {
         self.inner.native_hooks_allowed()
     }
+    /// A worker of the pool restores only a context it opened itself: one
+    /// saved on another worker is not there.
+    fn restores_saved_context(&self, saved: &ExecutionSessionId) -> bool {
+        self.context.as_ref().map_or_else(
+            || self.inner.restores_saved_context(saved),
+            |context| context.holds(saved),
+        )
+    }
     fn model_change_context(&self) -> Option<String> {
         self.inner
             .model_change_context()
@@ -634,18 +668,22 @@ impl AgentProvider for LeaseFence {
             }
         }
         let state = self.state.clone();
-        self.inner
-            .open(request)
-            .map(move |opened| {
-                opened.map(|opened| OpenedProviderSession {
-                    session: opened.session,
-                    events: Box::new(FencedEvents {
-                        inner: opened.events,
-                        state,
-                    }),
-                })
+        let context = self.context.clone();
+        let opening = self.inner.open(request);
+        async move {
+            let opened = opening.await;
+            if let (Ok(opened), Some(context)) = (&opened, &context) {
+                context.opened(opened.session.id()).await;
+            }
+            opened.map(|opened| OpenedProviderSession {
+                session: opened.session,
+                events: Box::new(FencedEvents {
+                    inner: opened.events,
+                    state,
+                }),
             })
-            .boxed()
+        }
+        .boxed()
     }
 }
 

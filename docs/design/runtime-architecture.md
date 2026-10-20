@@ -1772,7 +1772,7 @@ needs them:
 | `lease.event_buffer_bytes`, `lease.event_batch` | Events an environment may have in flight before backpressure or lease end |
 | `lease.cleanup_deadline` | How long an environment has to report cleanup before the turn is `interrupted` |
 | `peer.connections`, `peer.leases` | Live connections and leases per paired peer |
-| `organization.environments`, `organization.leases` | Concurrent environments and leases per organization |
+| `organization.leases`, `organization.commands` | Agent leases and commands running at once across one organization's paired environments (a gateway is one organization); `organization.environments` is `environment.connections` today, and artifact bytes per organization are [#1041](https://github.com/nessalabs/nessa-agent/issues/1041) |
 | `device.subscriptions`, `device.outbox_bytes` | Subscriptions one device may hold; intents it may hold unsent |
 | `lease.idle_sleep` | How long a leased harness may sit idle before the environment stops its process and the lease sleeps; a prompt wakes it by native resume, and a failed resume is `process_lost` |
 | `lease.previews` | Open previews one lease may hold |

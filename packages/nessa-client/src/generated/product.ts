@@ -731,7 +731,7 @@ export interface ConversationCreateParams {
   model?: string
   /** Initial preset, default ask; ignored on reopen. */
   approvalMode?: ApprovalMode
-  /** Where this conversation's agent runs for its whole life: one of the SSH destinations agents.list returns under environments. Omitted runs it on the gateway's own machine. Ignored when the conversation already exists, which keeps the environment it was created with. */
+  /** Where this conversation's agent runs for its whole life: one of the environments agents.list returns, an SSH destination, a paired environment's peer: name, or peer:any, any worker of the gateway's pool, which the gateway chooses each time the agent is opened. Omitted runs it on the gateway's own machine. Ignored when the conversation already exists, which keeps the environment it was created with. */
   environment?: string
 }
 /** Conversation ready for read and admission. */
@@ -1183,7 +1183,7 @@ export interface ConversationLease {
   cause?: "stopped" | "closed" | "revoked" | "expired" | "lost" | "idle"
   /** What the environment reported releasing, once it has: confirmed, released cooperatively; forced, released by forced termination; not_held, the environment holds nothing for the lease, though whether something started under it before the environment last started outlived it is not known. On an interrupted lease this is the evidence that arrived after its deadline. */
   cleanup?: "confirmed" | "forced" | "not_held"
-  /** Why the lease was refused. sandbox_unavailable: the sandbox asked for is not one both the agent's binding and the environment can enforce. environment_unreachable: the environment could not be reached, or did not answer in time. environment_version_mismatch: the copy of this build the environment holds, where the gateway installs it, speaks another lease protocol, so nothing was sent to it. environment_busy: the environment is serving another connection. agent_unavailable: the environment cannot run this conversation's agent. environment_platform_unsupported: the environment had no copy of this build, and runs on a system or processor this build cannot run on, so nothing was installed or sent. environment_install_failed: the environment had no copy of this build, and installing one failed: what arrived did not match what was sent, did not run there, or could not be stored; nothing was sent. */
+  /** Why the lease was refused. sandbox_unavailable: the sandbox asked for is not one both the agent's binding and the environment can enforce. environment_unreachable: the environment could not be reached, or did not answer in time. environment_version_mismatch: the copy of this build the environment holds, where the gateway installs it, speaks another lease protocol, so nothing was sent to it. environment_busy: the environment is serving another connection, or the organization's paired environments already run as many agent leases or commands as config.json limits.organizationLeases and limits.organizationCommands allow. agent_unavailable: the environment cannot run this conversation's agent. environment_platform_unsupported: the environment had no copy of this build, and runs on a system or processor this build cannot run on, so nothing was installed or sent. environment_install_failed: the environment had no copy of this build, and installing one failed: what arrived did not match what was sent, did not run there, or could not be stored; nothing was sent. */
   refusal?:
     | "sandbox_unavailable"
     | "environment_unreachable"
@@ -1859,7 +1859,7 @@ export interface AgentsSetNativeHooksResult {
 export interface AgentsListResult {
   /** Configured agents. */
   agents: AgentOption[]
-  /** Places a new conversation may run besides this gateway: the SSH destinations config.json names, in the order it names them, then each paired environment connected when the catalog is read, as `peer:` and its key in lowercase hex. At most 16 of the first and 8 of the second. agents.list reads it once; agents.subscribe reads it again each time a paired environment connects, disconnects or is revoked. */
+  /** Places a new conversation may run besides this gateway: the SSH destinations config.json names, in the order it names them, then, while any paired environment is connected, `peer:any` (the gateway picks one of them for each opening of the conversation's agent and keeps it there while it serves and is not draining), then each paired environment connected when the catalog is read, as `peer:` and its key in lowercase hex. At most 16 of the first and 8 of the last. agents.list reads it once; agents.subscribe reads it again each time a paired environment connects, disconnects or is revoked. */
   environments: string[]
   /** Of environments, the ones a conversation owner's turns may run commands on with run: those the gateway's command policy allows the owner, and only where that environment takes commands, in the order environments lists them; never here. Read with environments, each time it is. These are the hosts a drive grant's ConversationToolPolicy.commandHosts can usefully name: a grant is never given more than the gateway allows, so a host not listed here runs a grant's commands nowhere. Empty when the gateway grants no commands. */
   commandHosts: string[]

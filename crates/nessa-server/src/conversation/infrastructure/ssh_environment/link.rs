@@ -16,6 +16,8 @@
 //!                   not published ──▶ that publish's waiter: the host's reason
 //!                   fetch accepted / refused / fetched ──▶ that fetch's waiter
 //!                   ending ──▶ the lease's `ending` watch: the host is ending it
+//!                   draining, or a grant refused draining ──▶ the link is marked
+//!                     draining: the pool sends it no new lease (is_draining)
 //!                   none ──▶ FrameDropped, never applied elsewhere (row L9)
 //! end of stream ──▶ every route dropped: waiters unanswered, outputs ended,
 //!                   each lease's `gone` closed ──▶ ConnectionLost
@@ -251,6 +253,9 @@ struct Routes {
     /// How many fetches this connection has asked: each names itself on
     /// the wire by its call and this count, so no two asks share a name.
     fetches_asked: u64,
+    /// The host said it is stopping (`Draining`), or refused a lease as
+    /// draining: it admits nothing new on this connection.
+    draining: bool,
 }
 
 /// What the host said of a fetch, as the demux hands it on.
@@ -535,6 +540,22 @@ impl HostLink {
     /// Whether the host was revoked on this connection.
     pub(crate) fn revoked(&self) -> bool {
         self.routes().revoked
+    }
+
+    /// Whether the host said it is stopping on this connection: it admits
+    /// no new lease here, though those it holds still end through it.
+    pub(crate) fn is_draining(&self) -> bool {
+        self.routes().draining
+    }
+
+    /// How many leases of an agent this connection holds now: asked for,
+    /// granted, or ending, until each is let go. Commands are not counted.
+    pub(crate) fn agent_leases(&self) -> usize {
+        self.routes()
+            .leases
+            .values()
+            .filter(|route| !route.command)
+            .count()
     }
 
     /// The host no longer holds a credential to serve this gateway. No lease
@@ -1530,6 +1551,10 @@ fn route_frame(routes: &mut Routes, frame: FromEnvironment) -> Routed {
         // Only proof the host is still there: its arrival already reset the
         // demux's silence bound, and nothing waits on it.
         FromEnvironment::Keepalive => Routed::Done,
+        FromEnvironment::Draining => {
+            routes.draining = true;
+            Routed::Done
+        }
         FromEnvironment::Accounted { lease, cleanup } => match routes.accounts.remove(&lease) {
             Some(waiters) => {
                 for waiter in waiters {
@@ -1564,6 +1589,7 @@ fn route_frame(routes: &mut Routes, frame: FromEnvironment) -> Routed {
             {
                 Some(waiter) => {
                     routes.leases.remove(&lease);
+                    routes.draining |= reason == GrantRefusal::Draining;
                     let _ = waiter.send(Err(reason));
                     Routed::Done
                 }
@@ -1955,6 +1981,7 @@ fn frame_name(frame: &FromEnvironment) -> &'static str {
         FromEnvironment::Hello { .. } => "hello",
         FromEnvironment::Unavailable { .. } => "unavailable",
         FromEnvironment::Keepalive => "keepalive",
+        FromEnvironment::Draining => "draining",
         FromEnvironment::Granted { .. } => "granted",
         FromEnvironment::Refused { .. } => "refused",
         FromEnvironment::StartFailed { .. } => "start_failed",

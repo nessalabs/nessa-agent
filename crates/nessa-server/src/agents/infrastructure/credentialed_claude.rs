@@ -8,7 +8,7 @@
 //! the credential read at that launch, over the binding's own deletion
 //! exchange; every binding it launched for that is kept until it settles.
 
-use nessa_sdk::application::agent_execution::providers::HarnessHostIdentity;
+use nessa_sdk::application::agent_execution::providers::{HarnessHost, HarnessHostIdentity};
 use std::{
     collections::BTreeMap, ffi::OsString, future::Future, mem, pin::Pin, sync::Arc, time::Duration,
 };
@@ -222,6 +222,13 @@ impl AgentProvider for CredentialedClaudeProvider {
 
     fn open(&self, request: ProviderOpenRequest) -> ProviderOpenFuture<'_> {
         Box::pin(async move { self.current().await?.open(request).await })
+    }
+
+    /// Claude on another machine runs with that machine's own sign-in: the
+    /// credential this gateway reads is never sent, so the binding there is
+    /// the plain one its host starts.
+    fn on_host(&self, host: Arc<dyn HarnessHost>) -> Result<Arc<dyn AgentProvider>, AgentError> {
+        self.configured(self.config.clone())?.on_host(host)
     }
 }
 

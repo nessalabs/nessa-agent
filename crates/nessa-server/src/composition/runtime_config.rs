@@ -168,6 +168,8 @@ pub(super) struct LimitsConfig {
     app_calls_per_socket: u64,
     live_conversations: u64,
     agent_idle_seconds: u64,
+    organization_leases: u64,
+    organization_commands: u64,
     read_work_budget_ms: u64,
 }
 
@@ -185,6 +187,8 @@ impl Default for LimitsConfig {
             app_calls_per_socket: limits.app_calls_per_socket() as u64,
             live_conversations: limits.live_conversations() as u64,
             agent_idle_seconds: limits.agent_idle().map_or(0, |idle| idle.as_secs()),
+            organization_leases: limits.organization_leases().unwrap_or(0) as u64,
+            organization_commands: limits.organization_commands().unwrap_or(0) as u64,
             read_work_budget_ms: u64::try_from(limits.read_work_budget().as_millis())
                 .unwrap_or(u64::MAX),
         }
@@ -352,6 +356,8 @@ impl RuntimeConfig {
             app_calls_per_socket: self.limits.app_calls_per_socket,
             live_conversations: self.limits.live_conversations,
             agent_idle_seconds: self.limits.agent_idle_seconds,
+            organization_leases: self.limits.organization_leases,
+            organization_commands: self.limits.organization_commands,
             read_work_budget: Duration::from_millis(self.limits.read_work_budget_ms),
         })
         .map_err(refused)

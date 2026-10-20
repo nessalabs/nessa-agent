@@ -2,7 +2,9 @@
 # docs/guides/local-auth.md, on a paired machine in a container, explains
 # each setting. Replace a worker with `docker compose up -d --force-recreate
 # worker-acme`: the old container drains and stops before the new one starts
-# on the same volume.
+# on the same volume. For conversations created on `peer:any`, a second
+# service with a volume and enroll code of its own adds a worker to acme's
+# pool, and one can be stopped while the other serves.
 services:
   worker-acme:
     image: nessa-env-worker
