@@ -792,7 +792,13 @@ async function startedBeside(run, client, step, n, failures) {
 const steps = {
   async model(run, step, failures) {
     const picker = dock(run.page).locator(css.modelChip)
-    if (await picker.isDisabled()) {
+    // The picker is closed while an access change is still settling in the
+    // window, as one is right after a switch step; it must open once none is.
+    const open = await waitFor(
+      async () => !(await picker.isDisabled().catch(() => true)),
+      10_000,
+    )
+    if (!open) {
       failures.push("the established conversation's model picker is disabled")
       return
     }
