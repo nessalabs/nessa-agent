@@ -178,6 +178,16 @@ pub(crate) use metadata_target::ConversationMetadataReader;
 mod passive_read;
 mod permission_rules;
 pub use passive_read::AdmittedCatalogueRead;
+// Built everywhere, as the configuration that sizes it is; only the Unix
+// gateway's paired environments take places in it.
+#[cfg_attr(
+    not(unix),
+    allow(
+        dead_code,
+        reason = "the Unix gateway's paired environments count against it"
+    )
+)]
+mod organization_budget;
 mod placement;
 mod ports;
 mod provider_sessions;
@@ -262,7 +272,9 @@ pub use command_policy::{
 #[cfg(any(unix, test))]
 pub(crate) use placement::Environments;
 #[cfg(any(unix, test))]
-pub(crate) use placement::{ConversationPlacements, PlacementError};
+pub(crate) use placement::{
+    ConversationBindings, ConversationPlacements, PlacementError, WorkerBinding,
+};
 // For the paired environment adapter, which lives with the Unix-only SSH one.
 pub(crate) use drive_tools::MAX_ADMITTED_POLICIES;
 pub use drive_tools::{DriveToolAudit, DriveToolAuditRecord, DriveTools};
@@ -270,14 +282,17 @@ pub use model_changes::{
     ConversationModelApplication, ConversationModelRequest, ConversationModelRequestState,
     ConversationModelSelection,
 };
+#[cfg(unix)]
+pub(crate) use organization_budget::BudgetPlace;
+pub(crate) use organization_budget::OrganizationBudgets;
 pub use permission_rules::{
     rule_principal, ListedPermissionRule, PermissionRuleCatalog, PermissionRulePolicyEvaluator,
     PermissionRuleUnavailable, RuleCatalogError, RuleChange, RulePrincipal, RuleSettlement,
     StoredPermissionRule,
 };
 #[cfg(unix)]
-pub(crate) use placement::PairedEnvironments;
-pub use placement::{FETCH_CALL_WAIT, PUBLISH_CALL_WAIT};
+pub(crate) use placement::{PairedEnvironments, WorkerLoad};
+pub use placement::{FETCH_CALL_WAIT, POOL, PUBLISH_CALL_WAIT};
 pub use ports::{
     ArtifactKept, ArtifactRecordGate, AttachmentRelease, AttachmentReleaseCause,
     ConversationAttachments, ConversationCreation, ConversationCreationAudit,

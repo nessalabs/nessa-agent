@@ -6,9 +6,11 @@
 //! ensure(host, lease)            every record names the host and the lease
 //!   ──▶ probe ──▶ present ──▶ Present: nothing written (the host's own trouble)
 //!             ──▶ no answer ──▶ refused environment_unreachable
-//!             ──▶ absent <platform> ──▶ this build runs there?
+//!             ──▶ absent <platform> ──▶ this build runs there? ──▶ its own executable
+//!                    no ──▶ a release build it pins runs there? ──▶ that build
 //!                    no ──▶ InstallRefused{platform} ──▶ environment_platform_unsupported
-//!   ──▶ this build's executable, opened, and its SHA-256
+//!   ──▶ that build opened, and its SHA-256 the one expected?
+//!          no ──▶ InstallRefused{source | release} ──▶ environment_install_failed
 //!   ──▶ InstallStarted recorded (or nothing is sent)
 //!   ──▶ upload ──▶ installed ──▶ Installed recorded ──▶ Installed
 //!                                 (unrecorded ──▶ environment_install_failed)
@@ -23,13 +25,15 @@
 //! ```
 //!
 //! Arrows are steps, in order. What is installed is this gateway's own
-//! executable, and only where it runs: the same system and processor (and
-//! on Linux the GNU C library, which it links). That is the one copy that is
-//! certain to speak this build's lease protocol; no other platform's build
-//! of this exact source is published anywhere a digest could pin. The
-//! host's verdicts — the digest, then the protocol the copy itself states —
-//! are taken there before the copy is put where it is found
-//! (`env_serve::install`), and the hello after it is checked as any other.
+//! executable where it runs: the same system and processor (and on Linux
+//! the GNU C library, which it links). On a host of another platform it is
+//! the release build of these same sources for that platform, when this
+//! build is a release that pins one (#734, `release.rs`); a development
+//! build pins none, so such a host is refused. The serve command and the
+//! probe look for each of those copies in turn. The host's verdicts — the
+//! digest, then the protocol the copy itself states — are taken there
+//! before the copy is put where it is found (`env_serve::install`), and the
+//! hello after it is checked as any other.
 //!
 //! An install whose outcome cannot be recorded is not used, as a connection
 //! that cannot be recorded is not: the lease is refused, and any install
@@ -38,7 +42,8 @@
 //! the host, verified, so the next lease is served by it and recorded
 //! `Connected`; the audit keeps the `InstallStarted` with no outcome.
 use super::audit::{EnvironmentAudit, EnvironmentEvent, InstallRefusal};
-use crate::env::LEASE_PROTOCOL;
+use super::release::{pins, prune, HttpsReleases, ReleaseBuild, ReleaseDownload};
+use crate::env::{HOST_BUILDS, HOST_BUILDS_FROM, LEASE_PROTOCOL};
 use crate::env_serve::install::{
     probe_command, serve_command, upload_command, Platform, Probe, Upload, UploadRefusal,
 };
@@ -48,7 +53,7 @@ use std::{
     fs::File,
     future::Future,
     io::{self, Seek, SeekFrom},
-    path::Path,
+    path::{Path, PathBuf},
     pin::Pin,
     sync::Arc,
     time::Duration,
@@ -133,23 +138,85 @@ impl BuildSource for OwnExecutable {
             .ok_or_else(|| io::Error::other("this build's executable was not opened at start"))?;
         // Measured by position, so the shared offset is left for the send;
         // the installer sends one copy at a time.
-        let mut hasher = Sha256::new();
-        let mut buffer = vec![0; 1 << 16];
-        let mut at = 0;
-        loop {
-            let read = std::os::unix::fs::FileExt::read_at(held, &mut buffer, at)?;
-            if read == 0 {
-                break;
-            }
-            hasher.update(&buffer[..read]);
-            at += read as u64;
-        }
+        let digest = sha256_of(held)?;
         let mut file = held.try_clone()?;
         file.seek(SeekFrom::Start(0))?;
-        Ok(Build {
-            file,
-            digest: format!("{:x}", hasher.finalize()),
-        })
+        Ok(Build { file, digest })
+    }
+}
+
+/// The SHA-256 of what `file` reads from its start, read by position so
+/// its offset is left where it is.
+///
+/// # Errors
+/// It could not be read.
+pub(crate) fn sha256_of(file: &File) -> io::Result<String> {
+    let mut hasher = Sha256::new();
+    let mut buffer = vec![0; 1 << 16];
+    let mut at = 0;
+    loop {
+        let read = std::os::unix::fs::FileExt::read_at(file, &mut buffer, at)?;
+        if read == 0 {
+            return Ok(format!("{:x}", hasher.finalize()));
+        }
+        hasher.update(&buffer[..read]);
+        at += read as u64;
+    }
+}
+
+/// A build of these sources for another platform, which this one pins
+/// (#734): sent to a host this build does not run on.
+pub(crate) struct ReleaseCopy {
+    /// What it runs on.
+    pub(crate) platform: Platform,
+    /// Its SHA-256, as pinned: where it is kept on a host, and what the
+    /// bytes opened must measure.
+    pub(crate) digest: String,
+    /// Where its bytes come from.
+    pub(crate) build: Arc<dyn BuildSource>,
+}
+
+impl ReleaseCopy {
+    /// The release builds this build pins, downloaded by `download` and
+    /// kept in `cache`: none unless it was compiled as a release, and none
+    /// (said in the log) if what it was compiled with does not read.
+    pub(crate) fn pinned(
+        spec: Option<&str>,
+        from: Option<&str>,
+        download: Arc<dyn ReleaseDownload>,
+        cache: &Path,
+    ) -> Vec<Self> {
+        let (spec, from) = match (spec, from) {
+            (Some(spec), Some(from)) => (spec, from),
+            (None, None) => return Vec::new(),
+            _ => {
+                tracing::error!(
+                    "this build was compiled with only one of NESSA_HOST_BUILDS and \
+                     NESSA_HOST_BUILDS_FROM; it installs only itself"
+                );
+                return Vec::new();
+            }
+        };
+        match pins(spec) {
+            Ok(pins) => {
+                let keep: Vec<&str> = pins.iter().map(|pin| pin.digest.as_str()).collect();
+                prune(cache, &keep);
+                pins.into_iter()
+                    .map(|pin| {
+                        let build = ReleaseBuild::new(pin, from, download.clone(), cache.into());
+                        Self {
+                            platform: build.pin().platform.clone(),
+                            digest: build.pin().digest.clone(),
+                            build: Arc::new(build),
+                        }
+                    })
+                    .collect()
+            }
+            Err(error) => {
+                tracing::error!(%error, "this build's release pins do not read; it installs only itself");
+                Vec::new()
+            }
+        }
     }
 }
 
@@ -185,6 +252,9 @@ pub(crate) struct HostInstaller {
     shell: Arc<dyn RemoteShell>,
     build: Arc<dyn BuildSource>,
     platform: Platform,
+    /// The release builds for other platforms, in the order a host is
+    /// searched for them after this build's own.
+    releases: Vec<ReleaseCopy>,
     protocol: &'static str,
     timings: InstallTimings,
     /// This build's SHA-256, taken once: where its copy is kept on a host.
@@ -206,6 +276,7 @@ impl HostInstaller {
             shell,
             build,
             platform,
+            releases: Vec::new(),
             protocol,
             timings,
             digest: tokio::sync::OnceCell::new(),
@@ -213,8 +284,15 @@ impl HostInstaller {
         }
     }
 
-    /// This build, its platform and protocol, sent by `shell`.
-    pub(crate) fn this_build(shell: Arc<dyn RemoteShell>) -> Self {
+    /// With `releases` for hosts this build does not run on.
+    pub(crate) fn with_releases(mut self, releases: Vec<ReleaseCopy>) -> Self {
+        self.releases = releases;
+        self
+    }
+
+    /// This build, its platform and protocol, and the release builds it
+    /// pins, kept in `cache` once downloaded; sent by `shell`.
+    pub(crate) fn this_build(shell: Arc<dyn RemoteShell>, cache: PathBuf) -> Self {
         Self::new(
             shell,
             Arc::new(OwnExecutable::opened_now()),
@@ -222,6 +300,12 @@ impl HostInstaller {
             LEASE_PROTOCOL,
             InstallTimings::default(),
         )
+        .with_releases(ReleaseCopy::pinned(
+            HOST_BUILDS,
+            HOST_BUILDS_FROM,
+            Arc::new(HttpsReleases::default()),
+            &cache,
+        ))
     }
 
     /// This build's SHA-256, taken from its executable the first time it is
@@ -248,13 +332,31 @@ impl HostInstaller {
         })
     }
 
-    /// The command that serves this build on a host: its copy, kept by its
-    /// SHA-256, so only these exact bytes are run there.
+    /// Every copy of this build a host may keep, by SHA-256: its own, then
+    /// each release build's.
+    ///
+    /// # Errors
+    /// As [`Self::digest`].
+    async fn builds(&self) -> Result<Vec<&str>, LeaseRefusal> {
+        let own = self.digest().await?;
+        let mut builds = vec![own];
+        builds.extend(
+            self.releases
+                .iter()
+                .map(|release| release.digest.as_str())
+                .filter(|digest| *digest != own),
+        );
+        Ok(builds)
+    }
+
+    /// The command that serves this build on a host: the first of its
+    /// copies kept there, each by its SHA-256, so only these exact bytes are
+    /// run there.
     ///
     /// # Errors
     /// As [`Self::digest`].
     pub(crate) async fn serve_command(&self) -> Result<String, LeaseRefusal> {
-        Ok(serve_command(self.digest().await?))
+        Ok(serve_command(&self.builds().await?))
     }
 
     /// Make sure this build is installed on `host`, for `lease`.
@@ -273,7 +375,28 @@ impl HostInstaller {
             Some(Probe::Absent(platform)) => platform,
             None => return Err(LeaseRefusal::EnvironmentUnreachable),
         };
-        if !self.platform.runs_on(&platform) {
+        // This build where it runs, else the release build for the host's
+        // platform. Served by its digest, so it is known by now; the copy
+        // sent must be those bytes, or it would be kept where another build
+        // is looked for (on macOS the path can name a newer executable than
+        // the one running; a download can be anything).
+        let (source, expected, reason) = if self.platform.runs_on(&platform) {
+            (
+                self.build.clone(),
+                self.digest().await?,
+                InstallRefusal::Source,
+            )
+        } else if let Some(release) = self
+            .releases
+            .iter()
+            .find(|release| release.platform.runs_on(&platform))
+        {
+            (
+                release.build.clone(),
+                release.digest.as_str(),
+                InstallRefusal::Release,
+            )
+        } else {
             return Err(refused(
                 audit,
                 name,
@@ -282,34 +405,46 @@ impl HostInstaller {
                 Some(platform.to_string()),
                 LeaseRefusal::EnvironmentPlatformUnsupported,
             ));
-        }
-        // Served by its digest, so it is known by now; the copy sent must
-        // be those bytes, or it would be kept where another build is looked
-        // for (on macOS the path can name a newer executable than the one
-        // running).
-        let expected = self.digest().await?;
-        let sending = self.sending.lock().await;
-        let build = self.build.clone();
-        let opened = tokio::task::spawn_blocking(move || build.open())
+        };
+        // This build's own executable shares one offset among its copies,
+        // so one is sent at a time; a release build opens a file of its own,
+        // and its download is not held up behind another host's upload.
+        let sending = match reason {
+            InstallRefusal::Source => Some(self.sending.lock().await),
+            _ => None,
+        };
+        let opened = tokio::task::spawn_blocking(move || source.open())
             .await
             .map_err(io::Error::other)
-            .and_then(|opened| opened)
-            .and_then(|build| match build.digest == expected {
-                true => Ok(build),
-                false => Err(io::Error::other(format!(
-                    "this build's executable now has SHA-256 {}, not {expected}",
-                    build.digest
-                ))),
-            });
+            .and_then(|opened| opened);
         let Build { file, digest } = match opened {
-            Ok(build) => build,
-            Err(error) => {
-                tracing::error!(%error, "this build's executable could not be read to install it");
+            Ok(build) if build.digest == expected => build,
+            Ok(build) => {
+                tracing::error!(
+                    measured = build.digest,
+                    expected,
+                    ?reason,
+                    "the build to install is not the one expected; nothing is sent"
+                );
+                // A download's digest is what it was; this build's own
+                // executable changing under it says nothing of the host.
+                let seen = (reason == InstallRefusal::Release).then_some(build.digest);
                 return Err(refused(
                     audit,
                     name,
                     lease,
-                    InstallRefusal::Source,
+                    reason,
+                    seen,
+                    LeaseRefusal::EnvironmentInstallFailed,
+                ));
+            }
+            Err(error) => {
+                tracing::error!(%error, ?reason, "the build to install could not be had");
+                return Err(refused(
+                    audit,
+                    name,
+                    lease,
+                    reason,
                     None,
                     LeaseRefusal::EnvironmentInstallFailed,
                 ));
@@ -430,7 +565,7 @@ impl HostInstaller {
             self.timings.probe,
             self.shell.run(
                 host,
-                probe_command(self.protocol, self.digest().await.ok()?),
+                probe_command(self.protocol, &self.builds().await.ok()?),
                 None,
             ),
         )

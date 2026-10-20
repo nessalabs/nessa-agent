@@ -27,6 +27,11 @@ pub(crate) struct ConfiguredLimits {
     /// Seconds an idle agent nobody watches runs before it is parked; 0
     /// never parks one.
     pub agent_idle_seconds: u64,
+    /// Leases of an agent at once across every paired environment; 0
+    /// bounds none.
+    pub organization_leases: u64,
+    /// Commands at once across every paired environment; 0 bounds none.
+    pub organization_commands: u64,
     pub read_work_budget: Duration,
 }
 
@@ -44,6 +49,8 @@ pub struct OperationalLimits {
     app_calls_per_socket: usize,
     live_conversations: usize,
     agent_idle: Option<Duration>,
+    organization_leases: Option<usize>,
+    organization_commands: Option<usize>,
     read_work_budget: Duration,
 }
 
@@ -65,6 +72,8 @@ pub enum InvalidOperationalLimits {
     LiveConversations,
     /// An idle wait longer than [`MAX_AGENT_IDLE_SECONDS`].
     AgentIdle,
+    OrganizationLeases,
+    OrganizationCommands,
     ReadWorkBudget,
 }
 
@@ -82,6 +91,8 @@ impl InvalidOperationalLimits {
             Self::AppCalls => "app_calls_per_socket",
             Self::LiveConversations => "live_conversations",
             Self::AgentIdle => "agent_idle_seconds",
+            Self::OrganizationLeases => "organization_leases",
+            Self::OrganizationCommands => "organization_commands",
             Self::ReadWorkBudget => "read_work_budget",
         }
     }
@@ -101,6 +112,11 @@ impl std::fmt::Display for InvalidOperationalLimits {
             Self::AgentIdle => write!(
                 formatter,
                 "agent_idle_seconds must be 0 (never park) or from 1 to {MAX_AGENT_IDLE_SECONDS}"
+            ),
+            Self::OrganizationLeases | Self::OrganizationCommands => write!(
+                formatter,
+                "{} must be 0 (no budget) or from 1 to {MAX_ADMISSION}",
+                self.field()
             ),
             other => write!(
                 formatter,
@@ -135,6 +151,10 @@ impl Default for OperationalLimits {
             // the agent, short enough that a swarm's quiet members stop
             // holding memory (docs/design/agent-parking.md).
             agent_idle: Some(Duration::from_secs(120)),
+            // An operator's choice: nothing a person starts is held back
+            // until one is made (#791).
+            organization_leases: None,
+            organization_commands: None,
             read_work_budget: READ_WORK_BUDGET,
         }
     }
@@ -177,6 +197,14 @@ impl OperationalLimits {
                 InvalidOperationalLimits::LiveConversations,
             )?,
             agent_idle: agent_idle(input.agent_idle_seconds)?,
+            organization_leases: unless_zero(
+                input.organization_leases,
+                InvalidOperationalLimits::OrganizationLeases,
+            )?,
+            organization_commands: unless_zero(
+                input.organization_commands,
+                InvalidOperationalLimits::OrganizationCommands,
+            )?,
             read_work_budget: budget(input.read_work_budget)?,
         })
     }
@@ -228,6 +256,16 @@ impl OperationalLimits {
     pub(crate) fn agent_idle(self) -> Option<Duration> {
         self.agent_idle
     }
+    /// The most leases of an agent this gateway's paired environments run
+    /// at once, together; `None` bounds none.
+    pub(crate) fn organization_leases(self) -> Option<usize> {
+        self.organization_leases
+    }
+    /// The most commands this gateway's paired environments run at once,
+    /// together; `None` bounds none.
+    pub(crate) fn organization_commands(self) -> Option<usize> {
+        self.organization_commands
+    }
     pub(crate) fn read_work_budget(self) -> Duration {
         self.read_work_budget
     }
@@ -249,6 +287,17 @@ fn admit(count: u64, invalid: InvalidOperationalLimits) -> Result<usize, Invalid
         return Err(invalid);
     }
     usize::try_from(count).map_err(|_| invalid)
+}
+
+/// A count where 0 is no bound at all.
+fn unless_zero(
+    count: u64,
+    invalid: InvalidOperationalLimits,
+) -> Result<Option<usize>, InvalidOperationalLimits> {
+    match count {
+        0 => Ok(None),
+        count => admit(count, invalid).map(Some),
+    }
 }
 
 fn app_calls(count: u64) -> Result<usize, InvalidOperationalLimits> {
@@ -287,6 +336,8 @@ mod tests {
         assert_eq!(limits.control_lane(), 4);
         assert_eq!(limits.live_conversations(), 65_536);
         assert_eq!(limits.agent_idle(), Some(Duration::from_secs(120)));
+        assert_eq!(limits.organization_leases(), None);
+        assert_eq!(limits.organization_commands(), None);
         assert_eq!(limits.read_work_budget(), READ_WORK_BUDGET);
     }
 
@@ -304,6 +355,8 @@ mod tests {
             app_calls_per_socket: defaults.app_calls_per_socket() as u64,
             live_conversations: defaults.live_conversations() as u64,
             agent_idle_seconds: 120,
+            organization_leases: 0,
+            organization_commands: 0,
             read_work_budget: defaults.read_work_budget(),
         };
         input.requests = 0;
@@ -346,6 +399,8 @@ mod tests {
             app_calls_per_socket: defaults.app_calls_per_socket() as u64,
             live_conversations: defaults.live_conversations() as u64,
             agent_idle_seconds: 0,
+            organization_leases: 0,
+            organization_commands: 0,
             read_work_budget: defaults.read_work_budget(),
         };
         assert_eq!(
@@ -361,6 +416,51 @@ mod tests {
         assert_eq!(
             OperationalLimits::configured(input),
             Err(InvalidOperationalLimits::AgentIdle)
+        );
+    }
+
+    #[test]
+    fn an_organization_budget_of_zero_bounds_nothing_and_one_past_the_admission_is_refused() {
+        let defaults = OperationalLimits::default();
+        let mut input = ConfiguredLimits {
+            requests: defaults.requests() as u64,
+            controls: defaults.controls() as u64,
+            record_reads: defaults.record_reads() as u64,
+            upload_begins: defaults.upload_begins() as u64,
+            deletions: defaults.deletions() as u64,
+            ordinary_slots: defaults.ordinary_slots() as u64,
+            control_slots: defaults.control_slots() as u64,
+            app_calls_per_socket: defaults.app_calls_per_socket() as u64,
+            live_conversations: defaults.live_conversations() as u64,
+            agent_idle_seconds: 120,
+            organization_leases: 0,
+            organization_commands: 0,
+            read_work_budget: defaults.read_work_budget(),
+        };
+        let limits = OperationalLimits::configured(input).unwrap();
+        assert_eq!(
+            (limits.organization_leases(), limits.organization_commands()),
+            (None, None)
+        );
+        input.organization_leases = 3;
+        input.organization_commands = MAX_ADMISSION;
+        let limits = OperationalLimits::configured(input).unwrap();
+        assert_eq!(
+            (limits.organization_leases(), limits.organization_commands()),
+            (Some(3), Some(MAX_ADMISSION as usize))
+        );
+        input.organization_leases = MAX_ADMISSION + 1;
+        let refused = OperationalLimits::configured(input).unwrap_err();
+        assert_eq!(refused, InvalidOperationalLimits::OrganizationLeases);
+        assert_eq!(
+            refused.to_string(),
+            "organization_leases must be 0 (no budget) or from 1 to 65536"
+        );
+        input.organization_leases = 0;
+        input.organization_commands = MAX_ADMISSION + 1;
+        assert_eq!(
+            OperationalLimits::configured(input),
+            Err(InvalidOperationalLimits::OrganizationCommands)
         );
     }
 }

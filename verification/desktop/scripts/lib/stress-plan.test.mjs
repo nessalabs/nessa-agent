@@ -31,6 +31,7 @@ test("every required step appears as often as its number says", () => {
   assert.equal(count("rail"), knobs.rails)
   assert.equal(count("table"), knobs.tables)
   assert.equal(count("notice"), knobs.notices)
+  assert.equal(count("pool"), knobs.pools)
   assert.equal(count("reviews"), 1)
   assert.equal(count("long"), 1)
   assert.equal(steps.find((step) => step.kind === "long").turns, knobs.long)
@@ -107,6 +108,7 @@ test("the legacy seed preserves the existing non-model work's relative order", (
         rails: "0",
         tables: "0",
         notices: "0",
+        pools: "0",
         awaits: "0",
         fresh: "0",
         renames: "0",

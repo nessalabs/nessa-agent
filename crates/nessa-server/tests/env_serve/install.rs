@@ -73,8 +73,8 @@ fn leftovers(home: &Path) -> Vec<String> {
 fn every_command_survives_any_login_shell() {
     let digest = "a".repeat(64);
     for command in [
-        serve_command(&digest),
-        probe_command(PROTOCOL, &digest),
+        serve_command(&[&digest]),
+        probe_command(PROTOCOL, &[&digest]),
         upload_command(PROTOCOL, &digest),
     ] {
         let script = command
@@ -90,7 +90,83 @@ fn every_command_survives_any_login_shell() {
 #[test]
 #[should_panic(expected = "only hex goes into a host command")]
 fn nothing_but_hex_goes_into_a_command() {
-    let _ = serve_command("0123'; rm -rf ~; '");
+    let _ = serve_command(&["0123'; rm -rf ~; '"]);
+}
+
+#[test]
+#[should_panic(expected = "a host command names at least one build")]
+fn a_command_names_at_least_one_build() {
+    let _ = serve_command(&[]);
+}
+
+/// One build's copies for each platform (#734): the probe and the serve
+/// command look for each in turn, and find the first one kept there.
+#[test]
+fn of_one_builds_copies_the_first_kept_there_is_found_and_served() {
+    let home = tempfile::tempdir().unwrap();
+    let source = tempfile::tempdir().unwrap();
+    let (path, digest) = build(source.path(), PROTOCOL, true);
+    let answer = on_host(home.path(), &upload_command(PROTOCOL, &digest), Some(&path));
+    assert_eq!(Upload::parse(&answer), Some(Upload::Installed), "{answer}");
+    let builds = [elsewhere(), digest.clone()];
+    let builds: Vec<&str> = builds.iter().map(String::as_str).collect();
+    assert_eq!(
+        Probe::parse(&on_host(
+            home.path(),
+            &probe_command(PROTOCOL, &builds),
+            None
+        )),
+        Some(Probe::Present)
+    );
+    assert_eq!(
+        on_host(
+            home.path(),
+            &serve_command(&builds).replace("env serve", "env protocol"),
+            None
+        )
+        .trim(),
+        PROTOCOL
+    );
+    // None of them there: absent, and the serve command says nothing.
+    assert!(matches!(
+        Probe::parse(&on_host(
+            home.path(),
+            &probe_command(PROTOCOL, &[&elsewhere(), &"d".repeat(64)]),
+            None
+        )),
+        Some(Probe::Absent(_))
+    ));
+    assert_eq!(
+        on_host(home.path(), &serve_command(&[&elsewhere()]), None),
+        ""
+    );
+}
+
+/// The targets a release publishes are the platforms this build and a
+/// host's probe name alike.
+#[test]
+fn a_release_target_is_the_platform_a_host_probes_as() {
+    let darwin = Platform::of_target("aarch64-apple-darwin").unwrap();
+    assert!(darwin.runs_on(&Platform::from_probe("Darwin", "arm64", "other")));
+    let intel = Platform::of_target("x86_64-apple-darwin").unwrap();
+    assert!(intel.runs_on(&Platform::from_probe("Darwin", "x86_64", "other")));
+    assert!(!intel.runs_on(&darwin));
+    let linux = Platform::of_target("x86_64-unknown-linux-gnu").unwrap();
+    assert!(linux.runs_on(&Platform::from_probe("Linux", "x86_64", "gnu")));
+    assert!(!linux.runs_on(&Platform::from_probe("Linux", "x86_64", "other")));
+    assert!(!linux.runs_on(&Platform::from_probe("Linux", "aarch64", "gnu")));
+    for unpublished in ["aarch64-unknown-linux-gnu", "x86_64-unknown-linux-musl", ""] {
+        assert_eq!(Platform::of_target(unpublished), None, "{unpublished}");
+    }
+    let this_target = match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("macos", "aarch64") => Some("aarch64-apple-darwin"),
+        ("macos", "x86_64") => Some("x86_64-apple-darwin"),
+        ("linux", "x86_64") if cfg!(target_env = "gnu") => Some("x86_64-unknown-linux-gnu"),
+        _ => None,
+    };
+    if let Some(target) = this_target {
+        assert_eq!(Platform::of_target(target), Some(Platform::this_build()));
+    }
 }
 
 #[test]
@@ -98,7 +174,7 @@ fn a_host_without_this_build_says_what_it_runs_on_and_this_build_runs_there() {
     let home = tempfile::tempdir().unwrap();
     let probe = Probe::parse(&on_host(
         home.path(),
-        &probe_command(PROTOCOL, &elsewhere()),
+        &probe_command(PROTOCOL, &[&elsewhere()]),
         None,
     ))
     .unwrap();
@@ -130,7 +206,7 @@ fn an_upload_that_verifies_is_installed_where_the_probe_and_serve_look() {
     assert_eq!(
         Probe::parse(&on_host(
             home.path(),
-            &probe_command(PROTOCOL, &digest),
+            &probe_command(PROTOCOL, &[&digest]),
             None
         )),
         Some(Probe::Present)
@@ -139,7 +215,7 @@ fn an_upload_that_verifies_is_installed_where_the_probe_and_serve_look() {
     assert!(matches!(
         Probe::parse(&on_host(
             home.path(),
-            &probe_command(PROTOCOL, &elsewhere()),
+            &probe_command(PROTOCOL, &[&elsewhere()]),
             None
         )),
         Some(Probe::Absent(_))
@@ -148,7 +224,7 @@ fn an_upload_that_verifies_is_installed_where_the_probe_and_serve_look() {
     assert_eq!(
         on_host(
             home.path(),
-            &serve_command(&digest).replace("env serve", "env protocol"),
+            &serve_command(&[&digest]).replace("env serve", "env protocol"),
             None
         )
         .trim(),
@@ -358,7 +434,7 @@ fn a_copy_that_no_longer_runs_or_speaks_another_protocol_is_absent() {
         assert!(matches!(
             Probe::parse(&on_host(
                 home.path(),
-                &probe_command(PROTOCOL, &digest),
+                &probe_command(PROTOCOL, &[&digest]),
                 None
             )),
             Some(Probe::Absent(_))
@@ -369,7 +445,7 @@ fn a_copy_that_no_longer_runs_or_speaks_another_protocol_is_absent() {
     assert_eq!(
         Probe::parse(&on_host(
             home.path(),
-            &probe_command(PROTOCOL, &digest),
+            &probe_command(PROTOCOL, &[&digest]),
             None
         )),
         Some(Probe::Present)
@@ -410,7 +486,7 @@ fn every_command_runs_the_same_through_each_login_shell_here() {
         let shown = shell.display();
         assert!(
             matches!(
-                Probe::parse(&run(&probe_command(PROTOCOL, &digest), None)),
+                Probe::parse(&run(&probe_command(PROTOCOL, &[&digest]), None)),
                 Some(Probe::Absent(_))
             ),
             "{shown}"
@@ -422,7 +498,7 @@ fn every_command_runs_the_same_through_each_login_shell_here() {
             "{shown}: {answer}"
         );
         assert_eq!(
-            Probe::parse(&run(&probe_command(PROTOCOL, &digest), None)),
+            Probe::parse(&run(&probe_command(PROTOCOL, &[&digest]), None)),
             Some(Probe::Present),
             "{shown}"
         );

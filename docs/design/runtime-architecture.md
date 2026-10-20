@@ -694,16 +694,18 @@ per-person tool policy (the policy is the gateway's).
 ### Slice F: first-use install over SSH (#703)
 
 **What is installed, and where.** Only `nessa` itself: this gateway's own
-executable, and only on a host it runs on — the same system and processor,
-and on Linux the GNU C library it links. That copy is the one certain to
-speak this build's lease protocol, which is a fingerprint of its sources;
-no other platform's build of the same sources is published anywhere a
-digest could pin, so a host of another platform is refused
-(`environment_platform_unsupported`) rather than sent something unverified
-([#734](https://github.com/nessalabs/nessa-agent/issues/734) adds release
-builds per platform). It goes to `~/.nessa/env/<digest>/nessa` on the
-host, `<digest>` the executable's SHA-256: the directory names the exact
-bytes, so the gateway runs exactly its own build. A build whose lease
+executable on a host it runs on — the same system and processor, and on
+Linux the GNU C library it links. On a host of another platform it is that
+platform's build of the same sources, which a release publishes and this
+build pins (below, [#734](https://github.com/nessalabs/nessa-agent/issues/734)).
+Either copy speaks this build's lease protocol, which is a fingerprint of
+its sources; a build that pins none (every development build) refuses a
+host of another platform (`environment_platform_unsupported`) rather than
+send something unverified. It goes to `~/.nessa/env/<digest>/nessa` on the
+host, `<digest>` the copy's SHA-256: the directory names the exact bytes,
+so the gateway runs exactly its own build. The serve command and the probe
+look for this build's own digest first, then each pinned one, and use the
+first copy kept there. A build whose lease
 protocol is unchanged but whose harness or dependencies changed (the host
 runs the harness too) is absent until it is installed, a host keeps one
 copy per build, and two gateways of different builds never replace each
@@ -728,11 +730,11 @@ sequenceDiagram
         H-->>G: the stream ends with nothing said
         G->>H: probe
         H-->>G: absent, with its system, processor and C library
-        alt this build does not run there
+        alt neither this build nor any it pins runs there
             G->>A: InstallRefused platform
             G-->>G: refused environment_platform_unsupported
-        else it runs there
-            G->>G: open this executable again: still D?
+        else it runs there, or a pinned release build does
+            G->>G: open this executable again (still D?), or the release build (its pin?)
             G->>A: InstallStarted, before a byte is sent
             G->>H: upload: the bytes on stdin, the digest and P in the command
             H->>H: private temporary file, then its SHA-256 equals the digest?
@@ -757,8 +759,8 @@ sequenceDiagram
 | The bytes sent | the executable opened when the gateway starts (on Linux `/proc/self/exe`, elsewhere what `current_exe` names then) and held, so an update that later puts another file at its path is neither measured nor sent; measured once per process for the serve command, read from its start for each send, one send at a time, and a send whose bytes no longer match the measurement is not made (`source`); `ssh` compresses them on the way | a path can name a newer executable than the one running |
 | Files | the directory made under umask 077; the copy mode 700; a temporary file left by an install cut off is removed by a later install after 60 minutes | |
 | Timeouts | probe 30 s; upload, verification and placing 10 minutes. An upload whose answer is lost is probed again: a copy found there is recorded `InstallFound` (no digest claimed: another gateway of this build may have placed it) and used; none found is recorded `InstallUnsettled`, never refused, and the lease is refused `environment_unreachable` | the rename may have happened before the word was lost, or may still happen: the host's script is not stopped by the gateway giving up, and a copy it places is verified and served to a later lease, recorded `Connected` |
-| Gateway audit | Each install record names the host and the lease whose opening found no copy, which joins it to that lease's issuance and actor and pairs a start with its outcome (a lease opens at most one install). `InstallStarted` before the first byte (and nothing is sent if it cannot be recorded), then `Installed`, `InstallFound` (below), `InstallUnsettled` (below) or `InstallRefused` with its reason (`platform`, `source`, `fingerprint`, `version`, `unrunnable`, `digest_tool`, `failed`) and what the host said | the install's evidence beside slice B's connection records |
-| Refusals | the host's platform, `environment_platform_unsupported`; a fingerprint, an unrunnable copy, no digest tool, or a step that failed, `environment_install_failed`; a copy that speaks another protocol, `environment_version_mismatch`; no answer, `environment_unreachable` | each said in the composer; an install refusal is stored as `refused_v3`, a kind earlier builds read as unreadable rather than corrupt |
+| Gateway audit | Each install record names the host and the lease whose opening found no copy, which joins it to that lease's issuance and actor and pairs a start with its outcome (a lease opens at most one install). `InstallStarted` before the first byte (and nothing is sent if it cannot be recorded), then `Installed`, `InstallFound` (below), `InstallUnsettled` (below) or `InstallRefused` with its reason (`platform`, `source`, `release`, `fingerprint`, `version`, `unrunnable`, `digest_tool`, `failed`) and what the host said | the install's evidence beside slice B's connection records |
+| Refusals | the host's platform, `environment_platform_unsupported`; a release build not downloaded or not its pin, a fingerprint, an unrunnable copy, no digest tool, or a step that failed, `environment_install_failed`; a copy that speaks another protocol, `environment_version_mismatch`; no answer, `environment_unreachable` | each said in the composer; an install refusal is stored as `refused_v3`, a kind earlier builds read as unreadable rather than corrupt |
 | Old copies | kept | a gateway of an older build may still use its own; removing them is a later `nessa env` command |
 | Retries | none of its own: each lease that opens on a host without this build tries the install again, sending the whole build | known limit: a host whose link is too slow for the timeout, or that keeps refusing, is sent the build on every attempt |
 
@@ -788,6 +790,24 @@ machine's own `sh` with its own tools, so on Linux and macOS in CI) and
 | F16 | The executable replaced at its path, or its bytes changed since they were measured | The file opened at start is still the one measured and sent; bytes that no longer match are not sent: `InstallRefused` `source`, `environment_install_failed` | `an_executable_replaced_at_its_path_is_still_the_one_measured_and_sent`, `an_executable_replaced_since_it_was_measured_is_not_sent` |
 | F17 | Something other than a file where the copy goes (a directory at `~/.nessa/env/<digest>/nessa`) | Nothing is moved into it: `InstallRefused` `failed` `publish`, `environment_install_failed` | `a_directory_where_the_copy_goes_is_a_failed_step_and_nothing_goes_in_it` |
 | F18 | A login shell that prints a long banner before the answer | Its output is read to the end and only the last 4 KiB kept, so the answer on the last line is still read | `a_long_login_banner_does_not_hide_the_answer` |
+| F19 | A host of another platform, from a release that pins its build (#734) | The pinned build is downloaded once (kept in the gateway's `host-builds` under its digest), sent with its digest, verified and placed by the host as any copy, recorded with that digest, and served | `a_host_of_another_platform_gets_the_release_build_pinned_for_it`, `a_gateway_of_another_platform_installs_its_release_build_with_the_hosts_own_scripts`, `a_release_build_is_downloaded_once_and_kept_by_its_digest` |
+| F20 | A download that is not the pinned bytes, longer than its pin, or not reached | Refused before a byte is sent: `InstallRefused` `release` (with the digest it had), `environment_install_failed`; nothing kept | `a_release_build_that_is_not_the_pinned_one_is_refused_and_sent_nothing`, `a_download_that_is_not_the_pin_is_measured_and_not_kept`, `a_download_longer_than_its_pin_or_failed_is_an_error_and_not_kept` |
+| F21 | A pinned build whose copy speaks another protocol | Refused by the host's own check: `environment_version_mismatch` | `a_release_build_speaking_another_protocol_is_refused_by_the_host`, `a_gateway_of_another_platform_installs_its_release_build_with_the_hosts_own_scripts` |
+| F22 | A platform nothing is pinned for, a build with no pins (a development build), or pins that do not read | Refused `environment_platform_unsupported`, nothing downloaded | `a_platform_nothing_is_pinned_for_is_still_refused`, `a_host_this_build_cannot_run_on_is_refused_and_sent_nothing`, `pins_that_do_not_read_are_refused_whole` |
+| F23 | A host keeping another platform's copy of this build | The probe and serve command find it among the digests, so it is served and not installed again | `of_one_builds_copies_the_first_kept_there_is_found_and_served` |
+
+**Release builds (#734).** The release workflow builds a standalone `nessa`
+for each target first (`host-builds`: macOS aarch64 and x86_64, Linux
+x86_64 GNU), from the tagged commit, and then compiles each app build with
+their SHA-256s and lengths (`NESSA_HOST_BUILDS`, as
+`<target>=<sha256>:<bytes>`) and the release's download address
+(`NESSA_HOST_BUILDS_FROM`); the release publishes them as
+`nessa-<target>`. So the pin is part of the build that uses it, and nothing
+is trusted at run time but the digest. A gateway downloads a platform's
+build (HTTPS only, bounded by its pinned length) the first time a host of
+that platform needs it, and keeps it under its digest; a kept copy that no
+longer measures is downloaded again. A draft release serves no downloads,
+so this works once the release is published.
 
 **Verified on hosts.** The host commands run on both CI systems (Linux and
 macOS) with their own `sh`, `uname`, digest tool, `mktemp`, `find` and
@@ -1772,7 +1792,7 @@ needs them:
 | `lease.event_buffer_bytes`, `lease.event_batch` | Events an environment may have in flight before backpressure or lease end |
 | `lease.cleanup_deadline` | How long an environment has to report cleanup before the turn is `interrupted` |
 | `peer.connections`, `peer.leases` | Live connections and leases per paired peer |
-| `organization.environments`, `organization.leases` | Concurrent environments and leases per organization |
+| `organization.leases`, `organization.commands` | Agent leases and commands running at once across one organization's paired environments (a gateway is one organization); `organization.environments` is `environment.connections` today, and artifact bytes per organization are [#1041](https://github.com/nessalabs/nessa-agent/issues/1041) |
 | `device.subscriptions`, `device.outbox_bytes` | Subscriptions one device may hold; intents it may hold unsent |
 | `lease.idle_sleep` | How long a leased harness may sit idle before the environment stops its process and the lease sleeps; a prompt wakes it by native resume, and a failed resume is `process_lost` |
 | `lease.previews` | Open previews one lease may hold |

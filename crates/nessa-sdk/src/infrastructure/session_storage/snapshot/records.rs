@@ -549,6 +549,15 @@ impl<'a> From<&'a ExecutionEvent> for Event<&'a str> {
         }
     }
 }
+impl From<&ProviderIdentity> for Provider {
+    fn from(value: &ProviderIdentity) -> Self {
+        Self {
+            name: value.name().into(),
+            model_id: value.model_id().into(),
+            context: value.context().into(),
+        }
+    }
+}
 impl Provider {
     pub(super) fn decode(self) -> Result<ProviderIdentity, StorageError> {
         ProviderIdentity::new(self.name, self.model_id, self.context).map_err(corrupt)
@@ -620,10 +629,23 @@ impl Metadata {
         })
     }
 }
+/// The provider context a stored cancellation is read against. A cancellation
+/// names the context in force when it was recorded.
+pub(super) enum CancellationContext<'a> {
+    /// A semantic fact, read with the context in force at that fact: the
+    /// cancellation must name it.
+    AtFact(&'a ExecutionSessionId),
+    /// A checkpoint, which keeps only the final context. A cancellation from
+    /// an earlier context is accepted: each was checked against its own
+    /// context when its fact was recorded, and a checkpoint is written only
+    /// from that validated state.
+    Checkpoint,
+}
+
 impl Event {
     pub(super) fn decode(
         self,
-        provider_context: &ExecutionSessionId,
+        provider_context: CancellationContext<'_>,
         execution_id: &ExecutionId,
     ) -> Result<ExecutionEvent, StorageError> {
         if self.execution_id != execution_id.as_str() {
@@ -636,9 +658,11 @@ impl Event {
             Update::Tool(tool) => ExecutionUpdate::Tool(tool.decode()?),
             Update::PermissionCancelled(cancellation) => {
                 let cancellation = cancellation.decode()?;
-                if cancellation.session_id() != provider_context
-                    || cancellation.request().execution_id() != execution_id
-                {
+                let named = match provider_context {
+                    CancellationContext::AtFact(context) => cancellation.session_id() == context,
+                    CancellationContext::Checkpoint => true,
+                };
+                if !named || cancellation.request().execution_id() != execution_id {
                     return Err(corrupt(
                         "cancellation belongs to a different session or invocation",
                     ));
@@ -822,8 +846,12 @@ mod borrowed_event_tests {
             assert_eq!(bytes, expected.as_bytes());
             let decoded = owned
                 .decode(
-                    &crate::domain::agent_execution::sessions::ExecutionSessionId::new("remote")
+                    CancellationContext::AtFact(
+                        &crate::domain::agent_execution::sessions::ExecutionSessionId::new(
+                            "remote",
+                        )
                         .unwrap(),
+                    ),
                     event.execution_id(),
                 )
                 .unwrap();
@@ -850,8 +878,10 @@ mod borrowed_event_tests {
         let owned: Event = serde_json::from_slice(&bytes).unwrap();
         let decoded = owned
             .decode(
-                &crate::domain::agent_execution::sessions::ExecutionSessionId::new("remote")
-                    .unwrap(),
+                CancellationContext::AtFact(
+                    &crate::domain::agent_execution::sessions::ExecutionSessionId::new("remote")
+                        .unwrap(),
+                ),
                 event.execution_id(),
             )
             .unwrap();
@@ -924,8 +954,10 @@ mod borrowed_event_tests {
         let owned: Event = serde_json::from_slice(&bytes).unwrap();
         let decoded = owned
             .decode(
-                &crate::domain::agent_execution::sessions::ExecutionSessionId::new("remote")
-                    .unwrap(),
+                CancellationContext::AtFact(
+                    &crate::domain::agent_execution::sessions::ExecutionSessionId::new("remote")
+                        .unwrap(),
+                ),
                 event.execution_id(),
             )
             .unwrap();
@@ -963,8 +995,12 @@ mod borrowed_event_tests {
         assert_eq!(
             answered_owned
                 .decode(
-                    &crate::domain::agent_execution::sessions::ExecutionSessionId::new("remote")
+                    CancellationContext::AtFact(
+                        &crate::domain::agent_execution::sessions::ExecutionSessionId::new(
+                            "remote"
+                        )
                         .unwrap(),
+                    ),
                     answered.execution_id(),
                 )
                 .unwrap(),

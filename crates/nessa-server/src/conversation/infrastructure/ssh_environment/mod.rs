@@ -6,6 +6,8 @@
 //! gateway's own evidence about its hosts (kept by `durable_audit.rs`).
 //! A file the host publishes (issue #701) is read off it by `transfer.rs`,
 //! over `sftp.rs` on an artifact channel of that same connection.
+//! `release.rs` is the release builds for other platforms an install
+//! sends a host this build does not run on (issue #734).
 //! `peer.rs` is the paired environments (issue #706): the same adapter, over
 //! a connection the host dials into this gateway's native listener.
 //! Unix only, as its composition (`composition/local_auth.rs`) and the
@@ -20,6 +22,7 @@ mod install;
 mod link;
 mod open_ssh;
 mod peer;
+mod release;
 mod sftp;
 mod transfer;
 pub(crate) use durable_audit::DurableEnvironmentAudit;

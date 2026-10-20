@@ -57,8 +57,9 @@ use crate::conversation::application::{
     ArtifactAnswer, ArtifactBytes, ArtifactOffer, CommandEnvironment, CommandHold, CommandResult,
     Environment, EnvironmentDeclaration, EnvironmentFuture, EnvironmentLease, FetchAsk,
     FetchFailure, FetchPlaced, GrantedCommand, GrantedTerms, LeaseHold, LeaseRelease, PublishAsk,
-    PublishFailure,
+    PublishFailure, WorkerLoad,
 };
+use crate::conversation::application::{BudgetPlace, OrganizationBudgets};
 use nessa_auth::application::pairing::DeviceConnectionProof;
 use nessa_protocol::lease::{
     self, Cleanup, CommandEnd, GrantRefusal, COMMAND_STOP_WAIT, KEEPALIVE_INTERVAL, SILENCE_LIMIT,
@@ -143,6 +144,9 @@ enum Reach {
         /// are connected, moved here as this one's connection is admitted,
         /// ends, or is revoked.
         connections: watch::Sender<u64>,
+        /// The organization budget every paired environment of this gateway
+        /// shares: a place is taken before a lease or a command is asked.
+        budgets: OrganizationBudgets,
     },
 }
 
@@ -196,6 +200,7 @@ impl SshEnvironment {
         audit: Arc<dyn EnvironmentAudit>,
         timings: SshTimings,
         connections: watch::Sender<u64>,
+        budgets: OrganizationBudgets,
     ) -> Self {
         Self::reached(
             Reach::Peer {
@@ -203,6 +208,7 @@ impl SshEnvironment {
                 credentials,
                 serving: std::sync::Mutex::new(None),
                 connections,
+                budgets,
             },
             audit,
             timings,
@@ -262,11 +268,25 @@ impl SshEnvironment {
             replaced.link.close();
         }
         moved(connections);
-        tokio::select! {
-            () = link.ended() => {}
-            () = self.inner.until_revoked(credentials.as_ref(), &proof) => {
-                self.inner.revoke(&link);
-                link.ended().await;
+        let ended = link.ended();
+        let revoked = self.inner.until_revoked(credentials.as_ref(), &proof);
+        let drains = link.drains();
+        tokio::pin!(ended, revoked, drains);
+        let mut draining = false;
+        loop {
+            tokio::select! {
+                () = &mut ended => break,
+                () = &mut revoked => {
+                    self.inner.revoke(&link);
+                    link.ended().await;
+                    break;
+                }
+                // Draining, it is no longer offered new work: whoever lists
+                // where work can go reads that list again.
+                () = &mut drains, if !draining => {
+                    draining = true;
+                    moved(connections);
+                }
             }
         }
         moved(connections);
@@ -286,6 +306,28 @@ impl SshEnvironment {
     pub(super) fn is_connected(&self) -> bool {
         self.reachable() == Some(true)
     }
+
+    /// What a paired environment's connection carries now, read off that
+    /// connection: `None` with none that serves leases.
+    pub(super) fn load(&self) -> Option<WorkerLoad> {
+        let Reach::Peer { serving, .. } = &self.inner.reach else {
+            return None;
+        };
+        let link = served(serving)
+            .map(|served| served.link)
+            .filter(|link| link.is_serving())?;
+        Some(WorkerLoad {
+            leases: link.agent_leases(),
+            draining: link.is_draining(),
+        })
+    }
+}
+
+/// Which organization budget a piece of work takes a place in.
+#[derive(Clone, Copy, Debug)]
+enum Work {
+    Lease,
+    Command,
 }
 
 /// Whether opening a connection may install this build on the host first.
@@ -309,6 +351,34 @@ impl Inner {
         match &self.reach {
             Reach::Ssh { host, .. } => EnvironmentRef::Ssh(host.clone()),
             Reach::Peer { peer, .. } => EnvironmentRef::Peer(*peer),
+        }
+    }
+
+    /// A place in the organization budget for one more `kind` of work, on
+    /// a paired environment; `Ok(None)` elsewhere, where nothing is
+    /// counted. With every place the budget allows taken, the work is
+    /// refused busy before the host is asked.
+    fn budget_place(&self, kind: Work) -> Result<Option<BudgetPlace>, LeaseRefusal> {
+        let Reach::Peer { budgets, .. } = &self.reach else {
+            return Ok(None);
+        };
+        let place = match kind {
+            Work::Lease => budgets.lease(),
+            Work::Command => budgets.command(),
+        };
+        match place {
+            Some(place) => Ok(Some(place)),
+            None => {
+                let (leases, commands) = budgets.running();
+                tracing::warn!(
+                    host = self.name(),
+                    ?kind,
+                    leases,
+                    commands,
+                    "the organization budget is spent: refused busy before the worker is asked"
+                );
+                Err(LeaseRefusal::EnvironmentBusy)
+            }
         }
     }
 
@@ -481,6 +551,7 @@ impl Environment for SshEnvironment {
     ) -> EnvironmentFuture<'a, Result<EnvironmentLease, LeaseRefusal>> {
         Box::pin(async move {
             let LeaseWork::Agent(work) = &grant.work;
+            let place = self.inner.budget_place(Work::Lease)?;
             let link = self.inner.link(Install::IfAbsent(lease.as_str())).await?;
             let host: Arc<dyn HarnessHost> = Arc::new(LeaseHost {
                 link: link.clone(),
@@ -500,6 +571,7 @@ impl Environment for SshEnvironment {
                     lease.as_str(),
                     work.agent(),
                     grant.sandbox.into(),
+                    place,
                     self.inner.timings.answer,
                 )
                 .await?;
@@ -549,12 +621,16 @@ impl CommandEnvironment for SshEnvironment {
         command: &'a CommandWork,
     ) -> EnvironmentFuture<'a, Result<GrantedCommand, CommandRefusal>> {
         Box::pin(async move {
+            let place = self
+                .inner
+                .budget_place(Work::Command)
+                .map_err(CommandRefusal::Environment)?;
             let link = self
                 .inner
                 .link(Install::IfAbsent(lease.as_str()))
                 .await
                 .map_err(CommandRefusal::Environment)?;
-            let (_, terms) = link
+            let terms = link
                 .grant_command(
                     lease.as_str(),
                     command
@@ -564,6 +640,7 @@ impl CommandEnvironment for SshEnvironment {
                         .collect(),
                     command.cwd().map(Into::into),
                     command.timeout_ms(),
+                    place,
                     self.inner.timings.answer,
                 )
                 .await

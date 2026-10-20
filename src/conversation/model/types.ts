@@ -183,12 +183,14 @@ export type CommandFailure =
   | "environment-version-mismatch"
   /**
    * Its SSH host had no copy of this build, and runs on a system or processor
-   * this build cannot run on; nothing was installed or sent there.
+   * this build has no copy for (its own, or a release's build of it for that
+   * platform); nothing was installed or sent there.
    */
   | "environment-platform-unsupported"
   /**
-   * Its SSH host had no copy of this build, and installing one failed: it did
-   * not verify, did not run there, or could not be stored. Nothing was sent.
+   * Its SSH host had no copy of this build, and installing one failed: it
+   * could not be downloaded, did not verify, did not run there, or could not
+   * be stored. Nothing was sent.
    */
   | "environment-install-failed"
   /**
