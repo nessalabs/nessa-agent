@@ -386,6 +386,29 @@ it("keeps conversation content and pane fill visible while a layout moves", () =
   }
 })
 
+it("shows a conversation at full strength the moment it appears: no entry fade or scale on a pane, the widget window or a peek", () => {
+  // #914: each of these once entered from opacity 0 and a smaller scale, so
+  // every workspace change showed the conversation dark or shifted for a
+  // moment. Their own rule may animate nothing; motion inside them is
+  // separate and stays.
+  const read = (path: string) =>
+    readFileSync(new URL(path, import.meta.url), "utf8").replace(/\/\*[\s\S]*?\*\//g, "")
+  const panes = read("./workspace/ui/panes/panes.css")
+  const overview = read("./workspace/ui/overview/overview.css")
+  const rule = (sheet: string, selector: string) => {
+    const at = sheet.indexOf(`\n${selector} {`)
+    expect(at, selector).toBeGreaterThanOrEqual(0)
+    return sheet.slice(at).split("}")[0]
+  }
+  for (const [sheet, selector] of [
+    [panes, ".workspace-pane"],
+    [panes, ".workspace-widget-window"],
+    [overview, ".agents-peek"],
+  ] as const) {
+    expect(rule(sheet, selector), selector).not.toMatch(/animation\s*:/)
+  }
+})
+
 it("keeps the list and the panes under the Agents overview laid out", () => {
   // A pane command asked while the overview is open measures the panes' room:
   // it must be the room they have, so nothing under the overview may leave the
