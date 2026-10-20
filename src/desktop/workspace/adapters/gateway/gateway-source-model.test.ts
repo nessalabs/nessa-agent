@@ -21,7 +21,7 @@ const clock: GatewayClock = { now: () => 1_000_000, after: () => () => {} }
 async function ready() {
   const gateway = fakeGateway()
   gateway.rows.set("a", row("a"))
-  gateway.views.set("a", view("a", { runtime }))
+  gateway.views.set("a", view("a", { model: old, runtime }))
   const source = gatewaySource({
     connect: async () => gateway.client,
     clock,
@@ -170,7 +170,10 @@ describe("same-provider gateway control", () => {
     const { gateway, source } = await ready()
     const other = "claude-fable-5-1"
     gateway.once("setModel", () => {
-      gateway.views.set("a", view("a", { runtime: { ...runtime, model: other } }))
+      gateway.views.set(
+        "a",
+        view("a", { model: other, runtime: { ...runtime, model: other } }),
+      )
       return Promise.resolve({
         requestId: "request",
         model: next.modelId,
@@ -227,7 +230,10 @@ describe("same-provider gateway control", () => {
     const { gateway, source } = await ready()
     gateway.views.set(
       "a",
-      view("a", { runtime: { ...runtime, model: "not-in-the-catalogue" } }),
+      view("a", {
+        model: "not-in-the-catalogue",
+        runtime: { ...runtime, model: "not-in-the-catalogue" },
+      }),
     )
     gateway.publish("a")
     for (let i = 0; i < 20; i++) await Promise.resolve()
@@ -240,7 +246,7 @@ describe("same-provider gateway control", () => {
   })
   it("does not send a model change when the view names no model and no agent is open", async () => {
     const { gateway, source } = await ready()
-    gateway.views.set("a", view("a", { runtime: undefined }))
+    gateway.views.set("a", view("a", { runtime: undefined, model: "" }))
     gateway.publish("a")
     for (let i = 0; i < 20; i++) await Promise.resolve()
     await expect(source.setModel("a", next, "request", "person")).rejects.toMatchObject({

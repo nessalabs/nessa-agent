@@ -972,8 +972,9 @@ describe("the model a session runs on", () => {
     const listed = composerModels[composerModels.length - 1]
     const runs = (model: string) =>
       view("c", {
+        model,
         runtime: {
-          model,
+          model: "runtime-model-not-the-selection",
           provider: "codex",
           workspace: "/",
           agent: "codex",

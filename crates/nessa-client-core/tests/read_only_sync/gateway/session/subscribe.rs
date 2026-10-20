@@ -25,7 +25,7 @@ fn blank(text: &str) -> ConversationView {
     ConversationView {
         model_change: None,
         model_change_effect: None,
-        model: None,
+        model: "model".into(),
         conversation_id: "conversation".into(),
         revision: "rev".into(),
         server_now_ms: 1,

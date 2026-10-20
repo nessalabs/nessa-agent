@@ -91,6 +91,7 @@ function withLease(lease: ConversationLease | undefined): Conversation {
       serverNowMs: 1_700_000_000_000,
       title: "Leased conversation",
       approvalMode: "ask",
+      model: "claude-sonnet-5",
       approvalModes: [
         { id: "ask", name: "Provider asks", description: "Provider permission review." },
       ],

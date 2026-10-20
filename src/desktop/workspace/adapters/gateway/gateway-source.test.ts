@@ -946,7 +946,7 @@ describe("conversations", () => {
     follow()
     gateway.views.set(
       conversationA,
-      view(conversationA, { runtime: runtime(listed.modelId) }),
+      view(conversationA, { model: listed.modelId, runtime: runtime(listed.modelId) }),
     )
     await source.transcript(conversationA)
     expect(updates).toContainEqual({
@@ -2990,7 +2990,7 @@ describe("writes", () => {
     )!
     gateway.views.set(
       conversationS,
-      view(conversationS, { runtime: runtime(runs.modelId) }),
+      view(conversationS, { model: runs.modelId, runtime: runtime(runs.modelId) }),
     )
     await source.transcript(conversationS)
     const asking = (messageId: string, chosen: { provider: string; modelId: string }) =>
@@ -3070,7 +3070,7 @@ describe("writes", () => {
     )!
     gateway.views.set(
       conversationS,
-      view(conversationS, { runtime: runtime(runs.modelId) }),
+      view(conversationS, { model: runs.modelId, runtime: runtime(runs.modelId) }),
     )
     // While the first message's create is on its way, a frame says what the conversation runs.
     gateway.once("create", async (normal) => {

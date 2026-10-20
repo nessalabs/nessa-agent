@@ -1576,10 +1576,10 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
         const current = knownModel(sessionId)
         if (!current) {
           const held = reads.get(sessionId)?.view
-          // Nothing was sent. A view with no model and no running agent has
-          // no conversation to retarget; one whose model the catalogue does
+          // Nothing was sent. A view with no selected model has no
+          // conversation to retarget; one whose model the catalogue does
           // not list is not known, so the change stays unconfirmed.
-          if (!(held?.model ?? held?.runtime?.model))
+          if (!held?.model)
             throw new WorkspaceModelError("not-supported", false, {
               message: "conversation_configuration_changed",
               code: "conversation_configuration_changed",

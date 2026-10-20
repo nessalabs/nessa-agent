@@ -1718,7 +1718,8 @@
         "unreadable",
         "unreadableTruncated",
         "approvalMode",
-        "approvalModes"
+        "approvalModes",
+        "model"
       ]
     },
     "ConversationArtifact": {

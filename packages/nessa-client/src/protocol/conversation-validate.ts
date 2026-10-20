@@ -493,7 +493,7 @@ export function conversationView(value: unknown, expected: string): Conversation
   }
   if (item.modelChangeEffect !== undefined)
     oneOf(text(item, "modelChangeEffect"), ["subsequentResponses", "nextTurn"])
-  if (item.model !== undefined) text(item, "model", 256, false)
+  text(item, "model", 256, false)
   if (item.interactionViewError !== undefined)
     text(item, "interactionViewError", 2048, false)
   const messages = items(item, "messages", 128)

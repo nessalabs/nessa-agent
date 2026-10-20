@@ -159,3 +159,25 @@ stress plan. On the following CI run the model step found the picker
 disabled immediately after a mode switch; the step now waits for that
 change to settle. The macOS page-load and Windows device-client jobs on
 the previous head failed for reasons outside this diff.
+
+## Codex review
+
+Reviewed head `4452857d`. Two P2 findings.
+
+Endpoint and profile selectors left in the identity environment were not
+hashed, because the restoration fingerprint read only a directory allowlist.
+The binding still forwarded them, so a changed `ANTHROPIC_BASE_URL` kept the
+identity and attach would resume the previous backend's native session id.
+The fingerprint now hashes every entry of `AcpConfig::environment`. `PATH`,
+`TMPDIR`, and the other runtime keys stay in `runtime_environment` and stay
+out of that hash. A changed endpoint is S6. The contract is
+`plumbing_environment_does_not_change_the_fingerprint` and the
+identity-credentials session in
+`a_context_only_mismatch_opens_a_fresh_session_and_credentials_rotate_without_persistence`.
+
+`ConversationView.model` was emitted for every conversation and left out of
+`required`, so the generated field stayed optional and the desktop could
+read the runtime model or the catalogue default. `model` is required on the
+current product schema. A view that omits it fails
+`scripts/check-product-protocol.mjs` and `conversationView`. The desktop
+reads that field only.

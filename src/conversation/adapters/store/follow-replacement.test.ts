@@ -25,6 +25,7 @@ function gatewayView(): ConversationView {
     revision: "capabilities",
     serverNowMs: 1_700_000_000_000,
     approvalMode: "ask",
+    model: "claude-sonnet-5",
     approvalModes: [
       {
         id: "ask",
