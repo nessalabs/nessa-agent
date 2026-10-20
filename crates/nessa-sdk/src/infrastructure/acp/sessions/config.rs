@@ -311,10 +311,13 @@ pub struct AcpConfig {
     /// `acp/sessions/identity.rs`. Never place secrets in arguments. Only trusted composition
     /// may supply them.
     pub arguments: Vec<OsString>,
-    /// Noncredential context-selecting environment, including HOME, configuration directories,
-    /// endpoints, and executable search paths. These values enter the restoration fingerprint,
-    /// whose inputs are listed on `fingerprint` in `acp/sessions/identity.rs`.
-    /// Parent variables are cleared; this map and credential_environment supply the child.
+    /// Noncredential environment forwarded to the child. Only the keys that name
+    /// where a vendor keeps its account enter the restoration fingerprint
+    /// (`HOME`, `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, and the OpenCode `XDG_*`
+    /// roots). Process plumbing (`PATH`, `TMPDIR`, `USER`, `LOGNAME`, and a
+    /// native executable path) does not. The fingerprint's inputs are listed on
+    /// `fingerprint` in `acp/sessions/identity.rs`. Parent variables are cleared;
+    /// this map and credential_environment supply the child.
     pub environment: BTreeMap<OsString, OsString>,
     /// Host-supplied credentials forwarded verbatim, without discovery or extraction.
     /// Excluded from restoration identity so credentials may rotate; the fingerprint's inputs

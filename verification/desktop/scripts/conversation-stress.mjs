@@ -75,6 +75,10 @@
  *               saves config.json and starts itself again in the same
  *               process, the window comes back to the new state, and the
  *               message sent after it is answered
+ *   drift       the gateway is stopped and started again with a different
+ *               agent PATH and TMPDIR, the way an app update re-registers
+ *               the launchd job; the next message sent in the window to the
+ *               existing conversation is answered
  *   pool        native linking is turned on in Settings and two real
  *               `nessa env dial` workers pair with the gateway; a
  *               conversation created on `peer:any` is bound to one of them
@@ -1030,6 +1034,51 @@ const steps = {
         return failures.length === before
       })
     })
+  },
+
+  async drift(run, step, failures) {
+    await run.exclusive(async () => {
+      await run.restartConsole.during(run.opened, async () => {
+        const before = failures.length
+        // The composer is already on screen. The window has come back only
+        // once its new session socket has received a frame.
+        let stop = () => {}
+        const recovered = new Promise((resolve) => {
+          const onSocket = (socket) => {
+            if (!socket.url().endsWith("/session")) return
+            const received = () => resolve(true)
+            stop = () => {
+              socket.off("framereceived", received)
+              run.page.off("websocket", onSocket)
+            }
+            socket.once("framereceived", received)
+          }
+          run.page.on("websocket", onSocket)
+          stop = () => run.page.off("websocket", onSocket)
+        })
+        const old = run.client
+        run.restarts += 1
+        const drifted = mkdtempSync(join(tmpdir(), "nessa-stress-drift-"))
+        const path = `/opt/homebrew/bin:${process.env.PATH ?? ""}`
+        try {
+          await run.stack.gateway.restart("SIGTERM", {
+            NESSA_AGENT_PATH: path,
+            PATH: path,
+            TMPDIR: drifted,
+          })
+          old.close()
+          run.client = await connectClient(run.stack.gateway, INSTANCE, "panel")
+          const back = await Promise.race([recovered, sleep(60_000).then(() => false)])
+          if (!back)
+            failures.push("the window did not come back after the agent path changed")
+        } finally {
+          stop()
+        }
+        return failures.length === before
+      })
+    })
+    // The existing conversation still takes a message, in the window.
+    if (failures.length === 0) await steps.reply(run, step, failures)
   },
 
   async linking(run, step, failures) {

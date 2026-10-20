@@ -1574,7 +1574,18 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
       within(async (live) => {
         await transcriptOf(sessionId, "person")
         const current = knownModel(sessionId)
-        if (!current) throw new WorkspaceModelError("unavailable", true)
+        if (!current) {
+          const held = reads.get(sessionId)?.view
+          // Nothing was sent. A view with no model and no running agent has
+          // no conversation to retarget; one whose model the catalogue does
+          // not list is not known, so the change stays unconfirmed.
+          if (!(held?.model ?? held?.runtime?.model))
+            throw new WorkspaceModelError("not-supported", false, {
+              message: "conversation_configuration_changed",
+              code: "conversation_configuration_changed",
+            })
+          throw new WorkspaceModelError("unavailable", true)
+        }
         if (current.provider !== provider)
           throw new WorkspaceModelError("not-supported", false)
         // Read reconciles a lost native receipt. Refollow uses the existing

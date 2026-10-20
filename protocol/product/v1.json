@@ -1689,6 +1689,13 @@
         "modelChangeEffect": {
           "$ref": "#/$defs/ModelChangeEffect",
           "description": "Native effect boundary of the last confirmed model change."
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "The conversation's selected catalog model, present whether or not an agent is open."
         }
       },
       "required": [

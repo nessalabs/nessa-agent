@@ -1,7 +1,7 @@
 //! Restoration fingerprints distinguish context settings without retaining credentials.
 use super::support::*;
 use crate::application::agent_execution::providers::ExecutableUseSnapshot;
-use crate::application::agent_execution::sessions::{SessionManager, StorageError};
+use crate::application::agent_execution::sessions::SessionManager;
 use crate::domain::agent_execution::sessions::SessionId;
 use crate::infrastructure::acp::sessions::{McpServerList, StdioMcpServer};
 use crate::infrastructure::session_storage::RecordStorage;
@@ -17,7 +17,8 @@ fn provider(config: AcpConfig, model: &ModelMetadata) -> ClaudeAcpProvider {
 }
 
 #[tokio::test]
-async fn context_changes_reject_restore_before_launch_but_credentials_rotate_without_persistence() {
+async fn a_context_only_mismatch_opens_a_fresh_session_and_credentials_rotate_without_persistence()
+{
     let _slot = process_test_slot().await;
     let (root, mut config, model) = test_acp_configuration("identity-credentials", 16);
     config
@@ -51,54 +52,118 @@ async fn context_changes_reject_restore_before_launch_but_credentials_rotate_wit
     let agent = attached_agent(Arc::new(original), manager().await.unwrap())
         .await
         .unwrap();
+    let saved_context = agent
+        .session_manager()
+        .snapshot()
+        .await
+        .unwrap()
+        .provider_context
+        .recorded()
+        .unwrap()
+        .as_str()
+        .to_string();
     agent.close(close_action()).await.unwrap();
     drop(agent);
+
+    // A different account directory, a missing executable, or tools turned
+    // off selects another context. None of them is launched: the fixture
+    // asserts the original account directory, a missing executable cannot
+    // start, and tools off is a different binding.
     let launches = std::fs::read(root.path().join("launches")).unwrap();
-    for change in 0..6 {
-        let mut changed = config.clone();
-        match change {
-            0 => {
-                changed
-                    .environment
-                    .insert("CLAUDE_CONFIG_DIR".into(), "/fixture/config-b".into());
-            }
-            1 => {
-                changed.environment.insert(
-                    "ANTHROPIC_BASE_URL".into(),
-                    "https://fixture.invalid/b".into(),
-                );
-            }
-            2 => changed.arguments.push("semantic-setting".into()),
-            3 => changed.arguments.swap(0, 1),
-            4 => {
-                changed.executable = ExecutableUseSnapshot::unmanaged(PathBuf::from(
-                    "/nonexistent/different-provider",
-                ))
-            }
-            _ => changed.tools_enabled = false,
-        }
-        let changed = provider(changed, &model);
-        assert_ne!(changed.identity(), identity);
-        assert!(matches!(
-            attached_agent(Arc::new(changed), manager().await.unwrap()).await,
-            Err(error) if matches!(error, AgentError::Storage(StorageError::IdentityMismatch))
-        ));
-        assert_eq!(
-            std::fs::read(root.path().join("launches")).unwrap(),
-            launches
-        );
+    let mut account = config.clone();
+    account
+        .environment
+        .insert("CLAUDE_CONFIG_DIR".into(), "/fixture/config-b".into());
+    let mut executable = config.clone();
+    executable.executable =
+        ExecutableUseSnapshot::unmanaged(PathBuf::from("/nonexistent/different-provider"));
+    let mut tools = config.clone();
+    tools.tools_enabled = false;
+    for changed in [account, executable, tools] {
+        assert_ne!(provider(changed, &model).identity(), identity);
     }
+    assert_eq!(
+        std::fs::read(root.path().join("launches")).unwrap(),
+        launches
+    );
+
+    // PATH and the other plumbing keys, including an endpoint, keep the
+    // identity. The saved native session is resumed.
+    let mut plumbing = config.clone();
+    for (key, value) in [
+        ("PATH", "/opt/homebrew/bin:/usr/bin"),
+        ("TMPDIR", "/var/folders/drift"),
+        ("USER", "someone"),
+        ("LOGNAME", "someone"),
+        ("CODEX_PATH", "/opt/codex"),
+        ("CLAUDE_CODE_EXECUTABLE", "/opt/claude"),
+        ("ANTHROPIC_BASE_URL", "https://fixture.invalid/b"),
+    ] {
+        plumbing.environment.insert(key.into(), value.into());
+    }
+    let plumbing = provider(plumbing, &model);
+    assert_eq!(plumbing.identity(), identity);
+    let resumed = attached_agent(Arc::new(plumbing), manager().await.unwrap())
+        .await
+        .unwrap();
+    assert_eq!(
+        resumed
+            .session_manager()
+            .snapshot()
+            .await
+            .unwrap()
+            .provider_context
+            .recorded()
+            .unwrap()
+            .as_str(),
+        saved_context
+    );
+    resumed.close(close_action()).await.unwrap();
+    drop(resumed);
+    assert_eq!(
+        std::fs::read_to_string(root.path().join("resume-observed")).unwrap(),
+        saved_context
+    );
+    assert_eq!(
+        std::fs::read_to_string(root.path().join("new-session-count")).unwrap(),
+        "1"
+    );
+
     config.credential_environment.insert(
         "NESSA_FIXTURE_CREDENTIAL".into(),
         "synthetic-secret-two".into(),
     );
-    let rotated = provider(config, &model);
+    let rotated = provider(config.clone(), &model);
     assert_eq!(rotated.identity(), identity);
     let restored = attached_agent(Arc::new(rotated), manager().await.unwrap())
         .await
         .unwrap();
     restored.close(close_action()).await.unwrap();
     drop(restored);
+
+    // An argument change is a different context. The conversation opens a
+    // new native session instead of being refused.
+    let mut arguments = config;
+    arguments.arguments.push("semantic-setting".into());
+    let arguments = provider(arguments, &model);
+    let changed = arguments.identity();
+    assert_ne!(changed, identity);
+    let fresh = attached_agent(Arc::new(arguments), manager().await.unwrap())
+        .await
+        .unwrap();
+    let snapshot = fresh.session_manager().snapshot().await.unwrap();
+    assert_eq!(snapshot.provider, changed);
+    assert_ne!(
+        snapshot.provider_context.recorded().unwrap().as_str(),
+        saved_context
+    );
+    fresh.close(close_action()).await.unwrap();
+    drop(fresh);
+    assert_eq!(
+        std::fs::read_to_string(root.path().join("new-session-count")).unwrap(),
+        "2"
+    );
+
     let records = std::fs::read_dir(storage_path)
         .unwrap()
         .map(|entry| std::fs::read(entry.unwrap().path()).unwrap())
@@ -250,6 +315,40 @@ impl crate::infrastructure::acp::sessions::StandInGrants for TokenGrants {
             Box::new(()),
         )
     }
+}
+
+#[test]
+fn plumbing_environment_does_not_change_the_fingerprint() {
+    let (_root, mut config, model) = test_acp_configuration("echo", 16);
+    config
+        .environment
+        .insert("HOME".into(), "/fixture/home".into());
+    config
+        .environment
+        .insert("CLAUDE_CONFIG_DIR".into(), "/fixture/config-a".into());
+    let original = provider(config.clone(), &model).identity();
+    let mut plumbing = config.clone();
+    for (key, value) in [
+        ("PATH", "/opt/homebrew/bin:/usr/bin"),
+        ("TMPDIR", "/var/folders/drift"),
+        ("USER", "someone"),
+        ("LOGNAME", "someone"),
+        ("CODEX_PATH", "/opt/codex"),
+        ("CLAUDE_CODE_EXECUTABLE", "/opt/claude"),
+        ("ANTHROPIC_BASE_URL", "https://fixture.invalid/b"),
+    ] {
+        plumbing.environment.insert(key.into(), value.into());
+    }
+    assert_eq!(provider(plumbing, &model).identity(), original);
+    let mut account = config.clone();
+    account
+        .environment
+        .insert("CLAUDE_CONFIG_DIR".into(), "/fixture/config-b".into());
+    assert_ne!(provider(account, &model).identity(), original);
+    let mut home = config;
+    home.environment
+        .insert("HOME".into(), "/fixture/other-home".into());
+    assert_ne!(provider(home, &model).identity(), original);
 }
 
 #[test]

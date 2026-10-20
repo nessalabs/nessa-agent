@@ -1306,6 +1306,9 @@ describe("the view's lease", () => {
       }
       expect(String(error), key).not.toMatch(/unknown fields/)
     }
+    expect(
+      conversationView({ ...view(), model: "claude-sonnet-5" }, "conversation").model,
+    ).toBe("claude-sonnet-5")
     const properties = defs.ConversationLease.properties as Record<
       string,
       { enum?: string[] }

@@ -988,6 +988,12 @@ describe("the model a session runs on", () => {
     })
     expect(runningModel(runs("a-model-no-catalogue-lists"))).toBeUndefined()
     expect(runningModel(view("c", { runtime: undefined }))).toBeUndefined()
+    expect(
+      runningModel(view("c", { model: listed.modelId, runtime: undefined })),
+    ).toEqual({
+      provider: listed.provider,
+      modelId: listed.modelId,
+    })
   })
 
   it("is said as the known one, else the composer's default", () => {

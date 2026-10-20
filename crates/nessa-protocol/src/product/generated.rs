@@ -749,6 +749,8 @@ pub struct ConversationView {
     pub model_change: Option<ModelChange>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_change_effect: Option<ModelChangeEffect>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
