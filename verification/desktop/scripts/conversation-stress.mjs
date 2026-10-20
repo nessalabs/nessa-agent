@@ -119,6 +119,7 @@ import { randomUUID } from "node:crypto"
 import {
   chmodSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -790,9 +791,12 @@ async function startedBeside(run, client, step, n, failures) {
 }
 
 /**
- * Points the selected agent's command and its absolute file arguments at
- * new symlinks. The files stay where they are, so a script's own imports
- * still resolve; only the paths the gateway launches change.
+ * Points the selected agent's command and its absolute file arguments at a
+ * new directory. A script becomes a wrapper there that runs the real file:
+ * a symlink would make `process.argv[1]` differ from the path the script
+ * records, so it would never start, and a copy would break a root it
+ * derives from its own path. The node binary and every other file are
+ * symlinks, so the bytes stay where they are.
  */
 function moveStagedRuntime(directory) {
   const configPath = join(directory, "ci", "instances", INSTANCE, "config.json")
@@ -800,8 +804,22 @@ function moveStagedRuntime(directory) {
   const runtime = config.agents.runtimes[config.agents.selected]
   const staged = mkdtempSync(join(tmpdir(), "nessa-stress-runtime-"))
   let n = 0
+  const wrapScript = (path) => {
+    const dest = join(staged, `${n++}-${basename(path)}`)
+    writeFileSync(
+      dest,
+      `import { spawnSync } from "node:child_process"
+import { realpathSync } from "node:fs"
+const result = spawnSync(realpathSync(process.execPath), [${JSON.stringify(path)}, ...process.argv.slice(2)], { stdio: "inherit" })
+process.exit(result.status ?? 1)
+`,
+    )
+    return dest
+  }
   const relocate = (path) => {
     if (typeof path !== "string" || !isAbsolute(path) || !existsSync(path)) return path
+    if (lstatSync(path).isDirectory()) return path
+    if (/\.(?:mjs|cjs|js)$/.test(path)) return wrapScript(path)
     const dest = join(staged, `${n++}-${basename(path)}`)
     symlinkSync(path, dest)
     return dest
