@@ -493,6 +493,8 @@ pub fn relative_path_is_safe(path: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::*;
     use crate::backup::domain::{CredentialKind, DeletionFence, DeletionLog, GrantRole};
 
@@ -600,13 +602,24 @@ mod tests {
 
     #[test]
     fn paths_and_receipts_are_constrained() {
-        assert!(paths_are_distinct(Path::new("/q"), Path::new("/live")).is_ok());
+        let root = if cfg!(windows) {
+            PathBuf::from(r"C:\")
+        } else {
+            PathBuf::from("/")
+        };
+        let quarantine = root.join("q");
+        let live = root.join("live");
+        assert!(paths_are_distinct(&quarantine, &live).is_ok());
         assert_eq!(
-            paths_are_distinct(Path::new("/live"), Path::new("/live")).unwrap_err(),
+            paths_are_distinct(&live, &live).unwrap_err(),
             RestoreFault::Paths
         );
         assert_eq!(
-            paths_are_distinct(Path::new("/live/quarantine"), Path::new("/live")).unwrap_err(),
+            paths_are_distinct(&live.join("quarantine"), &live).unwrap_err(),
+            RestoreFault::Paths
+        );
+        assert_eq!(
+            paths_are_distinct(Path::new("q"), Path::new("live")).unwrap_err(),
             RestoreFault::Paths
         );
         assert!(receipt_is_usable("stopped-host-1"));
