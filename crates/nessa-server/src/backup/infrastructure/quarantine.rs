@@ -99,19 +99,41 @@ impl CutMaterializer for DirectoryMaterializer {
                     body,
                 ));
             }
+            lease_files.sort_by(|left, right| {
+                line_rank(&left.0)
+                    .cmp(&line_rank(&right.0))
+                    .then_with(|| left.0.cmp(&right.0))
+            });
+            let mut folded = Vec::new();
+            let mut per_file = Vec::new();
             for (identity, body) in lease_files {
-                let text = std::str::from_utf8(&body).map_err(|_| RestoreFault::Unreadable)?;
-                let events = lease_events(text)?;
-                let open = leases_to_interrupt(&events);
-                for id in &open {
-                    if !leases.iter().any(|existing: &String| existing == id) {
-                        leases.push(id.clone());
+                let text = std::str::from_utf8(&body)
+                    .map_err(|_| RestoreFault::Unreadable)?
+                    .to_owned();
+                let events = lease_events(&text)?;
+                folded.extend(events.iter().cloned());
+                per_file.push((identity, text, events));
+            }
+            let open = leases_to_interrupt(&folded);
+            let mut announced = Vec::new();
+            for (identity, text, events) in per_file {
+                let mut here = Vec::new();
+                for (id, mark) in events {
+                    if mark == LeaseMark::Opened
+                        && open.iter().any(|existing| existing == &id)
+                        && !announced.iter().any(|existing| existing == &id)
+                    {
+                        here.push(id.clone());
+                        announced.push(id);
                     }
                 }
                 files.push((
                     format!("records/{}/{}", StoreKind::LeaseRecords.as_str(), identity),
-                    interrupt_leases(text, &open)?,
+                    interrupt_leases(&text, &here)?,
                 ));
+            }
+            if store.store() == StoreKind::LeaseRecords {
+                leases = open;
             }
         }
         files.push((
@@ -156,6 +178,9 @@ fn inventory_log(
         .record(store.store(), &record.encoded_identity())
         .map_err(|_| RestoreFault::Verification)?;
     let body = read_reader(reader, limits)?;
+    if Fingerprint::of(&body) != record.fingerprint() {
+        return Err(RestoreFault::Verification);
+    }
     let text = std::str::from_utf8(&body).map_err(|_| RestoreFault::Verification)?;
     format
         .inventory(text)
@@ -277,6 +302,14 @@ fn text_field(value: &Value, name: &str) -> Result<String, ()> {
         .ok_or(())
 }
 
+fn line_rank(identity: &str) -> (u8, u64) {
+    identity
+        .strip_prefix("line-")
+        .and_then(|rest| rest.parse::<u64>().ok())
+        .map(|number| (0, number))
+        .unwrap_or((1, 0))
+}
+
 fn lease_events(text: &str) -> Result<Vec<(String, LeaseMark)>, RestoreFault> {
     let mut events = Vec::new();
     for line in text.lines() {
@@ -306,6 +339,9 @@ fn lease_events(text: &str) -> Result<Vec<(String, LeaseMark)>, RestoreFault> {
 }
 
 fn interrupt_leases(text: &str, open: &[String]) -> Result<Vec<u8>, RestoreFault> {
+    if open.is_empty() {
+        return Ok(text.as_bytes().to_vec());
+    }
     let mut out = text.to_owned();
     if !out.is_empty() && !out.ends_with('\n') {
         out.push('\n');

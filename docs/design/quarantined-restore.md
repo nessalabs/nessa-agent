@@ -61,6 +61,17 @@ the result is a visible audit failure, not a second rename back.
 - Acceptance records each open lease and the operator receipt that covered
   it, on the accepted audit line, before success.
   `an_unfenced_executor_blocks_acceptance`
+- The deletion-inventory body is checked against the authenticated fingerprint
+  before its fences are applied. `a_changed_inventory_body_is_not_a_fence`
+- Lease lines are one ledger in line order. A grant closed by a later line
+  does not stay open. `a_closed_lease_across_lines_needs_no_receipt`
+- Fetch checks the journal seal before it trusts `deferred.txt`.
+  `a_changed_deferred_line_is_not_fetched`
+- If the sealed audit is not stored and the quarantine cannot be removed, the
+  journal is removed and the tree is not recorded as absent.
+  `a_failed_cleanup_removes_the_journal`
+- A fetch audit names the conversation as well as the root.
+  `an_opened_deferred_conversation_matches_the_recorded_fingerprint`
 - Restore audit lines share one directory lock for the sequence, the read,
   and the replacement. Two adapters cannot each replace `restore.jsonl`.
   `a_restore_audit_waits_for_the_directory_lock`

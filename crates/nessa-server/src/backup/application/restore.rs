@@ -126,12 +126,12 @@ pub fn stage_quarantine(
     materializer: &dyn CutMaterializer,
     later_reader: &dyn SealedInventoryReader,
 ) -> Result<StageReport, RestoreFault> {
-    let target = request.quarantine;
+    let label = request.quarantine.display().to_string();
     let kind = request.facts.kind;
-    let policies = decide(policy, &request.facts, audit, target)?;
+    let policies = decide(policy, &request.facts, audit, &label)?;
     let recorded = Recorded {
         audit,
-        target,
+        target: &label,
         initiator: kind,
         policies: &policies,
     };
@@ -194,8 +194,11 @@ pub fn stage_quarantine(
         .write("absent", "verified", "sealed", "effect")
         .is_err()
     {
-        let _ = layout.remove_tree(request.quarantine);
-        let _ = recorded.write("verified", "absent", RestoreFault::Audit.cause(), "effect");
+        if layout.remove_tree(request.quarantine).is_ok() {
+            let _ = recorded.write("verified", "absent", RestoreFault::Audit.cause(), "effect");
+        } else {
+            let _ = layout.remove_file(&request.quarantine.join("journal.txt"));
+        }
         return Err(RestoreFault::Audit);
     }
     Ok(StageReport {
@@ -223,12 +226,12 @@ pub fn accept_quarantine(
     audit: &dyn RestoreAudit,
     layout: &dyn QuarantineLayout,
 ) -> Result<AcceptReport, RestoreFault> {
-    let target = request.quarantine;
+    let label = request.quarantine.display().to_string();
     let kind = request.facts.kind;
-    let policies = decide(policy, &request.facts, audit, target)?;
+    let policies = decide(policy, &request.facts, audit, &label)?;
     let recorded = Recorded {
         audit,
-        target,
+        target: &label,
         initiator: kind,
         policies: &policies,
     };
@@ -264,8 +267,9 @@ pub fn accept_quarantine(
     if let Err(error) = layout.promote(request.quarantine, request.live) {
         return Err(recorded.stop(error));
     }
+    let live = request.live.display().to_string();
     if recorded
-        .at(request.live)
+        .at(&live)
         .record("verified", "live", "accepted", "effect", &attestations)
         .is_err()
     {
@@ -296,12 +300,12 @@ pub fn open_deferred_conversation(
     source: &dyn DeferredSessionSource,
     progress: &mut dyn FetchProgress,
 ) -> Result<OpenReport, RestoreFault> {
-    let target = request.root;
+    let label = format!("{} {}", request.root.display(), request.conversation_id);
     let kind = request.facts.kind;
-    let policies = decide(policy, &request.facts, audit, target)?;
+    let policies = decide(policy, &request.facts, audit, &label)?;
     let recorded = Recorded {
         audit,
-        target,
+        target: &label,
         initiator: kind,
         policies: &policies,
     };
@@ -309,13 +313,17 @@ pub fn open_deferred_conversation(
         Ok(loaded) => loaded,
         Err(error) => return Err(recorded.stop(error)),
     };
-    if read_journal(&loaded.journal).is_err() {
-        return Err(recorded.stop(RestoreFault::Tamper));
-    }
+    let journal = match read_journal(&loaded.journal) {
+        Ok(journal) => journal,
+        Err(_) => return Err(recorded.stop(RestoreFault::Tamper)),
+    };
     let lines = match deferred_lines(layout, request.root) {
         Ok(lines) => lines,
         Err(error) => return Err(recorded.stop(error)),
     };
+    if let Err(error) = seal_matches(&journal, &loaded, &lines) {
+        return Err(recorded.stop(error));
+    }
     let expected = match deferred_for_open(&lines, request.conversation_id) {
         Ok(line) => line,
         Err(error) => return Err(recorded.stop(error)),
@@ -465,7 +473,7 @@ fn decide(
     policy: &dyn RestorePolicyEvaluator,
     facts: &RestoreFacts<'_>,
     audit: &dyn RestoreAudit,
-    target: &Path,
+    target: &str,
 ) -> Result<Vec<String>, RestoreFault> {
     let decision = policy.evaluate(facts);
     let (name, policies, denied) = match &decision {
@@ -495,13 +503,13 @@ fn denial_policies(denial: &InventoryDenial) -> Vec<String> {
 #[derive(Clone, Copy)]
 struct Recorded<'a> {
     audit: &'a dyn RestoreAudit,
-    target: &'a Path,
+    target: &'a str,
     initiator: &'a str,
     policies: &'a [String],
 }
 
 impl Recorded<'_> {
-    fn at<'a>(&'a self, target: &'a Path) -> Recorded<'a> {
+    fn at<'a>(&'a self, target: &'a str) -> Recorded<'a> {
         Recorded { target, ..*self }
     }
 
@@ -528,10 +536,9 @@ impl Recorded<'_> {
         decision: &str,
         attestations: &str,
     ) -> Result<(), RestoreFault> {
-        let target = self.target.display().to_string();
         self.audit
             .append(&RestoreEvidence {
-                target: &target,
+                target: self.target,
                 before,
                 after,
                 cause,
