@@ -28,7 +28,7 @@ use crate::backup::domain::{
     IDENTITY_BODY, MAX_NAME_BYTES, REPLAY_BODY,
 };
 
-use super::log::{authenticate_inventory, persist};
+use super::log::{authenticate_inventory, exclusive, persist};
 use super::snapshot::{inspect_conversation, materialize_conversation, MaterializeError};
 
 /// Reads a later inventory that carries its own mac line.
@@ -55,20 +55,12 @@ impl CutMaterializer for DirectoryMaterializer {
     fn prepare(
         &self,
         bundle: &dyn VerificationSource,
+        listing: &ManifestListing,
         format: &dyn VerificationFormat,
         limits: VerificationLimits,
         later: Option<&DeletionLog>,
     ) -> Result<PreparedCut, RestoreFault> {
-        let bytes = read_reader(
-            bundle.manifest().map_err(|_| RestoreFault::Verification)?,
-            limits,
-        )?;
-        let text = std::str::from_utf8(&bytes).map_err(|_| RestoreFault::Verification)?;
-        let listing = format
-            .manifest(text, limits.named_entries)
-            .map_err(|_| RestoreFault::Verification)?
-            .listing;
-        let cut_inventory = inventory_log(bundle, format, &listing, limits)?;
+        let cut_inventory = inventory_log(bundle, format, listing, limits)?;
         let (fences, freshness) = fresher_fences(&cut_inventory, later)?;
         let fence_list = fences
             .entries()
@@ -653,6 +645,7 @@ impl<C: ExportClock> RestoreAudit for FileRestoreAudit<C> {
             .gate
             .lock()
             .map_err(|_| DecisionAuditError::NotStored)?;
+        let _file = exclusive(&self.directory).map_err(|_| DecisionAuditError::NotStored)?;
         let next = next_sequence(&self.path).map_err(|_| DecisionAuditError::NotStored)?;
         let line = serde_json::to_string(&json!({
             "recordId": format!("restore-{next}"),
@@ -664,6 +657,7 @@ impl<C: ExportClock> RestoreAudit for FileRestoreAudit<C> {
             "initiator": evidence.initiator,
             "decision": evidence.decision,
             "policies": evidence.policies,
+            "attestations": evidence.attestations,
             "observedAtMs": self.clock.unix_ms(),
         }))
         .map_err(|_| DecisionAuditError::NotStored)?;
@@ -731,6 +725,71 @@ fn materialize_error(error: MaterializeError) -> SessionSourceError {
         MaterializeError::Interrupted => SessionSourceError::Interrupted,
         MaterializeError::Unreadable => SessionSourceError::Unreadable,
     }
+}
+
+#[test]
+fn a_restore_audit_waits_for_the_directory_lock() {
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    struct Clock;
+    impl ExportClock for Clock {
+        fn unix_ms(&self) -> u64 {
+            1
+        }
+    }
+
+    let root = tempfile::tempdir().unwrap();
+    let directory = root.path().join("audit");
+    let first = FileRestoreAudit::open(&directory, Clock).unwrap();
+    let second = FileRestoreAudit::open(&directory, Clock).unwrap();
+    let held = exclusive(&directory).unwrap();
+    let (started, ready) = mpsc::channel();
+    let (finished, result) = mpsc::channel();
+    std::thread::spawn(move || {
+        started.send(()).unwrap();
+        let stored = second.append(&RestoreEvidence {
+            target: "live",
+            before: "verified",
+            after: "live",
+            cause: "accepted",
+            initiator: "person",
+            decision: "effect",
+            policies: &[],
+            attestations: "lease-1 stopped\n",
+        });
+        finished.send(stored).unwrap();
+    });
+    ready.recv_timeout(Duration::from_secs(10)).unwrap();
+    assert!(
+        matches!(
+            result.recv_timeout(Duration::from_secs(1)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ),
+        "a second adapter must wait for the directory lock"
+    );
+    drop(held);
+    result
+        .recv_timeout(Duration::from_secs(10))
+        .unwrap()
+        .unwrap();
+    first
+        .append(&RestoreEvidence {
+            target: "quarantine",
+            before: "absent",
+            after: "verified",
+            cause: "sealed",
+            initiator: "person",
+            decision: "effect",
+            policies: &[],
+            attestations: "",
+        })
+        .unwrap();
+    let text = fs::read_to_string(directory.join("restore.jsonl")).unwrap();
+    assert!(text.contains("\"recordId\":\"restore-1\""));
+    assert!(text.contains("\"recordId\":\"restore-2\""));
+    assert!(text.contains("lease-1 stopped"));
+    assert!(text.contains("sealed"));
 }
 
 /// The ended line is the environment ledger's `ended` record.

@@ -277,6 +277,8 @@ pub struct RestoreEvidence<'a> {
     pub initiator: &'a str,
     pub decision: &'a str,
     pub policies: &'a [String],
+    /// `lease receipt` lines for an acceptance. Empty for every other transition.
+    pub attestations: &'a str,
 }
 
 /// Persist one restore transition. Failure means the effect must not be

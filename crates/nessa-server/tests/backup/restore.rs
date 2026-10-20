@@ -5,7 +5,9 @@
 //! when it is opened, and only when its stream still matches the cut.
 
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 
 use async_trait::async_trait;
@@ -16,7 +18,8 @@ use crate::backup::application::{
     DecisionAuditError, DeferredSessionSource, ExportClock, FetchProgress, InventoryCause,
     InventoryDecision, LeaseReceipts, MacKey, ManifestPublisher, MutationAdmission, OpenRequest,
     QuarantineLayout, RestoreAction, RestoreAudit, RestoreEvidence, RestoreFacts,
-    RestorePolicyEvaluator, SessionCut, SessionSourceError, StageRequest, VerificationLimits,
+    RestorePolicyEvaluator, SessionCut, SessionSourceError, StageRequest, VerificationFailure,
+    VerificationLimits, VerificationSource,
 };
 use crate::backup::domain::{
     AuthenticatedManifest, CapturedRecord, CredentialKind, DeferredEntry, DeletionFence,
@@ -90,6 +93,7 @@ struct AuditLine {
     initiator: String,
     decision: String,
     policies: Vec<String>,
+    attestations: String,
 }
 
 struct MemoryAudit {
@@ -133,6 +137,7 @@ impl RestoreAudit for MemoryAudit {
             initiator: evidence.initiator.to_owned(),
             decision: evidence.decision.to_owned(),
             policies: evidence.policies.to_vec(),
+            attestations: evidence.attestations.to_owned(),
         });
         Ok(())
     }
@@ -323,6 +328,72 @@ fn stage(
         &DirectoryMaterializer,
         &KeyedInventory::new(bundle.key),
     )
+}
+
+struct SecondManifest {
+    inner: DirectoryVerificationSource,
+    reads: AtomicUsize,
+}
+
+impl VerificationSource for SecondManifest {
+    fn manifest(&self) -> Result<Box<dyn Read + '_>, VerificationFailure> {
+        let read = self.reads.fetch_add(1, Ordering::SeqCst);
+        if read == 0 {
+            self.inner.manifest()
+        } else {
+            Ok(Box::new(std::io::Cursor::new(
+                b"unauthenticated-manifest".to_vec(),
+            )))
+        }
+    }
+
+    fn record(
+        &self,
+        store: StoreKind,
+        encoded_identity: &str,
+    ) -> Result<Box<dyn Read + '_>, VerificationFailure> {
+        self.inner.record(store, encoded_identity)
+    }
+
+    fn visit_records(
+        &self,
+        visitor: &mut dyn FnMut(StoreKind, &str) -> Result<(), VerificationFailure>,
+    ) -> Result<(), VerificationFailure> {
+        self.inner.visit_records(visitor)
+    }
+}
+
+#[tokio::test]
+async fn a_replaced_manifest_is_not_what_quarantine_seals() {
+    let bundle = publish(note_bundle_rows(), vec![], None).await;
+    let place = roots();
+    let source = SecondManifest {
+        inner: DirectoryVerificationSource::open(bundle.root.clone()).unwrap(),
+        reads: AtomicUsize::new(0),
+    };
+    stage_quarantine(
+        &StageRequest {
+            facts: person(RestoreAction::Stage),
+            bundle: &source,
+            format: &ExportFormat,
+            verifier: &bundle.key,
+            limits: VerificationLimits::default(),
+            later_inventory: None,
+            quarantine: &place.quarantine,
+            live: &place.live,
+        },
+        &policy(),
+        &MemoryAudit::open(),
+        &DirectoryQuarantine,
+        &DirectoryMaterializer,
+        &KeyedInventory::new(bundle.key),
+    )
+    .unwrap();
+    assert_eq!(source.reads.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        fs::read(place.quarantine.join("records/notes/note-1")).unwrap(),
+        b"a public note"
+    );
 }
 
 fn accept(
@@ -876,6 +947,13 @@ async fn an_unfenced_executor_blocks_acceptance() {
     let error = accept(&place, &audit, &MapReceipts(&[("lease-9", "")])).unwrap_err();
     assert_eq!(error, RestoreFault::ExecutorsUnfenced);
     accept(&place, &audit, &MapReceipts(&[("lease-9", "host-stopped")])).unwrap();
+    let accepted = audit
+        .lines()
+        .into_iter()
+        .find(|line| line.cause == "accepted")
+        .unwrap();
+    assert_eq!(accepted.attestations, "lease-9 host-stopped\n");
+    assert_eq!(accepted.after, "live");
 }
 
 struct FakeSource {

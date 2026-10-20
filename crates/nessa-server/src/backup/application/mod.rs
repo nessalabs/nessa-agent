@@ -16,8 +16,9 @@ pub use verification_format::{
 pub use restore_planning::{plan_offline_restore, OfflineRestorePlan};
 
 pub use verification::{
-    verify_bundle, InventoryVerification, ManifestMacVerifier, VerificationFailure,
-    VerificationLimits, VerificationReport, VerificationSource, VerifiedOmission,
+    authenticated_bundle, verify_bundle, AuthenticatedBundle, InventoryVerification,
+    ManifestMacVerifier, VerificationFailure, VerificationLimits, VerificationReport,
+    VerificationSource, VerifiedOmission,
 };
 
 pub use deletion_inventory::{capture_fences, capture_inventory, CaptureError, InventoryFailure};

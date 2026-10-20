@@ -6,7 +6,7 @@ use std::io::Read;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
-use crate::backup::domain::{Fingerprint, ListedStore, StoreKind, EXPORT_HEADER};
+use crate::backup::domain::{Fingerprint, ListedStore, ManifestListing, StoreKind, EXPORT_HEADER};
 
 use super::verification_format::{DeletionReadError, ManifestReadError, VerificationFormat};
 
@@ -104,6 +104,12 @@ pub struct VerifiedOmission {
     pub fingerprint: Option<String>,
 }
 
+/// The report and the listing whose mac was checked for that report.
+pub struct AuthenticatedBundle {
+    pub report: VerificationReport,
+    pub listing: ManifestListing,
+}
+
 /// Authenticate the manifest before any payload access, match its public
 /// layout, then stream each body and check the exported inventory (V1–V11).
 pub fn verify_bundle(
@@ -112,6 +118,16 @@ pub fn verify_bundle(
     verifier: &dyn ManifestMacVerifier,
     limits: VerificationLimits,
 ) -> Result<VerificationReport, VerificationFailure> {
+    Ok(authenticated_bundle(format, source, verifier, limits)?.report)
+}
+
+/// Same checks as [`verify_bundle`], keeping the listing those checks used.
+pub fn authenticated_bundle(
+    format: &dyn VerificationFormat,
+    source: &dyn VerificationSource,
+    verifier: &dyn ManifestMacVerifier,
+    limits: VerificationLimits,
+) -> Result<AuthenticatedBundle, VerificationFailure> {
     let bytes = read_bounded(source.manifest()?, limits.manifest_bytes)?;
     let text = std::str::from_utf8(&bytes).map_err(|_| VerificationFailure::MalformedManifest)?;
     let listing = format
@@ -216,7 +232,7 @@ pub fn verify_bundle(
             });
         }
     }
-    Ok(report)
+    Ok(AuthenticatedBundle { report, listing })
 }
 
 fn read_bounded(

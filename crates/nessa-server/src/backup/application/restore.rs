@@ -22,14 +22,15 @@ use super::ports::{
     RestoreAudit, RestoreEvidence, RestoreFacts, RestorePolicyEvaluator, SessionSourceError,
 };
 use super::verification::{
-    verify_bundle, ManifestMacVerifier, VerificationFailure, VerificationLimits, VerificationSource,
+    authenticated_bundle, ManifestMacVerifier, VerificationFailure, VerificationLimits,
+    VerificationSource,
 };
 use super::verification_format::VerificationFormat;
 use crate::backup::domain::{
     decode_deferred, deferred_for_open, deferred_session_name, encode_journal,
     extra_session_allowed, paths_are_distinct, posture, read_journal, receipt_is_usable,
-    relative_path_is_safe, DeferredLine, DeletionLog, Fingerprint, Freshness, Journal, Posture,
-    RestoreFault, SealedFile,
+    relative_path_is_safe, DeferredLine, DeletionLog, Fingerprint, Freshness, Journal,
+    ManifestListing, Posture, RestoreFault, SealedFile,
 };
 
 /// Filesystem effects of a quarantine. Tests substitute a layout that fails.
@@ -64,6 +65,7 @@ pub trait CutMaterializer {
     fn prepare(
         &self,
         bundle: &dyn VerificationSource,
+        listing: &ManifestListing,
         format: &dyn VerificationFormat,
         limits: VerificationLimits,
         later: Option<&DeletionLog>,
@@ -136,14 +138,15 @@ pub fn stage_quarantine(
     if let Err(error) = paths_are_distinct(request.quarantine, request.live) {
         return Err(recorded.stop(error));
     }
-    if let Err(error) = verify_bundle(
+    let authenticated = match authenticated_bundle(
         request.format,
         request.bundle,
         request.verifier,
         request.limits,
     ) {
-        return Err(recorded.stop(verification_fault(error)));
-    }
+        Ok(authenticated) => authenticated,
+        Err(error) => return Err(recorded.stop(verification_fault(error))),
+    };
     let later = match request.later_inventory {
         Some(text) => match later_reader.read_later(text) {
             Ok(log) => Some(log),
@@ -153,6 +156,7 @@ pub fn stage_quarantine(
     };
     let prepared = match materializer.prepare(
         request.bundle,
+        &authenticated.listing,
         request.format,
         request.limits,
         later.as_ref(),
@@ -246,9 +250,10 @@ pub fn accept_quarantine(
     if let Err(error) = seal_matches(&journal, &loaded, &deferred) {
         return Err(recorded.stop(error));
     }
-    if let Err(error) = receipts_cover(&journal, request.receipts) {
-        return Err(recorded.stop(error));
-    }
+    let attestations = match attested(&journal, request.receipts) {
+        Ok(text) => text,
+        Err(error) => return Err(recorded.stop(error)),
+    };
     match layout.exists(request.live) {
         Ok(true) => {
             return Err(recorded.stop(RestoreFault::LiveOccupied));
@@ -261,7 +266,7 @@ pub fn accept_quarantine(
     }
     if recorded
         .at(request.live)
-        .write("verified", "live", "accepted", "effect")
+        .record("verified", "live", "accepted", "effect", &attestations)
         .is_err()
     {
         return Err(RestoreFault::Audit);
@@ -429,14 +434,20 @@ fn deferred_lines(
     decode_deferred(text)
 }
 
-fn receipts_cover(journal: &Journal, receipts: &dyn LeaseReceipts) -> Result<(), RestoreFault> {
+fn attested(journal: &Journal, receipts: &dyn LeaseReceipts) -> Result<String, RestoreFault> {
+    let mut text = String::new();
     for lease in &journal.leases {
         match receipts.receipt(lease) {
-            Some(text) if receipt_is_usable(&text) => {}
+            Some(receipt) if receipt_is_usable(&receipt) => {
+                text.push_str(lease);
+                text.push(' ');
+                text.push_str(&receipt);
+                text.push('\n');
+            }
             _ => return Err(RestoreFault::ExecutorsUnfenced),
         }
     }
-    Ok(())
+    Ok(text)
 }
 
 fn join_relative(root: &Path, relative: &str) -> Result<PathBuf, RestoreFault> {
@@ -506,6 +517,17 @@ impl Recorded<'_> {
         cause: &str,
         decision: &str,
     ) -> Result<(), RestoreFault> {
+        self.record(before, after, cause, decision, "")
+    }
+
+    fn record(
+        &self,
+        before: &str,
+        after: &str,
+        cause: &str,
+        decision: &str,
+        attestations: &str,
+    ) -> Result<(), RestoreFault> {
         let target = self.target.display().to_string();
         self.audit
             .append(&RestoreEvidence {
@@ -516,6 +538,7 @@ impl Recorded<'_> {
                 initiator: self.initiator,
                 decision,
                 policies: self.policies,
+                attestations,
             })
             .map_err(|_| RestoreFault::Audit)
     }

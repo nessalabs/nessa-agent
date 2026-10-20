@@ -9,7 +9,7 @@ operator ──▶ Cedar (stage | accept | fetch)
                │
                ├── audit the decision
                └── effect, or stop when the audit was not stored
-stage ──▶ verify the bundle again
+stage ──▶ verify the bundle and keep that authenticated listing
             ├── omit fenced grants, credentials, and live metadata rows
             ├── append an uncertain end on each still-open lease
             └── seal the quarantine directory
@@ -55,6 +55,15 @@ the result is a visible audit failure, not a second rename back.
 - Historical outbox bytes stay, and `replay.blocked` stays in the seal, so
   acceptance does not mean those commands run.
   `quarantine_does_not_permit_replay`
+- Quarantine is built from the listing whose mac `authenticated_bundle` just
+  checked. A later manifest read is not a second source.
+  `a_replaced_manifest_is_not_what_quarantine_seals`
+- Acceptance records each open lease and the operator receipt that covered
+  it, on the accepted audit line, before success.
+  `an_unfenced_executor_blocks_acceptance`
+- Restore audit lines share one directory lock for the sequence, the read,
+  and the replacement. Two adapters cannot each replace `restore.jsonl`.
+  `a_restore_audit_waits_for_the_directory_lock`
 - Cedar decides stage, accept, and fetch. A device, peer, environment peer,
   or worker is forbidden. The decision is audited before the effect.
   `a_device_may_not_stage_a_restore`, `a_failed_decision_audit_does_not_stage`
