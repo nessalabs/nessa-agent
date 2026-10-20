@@ -87,6 +87,14 @@ export function waitingReviews(payload: unknown): readonly WaitingReview[] | nul
   return parsed
 }
 
+/** The reviews the gateway last said are waiting, whichever notices show them. */
+let waitingNow: readonly WaitingReview[] = []
+
+/** Whether a review still waits in `conversationId`, by the last set the gateway sent. */
+export function reviewWaitsIn(conversationId: string): boolean {
+  return waitingNow.some((review) => review.conversationId === conversationId)
+}
+
 const noticeKey = (review: WaitingReview) =>
   `${review.conversationId}\u0000${review.executionId}\u0000${review.permissionId}`
 
@@ -126,6 +134,7 @@ export function waitingReviewNotices(notifier: ReviewNotifier): {
   let latest: readonly WaitingReview[] = []
   return {
     apply(reviews) {
+      waitingNow = reviews
       applyReviewSnapshot(previous, reviews, notifier)
       previous = reviews
       latest = reviews
@@ -291,6 +300,7 @@ export function hostReviewNotices(host: HostNotices): {
   }
   return {
     apply(reviews) {
+      waitingNow = reviews
       latest = reviews
       send()
     },
