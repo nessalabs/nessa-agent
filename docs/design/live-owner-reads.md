@@ -88,11 +88,14 @@ the item is gone, so focus falls through to `body`.
 | S3 | The same | Already inside that session's row | Left where it is |
 | S4 | Link a Device, which opens Settings | Settings, or whatever took focus | Left where it is |
 | S5 | Dialog still open | Inside the dialog | Tab does not leave it |
+| S6 | Escape or close | `body`, and the session is drawn twice, one copy inside an inert ancestor | The copy that can take focus |
 
 Invariants:
 
 - The return target is the session row named by the dialog, looked up when
   the dialog closes, not the menu item captured when it opened.
+- A copy inside an inert ancestor is not that target. The folded sidebar
+  keeps a pinned session's row, and that row is first in the document.
 - A close that already moved focus somewhere else does not pull it back.
 - Tab containment is the dialog's existing trap.
 
@@ -104,6 +107,8 @@ Alternatives that lose:
   takes focus after that. It does not run again when the dialog closes.
 - Remembering the menu's element. The row may have been drawn again. The
   session id still names it.
+- The first element the session id matches. In columns that is the sidebar
+  copy, and a folded sidebar is inert, so focus stays on the page.
 
 ## Review brief
 

@@ -13,6 +13,8 @@
  * (`focusRowPlace`): to the row, or past it when it went meanwhile, and only
  * ever in the list it was asked from. A dialog that outlives that menu, such
  * as Share, looks the session's row up when it closes (`focusSessionRow`).
+ * A pinned session is drawn twice. A copy inside an inert ancestor, such as
+ * the folded sidebar, cannot take focus, so the lookup skips it.
  */
 import { useEffect, type RefObject } from "react"
 
@@ -58,13 +60,19 @@ function beside(node: Element, list: HTMLElement): HTMLElement | null {
   return null
 }
 
+/** A row focus can land on: still in the document, and not under `inert`. */
+function canTakeFocus(row: HTMLElement): boolean {
+  return row.isConnected && row.closest("[inert]") === null
+}
+
 /**
- * Focus the session row `id` names, as it is drawn now. In a list that keeps
- * focus, that list's rule (`focusRowPlace`); otherwise the row itself.
- * Whether a row took it.
+ * Focus the session row `id` names, as it is drawn now. When several copies
+ * are drawn, the first that can take focus. In a list that keeps focus, that
+ * list's rule (`focusRowPlace`); otherwise the row itself. Whether a row took it.
  */
 export function focusSessionRow(id: string, root: ParentNode = document): boolean {
-  const row = root.querySelector<HTMLElement>(`[data-session-row="${CSS.escape(id)}"]`)
+  const selector = `[data-session-row="${CSS.escape(id)}"]`
+  const row = [...root.querySelectorAll<HTMLElement>(selector)].find(canTakeFocus)
   if (!row) return false
   const place = rowPlace(row)
   if (place) return focusRowPlace(place)

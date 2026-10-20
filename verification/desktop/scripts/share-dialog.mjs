@@ -8,6 +8,8 @@
  * a revoke, a change refused because another window changed the grant and
  * started again from what it holds, a list held while it predates this
  * window's own change, focus kept in the dialog and given back,
+ * including to the session list when the same session is also pinned
+ * under a folded sidebar,
  * and the panel within the window. Chromium and WebKit.
  *
  * The page is the dev server's, opened with `?gateway` so it uses the browser
@@ -478,6 +480,9 @@ Per engine, against a scripted product session:
             Try Again reads it, with no reason after
   focus     Tab stays in the dialog; Escape closes it and focus comes back
             to the session's row
+  focus-pinned
+            the same, when that session is also pinned under a folded
+            sidebar: focus comes back to the list's row, not the inert copy
   fit-N     at 1200 and 420 wide the panel is inside the window and the page does not scroll sideways`,
 }
 
@@ -920,6 +925,101 @@ await main(meta, async ({ options, rep, url }) => {
             : `Tab left the dialog at step ${trail.indexOf(false) + 1}`,
           back.row ? null : `focus came back to ${back.what}, not the session's row`,
         ].filter(Boolean),
+      }
+    })
+
+    // The sample workspace can pin. The gateway keeps no pin, so this case
+    // cannot be the scripted product session the other checks use.
+    await attempt(rep, { engine, name: "focus-pinned" }, async () => {
+      const opened = await openPage(browser, {
+        url,
+        layout: "columns",
+        width: 1200,
+        height: 900,
+      })
+      const { page } = opened
+      try {
+        const row = page.locator(css.sessionListRow).first()
+        await row.waitFor({ timeout: 15_000 })
+        const id = await row.getAttribute("data-session-row")
+        if (!id) throw new Error("the session list row named no session")
+        await row.click({ button: "right" })
+        await need(page, css.menu, "the session's menu")
+        await page.locator(css.menuItem, { hasText: "Pin to Sidebar" }).click()
+        await page.waitForFunction(
+          (sessionId) =>
+            document.querySelector(
+              `.workspace-sidebar [data-session-row="${CSS.escape(sessionId)}"]`,
+            ) !== null,
+          id,
+        )
+        await page.locator(css.titlebarSidebarToggle).click()
+        await page.waitForFunction(
+          (selector) => document.querySelector(selector)?.hasAttribute("inert") === true,
+          css.sidebar,
+        )
+        const listRow = page.locator(selectorFor.sessionListRowFor(id))
+        await listRow.click({ button: "right" })
+        await need(page, css.menu, "the session's menu")
+        await page.locator(css.menuItem, { hasText: names.share }).click()
+        await page.waitForSelector(`${css.shareDialog}[data-share-state="read"]`, {
+          timeout: 10_000,
+        })
+        const trail = []
+        for (let index = 0; index < 40; index++) {
+          await page.keyboard.press("Tab")
+          trail.push(
+            await page.evaluate(
+              (selector) =>
+                document.querySelector(selector)?.contains(document.activeElement),
+              css.shareDialog,
+            ),
+          )
+        }
+        await page.keyboard.press("Escape")
+        await page.waitForSelector(css.shareDialog, { state: "detached", timeout: 5_000 })
+        await page
+          .waitForFunction(
+            (sessionId) => {
+              const active = document.activeElement
+              return (
+                active?.closest(
+                  `.workspace-list [data-session-row="${CSS.escape(sessionId)}"]`,
+                ) !== null && active !== document.body
+              )
+            },
+            id,
+            { timeout: 3_000 },
+          )
+          .catch(() => {})
+        const back = await page.evaluate((sessionId) => {
+          const active = document.activeElement
+          const selector = `[data-session-row="${CSS.escape(sessionId)}"]`
+          return {
+            list: active?.closest(`.workspace-list ${selector}`) !== null,
+            sidebarInert: document
+              .querySelector(".workspace-sidebar")
+              ?.hasAttribute("inert"),
+            sidebarCopy:
+              document.querySelector(`.workspace-sidebar ${selector}`) !== null,
+            what: active ? active.outerHTML.slice(0, 160) : null,
+          }
+        }, id)
+        return {
+          back,
+          failures: [
+            trail.every(Boolean)
+              ? null
+              : `Tab left the dialog at step ${trail.indexOf(false) + 1}`,
+            back.sidebarCopy ? null : "the folded sidebar had no copy of the session",
+            back.sidebarInert ? null : "the sidebar was not inert",
+            back.list
+              ? null
+              : `focus came back to ${back.what}, not the session list's row`,
+          ].filter(Boolean),
+        }
+      } finally {
+        await opened.close()
       }
     })
 

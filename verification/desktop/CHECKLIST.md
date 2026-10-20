@@ -1908,6 +1908,9 @@ the table in `docs/design/read-grants.md` › "Dialog state and order".
   naming 3 answers "Shared.".
 - [ ] **Tab stays in the dialog; Escape closes it and focus is back on the
   session's row.** _Check:_ `focus` (waits for that end state, 3 s).
+- [ ] **A pinned session under a folded sidebar gets that focus on the list's
+  row, not the inert sidebar copy.** _Check:_ `focus-pinned` (the sample
+  workspace, which can pin; the gateway keeps no pin).
 - [ ] **The panel fits the window.** _Check:_ `fit-1200`, `fit-420`; with
   `--shots <dir>`, screenshots of the grants, Drive form, budget, refusal,
   changed refusal and the narrow panel.
