@@ -7,7 +7,8 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import type { RuntimeCopy } from "../../host"
 
 const host = vi.hoisted(() => ({
-  onRuntimeCopy: vi.fn<(handler: (progress: RuntimeCopy) => void) => Promise<() => void>>(),
+  onRuntimeCopy:
+    vi.fn<(handler: (progress: RuntimeCopy) => void) => Promise<() => void>>(),
   runtimeCopy: vi.fn<() => Promise<RuntimeCopy | null>>(),
 }))
 vi.mock("../../host", () => host)
@@ -42,7 +43,11 @@ function deferred<T>() {
 
 function Probe() {
   const progress = useRuntimeCopy()
-  return <output>{progress ? `${progress.state}:${progress.filesCompleted}` : "absent"}</output>
+  return (
+    <output>
+      {progress ? `${progress.state}:${progress.filesCompleted}` : "absent"}
+    </output>
+  )
 }
 
 let container: HTMLDivElement
