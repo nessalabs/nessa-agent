@@ -1327,10 +1327,9 @@ export function useSplitPanesDrag(
           finishPreview()
           return
         }
-        // The grid paints a column change on the frame after it commits, so
-        // this script does not share a frame with that layout. The grid queues
-        // its callback during this commit; the preview lets go in the callback
-        // queued just after, on that same frame, before it paints.
+        // The grid paints a column change three frames after it commits, so
+        // this script does not share a frame with that layout. The preview
+        // lets go on the next frame, before that paint.
         if (accept && proposalHolds()) {
           source.commitDrop({ carried: what, target: aim.target, zone: aim.zone, room })
         } else {

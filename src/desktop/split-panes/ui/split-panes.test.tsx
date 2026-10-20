@@ -117,12 +117,14 @@ const grid = () => {
   return found
 }
 
-/** The frame a column change paints on: two frames after it commits. */
+/** The frame a column change paints on: three frames after it commits. */
 const nextPaint = () =>
   act(
     async () =>
       new Promise<void>((resolve) =>
-        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+        requestAnimationFrame(() =>
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+        ),
       ),
   )
 
@@ -154,9 +156,19 @@ it("paints a new arrangement on the frame after it commits", async () => {
   const fake = fakeSource(layout)
   await mounted(fake)
   await fake.change(splitPane(layout, 2, "bottom", "c"))
-  // The commit's own turn keeps the boxes already painted.
+  // The commit's own turn keeps the boxes already painted, and so do the
+  // two frames after it: a drop's copy lets go, then a column title glides.
   expect(grid().querySelectorAll(".host-pane")).toHaveLength(2)
-  await nextPaint()
+  await act(
+    async () =>
+      new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      ),
+  )
+  expect(grid().querySelectorAll(".host-pane")).toHaveLength(2)
+  await act(
+    async () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
+  )
   expect(grid().querySelectorAll(".host-pane")).toHaveLength(3)
   // That paint skips scene text. The frame after shows it again.
   expect(grid().hasAttribute(marks.painting)).toBe(true)
@@ -172,7 +184,7 @@ it("renders again when the arrangement changes, and not when only focus moves", 
   await fake.change(focusPane(layout, 2))
   expect(renders).toEqual([])
   await fake.change(splitPane(layout, 2, "bottom", "c"))
-  // The commit re-renders the boxes already painted. The new pane waits a frame.
+  // The commit re-renders the boxes already painted. The new pane waits three frames.
   expect(renders.every((key) => key < 3)).toBe(true)
   expect(host.querySelectorAll(".host-pane")).toHaveLength(2)
   await nextPaint()

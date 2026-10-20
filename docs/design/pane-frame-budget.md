@@ -31,10 +31,16 @@ paint, and every resized pane lays those lines out again. Chromium runs an
 animation callback queued from an input handler before that frame paints,
 so one `requestAnimationFrame` from `pointerup` is still that frame.
 
-The subagents panel reads no geometry. Its open mounts a widget pane whose
-body is already deferred one frame; the scene text above was on that frame
-with it. The same split covers that open. A panel frame that still exceeds
-50 ms after this is the panel's own first layout, and gets its own split.
+The subagents panel reads no geometry. Opening it is a pane insert at a
+short, narrow window (1000×560). That count does not fit beside the sidebar,
+so the window folds the sidebar. On the revision this note started from,
+the fold ran in the click's commit: about 15 ms of script, 16 ms of style
+on the workspace, and a full-document layout, and the column title then
+read `offsetTop` and computed style on the next frame (a 13–24 ms layout
+of a tree with about 20 dirty objects and the whole document walked).
+Neither read is a pane's landing box. `paneBox` was already what a drag
+asks. The fold now waits a frame, and the new boxes wait until the frame
+after the title's glide.
 
 ## States
 
@@ -46,8 +52,9 @@ with it. The same split covers that open. A panel frame that still exceeds
 | Focused | The frame after that | The dim layer's text mounts and lays out. The scene is `data-scene-ready`. The layers' width is fixed at that text's width. Rain, the lit layer, and steam are not mounted. |
 | Lit | The frame after that | Those layers mount and lay out at the fixed width. The scene is `data-scene-complete`. |
 | Carrying | `pointerup` on a shown zone | The copy flies to the box `paneBox` already computed. No pane layout is committed. |
-| Painted | The next frame | The drop commits in state. The grid is still on its last boxes, because every column change waits a frame. The room is read before the unmark dirties the tree. |
-| Drawn | The frame after that | The grid paints the new boxes, then the preview lets go, before that frame's paint. The glass blur stays off for one more frame, so that paint does not also rebuild it. |
+| Painted | The next frame | The drop commits in state. The grid is still on its last boxes. The room is read before the unmark dirties the tree. A side column that no longer fits folds on this frame, not in the commit. |
+| Gliding | The frame after that | The copy has let go. A column title that changed rows glides. The grid is still on its last boxes. |
+| Drawn | The frame after that | The grid paints the new boxes. The grain comes back the frame after that paint, and the composer's blur the frame after the grain. |
 
 A content height of 0 leaves the scene unready. The next positive height
 starts the measured row.
@@ -69,13 +76,14 @@ starts the measured row.
    frame. Rain and steam stay `content-visibility: hidden` until
    `data-scene-complete`. The layers' width is the text's column count.
    A later change of pane width crops them.
-5. A column change paints two frames after the commit that recorded it.
-   The frame between is when a drop's copy lets go. The grid mounted with
-   whatever layout it first read; that first paint does not wait. The paint
-   frame marks the grid `data-split-painting`, and scene text that has
-   already laid out stays unpainted until the next frame. The grain comes
-   back the frame after that paint, and the composer's blur the frame after
-   the grain. A drag's copy does not paint the night scene.
+5. A column change paints three frames after the commit that recorded it.
+   The next frame is when a drop's copy lets go and when a side column folds
+   for the new count. The frame after that is the column title's glide. The
+   grid mounted with whatever layout it first read; that first paint does
+   not wait. The paint frame marks the grid `data-split-painting`, and scene
+   text that has already laid out stays unpainted until the next frame. The
+   grain comes back the frame after that paint, and the composer's blur the
+   frame after the grain. A drag's copy does not paint the night scene.
 
 Conversation bodies stay in layout through measuring, flying, and reflow.
 The product flight stays zero-duration. A nonzero flight may still read
@@ -97,8 +105,10 @@ layer before the rest:
 
 ```mermaid
 flowchart LR
-  input["keydown or pointerup"] --> script["script; last boxes stay"]
-  script --> boxes["next frame: new boxes"]
+  input["keydown, click, or pointerup"] --> script["script; last boxes stay"]
+  script --> fold["next frame: copy lets go, side column folds"]
+  fold --> glide["next frame: column title glides"]
+  glide --> boxes["next frame: new boxes"]
   boxes --> focus["next frame: focus"]
   focus --> dim["next frame: dim layer, width locked"]
   dim --> rest["next frame: rain, lit layer, steam"]
@@ -123,8 +133,16 @@ flowchart LR
   frame, after focus, was about 70 ms of layout and paint with no script.
 - A drag-only attribute that holds the previous boxes through `commitDrop`.
   The split's keydown frame still shared its script with the new boxes.
-  The grid already waits one frame for every column change, so the
-  attribute would be a second owner of the same wait.
+  The grid already waits for every column change, so the attribute would
+  be a second owner of the same wait.
+- Folding the sidebar in the click's commit. At 1000×560 that commit's
+  style and layout, and the title's measure on the next frame, are the
+  open's long frames. The fold is the same `fitToWindow` a resize uses; a
+  resize still folds before paint, and a column-count change folds one
+  frame later.
+- Painting the new boxes on the title's glide frame. The glide reads
+  `offsetTop` after moving the title, which walks the document. The boxes
+  wait one more frame.
 
 ## Review brief
 
@@ -136,7 +154,8 @@ flowchart LR
   ≤ 50 ms unrounded. A shown night scene has laid out its text once the
   open has settled. A drop commits on the frame after pointerup paints.
 - Owned scope: `paneBox`, the drop's two callbacks, the grid painting a
-  column change one frame later, the scene-ready and scene-complete marks
+  column change three frames later, the side-column fit waiting one frame
+  when the pane count changes, the scene-ready and scene-complete marks
   and the layer rules, the tests that lock those, the settled assertion in
   `columns.mjs` `content-visible`, and this note.
 - Outside that scope: `FlipScope`'s read when the flight duration is

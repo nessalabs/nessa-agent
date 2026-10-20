@@ -100,9 +100,12 @@ export const SplitPanes = memo(function SplitPanes({
     () => source.layout()?.columns ?? null,
   )
   const gridRef = useRef<HTMLDivElement>(null)
-  // What is on screen lags the layout by one frame. The frame that commits a
-  // split, a resize, or a drop runs its script only; the next frame lays the
-  // new boxes out. The first paint uses the layout the grid mounted with.
+  // What is on screen lags the layout. The frame that commits a split, a
+  // resize, or a drop runs its script only. The next frame is when a drop's
+  // copy lets go and, in the workspace, when a side column folds for the new
+  // count. The frame after that is the column title's glide. The third frame
+  // paints the new boxes, so none of those share a paint. The first paint
+  // uses the layout the grid mounted with.
   const [drawn, setDrawn] = useState(columns)
   const { panes, edges } = useMemo(
     () => (drawn ? placements(drawn) : noPlacements),
@@ -111,15 +114,17 @@ export const SplitPanes = memo(function SplitPanes({
   useLayoutEffect(() => {
     if (drawn === columns) return
     const next = columns
-    // Two frames. The first is when a drop's copy lets go; the second paints
-    // the new boxes, so those two paints are not one frame.
-    let inner = 0
-    const outer = requestAnimationFrame(() => {
-      inner = requestAnimationFrame(() => setDrawn(next))
+    let third = 0
+    let second = 0
+    const first = requestAnimationFrame(() => {
+      second = requestAnimationFrame(() => {
+        third = requestAnimationFrame(() => setDrawn(next))
+      })
     })
     return () => {
-      cancelAnimationFrame(outer)
-      cancelAnimationFrame(inner)
+      cancelAnimationFrame(first)
+      cancelAnimationFrame(second)
+      cancelAnimationFrame(third)
     }
   }, [columns, drawn])
   // The frame that first paints a new arrangement skips scene text. The text
