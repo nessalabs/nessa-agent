@@ -155,5 +155,7 @@ after the last restore:
 - Hashing the arguments failed the same test at the argument comparison.
 
 No finding at any priority. Not re-run in this review: the full default
-stress plan, and the macOS page-load and Windows device-client jobs, which
-failed on the head for reasons outside this diff.
+stress plan. On the following CI run the model step found the picker
+disabled immediately after a mode switch; the step now waits for that
+change to settle. The macOS page-load and Windows device-client jobs on
+the previous head failed for reasons outside this diff.

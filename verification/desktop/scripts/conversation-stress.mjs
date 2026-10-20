@@ -833,7 +833,10 @@ process.exit(result.status ?? 1)
 const steps = {
   async model(run, step, failures) {
     const picker = dock(run.page).locator(css.modelChip)
-    if (await picker.isDisabled()) {
+    // A mode switch just before this step can still be settling. The picker
+    // is disabled only while that change is in flight.
+    const enabled = await waitFor(async () => !(await picker.isDisabled()), 10_000)
+    if (!enabled) {
       failures.push("the established conversation's model picker is disabled")
       return
     }
