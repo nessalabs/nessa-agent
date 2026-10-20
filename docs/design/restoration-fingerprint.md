@@ -15,14 +15,12 @@ fingerprint (gate 15).
 ## What selects a saved native session
 
 The restoration fingerprint keys on the workspace, whether tools are enabled,
-the token limits, the permission decisions, the system prompt, and the
-environment keys that name where the vendor keeps its account:
-
-- `HOME`
-- `CLAUDE_CONFIG_DIR`
-- `CODEX_HOME`
-- `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_CACHE_HOME`, `XDG_STATE_HOME`
-  (OpenCode's config roots; the same fact as the vendor directory)
+the token limits, the permission decisions, the system prompt, and every
+entry of the identity environment (`AcpConfig::environment`), in key order.
+That map is where composition leaves a vendor account directory (`HOME`,
+`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, the OpenCode `XDG_*` roots) and an
+endpoint or profile selector (`ANTHROPIC_BASE_URL` and the same kind of
+variable). The fingerprint function is the complete list of inputs.
 
 The provider name and the model sit beside that hash on `ProviderIdentity`.
 Together those are the whole restoration identity.
@@ -40,7 +38,7 @@ Not in it:
   login shell, rewritten into the launchd job whenever an update
   re-registers it, and `TMPDIR` differs between launchd and an app-launched
   child;
-- credentials, MCP servers, and any other environment key.
+- credentials and MCP servers.
 
 Warm-up keeps a launch fingerprint of its own: the executable, the
 arguments, and the runtime environment. It is recorded beside the
@@ -68,7 +66,9 @@ session id.
 S6 is the row that used to refuse with `storage-identity` and strand the
 conversation. A moved staged runtime, and `PATH` or `TMPDIR` drift, no
 longer reach S6: they are not in the restoration fingerprint, so the row
-is S3 and the saved native session is resumed.
+is S3 and the saved native session is resumed. An endpoint or profile
+selector changing, with the same provider name and model, is S6: the saved
+native session id belongs to the previous backend.
 
 ## Invariants
 
@@ -96,6 +96,9 @@ is S3 and the saved native session is resumed.
    warm-up's launch fingerprint, not the restoration fingerprint. Moving
    them leaves S3. Warm-up's key changes, so the next boot prepares that
    runtime again. S1 and S2 are unchanged.
+8. An endpoint or profile variable in the identity environment is part of
+   the restoration fingerprint. Changing it is S6, not a resume of the
+   saved native session id, and it does not change the launch fingerprint.
 
 ## Alternatives
 
@@ -119,7 +122,13 @@ is S3 and the saved native session is resumed.
 - **Show the catalogue default until an agent attaches.** That is what the
   desktop does when the view has no model. A Codex conversation then shows
   Claude Opus 5, and a model pick fails in the window before the gateway
-  sees it.
+  sees it. The product view's `model` is required, so a view always carries
+  the conversation's selected model.
+- **Treat every non-directory environment key as plumbing.** An endpoint or
+  profile selector left in the identity environment is forwarded to the
+  child. Leaving it out of the fingerprint resumes a native session that
+  belongs to the previous backend. Runtime paths stay in the runtime
+  environment, which the restoration fingerprint does not read.
 
 ## Consequences
 

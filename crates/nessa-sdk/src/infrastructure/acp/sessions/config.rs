@@ -312,12 +312,14 @@ pub struct AcpConfig {
     /// runtime. Never place secrets in arguments. Only trusted composition
     /// may supply them.
     pub arguments: Vec<OsString>,
-    /// Account and vendor directories forwarded to the child. Only the keys that
-    /// name where a vendor keeps its account enter the restoration fingerprint
-    /// (`HOME`, `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, and the OpenCode `XDG_*`
-    /// roots). The fingerprint's inputs are listed on `fingerprint` in
-    /// `acp/sessions/identity.rs`. Parent variables are cleared; this map,
-    /// `runtime_environment`, and `credential_environment` supply the child.
+    /// Identity environment forwarded to the child. Every entry enters the
+    /// restoration fingerprint, in key order: vendor account directories and
+    /// endpoint or profile selectors (`ANTHROPIC_BASE_URL` and the same kind
+    /// of variable). Process plumbing belongs in [`Self::runtime_environment`];
+    /// credentials belong in [`Self::credential_environment`]. The fingerprint's
+    /// inputs are listed on `fingerprint` in `acp/sessions/identity.rs`. Parent
+    /// variables are cleared; this map, `runtime_environment`, and
+    /// `credential_environment` supply the child.
     pub environment: BTreeMap<OsString, OsString>,
     /// Process plumbing forwarded to the child and hashed only into the launch
     /// fingerprint: `PATH`, `TMPDIR`, `USER`, `LOGNAME`, `CODEX_PATH`, and

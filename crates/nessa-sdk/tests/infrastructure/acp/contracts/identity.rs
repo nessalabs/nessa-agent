@@ -91,8 +91,8 @@ async fn a_context_only_mismatch_opens_a_fresh_session_and_credentials_rotate_wi
         launches
     );
 
-    // PATH and the other plumbing keys, including an endpoint, keep the
-    // identity. The saved native session is resumed.
+    // PATH and the other runtime keys keep the identity. The saved native
+    // session is resumed. An endpoint selector is not one of those keys.
     let mut plumbing = config.clone();
     for (key, value) in [
         ("PATH", "/opt/homebrew/bin:/usr/bin"),
@@ -101,12 +101,14 @@ async fn a_context_only_mismatch_opens_a_fresh_session_and_credentials_rotate_wi
         ("LOGNAME", "someone"),
         ("CODEX_PATH", "/opt/codex"),
         ("CLAUDE_CODE_EXECUTABLE", "/opt/claude"),
-        ("ANTHROPIC_BASE_URL", "https://fixture.invalid/b"),
     ] {
-        plumbing.environment.insert(key.into(), value.into());
+        plumbing
+            .runtime_environment
+            .insert(key.into(), value.into());
     }
     let plumbing = provider(plumbing, &model);
     assert_eq!(plumbing.identity(), identity);
+    assert_ne!(plumbing.launch_fingerprint(), launch);
     let resumed = attached_agent(Arc::new(plumbing), manager().await.unwrap())
         .await
         .unwrap();
@@ -147,6 +149,7 @@ async fn a_context_only_mismatch_opens_a_fresh_session_and_credentials_rotate_wi
 
     // An argument change is a different launch, not a different context.
     // The saved native session is resumed.
+    let endpoint_config = config.clone();
     let mut arguments = config;
     arguments.arguments.push("semantic-setting".into());
     let arguments = provider(arguments, &model);
@@ -178,6 +181,42 @@ async fn a_context_only_mismatch_opens_a_fresh_session_and_credentials_rotate_wi
         "1"
     );
 
+    // A changed endpoint selects another backend. The saved native session
+    // is not resumed; a new one is opened.
+    let mut endpoint = endpoint_config;
+    endpoint.environment.insert(
+        "ANTHROPIC_BASE_URL".into(),
+        "https://fixture.invalid/b".into(),
+    );
+    let endpoint = provider(endpoint, &model);
+    assert_ne!(endpoint.identity(), identity);
+    assert_eq!(endpoint.launch_fingerprint(), launch);
+    let opened = attached_agent(Arc::new(endpoint), manager().await.unwrap())
+        .await
+        .unwrap();
+    assert_ne!(
+        opened
+            .session_manager()
+            .snapshot()
+            .await
+            .unwrap()
+            .provider_context
+            .recorded()
+            .unwrap()
+            .as_str(),
+        saved_context
+    );
+    opened.close(close_action()).await.unwrap();
+    drop(opened);
+    assert_eq!(
+        std::fs::read_to_string(root.path().join("resume-observed")).unwrap(),
+        saved_context
+    );
+    assert_eq!(
+        std::fs::read_to_string(root.path().join("new-session-count")).unwrap(),
+        "2"
+    );
+
     let records = std::fs::read_dir(storage_path)
         .unwrap()
         .map(|entry| std::fs::read(entry.unwrap().path()).unwrap())
@@ -188,6 +227,7 @@ async fn a_context_only_mismatch_opens_a_fresh_session_and_credentials_rotate_wi
         "NESSA_FIXTURE_CREDENTIAL",
         "/fixture/config-a",
         "https://fixture.invalid/a",
+        "https://fixture.invalid/b",
     ] {
         assert!(!records.iter().any(|file| file
             .windows(secret.len())
@@ -356,15 +396,26 @@ fn plumbing_environment_does_not_change_the_fingerprint() {
             .runtime_environment
             .insert(key.into(), value.into());
     }
-    // A key that is neither the account nor the runtime still does not
-    // select a saved context, and it is not part of the launch fingerprint.
-    plumbing.environment.insert(
-        "ANTHROPIC_BASE_URL".into(),
-        "https://fixture.invalid/b".into(),
-    );
     let plumbing = provider(plumbing, &model);
     assert_eq!(plumbing.identity(), original);
     assert_ne!(plumbing.launch_fingerprint(), launch);
+    // An endpoint or profile selector left in the identity environment
+    // selects a saved context. It is not launch plumbing.
+    let mut endpoint = config.clone();
+    endpoint.environment.insert(
+        "ANTHROPIC_BASE_URL".into(),
+        "https://fixture.invalid/b".into(),
+    );
+    let endpoint = provider(endpoint, &model);
+    assert_ne!(endpoint.identity(), original);
+    assert_eq!(endpoint.launch_fingerprint(), launch);
+    let mut profile = config.clone();
+    profile
+        .environment
+        .insert("AWS_PROFILE".into(), "other".into());
+    let profile = provider(profile, &model);
+    assert_ne!(profile.identity(), original);
+    assert_eq!(profile.launch_fingerprint(), launch);
     let mut moved = config.clone();
     moved.executable =
         ExecutableUseSnapshot::unmanaged(PathBuf::from("/nonexistent/moved-runtime"));

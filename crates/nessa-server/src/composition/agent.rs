@@ -1114,7 +1114,9 @@ pub(super) mod build {
     }
 
     /// Keys composition collects for the process and that do not select a saved
-    /// native session. They move into `AcpConfig::runtime_environment`.
+    /// native session. They move into `AcpConfig::runtime_environment`. Every
+    /// key left in the identity environment is hashed, including an endpoint
+    /// or profile selector.
     const RUNTIME_ENVIRONMENT: &[&str] = &[
         "PATH",
         "TMPDIR",

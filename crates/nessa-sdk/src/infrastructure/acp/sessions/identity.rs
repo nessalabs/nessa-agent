@@ -15,19 +15,6 @@ use crate::domain::agent_execution::{
 };
 use crate::domain::common::value_objects::TokenLimits;
 use sha2::{Digest, Sha256};
-use std::ffi::OsStr;
-
-/// Environment keys that name where a vendor keeps its account. Present keys
-/// are hashed in this order. Every other key is process plumbing.
-const CONTEXT_ENVIRONMENT: &[&str] = &[
-    "HOME",
-    "CLAUDE_CONFIG_DIR",
-    "CODEX_HOME",
-    "XDG_CONFIG_HOME",
-    "XDG_DATA_HOME",
-    "XDG_CACHE_HOME",
-    "XDG_STATE_HOME",
-];
 
 // Length prefixes and explicit collection lengths keep ordered fields unambiguous.
 fn field(hash: &mut Sha256, bytes: &[u8]) {
@@ -39,16 +26,23 @@ fn field(hash: &mut Sha256, bytes: &[u8]) {
 /// match to be restored. This function is the complete list of its inputs;
 /// the `AcpConfig` field docs that state their membership link here.
 ///
-/// Hashed: the account environment ([`CONTEXT_ENVIRONMENT`]), the workspace,
-/// whether tools are enabled, the token limits, the permission decisions, and
-/// the composed system prompt. The provider name and the model sit beside
-/// this hash on [`ProviderIdentity`]. Changing a hashed input changes the
-/// identity. A saved conversation whose fingerprint differs opens a new
-/// native session; it is refused only when the provider name or the model
-/// differs. The rows are `docs/design/restoration-fingerprint.md`.
+/// Hashed: every entry of [`AcpConfig::environment`], in key order, the
+/// workspace, whether tools are enabled, the token limits, the permission
+/// decisions, and the composed system prompt. The provider name and the
+/// model sit beside this hash on [`ProviderIdentity`]. Changing a hashed
+/// input changes the identity. A saved conversation whose fingerprint
+/// differs opens a new native session; it is refused only when the provider
+/// name or the model differs. The rows are
+/// `docs/design/restoration-fingerprint.md`.
 /// (`a_context_only_mismatch_opens_a_fresh_session_and_credentials_rotate_without_persistence`,
 /// `plumbing_environment_does_not_change_the_fingerprint`,
 /// `fingerprint_tracks_workspace_policy_prompt_and_limits`).
+///
+/// [`AcpConfig::environment`] is the identity environment. It holds the
+/// vendor account directories and every endpoint or profile selector the
+/// binding forwards (`ANTHROPIC_BASE_URL` and the same kind of variable).
+/// A change of one of those selectors moves the process to a different
+/// backend, so the saved native session id is not resumed.
 ///
 /// Not hashed:
 /// - the executable path and the ordered arguments. A release stages the
@@ -60,8 +54,7 @@ fn field(hash: &mut Sha256, bytes: &[u8]) {
 ///   the login shell's path, rewritten into the launchd job on every app
 ///   update, and `TMPDIR` differs between launchd and an app-launched child.
 ///   Composition puts those keys there rather than in
-///   [`AcpConfig::environment`]. Any other key left in `environment` that is
-///   not in [`CONTEXT_ENVIRONMENT`] is also not hashed;
+///   [`AcpConfig::environment`];
 /// - the credential environment, so credentials rotate without stranding a
 ///   conversation;
 /// - the stand-in grants (`AcpConfig::stand_ins`), fresh on every open;
@@ -123,12 +116,8 @@ fn fingerprint_fields(
     prompt: Option<&SystemPrompt>,
 ) -> String {
     let mut hash = Sha256::new();
-    let context_environment: Vec<_> = CONTEXT_ENVIRONMENT
-        .iter()
-        .filter_map(|key| config.environment.get_key_value(OsStr::new(key)))
-        .collect();
-    hash.update((context_environment.len() as u64).to_be_bytes());
-    for (key, value) in context_environment {
+    hash.update((config.environment.len() as u64).to_be_bytes());
+    for (key, value) in &config.environment {
         field(&mut hash, key.as_encoded_bytes());
         field(&mut hash, value.as_encoded_bytes());
     }
