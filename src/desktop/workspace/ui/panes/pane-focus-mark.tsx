@@ -43,11 +43,13 @@ export function FocusedSliver({ paneKey }: { paneKey: PaneKey }) {
   )
   useEffect(() => {
     let frame = 0
+    let movingNow = selectFocusedPaneKey(store.getState()) === paneKey
     const unsubscribe = store.subscribe(() => {
+      const next = selectFocusedPaneKey(store.getState()) === paneKey
+      if (next === movingNow) return
+      movingNow = next
       cancelAnimationFrame(frame)
-      frame = requestAnimationFrame(() =>
-        setMoving(selectFocusedPaneKey(store.getState()) === paneKey),
-      )
+      frame = requestAnimationFrame(() => setMoving(next))
     })
     return () => {
       cancelAnimationFrame(frame)

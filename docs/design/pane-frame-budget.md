@@ -115,7 +115,9 @@ starts the measured row.
    sidebar unless the reveal itself changed, it does not render the
    night scene or the overview unless their own inputs changed, and it
    does not render the pane that lost focus: the focused mark is set on
-   the article before paint.
+   the article before paint. A selector whose fields did not change is
+   not called (`useWorkspaceSelector`). One whose fields changed still
+   paints in the turn.
 
 Conversation bodies stay in layout through measuring, flying, and reflow.
 The product flight stays zero-duration. A nonzero flight may still read
@@ -204,6 +206,10 @@ flowchart LR
   style, a frame of 62–73 ms), and the click still rendered the pane that
   lost focus (about 7 ms of script, a frame of 53–61 ms). The measure
   waits one frame, and focus is a mark on the article.
+- Calling every selector on the click and letting equality drop the
+  render. The calls were the click's script (about 6 ms, a frame of
+  51–58 ms at 4×) even when nothing rendered. A selector is called only
+  when a field it reads has a new reference.
 
 ## Review brief
 
@@ -221,7 +227,8 @@ flowchart LR
   fold with the new boxes (`usePaintedWithPanes`, passed into the source
   list as the open it draws), the session list keeping its measure until
   the frame after those boxes, the focused mark set on the article before
-  paint, the edge peek's stable controls, the shell
+  paint, a selector skipping a dispatch that did not change the fields
+  it reads, the edge peek's stable controls, the shell
   leaving a pane change to the fitted window, the night scene and the
   overview layer skipping a render whose inputs did not change, the
   scene-ready and scene-complete marks and the layer rules,
