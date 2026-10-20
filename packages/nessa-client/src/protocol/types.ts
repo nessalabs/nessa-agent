@@ -39,4 +39,5 @@ export type ClientEventMap = {
   "conversation.listed": import("../generated/product.js").ConversationListed
   "conversation.events": import("../generated/product.js").ConversationEvents
   "conversation.subscriptionEnded": import("../generated/product.js").ConversationSubscriptionEnded
+  "permission.reviewWaiting": import("../generated/product.js").PermissionReviewWaiting
 }
