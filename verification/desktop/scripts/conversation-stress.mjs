@@ -1312,13 +1312,15 @@ const steps = {
       .locator('.workspace-message[data-role="agent"]')
       .filter({ hasText: `${SAYS.table}${text}` })
     const tables = message.locator('[data-slot="markdown-table"]')
-    // Both tables, down to the last cell streamed: the window can still be
-    // drawing the answer the gateway already holds whole.
-    const lastCell = TABLE_LINES.at(-1).split("|")[1].trim()
+    // Both tables whole: the last cell streamed is drawn, and the window has
+    // finished revealing the answer (no word still in its fade-in span), so
+    // every column has its final width.
+    const lastCell = TABLE_LINES.at(-1).split("|").at(-2).trim()
     const drawn = await waitFor(
       async () =>
         (await tables.count()) === 2 &&
-        (await tables.nth(1).getByText(lastCell, { exact: true }).count()) === 1,
+        (await tables.nth(1).getByText(lastCell, { exact: true }).count()) === 1 &&
+        (await message.locator('span[class*="starting:"]').count()) === 0,
       15_000,
     )
     if (!drawn) {
