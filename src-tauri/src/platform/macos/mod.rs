@@ -77,6 +77,10 @@ impl Host for Macos {
         window_controls::hold(window)
     }
 
+    fn lead_window_controls(&self, window: &WebviewWindow, by: f64) -> Result<(), String> {
+        window_controls::lead(window, by)
+    }
+
     fn after_attach(&self, window: &WebviewWindow, _settings: &crate::settings::Settings) {
         // Setup runs on the main thread. The live WebviewWindow owns this
         // NSWindow; borrow it only for the duration of this configuration.

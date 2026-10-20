@@ -302,6 +302,18 @@ export async function windowSize(): Promise<PanelSize | null> {
 }
 
 /**
+ * Moves the window's own controls (the macOS traffic lights) into the page's
+ * first column, which starts `by` CSS pixels from the window's left edge: the
+ * side rail's width while it is open, else 0. Hosts that do not hold the
+ * controls ignore it.
+ */
+export async function leadWindowControls(by: number) {
+  if (!inTauri) return
+  const { invoke } = await import("@tauri-apps/api/core")
+  await invoke("lead_window_controls", { by })
+}
+
+/**
  * Drops vacated compositor tiles. WebKitGTK keeps the previous frame of a
  * bubble that has changed y; macOS and the browser preview do not need this.
  */

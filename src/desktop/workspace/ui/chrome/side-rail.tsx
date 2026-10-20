@@ -145,6 +145,7 @@ export function SideRail({
       aria-hidden={!open || undefined}
       style={{ "--rail-index": index } as CSSProperties}
     >
+      <div className="side-rail-drag" data-tauri-drag-region aria-hidden="true" />
       <div className="side-rail-items">
         <span className="side-rail-lens" aria-hidden="true" />
         {railItems.map((item, i) => (

@@ -18,6 +18,7 @@
   --rail-spring: cubic-bezier(0.34, 1.4, 0.64, 1);
   --rail-gap: 6px;
   position: relative;
+  isolation: isolate;
   display: flex;
   height: 100svh;
   overflow: hidden;
@@ -30,11 +31,23 @@
 .workspace-window > .workspace {
   min-width: 0;
   flex: 1;
+  /* The window's ambient light is behind both the rail and the workspace: a
+     fill here would draw a seam down the rail's edge. */
+  background: transparent;
 }
 
 /* ——— The rail ——— */
 
+/*
+ * The window's own controls (the traffic lights) never stand over the rail:
+ * open, it moves them into the workspace's corner (`useWindowControlsLead`,
+ * `traffic_lights.rs`), so they sit in the first column's corner exactly as
+ * they do with the rail closed, and the titlebar's controls follow them
+ * there by the same inset. The rail's own titlebar row is left empty: a drag
+ * strip, drawn by nothing, so the window still moves by its top edge there.
+ */
 .side-rail {
+  position: relative;
   display: flex;
   width: 0;
   flex: none;
@@ -50,6 +63,14 @@
 .side-rail[data-open] {
   width: var(--rail-width);
   opacity: 1;
+}
+
+.side-rail-drag {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: var(--rail-width);
+  height: var(--desktop-titlebar-height);
 }
 
 .side-rail-items {
@@ -273,18 +294,6 @@
   padding-left: calc(2 * var(--desktop-control-inset) + var(--desktop-control-size));
 }
 
-/*
- * The titlebar is the workspace's, so it already starts after the rail. The
- * window's own controls (the traffic lights) are placed from the window's
- * edge, so with the rail open the rail's width comes off their inset.
- */
-.workspace-window[data-rail="open"] .workspace-titlebar {
-  padding-left: max(
-    calc(var(--desktop-window-controls-inset) - var(--rail-width)),
-    var(--desktop-control-edge)
-  );
-}
-
 /* ——— An item's full view ——— */
 
 /*
@@ -301,12 +310,6 @@
   justify-content: center;
   gap: 6px;
   background: var(--background);
-  /* How far the window's own controls reach past the rail: the view's top
-     row keeps clear of this much on its left. */
-  --rail-view-safe-left: max(
-    0px,
-    calc(var(--desktop-window-controls-inset) - var(--rail-width))
-  );
   /* Opaque from its first frame: a fade in would show the panes under it. */
 }
 
@@ -326,7 +329,9 @@
   position: absolute;
   top: 0;
   right: 0;
-  left: var(--rail-view-safe-left);
+  /* The window's own controls stand in the view's corner, as in the
+     workspace's: the strip starts where they end. */
+  left: var(--desktop-window-controls-inset);
   height: var(--desktop-titlebar-height);
 }
 

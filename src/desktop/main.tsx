@@ -8,6 +8,7 @@ import { Provider } from "react-redux"
 import {
   askReviewNoticeAccess,
   host,
+  leadWindowControls,
   loadAssignedGatewayEndpoint,
   onReviewNoticeOpened,
   reviewNoticeAccess,
@@ -29,6 +30,7 @@ import { SiteIconProvider } from "./workspace/ui/transcript/site-icon"
 import { hostGateway } from "./adapters/host-gateway"
 import { workspaceBackend, type WorkspaceBackend } from "./model/workspace-backend"
 import { seededWindow } from "./seeded-window"
+import { WindowControlsProvider } from "./ui/window-controls"
 import {
   LinkedDevicesProvider,
   McpServersProvider,
@@ -172,11 +174,13 @@ createRoot(container).render(
                             <PermissionRulesProvider
                               gateway={dependencies.permissionRules}
                             >
-                              <DesktopWindow
-                                hostKind={host.kind}
-                                browserSurface={host.kind === "browser"}
-                                inspectable={import.meta.env.DEV}
-                              />
+                              <WindowControlsProvider lead={leadWindowControls}>
+                                <DesktopWindow
+                                  hostKind={host.kind}
+                                  browserSurface={host.kind === "browser"}
+                                  inspectable={import.meta.env.DEV}
+                                />
+                              </WindowControlsProvider>
                             </PermissionRulesProvider>
                           </NativeHooksProvider>
                         </HeldFilesProvider>

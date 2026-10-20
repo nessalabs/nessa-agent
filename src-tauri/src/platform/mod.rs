@@ -120,6 +120,13 @@ pub trait Host: Send + Sync {
         Ok(())
     }
 
+    /// Move the window's own controls into the page's first column, which
+    /// starts `by` points from the window's left edge (the side rail's width
+    /// while it is open). Hosts that do not hold the controls ignore it.
+    fn lead_window_controls(&self, _window: &WebviewWindow, _by: f64) -> Result<(), String> {
+        Ok(())
+    }
+
     /// After the shared attach (size, frost, watches). Linux uses this to put
     /// the panel on the taskbar and show it; macOS leaves it hidden until the
     /// tray summons it.
@@ -195,6 +202,13 @@ pub fn set_frosted(app: AppHandle, window: WebviewWindow, frosted: bool) -> Resu
     }
 
     Ok(())
+}
+
+/// The desktop page's first column moved: the side rail opened or closed.
+/// The window's own controls follow it, so they stay in that column's corner.
+#[tauri::command]
+pub fn lead_window_controls(window: WebviewWindow, by: f64) -> Result<(), String> {
+    current().lead_window_controls(&window, by)
 }
 
 /// The window's size now, for a page that has just loaded and has no size

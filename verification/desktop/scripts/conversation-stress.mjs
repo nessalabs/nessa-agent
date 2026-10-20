@@ -56,6 +56,12 @@
  *   delete      another conversation is deleted from its row's More menu,
  *               once asked; the gateway refuses it as deleted, and neither
  *               list nor the window holds it
+ *   rail        the side rail is turned on in Settings › Advanced ›
+ *               Experimental and opened: the window's controls are asked to
+ *               stand beside it, in the workspace's corner, and the
+ *               titlebar starts where they end; a message sent with the rail
+ *               open is answered; closed and turned off, they are back at
+ *               the window's edge
  *   linking     native linking is turned on, then off, with the switch in
  *               Settings › Connections › Linked devices; each time the gateway
  *               saves config.json and starts itself again in the same
@@ -315,6 +321,60 @@ async function untilView(run, conversationId, ready, seconds = 60) {
 }
 
 const ended = (turn) => turnEnded(turn.status)
+
+/**
+ * Turns the side rail preview on or off where a person does: Settings ›
+ * Advanced › Experimental. Leaves Settings, back in the workspace.
+ */
+async function setSideRail(page, on, failures) {
+  if (!(await page.$(css.settings))) await page.keyboard.press(keys.settings)
+  await page.locator(css.settingsCategory, { hasText: names.advanced }).click()
+  // A category with one tab draws no tab list.
+  const tab = page.locator(css.settingsTab, { hasText: names.experimental })
+  if (await tab.count()) await tab.click()
+  const toggle = page.locator(`${selectorFor.settingRow("side-rail")} [role='switch']`)
+  if ((await toggle.getAttribute("aria-checked")) !== String(on)) await toggle.click()
+  const switched = await waitFor(
+    async () => (await toggle.getAttribute("aria-checked")) === String(on),
+    5_000,
+  )
+  if (!switched) failures.push(`the side rail's switch did not turn ${on ? "on" : "off"}`)
+  await page.getByRole("button", { name: names.leaveSettings }).first().click()
+  await page.waitForSelector(css.settings, { state: "detached", timeout: 10_000 })
+  const shown = await waitFor(
+    async () => (await page.locator(css.sideRailToggle).count()) === (on ? 1 : 0),
+    10_000,
+  )
+  if (!shown) failures.push(`the side rail's toggle is ${on ? "missing" : "still shown"}`)
+}
+
+/**
+ * Where the window's controls stand: every distance the page asked the host
+ * to move them in (`__fakeHostLeads`), where the workspace starts, the
+ * controls' inset from it, and where the titlebar's first control is.
+ */
+function windowControls(page) {
+  return page.evaluate(
+    ({ frame, workspace, control }) => {
+      const at = document.querySelector(workspace)
+      const first = document.querySelector(control)
+      return {
+        rail: document.querySelector(frame)?.dataset.rail,
+        leads: [...(window.__fakeHostLeads ?? [])],
+        lead: Math.round(at?.getBoundingClientRect().left ?? NaN),
+        inset: parseFloat(
+          getComputedStyle(at).getPropertyValue("--desktop-window-controls-inset"),
+        ),
+        control: Math.round(first?.getBoundingClientRect().left ?? NaN),
+      }
+    },
+    {
+      frame: css.workspaceWindow,
+      workspace: css.workspace,
+      control: css.titlebarSidebarToggle,
+    },
+  )
+}
 
 /** The row of the conversation `conversationId` in the window's list. */
 const sessionRow = (page, conversationId) =>
@@ -919,6 +979,50 @@ const steps = {
     })
     // The restarted gateway still answers the conversation, in the window.
     if (failures.length === 0) await steps.reply(run, step, failures)
+  },
+
+  async rail(run, step, failures) {
+    await run.exclusive(async () => {
+      await setSideRail(run.page, true, failures)
+      if (failures.length) return
+      const toggle = run.page.locator(css.sideRailToggle)
+      if ((await toggle.getAttribute("aria-disabled")) === "true") {
+        failures.push("the window had no room for the side rail")
+        return
+      }
+      for (const open of [true, false]) {
+        if ((await toggle.getAttribute("aria-expanded")) !== String(open))
+          await toggle.click()
+        const where = await waitFor(async () => {
+          const now = await windowControls(run.page)
+          return now.rail === (open ? "open" : "closed") && now.leads.at(-1) === now.lead
+            ? now
+            : null
+        }, 10_000)
+        const said = open ? "open" : "closed"
+        if (!where) {
+          const now = await windowControls(run.page)
+          failures.push(
+            `rail ${said}: the window's controls were asked to lead by ${JSON.stringify(now.leads)}, the workspace starts at ${now.lead}`,
+          )
+          continue
+        }
+        // The page's half of the lights' place: its titlebar starts where the
+        // lights end, measured from the workspace the lights now stand in.
+        if (Math.abs(where.control - (where.lead + where.inset)) > 0.5)
+          failures.push(
+            `rail ${said}: the titlebar's first control is at ${where.control}px, not ${where.lead + where.inset}px`,
+          )
+        // The workspace still takes a message with the rail beside it.
+        if (open && failures.length === 0) await steps.reply(run, step, failures)
+      }
+      await setSideRail(run.page, false, failures)
+      const back = await windowControls(run.page)
+      if (back.leads.at(-1) !== 0)
+        failures.push(
+          `with the rail off the window's controls lead by ${back.leads.at(-1)}`,
+        )
+    })
   },
 
   async delegate(run, step, failures) {

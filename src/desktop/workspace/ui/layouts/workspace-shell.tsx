@@ -31,6 +31,7 @@ import { draggedEdge } from "../../../model/side-column"
 import { EdgePeekStrip } from "../../../ui/edge-peek-strip"
 import { HistoryButtons } from "../../../ui/history-buttons"
 import { ResizeEdge } from "../../../ui/resize-edge"
+import { useWindowControlsLead } from "../../../ui/window-controls"
 import { workspaceDragOptions } from "../../adapters/dom/split-panes-drag"
 import { FlipScope, useSplitPanesDrag, type SplitPanesSource } from "../../../split-panes"
 import { useFocusFollowsPane } from "../../adapters/dom/focus"
@@ -339,6 +340,9 @@ export function WorkspaceShell({
   const railDrawn = railOffered && railOpen && railRoom
   // The rail stands beside the workspace, not in it: the columns fit what is left.
   const windowWidth = fullWidth - (railDrawn ? RAIL_WIDTH : 0)
+  // The window's own controls sit in the workspace's corner, so with the rail
+  // open they stand beside it too, never straddling the first column's edge.
+  useWindowControlsLead(railDrawn ? RAIL_WIDTH : 0)
   useFitOnResize(windowWidth, columns, (width) =>
     dispatch(
       fitToWindow({ windowWidth: width, sidebarWidth, sessionListWidth: listWidth }),
@@ -452,6 +456,11 @@ export function WorkspaceShell({
                   data-sidebar-chosen={chrome.sidebar.open ? "open" : "closed"}
                   style={{ "--rail-width": `${RAIL_WIDTH}px` } as CSSProperties}
                 >
+                  {/* The light behind the window spans the rail too, so the
+                      rail and the workspace stand on one ground. */}
+                  <div className="desktop-ambient" aria-hidden="true">
+                    <span className="desktop-grain" />
+                  </div>
                   {railOffered ? (
                     <>
                       <SideRail
@@ -494,9 +503,6 @@ export function WorkspaceShell({
                       } as CSSProperties
                     }
                   >
-                    <div className="desktop-ambient" aria-hidden="true">
-                      <span className="desktop-grain" />
-                    </div>
                     {sidebarOpen ? null : (
                       <EdgePeekStrip
                         peek={peek}

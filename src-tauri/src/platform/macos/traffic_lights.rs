@@ -53,8 +53,10 @@ include!(concat!(env!("OUT_DIR"), "/titlebar.rs"));
 /// the page's `--desktop-titlebar-height`, which the build script reads from
 /// the stylesheet (`titlebar_geometry.rs`).
 pub const ROW_CENTRE: f64 = TITLEBAR_HEIGHT / 2.0;
-/// The close button's left edge, in points from the window's left edge. The
-/// page leaves the buttons room up to `--desktop-window-controls-inset`.
+/// The close button's left edge, in points from the left edge of the page's
+/// first column (the window's own edge unless [`lead`] says otherwise). The
+/// page leaves the buttons room up to `--desktop-window-controls-inset` from
+/// that same edge.
 pub const LEFT: f64 = 16.0;
 
 /// `NSWindowButton`: close, minimize, zoom.
@@ -82,6 +84,21 @@ thread_local! {
     static SPACING: Cell<Option<f64>> = const { Cell::new(None) };
     /// The last error `report` printed, while it lasts.
     static REPORTED: Cell<Option<String>> = const { Cell::new(None) };
+    /// How far the page's first column starts from the window's left edge:
+    /// the side rail's width while the rail is open, else nothing. The
+    /// buttons sit in that column's corner, so they start this much further in.
+    static LEAD: Cell<f64> = const { Cell::new(0.0) };
+}
+
+/// Moves the buttons to a column that starts `by` points from the window's
+/// left edge, and keeps them there. The page says so whenever its first
+/// column moves (the side rail opening or closing); 0 is the window's edge.
+pub fn lead(window: &NSWindow, by: f64, main: MainThreadMarker) -> Result<(), String> {
+    if !by.is_finite() || by < 0.0 {
+        return Err(format!("the traffic lights cannot lead by {by}pt"));
+    }
+    LEAD.set(by);
+    place(window, main)
 }
 
 /// The window's three buttons, close first.
@@ -167,7 +184,7 @@ fn place_now(window: &NSWindow) -> Result<(), String> {
     };
     for (index, button) in buttons.iter().enumerate() {
         let origin = NSPoint::new(
-            LEFT + index as f64 * spacing,
+            LEFT + LEAD.get() + index as f64 * spacing,
             centre.y - button.frame().size.height / 2.0,
         );
         let now = button.frame().origin;

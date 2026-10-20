@@ -315,10 +315,17 @@ Experimental turns it on; the rail stands beside the workspace in
   loader before 3 s; still loading at 3 s, the kit's `LoadingText` sweeps
   "Loading Files" with no panel or border around it. _Check:_
   `columns.mjs --only rail-loading`.
+- [ ] **The window's controls stand in the workspace's corner, never over
+  the rail**: with the rail open the traffic lights move in by the rail's
+  width, into the first column's corner as with the rail closed, and the
+  titlebar's controls start where they end; closed or off, both are back at
+  the window's edge. _Check:_ `conversation-stress.mjs` step `rail` (what the
+  page asks the host, and where the titlebar starts);
+  `cargo test -p nessa-app --no-default-features --test traffic_lights` for
+  the buttons following the lead in a real AppKit window (macOS).
 - [ ] **The titlebar's controls never pass under the window's controls while
   the rail opens or closes**: every frame draws them between where they were
-  and where they land — still, in the macOS window. _Check:_
-  `columns.mjs --only titlebar-steady`.
+  and where they land. _Check:_ `columns.mjs --only titlebar-steady`.
 - [ ] **Toggling the rail moves things by transform only**: the width lands at
   once and FlipScope plays the columns back, so no frame lays text out again.
   _Check:_ `perf-budget.mjs` (production build) — not yet run for the rail.

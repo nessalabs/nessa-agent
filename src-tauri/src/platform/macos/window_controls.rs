@@ -29,3 +29,27 @@ pub fn hold(window: &tauri::WebviewWindow) -> Result<(), String> {
     }
     watched
 }
+
+/// Moves the buttons into a column that starts `by` points from the window's
+/// left edge (`traffic_lights::lead`). Asked from a command thread; AppKit's
+/// views move on the main thread only, so the move is queued there.
+pub fn lead(window: &tauri::WebviewWindow, by: f64) -> Result<(), String> {
+    let target = window.clone();
+    window
+        .run_on_main_thread(move || {
+            let led = MainThreadMarker::new()
+                .ok_or_else(|| {
+                    String::from("the traffic lights are placed on the main thread only")
+                })
+                .and_then(|main| {
+                    let handle = target.ns_window().map_err(|error| error.to_string())?;
+                    // SAFETY: the live window's NSWindow, borrowed for this call on the main thread.
+                    let ns_window = unsafe { &*handle.cast::<NSWindow>() };
+                    traffic_lights::lead(ns_window, by, main)
+                });
+            if let Err(error) = led {
+                eprintln!("[nessa] could not move the traffic lights: {error}");
+            }
+        })
+        .map_err(|error| error.to_string())
+}

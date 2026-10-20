@@ -81,6 +81,10 @@ export const KNOBS = {
     default: 1,
     what: "turns where an agent reads the window: beside another pane, then alone",
   },
+  rails: {
+    default: 1,
+    what: "times the side rail is turned on in Settings and opened, the window's controls moved beside it, a message sent, then closed and turned off",
+  },
   linkings: {
     default: 1,
     what: "times native linking is turned on and off again from Settings, each restarting the gateway",
@@ -151,6 +155,7 @@ export function plan(knobs) {
   add(knobs.deletes, () => ({ kind: "delete" }))
   add(knobs.fresh, () => ({ kind: "fresh" }))
   add(knobs.windows, () => ({ kind: "window" }))
+  add(knobs.rails, () => ({ kind: "rail" }))
   add(knobs.linkings, () => ({ kind: "linking" }))
   if (knobs.long > 0) steps.push({ kind: "long", turns: knobs.long })
   if (knobs.reviews > 0) steps.push({ kind: "reviews" })
