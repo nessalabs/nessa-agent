@@ -20,6 +20,13 @@ import { selectColumnCount } from "./selectors"
  * rows that gained or lost it.
  */
 
+/**
+ * The frame before the boxes. The window's fold is recorded then, while the
+ * spare hold still keeps the sidebar in the row, so the fold does not lay
+ * the panes out on its own.
+ */
+export const spareFoldFrame = 2
+
 /** The frame, after the commit, on which the grid paints new boxes. */
 export const paneBoxFrame = 3
 

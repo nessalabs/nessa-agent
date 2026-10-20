@@ -64,7 +64,7 @@ export { SessionsInSidebar } from "./ui/layouts/sessions-in-sidebar"
 export { ThreeColumns } from "./ui/layouts/three-columns"
 export { shortcutNames, workspaceShortcuts } from "./ui/layouts/shortcuts"
 export { focusInFront } from "./adapters/dom/focus"
-export { measureWorkspace } from "./adapters/dom/measure"
+export { measureWorkspace, paintedRoom } from "./adapters/dom/measure"
 export {
   inMemorySource,
   type InMemorySource,

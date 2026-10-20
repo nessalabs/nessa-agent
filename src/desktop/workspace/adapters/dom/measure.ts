@@ -15,6 +15,14 @@ import { gridOf } from "../../../split-panes"
 import { paneLimits } from "../../../split-panes/model/pane-layout"
 import type { PaneRoom } from "../../../split-panes/model/pane-sizing"
 
+/** The room last read from the page, so a click can place a pane without laying out. */
+let painted: PaneRoom | undefined
+
+/** The room as last laid out, without reading the page. Nothing until something has measured. */
+export function paintedRoom(): PaneRoom | undefined {
+  return painted
+}
+
 export function measureWorkspace(page: ParentNode = document): PaneRoom | undefined {
   const grid = gridOf(page)
   if (!grid) return undefined
@@ -23,9 +31,11 @@ export function measureWorkspace(page: ParentNode = document): PaneRoom | undefi
     root?.dataset.sidebar === "open"
       ? root.querySelector<HTMLElement>(".workspace-sidebar")
       : null
-  return {
+  const room = {
     width: grid.offsetWidth,
     height: grid.offsetHeight,
     spare: sidebar ? sidebar.offsetWidth + paneLimits.gutter : 0,
   }
+  painted = room
+  return room
 }

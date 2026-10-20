@@ -68,6 +68,7 @@ html:not(.dark) .workspace-sidebar {
   bottom: auto;
   left: auto;
   transform: none;
+  visibility: visible;
 }
 
 /*

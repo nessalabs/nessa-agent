@@ -71,6 +71,7 @@ import {
 import { reviewToOpen, reviewWaitsIn } from "../../adapters/gateway/review-notices"
 import {
   listPaintFrame,
+  spareFoldFrame,
   usePaintedWithPanes,
 } from "../../adapters/store/paint-with-panes"
 import {
@@ -429,10 +430,15 @@ function FittedWindow({
   const listDrawn = useWorkspaceSelector(selectSessionListOpen)
   const listOpen = region.sessionList && listDrawn
   const view = useWorkspaceSelector(selectView)
-  // Painted with the new boxes, not in the click that recorded the fold.
-  const chrome = usePaintedWithPanes(selectChrome)
-  const columns = usePaintedWithPanes(selectColumnCount)
-  const paneShape = usePaintedWithPanes(selectPaneShape)
+  // The fold paints while the spare hold is on. The sidebar's tree waits
+  // until the list's frame, so this render does not reconcile it.
+  const chrome = usePaintedWithPanes(selectChrome, spareFoldFrame)
+  const columns = usePaintedWithPanes(selectColumnCount, spareFoldFrame)
+  const paneShape = usePaintedWithPanes(selectPaneShape, spareFoldFrame)
+  const sidebarSettled = usePaintedWithPanes(
+    (state) => drawn(selectChrome(state).sidebar),
+    listPaintFrame,
+  )
   const sidebarDrawn = drawn(chrome.sidebar)
   const shownRailItem = railOffered
     ? railItems.find((each) => each.id === railItem && each.id !== "agents")
@@ -588,7 +594,7 @@ function FittedWindow({
                 data-list={
                   region.sessionList ? (listOpen ? "open" : "closed") : undefined
                 }
-                data-panes-alone={(!sidebarDrawn && !listOpen) || undefined}
+                data-panes-alone={(!sidebarSettled && !listOpen) || undefined}
                 style={
                   {
                     "--workspace-sidebar-width": `${sidebarWidth}px`,
@@ -598,7 +604,7 @@ function FittedWindow({
                   } as CSSProperties
                 }
               >
-                {sidebarDrawn ? null : (
+                {sidebarSettled ? null : (
                   <EdgePeekStrip
                     peek={peek}
                     onDragOut={() => dispatch(toggleSidebar({ open: true }))}
@@ -638,7 +644,7 @@ function FittedWindow({
                 <Columns
                   region={region}
                   root={root}
-                  sidebarOpen={sidebarDrawn}
+                  sidebarOpen={sidebarSettled}
                   listOpen={listOpen}
                   sidebarWidth={sidebarWidth}
                   listWidth={listWidth}

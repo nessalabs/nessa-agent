@@ -89,6 +89,7 @@ import {
   gatewaySource,
   inMemorySource,
   measureWorkspace,
+  paintedRoom,
   type InMemorySource,
   rememberedFilter,
   inMemorySharing,
@@ -241,6 +242,7 @@ export function createDesktopDependencies(
     newId,
     // The page's own layout: every command that changes the panes is held to it.
     measure: options.measure ?? (() => measureWorkspace(document)),
+    paintedRoom: options.paintedRoom ?? (options.measure ? undefined : paintedRoom),
     // The webview's storage, where the overview's filter is kept between launches.
     overviewFilter: options.overviewFilter ?? rememberedFilter(),
     questionFlights: createQuestionFlights(),

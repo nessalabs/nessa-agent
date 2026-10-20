@@ -528,10 +528,10 @@ describe("a review notice opens its conversation", () => {
   })
 })
 
-describe("a spare sidebar fold paints with the new boxes, not in the click", () => {
+describe("a spare sidebar fold paints before the boxes, and the list keeps its measure", () => {
   const narrow = { width: 500, height: 800, spare: 240 }
 
-  it("keeps the sidebar on screen through the commit and the two frames before the boxes", async () => {
+  it("keeps the sidebar's tree through the fold and releases the list measure after the boxes", async () => {
     const frames = controlledAnimationFrames()
     const width = window.innerWidth
     Object.defineProperty(window, "innerWidth", { configurable: true, value: 1000 })
@@ -571,15 +571,19 @@ describe("a spare sidebar fold paints with the new boxes, not in the click", () 
       expect(sidebar()?.getAttribute("data-sidebar")).toBe("open")
       expect(list()?.hasAttribute("inert")).toBe(false)
       await act(async () => frames.runFrame())
-      expect(sidebar()?.getAttribute("data-sidebar")).toBe("open")
-      await act(async () => frames.runFrame())
       expect(sidebar()?.getAttribute("data-sidebar")).toBe("closed")
-      expect(list()?.hasAttribute("inert")).toBe(true)
+      expect(list()?.hasAttribute("inert")).toBe(false)
+      expect(sidebar()?.hasAttribute("data-spare-held")).toBe(true)
       expect(sidebar()?.hasAttribute("data-list-held")).toBe(true)
       expect(host.querySelector(".workspace-window")?.getAttribute("data-sidebar")).toBe(
         "closed",
       )
       await act(async () => frames.runFrame())
+      expect(sidebar()?.hasAttribute("data-spare-held")).toBe(false)
+      expect(list()?.hasAttribute("inert")).toBe(false)
+      expect(sidebar()?.hasAttribute("data-list-held")).toBe(true)
+      await act(async () => frames.runFrame())
+      expect(list()?.hasAttribute("inert")).toBe(true)
       expect(sidebar()?.hasAttribute("data-list-held")).toBe(false)
       await act(async () => root.unmount())
     } finally {

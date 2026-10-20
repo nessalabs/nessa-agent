@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { expect, it } from "vitest"
-import { measureWorkspace } from "./measure"
+import { measureWorkspace, paintedRoom } from "./measure"
 
 /** jsdom lays nothing out: the boxes are set by hand, as the browser would. */
 function box(element: HTMLElement, width: number, height: number) {
@@ -31,4 +31,5 @@ it("counts no spare room for a sidebar already folded, and no room without a gri
   box(page.querySelector<HTMLElement>("[data-split-grid]")!, 900, 700)
   expect(measureWorkspace(page)?.spare).toBe(0)
   expect(measureWorkspace(document.createElement("div"))).toBeUndefined()
+  expect(paintedRoom()).toEqual({ width: 900, height: 700, spare: 0 })
 })

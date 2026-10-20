@@ -1,6 +1,9 @@
 import { memo } from "react"
 import { useWorkspaceSelector } from "../../adapters/store/hooks"
-import { usePaintedWithPanes } from "../../adapters/store/paint-with-panes"
+import {
+  listPaintFrame,
+  usePaintedWithPanes,
+} from "../../adapters/store/paint-with-panes"
 import {
   selectFocusedSessionId,
   selectSession,
@@ -45,6 +48,7 @@ export const ThreadRow = memo(function ThreadRow({
   // Painted with the boxes, so opening a pane does not render the row.
   const focused = usePaintedWithPanes(
     (state) => selectFocusedSessionId(state) === sessionId,
+    listPaintFrame,
   )
   const actions = useOpenFromRow()
   // Delete only: the row is a button, which holds no field to rename in.
