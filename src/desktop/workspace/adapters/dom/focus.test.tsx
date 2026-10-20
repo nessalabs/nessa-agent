@@ -4,7 +4,7 @@
  * pane takes focus or what held the caret went away, and never out of a
  * list the person is walking, or a dialog.
  */
-import { act, useRef } from "react"
+import { act, useLayoutEffect, useRef } from "react"
 import { arrivalWaitingAttribute } from "./arrival"
 import { createRoot, type Root } from "react-dom/client"
 import { Provider } from "react-redux"
@@ -49,9 +49,25 @@ function Page() {
   const root = useRef<HTMLDivElement>(null)
   const store = useWorkspaceStore()
   useFocusFollowsPane(store, root)
-  const focused = useWorkspaceSelector(selectFocusedPaneKey)
   const shown = useWorkspaceSelector(selectShownSessionIds)
   const panes = useWorkspaceSelector((state) => state.workspace.panes)
+  // The product writes this mark in the click (`PaneFocusMark`). A new
+  // column's article paints a frame later, so the mark is written again
+  // when that article is committed.
+  useLayoutEffect(() => {
+    const apply = () => {
+      const key = selectFocusedPaneKey(store.getState())
+      root.current
+        ?.querySelectorAll<HTMLElement>("[data-pane-key]")
+        .forEach((article) => {
+          if (article.getAttribute("data-pane-key") === String(key))
+            article.setAttribute(focusedPaneAttribute, "")
+          else article.removeAttribute(focusedPaneAttribute)
+        })
+    }
+    apply()
+    return store.subscribe(apply)
+  }, [store, panes])
   const windowWidget = useWorkspaceSelector(selectWindowWidget)
   const asking = useWorkspaceSelector(
     (state) =>
@@ -76,11 +92,7 @@ function Page() {
       ) : null}
       <div className="split-panes-grid" data-split-grid>
         {(panes ? panesOf(panes) : []).map((pane, index) => (
-          <article
-            key={pane.key}
-            data-pane-key={pane.key}
-            {...{ [focusedPaneAttribute]: pane.key === focused || undefined }}
-          >
+          <article key={pane.key} data-pane-key={pane.key}>
             {/* An approval, which goes once it is answered. */}
             {asking.includes(shown[index]) ? (
               <button type="button">Approve</button>

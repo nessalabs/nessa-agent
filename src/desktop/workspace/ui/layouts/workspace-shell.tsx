@@ -728,8 +728,10 @@ function ListMeasureHold({ root }: { root: RefObject<HTMLElement | null> }) {
 }
 
 /**
- * Fits the side columns from the live column count, without rendering the
- * window: the count changes in the click, and the fit runs the frame after.
+ * Fits the side columns from the column count, without rendering the
+ * window. The count is a layout selector, so the click that changes it
+ * does not render this: the count arrives the next frame, and the fit
+ * runs the frame after that.
  */
 function ColumnFit({
   windowWidth,

@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 /**
  * A selector paints from the fields it reads. A session's own text updates
- * in the turn, and so does a new pane column. Opening a pane does not call
- * a selector that reads neither the panes nor the chrome
- * (`selector-paint.ts`).
+ * in the turn. A new pane column renders on the next frame. Opening a
+ * pane does not call a selector that reads neither the panes nor the
+ * chrome (`selector-paint.ts`).
  */
 import { act } from "react"
 import { createRoot } from "react-dom/client"
@@ -74,6 +74,8 @@ it("paints a changed field in the turn, and does not call a selector whose field
     store.dispatch(openBeside({ sessionId: "c" }))
   })
   expect(textReads()).toBe(before)
+  expect(columns()?.getAttribute("data-columns")).toBe(count)
+  await act(() => frames.runFrame())
   expect(columns()?.getAttribute("data-columns")).not.toBe(count)
 
   const layout = store.getState().workspace.panes

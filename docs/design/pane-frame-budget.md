@@ -116,8 +116,9 @@ starts the measured row.
    night scene or the overview unless their own inputs changed, and it
    does not render the pane that lost focus: the focused mark is set on
    the article before paint. A selector whose fields did not change is
-   not called (`useWorkspaceSelector`). One whose fields changed still
-   paints in the turn.
+   not called. One that reads the new layout waits for the next frame
+   (`useWorkspaceSelector`), so the click does not render it. A focus
+   move between panes already open still paints in the turn.
 
 Conversation bodies stay in layout through measuring, flying, and reflow.
 The product flight stays zero-duration. A nonzero flight may still read
@@ -209,7 +210,8 @@ flowchart LR
 - Calling every selector on the click and letting equality drop the
   render. The calls were the click's script (about 6 ms, a frame of
   51–58 ms at 4×) even when nothing rendered. A selector is called only
-  when a field it reads has a new reference.
+  when a field it reads has a new reference, and a new column count
+  waits for the next frame.
 
 ## Review brief
 
@@ -228,7 +230,8 @@ flowchart LR
   list as the open it draws), the session list keeping its measure until
   the frame after those boxes, the focused mark set on the article before
   paint, a selector skipping a dispatch that did not change the fields
-  it reads, the edge peek's stable controls, the shell
+  it reads and painting a new column count on the next frame, the edge
+  peek's stable controls, the shell
   leaving a pane change to the fitted window, the night scene and the
   overview layer skipping a render whose inputs did not change, the
   scene-ready and scene-complete marks and the layer rules,
