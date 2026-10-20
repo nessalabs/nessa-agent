@@ -2876,6 +2876,8 @@ pub struct PermissionReviewNotice {
     pub execution_id: String,
     pub permission_id: String,
     pub tool: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

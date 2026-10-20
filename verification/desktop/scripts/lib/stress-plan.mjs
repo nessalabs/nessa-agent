@@ -89,6 +89,10 @@ export const KNOBS = {
     default: 1,
     what: "turns whose answer streams Markdown tables, one narrow and one wider than the reply",
   },
+  notices: {
+    default: 1,
+    what: "reviews waiting in a conversation the window does not show: the host's notice opens it and is taken back once answered",
+  },
   long: {
     default: 30,
     what: "turns of long streamed answers one conversation takes before it is talked to in the window",
@@ -157,6 +161,7 @@ export function plan(knobs) {
   add(knobs.windows, () => ({ kind: "window" }))
   add(knobs.linkings, () => ({ kind: "linking" }))
   add(knobs.tables, () => ({ kind: "table" }))
+  add(knobs.notices, () => ({ kind: "notice" }))
   if (knobs.long > 0) steps.push({ kind: "long", turns: knobs.long })
   if (knobs.reviews > 0) steps.push({ kind: "reviews" })
   while (steps.length < knobs.rounds)

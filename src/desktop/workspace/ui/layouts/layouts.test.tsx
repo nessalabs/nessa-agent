@@ -23,6 +23,10 @@ import {
 import { layoutShape, panesOf } from "../../../split-panes/model/pane-layout"
 import { controlledAnimationFrames, settle, shownBy, testStore } from "../../testing"
 import { paneItemOf } from "../../model/pane-item"
+import {
+  openReviewEvent,
+  waitingReviewNotices,
+} from "../../adapters/gateway/review-notices"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from "../../../ui/menu"
 import { PaneMenuItems } from "../panes/pane-menu"
 import { SessionsInSidebar } from "./sessions-in-sidebar"
@@ -441,6 +445,74 @@ describe("a pane's close is offered where closing it does something", () => {
     )
     expect(offered()).toEqual([true])
     expect(await menuOffers()).toBe(true)
+    await act(async () => root.unmount())
+  })
+})
+
+describe("a review notice opens its conversation", () => {
+  const notices = waitingReviewNotices({ show() {}, clear() {} })
+  const waitingIn = (conversationId: string) => ({
+    conversationId,
+    executionId: "turn",
+    permissionId: "p1",
+    tool: "Bash",
+  })
+  afterEach(() => notices.apply([]))
+
+  async function shell() {
+    const store = testStore()
+    const root = createRoot(host)
+    await act(async () =>
+      root.render(
+        <Provider store={store}>
+          <ClockProvider now={() => 1000}>
+            <ThreeColumns hostKind="browser" browserSurface />
+          </ClockProvider>
+        </Provider>,
+      ),
+    )
+    const shown = () =>
+      store
+        .getState()
+        .workspace.panes?.columns.flatMap((column) => column.panes.map(shownBy))
+    const load = () =>
+      act(async () => {
+        await store.dispatch(loadWorkspace())
+        await settle()
+      })
+    return { store, root, shown, load }
+  }
+
+  it("once the list holds it, when the notice came first", async () => {
+    // The gateway can send a waiting review before the list that names its
+    // conversation: the click is kept until the list has it.
+    notices.apply([waitingIn("b")])
+    const { store, root, shown, load } = await shell()
+    const before = shown()
+    await act(async () => {
+      window.dispatchEvent(openReviewEvent("b"))
+    })
+    expect(shown()).toEqual(before)
+    await load()
+    expect(shown()).toContain("b")
+    // Opened once: a later list change does not open it again.
+    store.dispatch(openBeside({ sessionId: "a" }))
+    const after = shown()
+    await load()
+    expect(shown()).toEqual(after)
+    await act(async () => root.unmount())
+  })
+
+  it("not once no review waits there any more", async () => {
+    notices.apply([waitingIn("b")])
+    const { root, shown, load } = await shell()
+    await act(async () => {
+      window.dispatchEvent(openReviewEvent("b"))
+    })
+    // Answered elsewhere before the list held it: nothing is left to show.
+    notices.apply([])
+    await load()
+    expect(shown()).not.toContain("b")
     await act(async () => root.unmount())
   })
 })
