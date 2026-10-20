@@ -62,22 +62,20 @@ starts the measured row.
    callback that turn queues. It runs in the callback that one queues.
 3. Scene lines are not laid out on the frame that first measures the box,
    nor on the frame after it. `content-visibility: hidden` until
-   `data-scene-ready`. The children stay mounted, so the scale written onto
-   the element survives.
-4. The ready frame mounts and lays out only the dim layer (`[data-dim]`).
-   The lit layer mounts on the next frame. Rain and steam mount one frame
-   after that, when the scene is `data-scene-complete`. Until then, rain and
-   steam stay `content-visibility: hidden`.
-5. Once the dim layer has laid out, the layers' width is that text's width
-   in pixels. A change of pane width crops them. `width: max-content` and
-   `contain: layout paint style` on the layers are the same rule before that
-   lock.
-6. A column change paints two frames after the commit that recorded it.
+   `data-scene-ready`. The scale is written on the element and kept in the
+   render, so mounting the lines does not wipe it.
+4. The ready frame mounts the top half of the dim layer. The bottom half,
+   then each half of the lit layer, then rain and steam, each take the next
+   frame. Rain and steam stay `content-visibility: hidden` until
+   `data-scene-complete`. The layers' width is the text's column count.
+   A later change of pane width crops them.
+5. A column change paints two frames after the commit that recorded it.
    The frame between is when a drop's copy lets go. The grid mounted with
    whatever layout it first read; that first paint does not wait. The paint
    frame marks the grid `data-split-painting`, and scene text that has
-   already laid out stays unpainted until the next frame. A drag's copy
-   does not paint the night scene.
+   already laid out stays unpainted until the next frame. The glass blur
+   comes back the frame after that paint. A drag's copy does not paint the
+   night scene.
 
 Conversation bodies stay in layout through measuring, flying, and reflow.
 The product flight stays zero-duration. A nonzero flight may still read

@@ -987,6 +987,18 @@ html:not(.dark) [data-surface] {
   grid-area: 1 / 1;
 }
 
+/* Each half of a layer lays out on its own. Adding the next half does not
+   lay the previous lines out again. */
+.desktop-night-scene-copy {
+  display: flex;
+  flex-direction: column;
+}
+
+.desktop-night-scene-copy > span {
+  display: block;
+  contain: layout paint style;
+}
+
 /*
  * Rain falls in the window opening only: placed in character cells over the
  * scene's grid, clipped around the mug and its steam, and under the scene's

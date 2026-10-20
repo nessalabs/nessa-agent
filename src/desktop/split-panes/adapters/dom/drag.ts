@@ -530,13 +530,15 @@ export function useSplitPanesDrag(
         reflectMark(scope, marks.pressing, options.previewPanes)
         return
       }
-      // Two frames after this one, so the frame that paints a drop's new boxes
-      // does not also rebuild the glass blur (`styles.test.ts`).
+      // Three frames after this one. The new boxes paint on the second, so
+      // the blur comes back on the one after that (`styles.test.ts`).
       glassFrame = requestAnimationFrame(() => {
         glassFrame = requestAnimationFrame(() => {
-          if (!active || generation !== glass) return
-          glassFrame = null
-          reflectMark(scope, marks.pressing, false)
+          glassFrame = requestAnimationFrame(() => {
+            if (!active || generation !== glass) return
+            glassFrame = null
+            reflectMark(scope, marks.pressing, false)
+          })
         })
       })
     }

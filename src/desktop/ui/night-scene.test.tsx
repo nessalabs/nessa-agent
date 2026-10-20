@@ -105,8 +105,17 @@ it("uses the observed content height without synchronous layout reads, and disco
   await act(
     async () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
   )
+  // The dim layer's lower half, then each half of the lit layer.
+  expect(frame.querySelector("[data-lit]")).toBeNull()
+  await act(
+    async () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
+  )
   expect(frame.hasAttribute("data-scene-complete")).toBe(false)
   expect(frame.querySelector("[data-lit]")?.textContent?.length).toBeGreaterThan(0)
+  expect(frame.querySelector(".desktop-night-scene-rain")).toBeNull()
+  await act(
+    async () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
+  )
   expect(frame.querySelector(".desktop-night-scene-rain")).toBeNull()
   await act(
     async () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
@@ -127,7 +136,7 @@ it("bounds a static window to its visible rain and steam, preserving animated tr
   const reveal = async (still = false) => {
     const mountedScene = await scene(still)
     mountedScene.resize(290)
-    for (let step = 0; step < 4; step++) {
+    for (let step = 0; step < 6; step++) {
       await act(
         async () =>
           new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),

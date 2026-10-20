@@ -15,6 +15,29 @@ import {
   nightSceneWindow,
 } from "../model/night-scene"
 
+const sceneColumns = Math.max(
+  ...nightSceneDim.map((line) => line.length),
+  ...nightSceneLit.map((line) => line.length),
+)
+
+/** The layer in two mounts, so neither frame lays out every line. */
+function halves(lines: readonly string[]): readonly [string, string] {
+  const mid = Math.ceil(lines.length / 2)
+  return [lines.slice(0, mid).join("\n"), lines.slice(mid).join("\n")]
+}
+
+const [dimTop, dimBottom] = halves(nightSceneDim)
+const [litTop, litBottom] = halves(nightSceneLit)
+
+type ScenePhase = "shell" | "dim" | "dim2" | "lit" | "lit2" | "full"
+
+const nextPhase: Partial<Record<ScenePhase, ScenePhase>> = {
+  dim: "dim2",
+  dim2: "lit",
+  lit: "lit2",
+  lit2: "full",
+}
+
 /**
  * The home screen's night scene, set as text: the dim layer with the lit layer
  * over it. Decoration only: hidden from assistive technology and from the
@@ -29,11 +52,11 @@ import {
  * same frame as the resize rather than a render later. The lines themselves
  * wait two frames (`data-scene-ready`): the frame that measures the box, and
  * the frame that focuses the new pane, each stay clear of that layout. The
- * ready frame mounts and lays out only the dim layer, and fixes the layers'
- * width at that text's width. The lit layer mounts one frame later. Rain and
- * steam mount one frame after that (`data-scene-complete`). A later change
- * of pane width only crops them. `still`: its rain and steam hold still, as
- * they do in a conversation pane's sliver of it.
+ * ready frame mounts the top half of the dim layer and fixes the layers'
+ * width at the text's column count. The bottom half, then each half of the
+ * lit layer, then the rain and steam (`data-scene-complete`), each take the
+ * next frame. A later change of pane width only crops them. `still`: its
+ * rain and steam hold still, as they do in a conversation pane's sliver of it.
  */
 export function NightScene({ still = false }: { still?: boolean }) {
   const frameRef = useRef<HTMLPreElement>(null)
@@ -42,7 +65,7 @@ export function NightScene({ still = false }: { still?: boolean }) {
     em: `${nightSceneLayoutFontPx}px`,
     measured: false,
   })
-  const [phase, setPhase] = useState<"shell" | "dim" | "lit" | "full">("shell")
+  const [phase, setPhase] = useState<ScenePhase>("shell")
 
   useLayoutEffect(() => {
     const frame = frameRef.current
@@ -85,18 +108,8 @@ export function NightScene({ still = false }: { still?: boolean }) {
   }, [])
 
   useLayoutEffect(() => {
-    const frame = frameRef.current
-    if (!frame || phase === "shell" || phase === "full") return
-    if (phase === "dim") {
-      const layers = frame.querySelector(".desktop-night-scene-layers")
-      if (layers instanceof HTMLElement) {
-        // Dim is the only layer in layout on this frame, and it is the full
-        // width of the grid the other layers share.
-        const width = layers.scrollWidth
-        if (width > 0) layers.style.width = `${width}px`
-      }
-    }
-    const next = phase === "dim" ? "lit" : "full"
+    const next = nextPhase[phase]
+    if (!next) return
     const id = requestAnimationFrame(() => setPhase(next))
     return () => cancelAnimationFrame(id)
   }, [phase])
@@ -131,7 +144,7 @@ export function NightScene({ still = false }: { still?: boolean }) {
         } as CSSProperties
       }
     >
-      <span className="desktop-night-scene-layers">
+      <span className="desktop-night-scene-layers" style={{ width: `${sceneColumns}ch` }}>
         {phase === "full" ? (
           <Rain key="far" depth="far" pattern={nightSceneRainFar} still={still} />
         ) : null}
@@ -142,13 +155,15 @@ export function NightScene({ still = false }: { still?: boolean }) {
           <Rain key="near" depth="near" pattern={nightSceneRainNear} still={still} />
         ) : null}
         {phase === "shell" ? null : (
-          <span key="dim" data-dim="">
-            {nightSceneDim.join("\n")}
+          <span key="dim" className="desktop-night-scene-copy" data-dim="">
+            <span>{dimTop}</span>
+            {phase === "dim" ? null : <span>{dimBottom}</span>}
           </span>
         )}
-        {phase === "lit" || phase === "full" ? (
-          <span key="lit" data-lit="">
-            {nightSceneLit.join("\n")}
+        {phase === "lit" || phase === "lit2" || phase === "full" ? (
+          <span key="lit" className="desktop-night-scene-copy" data-lit="">
+            <span>{litTop}</span>
+            {phase === "lit" ? null : <span>{litBottom}</span>}
           </span>
         ) : null}
         {phase === "full" ? <Steam key="steam" still={still} /> : null}
