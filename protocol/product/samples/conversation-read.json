@@ -61,5 +61,6 @@
       "name": "Provider asks",
       "description": "The provider requests approval where required."
     }
-  ]
+  ],
+  "usageLimitAutoContinue": false
 }
