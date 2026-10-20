@@ -1562,11 +1562,15 @@ async fn deleting_a_cold_owned_tree_reconciles_confirmed_leases_and_cannot_repar
         );
     }
     assert!(service
-        .ownership_gate(&child_id, &caller("reopen-child").actor().unwrap())
+        .ownership_gate(&child_id, &caller("reopen-child").actor().unwrap(), None)
         .await
         .is_err());
     assert!(service
-        .ownership_gate(&grandchild, &caller("reopen-grandchild").actor().unwrap())
+        .ownership_gate(
+            &grandchild,
+            &caller("reopen-grandchild").actor().unwrap(),
+            None
+        )
         .await
         .is_err());
     assert!(provider.executions.lock().unwrap().is_empty());

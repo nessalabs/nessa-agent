@@ -764,6 +764,9 @@ struct OpeningFailure {
     holds: bool,
 }
 struct Slot {
+    /// Lightweight completed acquisition fact, published by this opening before
+    /// Slot removal. Root cleanup retains this fact without retaining an Agent.
+    acquisition: Arc<std::sync::OnceLock<bool>>,
     value: OnceCell<Result<Arc<LiveConversation>, OpeningFailure>>,
     ready: Notify,
     started: AtomicBool,
@@ -785,6 +788,7 @@ struct Slot {
 impl Slot {
     fn new(now_ms: u64) -> Self {
         Self {
+            acquisition: Arc::new(std::sync::OnceLock::new()),
             value: OnceCell::new(),
             ready: Notify::new(),
             started: AtomicBool::new(false),
@@ -1984,7 +1988,7 @@ impl ConversationService {
                             // for another.
                             let ownership = match owned_preparation {
                                 Some(ref gate) => Some(gate.clone()),
-                                None => service.ownership_gate(&id, &actor).await
+                                None => service.ownership_gate(&id, &actor, Some(owner.acquisition.clone())).await
                                     .map_err(|cause| OpeningFailure { cause, holds: false })?,
                             };
                             let mut avoid = Vec::new();
@@ -2329,7 +2333,7 @@ impl ConversationService {
                             }
                             Ok(live)
                         };
-                        match AssertUnwindSafe(preparation).catch_unwind().await {
+                        let result = match AssertUnwindSafe(preparation).catch_unwind().await {
                             Ok(result) => result,
                             Err(payload) => {
                                 mem::forget(payload);
@@ -2338,7 +2342,12 @@ impl ConversationService {
                                     holds: true,
                                 })
                             }
-                        }
+                        };
+                        let _ = owner.acquisition.set(match &result {
+                            Ok(_) => true,
+                            Err(failure) => failure.holds,
+                        });
+                        result
                     })
                     .await;
                 owner.ready.notify_waiters();

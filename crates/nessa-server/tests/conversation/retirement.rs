@@ -500,6 +500,7 @@ async fn an_unsettled_opening_counts_as_holding_resources() {
     service.inner.conversations.lock().await.insert(
         ConversationId::new(&Uuid::new_v4().to_string()).unwrap(),
         Arc::new(Slot {
+            acquisition: Arc::new(std::sync::OnceLock::new()),
             value: OnceCell::new(),
             ready: Notify::new(),
             started: AtomicBool::new(true),

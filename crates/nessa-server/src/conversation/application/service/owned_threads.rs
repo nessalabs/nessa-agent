@@ -20,6 +20,7 @@ use nessa_sdk::application::agent_execution::commands::{
     CreationFailure, CreationReceipt, CreationStorage, CreationTaskFault, MutationFailure,
 };
 use nessa_sdk::application::agent_execution::permissions::ActionContext;
+use nessa_sdk::application::agent_execution::sessions::CommittedViewState;
 use nessa_sdk::application::agent_execution::subagents::{
     BindResourcesRefusal, ChildFactory, ChildResources, CloseCommand, InitialSubmit,
     OwnershipCoordinator, PortFailure, PrepareFailure, PrepareRequest, PreparedChild,
@@ -321,6 +322,7 @@ impl ConversationService {
                 Arc::new(Resources {
                     service: Arc::downgrade(&self.inner),
                     id,
+                    acquisition: None,
                 }),
             );
         }
@@ -384,6 +386,7 @@ impl ConversationService {
         let resources = Arc::new(Resources {
             service: Arc::downgrade(&self.inner),
             id: id.clone(),
+            acquisition: None,
         });
         let _ = ownership
             .coordinator
@@ -404,14 +407,43 @@ impl ConversationService {
             .map_err(|_| ConversationError::Unavailable)
     }
 
-    async fn cold_owned_resources(&self, id: &ConversationId) -> ResourceReport {
+    async fn cold_owned_resources(
+        &self,
+        id: &ConversationId,
+        acquisition: Option<&std::sync::OnceLock<bool>>,
+    ) -> ResourceReport {
         let unknown = ResourceReport {
             physical: PhysicalFact::Failed,
             evidence: EvidenceFact::Pending,
         };
-        let Ok((committed, _)) = self.committed_with_order(id).await else {
+        let Ok(committed) = self.committed_if_present_with_order(id).await else {
             return unknown;
         };
+        let Some((committed, _)) = committed else {
+            // No persisted attachment history exists. Only this exact completed
+            // opening can establish non-acquisition; a missing Slot cannot.
+            return if acquisition.and_then(std::sync::OnceLock::get) == Some(&false) {
+                ResourceReport {
+                    physical: PhysicalFact::Released,
+                    evidence: EvidenceFact::Acknowledged,
+                }
+            } else {
+                unknown
+            };
+        };
+        if matches!(
+            committed.state(),
+            CommittedViewState::Complete | CommittedViewState::CompleteEmpty
+        ) && committed
+            .snapshot()
+            .is_none_or(|snapshot| snapshot.lease.is_none())
+            && acquisition.and_then(std::sync::OnceLock::get) == Some(&false)
+        {
+            return ResourceReport {
+                physical: PhysicalFact::Released,
+                evidence: EvidenceFact::Acknowledged,
+            };
+        }
         let Some(lease) = committed
             .snapshot()
             .and_then(|snapshot| snapshot.lease.as_ref())
@@ -454,6 +486,7 @@ impl ConversationService {
         &self,
         id: &ConversationId,
         actor: &ActionContext,
+        acquisition: Option<Arc<std::sync::OnceLock<bool>>>,
     ) -> Result<Option<Arc<dyn OwnedLifetime>>, ConversationError> {
         let Some(ownership) = self.inner.ownership.get() else {
             return Ok(None);
@@ -511,6 +544,7 @@ impl ConversationService {
         let resources = Arc::new(Resources {
             service: Arc::downgrade(&self.inner),
             id: id.clone(),
+            acquisition,
         });
         match coordinator.bind_resources(lifetime.clone(), resources) {
             Ok(()) => {}
@@ -562,6 +596,7 @@ impl ConversationService {
             resources: Arc::new(Resources {
                 service: Arc::downgrade(&self.inner),
                 id: id.clone(),
+                acquisition: None,
             }),
             opening,
         });
@@ -728,6 +763,7 @@ impl InitialSubmit for NoInitialTurn {
 struct Resources {
     service: Weak<Inner>,
     id: ConversationId,
+    acquisition: Option<Arc<std::sync::OnceLock<bool>>>,
 }
 #[async_trait]
 impl ChildResources for Resources {
@@ -774,7 +810,9 @@ impl ChildResources for Resources {
             .get(&self.id)
             .cloned();
         let Some(slot) = slot else {
-            return service.cold_owned_resources(&self.id).await;
+            return service
+                .cold_owned_resources(&self.id, self.acquisition.as_deref())
+                .await;
         };
         // A pending or failed opening may retain a newer physical hold before
         // its lease is published. Historical cleanup cannot release that owner.

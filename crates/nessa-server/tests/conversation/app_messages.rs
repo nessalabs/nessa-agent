@@ -3124,6 +3124,7 @@ async fn c15c_a_delete_giving_way_before_its_stop_reached_the_apps_drops_once_as
     // without its apps' end, as `c15_a_delete_drops_what_is_still_held_as_the_deleters`
     // has it — so the delete's stop waits for it, and has ended no app.
     let opening = Arc::new(super::super::Slot {
+        acquisition: Arc::new(std::sync::OnceLock::new()),
         value: tokio::sync::OnceCell::new(),
         ready: Notify::new(),
         started: std::sync::atomic::AtomicBool::new(true),

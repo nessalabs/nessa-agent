@@ -196,3 +196,203 @@ async fn an_owned_opening_sealed_during_placement_does_not_acquire_a_lease() {
     drop(work);
     retire(service, storage, metadata).await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_root_sealed_during_first_placement_closes_from_its_actual_opening() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("data");
+    let provider = Arc::new(ProviderFactory::default());
+    let placements = Arc::new(PausedPlacement {
+        inner: FilePlacements::new(root.join("placements")).unwrap(),
+        pause: AtomicBool::new(false),
+        entered: Notify::new(),
+        release: Notify::new(),
+    });
+    let environment = Arc::new(CountedLeases {
+        inner: in_process_environment(),
+        opened: AtomicUsize::new(0),
+    });
+    let (service, storage, metadata) = fixture_in(
+        &root,
+        provider.clone(),
+        Environments::new(environment.clone(), BTreeMap::new(), placements.clone()),
+    );
+    let coordinator = bind_with_capacity(&service, &storage, &root, true, 1).await;
+    let target = id();
+    let before = environment.opened.load(Ordering::SeqCst);
+    placements.pause.store(true, Ordering::SeqCst);
+    let creating = tokio::spawn({
+        let service = service.clone();
+        let target = target.clone();
+        async move {
+            service
+                .create(
+                    target,
+                    caller("create-during-placement"),
+                    RequestedConversation::default(),
+                )
+                .await
+        }
+    });
+    tokio::time::timeout(TURN_HOLD_HANG, placements.entered.notified())
+        .await
+        .unwrap();
+    let opening = Arc::downgrade(
+        service
+            .inner
+            .conversations
+            .lock()
+            .await
+            .get(&target)
+            .unwrap(),
+    );
+    let lifetime = coordinator
+        .active_lifetime_for_session(&conversation_session(&target))
+        .unwrap();
+    let closing = tokio::spawn({
+        let coordinator = coordinator.clone();
+        let lifetime = lifetime.clone();
+        async move {
+            coordinator
+                .end_lifetime(CloseCommand {
+                    lifetime,
+                    cause: LifetimeCause::HostClose,
+                    initiator: Initiator::Host(
+                        HostActor::new("person", "panel", "close-during-placement").unwrap(),
+                    ),
+                    external_attachment: false,
+                    timeout: None,
+                })
+                .await
+        }
+    });
+    tokio::time::timeout(TURN_HOLD_HANG, async {
+        while coordinator.lifetime_state(&lifetime) == Some(LifetimeState::Open) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    placements.release.notify_one();
+    let created = tokio::time::timeout(TURN_HOLD_HANG, creating)
+        .await
+        .unwrap()
+        .unwrap();
+    let closed = tokio::time::timeout(TURN_HOLD_HANG, closing)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(created.is_err());
+    assert_eq!(
+        environment.opened.load(Ordering::SeqCst),
+        before,
+        "a lifetime sealed during placement acquired another lease"
+    );
+    assert!(matches!(closed, Ok(()) | Err(nessa_sdk::application::agent_execution::subagents::OwnershipFailure::Incomplete)), "{closed:?}");
+    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 0);
+    tokio::time::timeout(TURN_HOLD_HANG, async {
+        while opening.upgrade().is_some() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    // The root adapter retains a lightweight completion receipt, not the Slot.
+    // owner after its actual opening result has been transferred.
+    coordinator
+        .end_lifetime(CloseCommand {
+            lifetime: lifetime.clone(),
+            cause: LifetimeCause::Deletion,
+            initiator: Initiator::Host(HostActor::new("other", "other", "later-close").unwrap()),
+            external_attachment: false,
+            timeout: None,
+        })
+        .await
+        .unwrap();
+    let original =
+        Initiator::Host(HostActor::new("person", "panel", "close-during-placement").unwrap());
+    assert_eq!(
+        coordinator.lifetime_state(&lifetime),
+        Some(LifetimeState::Closed)
+    );
+    assert_eq!(
+        coordinator.close_cause(&lifetime),
+        Some(LifetimeCause::HostClose)
+    );
+    assert_eq!(
+        coordinator.close_initiator(&lifetime),
+        Some(original.clone())
+    );
+    let snapshot = SqliteOwnershipStore::open(&root.join("ownership.sqlite3"))
+        .unwrap()
+        .read()
+        .await
+        .unwrap();
+    let row = snapshot
+        .lifetimes
+        .iter()
+        .find(|row| row.lifetime_id == lifetime)
+        .unwrap();
+    assert_eq!(row.state, LifetimeState::Closed);
+    assert_eq!(row.cause, Some(LifetimeCause::HostClose));
+    assert_eq!(row.initiator, Some(original));
+    opened(&service, &provider, &target).await;
+    let replacement = coordinator
+        .active_lifetime_for_session(&conversation_session(&target))
+        .unwrap();
+    assert_ne!(replacement, lifetime);
+    assert_eq!(
+        coordinator.lifetime_state(&replacement),
+        Some(LifetimeState::Open)
+    );
+    assert_eq!(
+        environment.opened.load(Ordering::SeqCst),
+        before + 1,
+        "the root can open normally after confirmed absence"
+    );
+    retire(service, storage, metadata).await;
+}
+
+#[tokio::test]
+async fn a_root_without_completed_nonacquisition_cannot_claim_absence() {
+    for fact in [None, Some(None), Some(Some(true))] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("data");
+        let provider = Arc::new(ProviderFactory::default());
+        let (service, storage, metadata) = fixture(&root, provider.clone());
+        let coordinator = bind(&service, &storage, &root, true).await;
+        let target = id();
+        let acquisition = fact.map(|value| {
+            let receipt = Arc::new(std::sync::OnceLock::new());
+            if let Some(value) = value {
+                receipt.set(value).unwrap();
+            }
+            receipt
+        });
+        service
+            .ownership_gate(&target, &caller("bind").actor().unwrap(), acquisition)
+            .await
+            .unwrap();
+        let lifetime = coordinator
+            .active_lifetime_for_session(&conversation_session(&target))
+            .unwrap();
+        let result = coordinator
+            .end_lifetime(CloseCommand {
+                lifetime: lifetime.clone(),
+                cause: LifetimeCause::HostClose,
+                initiator: Initiator::Host(
+                    HostActor::new("person", "panel", "unconfirmed").unwrap(),
+                ),
+                external_attachment: false,
+                timeout: None,
+            })
+            .await;
+        assert!(matches!(result, Err(nessa_sdk::application::agent_execution::subagents::OwnershipFailure::Incomplete)), "{fact:?}: {result:?}");
+        assert_eq!(
+            coordinator.lifetime_state(&lifetime),
+            Some(LifetimeState::Closing)
+        );
+        assert_eq!(provider.open_calls.load(Ordering::SeqCst), 0);
+        retire(service, storage, metadata).await;
+    }
+}

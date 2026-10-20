@@ -991,6 +991,7 @@ async fn a_failed_opening_holding_its_slot_is_read_by_a_follower_as_its_history(
     fixture.service.inner.conversations.lock().await.insert(
         fixture.id.clone(),
         Arc::new(Slot {
+            acquisition: Arc::new(std::sync::OnceLock::new()),
             value: OnceCell::new_with(Some(Err(OpeningFailure {
                 cause: ConversationError::Unavailable,
                 holds: true,
