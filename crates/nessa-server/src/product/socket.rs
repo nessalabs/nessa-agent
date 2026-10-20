@@ -1533,17 +1533,18 @@ async fn forward_review_notices(
         // Stable audited selection admits this candidate. As with other gateway
         // responses, its subsequent UI-capacity wait may finish after revocation;
         // an authority update stays pending for the next replacement.
-        let payload = PermissionReviewWaiting {
-            reviews: visible
-                .into_iter()
-                .map(|review| PermissionReviewNotice {
-                    conversation_id: review.conversation_id,
-                    execution_id: review.execution_id,
-                    permission_id: review.permission_id,
-                    tool: review.tool,
-                })
-                .collect(),
-        };
+        let mut reviews = Vec::with_capacity(visible.len());
+        for review in visible {
+            let title = review_title(&state, &review.conversation_id).await;
+            reviews.push(PermissionReviewNotice {
+                conversation_id: review.conversation_id,
+                execution_id: review.execution_id,
+                permission_id: review.permission_id,
+                tool: review.tool,
+                title,
+            });
+        }
+        let payload = PermissionReviewWaiting { reviews };
         let Ok(permit) = slots.clone().acquire_owned().await else {
             break;
         };
@@ -1571,6 +1572,15 @@ async fn forward_review_notices(
         }
     }
     Ok(())
+}
+
+/// The conversation's name as `conversation.list` shows it, so a notice can
+/// name a conversation its client has not listed yet: a review can reach a
+/// client before the list frame that names its conversation.
+async fn review_title(state: &ProductRouteState, conversation_id: &str) -> Option<String> {
+    let conversations = state.conversations.as_ref()?;
+    let id = super::conversation::conversation_id(conversation_id).ok()?;
+    conversations.title(&id).await
 }
 
 /// Give a waiting-review snapshot the next event number. Any other message

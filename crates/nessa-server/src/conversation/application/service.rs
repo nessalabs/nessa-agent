@@ -3228,7 +3228,7 @@ impl ConversationService {
     /// one rule, the summary's, whichever of the two is drawing it
     /// (`a_read_carries_the_title_the_list_shows`). A summary that cannot be
     /// read is logged and the view goes without a title.
-    async fn title(&self, id: &ConversationId) -> Option<String> {
+    pub(crate) async fn title(&self, id: &ConversationId) -> Option<String> {
         match self.inner.summaries.load(id).await {
             Ok(summary) => summary
                 .as_ref()

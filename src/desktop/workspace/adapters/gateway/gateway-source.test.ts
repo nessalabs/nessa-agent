@@ -38,7 +38,12 @@ import {
   type FakeGateway,
   type Unkeyed,
 } from "./fake-gateway"
-import { gatewaySource, refusalOf, type GatewayClock } from "./gateway-source"
+import {
+  gatewaySource,
+  refusalOf,
+  type GatewayClient,
+  type GatewayClock,
+} from "./gateway-source"
 
 const { a: conversationA, b: conversationB, s: conversationS } = gatewayConversationIds
 const timing = { callMs: 5_000, retryMs: 1_000 }
@@ -1806,6 +1811,7 @@ describe("a connection that could not be made says why (#419)", () => {
         gateway.setState({ status: "closed", error: revoked })
         return off
       },
+      on: inner.on,
       close() {
         inner.close()
       },
@@ -1954,13 +1960,11 @@ describe("a connection that could not be made says why (#419)", () => {
         return inner.connectionState
       },
       onConnectionStateChange: inner.onConnectionStateChange.bind(inner),
-      onEvent(event: string, handler: (payload: unknown) => void) {
-        const listen = inner.onEvent
-        if (!listen) return () => {}
-        const off = listen(event, handler)
-        if (event === "permission.reviewWaiting") handler({ reviews: [newer] })
+      on: ((event, handler) => {
+        const off = inner.on(event, handler)
+        handler({ reviews: [newer] })
         return off
-      },
+      }) satisfies GatewayClient["on"],
       close: inner.close.bind(inner),
     }
     const clients = [first.client, replaying]

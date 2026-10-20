@@ -56,6 +56,12 @@
  *   delete      another conversation is deleted from its row's More menu,
  *               once asked; the gateway refuses it as deleted, and neither
  *               list nor the window holds it
+ *   notice      a review waits in another conversation, which the window does
+ *               not show: the host's system notice names its tool and the
+ *               conversation's title, opening it brings that conversation
+ *               up with its card, and answering there takes the notice back;
+ *               a second review there, answered by another client while the
+ *               window shows the main conversation, is taken back too
  *   linking     native linking is turned on, then off, with the switch in
  *               Settings › Connections › Linked devices; each time the gateway
  *               saves config.json and starts itself again in the same
@@ -1148,6 +1154,92 @@ const steps = {
     await openStressConversation(run.page, run.main.id, run.main.title)
   },
 
+  async notice(run, step, failures) {
+    const conversationId = randomUUID()
+    run.checked.push(conversationId)
+    await run.client.conversation.create({
+      conversationId,
+      agent: run.stack.agent,
+      approvalMode: "ask",
+    })
+    // The person is on the main conversation: the review waits where the
+    // window does not show it, and only the notice says so.
+    const first = prompt(run, STRESS.permission, step, " notice")
+    await run.client.conversation.submit(
+      run.client.conversation.prepare(conversationId, first),
+    )
+    const title = await titleOf(run, conversationId)
+    const posted = await noticePosted(run, conversationId, failures)
+    if (!posted) return
+    if (posted.notice.body !== title)
+      failures.push(
+        `the notice names ${JSON.stringify(posted.notice.body)}, not the conversation ${JSON.stringify(title)}`,
+      )
+    if (posted.notice.title !== `${posted.review.toolName} needs a decision`)
+      failures.push(
+        `the notice says ${JSON.stringify(posted.notice.title)}, not that ${posted.review.toolName} needs a decision`,
+      )
+    // The person clicks the notice: the host sends its event and the window
+    // opens that conversation on its card.
+    const listening = await run.page.evaluate(
+      (id) => window.__fakeHostOpenNotice?.(id) ?? 0,
+      conversationId,
+    )
+    if (listening !== 1)
+      failures.push(`${listening} windows listened for an opened notice, not 1`)
+    const opened = await run.page
+      .locator(`${selectorFor.sessionListRowFor(conversationId)}[aria-selected=true]`)
+      .waitFor({ timeout: 15_000 })
+      .then(() => true)
+      .catch(() => false)
+    if (!opened) {
+      failures.push("opening the notice did not bring its conversation up")
+      return
+    }
+    await answerCard(run, conversationId, "allow", failures, "Report the rows")
+    await noticeTakenBack(run, posted.notice, "answered in the window", failures)
+    const { view: before } = await settled(
+      run,
+      conversationId,
+      new Set(),
+      first,
+      "completed",
+      failures,
+    )
+    await expectShown(run.page, SAYS.allowed, failures)
+    if (failures.length) return
+    // Back on the main conversation, a second review there is answered by
+    // another of the person's clients: the window was never shown it, and
+    // its notice still goes.
+    await openStressConversation(run.page, run.main.id, run.main.title)
+    const second = prompt(run, STRESS.permission, step, " notice elsewhere")
+    await run.client.conversation.submit(
+      run.client.conversation.prepare(conversationId, second),
+    )
+    const again = await noticePosted(run, conversationId, failures, posted.notice)
+    if (!again) return
+    const { permissionTargets } = await import("@nessa/client")
+    const view = await readWithReviews(run.client, conversationId)
+    const index = view.permissions.findIndex(
+      (each) => each.permissionId === again.review.permissionId,
+    )
+    const deny = view.permissions[index]?.options.find((each) => each.effect === "deny")
+    if (!deny) {
+      failures.push("the second review offers no deny")
+      return
+    }
+    await run.client.conversation.answer(permissionTargets(view)[index], deny.id)
+    await noticeTakenBack(run, again.notice, "answered elsewhere", failures)
+    await settled(
+      run,
+      conversationId,
+      new Set(before?.messages.map((each) => each.executionId) ?? []),
+      second,
+      "completed",
+      failures,
+    )
+  },
+
   async park(run, step, failures) {
     const conversationId = randomUUID()
     const first = prompt(run, STRESS.reply, step, " park")
@@ -1587,6 +1679,53 @@ async function titleOf(run, conversationId) {
   return title
 }
 
+/** What the window has told the host about waiting reviews (`fake-host.mjs`). */
+const hostNotices = (page) => page.evaluate(() => window.__fakeHostNotices ?? null)
+
+const sameNotice = (a, b) =>
+  a.conversationId === b.conversationId &&
+  a.executionId === b.executionId &&
+  a.permissionId === b.permissionId
+
+/**
+ * The notice the host shows for the review now waiting in `conversationId`,
+ * and that review read in full; `null` (a failure noted) when none is up
+ * within 30 s. `not` is a notice of the same conversation already settled.
+ */
+async function noticePosted(run, conversationId, failures, not = null) {
+  let found = null
+  await waitFor(async () => {
+    const view = await readWithReviews(run.client, conversationId).catch(() => null)
+    const review = view?.permissions[0]
+    const notices = await hostNotices(run.page)
+    const notice =
+      review &&
+      notices?.up.find(
+        (each) =>
+          each.conversationId === conversationId &&
+          each.executionId === review.executionId &&
+          each.permissionId === review.permissionId,
+      )
+    if (notice && !(not && sameNotice(notice, not))) found = { notice, review }
+    return Boolean(found)
+  }, 30_000)
+  if (!found) failures.push(`no notice was posted for the review in ${conversationId}`)
+  return found
+}
+
+/** Waits for the host to take `notice` back once its review was `how`. */
+async function noticeTakenBack(run, notice, how, failures) {
+  const gone = await waitFor(async () => {
+    const notices = await hostNotices(run.page)
+    return (
+      notices !== null &&
+      !notices.up.some((each) => sameNotice(each, notice)) &&
+      notices.withdrawn.some((each) => sameNotice(each, notice))
+    )
+  }, 15_000)
+  if (!gone) failures.push(`the notice of a review ${how} was not taken back`)
+}
+
 async function atRest(run, ids) {
   const failures = []
   for (const conversationId of ids) {
@@ -1611,6 +1750,19 @@ async function atRest(run, ids) {
         failures.push(`${conversationId}: a review was hidden`)
     }
     if (view.permissions.length) failures.push(`${conversationId} still has open reviews`)
+  }
+  // Every review settled, so the host shows none of their notices.
+  const cleared = await waitFor(async () => {
+    const notices = await hostNotices(run.page)
+    return notices !== null && notices.up.length === 0
+  }, 15_000)
+  if (!cleared) {
+    const notices = await hostNotices(run.page)
+    failures.push(
+      notices === null
+        ? "the window never told the host which reviews wait"
+        : `${notices.up.length} review notices are still up`,
+    )
   }
   const text = await pageText(run.page)
   if (/display limit|Denied automatically/i.test(text))
@@ -1688,7 +1840,10 @@ await main(
         layout,
         lines: { engine, layout },
         initScripts: [
-          [gatewayHost, { endpoint: stack.endpoint, credential: stack.credential }],
+          [
+            gatewayHost,
+            { endpoint: stack.endpoint, credential: stack.credential, notices: true },
+          ],
         ],
       })
       const run = new Run(stack, opened, knobs, restartConsole)

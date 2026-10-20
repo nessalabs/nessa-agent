@@ -5510,3 +5510,33 @@ async fn a_queued_drive_turn_is_not_sent_where_its_tools_can_no_longer_be_checke
         .iter()
         .any(|execution| execution == "queued"));
 }
+
+/// A waiting-review notice names its conversation by the title
+/// `conversation.list` shows, read from the gateway when the set is
+/// published: a client can hear of the review before its list names the
+/// conversation, and then had only the id to show.
+#[tokio::test]
+async fn a_review_notice_is_titled_as_the_list_titles_its_conversation() {
+    let fixture = SubscriptionFixture::new().await;
+    let id = fixture.id.to_string();
+    assert_eq!(
+        super::super::review_title(&fixture.state, &id).await,
+        None,
+        "nothing said yet: no title"
+    );
+    fixture.turn("titled").await;
+    fixture.turn_settled("titled").await;
+    let view = fixture
+        .service
+        .read(fixture.id.clone(), caller(&fixture.session, "read".into()))
+        .await
+        .unwrap();
+    assert_eq!(view.title.as_deref(), Some("question titled"));
+    assert_eq!(
+        super::super::review_title(&fixture.state, &id).await,
+        view.title
+    );
+    let unknown = Uuid::new_v4().to_string();
+    assert_eq!(super::super::review_title(&fixture.state, &unknown).await, None);
+    assert_eq!(super::super::review_title(&fixture.state, "not-an-id").await, None);
+}

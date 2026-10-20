@@ -118,6 +118,7 @@ import {
   type ConversationSummary,
   type ConversationView,
   type ConversationViewCursor,
+  type PermissionReviewWaiting,
   type QuestionDetail,
   type QuestionDetails,
   type ReviewDetail,
@@ -177,8 +178,15 @@ export interface GatewayClient {
   stopThread(threadId: string): Promise<StopThreadResult>
   readonly connectionState: ConnectionState
   onConnectionStateChange(handler: (state: ConnectionState) => void): () => void
-  /** Server pushes, when the client has them. Absent on a client that only answers calls. */
-  onEvent?(event: string, handler: (payload: unknown) => void): () => void
+  /**
+   * The gateway's push of the reviews waiting on a person: `NessaClient.on`.
+   * Required, so a client without it fails the type check instead of
+   * leaving every waiting-review notice silently unshown.
+   */
+  on(
+    event: "permission.reviewWaiting",
+    handler: (payload: PermissionReviewWaiting) => void,
+  ): () => void
   close(): void
 }
 
@@ -563,11 +571,10 @@ export function gatewaySource<C extends GatewayClient = GatewayClient>(options: 
    * that failure. The caller closes the client and fails the attempt.
    */
   const adopt = (connected: C): WorkspaceSourceError | undefined => {
-    const offReviews =
-      connected.onEvent?.("permission.reviewWaiting", (payload) => {
-        const reviews = waitingReviews(payload)
-        if (reviews) noteReviews(reviews)
-      }) ?? (() => {})
+    const offReviews = connected.on("permission.reviewWaiting", (payload) => {
+      const reviews = waitingReviews(payload)
+      if (reviews) noteReviews(reviews)
+    })
     const off = connected.onConnectionStateChange((state) => {
       if (current?.client !== connected) return
       if (state.status === "connected") {
