@@ -13,6 +13,8 @@
 //! gateway ── End{lease} ──▶ environment ── Ended{cleanup} ──▶ gateway
 //! environment ── Ending{lease, expired} ──▶ gateway   (past Granted's leaseMs: it stops
 //!   everything) ── gateway ── End{lease} ──▶ environment ── Ended{cleanup} ──▶ gateway
+//! environment ── Draining ──▶ gateway   (the host is stopping: said once, before anything
+//!   else of the drain, so the gateway asks it for no new lease)
 //! environment ── Ending{lease, drained} ──▶ gateway   (the host is stopping: it ends every
 //!   lease it holds and admits none) ── gateway ── End{lease} ──▶ environment
 //!   ── Ended{cleanup} ──▶ gateway; once every lease is answered the environment
@@ -738,6 +740,11 @@ pub enum FromEnvironment {
     /// Nothing else to say: the environment is still there. Sent when its
     /// side was idle for [`KEEPALIVE_INTERVAL`].
     Keepalive,
+    /// The environment is stopping: it admits no lease from now on, and
+    /// ends each it holds with [`EndingCause::Drained`]. Said once, before
+    /// any of those endings, so the gateway sends new work elsewhere rather
+    /// than finding each refused.
+    Draining,
     /// Nothing is served on this connection.
     Unavailable {
         /// Why.
@@ -910,7 +917,9 @@ impl FromEnvironment {
     /// The lease the frame names, if it names one.
     pub fn lease(&self) -> Option<&str> {
         match self {
-            Self::Hello { .. } | Self::Unavailable { .. } | Self::Keepalive => None,
+            Self::Hello { .. } | Self::Unavailable { .. } | Self::Keepalive | Self::Draining => {
+                None
+            }
             Self::Granted { lease, .. }
             | Self::Refused { lease, .. }
             | Self::StartFailed { lease, .. }

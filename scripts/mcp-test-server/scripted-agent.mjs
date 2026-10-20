@@ -411,8 +411,8 @@ const replies = new Map()
 /** One prompt of the scenario: the turn `prompt` matches, or a failure when none does. */
 async function scenarioTurn({ sessionId, prompt: blocks }) {
   const session = sessionOf(sessionId)
-  const server = session.servers.get(SERVER)
-  if (!server) throw new Error(`the session has no ${SERVER} server`)
+  // A session started on another machine has none of the gateway's tool
+  // servers, so a turn needs one only when a step calls it (`callTool`).
   if (session.prompt) throw new Error(`session ${sessionId} is already in a prompt`)
   const text = promptText(blocks)
   const matched = turnFor(scenario, text)

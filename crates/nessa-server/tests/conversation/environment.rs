@@ -85,6 +85,7 @@ fn the_lease_fence_reads_the_provider_trace_store() {
         LeaseId::new("lease").unwrap(),
         Arc::new(Traced(binding(), store.clone())),
         FencePhase::Live,
+        None,
     );
     assert!(Arc::ptr_eq(&store, &fence.traces().unwrap()));
 }
@@ -601,6 +602,7 @@ async fn a_model_target_and_its_normalized_factory_keep_the_original_lease_fence
         LeaseId::new("another-lease").unwrap(),
         raw,
         FencePhase::Live,
+        None,
     );
     assert!(
         ModelChange::between(fence.as_ref(), another.as_ref()).is_err(),
@@ -687,6 +689,7 @@ async fn hosted_lease_fence_and_normalization_delegate_the_captured_host_owner()
         LeaseId::new("hosted-lease").unwrap(),
         original,
         FencePhase::Live,
+        None,
     );
     assert!(fence.harness_host_identity() == HarnessHostIdentity::hosted(&host));
     let make = |host| {

@@ -38,7 +38,8 @@
 //!                          ──Revoked──▶ for each lease held: ledger: revoking
 //!                                       ──▶ stop everything under it ──▶ ledger: ended(revoked);
 //!                                       nothing more admitted; each `End` answered with that
-//! drain asked (the host is stopping) ──▶ for each lease held: ledger: draining
+//! drain asked (the host is stopping) ──▶ Draining, before anything else
+//!     ──▶ for each lease held: ledger: draining
 //!     ──▶ stop everything under it ──▶ ledger: ended(drained) ──▶ Ending{drained};
 //!     nothing more admitted; each `End` answered with that; once nothing is held
 //!     and every lease's End is answered, serving ends and the connection closes
@@ -2002,6 +2003,9 @@ impl Served {
             commands = self.commands.len(),
             "draining: every lease held here ends before the host stops"
         );
+        // Said first, so the gateway asks for nothing more here before it
+        // learns of any lease's end.
+        self.outgoing.push_back(FromEnvironment::Draining);
         let mut leases: Vec<_> = self.leases.drain().collect();
         leases.sort_by(|(left, _), (right, _)| left.cmp(right));
         for (lease, held) in leases {

@@ -29,7 +29,9 @@ fn field(hash: &mut Sha256, bytes: &[u8]) {
 /// Hashed: the executable's path, the ordered arguments, the context
 /// environment, the workspace, whether tools are enabled, the token limits,
 /// the permission decisions, and the composed system prompt. Changing any of
-/// them changes the identity, and a saved conversation is refused before launch
+/// them changes the identity, and a saved conversation whose context would be
+/// restored is refused before launch; one whose saved context is not restored
+/// (opened on another worker of a pool) goes on under the new fingerprint
 /// (`context_changes_reject_restore_before_launch_but_credentials_rotate_without_persistence`,
 /// `fingerprint_tracks_workspace_policy_prompt_limits_and_unambiguous_arguments`).
 ///

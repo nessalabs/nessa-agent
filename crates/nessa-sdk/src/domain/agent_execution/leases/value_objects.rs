@@ -632,7 +632,8 @@ pub enum LeaseRefusal {
     /// frames are not this build's, and nothing was sent to it.
     EnvironmentVersionMismatch,
     /// The environment is already serving another connection, and serves one
-    /// at a time.
+    /// at a time; or, for a paired environment, its organization already
+    /// runs as many leases or commands as its budget allows.
     EnvironmentBusy,
     /// The environment had no copy of this build, and runs on a system or
     /// processor this build has no copy for (its own executable, or a

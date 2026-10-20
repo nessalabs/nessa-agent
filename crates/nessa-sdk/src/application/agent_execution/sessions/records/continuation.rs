@@ -1,6 +1,5 @@
 //! Canonical owned semantic continuation and derived validated authorities.
 use super::ProviderEvidence;
-use crate::application::agent_execution::executions::ExecutionUpdate;
 use crate::application::agent_execution::sessions::{
     queue_validation::QueueReplay,
     retained,
@@ -17,7 +16,6 @@ pub(crate) struct Continuation {
     pub(in crate::application::agent_execution::sessions) invocations: Vec<InvocationContinuation>,
     pub(in crate::application::agent_execution::sessions) queue: QueueReplay,
     pub(in crate::application::agent_execution::sessions) evidence: ProviderEvidence,
-    pub(crate) context_witness: Option<(usize, usize)>,
     pub(crate) snapshot_bytes: usize,
     pub(crate) derived_bytes: usize,
     pub(crate) identity_bytes: usize,
@@ -40,7 +38,6 @@ impl Continuation {
             invocations: Vec::new(),
             queue: QueueReplay::empty(),
             evidence: ProviderEvidence::default(),
-            context_witness: None,
             snapshot_bytes: 0,
             derived_bytes: 0,
             identity_bytes: 0,
@@ -67,20 +64,6 @@ impl Continuation {
                 state.history.take().expect("rebuilt history"),
             );
         }
-        let context_witness =
-            snapshot
-                .invocations
-                .iter()
-                .enumerate()
-                .find_map(|(index, record)| {
-                    record
-                        .events
-                        .iter()
-                        .position(|event| {
-                            matches!(event.update(), ExecutionUpdate::PermissionCancelled(_))
-                        })
-                        .map(|event| (index, event))
-                });
         let queue = QueueReplay::from_snapshot(&snapshot)?;
         let evidence = ProviderEvidence::from_snapshot(Some(&snapshot))?;
         let snapshot_bytes = retained::snapshot(&snapshot);
@@ -97,7 +80,6 @@ impl Continuation {
             invocations,
             queue,
             evidence,
-            context_witness,
             snapshot_bytes,
             derived_bytes,
             identity_bytes,

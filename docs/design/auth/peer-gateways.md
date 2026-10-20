@@ -686,11 +686,18 @@ sequenceDiagram
   `not_granted`), and reported unreachable by the gateway. A revocation
   arriving during a drain ends nothing twice: each lease keeps the drain as
   its cause.
-- **Replacing a worker** is draining one container and then starting the
-  next on the same pairing volume, so the key, and the `peer:` name
-  conversations were placed on, stays the same. The two must not overlap: a
-  second connection from the same key takes the first one's place and its
-  leases are lost, and only one process serves a data directory at a time.
+- **Replacing a worker** that conversations name by its `peer:` name is
+  draining one container and then starting the next on the same pairing
+  volume, so the key, and the name, stays the same. The two must not
+  overlap: a second connection from the same key takes the first one's
+  place and its leases are lost, and only one process serves a data
+  directory at a time. Conversations placed on `peer:any` need no gap: a
+  replacement with a key of its own serves beside the old worker, and the
+  old one drains (below).
+- **Said before anything else.** The first frame a draining worker sends
+  is `Draining`, so the gateway takes no new lease there while its old
+  leases end; a grant already on its way is refused `draining`, which marks
+  the link the same way.
 
 ### Starting from a container (row K2)
 
@@ -817,10 +824,81 @@ sequenceDiagram
   checks with the same calls (an answered head, then `history_pruned`). An owner's share to a worker is refused
   (row I1).
 
-Not built ([#791](https://github.com/nessalabs/nessa-agent/issues/791)):
-pools of workers per organization, placing a conversation on "any worker
-of this organization", and per-organization budgets. A conversation names
-one worker, as it names one SSH host.
+### A pool of workers, and organization budgets ([#791](https://github.com/nessalabs/nessa-agent/issues/791))
+
+A conversation can name one worker, as it names one SSH host, or
+`peer:any`: any worker of this gateway's pool. The pool is every paired
+environment whose credential serves this gateway, which is the registry's
+fact; nothing else keeps a member list. Which worker holds a pool
+conversation now is a separate fact, its **binding**, kept in
+`conversations/bindings/<id>.json` as
+`{"schemaVersion":1,"worker":"peer:…","context":"…"}`. The placement is
+written once and never moves; the binding may.
+
+```mermaid
+sequenceDiagram
+    participant C as Conversation service (G)
+    participant E as Environments (G)
+    participant B as Bindings (G)
+    participant L as HostLink to W1 (G)
+    participant W1 as Worker W1
+    participant W2 as Worker W2
+    C->>E: for_lease(conversation)
+    E->>B: binding
+    B-->>E: none yet
+    E->>E: fewest agent leases among serving, not draining workers (lowest key among equals)
+    E->>B: bind W1, no context
+    C->>W1: Grant (agent lease), harness opens new provider context X
+    C->>B: W1 opened X
+    Note over W1: replaced: W2 dials in with its own key, W1 is stopped with SIGTERM
+    W1->>L: Draining (first frame)
+    W1->>L: Ending{drained} for each lease
+    C->>E: for_lease(conversation), on the next message
+    E->>B: binding: W1, X
+    E->>E: W1 is draining, so W2
+    E->>B: bind W2, no context
+    C->>W2: Grant, harness opens new context Y (X stays on W1)
+```
+
+- **One worker at a time.** A pool conversation is bound when its agent is
+  opened, which happens only while no lease of it is live, so the worker it
+  leaves holds nothing of it. It stays on its worker while that worker
+  serves and is not draining, however loaded, so its provider context is
+  found there again.
+- **Context stays where it was opened.** A provider session is a file on
+  the worker that opened it. The binding keeps the context last opened on
+  its worker, and the lease restores a saved context only when it is that
+  one (`AgentProvider::restores_saved_context`); otherwise the agent opens
+  new context. A binding write that is lost costs only that context, never
+  a restore of one the worker does not hold. Each worker's harness works in
+  its own workspace, so the agent's identity there differs from the last
+  worker's in its context fingerprint; a history whose saved context is not
+  restored goes on under the new fingerprint
+  (`SessionChange::ProviderIdentityChanged`), while its provider and model
+  stay fixed. Resuming across workers is
+  [#1040](https://github.com/nessalabs/nessa-agent/issues/1040).
+- **Refused, then elsewhere.** An opening refused on a worker that has
+  since drained or gone is asked once more of another, and the history
+  keeps that refusal as a refused lease before the lease the other worker
+  issued; a worker that is simply busy or not granting is reported as any
+  worker's refusal is.
+  With no worker serving, the lease is asked of the bound worker and is
+  refused unreachable, as any absent worker's is; a pool conversation
+  never bound is unavailable. Placing on `peer:any` is refused
+  `environment_not_configured` while no worker serves.
+- **Listed first.** The catalogue lists `peer:any` before the workers
+  while any is connected, so a surface offers it like any environment.
+- **Organization budgets.** `limits.organizationLeases` and
+  `limits.organizationCommands` in `config.json` bound the agent leases and
+  the commands running at once across every paired environment (rows
+  `organization.leases` and `organization.commands`; 0, the default, bounds
+  nothing). A place is taken before the environment is asked and given back
+  when the lease or command ends; past it, the lease is refused
+  `environment_busy`, as a busy worker's is. It is a count of work running
+  now, kept in memory, so it is no policy and asks nothing of Cedar. Leases
+  on SSH hosts and here are not counted: an organization's own machines
+  are its own. Artifact bytes per organization are
+  [#1041](https://github.com/nessalabs/nessa-agent/issues/1041).
 
 ### What the environment grants
 
