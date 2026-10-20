@@ -479,7 +479,8 @@ it("lays night-scene text out on the frame after its box is measured", () => {
       styles.indexOf(".desktop-night-scene[data-scene-ready]:not([data-scene-complete])"),
     )
     .split("}")[0]
-  expect(dimOnly).toContain(":not([data-dim])")
+  expect(dimOnly).toContain(".desktop-night-scene-rain")
+  expect(dimOnly).toContain(".desktop-night-scene-steam")
   expect(dimOnly).toMatch(/content-visibility:\s*hidden/)
   const layers = styles
     .slice(styles.indexOf(".desktop-night-scene-layers {"))

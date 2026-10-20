@@ -30,10 +30,10 @@ import {
  * wait two frames (`data-scene-ready`): the frame that measures the box, and
  * the frame that focuses the new pane, each stay clear of that layout. The
  * ready frame mounts and lays out only the dim layer, and fixes the layers'
- * width at that text's width. Rain, the lit layer, and steam mount one frame
- * later (`data-scene-complete`). A later change of pane width only crops
- * them. `still`: its rain and steam hold still, as they do in a conversation
- * pane's sliver of it.
+ * width at that text's width. The lit layer mounts one frame later. Rain and
+ * steam mount one frame after that (`data-scene-complete`). A later change
+ * of pane width only crops them. `still`: its rain and steam hold still, as
+ * they do in a conversation pane's sliver of it.
  */
 export function NightScene({ still = false }: { still?: boolean }) {
   const frameRef = useRef<HTMLPreElement>(null)
@@ -42,7 +42,7 @@ export function NightScene({ still = false }: { still?: boolean }) {
     em: `${nightSceneLayoutFontPx}px`,
     measured: false,
   })
-  const [phase, setPhase] = useState<"shell" | "dim" | "full">("shell")
+  const [phase, setPhase] = useState<"shell" | "dim" | "lit" | "full">("shell")
 
   useLayoutEffect(() => {
     const frame = frameRef.current
@@ -85,16 +85,19 @@ export function NightScene({ still = false }: { still?: boolean }) {
   }, [])
 
   useLayoutEffect(() => {
-    if (phase !== "dim") return
     const frame = frameRef.current
-    const layers = frame?.querySelector(".desktop-night-scene-layers")
-    if (layers instanceof HTMLElement) {
-      // Dim is the only layer in layout on this frame, and it is the full
-      // width of the grid the other layers share.
-      const width = layers.scrollWidth
-      if (width > 0) layers.style.width = `${width}px`
+    if (!frame || phase === "shell" || phase === "full") return
+    if (phase === "dim") {
+      const layers = frame.querySelector(".desktop-night-scene-layers")
+      if (layers instanceof HTMLElement) {
+        // Dim is the only layer in layout on this frame, and it is the full
+        // width of the grid the other layers share.
+        const width = layers.scrollWidth
+        if (width > 0) layers.style.width = `${width}px`
+      }
     }
-    const id = requestAnimationFrame(() => setPhase("full"))
+    const next = phase === "dim" ? "lit" : "full"
+    const id = requestAnimationFrame(() => setPhase(next))
     return () => cancelAnimationFrame(id)
   }, [phase])
 
@@ -143,7 +146,7 @@ export function NightScene({ still = false }: { still?: boolean }) {
             {nightSceneDim.join("\n")}
           </span>
         )}
-        {phase === "full" ? (
+        {phase === "lit" || phase === "full" ? (
           <span key="lit" data-lit="">
             {nightSceneLit.join("\n")}
           </span>

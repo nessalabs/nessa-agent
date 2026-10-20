@@ -57,7 +57,8 @@
  *   (`data-split-corner`, and `data-drag-corner` while a preview moves it),
  *   motion in progress (`data-split-flipping`, `data-drag-reflow`), a drag
  *   (`data-drag-carrying`, `data-drag-lifted`, `data-drag-waiting`,
- *   `data-drag-takes-spare`), and the carried copy and its layer
+ *   `data-drag-takes-spare`), a column change being painted
+ *   (`data-split-painting`), and the carried copy and its layer
  *   (`.split-panes-ghost`, `-layer`, `-carrier`, `-placeholder`, `-shield`);
  * - the frame spreads `data-pane-key`, `data-flip` and `data-flip-id`, and a
  *   host marks a column that slides with FLIP's `data-flip="slide"`.

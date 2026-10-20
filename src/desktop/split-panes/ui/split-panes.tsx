@@ -114,6 +114,15 @@ export const SplitPanes = memo(function SplitPanes({
     const id = requestAnimationFrame(() => setDrawn(next))
     return () => cancelAnimationFrame(id)
   }, [columns, drawn])
+  // The frame that first paints a new arrangement skips scene text. The text
+  // is already laid out at a fixed width; painting it again is the resize.
+  useLayoutEffect(() => {
+    const grid = gridRef.current
+    if (!grid) return
+    grid.setAttribute(marks.painting, "")
+    const id = requestAnimationFrame(() => grid.removeAttribute(marks.painting))
+    return () => cancelAnimationFrame(id)
+  }, [drawn])
   const multi = panes.length > 1
   // In the order the panes were opened, not where they sit: a pane is placed
   // by its fractions, so its node never moves in the document, and a moved

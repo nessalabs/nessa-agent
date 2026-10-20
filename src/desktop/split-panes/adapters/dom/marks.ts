@@ -61,6 +61,8 @@ export const marks = {
   waiting: "data-drag-waiting",
   /** On the drag's root while a drop shown would take the host's spare room (`takesSpare`). */
   takesSpare: "data-drag-takes-spare",
+  /** On the grid while it is painting a column change. Scene text waits one frame (`styles.css`). */
+  painting: "data-split-painting",
 } as const
 
 /** The module's own elements a host may style or find. */

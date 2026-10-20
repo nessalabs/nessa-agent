@@ -685,11 +685,16 @@ html:not(.dark) [data-surface] {
   content-visibility: hidden;
 }
 
-/* The ready frame lays out only the dim layer. Rain, the lit layer, and
-   steam lay out on the frame after, once the dim width is fixed. */
+/* The ready frame lays out the dim layer, and the next frame the lit layer.
+   Rain and steam lay out one frame after that, once the width is fixed. */
 .desktop-night-scene[data-scene-ready]:not([data-scene-complete])
-  .desktop-night-scene-layers
-  > :not([data-dim]) {
+  :is(.desktop-night-scene-rain, .desktop-night-scene-steam) {
+  content-visibility: hidden;
+}
+
+/* A column change paints its boxes without also painting scene text that is
+   already laid out. The next frame shows it again. */
+.split-panes-grid[data-split-painting] .desktop-night-scene[data-scene-complete] {
   content-visibility: hidden;
 }
 

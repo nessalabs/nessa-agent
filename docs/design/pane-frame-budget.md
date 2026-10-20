@@ -64,16 +64,18 @@ starts the measured row.
    nor on the frame after it. `content-visibility: hidden` until
    `data-scene-ready`. The children stay mounted, so the scale written onto
    the element survives.
-4. The ready frame lays out only the dim layer (`[data-dim]`). Rain, the
-   lit layer, and steam stay `content-visibility: hidden` until
-   `data-scene-complete`, one frame later.
+4. The ready frame mounts and lays out only the dim layer (`[data-dim]`).
+   The lit layer mounts on the next frame. Rain and steam mount one frame
+   after that, when the scene is `data-scene-complete`. Until then, rain and
+   steam stay `content-visibility: hidden`.
 5. Once the dim layer has laid out, the layers' width is that text's width
    in pixels. A change of pane width crops them. `width: max-content` and
    `contain: layout paint style` on the layers are the same rule before that
    lock.
 6. A column change paints on the frame after the commit that recorded it.
    The grid mounted with whatever layout it first read; that first paint
-   does not wait.
+   does not wait. The paint frame marks the grid `data-split-painting`, and
+   scene text that has already laid out stays unpainted until the next frame.
 
 Conversation bodies stay in layout through measuring, flying, and reflow.
 The product flight stays zero-duration. A nonzero flight may still read

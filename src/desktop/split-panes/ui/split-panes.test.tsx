@@ -153,6 +153,10 @@ it("paints a new arrangement on the frame after it commits", async () => {
   expect(grid().querySelectorAll(".host-pane")).toHaveLength(2)
   await nextPaint()
   expect(grid().querySelectorAll(".host-pane")).toHaveLength(3)
+  // That paint skips scene text. The frame after shows it again.
+  expect(grid().hasAttribute(marks.painting)).toBe(true)
+  await nextPaint()
+  expect(grid().hasAttribute(marks.painting)).toBe(false)
 })
 
 it("renders again when the arrangement changes, and not when only focus moves", async () => {
