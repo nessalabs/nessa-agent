@@ -546,6 +546,10 @@ export interface SettingsMatch {
   trail: string
 }
 
+/** The identity of one search result: the list's key and the mark on the one last taken. */
+export const settingsResultKey = (match: SettingsMatch) =>
+  `${match.tab}:${match.setting ?? match.label}`
+
 function words(query: string): string[] {
   return query.toLowerCase().trim().split(/\s+/).filter(Boolean)
 }
