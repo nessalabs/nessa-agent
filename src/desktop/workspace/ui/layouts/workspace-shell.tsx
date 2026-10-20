@@ -689,9 +689,10 @@ function FoldMark({ root }: { root: RefObject<HTMLElement | null> }) {
 }
 
 /**
- * Holds the session list's measure through the fold. The fold paints with
- * the new boxes; the list takes its closed measure the frame after
- * (`listPaintFrame`), so that commit does not restyle the rows.
+ * Holds the session list's measure through the fold and the frame that
+ * shows the scene text again. The list takes its closed measure on the
+ * frame after that (`listPaintFrame`), so that commit does not restyle
+ * the rows on the scene's frame.
  */
 function ListMeasureHold({ root }: { root: RefObject<HTMLElement | null> }) {
   const store = useWorkspaceStore()

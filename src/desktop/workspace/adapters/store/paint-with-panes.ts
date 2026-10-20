@@ -12,9 +12,10 @@ import { selectColumnCount } from "./selectors"
  *
  * A change that arrives with a new number of pane columns is painted on the
  * third frame, which is when the grid paints the new boxes
- * (`split-panes/ui/split-panes.tsx`). The session list's measure and its tab
- * stop wait one frame more (`listPaintFrame`), so that commit does not
- * restyle the list. A change that does not — a person's toggle, a focus move
+ * (`split-panes/ui/split-panes.tsx`). The next frame shows scene text that
+ * was already laid out. The session list's measure and its tab stop wait
+ * one frame more (`listPaintFrame`), so that commit does not restyle the
+ * list. A change that does not — a person's toggle, a focus move
  * between panes already open — is painted in the turn it happens. The value
  * a row or a pane compares is its own boolean, so a focus move renders the
  * rows that gained or lost it.
@@ -31,10 +32,11 @@ export const spareFoldFrame = 2
 export const paneBoxFrame = 3
 
 /**
- * The frame after the boxes. The session list keeps the measure it had
- * through the fold, and takes its new one here, with its tab stop.
+ * The frame after the scene text returns. The session list keeps the measure
+ * it had through the box paint and that reveal, and takes its new one here,
+ * with its tab stop.
  */
-export const listPaintFrame = 4
+export const listPaintFrame = 5
 
 interface Listener {
   frames: number

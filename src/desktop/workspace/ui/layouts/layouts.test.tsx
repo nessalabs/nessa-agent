@@ -587,6 +587,11 @@ describe("a spare sidebar fold paints before the boxes, and the list keeps its m
       expect(list()?.hasAttribute("inert")).toBe(true)
       expect(sidebar()?.hasAttribute("data-list-held")).toBe(true)
       await act(async () => frames.runFrame())
+      // Scene text returns on the frame after the boxes. The list's measure
+      // is still the one it had.
+      expect(list()?.hasAttribute("inert")).toBe(true)
+      expect(sidebar()?.hasAttribute("data-list-held")).toBe(true)
+      await act(async () => frames.runFrame())
       expect(list()?.hasAttribute("inert")).toBe(true)
       expect(sidebar()?.hasAttribute("data-list-held")).toBe(false)
       await act(async () => root.unmount())

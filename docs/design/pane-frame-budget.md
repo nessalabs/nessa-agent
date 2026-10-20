@@ -100,9 +100,9 @@ starts the measured row.
    the row. The window renders that fold with the new boxes. The click
    writes neither mark. Until the new boxes paint, the workspace is
    `data-spare-held`. The session list keeps the measure it had through
-   the box paint (`data-list-held`): the gutter and the tab stop paint
-   on the frame after the boxes. The spare mark clears in the commit
-   that paints the boxes.
+   the box paint and the frame that shows the scene text again
+   (`data-list-held`): the gutter and the tab stop paint on the frame
+   after that. The spare mark clears in the commit that paints the boxes.
    The frame after the click is the column title's glide, while the grid
    is still on its last boxes. The grid mounted with whatever layout it
    first read; that first paint does not wait. The paint frame marks the
@@ -118,7 +118,8 @@ starts the measured row.
    on the next frame, not in the click. A selector whose fields did not change is
    not called. One that reads the new layout waits for the next frame
    (`useWorkspaceSelector`), so the click does not render it. The session
-   list's rows wait until the frame after the boxes, with its measure. A
+   list's rows wait until the frame after the scene text returns, with its
+   measure. A
    focus move between panes already open still paints in the turn.
 
 Conversation bodies stay in layout through measuring, flying, and reflow.
@@ -144,7 +145,8 @@ flowchart LR
   input["keydown, click, or pointerup"] --> script["script; window stays as painted"]
   script --> glide["next frames: copy lets go, column title glides"]
   glide --> boxes["third frame: new boxes and the spare fold"]
-  boxes --> list["next frame: session list measure and tab stop"]
+  boxes --> scene["next frame: scene text"]
+  scene --> list["next frame: session list measure and tab stop"]
   list --> focus["next frame: focus"]
   focus --> dim["next frame: dim layer, width locked"]
   dim --> rest["next frame: rain, lit layer, steam"]
