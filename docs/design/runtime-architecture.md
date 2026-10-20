@@ -639,6 +639,8 @@ sequenceDiagram
         H-->>A: Published, while it runs
         A-->>C: kept, the command lease as cause
         H-->>A: Ran{end, stdout, stderr, droppedBytes, cleanup}
+        A->>H: End, after every file already offered is answered
+        H-->>A: Ended
         C->>C: CommandEnded, after those files are answered
         C-->>M: exit, output, and the files
     end
@@ -660,6 +662,7 @@ No new Cedar action. The command was already admitted by `command.run`. Publishi
 | C14 | The publish point cannot be opened | The command still runs. The runner is told of no point. `run` lists nothing |
 | C15 | The file would pass the command's own file or byte budget, or the conversation's record cap | Refused, nothing read, listed on the result. The command still returns. The budget is the command's, not what the parent agent lease has already spent |
 | C16 | The file cannot be recorded, or the path is not one this build accepts | The host is told the refusal, nothing is held, `run` lists it, and the command's end is still recorded |
+| C17 | The command's `Ran` arrives and no End was asked | End is asked after every file already offered is answered. The route stays until the host's `Ended`, so a copy still being read is read through, and the host closes the publish point |
 
 Invariants:
 

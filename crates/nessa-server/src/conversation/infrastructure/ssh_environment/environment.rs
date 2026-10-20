@@ -706,7 +706,8 @@ fn command_refusal(host: &str, refused: AdmissionRefused) -> CommandRefusal {
 }
 
 /// The gateway's side of one command lease on a host. Dropped, it ends the
-/// lease there unless its run already did.
+/// lease there unless an End is already queued: a command that finished
+/// queues its own from its `Ran`, and the route stays until `Ended`.
 struct SshCommand {
     inner: Arc<Inner>,
     link: Arc<HostLink>,

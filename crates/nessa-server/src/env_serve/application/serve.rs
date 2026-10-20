@@ -1713,9 +1713,10 @@ impl Served {
         cwd: Option<String>,
         timeout_ms: u64,
     ) {
-        // Commands whose end is recorded are the audit's to answer for.
-        // Their publish point closes with them: the gateway has not asked
-        // `End`, so a file still in flight is left unanswered.
+        // A command whose exit is already recorded may still be held when
+        // the next one is granted, if its `End` has not been processed.
+        // Its publish point closes here, and a file still in flight is
+        // left unanswered: the gateway did not get to end it first.
         let finished: Vec<String> = self
             .commands
             .iter()

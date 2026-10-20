@@ -35,8 +35,9 @@
 //!   ──▶ ReadArtifact ──▶ ArtifactRead | ArtifactNotRead (a paired connection's
 //!   file bytes, which have no artifact channel beside it)
 //! a command lease: grant_command ──▶ GrantCommand ──▶ Granted{terms} | Refused
-//!                  run ──▶ Run ──▶ Ran (routed to its waiter; the lease is done
-//!                  there unless its End is asked, whose Ended follows)
+//!                  run ──▶ Run ──▶ Ran (routed to its waiter). Its End is
+//!                  asked then, after every file already offered is answered,
+//!                  unless one was already asked; the route stays until Ended
 //! a harness: binding's input ──▶ its pump ──▶ Input… InputClosed ──▶ Stop
 //!            (cleanup, let go, or output overflow ask its pump for the Stop;
 //!             a Stopped the host sent unasked, for its input overflow, ends
@@ -195,8 +196,9 @@ struct LeaseRoute {
     grant: Option<oneshot::Sender<Result<GrantedTerms, GrantRefusal>>>,
     /// A command lease's run, waiting for its `Ran`.
     ran: Option<oneshot::Sender<CommandAnswer>>,
-    /// A command lease's: its `Ran` ends it, and the host never ends it
-    /// unasked.
+    /// A command lease's. The host never ends it unasked (`Ending` is
+    /// dropped). Its `Ran` asks its End when none was asked already, and
+    /// the route stays until the host's `Ended`.
     command: bool,
     ended: Option<oneshot::Sender<Cleanup>>,
     /// Its End was asked: no harness starts under it and none is asked to
@@ -1568,6 +1570,11 @@ impl Shared {
                     self.routes().unaudited.insert(lease);
                 }
             }
+            Routed::EndAfterPumps { lease, pumps } => {
+                if let Some(frames) = self.frames.upgrade() {
+                    deliver(&frames, Some(pumps), ToEnvironment::End { lease }, None);
+                }
+            }
             Routed::GrantedRevoked(lease) => {
                 // Granted after the revocation was recorded, so not named
                 // in it: it is recorded on its own, as every lease the host
@@ -1609,6 +1616,13 @@ enum Routed {
     /// The host granted a lease whose admission was still pending when its
     /// connection was revoked.
     GrantedRevoked(String),
+    /// End this command lease once `pumps` can be held for writing, so
+    /// after every file already offered is answered. The route stays until
+    /// the host's `Ended`.
+    EndAfterPumps {
+        lease: String,
+        pumps: Arc<RwLock<()>>,
+    },
 }
 
 fn route_frame(routes: &mut Routes, frame: FromEnvironment) -> Routed {
@@ -1807,10 +1821,16 @@ fn route_frame(routes: &mut Routes, frame: FromEnvironment) -> Routed {
                 dropped_bytes,
                 cleanup,
             });
-            // Its `Ran` ended it there; an End already asked is answered by
-            // the `Ended` that follows, so its route waits for that.
+            // Its `Ran` is the command's finish. An End already asked is
+            // answered by the `Ended` that follows. Otherwise End is asked
+            // now, after every file already offered is answered, and the
+            // route stays until that `Ended`: dropping it here would cut
+            // off a copy still being read and leave the host holding the
+            // publish point.
             if !route.end_sent && route.ended.is_none() {
-                routes.leases.remove(&lease);
+                route.end_sent = true;
+                let pumps = begin_end(route);
+                return Routed::EndAfterPumps { lease, pumps };
             }
             Routed::Done
         }
