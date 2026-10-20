@@ -21,9 +21,7 @@
  *                    ⌘B, ⌘0 and ⌥⌘S change nothing behind it, and coming back
  *                    to Agents finds it as it was left.
  *   titlebar-steady  every frame of a rail toggle draws the titlebar's controls
- *                    between where they were and where they land: still, in a
- *                    window whose controls are placed from its edge (macOS),
- *                    and never under its traffic lights.
+ *                    between where they were and where they land.
  *   titlebar-row     the titlebar's controls are centred 24px below the window's
  *                    top, the line the host centres the traffic lights on
  *                    (`src-tauri/src/platform/macos/traffic_lights.rs`), in

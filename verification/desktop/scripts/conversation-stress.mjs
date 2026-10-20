@@ -375,13 +375,16 @@ async function setSideRail(page, on, failures) {
  * so they end 76px in and their middle is 46px in. The page never moves them.
  */
 const LIGHTS = { left: 16, middle: 46, end: 76 }
+// The same geometry against the host's and the page's own copies:
+// `side-rail.test.ts`.
 
 /**
  * Waits until the rail is `rail` (open, closed, or off) and laid out around
- * the traffic lights: open, the rail holds them in its top row, its controls
+ * the traffic lights: open, the rail holds them in its top row, its items
  * centred under them, and the first card starts past them by the gap they
- * keep from the window's edge; open or not, the titlebar's first control
- * starts where they end, never under them. False, with the last measurement
+ * keep from the window's edge; open or closed, the rail's toggle stays
+ * centred under them; open or not, the titlebar's first control starts
+ * where they end, never under them. False, with the last measurement
  * said, when that never holds.
  */
 async function aroundTheLights(page, rail, failures) {
@@ -393,10 +396,10 @@ async function aroundTheLights(page, rail, failures) {
     now.at.control >= LIGHTS.end &&
     (rail === "open"
       ? near(now.at.workspace, now.at.railWidth) &&
-        near(now.at.workspace + now.at.gutter, LIGHTS.end + LIGHTS.left) &&
-        near(now.at.item, LIGHTS.middle) &&
-        near(now.at.toggle, LIGHTS.middle)
-      : near(now.at.workspace, 0))
+        near(now.at.card, LIGHTS.end + LIGHTS.left) &&
+        near(now.at.item, LIGHTS.middle)
+      : near(now.at.workspace, 0)) &&
+    (rail === "off" || near(now.at.toggle, LIGHTS.middle))
   if (await waitFor(async () => holds(await railLayout(page)), 10_000)) return true
   const now = await railLayout(page)
   failures.push(
@@ -408,7 +411,7 @@ async function aroundTheLights(page, rail, failures) {
 
 /**
  * The rail's state and, from the window's left edge: its width, the middle of
- * its first item and of its toggle, where the workspace starts, its gutter,
+ * its first item and of its toggle, where the workspace and its first card start,
  * the window controls' inset from it, and where its titlebar's first control
  * starts.
  */
@@ -429,6 +432,20 @@ function railLayout(page) {
         probe.remove()
         return width
       }
+      // The workspace's first card: the rounded panel at its left edge.
+      const card = (inside) => {
+        const left = inside.getBoundingClientRect().left
+        const x = left + length(inside, "--desktop-gutter") + 2
+        const panel = document
+          .elementsFromPoint(x, innerHeight / 2)
+          .find(
+            (e) =>
+              inside.contains(e) &&
+              parseFloat(getComputedStyle(e).borderTopLeftRadius) >= 8 &&
+              e.getBoundingClientRect().height > innerHeight / 2,
+          )
+        return panel?.getBoundingClientRect().left ?? NaN
+      }
       const at = document.querySelector(workspace)
       return {
         rail: document.querySelector(frame)?.dataset.rail,
@@ -437,7 +454,7 @@ function railLayout(page) {
           item: middle(item),
           toggle: middle(toggle),
           workspace: at.getBoundingClientRect().left,
-          gutter: length(at, "--desktop-gutter"),
+          card: card(at),
           inset: length(at, "--desktop-window-controls-inset"),
           control: box(control)?.left ?? NaN,
         },

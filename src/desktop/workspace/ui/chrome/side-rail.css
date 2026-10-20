@@ -59,11 +59,12 @@
 }
 
 /*
- * With the rail open the traffic lights stand over the rail, not the
- * workspace, so nothing in the workspace keeps clear of them.
+ * In an open rail that holds the traffic lights they stand over the rail,
+ * not the workspace, so nothing in the workspace keeps clear of them.
  */
-.workspace-window[data-rail="open"][data-surface],
-.workspace-window[data-rail="open"] > .workspace[data-surface] {
+.workspace-window[data-rail-holds="window-controls"][data-rail="open"],
+.workspace-window[data-rail-holds="window-controls"][data-rail="open"]
+  > .workspace[data-surface] {
   --desktop-window-controls-inset: var(--desktop-control-edge);
 }
 
@@ -235,8 +236,9 @@
 /* ——— The toggle: one place in the window's bottom-left corner ——— */
 
 /*
- * The toggle sits in the bottom-left corner at the control edge — the
- * titlebar's sidebar toggle mirrored — and stays there open or closed, so it
+ * The toggle sits in the bottom-left corner in the rail's column — at the
+ * control edge, the titlebar's sidebar toggle mirrored, or under the traffic
+ * lights where the rail holds them — and stays there open or closed, so it
  * is in whatever is there: the rail, the sidebar card's foot, or a full view's
  * corner (`columns.mjs`, rail-corner). With the rail closed and the Agents
  * sidebar closed by the person there is nothing to sit in, so it hides; ⌘B
@@ -247,11 +249,6 @@
   position: absolute;
   z-index: 42;
   bottom: var(--desktop-control-edge);
-  left: var(--desktop-control-edge);
-}
-
-/* In the open rail it stands in the rail's column. */
-.workspace-window[data-rail="open"] .side-rail-toggle {
   left: var(--rail-column);
 }
 
@@ -310,14 +307,17 @@
 
 /*
  * With the rail closed the toggle stands inside the sidebar card's foot, so
- * "nessa Studio" steps right by one control and one inset, a hairline apart.
+ * "nessa Studio" steps right past it by one inset, a hairline apart.
  */
 .workspace-window .workspace-identity {
   transition: padding-left var(--desktop-slow) var(--desktop-out);
 }
 
 .workspace-window[data-rail="closed"] .workspace-identity {
-  padding-left: calc(2 * var(--desktop-control-inset) + var(--desktop-control-size));
+  padding-left: calc(
+    var(--rail-column) - var(--desktop-gutter) + var(--desktop-control-size) +
+      var(--desktop-control-inset)
+  );
 }
 
 /* ——— An item's full view ——— */
