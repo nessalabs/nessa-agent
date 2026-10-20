@@ -108,7 +108,11 @@ it("starts an inline column title after the window's controls wherever they stan
   const rules = [
     [
       read("./workspace/ui/session-list/session-list.css"),
-      '.workspace[data-sidebar="closed"] .workspace-list .desktop-column-bar {',
+      // The fold holds the sidebar and the list's measure, so this gutter
+      // waits until both holds are gone.
+      `.workspace[data-sidebar="closed"]:not([data-spare-held]):not([data-list-held])
+  .workspace-list
+  .desktop-column-bar {`,
     ],
     [
       read("./settings/ui/settings.css"),
