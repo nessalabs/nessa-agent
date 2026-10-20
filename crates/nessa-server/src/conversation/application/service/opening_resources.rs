@@ -19,6 +19,15 @@ impl OpeningResources {
         );
         *retained = Some(lease);
     }
+    pub(super) fn can_retire(&self) -> bool {
+        self.completion.get() == Some(&false)
+            && self
+                .lease
+                .lock()
+                .unwrap()
+                .as_ref()
+                .is_none_or(|lease| lease.release_answered())
+    }
     pub(super) fn transferred(&self) {
         self.lease.lock().unwrap().take();
     }
@@ -41,3 +50,7 @@ impl OpeningResources {
         self.completion.get() == Some(&false) && self.release_environment(deadline).await
     }
 }
+
+#[cfg(test)]
+#[path = "../../../../tests/conversation/owned_preparation.rs"]
+mod tests;

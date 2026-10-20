@@ -65,7 +65,7 @@ impl SessionStorageLease for PreparationWriteLease {
         self.inner.erase()
     }
 }
-async fn granted_preparation_failure(commit: bool) {
+async fn granted_preparation_failure(commit: bool, earlier: bool) {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("data");
     let provider = Arc::new(ProviderFactory::default());
@@ -86,6 +86,18 @@ async fn granted_preparation_failure(commit: bool) {
         fired: fired.clone(),
     });
     let coordinator = bind_with_capacity(&service, &storage, &root, true, 1).await;
+    if earlier {
+        let old = Arc::new(crate::conversation::application::service::OpeningResources::default());
+        old.complete(false, DELETION_BUDGETS.stop).await;
+        service
+            .ownership_gate(
+                &target,
+                &caller("earlier-empty-opening").actor().unwrap(),
+                Some(old),
+            )
+            .await
+            .unwrap();
+    }
     let creating = tokio::spawn({
         let service = service.clone();
         let target = target.clone();
@@ -130,6 +142,10 @@ async fn granted_preparation_failure(commit: bool) {
         ),
         "{created:?}"
     );
+    assert!(
+        opening.upgrade().is_some(),
+        "the actual unacknowledged grant keeps its Slot"
+    );
     let committed = storage
         .read_committed(conversation_session(&target))
         .await
@@ -170,20 +186,27 @@ async fn granted_preparation_failure(commit: bool) {
         Some(LifetimeState::Closing)
     );
     assert_eq!(host.held(), 1);
-    let (restored_service, restored_storage, restored_metadata) = fixture(&root, provider.clone());
-    let restored = bind_with_capacity(&restored_service, &restored_storage, &root, true, 1).await;
+    // Reconstruct the actual durable graph while the physical owner remains
+    // live. This is graph restoration, not a second concurrent storage runtime.
+    let persisted = SqliteOwnershipStore::open(&root.join("ownership.sqlite3"))
+        .unwrap()
+        .read()
+        .await
+        .unwrap();
+    let restored =
+        nessa_sdk::domain::agent_execution::subagents::OwnershipGraph::restore(persisted);
     assert_eq!(
         restored.lifetime_state(&lifetime),
-        Some(LifetimeState::Closing),
-        "restart cannot reconstruct release from empty or Opened-only history"
+        Some(LifetimeState::Closing)
     );
     assert_eq!(
-        restored.close_cause(&lifetime),
+        restored.close_cause(&lifetime).cloned(),
         Some(LifetimeCause::HostClose)
     );
-    assert_eq!(restored.close_initiator(&lifetime), Some(first.clone()));
-    retire(restored_service, restored_storage, restored_metadata).await;
-    drop(restored);
+    assert_eq!(
+        restored.close_initiator(&lifetime).cloned(),
+        Some(first.clone())
+    );
     host.release();
     tokio::time::timeout(TURN_HOLD_HANG, async {
         while host.held() != 0 {
@@ -205,6 +228,13 @@ async fn granted_preparation_failure(commit: bool) {
         Some(LifetimeCause::HostClose)
     );
     assert_eq!(coordinator.close_initiator(&lifetime), Some(first.clone()));
+    tokio::time::timeout(TURN_HOLD_HANG, async {
+        while opening.upgrade().is_some() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
     assert_eq!(provider.open_calls.load(Ordering::SeqCst), 0);
     let snapshot = SqliteOwnershipStore::open(&root.join("ownership.sqlite3"))
         .unwrap()
@@ -237,11 +267,11 @@ async fn granted_preparation_failure(commit: bool) {
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_granted_root_rejected_preparation_write_waits_for_real_release() {
-    granted_preparation_failure(false).await;
+    granted_preparation_failure(false, false).await;
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_granted_root_lost_preparation_ack_waits_for_real_release() {
-    granted_preparation_failure(true).await;
+    granted_preparation_failure(true, false).await;
 }
 
 async fn granted_child_preparation_failure(commit: bool) {
@@ -322,13 +352,10 @@ async fn granted_child_preparation_failure(commit: bool) {
         "the single child reservation must remain held"
     );
     assert_eq!(host.held(), 2);
-    tokio::time::timeout(TURN_HOLD_HANG, async {
-        while opening.upgrade().is_some() {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .unwrap();
+    assert!(
+        opening.upgrade().is_some(),
+        "the failed grant retains its actual owner"
+    );
     host.release();
     tokio::time::timeout(TURN_HOLD_HANG, async {
         while host.held() != 1 {
@@ -353,6 +380,13 @@ async fn granted_child_preparation_failure(commit: bool) {
     );
     assert_eq!(coordinator.close_cause(&lifetime), first_cause);
     assert_eq!(coordinator.close_initiator(&lifetime), first_actor);
+    tokio::time::timeout(TURN_HOLD_HANG, async {
+        while opening.upgrade().is_some() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
     assert_eq!(host.end_requests(), 1);
     child(&service, &parent, "parent", "after-real-release").await;
     assert_eq!(
@@ -457,4 +491,13 @@ async fn a_live_root_waits_for_its_environment_release() {
     assert_eq!(host.end_requests(), 1);
     host.close();
     retire(service, storage, metadata).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_earlier_root_absence_cannot_hide_a_later_rejected_preparation_grant() {
+    granted_preparation_failure(false, true).await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_earlier_root_absence_cannot_hide_a_later_lost_ack_grant() {
+    granted_preparation_failure(true, true).await;
 }

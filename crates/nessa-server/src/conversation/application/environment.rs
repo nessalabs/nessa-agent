@@ -984,7 +984,7 @@ impl LiveLease {
     /// Join this hold's release owner. Unanswered attempts retain that owner;
     /// confirmed answers are reused without another physical End.
     async fn release(&self, cause: LeaseEndCause, deadline: Duration) -> LeaseRelease {
-        tokio::time::timeout(deadline, async {
+        let release = std::panic::AssertUnwindSafe(tokio::time::timeout(deadline, async {
             let mut retained = self.release.lock().await;
             if let Some(release) = *retained {
                 return release;
@@ -997,11 +997,26 @@ impl LiveLease {
                 *retained = Some(release);
             }
             release
-        })
-        .await
-        .unwrap_or(LeaseRelease::Unanswered)
+        }))
+        .catch_unwind()
+        .await;
+        match release {
+            Ok(result) => result.unwrap_or(LeaseRelease::Unanswered),
+            Err(payload) => {
+                std::mem::forget(payload);
+                tracing::error!(
+                    lease = self.lease.as_str(),
+                    "environment release panicked; cleanup remains unanswered"
+                );
+                LeaseRelease::Unanswered
+            }
+        }
     }
-
+    pub(crate) fn release_answered(&self) -> bool {
+        self.release
+            .try_lock()
+            .is_ok_and(|release| release.is_some())
+    }
     /// Called only after SDK preparation established no provider hold. The
     /// surrounding environment may still own resources before LeaseIssued.
     pub(crate) async fn release_preparation(&self, deadline: Duration) -> bool {

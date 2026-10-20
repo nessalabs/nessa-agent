@@ -766,8 +766,8 @@ struct OpeningFailure {
     holds: bool,
 }
 struct Slot {
-    /// Lightweight completed acquisition fact, published by this opening before
-    /// Slot removal. Root cleanup retains this fact without retaining an Agent.
+    /// Completion and actual environment cleanup owner. Successful preparation
+    /// transfers the lease; failed preparation retains it until release answers.
     acquisition: Arc<OpeningResources>,
     value: OnceCell<Result<Arc<LiveConversation>, OpeningFailure>>,
     ready: Notify,
@@ -2354,7 +2354,7 @@ impl ConversationService {
                     })
                     .await;
                 owner.ready.notify_waiters();
-                if result.as_ref().is_err_and(|failure| !failure.holds) {
+                if result.is_err() && owner.acquisition.can_retire() {
                     let mut owners = service.inner.conversations.lock().await;
                     if owners
                         .get(&id)
@@ -2479,7 +2479,7 @@ impl ConversationService {
                     .as_ref()
                     .cloned()
                     .map_err(|failure| failure.cause.clone());
-                if result.as_ref().is_err_and(|failure| !failure.holds) {
+                if result.is_err() && slot.acquisition.can_retire() {
                     let mut owners = self.inner.conversations.lock().await;
                     if owners
                         .get(id)

@@ -54,29 +54,6 @@ struct PreparationResources {
     opening: Arc<super::Slot>,
 }
 
-/// The original opening owner confirmed it acquired nothing. Retain its
-/// immutable result so later slot removal/reopening cannot supply that fact.
-struct UnacquiredPreparation {
-    opening: Arc<super::OpeningResources>,
-    deadline: Duration,
-}
-#[async_trait]
-impl ChildResources for UnacquiredPreparation {
-    async fn close(&self, _: &LifetimeCause, _: &Initiator) -> ResourceReport {
-        if self.opening.released(self.deadline).await {
-            ResourceReport {
-                physical: PhysicalFact::Released,
-                evidence: EvidenceFact::Acknowledged,
-            }
-        } else {
-            ResourceReport {
-                physical: PhysicalFact::Failed,
-                evidence: EvidenceFact::Pending,
-            }
-        }
-    }
-}
-
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Preparation {
@@ -604,7 +581,7 @@ impl ConversationService {
             resources: Arc::new(Resources {
                 service: Arc::downgrade(&self.inner),
                 id: id.clone(),
-                acquisition: None,
+                acquisition: Some(opening.acquisition.clone()),
             }),
             opening,
         });
@@ -739,10 +716,7 @@ impl ChildFactory for Factory {
                 {
                     PrepareFailure {
                         failure: PortFailure::Rejected,
-                        cleanup: Some(Arc::new(UnacquiredPreparation {
-                            opening: held.opening.acquisition.clone(),
-                            deadline: service.inner.deletion_budgets.stop,
-                        })),
+                        cleanup: Some(held.resources),
                     }
                 }
                 Some(held) => PrepareFailure {
@@ -831,9 +805,26 @@ impl ChildResources for Resources {
                 .get()
                 .is_some_and(|result| result.as_ref().is_err_and(|failure| !failure.holds))
             {
-                return service
+                if !slot
+                    .acquisition
+                    .released(service.inner.deletion_budgets.stop)
+                    .await
+                {
+                    return failed;
+                }
+                let report = service
                     .cold_owned_resources(&self.id, Some(&slot.acquisition))
                     .await;
+                if report.physical == PhysicalFact::Released {
+                    let mut slots = service.inner.conversations.lock().await;
+                    if slots
+                        .get(&self.id)
+                        .is_some_and(|current| Arc::ptr_eq(current, &slot))
+                    {
+                        slots.remove(&self.id);
+                    }
+                }
+                return report;
             }
             return failed;
         };
@@ -924,7 +915,3 @@ pub(super) fn creation_request(principal: &str, surface: &str, action: &str) -> 
     let bytes = serde_json::to_vec(&(principal, surface, action)).expect("strings serialize");
     SpawnRequestId::new(format!("create-{:x}", Sha256::digest(bytes))).expect("digest identity")
 }
-
-#[cfg(test)]
-#[path = "../../../../tests/conversation/owned_preparation.rs"]
-mod tests;
