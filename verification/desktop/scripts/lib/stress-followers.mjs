@@ -237,23 +237,58 @@ export class Follower {
   async probe() {
     // Only with every stream it keeps room for held, so the room it asks
     // past is the connection's real one.
-    if (this.view.lost || [...this.events.values()].some((each) => !each.subscription))
+    if (
+      this.view.lost ||
+      !this.view.subscription ||
+      [...this.events.values()].some((each) => each.lost || !each.subscription)
+    )
       return
     const others = this.list.conversations.filter((id) => id !== this.mainId)
     const room = this.limits.conversationTargets - this.held()
     if (room < 0 || others.length < room + 1) return
+    const client = this.client
+    const originalView = this.view.subscription
+    const originals = [...this.events].map(([id, held]) => ({
+      id,
+      held,
+      subscription: held.subscription,
+    }))
     const opened = []
+    let ended = false
+    // Capacity is measured only while the original physical follows and all
+    // views acquired by this probe remain live. Their loss frees real room.
+    const live = () =>
+      !ended &&
+      this.client === client &&
+      client.connectionState.status === "connected" &&
+      !this.view.lost &&
+      this.view.subscription === originalView &&
+      originals.every(
+        ({ id, held, subscription }) =>
+          !this.deleted.has(id) &&
+          this.events.get(id) === held &&
+          !held.lost &&
+          held.subscription === subscription,
+      )
     try {
       for (let n = 0; n <= room; n += 1) {
+        if (!live()) return
         try {
           opened.push(
-            await this.client.subscriptions.view(others[n], { view() {}, ended() {} }),
+            await client.subscriptions.view(others[n], {
+              view() {},
+              ended() {
+                ended = true
+              },
+            }),
           )
+          if (!live()) return
           if (n === room)
             this.fail(
               `a subscription past ${this.limits.conversationTargets} was accepted`,
             )
         } catch (error) {
+          if (!live()) return
           // The gateway restarting, or this connection dropping, ends the
           // probe: it asks again on a later round.
           if (error?.code === "temporarily_unavailable" || !isRefusal(error)) return

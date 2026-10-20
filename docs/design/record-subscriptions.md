@@ -81,6 +81,20 @@ out does not hide the turns the view did draw.
 
 ## How it works
 
+### Stress capacity observation
+
+The follower's capacity probe counts only one unchanged set of physical follows.
+The probe retires its temporary views in every outcome; a later loop retries an
+interrupted observation without changing the connection's published limit.
+
+| Arrival during the probe | Observation | Regression |
+| --- | --- | --- |
+| Original view and event follows remain live; the extra view is refused | Count the expected capacity refusal | `a stable full connection proves its capacity` |
+| An original event ends, is removed, or is replaced while a view opens | End this observation because real room changed | `an original event ending invalidates the probe`; `replacing an original event invalidates the probe` |
+| The original main view ends while a view opens | End this observation | `the original main view ending invalidates the probe` |
+| A temporary view ends before the final response | End this observation; close each acquired handle | `an acquired view ending invalidates the probe` |
+| Every captured source remains live and the extra view is accepted | Record a capacity failure and close the acquired views | `a stable connection accepting an extra view fails` |
+
 One task per subscription, owned by the connection
 (`product/subscription/target.rs`):
 
@@ -294,7 +308,8 @@ guarantee (#935).
 | L10 | Catalogue admission succeeds but the configured policy denies or cannot decide a returned candidate | Refuse the whole batch without rows, cursor, scoped head or completeness; no partial disclosure from an inconsistent index | `a_paired_list_uses_the_configured_read_policy` |
 | L11 | A paired observation spans a page boundary while ungranted rows change | Keep the existing scoped cursor, return each granted identity once, and finish without exposing ungranted rows | `a_paired_list_observation_keeps_its_scoped_cursor` |
 | L12 | A list or observation reaches a gateway with no conversation service | Ask catalogue policy before exposing service availability: a peer remains forbidden, while an admitted device receives conversations_not_configured | `a_paired_list_admits_its_scope_before_service_availability` |
-| L13 | A seeded mock-agent socket run mixes hidden summary writes, omitted-row R1→R2→R3 replacement, revoke/regrant, archive/restore, running turns and reconnects; repeat at raised counts | Each batch matches an independent granted-row ordering, ungranted activity stays quiet, former-receiver heads stop at replacement, running settles, and reconnect releases watches/capacity | `paired_catalogue_seeded_mock_agent_stress`; `paired_catalogue_seeded_mock_agent_stress_under_load` (owned socket stress; canonical gate19 wiring still requires shared-harness coordination) |
+| L13 | A seeded mock-agent socket run mixes hidden summary writes, omitted-row R1→R2→R3 replacement, revoke/regrant, archive/restore, running turns and reconnects; repeat at raised counts | Each batch matches an independent granted-row ordering, ungranted activity stays quiet, former-receiver heads stop at replacement, running settles, and reconnect releases watches/capacity | `paired_catalogue_seeded_mock_agent_stress`; `paired_catalogue_seeded_mock_agent_stress_under_load` (socket coverage; L14 adds the canonical stress step through a native client) |
+| L14 | A real native-client product child lists and subscribes through the pinned paired listener while hidden rows exceed the list bound; repeat replacement, restore, revoke and archive cycles | List/read/observe expose exactly granted active identities; hidden updates and R2→R3 stay quiet; R1→R2, restore, revoke and archive publish the expected replacement; a fresh child catches up | `native_paired_catalogue_stress` (canonical conversation stress invokes this exact test with default and raised cycle counts) |
 | AC1 | Subscribe to the agent catalog; on a gateway that pairs no environments, too | The reply, then one `agents.listed` frame, the generated shape, carrying what `agents.list` answers; with no environments paired nothing changes it, and no other frame comes | `the_agent_catalog_is_sent_again_as_paired_environments_come_and_go`; `a_gateway_pairing_no_environments_sends_its_catalog_once`; `an_agent_catalog_frame_is_the_generated_shape` |
 | AC2 | A paired environment connects, disconnects or is revoked; or the count moves with the catalog unchanged (a connection taking another's place) | A frame with the catalog as `agents.list` answers it then; none when it is the same | `the_agent_catalog_is_sent_again_as_paired_environments_come_and_go` |
 | AC3 | Many changes while a catalog frame waits for the writer | At most one more frame, with the latest catalog | `changes_while_a_catalog_frame_waits_collapse_into_one_frame` |

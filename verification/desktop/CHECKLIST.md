@@ -31,6 +31,15 @@ Opt-in. Not part of `run-all`. The contract is
 
 ## Alpha startup and stress
 
+- [ ] **Native paired catalogue stress uses the actual protected product child.**
+  `conversation-stress.mjs` runs `native_paired_catalogue_stress` while its window,
+  background conversations and followers remain active. `--pairedCatalogues` is
+  the cycle count (default 1; raise it with the other load knobs). Hidden rows
+  exceed the list bound. Replacement, restore, revoke, archive and reconnect
+  preserve the independent granted-identity oracle; hidden activity and a former
+  receiver's later replacement stay quiet. This native check runs once per
+  browser engine; it does not claim that a browser itself holds native credentials.
+
 Opt-in. Not part of `run-all`. It does not change the frame budget and it
 does not replace `workspace-load.mjs`.
 
