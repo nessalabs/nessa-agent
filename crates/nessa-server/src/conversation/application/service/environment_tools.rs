@@ -41,7 +41,7 @@ use crate::conversation::application::drive_tools::{
 use crate::conversation::application::{
     admit_command, environment::GrantedTerms, ArtifactBudget, ArtifactCollector, CommandInitiator,
     CommandPolicyEvaluator, CommandPublication, CommandQuestion, CommandResult, Environment,
-    PublicationOutcome, ToolDecision,
+    PublicationOutcome, ToolDecision, PUBLISH_CALL_WAIT,
 };
 use crate::conversation::domain::{ToolCall, ToolPolicy, ToolSource};
 use nessa_protocol::conversation::domain::ConversationId;
@@ -57,7 +57,7 @@ use nessa_sdk::domain::agent_execution::leases::{
     CommandExit, CommandOutput, CommandRefusal, CommandTerms, CommandWork, EnvironmentRef, Lease,
     LeaseEndCause, LeaseId, LeasePhase, LeaseRefusal, SandboxProfile, SandboxProfiles,
 };
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use tokio::sync::watch;
 
 /// The environment named `here`: this gateway's own machine.
@@ -395,10 +395,13 @@ impl ConversationService {
             }
         }
         // Collected while the command runs, and finished before its end is
-        // recorded, so the command is still live to admit each file.
+        // recorded, so the command is still live to admit each file. What
+        // was kept is shared so a wait given up still lists it.
         let offers = hold.publications();
+        let published = Arc::new(Mutex::new(Vec::new()));
         let collecting = offers.map(|mut offers| {
             let live = Arc::clone(&live);
+            let published = Arc::clone(&published);
             let mut collector = ArtifactCollector::new(
                 live.organization_id.clone(),
                 id.clone(),
@@ -408,14 +411,15 @@ impl ConversationService {
                 ArtifactBudget::LEASE,
             );
             tokio::spawn(async move {
-                let mut published = Vec::new();
                 while let Some(offer) = offers.recv().await {
                     let outcome = collector
                         .collect(offer, &live.agent, &live.lease, &live.publishes)
                         .await;
-                    published.push(publication(outcome));
+                    published
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .push(publication(outcome));
                 }
-                published
             })
         });
         // A caller gone during the grant stops it before it starts.
@@ -435,8 +439,43 @@ impl ConversationService {
                 }
             }
         };
-        if let Some(collecting) = collecting {
-            result.published = collecting.await.unwrap_or_default();
+        if let Some(mut collecting) = collecting {
+            // The stream ends with the command. A host that never closes
+            // it, or a read it never answers, does not hold the tool call
+            // past the same bound a publish call has. The caller going
+            // away stops the wait at once. Either way the end is recorded.
+            let given_up = if collecting.is_finished() {
+                false
+            } else if *caller.borrow() {
+                collecting.abort();
+                true
+            } else {
+                let deadline = tokio::time::Instant::now() + PUBLISH_CALL_WAIT;
+                loop {
+                    tokio::select! {
+                        collected = &mut collecting => break collected.is_err(),
+                        _ = tokio::time::sleep_until(deadline) => {
+                            collecting.abort();
+                            break true;
+                        }
+                        changed = caller.changed(), if !*caller.borrow() => {
+                            if changed.is_err() || *caller.borrow() {
+                                collecting.abort();
+                                break true;
+                            }
+                        }
+                    }
+                }
+            };
+            if given_up {
+                tracing::warn!(
+                    conversation_id = %id,
+                    lease = lease.as_str(),
+                    "a command's publications were not all collected"
+                );
+            }
+            result.published =
+                std::mem::take(&mut *published.lock().unwrap_or_else(PoisonError::into_inner));
         }
         let result = CommandResult {
             exit: self.stop_cause(&live, &parent, result.exit).await,

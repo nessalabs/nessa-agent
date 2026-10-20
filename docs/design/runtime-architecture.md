@@ -662,7 +662,9 @@ No new Cedar action. The command was already admitted by `command.run`. Publishi
 | C14 | The publish point cannot be opened | The command still runs. The runner is told of no point. `run` lists nothing |
 | C15 | The file would pass the command's own file or byte budget, or the conversation's record cap | Refused, nothing read, listed on the result. The command still returns. The budget is the command's, not what the parent agent lease has already spent |
 | C16 | The file cannot be recorded, or the path is not one this build accepts | The host is told the refusal, nothing is held, `run` lists it, and the command's end is still recorded |
-| C17 | The command's `Ran` arrives and no End was asked | End is asked after every file already offered is answered. The route stays until the host's `Ended`, so a copy still being read is read through, and the host closes the publish point |
+| C17 | The command's `Ran` arrives and no End was asked | End is asked after every file already offered is answered. The route stays until the host's `Ended`, so a copy still being read is read through, and the host closes the publish point. The publication stream ends with `Ran`, so collecting does not wait for `Ended` |
+| C18 | A later command is granted while an earlier one's `End` is not yet processed | The earlier command stays, and its publish point stays open, until its own `End` or the connection is lost |
+| C19 | The host never closes the publication stream, or the caller is gone, while files are still being collected | Collection stops at the publish-call bound, or at once when the caller is gone. What was already kept is listed, and the command's end is still recorded |
 
 Invariants:
 

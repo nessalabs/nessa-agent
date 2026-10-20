@@ -1713,23 +1713,9 @@ impl Served {
         cwd: Option<String>,
         timeout_ms: u64,
     ) {
-        // A command whose exit is already recorded may still be held when
-        // the next one is granted, if its `End` has not been processed.
-        // Its publish point closes here, and a file still in flight is
-        // left unanswered: the gateway did not get to end it first.
-        let finished: Vec<String> = self
-            .commands
-            .iter()
-            .filter_map(|(id, held)| match held {
-                HeldCommand::Running { ran, .. } if ran.borrow().is_some() => Some(id.clone()),
-                _ => None,
-            })
-            .collect();
-        for id in finished {
-            if let Some(HeldCommand::Running { artifacts, .. }) = self.commands.remove(&id) {
-                let _reads = close_command_artifacts(artifacts, true);
-            }
-        }
+        // A command whose exit is recorded stays until its own `End`, or
+        // the connection is lost. Closing it here would cut off a copy the
+        // gateway is still reading, which is what holds that `End` back.
         let refusal = if LeaseId::new(lease.clone()).is_err() || self.granted.contains(&lease) {
             Err(GrantRefusal::Duplicate)
         } else if let Some(refusal) = self.recorded_before(&lease) {

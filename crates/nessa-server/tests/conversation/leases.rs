@@ -3082,6 +3082,48 @@ async fn a_command_s_published_file_is_kept_under_its_lease_and_listed_on_its_re
     assert_eq!(snapshot.artifacts[0].lease, lease);
 }
 
+/// Row C19: the caller going away does not leave `run` waiting on a
+/// publication stream the command already finished with.
+#[tokio::test]
+async fn a_caller_gone_does_not_wait_out_an_open_publication_stream() {
+    let root = tempfile::tempdir().unwrap();
+    let host = CommandHost::publishing();
+    let harness = with_command_host(root.path(), host.clone(), Some(devbox_policy()));
+    harness.create().await;
+    let go = harness.running_turn().await;
+    let service = harness.service.clone();
+    let id = harness.id.clone();
+    let (caller_gone, stop) = tokio::sync::watch::channel(false);
+    let running = tokio::spawn(async move {
+        service
+            .run_command(&id, command("devbox", &["echo", "hi"], "call-1"), stop)
+            .await
+    });
+    host.finish
+        .send_replace(Some(CommandExit::Exited { code: 0 }));
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    caller_gone.send_replace(true);
+    let CommandAnswer::Ran {
+        result,
+        recorded: true,
+        ..
+    } = tokio::time::timeout(Duration::from_secs(5), running)
+        .await
+        .expect("the call did not wait out the open stream")
+        .unwrap()
+        .unwrap()
+    else {
+        panic!("the command ran");
+    };
+    assert!(result.published.is_empty());
+    go.send(()).unwrap();
+    harness
+        .service
+        .close(harness.id.clone(), caller("close"))
+        .await
+        .unwrap();
+}
+
 /// Rows C15 and C16: a path this build does not accept, and a file past the
 /// command's own byte budget, are refused and listed. Nothing is held, and
 /// the command's end is still recorded.

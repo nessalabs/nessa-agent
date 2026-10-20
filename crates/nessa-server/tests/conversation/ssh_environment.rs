@@ -2134,17 +2134,22 @@ async fn a_finished_command_keeps_its_publish_route_until_the_host_ends_it() {
         .expect("granted")
         .hold;
     let mut offers = hold.publications().expect("the command publishes");
-    let (release, mut released) = tokio::sync::watch::channel(false);
-    let copying = tokio::spawn(async move {
-        let offer = offers.recv().await.expect("the file was offered");
-        released.wait_for(|open| *open).await.expect("released");
-        offer.answer.answer(Collection::Held).await;
-    });
     let (_stop, stopped) = tokio::sync::watch::channel(None);
-    let result = tokio::time::timeout(Duration::from_secs(5), hold.run(10_000, stopped))
+    let running = tokio::spawn(async move { hold.run(10_000, stopped).await });
+    let offer = tokio::time::timeout(Duration::from_secs(5), offers.recv())
         .await
-        .expect("answered");
+        .expect("the file was offered")
+        .expect("the file was offered");
+    let result = tokio::time::timeout(Duration::from_secs(5), running)
+        .await
+        .expect("answered")
+        .expect("the command ran");
     assert_eq!(result.exit, CommandExit::Exited { code: 0 });
+    // The publication stream ends with `Ran`, without waiting for `Ended`.
+    assert!(tokio::time::timeout(Duration::from_secs(1), offers.recv())
+        .await
+        .expect("the stream ended")
+        .is_none());
     // `Ran` is routed. End waits while the offered file is still unanswered.
     tokio::time::sleep(Duration::from_millis(50)).await;
     assert!(
@@ -2156,8 +2161,7 @@ async fn a_finished_command_keeps_its_publish_route_until_the_host_ends_it() {
             .any(|frame| matches!(frame, ToEnvironment::End { .. })),
         "End was asked while a file was still unanswered"
     );
-    release.send_replace(true);
-    copying.await.expect("the file was answered");
+    offer.answer.answer(Collection::Held).await;
     let asked = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             if connector

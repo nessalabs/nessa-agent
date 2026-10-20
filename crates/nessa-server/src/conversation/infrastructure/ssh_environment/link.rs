@@ -1821,6 +1821,9 @@ fn route_frame(routes: &mut Routes, frame: FromEnvironment) -> Routed {
                 dropped_bytes,
                 cleanup,
             });
+            // Files already offered are still read. The stream itself ends
+            // with `Ran`, so collecting them does not wait for `Ended`.
+            route.published.take();
             // Its `Ran` is the command's finish. An End already asked is
             // answered by the `Ended` that follows. Otherwise End is asked
             // now, after every file already offered is answered, and the
