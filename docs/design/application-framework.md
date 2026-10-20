@@ -279,10 +279,18 @@ view, or a different one, is `surface_unavailable`, and the call does not
 become an operation and does not write the package's data.
 
 An operation runs in the process. Closing every view leaves it running.
-The acknowledgement is the process's. A view that has gone cannot report
-success. The same request id and the same body are the same attempt. A
-second body under that request id is refused, and the first attempt is
-left as it was.
+The acknowledgement is the process's. A view that has gone does not
+report success (O3). The same request id and the same body are the same
+attempt. A second body under that request id is refused, and the first
+attempt is left as it was.
+
+The attempt is a record in the process's own store: request id, body,
+and outcome. For app-owned data the outcome record is the write, so
+there is no gap between the effect and the record. For a Nessa resource
+the process stores the gateway receipt before it acknowledges, and a
+restart repeats that request id. The gateway already treats that id as
+the same command. Restart reads the record and does not start a second
+effect (O9–O11).
 
 The package's own dashboard record is app-owned data. Cedar is not asked,
 because the record is not a Nessa resource. An operation that both writes
@@ -292,7 +300,8 @@ read.
 
 Registering an operation as an MCP tool is explicit. An unregistered name
 is not a tool. A registered tool travels the gateway's existing MCP path
-to Claude or Codex, once the package is installed as a stored server.
+to Claude or Codex, once the running process is stored as a remote
+MCP server.
 Its UI, when the tool declares one, is the MCP App mount already built,
 on the caller's session. The turn's tool policy is unchanged.
 
@@ -370,12 +379,15 @@ A9 on one row leaves the other.
 | --- | --- | --- | --- | --- |
 | O1 | process up, operation idle | invoke an operation, no view open | running in that process | the process owns it |
 | O2 | running | the last view closes | running | it continues |
-| O3 | running | the caller disconnects before the ack | uncertain | the same request id and the same body are this attempt; a different body is refused and this attempt stays |
-| O4 | process up | the operation names only a Nessa resource the grant does not admit | idle | refused before the effect |
+| O3 | running, attempt record stored | the caller disconnects before the ack | uncertain | the same request id and the same body are this attempt; a different body is refused and this attempt stays |
+| O4 | process up | the operation names only a Nessa resource the grant does not admit | idle | refused before the effect; the refusal is the stored outcome |
 | O5 | admitted | the grant epoch changes | running | this attempt keeps the epoch it read |
 | O6 | — | a tool call for a name that was not registered | — | not a tool |
-| O7 | registered, package installed as a stored server | a turn calls the tool | the existing MCP path | the mount, if the tool has UI, is the caller's |
-| O8 | process up | the operation writes app-owned data and names a Nessa resource | running, or idle | Cedar is asked first; a refusal writes neither |
+| O7 | registered, process up | a turn calls the tool | one remote MCP connection to that process | the harness session ending closes the connection; the process stays; the mount, if the tool has UI, is the caller's |
+| O8 | process up | the operation writes app-owned data and names a Nessa resource | running, or idle | Cedar is asked first; a refusal writes neither and is stored |
+| O9 | running or uncertain | the process exits | the attempt record remains | no second effect is started by the exit |
+| O10 | record holds the outcome | the process starts again and the same request id and body arrive | idle | the stored outcome is the ack |
+| O11 | record holds the attempt and no outcome | the process starts again | running or uncertain | that attempt continues; a different body is refused |
 
 ### The mount
 
@@ -401,16 +413,18 @@ Each rule names the rows that hold it.
    credential holds `server.read` and `conversation.read`. It is not the
    panel token and not a peer gateway. Rows A1, A2, A6.
 4. A UI action runs on the one live view it names. Rows U1–U5.
-5. The process that accepted an operation owns it, and the acknowledgement
-   is that process's. Rows O1–O3.
+5. The process that accepted an operation owns it. The attempt record
+   survives that process exiting, and a restart does not apply the effect
+   twice. Rows O1–O3, O9–O11.
 6. A view's context does not outlive that view. Rows U6, U7, M6.
 7. An MCP App mount stays the tool call it is, on the caller's session.
    Rows M1–M4.
 8. The browser entry imports the public contract only. The import test
    holds this.
 9. The frame does not receive the credential. Row H1.
-10. A registered tool uses the gateway's Claude and Codex MCP path.
-    OpenCode is not added. Row O7.
+10. A registered tool is a remote MCP connection to the running
+    application process, on the gateway's Claude and Codex path.
+    OpenCode is not added. A stdio launch is not this tool. Row O7.
 11. The install list, when the packaging slice adds a file, has one
     version. Another version is refused and not rewritten. Startup does
     not delete it. Alpha: no migration.
@@ -427,6 +441,13 @@ entry), the public actions, and the UI document the sandbox loads. The
 owner installs it on this gateway. The install list is the owner's,
 beside the stored MCP servers, not a channel of the updater. The first
 install is a local path. A signed feed is out of scope.
+
+A stored stdio server is one process per harness session, ended with
+that session (`open_admitted` in
+`crates/nessa-server/src/mcp_servers/infrastructure/relay.rs`). The
+application process is not that child. Its tools are stored as a remote
+server aimed at the process already running. The session's end closes
+the connection.
 
 `nessa init` is the last slice. It scaffolds `examples/dashboard`'s
 shape against a gateway the developer already runs. Until then, the
@@ -448,9 +469,9 @@ The dashboard, in order, once the slices have landed:
 3. Save runs with no view open. Dropping the view leaves the
    acknowledgement uncertain until the process answers. A retry with a
    different body is refused (O1–O3).
-4. The save is an MCP tool only after it is registered and the package
-   is installed as a stored server. An unregistered name is not listed
-   (O6, O7).
+4. The save is an MCP tool only after it is registered and the running
+   process is stored as a remote server. An unregistered name is not
+   listed. Ending the harness session does not stop the process (O6, O7).
 5. The plugin entry opens the dashboard with no tool call. Opening it
    while a tool-call widget has the window replaces that widget and
    drops its view context. Closing the entry does not stop the process
@@ -469,12 +490,15 @@ Dependencies run downward.
 | --- | --- | --- |
 | 1. Principal, grant, and admission ([#1052](https://github.com/nessalabs/nessa-agent/issues/1052)) | Install mints the active member and the application registration. A credential holding `server.read` and `conversation.read`. `conversation.share` accepts that registration and refuses a browser token. No-binding admission asks Cedar with the registration fact: no registration keeps today's owner fallback; an application registration matches a principal-subject grant or is refused. `mcp.*` stays off this principal. | A1–A12, M4 |
 | 2. Connected web view ([#1053](https://github.com/nessalabs/nessa-agent/issues/1053)) | `examples/dashboard` as a page on the application process. `@nessa/client` on that process only. Renders the granted conversation. No desktop import. | A6–A8, A12 |
-| 3. Action contract and the dashboard save ([#1054](https://github.com/nessalabs/nessa-agent/issues/1054)) | `packages/nessa-app`. UI action, operation, service entry, explicit MCP registration, the import test. | U1–U7, O1–O8 |
+| 3. Action contract and the dashboard save ([#1054](https://github.com/nessalabs/nessa-agent/issues/1054)) | `packages/nessa-app`. UI action, operation, the attempt record, service entry, explicit MCP registration, the import test. | U1–U7, O1–O11 |
 | 4. Plugin entry ([#1055](https://github.com/nessalabs/nessa-agent/issues/1055)) | The window place opens the package's UI with no tool call. The host proxies. H1. M6 against a tool-call widget already in the window. Mounts stay M1–M3. | H1, M5, M6, U6, U7 |
 | 5. Standalone window ([#1056](https://github.com/nessalabs/nessa-agent/issues/1056)) | The same process shows its own window. A second process is a second socket and does not adopt the first's operation. | A6, acceptance 6 |
-| 6. `nessa init` and install ([#1057](https://github.com/nessalabs/nessa-agent/issues/1057)) | Scaffold, local install beside stored MCP servers, the versioned install list. A registered tool is launched through the stored-server path. | rule 11, O7 |
+| 6. `nessa init` and install ([#1057](https://github.com/nessalabs/nessa-agent/issues/1057)) | Scaffold, local install, the versioned install list. A registered tool is a remote MCP URL of the running process, not a stdio child of the harness session. | rule 11, O7 |
 
-Slice 3 lists tool descriptors. The live harness call is slice 6.
+Slice 3 lists tool descriptors and the attempt record. The live harness
+call is slice 6. [#1057](https://github.com/nessalabs/nessa-agent/issues/1057)
+as filed says the tool is launched through the stored-server path. O7 is
+the contract: a remote URL of the process already running.
 
 ## Alternatives
 
@@ -519,7 +543,9 @@ conversation view. A shared React kit, and any Redux adapter, wait until
 a second app needs them.
 
 **Ship packages through the Tauri updater.** The updater replaces the
-desktop binary. Stored MCP servers are the install path this plan extends.
+desktop binary. The install list sits beside stored MCP servers. The
+tool route is a remote URL, not a stdio command, because stdio's process
+ends with the harness session.
 
 **One grant for the catalogue.** A grant by channel, by a folder of
 chats, or by default sync is already refused. Two conversations are two
