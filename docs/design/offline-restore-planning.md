@@ -8,6 +8,10 @@ staging directory, journal, profile, receipt or imported records. Exit 0 means
 an inspection report was produced, never that restoration is possible or allowed.
 The report is not an authorization token, reservation or replayable plan.
 
+Activating a restore is a separate use case,
+[quarantined restore](quarantined-restore.md). This command does not call it
+and still reports activation unavailable.
+
 The command reuses the standalone verifier merged in #971. Composition supplies
 the infrastructure `ExportFormat` through the application's `VerificationFormat`
 port for both the manifest and deletion inventory. There is no second persisted
@@ -25,8 +29,8 @@ observations inherit the verifier's current retained-root checks; changes from
 | P3 | Public payload fingerprints match | Format integrity is verified; every store payload still needs its owner's schema/semantic compatibility checks. No database or provider context is opened. |
 | P4 | Authenticated redacted/skipped/deferred omissions, including repeated labels | Preserve all verifier rows; summarize counts by writer-owned store inventory without inferring unique source origins or treating public overlap as recovered data. Deferred bytes are not fetched. |
 | P5 | Inventory absent, or authenticated inventory present | Report absence versus verified format separately. Neither establishes latest revocations or an independent rollback anchor. |
-| P6 | Proposed import sequence | New private destination selection, persisted quarantine before consumers, store-owner validation/import, independently trusted inventory reconciliation, identity/fencing proof, then separately implemented audited authority acceptance. Every step is unimplemented; none is executed. |
-| P7 | Any cut, even one with zero omissions | Trusted-key recovery, freshness authority, replacement identity, source/executor fencing, omission acceptance, payload compatibility, quarantine/import/acceptance implementation remain unresolved. No flag bypasses these prerequisites. |
+| P6 | Proposed import sequence | This command lists a proposed order and executes none of it. Quarantine and acceptance live in the separate restore use case; this command does not select a destination or rename anything. |
+| P7 | Any cut, even one with zero omissions | This command still reports trusted-key recovery, freshness authority, replacement identity, source/executor fencing, omission acceptance, and payload compatibility as unresolved. No flag makes the inspection an activation. |
 | P8 | Actual standalone process, including hostile historical command/outbox/lease/pairing bytes and failure paths | No profile/input writes, listener, connection, pairing, lease issuance, outbox delivery, command/tool execution or background process. Synthetic canaries and Linux network/process syscall trace verify this boundary. |
 | P9 | Injected decoder refuses manifest or authenticated inventory | Forward the same format port to the verifier and return its typed refusal without a plan. Manifest refusal precedes MAC/payload access; inventory refusal follows authenticated, fingerprint-checked bytes. No alternate decoder or import path is used. |
 

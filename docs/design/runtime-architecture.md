@@ -1645,14 +1645,15 @@ forwarded to the surface's own loopback, for the life of the lease.
 - Backup is an export cut, not a cache: records, metadata and audit from
   their owners at one consistent boundary, plus a deletion inventory
   (#270). The cut's order is [the export cut](export-cut.md). It keeps
-  live leases and the grants, follow rules and peer table. Restore and
-  quarantine are not built. A restore has to fence a host that may still
-  be running a lease, not only mark that lease `Interrupted`, and a
-  revoked grant must not return. A restored gateway is quarantined: it
-  serves reads and issues no leases until the person accepts it as the
-  authority and every device, peer, environment and worker is told,
-  through a restore generation they see on their next connection or by
-  re-pairing if the key was not in the backup; #272 chooses which.
+  live leases and the grants, follow rules and peer table. An oversized
+  conversation is named, not copied. Restore writes a sealed quarantine
+  directory and becomes live only by renaming that directory onto an empty
+  path ([quarantined restore](quarantined-restore.md)). A revoked grant does
+  not return. An open lease is closed in the restored ledger as uncertain,
+  and acceptance waits for an operator receipt rather than contacting the
+  executor. The restored gateway does not keep the old private key; peers
+  re-pair. `nessa-backup-plan` stays inspection-only. The desktop and
+  `conversation.read` do not call the deferred fetch yet.
 
 ## Commands
 

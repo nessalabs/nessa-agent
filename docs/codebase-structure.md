@@ -1675,7 +1675,14 @@ committed, then releases it and reads, macs, and publishes from those
 snapshots. `infrastructure/` reads the namespace, including `device/outbox/` and
 `environment/outbox/` under each directory's `outbox.lock`, within the files and bytes one lease may keep, and writes the bundle. After a deletion, unshare, credential revocation, or pairing cancellation commits, the gateway records that fence through `infrastructure/cedar` without taking admission and without publishing a bundle. The Cedar decision is appended to `backup/inventory-decisions.jsonl` before the log is written. The
 mac key stays beside the deletion inventory and is not part of the bundle.
-Restore and quarantine are not in this module.
+`domain/restore.rs` decides quarantine paths, the seal, fence omission, and
+which deferred line an open must match. `application/restore.rs` runs stage,
+accept, and open. `infrastructure/quarantine.rs` writes the partial directory,
+reads record JSON, and streams one deferred conversation.
+`infrastructure/cedar` permits a person or the gateway surface to stage, accept,
+or fetch when the cause is operator, and forbids a device, peer, environment
+peer, or worker. The ordering table is
+[quarantined restore](design/quarantined-restore.md).
 
 The separate `nessa-backup-verify` binary enters through `backup_verify_main.rs`
 and `composition/backup_verification.rs`, without gateway bootstrap.
@@ -1698,7 +1705,9 @@ quarantine/import ordering; it acquires no activation or destination capability.
 `composition/backup_output.rs` owns JSON output for both offline commands.
 `tests/backup/restore_planning.rs` and `tests/backup_restore_plan.rs` cover the
 application decoder refusals and actual process. [Offline restore planning](design/offline-restore-planning.md)
-defines the boundary; #324 storage changes remain separately owned.
+defines that command's boundary; #324 storage changes remain separately owned.
+`tests/backup/restore.rs` covers quarantine, acceptance, audit failure, and the
+oversized-session drill. The plan command does not call those use cases.
 
 ## Attachments
 
