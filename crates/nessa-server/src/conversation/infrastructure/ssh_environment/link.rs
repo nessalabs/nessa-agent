@@ -79,7 +79,7 @@ use nessa_protocol::lease::{
     decode, encode, read_hello, stop_steps, ArtifactReadRefusal, Cleanup, Collection,
     CollectionRefusal, CommandEnd, Data, EndingCause, FetchOutcome, FetchRefusal, FromEnvironment,
     GrantRefusal, GrantedTerms, PublishRefusal, Sandbox, StagedArtifact, ToEnvironment,
-    Unavailability, MAX_ARTIFACTS_IN_FLIGHT, MAX_DATA_BYTES,
+    Unavailability, COMMAND_STOP_WAIT, MAX_ARTIFACTS_IN_FLIGHT, MAX_DATA_BYTES,
 };
 use nessa_sdk::domain::agent_execution::leases::{LeaseEndCause, LeaseRefusal, SshDestination};
 use std::{
@@ -197,8 +197,10 @@ struct LeaseRoute {
     /// A command lease's run, waiting for its `Ran`.
     ran: Option<oneshot::Sender<CommandAnswer>>,
     /// A command lease's. The host never ends it unasked (`Ending` is
-    /// dropped). Its `Ran` asks its End when none was asked already, and
-    /// the route stays until the host's `Ended`.
+    /// dropped). Its `Ran` asks its End when none was asked already. The
+    /// route stays until the host's `Ended`, or, once that `End` is queued
+    /// and `Ran` was said, for [`COMMAND_STOP_WAIT`] and then it is
+    /// released: a connection that stays up does not keep its place.
     command: bool,
     ended: Option<oneshot::Sender<Cleanup>>,
     /// Its End was asked: no harness starts under it and none is asked to
@@ -206,6 +208,10 @@ struct LeaseRoute {
     ending: bool,
     /// Its End is queued for the host, or will be once its pumps are done.
     end_sent: bool,
+    /// Its End has been handed to the writer.
+    end_queued: bool,
+    /// Its `Ran` was handed to whoever ran it.
+    ran_answered: bool,
     /// Held for reading by each of its harnesses' pumps while it runs; its
     /// End is queued only once it can be held for writing.
     pumps: Arc<RwLock<()>>,
@@ -853,6 +859,8 @@ impl HostLink {
                     ended: None,
                     ending: false,
                     end_sent: false,
+                    end_queued: false,
+                    ran_answered: false,
                     pumps: Arc::new(RwLock::new(())),
                     channels: HashMap::new(),
                     next_channel: 1,
@@ -1141,19 +1149,20 @@ impl HostLink {
     /// End `lease` without waiting, unless its End is already queued: its
     /// hold was let go. Always sent, after every frame its pumps still send.
     pub(crate) fn abandon_lease(&self, lease: &str) {
-        let mut routes = self.routes();
-        if let Some(route) = routes.leases.get_mut(lease).filter(|route| !route.end_sent) {
+        let pumps = {
+            let mut routes = self.routes();
+            let Some(route) = routes.leases.get_mut(lease).filter(|route| !route.end_sent) else {
+                return;
+            };
             route.end_sent = true;
-            let pumps = begin_end(route);
-            deliver(
-                &self.frames,
-                Some(pumps),
-                ToEnvironment::End {
-                    lease: lease.into(),
-                },
-                None,
-            );
-        }
+            begin_end(route)
+        };
+        queue_end(
+            self.frames.clone(),
+            pumps,
+            lease.into(),
+            self.routes.clone(),
+        );
     }
 
     /// Ask the host to publish the file at `path` under `lease` for
@@ -1572,8 +1581,14 @@ impl Shared {
             }
             Routed::EndAfterPumps { lease, pumps } => {
                 if let Some(frames) = self.frames.upgrade() {
-                    deliver(&frames, Some(pumps), ToEnvironment::End { lease }, None);
+                    queue_end(frames, pumps, lease, self.routes.clone());
                 }
+            }
+            Routed::ReleaseCommand { lease } => {
+                let routes = self.routes.clone();
+                tokio::spawn(async move {
+                    release_command_route(routes, lease).await;
+                });
             }
             Routed::GrantedRevoked(lease) => {
                 // Granted after the revocation was recorded, so not named
@@ -1618,10 +1633,16 @@ enum Routed {
     GrantedRevoked(String),
     /// End this command lease once `pumps` can be held for writing, so
     /// after every file already offered is answered. The route stays until
-    /// the host's `Ended`.
+    /// the host's `Ended`, or for [`COMMAND_STOP_WAIT`] after that End is
+    /// queued.
     EndAfterPumps {
         lease: String,
         pumps: Arc<RwLock<()>>,
+    },
+    /// `Ran` was already said and End is already queued. Release the
+    /// command route if `Ended` does not arrive within [`COMMAND_STOP_WAIT`].
+    ReleaseCommand {
+        lease: String,
     },
 }
 
@@ -1824,16 +1845,20 @@ fn route_frame(routes: &mut Routes, frame: FromEnvironment) -> Routed {
             // Files already offered are still read. The stream itself ends
             // with `Ran`, so collecting them does not wait for `Ended`.
             route.published.take();
+            route.ran_answered = true;
             // Its `Ran` is the command's finish. An End already asked is
             // answered by the `Ended` that follows. Otherwise End is asked
-            // now, after every file already offered is answered, and the
-            // route stays until that `Ended`: dropping it here would cut
-            // off a copy still being read and leave the host holding the
-            // publish point.
+            // now, after every file already offered is answered. The route
+            // stays through that copy. Once End is queued, `Ended` has the
+            // stop wait; then the route is released, so a host that stays
+            // up without answering it does not keep the place.
             if !route.end_sent && route.ended.is_none() {
                 route.end_sent = true;
                 let pumps = begin_end(route);
                 return Routed::EndAfterPumps { lease, pumps };
+            }
+            if route.end_queued {
+                return Routed::ReleaseCommand { lease };
             }
             Routed::Done
         }
@@ -2194,6 +2219,57 @@ async fn write_frames(
         }
     }
     let _ = output.shutdown().await;
+}
+
+/// Queue End for `lease` once `pumps` can be held for writing. A command
+/// whose `Ran` was already said is released if `Ended` does not arrive
+/// within [`COMMAND_STOP_WAIT`] of that End being queued.
+fn queue_end(
+    frames: mpsc::Sender<ToEnvironment>,
+    pumps: Arc<RwLock<()>>,
+    lease: String,
+    routes: Arc<Mutex<Routes>>,
+) {
+    let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+        tracing::error!("a command's End asked outside a runtime is not sent");
+        return;
+    };
+    runtime.spawn(async move {
+        let _done = pumps.write_owned().await;
+        if frames
+            .send(ToEnvironment::End {
+                lease: lease.clone(),
+            })
+            .await
+            .is_err()
+        {
+            return;
+        }
+        let arm = {
+            let mut routes = routes.lock().unwrap_or_else(PoisonError::into_inner);
+            let Some(route) = routes.leases.get_mut(&lease) else {
+                return;
+            };
+            route.end_queued = true;
+            route.command && route.ran_answered
+        };
+        if arm {
+            release_command_route(routes, lease).await;
+        }
+    });
+}
+
+/// Give back a finished command's route when its host does not answer
+/// `Ended`. A route already removed, or one whose `Ran` was not said, stays
+/// as it is.
+async fn release_command_route(routes: Arc<Mutex<Routes>>, lease: String) {
+    tokio::time::sleep(COMMAND_STOP_WAIT).await;
+    let mut routes = routes.lock().unwrap_or_else(PoisonError::into_inner);
+    if routes.leases.get(&lease).is_some_and(|route| {
+        route.command && route.end_sent && route.end_queued && route.ran_answered
+    }) {
+        routes.leases.remove(&lease);
+    }
 }
 
 /// Queue `frame` for the host even when there is no room just now: on a

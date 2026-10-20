@@ -667,6 +667,7 @@ No new Cedar action. The command was already admitted by `command.run`. Publishi
 | C19 | The host never closes the publication stream, or the caller is gone, while files are still being collected | Collection stops at the publish-call bound, or at once when the caller is gone. What was already kept is listed, and the command's end is still recorded |
 | C20 | A file is offered after `run` already lists the lease's file budget of publications | Answered `budgetExceeded`, nothing read, and not listed. What was already listed stays. The command still ends |
 | C21 | The host drains after a command's `Ran` and before its `End` | The command stays held and its publish point stays open. Serving ends once that `End` is asked |
+| C22 | The host says `Ran`, keeps the connection up, and never answers `Ended` | Once `End` is queued, the route is released after the command stop wait. Its organization command place is given back |
 
 Invariants:
 
@@ -677,6 +678,7 @@ Invariants:
 - A command served through the relay and the same command served directly leave the same command-ledger checkpoint: granted, started, ran, ended (`docs/design/auth/relay.md` RL14).
 - A drain stays open while a command lease is still held, including one whose `Ran` was already said. Its `End` is what lets serving finish.
 - `run` lists at most the lease file budget (`artifact.environment_files`). A file offered past that is answered `budgetExceeded`, unread, and not listed.
+- A command route whose `Ran` was said and whose `End` is queued is released if `Ended` does not arrive within the command stop wait (`command.stop_wait_ms`). The organization command place goes with the route.
 
 Alternatives that lose:
 

@@ -26,8 +26,8 @@ use crate::env_serve::install::Platform;
 use crate::timer::TokioTimer;
 use nessa_protocol::lease::{
     decode, encode, Cleanup, Collection, CommandEnd, Data, FromEnvironment,
-    GrantedTerms as WireTerms, Sandbox, StagedArtifact, ToEnvironment, KEEPALIVE_INTERVAL,
-    SILENCE_LIMIT,
+    GrantedTerms as WireTerms, Sandbox, StagedArtifact, ToEnvironment, COMMAND_STOP_WAIT,
+    KEEPALIVE_INTERVAL, SILENCE_LIMIT,
 };
 use nessa_sdk::application::agent_execution::providers::HarnessHostIdentity;
 use nessa_sdk::application::agent_execution::providers::{ApprovalMode, ModelChange};
@@ -197,6 +197,9 @@ enum Reach {
     /// says it ran. It answers reads of that file and ends the lease when
     /// asked. Every frame it reads is kept.
     PublishesOnRun,
+    /// A host that grants a command and, on Run, says it ran. It keeps
+    /// reading, keepalives included, and never answers `Ended`.
+    AnswersRan,
     /// A host that grants every lease, says it is ending one as expired at
     /// once when `early`, and, told it is revoked, says each is ending as
     /// expired and then ended; keeps every frame it reads.
@@ -480,6 +483,49 @@ impl LeaseConnector for Connector {
                                 lease,
                                 cleanup: Cleanup::Confirmed { forced: false },
                             }),
+                            _ => None,
+                        };
+                        if let Some(said) = said {
+                            host_out.write_all(&encode(&said).unwrap()).await.unwrap();
+                        }
+                    }
+                });
+            }
+            Reach::AnswersRan => {
+                tokio::spawn(async move {
+                    let (host_in, mut host_out) = split(host);
+                    let mut stream = FrameStream::new(host_in);
+                    let hello = encode(&FromEnvironment::Hello {
+                        build: VERSION.into(),
+                        protocol: LEASE_PROTOCOL.into(),
+                        workspace: "/srv/work".into(),
+                    })
+                    .unwrap();
+                    host_out.write_all(&hello).await.unwrap();
+                    while let Ok(Some(body)) = stream.next().await {
+                        let Ok(frame) = decode::<ToEnvironment>(&body) else {
+                            continue;
+                        };
+                        let said = match frame {
+                            ToEnvironment::GrantCommand {
+                                lease, timeout_ms, ..
+                            } => Some(FromEnvironment::Granted {
+                                lease,
+                                terms: WireTerms {
+                                    sandbox: Sandbox::None,
+                                    timeout_ms: Some(timeout_ms),
+                                    lease_ms: None,
+                                },
+                            }),
+                            ToEnvironment::Run { lease } => Some(FromEnvironment::Ran {
+                                lease,
+                                end: CommandEnd::Exited { code: 0 },
+                                stdout: Data(Vec::new()),
+                                stderr: Data(Vec::new()),
+                                dropped_bytes: 0,
+                                cleanup: Cleanup::Confirmed { forced: false },
+                            }),
+                            ToEnvironment::Keepalive | ToEnvironment::End { .. } => None,
                             _ => None,
                         };
                         if let Some(said) = said {
@@ -3645,6 +3691,48 @@ async fn a_revoked_link_ends_each_lease_as_revoked_and_closes_once_they_are_ende
         })
         .expect("and that it ended as revoked");
     assert!(revoking < ended, "{entries:?}");
+}
+
+/// Row C22: a command whose host says `Ran` and never `Ended`, while the
+/// connection stays up, gives its organization place back after the stop
+/// wait. A later command can take that place.
+#[tokio::test]
+async fn a_finished_command_releases_its_budget_place_when_ended_never_arrives() {
+    let connector = Connector::new(Reach::AnswersRan);
+    let link = dialed_link(&connector, Arc::new(Audit::default())).await;
+    let budgets = crate::conversation::application::OrganizationBudgets::new(None, Some(1));
+    let id = lease();
+    link.grant_command(
+        id.as_str(),
+        vec!["echo".into(), "hi".into()],
+        None,
+        5_000,
+        budgets.command(),
+        Duration::from_secs(5),
+    )
+    .await
+    .expect("the host grants the command");
+    assert_eq!(budgets.running(), (0, 1));
+    let answer = tokio::time::timeout(Duration::from_secs(5), link.run(id.as_str()))
+        .await
+        .expect("the host says Ran")
+        .expect("the command is still routed");
+    assert!(matches!(answer.end, CommandEnd::Exited { code: 0 }));
+    assert_eq!(budgets.running(), (0, 1));
+    tokio::time::timeout(COMMAND_STOP_WAIT + Duration::from_secs(2), async {
+        while budgets.running() != (0, 0) {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the place is given back once Ended does not arrive");
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), link.ended())
+            .await
+            .is_err(),
+        "the connection stayed up"
+    );
+    assert!(budgets.command().is_some());
 }
 
 /// A grant the host does not answer in time keeps its organization budget
