@@ -981,8 +981,8 @@ the dev stage's own port (7421), so the two coexist and neither has to be stoppe
 for the other. Its working directory is `~/.nessa` and its log is `~/.nessa/logs/gateway.log`. User credentials stay under `~/.nessa` (stage and instance
 namespaces still apply). Custom user-supplied MCP servers are not packaged.
 
-`pnpm app:build --bundles dmg` prepares the complete runtime, builds the disk
-image, and verifies the final packaged runtime before returning success.
+`pnpm app:build --bundles app,dmg` prepares the complete runtime, builds the
+app and its disk image, and verifies the final packaged runtime before returning success.
 The preparation script verifies the official Node archive against its release
 checksum and installs the ACP harness from its lockfile. Packaging currently targets
 native macOS architecture and requires macOS 13.5 or newer at runtime.
