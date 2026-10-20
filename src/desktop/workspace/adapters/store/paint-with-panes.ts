@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react"
+import { useStore } from "react-redux"
 import type { DesktopState, DesktopStore } from "../../../store"
-import { useWorkspaceStore } from "./hooks"
 import { selectColumnCount } from "./selectors"
 
 /**
@@ -121,7 +121,9 @@ export function usePaintedWithPanes<T>(
   select: (state: DesktopState) => T,
   frames = paneBoxFrame,
 ): T {
-  const store = useWorkspaceStore()
+  // `useStore` directly: `hooks.ts` re-exports the selector, which reads the
+  // frame numbers from this module.
+  const store = useStore() as DesktopStore
   const [value, setValue] = useState(() => select(store.getState()))
   const shown = useRef(value)
   const selectRef = useRef(select)

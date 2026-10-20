@@ -40,12 +40,14 @@ export const ThreadRow = memo(function ThreadRow({
   kind: "pinned" | "branch"
 }) {
   const session = useWorkspaceSelector((state) => selectSession(state, sessionId))
-  // After the open paint, so the key does not render the row (`layouts.test.tsx`).
   const quiet = useOverviewQuiet()
-  const open = useWorkspaceSelector((state) =>
-    selectShownSessionIds(state).includes(sessionId),
+  // With the list's measure, the frame after the boxes, so opening a pane
+  // does not render the row on the click or on the box paint.
+  const open = usePaintedWithPanes(
+    (state) => selectShownSessionIds(state).includes(sessionId),
+    listPaintFrame,
   )
-  // Painted with the boxes, so opening a pane does not render the row.
+  // The focused mark waits with it, so opening a pane does not render the row.
   const focused = usePaintedWithPanes(
     (state) => selectFocusedSessionId(state) === sessionId,
     listPaintFrame,

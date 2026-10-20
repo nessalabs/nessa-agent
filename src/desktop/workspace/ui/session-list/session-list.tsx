@@ -227,8 +227,11 @@ const SessionRow = memo(function SessionRow({
   tabStop: boolean
 }) {
   const session = useWorkspaceSelector((state) => selectSession(state, sessionId))
-  const open = useWorkspaceSelector((state) =>
-    selectShownSessionIds(state).includes(sessionId),
+  // With the list's measure, the frame after the boxes, so the fold does not
+  // restyle the row.
+  const open = usePaintedWithPanes(
+    (state) => selectShownSessionIds(state).includes(sessionId),
+    listPaintFrame,
   )
   const selected = usePaintedWithPanes(
     (state) => selectFocusedSessionId(state) === sessionId,

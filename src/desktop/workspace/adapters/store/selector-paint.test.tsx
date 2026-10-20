@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 /**
  * A selector paints from the fields it reads. A session's own text updates
- * in the turn. A new pane column renders on the next frame. Opening a
+ * in the turn. A new pane column renders with the new boxes. Opening a
  * pane does not call a selector that reads neither the panes nor the
  * chrome (`selector-paint.ts`).
  */
@@ -12,6 +12,7 @@ import { beforeEach, expect, it } from "vitest"
 import { panesOf } from "../../../split-panes/model/pane-layout"
 import { focusPane, loadWorkspace, openBeside, setComposerText } from "./commands"
 import { useWorkspaceSelector } from "./hooks"
+import { paneBoxFrame } from "./paint-with-panes"
 import { selectColumnCount, selectComposerText, selectFocusedPaneKey } from "./selectors"
 import { controlledAnimationFrames, testStore } from "../../testing"
 
@@ -75,6 +76,10 @@ it("paints a changed field in the turn, and does not call a selector whose field
   })
   expect(textReads()).toBe(before)
   expect(columns()?.getAttribute("data-columns")).toBe(count)
+  for (let frame = 1; frame < paneBoxFrame; frame++) {
+    await act(() => frames.runFrame())
+    expect(columns()?.getAttribute("data-columns")).toBe(count)
+  }
   await act(() => frames.runFrame())
   expect(columns()?.getAttribute("data-columns")).not.toBe(count)
 

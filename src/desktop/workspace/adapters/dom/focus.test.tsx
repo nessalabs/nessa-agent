@@ -4,7 +4,7 @@
  * pane takes focus or what held the caret went away, and never out of a
  * list the person is walking, or a dialog.
  */
-import { act, useLayoutEffect, useRef } from "react"
+import { act, useLayoutEffect, useRef, useSyncExternalStore } from "react"
 import { arrivalWaitingAttribute } from "./arrival"
 import { createRoot, type Root } from "react-dom/client"
 import { Provider } from "react-redux"
@@ -49,11 +49,16 @@ function Page() {
   const root = useRef<HTMLDivElement>(null)
   const store = useWorkspaceStore()
   useFocusFollowsPane(store, root)
-  const shown = useWorkspaceSelector(selectShownSessionIds)
-  const panes = useWorkspaceSelector((state) => state.workspace.panes)
-  // The product writes this mark in the click (`PaneFocusMark`). A new
-  // column's article paints a frame later, so the mark is written again
-  // when that article is committed.
+  // The product paints a new column with the boxes. This page draws the
+  // articles in the turn, and writes the mark in that commit, so these
+  // tests follow the caret rather than the paint wait.
+  const shown = useSyncExternalStore(store.subscribe, () =>
+    selectShownSessionIds(store.getState()),
+  )
+  const panes = useSyncExternalStore(
+    store.subscribe,
+    () => store.getState().workspace.panes,
+  )
   useLayoutEffect(() => {
     const apply = () => {
       const key = selectFocusedPaneKey(store.getState())
