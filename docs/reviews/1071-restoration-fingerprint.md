@@ -181,3 +181,25 @@ read the runtime model or the catalogue default. `model` is required on the
 current product schema. A view that omits it fails
 `scripts/check-product-protocol.mjs` and `conversationView`. The desktop
 reads that field only.
+
+Reviewed head `852b5361`. One P2 finding: a public `AcpConfig` consumer
+that changes an argument selecting a provider, model, or profile
+(`--profile staging`) left the restoration fingerprint unchanged, and
+attach resumed the previous backend's native session id. The executable
+path and every argument had been left out together.
+
+The restoration fingerprint now hashes every semantic argument: one that
+is not an absolute path. Absolute-path arguments, the executable path, and
+`runtime_environment` (`PATH`, `TMPDIR`, `USER`, `LOGNAME`, `CODEX_PATH`,
+`CLAUDE_CODE_EXECUTABLE`) stay on the launch fingerprint. The list is on
+`fingerprint` in `identity.rs`, and the design note's "What selects a
+saved native session" states the same membership. A semantic argument
+change is S6. A moved runtime stays S3.
+
+`a_semantic_argument_changes_the_restoration_identity` fails when those
+arguments are not hashed (the identity comparison). Restoring the hash
+makes it pass.
+`a_bundled_runtime_path_does_not_change_the_restoration_identity` moves
+the executable, appends an absolute adapter path, and changes `PATH` and
+`TMPDIR`, and the restoration identity stays equal. The identity-credentials
+session appends `--profile staging` and opens a new native session.

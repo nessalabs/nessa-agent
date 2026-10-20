@@ -306,11 +306,14 @@ pub struct AcpConfig {
     /// Trusted provider executable and the authority required before each launch.
     /// The adapter admits a distinct use generation immediately before spawning it.
     pub executable: ExecutableUseSnapshot,
-    /// Noncredential arguments passed verbatim in order. They are the launch
-    /// fingerprint (`launch_fingerprint` in `acp/sessions/identity.rs`), not the
-    /// restoration identity: a release moves the adapter path with the staged
-    /// runtime. Never place secrets in arguments. Only trusted composition
-    /// may supply them.
+    /// Noncredential arguments passed verbatim in order. An argument that is
+    /// not an absolute path is semantic and enters the restoration fingerprint:
+    /// a subcommand, a flag, or a profile or model selector. An absolute path
+    /// is a bundled runtime path and is only the launch fingerprint
+    /// (`launch_fingerprint` in `acp/sessions/identity.rs`), because a release
+    /// moves the adapter entry with the staged runtime. The fingerprint's
+    /// inputs are listed on `fingerprint` in that module. Never place secrets
+    /// in arguments. Only trusted composition may supply them.
     pub arguments: Vec<OsString>,
     /// Identity environment forwarded to the child. Every entry enters the
     /// restoration fingerprint, in key order: vendor account directories and

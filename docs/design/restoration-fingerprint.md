@@ -14,28 +14,34 @@ fingerprint (gate 15).
 
 ## What selects a saved native session
 
-The restoration fingerprint keys on the workspace, whether tools are enabled,
-the token limits, the permission decisions, the system prompt, and every
-entry of the identity environment (`AcpConfig::environment`), in key order.
-That map is where composition leaves a vendor account directory (`HOME`,
-`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, the OpenCode `XDG_*` roots) and an
-endpoint or profile selector (`ANTHROPIC_BASE_URL` and the same kind of
-variable). The fingerprint function is the complete list of inputs.
+The restoration fingerprint's inputs are listed once, on `fingerprint` in
+`crates/nessa-sdk/src/infrastructure/acp/sessions/identity.rs`. This is that
+list.
 
-The provider name and the model sit beside that hash on `ProviderIdentity`.
-Together those are the whole restoration identity.
+In the restoration identity:
 
-Not in it:
+- the provider name and the model, beside the hash on `ProviderIdentity`;
+- every entry of the identity environment (`AcpConfig::environment`): vendor
+  account directories (`HOME`, `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, the
+  OpenCode `XDG_*` roots) and endpoint or profile selectors
+  (`ANTHROPIC_BASE_URL`, `AWS_PROFILE`, and the same kind of variable);
+- every semantic argument, in order. A semantic argument is not an absolute
+  path: a subcommand, a flag, or a profile or model selector such as
+  `--profile staging`;
+- the workspace, whether tools are enabled, the token limits, the permission
+  decisions, and the system prompt.
 
-- the executable path and the ordered arguments. Every release stages the
-  runtime (the node binary and the adapter) under a new directory named by
-  the tree's content fingerprint, so those paths move on every update. They
-  do not choose which native session to resume;
-- the runtime environment, which composition keeps in
-  `AcpConfig::runtime_environment` rather than the identity environment:
-  `PATH`, `TMPDIR`, `USER`, `LOGNAME`, `CODEX_PATH`,
-  `CLAUDE_CODE_EXECUTABLE`. On macOS, `PATH` is `NESSA_AGENT_PATH` from the
-  login shell, rewritten into the launchd job whenever an update
+Deliberately not in it. These are the warm-up launch fingerprint:
+
+- bundled runtime paths: the executable path, and every absolute-path
+  argument (the adapter entry and any other path the process is handed). A
+  release stages that tree under a new directory, and relocating it renames
+  the files. Which implementation a conversation belongs to is the provider
+  name, the model, the semantic arguments, and the identity environment;
+- `PATH`, `TMPDIR`, `USER`, `LOGNAME`, `CODEX_PATH`, and
+  `CLAUDE_CODE_EXECUTABLE`, which composition keeps in
+  `AcpConfig::runtime_environment`. On macOS, `PATH` is `NESSA_AGENT_PATH`
+  from the login shell, rewritten into the launchd job whenever an update
   re-registers it, and `TMPDIR` differs between launchd and an app-launched
   child;
 - credentials and MCP servers.
@@ -66,9 +72,9 @@ session id.
 S6 is the row that used to refuse with `storage-identity` and strand the
 conversation. A moved staged runtime, and `PATH` or `TMPDIR` drift, no
 longer reach S6: they are not in the restoration fingerprint, so the row
-is S3 and the saved native session is resumed. An endpoint or profile
-selector changing, with the same provider name and model, is S6: the saved
-native session id belongs to the previous backend.
+is S3 and the saved native session is resumed. An endpoint, profile
+selector, or semantic argument changing, with the same provider name and
+model, is S6: the saved native session id belongs to the previous context.
 
 ## Invariants
 
@@ -92,13 +98,16 @@ native session id belongs to the previous backend.
    as `conversation_configuration_changed`, says the chat cannot be reopened.
    An uncertain model change that is not that refusal still says the change
    is not confirmed.
-7. The executable, the arguments, and the runtime environment are the
-   warm-up's launch fingerprint, not the restoration fingerprint. Moving
-   them leaves S3. Warm-up's key changes, so the next boot prepares that
-   runtime again. S1 and S2 are unchanged.
+7. The executable path, absolute-path arguments, and the runtime environment
+   are the warm-up's launch fingerprint, not the restoration fingerprint.
+   Moving them leaves S3. Warm-up's key changes, so the next boot prepares
+   that runtime again. S1 and S2 are unchanged.
 8. An endpoint or profile variable in the identity environment is part of
    the restoration fingerprint. Changing it is S6, not a resume of the
    saved native session id, and it does not change the launch fingerprint.
+9. A semantic argument is part of the restoration fingerprint. Changing
+   `--profile staging` is S6. It also changes the launch fingerprint, which
+   hashes every argument.
 
 ## Alternatives
 
@@ -129,6 +138,13 @@ native session id belongs to the previous backend.
   child. Leaving it out of the fingerprint resumes a native session that
   belongs to the previous backend. Runtime paths stay in the runtime
   environment, which the restoration fingerprint does not read.
+- **Treat every argument as plumbing, including `--profile staging`.** The
+  binding passes the argument to the child. Leaving it out of the
+  fingerprint resumes a native session that belongs to the previous profile.
+  Absolute paths stay out, because those are the bundled runtime.
+- **Hash the executable path or its file name.** A release moves the staged
+  directory, and relocating that tree renames the binary. Either hash
+  changes the restoration identity on a move that should resume.
 
 ## Consequences
 

@@ -147,15 +147,17 @@ async fn a_context_only_mismatch_opens_a_fresh_session_and_credentials_rotate_wi
     restored.close(close_action()).await.unwrap();
     drop(restored);
 
-    // An argument change is a different launch, not a different context.
-    // The saved native session is resumed.
+    // An absolute adapter path is a bundled runtime path. The saved native
+    // session is resumed. The fixture's mode stays the first argument.
     let endpoint_config = config.clone();
-    let mut arguments = config;
-    arguments.arguments.push("semantic-setting".into());
-    let arguments = provider(arguments, &model);
-    assert_eq!(arguments.identity(), identity);
-    assert_ne!(arguments.launch_fingerprint(), launch);
-    let resumed_arguments = attached_agent(Arc::new(arguments), manager().await.unwrap())
+    let mut bundled = config;
+    bundled
+        .arguments
+        .push("/opt/staged/runtime/adapter.js".into());
+    let bundled = provider(bundled, &model);
+    assert_eq!(bundled.identity(), identity);
+    assert_ne!(bundled.launch_fingerprint(), launch);
+    let resumed_arguments = attached_agent(Arc::new(bundled), manager().await.unwrap())
         .await
         .unwrap();
     assert_eq!(
@@ -183,7 +185,7 @@ async fn a_context_only_mismatch_opens_a_fresh_session_and_credentials_rotate_wi
 
     // A changed endpoint selects another backend. The saved native session
     // is not resumed; a new one is opened.
-    let mut endpoint = endpoint_config;
+    let mut endpoint = endpoint_config.clone();
     endpoint.environment.insert(
         "ANTHROPIC_BASE_URL".into(),
         "https://fixture.invalid/b".into(),
@@ -215,6 +217,40 @@ async fn a_context_only_mismatch_opens_a_fresh_session_and_credentials_rotate_wi
     assert_eq!(
         std::fs::read_to_string(root.path().join("new-session-count")).unwrap(),
         "2"
+    );
+
+    // A profile argument selects another context. The saved native session
+    // is not resumed; a new one is opened.
+    let mut profile = endpoint_config;
+    profile.arguments.push("--profile".into());
+    profile.arguments.push("staging".into());
+    let profile = provider(profile, &model);
+    assert_ne!(profile.identity(), identity);
+    assert_ne!(profile.launch_fingerprint(), launch);
+    let opened_profile = attached_agent(Arc::new(profile), manager().await.unwrap())
+        .await
+        .unwrap();
+    assert_ne!(
+        opened_profile
+            .session_manager()
+            .snapshot()
+            .await
+            .unwrap()
+            .provider_context
+            .recorded()
+            .unwrap()
+            .as_str(),
+        saved_context
+    );
+    opened_profile.close(close_action()).await.unwrap();
+    drop(opened_profile);
+    assert_eq!(
+        std::fs::read_to_string(root.path().join("resume-observed")).unwrap(),
+        saved_context
+    );
+    assert_eq!(
+        std::fs::read_to_string(root.path().join("new-session-count")).unwrap(),
+        "3"
     );
 
     let records = std::fs::read_dir(storage_path)
@@ -422,11 +458,11 @@ fn plumbing_environment_does_not_change_the_fingerprint() {
     let moved = provider(moved, &model);
     assert_eq!(moved.identity(), original);
     assert_ne!(moved.launch_fingerprint(), launch);
-    let mut arguments = config.clone();
-    arguments.arguments.push("semantic-setting".into());
-    let arguments = provider(arguments, &model);
-    assert_eq!(arguments.identity(), original);
-    assert_ne!(arguments.launch_fingerprint(), launch);
+    let mut path = config.clone();
+    path.arguments.push("/opt/staged/runtime/adapter.js".into());
+    let path = provider(path, &model);
+    assert_eq!(path.identity(), original);
+    assert_ne!(path.launch_fingerprint(), launch);
     let mut account = config.clone();
     account
         .environment
@@ -504,6 +540,38 @@ fn fingerprint_tracks_workspace_policy_prompt_and_limits() {
     right.arguments = vec!["a".into(), "bc".into()];
     let left = provider(left, &model);
     let right = provider(right, &model);
-    assert_eq!(left.identity(), right.identity());
+    assert_ne!(left.identity(), right.identity());
     assert_ne!(left.launch_fingerprint(), right.launch_fingerprint());
+}
+
+#[test]
+fn a_semantic_argument_changes_the_restoration_identity() {
+    let (_root, config, model) = test_acp_configuration("echo", 16);
+    let original = provider(config.clone(), &model);
+    let mut profile = config;
+    profile.arguments.push("--profile".into());
+    profile.arguments.push("staging".into());
+    let profile = provider(profile, &model);
+    assert_ne!(profile.identity(), original.identity());
+    assert_ne!(profile.launch_fingerprint(), original.launch_fingerprint());
+}
+
+#[test]
+fn a_bundled_runtime_path_does_not_change_the_restoration_identity() {
+    let (_root, mut config, model) = test_acp_configuration("echo", 16);
+    let original = provider(config.clone(), &model);
+    config.executable =
+        ExecutableUseSnapshot::unmanaged(PathBuf::from("/nonexistent/moved-runtime"));
+    config
+        .arguments
+        .push("/opt/staged/runtime/adapter.js".into());
+    config
+        .runtime_environment
+        .insert("PATH".into(), "/opt/homebrew/bin:/usr/bin".into());
+    config
+        .runtime_environment
+        .insert("TMPDIR".into(), "/var/folders/drift".into());
+    let moved = provider(config, &model);
+    assert_eq!(moved.identity(), original.identity());
+    assert_ne!(moved.launch_fingerprint(), original.launch_fingerprint());
 }
