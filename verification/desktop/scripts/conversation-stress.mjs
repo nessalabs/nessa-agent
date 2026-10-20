@@ -1312,12 +1312,26 @@ const steps = {
       .locator('.workspace-message[data-role="agent"]')
       .filter({ hasText: `${SAYS.table}${text}` })
     const tables = message.locator('[data-slot="markdown-table"]')
-    const drawn = await waitFor(async () => (await tables.count()) === 2, 15_000)
+    // Both tables, down to the last cell streamed: the window can still be
+    // drawing the answer the gateway already holds whole.
+    const lastCell = TABLE_LINES.at(-1).split("|")[1].trim()
+    const drawn = await waitFor(
+      async () =>
+        (await tables.count()) === 2 &&
+        (await tables.nth(1).getByText(lastCell, { exact: true }).count()) === 1,
+      15_000,
+    )
     if (!drawn) {
-      failures.push(`the window drew ${await tables.count()} of 2 tables`)
+      failures.push(
+        `the window drew ${await tables.count()} of 2 tables, or not all of them`,
+      )
       return
     }
-    const words = ["Price", "$16.99", "CAD", "$150", "Runtime", "Format", "Projectionist"]
+    // Short runs each table holds, which a squeezed column used to split.
+    const words = [
+      ["Price", "$16.99", "CAD", "$150"],
+      ["Runtime", "Format", "Projectionist"],
+    ]
     const measured = await message.evaluate((element, words) => {
       const lines = (root, word) => {
         const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
@@ -1334,10 +1348,11 @@ const steps = {
       }
       const reply = element.getBoundingClientRect()
       return [...element.querySelectorAll('[data-slot="markdown-table"]')].map(
-        (table) => {
+        (table, index) => {
           const port = table.querySelector('[data-slot="table-container"]')
           return {
-            split: words.filter((word) => lines(table, word) > 1),
+            missing: words[index].filter((word) => lines(table, word) === 0),
+            split: words[index].filter((word) => lines(table, word) > 1),
             hidden: port.scrollWidth - port.clientWidth,
             within: table.getBoundingClientRect().right <= reply.right + 1,
             fadedRight: port.hasAttribute("data-hidden-right"),
@@ -1346,6 +1361,8 @@ const steps = {
       )
     }, words)
     for (const [index, table] of measured.entries()) {
+      if (table.missing.length)
+        failures.push(`table ${index + 1} does not show ${JSON.stringify(table.missing)}`)
       if (table.split.length)
         failures.push(
           `table ${index + 1} split ${JSON.stringify(table.split)} across lines`,
