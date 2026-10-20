@@ -102,8 +102,9 @@ starts the measured row.
    `data-spare-held`. The session list keeps the measure it had through
    the box paint and the frame that shows the scene text again
    (`data-list-held`): the gutter and the tab stop paint on the frame
-   after that. The spare mark stays through the box paint, so the list does
-   not move with the new boxes, and clears on the next frame.
+   after that. The spare mark clears in the commit that paints the boxes.
+   Each pane body keeps the width it had through that paint, and releases
+   it on the next frame, so the conversation does not reflow with the boxes.
    The frame after the click is the column title's glide, while the grid
    is still on its last boxes. The grid mounted with whatever layout it
    first read; that first paint does not wait. The paint frame marks the

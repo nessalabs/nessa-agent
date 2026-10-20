@@ -173,11 +173,10 @@ it("paints a new arrangement on the frame after it commits", async () => {
     async () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
   )
   expect(grid().querySelectorAll(".host-pane")).toHaveLength(3)
-  // The sidebar stays in the row for this paint. It leaves with the scene text.
-  expect(host.hasAttribute("data-spare-held")).toBe(true)
+  expect(host.hasAttribute("data-spare-held")).toBe(false)
+  // That paint skips scene text. The frame after shows it again.
   expect(grid().hasAttribute(marks.painting)).toBe(true)
   await nextPaint()
-  expect(host.hasAttribute("data-spare-held")).toBe(false)
   expect(grid().hasAttribute(marks.painting)).toBe(false)
 })
 
