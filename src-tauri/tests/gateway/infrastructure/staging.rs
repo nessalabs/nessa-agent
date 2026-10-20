@@ -1,7 +1,7 @@
 use super::super::generation::random_generation;
 use super::{
-    begin_stage_measurement, clone_file, end_stage_measurement, entry_name, finalize_file,
-    launch_settings, parallelism, publish, stage_runtime, stage_runtime_cached,
+    begin_stage_measurement, clone_file, copy_percent, end_stage_measurement, entry_name,
+    finalize_file, launch_settings, parallelism, publish, stage_runtime, stage_runtime_cached,
     stage_runtime_using, tree_fingerprint, utf8, validate_runtime, CopyHookGuard, StagePhases,
     SyncHookGuard, ValidatedRuntimes,
 };
@@ -629,11 +629,12 @@ fn a_slower_progress_report_does_not_move_the_percent_backwards() {
     let events = events.lock().expect("progress");
     let mut previous = 0u64;
     for event in events.iter() {
-        let percent = if event.bytes_total == 0 {
-            0
-        } else {
-            event.bytes_completed.saturating_mul(100) / event.bytes_total
-        };
+        let percent = copy_percent(
+            event.files_completed,
+            event.bytes_completed,
+            event.files_total,
+            event.bytes_total,
+        );
         assert!(percent >= previous, "progress moved backwards: {events:?}");
         previous = percent;
     }

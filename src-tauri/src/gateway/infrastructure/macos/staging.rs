@@ -479,9 +479,9 @@ type CopyHookFn = dyn FnMut(&Path) -> Result<(), String> + Send;
 #[cfg(test)]
 type SyncHookFn = dyn FnMut() + Send;
 
-/// The attempt that is staging captures these on its own thread. Workers use
-/// that capture. They do not read the slot, so a test on another thread cannot
-/// see or clear them.
+// The attempt that is staging captures these on its own thread. Workers use
+// that capture. They do not read the slot, so a test on another thread cannot
+// see or clear them.
 #[cfg(test)]
 thread_local! {
     static COPY_HOOK: RefCell<Option<Arc<Mutex<CopyHookFn>>>> = const { RefCell::new(None) };
@@ -501,13 +501,15 @@ impl AttemptHooks {
     fn capture() -> Self {
         #[cfg(test)]
         {
-            return Self {
+            Self {
                 copy: COPY_HOOK.with(|slot| slot.borrow().clone()),
                 before_sync: SYNC_HOOK.with(|slot| slot.borrow().clone()),
-            };
+            }
         }
         #[cfg(not(test))]
-        Self
+        {
+            Self
+        }
     }
 
     fn note_file(&self, path: &Path) -> Result<(), String> {
@@ -682,13 +684,12 @@ impl<'a> CopyProgress<'a> {
 }
 
 fn copy_percent(files: u64, bytes: u64, files_total: u64, bytes_total: u64) -> u64 {
-    if bytes_total > 0 {
-        bytes.saturating_mul(100) / bytes_total
-    } else if files_total > 0 {
-        files.saturating_mul(100) / files_total
+    let (done, total) = if bytes_total > 0 {
+        (bytes, bytes_total)
     } else {
-        100
-    }
+        (files, files_total)
+    };
+    done.saturating_mul(100).checked_div(total).unwrap_or(100)
 }
 
 pub(super) fn stage_runtime_reporting(
@@ -788,7 +789,6 @@ fn copy_sync_and_match(
             let queue = &queue;
             let syncs = &syncs;
             let progress = &progress;
-            let hooks = hooks;
             #[cfg(test)]
             let ledger = ledger.clone();
             scope.spawn(move || {
@@ -797,20 +797,23 @@ fn copy_sync_and_match(
                 sync_queued_files(queue, syncs, progress, hooks);
             });
         }
+        let copy = CopyAttempt {
+            plan: &plan,
+            next: &next,
+            cancel: &cancel,
+            queue: &queue,
+            copies: &copies,
+            syncs: &syncs,
+            hooks,
+        };
         for _ in 0..workers {
-            let plan = &plan;
-            let next = &next;
-            let cancel = &cancel;
-            let queue = &queue;
-            let copies = &copies;
-            let syncs = &syncs;
-            let hooks = hooks;
+            let attempt = &copy;
             #[cfg(test)]
             let ledger = ledger.clone();
             scope.spawn(move || {
                 #[cfg(test)]
                 install_measurement(ledger);
-                copy_planned_files(plan, next, cancel, clone, queue, copies, syncs, hooks);
+                copy_planned_files(attempt, clone);
             });
         }
         let copied = copies.wait();
@@ -876,44 +879,48 @@ fn sync_queued_files(
     }
 }
 
+struct CopyAttempt<'a> {
+    plan: &'a PlannedCopy,
+    next: &'a AtomicUsize,
+    cancel: &'a AtomicBool,
+    queue: &'a FileQueue,
+    copies: &'a SyncWait,
+    syncs: &'a SyncWait,
+    hooks: &'a AttemptHooks,
+}
+
 fn copy_planned_files(
-    plan: &PlannedCopy,
-    next: &AtomicUsize,
-    cancel: &AtomicBool,
+    attempt: &CopyAttempt<'_>,
     clone: &(impl Fn(&Path, &Path) -> Result<bool, String> + Sync),
-    queue: &FileQueue,
-    copies: &SyncWait,
-    syncs: &SyncWait,
-    hooks: &AttemptHooks,
 ) {
     loop {
-        let index = next.fetch_add(1, Ordering::Relaxed);
-        if index >= plan.files.len() {
+        let index = attempt.next.fetch_add(1, Ordering::Relaxed);
+        if index >= attempt.plan.files.len() {
             return;
         }
         let mut finish = SyncFinish {
-            wait: copies,
+            wait: attempt.copies,
             result: None,
         };
-        if cancel.load(Ordering::Relaxed) {
+        if attempt.cancel.load(Ordering::Relaxed) {
             // The first error is already recorded. This file is not copied,
             // and finishing Ok leaves that error as the one `wait` returns.
             finish.result = Some(Ok(()));
             continue;
         }
-        let file = &plan.files[index];
+        let file = &attempt.plan.files[index];
         match copy_file(
             &file.source,
             &file.destination,
             file.bytes,
             clone,
-            queue,
-            syncs,
-            hooks,
+            attempt.queue,
+            attempt.syncs,
+            attempt.hooks,
         ) {
             Ok(()) => finish.result = Some(Ok(())),
             Err(error) => {
-                cancel.store(true, Ordering::Relaxed);
+                attempt.cancel.store(true, Ordering::Relaxed);
                 finish.result = Some(Err(error));
             }
         }
