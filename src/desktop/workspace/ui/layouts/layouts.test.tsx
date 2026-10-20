@@ -581,8 +581,10 @@ describe("a spare sidebar fold paints before the boxes, and the list keeps its m
         "closed",
       )
       await act(async () => frames.runFrame())
+      // The boxes and the folded window land together. The list's measure
+      // is still the one it had.
       expect(sidebar()?.hasAttribute("data-spare-held")).toBe(false)
-      expect(list()?.hasAttribute("inert")).toBe(false)
+      expect(list()?.hasAttribute("inert")).toBe(true)
       expect(sidebar()?.hasAttribute("data-list-held")).toBe(true)
       await act(async () => frames.runFrame())
       expect(list()?.hasAttribute("inert")).toBe(true)

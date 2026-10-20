@@ -71,6 +71,7 @@ import {
 import { reviewToOpen, reviewWaitsIn } from "../../adapters/gateway/review-notices"
 import {
   listPaintFrame,
+  paneBoxFrame,
   spareFoldFrame,
   usePaintedWithPanes,
 } from "../../adapters/store/paint-with-panes"
@@ -430,12 +431,12 @@ function FittedWindow({
   const listDrawn = useWorkspaceSelector(selectSessionListOpen)
   const listOpen = region.sessionList && listDrawn
   const view = useWorkspaceSelector(selectView)
-  // The window renders with the list, one frame after the boxes. The fold's
-  // attribute is set earlier (`FoldMark`), while the spare hold is on, so
-  // this render is not that frame.
-  const chrome = usePaintedWithPanes(selectChrome, listPaintFrame)
-  const columns = usePaintedWithPanes(selectColumnCount, listPaintFrame)
-  const paneShape = usePaintedWithPanes(selectPaneShape, listPaintFrame)
+  // Painted with the new boxes. The fold's attribute is set a frame earlier
+  // (`FoldMark`), while the spare hold is on. The session list keeps the
+  // measure it had (`ListMeasureHold`) through this commit.
+  const chrome = usePaintedWithPanes(selectChrome, paneBoxFrame)
+  const columns = usePaintedWithPanes(selectColumnCount, paneBoxFrame)
+  const paneShape = usePaintedWithPanes(selectPaneShape, paneBoxFrame)
   const sidebarDrawn = drawn(chrome.sidebar)
   const shownRailItem = railOffered
     ? railItems.find((each) => each.id === railItem && each.id !== "agents")
