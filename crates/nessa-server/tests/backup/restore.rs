@@ -143,6 +143,16 @@ impl RestoreAudit for MemoryAudit {
         });
         Ok(())
     }
+
+    fn available(&self, target: &str) -> Result<bool, DecisionAuditError> {
+        let lines = self
+            .lines
+            .lock()
+            .map_err(|_| DecisionAuditError::NotStored)?;
+        Ok(lines.iter().any(|line| {
+            line.target == target && line.after == "available" && line.decision == "effect"
+        }))
+    }
 }
 
 struct Clock(u64);
@@ -972,6 +982,29 @@ async fn a_device_may_not_stage_a_restore() {
 }
 
 #[tokio::test]
+async fn a_caller_supplied_action_does_not_choose_the_policy() {
+    let bundle = publish(note_bundle_rows(), vec![], None).await;
+    let place = roots();
+    let audit = MemoryAudit::open();
+    stage(
+        &bundle,
+        &place.quarantine,
+        &place.live,
+        &audit,
+        RestoreFacts {
+            kind: "person",
+            cause: InventoryCause::Operator,
+            action: RestoreAction::Fetch,
+        },
+        None,
+    )
+    .unwrap();
+    let policies = &audit.lines()[0].policies;
+    assert!(policies.iter().any(|id| id == "restore.stage.person"));
+    assert!(policies.iter().all(|id| !id.contains("fetch")));
+}
+
+#[tokio::test]
 async fn a_failed_decision_audit_does_not_stage() {
     let bundle = publish(note_bundle_rows(), vec![], None).await;
     let place = roots();
@@ -1109,6 +1142,39 @@ async fn a_revoked_grant_is_absent_from_quarantine() {
         .windows(tombstone.len())
         .any(|window| window == tombstone));
     assert!(!holds(&place.quarantine, b"DO-NOT-RESTORE-SECRET"));
+    assert!(!place.live.exists());
+}
+
+#[tokio::test]
+async fn a_worker_fence_omits_the_environment_peer_credential() {
+    let credential = br#"{"id":"cred-w","kind":"environment-peer","fingerprint":"ab"}"#;
+    let log = DeletionLog::default()
+        .append(
+            DeletionFence::credential(CredentialKind::Worker, "cred-w", Fingerprint::of(b"public"))
+                .unwrap(),
+        )
+        .0;
+    let bundle = publish(
+        vec![Row {
+            store: StoreKind::EnvironmentPeerCredentials,
+            identity: "cred-w".into(),
+            bytes: Bytes::Public(credential.to_vec()),
+        }],
+        vec![],
+        Some(log),
+    )
+    .await;
+    let place = roots();
+    stage(
+        &bundle,
+        &place.quarantine,
+        &place.live,
+        &MemoryAudit::open(),
+        person(RestoreAction::Stage),
+        None,
+    )
+    .unwrap();
+    assert!(!holds(&place.quarantine, credential));
     assert!(!place.live.exists());
 }
 
@@ -1483,6 +1549,22 @@ async fn deferred_bundle(lines: Vec<DeferredEntry>) -> (Bundle, Roots) {
     (bundle, place)
 }
 
+fn mark_available(audit: &MemoryAudit, root: &Path, conversation_id: &str) {
+    let target = format!("{} {conversation_id}", root.display());
+    audit
+        .append(&RestoreEvidence {
+            target: &target,
+            before: "held",
+            after: "available",
+            cause: "fetched",
+            initiator: "person",
+            decision: "effect",
+            policies: &[],
+            attestations: "",
+        })
+        .unwrap();
+}
+
 fn open_one(
     place: &Roots,
     conversation_id: &str,
@@ -1516,12 +1598,12 @@ async fn an_opened_deferred_conversation_matches_the_recorded_fingerprint() {
     assert!(!report.already_present);
     assert_eq!(*source.writes.lock().unwrap(), 1);
     assert!(place.live.join("sessions/conv-bulk.sqlite3").is_file());
-    let fetched = audit
-        .lines()
-        .into_iter()
-        .find(|line| line.cause == "fetched")
-        .unwrap();
-    assert_eq!(fetched.before, "deferred");
+    let lines = audit.lines();
+    let matched = lines.iter().find(|line| line.cause == "matched").unwrap();
+    assert_eq!(matched.before, "deferred");
+    assert_eq!(matched.after, "held");
+    let fetched = lines.iter().find(|line| line.cause == "fetched").unwrap();
+    assert_eq!(fetched.before, "held");
     assert_eq!(fetched.after, "available");
     assert_eq!(fetched.initiator, "person");
     assert_eq!(fetched.decision, "effect");
@@ -1568,7 +1650,7 @@ async fn a_failed_fetch_cleanup_moves_the_session() {
             conversation_id: "conv-bulk",
         },
         &policy(),
-        &MemoryAudit::fail_after(1),
+        &MemoryAudit::fail_after(2),
         &KeepsSession,
         &source,
         &mut Quiet,
@@ -1666,7 +1748,9 @@ async fn a_matching_session_is_not_fetched_again() {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     fs::write(&path, &session.bytes).unwrap();
     let source = FakeSource::matching(&session);
-    let report = open_one(&place, "conv-bulk", &source, &MemoryAudit::open()).unwrap();
+    let audit = MemoryAudit::open();
+    mark_available(&audit, &place.live, "conv-bulk");
+    let report = open_one(&place, "conv-bulk", &source, &audit).unwrap();
     assert!(report.already_present);
     assert_eq!(*source.writes.lock().unwrap(), 0);
     assert_eq!(fs::read(&path).unwrap(), session.bytes);
@@ -1682,7 +1766,9 @@ async fn a_different_session_file_is_not_replaced() {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     fs::write(&path, &other.bytes).unwrap();
     let source = FakeSource::matching(&session);
-    let error = open_one(&place, "conv-bulk", &source, &MemoryAudit::open()).unwrap_err();
+    let audit = MemoryAudit::open();
+    mark_available(&audit, &place.live, "conv-bulk");
+    let error = open_one(&place, "conv-bulk", &source, &audit).unwrap_err();
     assert_eq!(error, RestoreFault::SessionDiffers);
     assert_eq!(*source.writes.lock().unwrap(), 0);
     assert_eq!(fs::read(&path).unwrap(), other.bytes);
@@ -2298,7 +2384,7 @@ async fn a_failed_fetch_fallback_empties_the_session() {
             conversation_id: "conv-bulk",
         },
         &policy(),
-        &MemoryAudit::fail_after(1),
+        &MemoryAudit::fail_after(2),
         &KeepsTree,
         &source,
         &mut Quiet,
@@ -2308,6 +2394,113 @@ async fn a_failed_fetch_fallback_empties_the_session() {
     let path = place.live.join("sessions/conv-bulk.sqlite3");
     assert_eq!(fs::metadata(&path).unwrap().len(), 0);
     assert!(!path.with_extension("sqlite3.rejected").exists());
+}
+
+/// Remove, rename, and empty all fail once the session file exists.
+struct KeepsBytes;
+
+impl QuarantineLayout for KeepsBytes {
+    fn begin(&self, quarantine: &Path, live: &Path) -> Result<Box<dyn Staging>, RestoreFault> {
+        DirectoryQuarantine.begin(quarantine, live)
+    }
+    fn load(&self, root: &Path) -> Result<LoadedTree, RestoreFault> {
+        DirectoryQuarantine.load(root)
+    }
+    fn promote(&self, quarantine: &Path, live: &Path) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.promote(quarantine, live)
+    }
+    fn remove_tree(&self, path: &Path) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.remove_tree(path)
+    }
+    fn read_bytes(&self, path: &Path) -> Result<Vec<u8>, RestoreFault> {
+        DirectoryQuarantine.read_bytes(path)
+    }
+    fn session_temp(&self, root: &Path, relative: &str) -> Result<PathBuf, RestoreFault> {
+        DirectoryQuarantine.session_temp(root, relative)
+    }
+    fn publish_file(&self, temp: &Path, final_path: &Path) -> Result<(), RestoreFault> {
+        let name = final_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("");
+        if name.ends_with(".rejected") {
+            return Err(RestoreFault::Unreadable);
+        }
+        DirectoryQuarantine.publish_file(temp, final_path)
+    }
+    fn remove_file(&self, path: &Path) -> Result<(), RestoreFault> {
+        if path.exists() {
+            return Err(RestoreFault::Unreadable);
+        }
+        Ok(())
+    }
+    fn exists(&self, path: &Path) -> Result<bool, RestoreFault> {
+        DirectoryQuarantine.exists(path)
+    }
+    fn canonicalize(&self, path: &Path) -> Result<PathBuf, RestoreFault> {
+        DirectoryQuarantine.canonicalize(path)
+    }
+    fn anchor(&self, path: &Path) -> Result<PathBuf, RestoreFault> {
+        DirectoryQuarantine.anchor(path)
+    }
+    fn hold(
+        &self,
+        root: &Path,
+    ) -> Result<Box<dyn crate::backup::application::RestoreHold>, RestoreFault> {
+        DirectoryQuarantine.hold(root)
+    }
+    fn mark_ready(&self, root: &Path) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.mark_ready(root)
+    }
+    fn ready(&self, root: &Path) -> Result<bool, RestoreFault> {
+        DirectoryQuarantine.ready(root)
+    }
+    fn spoil(&self, _path: &Path) -> Result<(), RestoreFault> {
+        Err(RestoreFault::Unreadable)
+    }
+    fn session_cut(&self, path: &Path, conversation_id: &str) -> Result<SessionCut, RestoreFault> {
+        DirectoryQuarantine.session_cut(path, conversation_id)
+    }
+}
+
+#[tokio::test]
+async fn a_failed_fetch_that_cannot_be_retired_is_not_served() {
+    let session = sealed_session(b"session-v1");
+    let (_bundle, place) =
+        deferred_bundle(deferred_rows("conv-bulk", session.size, session.digest)).await;
+    let source = FakeSource::matching(&session);
+    let error = open_deferred_conversation(
+        &OpenRequest {
+            facts: person(RestoreAction::Fetch),
+            root: &place.live,
+            conversation_id: "conv-bulk",
+        },
+        &policy(),
+        &MemoryAudit::fail_after(2),
+        &KeepsBytes,
+        &source,
+        &mut Quiet,
+    )
+    .unwrap_err();
+    assert_eq!(error, RestoreFault::Retained);
+    let path = place.live.join("sessions/conv-bulk.sqlite3");
+    assert!(fs::metadata(&path).unwrap().len() > 0);
+    let again = open_deferred_conversation(
+        &OpenRequest {
+            facts: person(RestoreAction::Fetch),
+            root: &place.live,
+            conversation_id: "conv-bulk",
+        },
+        &policy(),
+        &MemoryAudit::open(),
+        &KeepsBytes,
+        &source,
+        &mut Quiet,
+    )
+    .unwrap_err();
+    assert_eq!(again, RestoreFault::Retained);
+    assert!(fs::metadata(&path).unwrap().len() > 0);
+    assert_eq!(*source.writes.lock().unwrap(), 1);
 }
 
 #[tokio::test]

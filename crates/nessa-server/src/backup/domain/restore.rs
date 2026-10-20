@@ -40,6 +40,8 @@ pub enum RestoreFault {
     Paths,
     /// A session database still contained a fenced conversation and could not be filtered.
     FencedBody,
+    /// The session file is still readable and could not be removed, moved, or emptied.
+    Retained,
 }
 
 impl RestoreFault {
@@ -64,6 +66,7 @@ impl RestoreFault {
             Self::SessionDiffers => "session-differs",
             Self::Paths => "paths",
             Self::FencedBody => "fenced-body",
+            Self::Retained => "retained",
         }
     }
 }
@@ -186,9 +189,20 @@ pub fn credential_is_fenced(
                 kind: fenced,
                 credential_id: id,
                 ..
-            } if *fenced == kind && id == credential_id
+            } if id == credential_id && same_stored_credential(*fenced, kind)
         )
     })
+}
+
+/// A hosted worker and an environment peer share one registry class. Export
+/// stores that credential as an environment peer and labels the fence worker.
+fn same_stored_credential(fenced: CredentialKind, stored: CredentialKind) -> bool {
+    fenced == stored
+        || matches!(
+            (fenced, stored),
+            (CredentialKind::Worker, CredentialKind::EnvironmentPeer)
+                | (CredentialKind::EnvironmentPeer, CredentialKind::Worker)
+        )
 }
 
 pub fn conversation_is_fenced(conversation_id: &str, fences: &[DeletionFence]) -> bool {
@@ -583,6 +597,27 @@ mod tests {
             CredentialKind::Peer,
             "cred-9",
             &fences
+        ));
+        let worker = [DeletionFence::credential(
+            CredentialKind::Worker,
+            "cred-w",
+            Fingerprint::of(b"public"),
+        )
+        .unwrap()];
+        assert!(credential_is_fenced(
+            CredentialKind::EnvironmentPeer,
+            "cred-w",
+            &worker
+        ));
+        assert!(credential_is_fenced(
+            CredentialKind::Worker,
+            "cred-w",
+            &worker
+        ));
+        assert!(!credential_is_fenced(
+            CredentialKind::Device,
+            "cred-w",
+            &worker
         ));
         assert!(metadata_omitted(
             MetadataFacts {

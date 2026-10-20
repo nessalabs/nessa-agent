@@ -475,9 +475,19 @@ impl QuarantineLayout for DirectoryQuarantine {
         if symlink_exists(live)? {
             return Err(RestoreFault::LiveOccupied);
         }
+        let from_parent = quarantine.parent().map(Path::to_path_buf);
+        let to_parent = live.parent().map(Path::to_path_buf);
         fs::rename(quarantine, live).map_err(|_| RestoreFault::Rename)?;
-        if let Some(parent) = live.parent() {
-            let _ = sync_directory(parent);
+        // Both directories must commit the rename. Ignoring either sync would
+        // let a later audit call the tree live while a parent still has the
+        // old name.
+        if let Some(parent) = to_parent.as_deref() {
+            sync_directory(parent).map_err(|_| RestoreFault::Unreadable)?;
+        }
+        if let Some(parent) = from_parent.as_deref() {
+            if to_parent.as_deref() != Some(parent) {
+                sync_directory(parent).map_err(|_| RestoreFault::Unreadable)?;
+            }
         }
         let marker = live.join("accept-ready");
         if marker.exists() {
@@ -706,7 +716,11 @@ fn walk(
             return Err(RestoreFault::Tamper);
         }
         let relative = relative_to(root, &path)?;
-        if relative == "journal.txt" || relative == "accept-ready" {
+        if relative == "journal.txt"
+            || relative == "accept-ready"
+            || relative.ends_with(".partial")
+            || relative.ends_with(".rejected")
+        {
             continue;
         }
         let fingerprint = hash_file(&path)?;
@@ -859,6 +873,29 @@ impl<C: ExportClock> RestoreAudit for FileRestoreAudit<C> {
         text.push_str(&line);
         text.push('\n');
         persist(&self.directory, &self.path, &text).map_err(|_| DecisionAuditError::NotStored)
+    }
+
+    fn available(&self, target: &str) -> Result<bool, DecisionAuditError> {
+        let _gate = self
+            .gate
+            .lock()
+            .map_err(|_| DecisionAuditError::NotStored)?;
+        let _file = exclusive(&self.directory).map_err(|_| DecisionAuditError::NotStored)?;
+        if !self.path.is_file() {
+            return Ok(false);
+        }
+        let text = fs::read_to_string(&self.path).map_err(|_| DecisionAuditError::NotStored)?;
+        for line in text.lines().filter(|line| !line.is_empty()) {
+            let value: Value =
+                serde_json::from_str(line).map_err(|_| DecisionAuditError::NotStored)?;
+            if value.get("target").and_then(Value::as_str) == Some(target)
+                && value.get("after").and_then(Value::as_str) == Some("available")
+                && value.get("decision").and_then(Value::as_str) == Some("effect")
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 }
 

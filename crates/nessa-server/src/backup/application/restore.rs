@@ -8,8 +8,8 @@
 //! accept ──▶ policy ──▶ decision audit ──▶ seal and receipts
 //!             ──▶ rename quarantine to live ──▶ outcome audit
 //! open ──▶ policy ──▶ decision audit ──▶ write temp session
-//!             ──▶ fingerprint ──▶ rename into sessions/
-//!             ──▶ outcome audit (failure deletes the session file)
+//!             ──▶ fingerprint ──▶ match audit ──▶ rename into sessions/
+//!             ──▶ available audit (failure retires the session file)
 //! ```
 //!
 //! Arrows are the order one call runs. The live path is not written before
@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 
 use super::ports::{
     DeferredSessionSource, FetchProgress, InventoryDecision, InventoryDenial, LeaseReceipts,
-    RestoreAudit, RestoreEvidence, RestoreFacts, RestorePolicyEvaluator, SessionCut,
+    RestoreAction, RestoreAudit, RestoreEvidence, RestoreFacts, RestorePolicyEvaluator, SessionCut,
     SessionSourceError,
 };
 use super::verification::{
@@ -143,8 +143,9 @@ pub fn stage_quarantine(
     later_reader: &dyn SealedInventoryReader,
 ) -> Result<StageReport, RestoreFault> {
     let label = request.quarantine.display().to_string();
-    let kind = request.facts.kind;
-    let policies = decide(policy, &request.facts, audit, &label, "absent", "absent")?;
+    let facts = entry_facts(&request.facts, RestoreAction::Stage);
+    let kind = facts.kind;
+    let policies = decide(policy, &facts, audit, &label, "absent", "absent")?;
     let recorded = Recorded {
         audit,
         target: &label,
@@ -256,15 +257,9 @@ pub fn accept_quarantine(
     layout: &dyn QuarantineLayout,
 ) -> Result<AcceptReport, RestoreFault> {
     let label = request.quarantine.display().to_string();
-    let kind = request.facts.kind;
-    let policies = decide(
-        policy,
-        &request.facts,
-        audit,
-        &label,
-        "verified",
-        "verified",
-    )?;
+    let facts = entry_facts(&request.facts, RestoreAction::Accept);
+    let kind = facts.kind;
+    let policies = decide(policy, &facts, audit, &label, "verified", "verified")?;
     let recorded = Recorded {
         audit,
         target: &label,
@@ -357,15 +352,9 @@ pub fn open_deferred_conversation(
     progress: &mut dyn FetchProgress,
 ) -> Result<OpenReport, RestoreFault> {
     let label = format!("{} {}", request.root.display(), request.conversation_id);
-    let kind = request.facts.kind;
-    let policies = decide(
-        policy,
-        &request.facts,
-        audit,
-        &label,
-        "deferred",
-        "deferred",
-    )?;
+    let facts = entry_facts(&request.facts, RestoreAction::Fetch);
+    let kind = facts.kind;
+    let policies = decide(policy, &facts, audit, &label, "deferred", "deferred")?;
     let recorded = Recorded {
         audit,
         target: &label,
@@ -412,18 +401,28 @@ pub fn open_deferred_conversation(
         Err(error) => return Err(recorded.stop(error)),
     };
     if present {
-        return match layout.session_cut(&final_path, request.conversation_id) {
-            Ok(cut) if cut.size == expected.size && cut.digest == expected.digest => {
-                recorded.write("available", "available", "already", "effect")?;
-                Ok(OpenReport {
-                    size: cut.size,
-                    digest: cut.digest,
-                    already_present: true,
-                })
+        match audit.available(&label) {
+            Ok(true) => {
+                return match layout.session_cut(&final_path, request.conversation_id) {
+                    Ok(cut) if cut.size == expected.size && cut.digest == expected.digest => {
+                        recorded.write("available", "available", "already", "effect")?;
+                        Ok(OpenReport {
+                            size: cut.size,
+                            digest: cut.digest,
+                            already_present: true,
+                        })
+                    }
+                    Ok(_) => Err(recorded.stop(RestoreFault::SessionDiffers)),
+                    Err(error) => Err(recorded.stop(error)),
+                };
             }
-            Ok(_) => Err(recorded.stop(RestoreFault::SessionDiffers)),
-            Err(error) => Err(recorded.stop(error)),
-        };
+            Ok(false) => {
+                if !retire_session(layout, &final_path) {
+                    return Err(RestoreFault::Retained);
+                }
+            }
+            Err(_) => return Err(RestoreFault::Audit),
+        }
     }
     let temp = match layout.session_temp(&root, &relative) {
         Ok(temp) => temp,
@@ -447,16 +446,25 @@ pub fn open_deferred_conversation(
         let _ = layout.remove_file(&temp);
         return Err(recorded.stop(RestoreFault::SourceChanged));
     }
+    // The session name does not exist until this line is stored. A failed
+    // audit therefore cannot leave the conversation at its normal path.
+    if recorded
+        .write("deferred", "held", "matched", "effect")
+        .is_err()
+    {
+        return Err(retire_or_audit(layout, &temp));
+    }
     if let Err(error) = layout.publish_file(&temp, &final_path) {
-        let _ = layout.remove_file(&temp);
+        if !retire_session(layout, &temp) {
+            return Err(RestoreFault::Retained);
+        }
         return Err(recorded.stop(error));
     }
     if recorded
-        .write("deferred", "available", "fetched", "effect")
+        .write("held", "available", "fetched", "effect")
         .is_err()
     {
-        retire_session(layout, &final_path);
-        return Err(RestoreFault::Audit);
+        return Err(retire_or_audit(layout, &final_path));
     }
     Ok(OpenReport {
         size: cut.size,
@@ -590,6 +598,23 @@ fn hold_roots(
         _earlier: layout.hold(left)?,
         _later: layout.hold(right)?,
     })
+}
+
+fn entry_facts<'a>(facts: &RestoreFacts<'a>, action: RestoreAction) -> RestoreFacts<'a> {
+    RestoreFacts {
+        kind: facts.kind,
+        cause: facts.cause,
+        action,
+    }
+}
+
+/// `Audit` when the file is gone. `Retained` when it is still readable.
+fn retire_or_audit(layout: &dyn QuarantineLayout, path: &Path) -> RestoreFault {
+    if retire_session(layout, path) {
+        RestoreFault::Audit
+    } else {
+        RestoreFault::Retained
+    }
 }
 
 /// Remove the published session, or move it aside, or empty it.

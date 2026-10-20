@@ -82,5 +82,10 @@ holds the live path's lock across that rename. A quarantine is promotable
 only after its sealed audit is stored. The fetch checks the session with
 the restore layout, and a fetch that cannot be audited removes, moves, or
 empties that file. Emptying truncates the file directly, because the
-storage opener refuses a copy it did not create. A canonical session image that cannot be read is not
+storage opener refuses a copy it did not create. When that file still
+cannot be made unreadable, the open returns retained and a later open does
+not serve it. A worker fence omits the environment-peer credential with the
+same id, because those two labels are one stored credential. Each restore
+entry point evaluates its own Cedar action. Accept syncs both parents of
+the rename before reporting success. A canonical session image that cannot be read is not
 sealed while a conversation fence applies.

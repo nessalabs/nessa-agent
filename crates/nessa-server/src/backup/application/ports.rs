@@ -285,6 +285,9 @@ pub struct RestoreEvidence<'a> {
 /// reported as done. The adapter assigns identity and observation time.
 pub trait RestoreAudit: Send + Sync {
     fn append(&self, evidence: &RestoreEvidence<'_>) -> Result<(), DecisionAuditError>;
+
+    /// Whether an effect line already records `target` as available.
+    fn available(&self, target: &str) -> Result<bool, DecisionAuditError>;
 }
 
 /// Bytes copied while a deferred conversation is fetched.

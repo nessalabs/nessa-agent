@@ -17,7 +17,7 @@ stage ──▶ verify the bundle and keep that authenticated listing
 accept ──▶ hold the restore-root lock, seal still matches, live path absent
             └── rename quarantine → live, then store the audit, then release
 open ──▶ hold that same lock, stream one deferred conversation into a temp file
-            └── publish only when size and fingerprint match, then store the audit
+            └── store the match, then publish, then store that the session is available
 ```
 
 Arrows are the order one call runs. The live path is not created, opened for
@@ -89,7 +89,9 @@ the result is a visible audit failure, not a second rename back.
   `an_older_inventory_is_refused`, `a_newer_fence_omits_the_grant`
 - A share grant, credential, or live metadata row named by a fence is not
   copied. A tombstone is. A row of those stores that cannot be checked
-  aborts the stage. `a_revoked_grant_is_absent_from_quarantine`
+  aborts the stage. A worker fence and an environment-peer fence name the
+  same stored credential. `a_revoked_grant_is_absent_from_quarantine`,
+  `a_worker_fence_omits_the_environment_peer_credential`
 - A fenced conversation that still sits in a canonical or notes session
   database is deleted from the restored image, and the image is vacuumed.
   A session image that cannot be checked is not copied.
@@ -104,14 +106,22 @@ the result is a visible audit failure, not a second rename back.
   of the seal. A stage whose cleanup cannot delete the tree is still refused
   by accept. `a_failed_stage_cleanup_still_refuses_acceptance`
 - A fetched session is checked by the layout, not by the source that wrote
-  it. If the fetch audit is not stored, the file is removed, moved aside,
-  or emptied. Emptying truncates the file directly: the storage opener
-  refuses a copy it did not create, and that refusal must not leave the
-  session readable. `a_failed_fetch_fallback_empties_the_session`
+  it. The match is stored before the session name exists. The session is
+  available only after the following effect line is stored. If that line is
+  not stored, the file is removed, moved aside, or emptied. Emptying
+  truncates the file directly: the storage opener refuses a copy it did not
+  create. If none of those three leaves the file unreadable, the result is
+  retained and a later open does not serve it.
+  `a_failed_fetch_fallback_empties_the_session`,
+  `a_failed_fetch_that_cannot_be_retired_is_not_served`
 - A session body that cannot be inspected is not sealed while a conversation
   fence applies. `an_unreadable_session_body_is_not_sealed_when_a_conversation_is_fenced`
 - A refusal whose audit line is not stored is an audit failure.
   `a_lost_refusal_audit_is_not_a_plain_refusal`
+- Each entry point evaluates its own Cedar action. A caller-supplied action
+  does not choose the policy. `a_caller_supplied_action_does_not_choose_the_policy`
+- Accept syncs the live parent and, when it differs, the quarantine parent,
+  and does not report success when either sync fails.
 - A lease line `granted` or `command_granted` without a later `ended` gains
   one `ended` line with uncertain cleanup. Accept then requires an operator
   receipt for each such lease. No receipt leaves the tree quarantined.
