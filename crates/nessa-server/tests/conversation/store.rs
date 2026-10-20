@@ -229,7 +229,7 @@ fn an_alpha_v1_database_is_refused_without_migrating_its_rows() {
         LocalConversationStore::open(&path),
         Err(nessa_local_database::OpenError::Version {
             found: 1,
-            expected: 7
+            expected: 8
         })
     ));
     let old_row: String = raw(&path)
@@ -256,7 +256,7 @@ fn an_alpha_v2_database_is_refused_without_erasing_ownership() {
         LocalConversationStore::open(&path),
         Err(nessa_local_database::OpenError::Version {
             found: 2,
-            expected: 7
+            expected: 8
         })
     ));
     let retained: String = raw(&path)
@@ -2916,7 +2916,7 @@ fn a_version_4_database_is_refused_without_erasing_its_grants() {
         LocalConversationStore::open(&path),
         Err(nessa_local_database::OpenError::Version {
             found: 4,
-            expected: 7
+            expected: 8
         })
     ));
     let kept: String = raw(&path)
@@ -2926,7 +2926,7 @@ fn a_version_4_database_is_refused_without_erasing_its_grants() {
 }
 
 /// The previous metadata version, whose grants name a role, is refused and
-/// left untouched. This build reads version 7 only.
+/// left untouched. This build reads version 8, and brings only 6 and 7 forward.
 #[test]
 fn a_version_5_database_is_refused_without_erasing_its_grants() {
     let directory = tempfile::tempdir().unwrap();
@@ -2953,7 +2953,7 @@ fn a_version_5_database_is_refused_without_erasing_its_grants() {
         LocalConversationStore::open(&path),
         Err(nessa_local_database::OpenError::Version {
             found: 5,
-            expected: 7
+            expected: 8
         })
     ));
     let kept: String = raw(&path)
