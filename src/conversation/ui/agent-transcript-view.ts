@@ -46,15 +46,17 @@ function nullableRawText(raw: Record<string, JsonValue>, key: string): string | 
   if (value === null || typeof value === "string") return value
   throw new Error("Transcript event has invalid source execution metadata")
 }
-function localNotice(raw: JsonValue): { id: string; text: string } | undefined {
+function localNotice(
+  raw: JsonValue,
+): { id: string; kind: string; text: string } | undefined {
   if (raw === null || Array.isArray(raw) || typeof raw !== "object") return undefined
   const value = raw.localNotice
   if (value === null || Array.isArray(value) || typeof value !== "object")
     return undefined
   if (!Object.hasOwn(value, "id") || !Object.hasOwn(value, "text")) return undefined
-  return typeof value.id === "string" && typeof value.text === "string"
-    ? { id: value.id, text: value.text }
-    : undefined
+  if (typeof value.id !== "string" || typeof value.text !== "string") return undefined
+  const kind = Object.hasOwn(value, "kind") && value.kind === "hook" ? "hook" : "review"
+  return { id: value.id, kind, text: value.text }
 }
 function executionMetadata(events: readonly AgentEvent[]): ExecutionMetadata | undefined {
   const productEvents = events.filter(
@@ -202,7 +204,11 @@ export function agentTurnView(turn: Turn, transcript: Transcript) {
       const notice = localNotice(event.raw)
       if (notice) {
         flushWork()
-        content.push({ key: `notice:${notice.id}`, notice: notice.text })
+        content.push({
+          key:
+            notice.kind === "hook" ? `notice:hook:${notice.id}` : `notice:${notice.id}`,
+          notice: notice.text,
+        })
       }
     }
   }

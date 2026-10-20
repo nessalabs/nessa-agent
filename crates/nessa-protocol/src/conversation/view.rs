@@ -1061,6 +1061,13 @@ pub struct ConversationPart {
     pub kind: String,
     pub text: String,
     pub tool_id: String,
-    /// Stable identity for a runtime-owned declined-review notice; empty otherwise.
+    /// Decimal identity of a local notice; empty otherwise.
+    ///
+    /// A review notice uses the declined-review or permission id. A hook notice
+    /// uses the permission id. Those identities are independent, so one decimal
+    /// may name both. [`notice_kind`](Self::notice_kind) says which decision it is.
     pub notice_id: String,
+    /// `review` or `hook` on a local notice; empty on every other part.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub notice_kind: String,
 }

@@ -1266,6 +1266,21 @@ pub struct ConversationRuntime {
     pub context_window_tokens: u64,
     pub reasoning: bool,
 }
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub enum ConversationNoticeKind {
+    #[serde(rename = "review")]
+    Review,
+    #[serde(rename = "hook")]
+    Hook,
+}
+impl ConversationNoticeKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Review => "review",
+            Self::Hook => "hook",
+        }
+    }
+}
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConversationPart {
@@ -1274,6 +1289,8 @@ pub struct ConversationPart {
     pub text: String,
     pub tool_id: String,
     pub notice_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notice_kind: Option<ConversationNoticeKind>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message_id: Option<String>,
 }

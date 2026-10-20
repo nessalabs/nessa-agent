@@ -45,7 +45,11 @@ a rule, or a saved continue with one, is corrupt.
 A hook stop is not relabelled as a rule. The cancellation already names the
 hook. When its code is an end-turn or a close-session hook refusal, and its
 review id is a notice id, the panel says the turn stopped or the session
-closed, names the tool, and quotes the hook's reason.
+closed, names the tool, and quotes the hook's reason. That notice is a hook
+notice. A declined-review notice is a review notice. `ReviewDeclineId` and
+`PermissionId` are different identities, so the same decimal may name both
+in one turn. The wire carries which decision the notice is. Neither sentence
+replaces the other.
 
 The gateway log for a configured stop names the rule id, its revision, and
 the tool. The hook stop log names the tool, the hook index or `runtime`, and
@@ -76,6 +80,7 @@ first matching row is what happens.
 | A hook close-session | The withdrawal is recorded while the session can still record it, then the session is closed. The panel sentence is that cancellation. |
 | A hook returns continue, or an end-turn the binding cannot perform and so records as continue | No stop sentence. The turn keeps running. |
 | A hook stop's review id is not a notice id | No notice is added, because a notice id that the client rejects would drop the whole view. The cancellation and its audit remain. |
+| A hook stop's permission id equals a declined-review id in the same turn | Both notices stay. They are different decisions. The hook sentence is not dropped, and a later review update does not rewrite the hook sentence. |
 | Provider notification of the stop fails | The local notice and the local outcome stay. The notification failure is its own log line. |
 
 ## Invariants
@@ -90,6 +95,8 @@ first matching row is what happens.
   using the turn.
 - General logs name the rule or the hook and the tool. They do not include
   tool arguments.
+- A review notice and a hook notice are different notices. The same decimal
+  may name both. The notice kind is what tells them apart.
 
 ## Alternatives considered
 

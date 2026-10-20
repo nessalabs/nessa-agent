@@ -845,3 +845,54 @@ it("splits work around distinct local notices without changing their meaning", (
     transcript.events.filter((event) => event.payload.type === "permission_denied"),
   ).toEqual([])
 })
+
+it("shows a hook notice beside a review notice that uses the same decimal", () => {
+  const transcript = agentTranscript(
+    "chat",
+    [
+      {
+        id: "assistant",
+        from: "assistant",
+        executionId: "run",
+        text: "",
+        status: "cancelled",
+        parts: [
+          {
+            offset: 0,
+            kind: "local_notice",
+            text: "Nessa declined a tool review labeled Bash because that tool is not reviewable here.",
+            toolId: "",
+            noticeId: "7",
+            noticeKind: "review",
+          },
+          {
+            offset: 1,
+            kind: "local_notice",
+            text: "Nessa stopped this turn before write_file ran because a hook refused it: shell is blocked.",
+            toolId: "",
+            noticeId: "7",
+            noticeKind: "hook",
+          },
+        ],
+      },
+    ],
+    [],
+  )
+  const row = agentTurnView(transcript.turns[0]!, transcript)
+  expect(
+    row.content.map((part) =>
+      "notice" in part ? { notice: part.notice, key: part.key } : part,
+    ),
+  ).toEqual([
+    {
+      notice:
+        "Nessa declined a tool review labeled Bash because that tool is not reviewable here.",
+      key: "notice:7",
+    },
+    {
+      notice:
+        "Nessa stopped this turn before write_file ran because a hook refused it: shell is blocked.",
+      key: "notice:hook:7",
+    },
+  ])
+})

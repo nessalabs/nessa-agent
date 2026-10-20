@@ -334,6 +334,8 @@ export type AgentPart = {
   text: string
   toolId: string
   noticeId: string
+  /** Which local decision a notice is. A review and a hook may share one decimal. */
+  noticeKind?: "review" | "hook"
 }
 
 export type AssistantTurn = {

@@ -2343,6 +2343,7 @@ fn a_stopping_refusal_says_why_the_turn_stopped() {
         "Nessa stopped this turn before Bash ran because rule refuse-shell (revision 3) refused it. That tool is not reviewable here."
     );
     assert_eq!(notice.notice_id, "4");
+    assert_eq!(notice.notice_kind, "review");
     let closed = shown(vec![declined(
         DeclinedReview::selected(
             ReviewDeclineId::new("8").unwrap(),
@@ -2407,6 +2408,7 @@ fn a_hook_stop_names_the_tool_and_the_hook_reason() {
         "Nessa stopped this turn before write_file ran because a hook refused it: shell is blocked."
     );
     assert_eq!(notice.notice_id, "7");
+    assert_eq!(notice.notice_kind, "hook");
     assert!(!notice.text.contains("{"));
 
     let continued = PermissionCancellationReason::custom(
@@ -2488,6 +2490,133 @@ fn a_hook_stop_names_the_tool_and_the_hook_reason() {
         .parts
         .iter()
         .all(|part| part.kind != "local_notice"));
+}
+
+fn notices(
+    message: &crate::conversation::view::ConversationMessage,
+) -> Vec<&crate::conversation::view::ConversationPart> {
+    message
+        .parts
+        .iter()
+        .filter(|part| part.kind == "local_notice")
+        .collect()
+}
+
+fn hook_cancellation(outcome: RefusalOutcome, explanation: &str) -> ExecutionEvent {
+    let session = ExecutionSessionId::new("provider-session").unwrap();
+    let execution = ExecutionId::new("execution").unwrap();
+    let permission = PermissionId::new("7").unwrap();
+    let reason = PermissionCancellationReason::custom(
+        CustomPermissionCancellationReason::hook_refusal_for_test(
+            &session,
+            &execution,
+            &permission,
+            outcome,
+            explanation,
+        )
+        .unwrap(),
+    );
+    cancelled_review(
+        reason,
+        CancellationOrigin::Client(
+            ActionContext::new("permission-review-hook", "0", permission.as_str()).unwrap(),
+        ),
+    )
+}
+
+/// Fold events the way the panel does, without the snapshot admission check.
+/// Admission rejects a permission id that repeats a decline id. The panel
+/// still has to keep both sentences when a history reaches it with both,
+/// because those identities are independent.
+fn project_events(events: Vec<ExecutionEvent>) -> ConversationView {
+    let mut projection = projection();
+    for event in &events {
+        projection.observe(event);
+    }
+    projection.read()
+}
+
+/// A declined review and a hook stop are different decisions. The same decimal
+/// may name both, and each sentence stays.
+#[test]
+fn a_hook_stop_stays_beside_a_declined_review_with_the_same_id() {
+    let decline = DeclinedReview::selected(
+        ReviewDeclineId::new("7").unwrap(),
+        ReviewDecline::new(
+            Some("Bash"),
+            ReviewDeclineReason::ToolNotReviewable,
+            RefusalOutcome::Continue,
+        ),
+        None,
+    )
+    .unwrap();
+    let ended = project_events(vec![
+        declined(decline.clone()),
+        review("{}".into()),
+        hook_cancellation(RefusalOutcome::EndTurn, "shell is blocked"),
+        event(ExecutionUpdate::Finished(ExecutionOutcome::Cancelled)),
+    ]);
+    let ended = notices(&ended.messages[0]);
+    assert_eq!(ended.len(), 2);
+    assert_eq!(ended[0].notice_kind, "review");
+    assert_eq!(ended[0].notice_id, "7");
+    assert_eq!(
+        ended[0].text,
+        "Nessa declined a tool review labeled Bash because that tool is not reviewable here. Nessa has not confirmed writing the refusal to the agent."
+    );
+    assert_eq!(ended[1].notice_kind, "hook");
+    assert_eq!(ended[1].notice_id, "7");
+    assert_eq!(
+        ended[1].text,
+        "Nessa stopped this turn before write_file ran because a hook refused it: shell is blocked."
+    );
+
+    let confirmed = decline.advance(ReviewDeclineStage::WriteConfirmed).unwrap();
+    let closed = project_events(vec![
+        declined(decline),
+        review("{}".into()),
+        hook_cancellation(RefusalOutcome::CloseSession, "shell is blocked"),
+        declined(confirmed),
+    ]);
+    let closed = notices(&closed.messages[0]);
+    assert_eq!(closed.len(), 2);
+    assert_eq!(closed[0].notice_kind, "review");
+    assert_eq!(
+        closed[0].text,
+        "Nessa declined a tool review labeled Bash because that tool is not reviewable here."
+    );
+    assert_eq!(closed[1].notice_kind, "hook");
+    assert_eq!(closed[1].notice_id, "7");
+    assert_eq!(
+        closed[1].text,
+        "Nessa closed the session before write_file ran because a hook refused it: shell is blocked."
+    );
+}
+
+#[test]
+fn a_notice_kind_survives_the_product_wire() {
+    use crate::product::generated::{ConversationNoticeKind, ConversationPart as WirePart};
+    let view = shown(vec![
+        event(ExecutionUpdate::Message(MessageChunk::text("hello"))),
+        declined(refusal("Bash")),
+        review("{}".into()),
+        hook_cancellation(RefusalOutcome::CloseSession, "shell is blocked"),
+    ]);
+    let wire = |part: &crate::conversation::view::ConversationPart| -> WirePart {
+        serde_json::from_value(serde_json::to_value(part).unwrap()).unwrap()
+    };
+    let text = &view.messages[0].parts[0];
+    assert_eq!(text.kind, "text");
+    assert_eq!(wire(text).notice_kind, None);
+    let shown_notices = notices(&view.messages[0]);
+    assert_eq!(
+        wire(shown_notices[0]).notice_kind,
+        Some(ConversationNoticeKind::Review)
+    );
+    assert_eq!(
+        wire(shown_notices[1]).notice_kind,
+        Some(ConversationNoticeKind::Hook)
+    );
 }
 
 fn text_len(message: &crate::conversation::view::ConversationMessage) -> usize {

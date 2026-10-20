@@ -412,11 +412,22 @@ fn decline_notice(review: &DeclinedReview) -> String {
     text
 }
 
+/// A declined review or a deadline settlement. Its decimal is that review's.
+const REVIEW_NOTICE: &str = "review";
+/// A hook that stopped the turn. Its decimal is the permission's, which is a
+/// different identity from a review decline even when the text matches.
+const HOOK_NOTICE: &str = "hook";
+
+fn same_notice(part: &ConversationPart, kind: &str, id: &str) -> bool {
+    part.kind == "local_notice" && part.notice_kind == kind && part.notice_id == id
+}
+
 /// A hook that ended the turn or closed the session. Continue stays quiet
 /// here: the turn is still running. An end-turn sentence is held until that
 /// execution is cancelled, and dropped if it finishes any other way. A
 /// review id that is not a notice id is skipped, because the client rejects
-/// the whole view for one bad notice id.
+/// the whole view for one bad notice id. The notice is a hook notice, so a
+/// declined review that already used the same decimal stays beside it.
 fn hook_stop_notice(
     cancellation: &PermissionCancellation,
 ) -> Option<(String, String, RefusalOutcome)> {
@@ -1160,7 +1171,7 @@ impl Projection {
             let already = self.view.messages[index]
                 .parts
                 .iter()
-                .any(|part| part.kind == "local_notice" && part.notice_id == notice_id);
+                .any(|part| same_notice(part, HOOK_NOTICE, &notice_id));
             if already {
                 continue;
             }
@@ -1178,6 +1189,7 @@ impl Projection {
                 text: bounded,
                 tool_id: String::new(),
                 notice_id,
+                notice_kind: HOOK_NOTICE.into(),
             };
             let message = &mut self.view.messages[index];
             if message.parts.len() < 512 && message.retained_text + part.text.len() <= MAX_TEXT * 2
@@ -1199,7 +1211,8 @@ impl Projection {
         // The review's id becomes the notice's, and a notice id is the decimal
         // a review decline has; a saved history may hold any permission id, so
         // one that is not a notice id shows no notice rather than a view the
-        // client refuses whole.
+        // client refuses whole. A hook notice uses the same decimal shape and
+        // a different kind, so it does not count as this review's notice.
         let deadline_notice_shown = match event.update() {
             ExecutionUpdate::DeadlineAnswered {
                 id: permission,
@@ -1210,9 +1223,10 @@ impl Projection {
                     && self.deadline_settled(id, permission.as_str(), |published| {
                         published.effect() == *effect && published.reason() == reason.as_str()
                     })
-                    && !self.view.messages[index].parts.iter().any(|part| {
-                        part.kind == "local_notice" && part.notice_id == permission.as_str()
-                    })
+                    && !self.view.messages[index]
+                        .parts
+                        .iter()
+                        .any(|part| same_notice(part, REVIEW_NOTICE, permission.as_str()))
             }
             _ => false,
         };
@@ -1240,6 +1254,7 @@ impl Projection {
                 text: clipped(chunk.as_str(), available),
                 tool_id: String::new(),
                 notice_id: String::new(),
+                notice_kind: String::new(),
             }),
             // One part per tool call, where it was first seen: a call's later
             // updates change its `tools` entry, not the turn's parts.
@@ -1256,6 +1271,7 @@ impl Projection {
                     text: String::new(),
                     tool_id,
                     notice_id: String::new(),
+                    notice_kind: String::new(),
                 })
             }
             ExecutionUpdate::DeadlineAnswered {
@@ -1278,6 +1294,7 @@ impl Projection {
                         text: bounded,
                         tool_id: String::new(),
                         notice_id: permission.as_str().into(),
+                        notice_kind: REVIEW_NOTICE.into(),
                     })
                 }
             }
@@ -1287,7 +1304,7 @@ impl Projection {
                 if let Some(position) = self.view.messages[index]
                     .parts
                     .iter()
-                    .position(|part| part.kind == "local_notice" && part.notice_id == notice_id)
+                    .position(|part| same_notice(part, REVIEW_NOTICE, notice_id))
                 {
                     let previous = self.view.messages[index].parts[position].text.len();
                     let budget =
@@ -1312,6 +1329,7 @@ impl Projection {
                         text: bounded,
                         tool_id: String::new(),
                         notice_id: notice_id.into(),
+                        notice_kind: REVIEW_NOTICE.into(),
                     })
                 }
             }
@@ -1328,7 +1346,7 @@ impl Projection {
                         let already = self.view.messages[index]
                             .parts
                             .iter()
-                            .any(|part| part.kind == "local_notice" && part.notice_id == notice_id);
+                            .any(|part| same_notice(part, HOOK_NOTICE, &notice_id));
                         if already {
                             None
                         } else {
@@ -1343,6 +1361,7 @@ impl Projection {
                                 text: bounded,
                                 tool_id: String::new(),
                                 notice_id,
+                                notice_kind: HOOK_NOTICE.into(),
                             })
                         }
                     }
