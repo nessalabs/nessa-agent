@@ -5,6 +5,7 @@ import { resolve } from "node:path"
 import { attempt, CannotRun } from "./lib/cli.mjs"
 import { openPage, withEngines } from "./lib/browser.mjs"
 import { main } from "./lib/run.mjs"
+import { readLifetimeCounters } from "./lib/lifetime-snapshot.mjs"
 import { css, localLifetimeRoles } from "./lib/selectors.mjs"
 
 await main(
@@ -56,14 +57,13 @@ await main(
                   css.localLifetimes,
                 )
                 const state = await page.locator(css.localLifetimes).evaluate((node) => ({
-                  follows: JSON.parse(node.dataset.follows),
-                  stops: Number(node.dataset.stops),
-                  closed: JSON.parse(node.dataset.closed),
                   errors: node.dataset.error,
                   statuses: node.querySelectorAll('[role="status"]').length,
                   local: node.dataset.localId,
                   overflow: node.scrollWidth > node.clientWidth + 1,
                 }))
+                const counters = await readLifetimeCounters((read) => page.evaluate(read))
+                const seen = { ...state, ...counters }
                 if (options.shots && engine === "chromium" && width === 600 && !same) {
                   mkdirSync(options.shots, { recursive: true })
                   await page.locator(css.localLifetimes).screenshot({
@@ -75,28 +75,27 @@ await main(
                 return {
                   original,
                   replacement,
-                  ...state,
+                  ...seen,
                   failures: [
                     ...(replacement === original
                       ? ["restoration reused local lifetime"]
                       : []),
-                    ...(state.local !== replacement
+                    ...(seen.local !== replacement
                       ? ["old completion changed replacement identity"]
                       : []),
-                    ...(JSON.stringify(state.follows) !==
-                    JSON.stringify([A, same ? A : B])
+                    ...(JSON.stringify(seen.follows) !== JSON.stringify([A, same ? A : B])
                       ? ["replacement did not own exactly its follow"]
                       : []),
-                    ...(state.stops !== 1
-                      ? [`old follow stops ${state.stops}, expected 1`]
+                    ...(seen.stops !== 1
+                      ? [`old follow stops ${seen.stops}, expected 1`]
                       : []),
-                    ...(JSON.stringify(state.closed) !== JSON.stringify([A])
+                    ...(JSON.stringify(seen.closed) !== JSON.stringify([A])
                       ? ["close lost original remote target"]
                       : []),
-                    ...(state.statuses !== 0 || state.errors
+                    ...(seen.statuses !== 0 || seen.errors
                       ? ["old completion polluted replacement notices"]
                       : []),
-                    ...(state.overflow ? ["fixture overflowed horizontally"] : []),
+                    ...(seen.overflow ? ["fixture overflowed horizontally"] : []),
                   ],
                 }
               },

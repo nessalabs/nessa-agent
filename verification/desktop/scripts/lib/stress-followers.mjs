@@ -6,7 +6,8 @@
  * its list subscription. As it goes it stops one at random and follows it
  * again from the last cursor it applied, asks for one more than it may hold
  * (and must be refused), and follows again after a restart drops its
- * connection or the gateway ends a stream it fell behind on.
+ * connection, a change source closes, or the gateway ends a stream it fell
+ * behind on.
  *
  * What it must show at the end: every conversation's events, as it applied
  * them, are exactly the conversation's events from the start (none missed,
@@ -14,7 +15,8 @@
  * the one a read gives.
  */
 
-/** How a subscription may end without anything being wrong. */
+/** How a subscription may end without anything being wrong. A closed
+ * change source is subscribed again, as the product protocol says. */
 const RESUMED = new Set(["disconnected", "lagging", "source_closed"])
 /** Refusals that say this follower asked for something it should not have. */
 const REFUSED = new Set(["subscription_capacity", "subscription_duplicate"])
