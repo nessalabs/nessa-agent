@@ -40,7 +40,7 @@ fn pins_that_do_not_read_are_refused_whole() {
         String::new(),
         LINUX.to_owned(),
         format!("{LINUX}={a}"),
-        format!("aarch64-unknown-linux-gnu={a}:1"),
+        format!("aarch64-unknown-linux-gnu=nope,{LINUX}={a}:1"),
         format!("{LINUX}={a}:1,{LINUX}={a}:1"),
         format!("{LINUX}={}:1", "A".repeat(64)),
         format!("{LINUX}={}:1", "a".repeat(63)),
@@ -51,6 +51,69 @@ fn pins_that_do_not_read_are_refused_whole() {
     ] {
         assert!(pins(&spec).is_err(), "{spec:?}");
     }
+}
+
+/// A target this build does not know (a release that added one) is
+/// skipped, so the others still serve.
+#[test]
+fn a_target_this_build_does_not_know_is_skipped() {
+    let a = "a".repeat(64);
+    let read = pins(&format!("aarch64-unknown-linux-gnu={a}:1,{LINUX}={a}:2")).unwrap();
+    assert_eq!(read.len(), 1);
+    assert_eq!(read[0].target, LINUX);
+}
+
+/// Every target the release workflow builds (scripts/desktop's
+/// `TARGET_PLATFORMS`) is one this build has a platform for: a release
+/// adding a target adds it here too.
+#[test]
+fn every_target_a_release_builds_is_a_platform_here() {
+    let source = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../scripts/desktop/release-assets.mjs"
+    ))
+    .unwrap();
+    let table = source.split("const TARGET_PLATFORMS = {").nth(1).unwrap();
+    let table = &table[..table.find("\n}").unwrap()];
+    let targets: Vec<&str> = table
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix('"'))
+        .filter_map(|line| line.split('"').next())
+        .collect();
+    assert_eq!(targets.len(), 3, "{table}");
+    for target in targets {
+        assert!(Platform::of_target(target).is_some(), "{target}");
+    }
+}
+
+/// An earlier release's builds and long-abandoned downloads are removed;
+/// the current pins and a download under way are kept.
+#[test]
+fn the_cache_keeps_only_the_current_pins() {
+    let cache = tempfile::tempdir().unwrap();
+    let (current, earlier) = ("a".repeat(64), "b".repeat(64));
+    for name in [
+        current.as_str(),
+        earlier.as_str(),
+        ".download.1.0",
+        ".download.2.0",
+    ] {
+        std::fs::write(cache.path().join(name), b"x").unwrap();
+    }
+    let old = std::time::SystemTime::now() - std::time::Duration::from_secs(2 * 60 * 60);
+    File::options()
+        .write(true)
+        .open(cache.path().join(".download.1.0"))
+        .unwrap()
+        .set_modified(old)
+        .unwrap();
+    prune(cache.path(), &[&current]);
+    let mut left: Vec<_> = std::fs::read_dir(cache.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .collect();
+    left.sort();
+    assert_eq!(left, [".download.2.0".to_owned(), current]);
 }
 
 /// Serves `bytes` for every fetch, or fails it, and counts the fetches.

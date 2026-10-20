@@ -50,8 +50,9 @@ test("the release builds every target's host build first and compiles the app wi
     ([, target]) => target,
   )
   assert.deepEqual(rows, RELEASE_TARGETS)
-  // The gateway itself, from the tagged commit, and nothing set that would
-  // make it differ from what the app's builds compile.
+  // The gateway alone, from the tagged commit. Its features and flags may
+  // differ from the app's build of it; its lease protocol, a fingerprint of
+  // its sources, does not.
   assert.match(
     workflow,
     /cargo build --locked --release -p nessa-server --bin nessa --target \$\{\{ matrix\.host-target \}\}/,

@@ -2,7 +2,8 @@
 //! over SSH to find it, put it there, and start it (issue #703).
 //!
 //! ```text
-//! serve_command   ──▶ exec ~/.nessa/env/<digest>/nessa env serve
+//! serve_command   ──▶ exec the first ~/.nessa/env/<digest>/nessa kept there
+//!                     of the digests named, env serve
 //!                     absent: the stream ends with no hello
 //! probe_command   ──▶ "present", or "absent <os> <arch> <libc>"
 //! upload_command  ──▶ stdin to a private temporary file under ~/.nessa/env
@@ -48,10 +49,13 @@ pub const INSTALL_DIRECTORY: &str = ".nessa/env";
 const ABANDONED_MINUTES: u32 = 60;
 
 /// The command that starts, in its environment role on a host, the first
-/// copy kept there of the builds whose SHA-256s are `builds`, in that order.
-/// They are one build's copies for each platform (#734), so a host holds at
-/// most the one its platform runs; with none there the stream ends with no
-/// hello.
+/// copy kept there of the builds whose SHA-256s are `builds`, in that order:
+/// a gateway's own executable, then the release builds of its sources it
+/// pins for each platform (#734). Two gateways of one release on different
+/// platforms may each leave a copy on a host (an app's gateway is not the
+/// standalone build of its own platform); both speak one protocol and share
+/// the host's data directory, so either serves. With none there the stream
+/// ends with no hello.
 #[must_use]
 pub fn serve_command(builds: &[&str]) -> String {
     format!(

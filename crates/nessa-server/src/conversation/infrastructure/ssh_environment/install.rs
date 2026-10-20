@@ -42,7 +42,7 @@
 //! the host, verified, so the next lease is served by it and recorded
 //! `Connected`; the audit keeps the `InstallStarted` with no outcome.
 use super::audit::{EnvironmentAudit, EnvironmentEvent, InstallRefusal};
-use super::release::{pins, HttpsReleases, ReleaseBuild, ReleaseDownload};
+use super::release::{pins, prune, HttpsReleases, ReleaseBuild, ReleaseDownload};
 use crate::env::{HOST_BUILDS, HOST_BUILDS_FROM, LEASE_PROTOCOL};
 use crate::env_serve::install::{
     probe_command, serve_command, upload_command, Platform, Probe, Upload, UploadRefusal,
@@ -186,21 +186,32 @@ impl ReleaseCopy {
         download: Arc<dyn ReleaseDownload>,
         cache: &Path,
     ) -> Vec<Self> {
-        let (Some(spec), Some(from)) = (spec, from) else {
-            return Vec::new();
+        let (spec, from) = match (spec, from) {
+            (Some(spec), Some(from)) => (spec, from),
+            (None, None) => return Vec::new(),
+            _ => {
+                tracing::error!(
+                    "this build was compiled with only one of NESSA_HOST_BUILDS and \
+                     NESSA_HOST_BUILDS_FROM; it installs only itself"
+                );
+                return Vec::new();
+            }
         };
         match pins(spec) {
-            Ok(pins) => pins
-                .into_iter()
-                .map(|pin| {
-                    let build = ReleaseBuild::new(pin, from, download.clone(), cache.into());
-                    Self {
-                        platform: build.pin().platform.clone(),
-                        digest: build.pin().digest.clone(),
-                        build: Arc::new(build),
-                    }
-                })
-                .collect(),
+            Ok(pins) => {
+                let keep: Vec<&str> = pins.iter().map(|pin| pin.digest.as_str()).collect();
+                prune(cache, &keep);
+                pins.into_iter()
+                    .map(|pin| {
+                        let build = ReleaseBuild::new(pin, from, download.clone(), cache.into());
+                        Self {
+                            platform: build.pin().platform.clone(),
+                            digest: build.pin().digest.clone(),
+                            build: Arc::new(build),
+                        }
+                    })
+                    .collect()
+            }
             Err(error) => {
                 tracing::error!(%error, "this build's release pins do not read; it installs only itself");
                 Vec::new()
@@ -395,7 +406,13 @@ impl HostInstaller {
                 LeaseRefusal::EnvironmentPlatformUnsupported,
             ));
         };
-        let sending = self.sending.lock().await;
+        // This build's own executable shares one offset among its copies,
+        // so one is sent at a time; a release build opens a file of its own,
+        // and its download is not held up behind another host's upload.
+        let sending = match reason {
+            InstallRefusal::Source => Some(self.sending.lock().await),
+            _ => None,
+        };
         let opened = tokio::task::spawn_blocking(move || source.open())
             .await
             .map_err(io::Error::other)

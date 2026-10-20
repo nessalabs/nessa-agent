@@ -50,14 +50,17 @@ pub(crate) struct ReleasePin {
 }
 
 /// The pins in `spec`, `<target>=<sha256>:<bytes>` comma-separated, as the
-/// release workflow writes them.
+/// release workflow writes them. A target this build has no platform for
+/// (a release that added one) is skipped, said in the log, so the others
+/// still serve.
 ///
 /// # Errors
-/// What is wrong with it: a target a release does not publish, one named
-/// twice, a digest that is not 64 lowercase hex digits, a length that is
-/// not a positive number. A release build with any of these pins nothing.
+/// What is wrong with it: an entry of another shape, a target named twice,
+/// a digest that is not 64 lowercase hex digits, a length that is not a
+/// positive number. A release build with any of these pins nothing.
 pub(crate) fn pins(spec: &str) -> Result<Vec<ReleasePin>, String> {
     let mut pins: Vec<ReleasePin> = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
     for entry in spec.split(',') {
         let (target, pin) = entry
             .split_once('=')
@@ -65,9 +68,7 @@ pub(crate) fn pins(spec: &str) -> Result<Vec<ReleasePin>, String> {
         let (digest, bytes) = pin
             .split_once(':')
             .ok_or_else(|| format!("{entry:?} is not target=sha256:bytes"))?;
-        let platform = Platform::of_target(target)
-            .ok_or_else(|| format!("no release publishes a build for {target:?}"))?;
-        if pins.iter().any(|pin| pin.target == target) {
+        if !seen.insert(target) {
             return Err(format!("{target} is pinned twice"));
         }
         if digest.len() != 64
@@ -82,6 +83,13 @@ pub(crate) fn pins(spec: &str) -> Result<Vec<ReleasePin>, String> {
             .ok()
             .filter(|bytes| *bytes > 0)
             .ok_or_else(|| format!("{target}'s length {bytes:?} is not a number of bytes"))?;
+        let Some(platform) = Platform::of_target(target) else {
+            tracing::warn!(
+                target,
+                "a release build for a target this build does not know is not used"
+            );
+            continue;
+        };
         pins.push(ReleasePin {
             target: target.into(),
             platform,
@@ -111,6 +119,40 @@ pub(crate) struct ReleaseBuild {
     url: String,
     download: Arc<dyn ReleaseDownload>,
     cache: PathBuf,
+    /// Held while it is opened, so hosts asking for it together wait for
+    /// one download rather than each making their own.
+    opening: std::sync::Mutex<()>,
+}
+
+/// How long a download's temporary file is kept before it is taken to be
+/// one a stopped gateway left, in seconds.
+const ABANDONED_DOWNLOAD: Duration = Duration::from_secs(60 * 60);
+
+/// Remove from `cache` every build but those `keep` names (an earlier
+/// release's), and the temporary files of downloads abandoned long ago.
+pub(crate) fn prune(cache: &std::path::Path, keep: &[&str]) {
+    let Ok(entries) = fs::read_dir(cache) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        let stale = if name.starts_with(".download.") {
+            entry
+                .metadata()
+                .and_then(|metadata| metadata.modified())
+                .ok()
+                .and_then(|modified| modified.elapsed().ok())
+                .is_some_and(|age| age > ABANDONED_DOWNLOAD)
+        } else {
+            !keep.contains(&name.as_ref())
+        };
+        if stale {
+            if let Err(error) = fs::remove_file(entry.path()) {
+                tracing::warn!(%error, name = %name, "a stale release build could not be removed");
+            }
+        }
+    }
 }
 
 impl ReleaseBuild {
@@ -127,6 +169,7 @@ impl ReleaseBuild {
             url,
             download,
             cache,
+            opening: std::sync::Mutex::new(()),
         }
     }
 
@@ -163,6 +206,10 @@ impl BuildSource for ReleaseBuild {
     /// not the pin's are handed back as they measured, never kept, so the
     /// installer refuses them and sends nothing.
     fn open(&self) -> io::Result<Build> {
+        let _opening = self
+            .opening
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(mut kept) = self.kept() {
             kept.file.seek(SeekFrom::Start(0))?;
             return Ok(kept);
