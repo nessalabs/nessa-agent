@@ -15,7 +15,7 @@ import {
 describe("startup refusals", () => {
   it("names a repair without taking a message from the payload", () => {
     expect(startupRefusalSentence("not-provisioned")).toContain("just start")
-    expect(startupRefusalSentence("not-ready")).toContain("still starting")
+    expect(startupRefusalSentence("not-ready")).toContain("did not start")
     expect(startupRefusalSentence("not-listening")).toContain("not answering")
     const mismatch = hostRefusalFromInvoke({
       reason: "wrong-stage",

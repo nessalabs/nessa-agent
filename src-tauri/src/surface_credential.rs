@@ -448,7 +448,8 @@ mod tests {
     /// window read that does not wait is refused, and its asking starts
     /// nothing: no registration, no reconciliation, no token read (H2′).
     #[test]
-    fn the_desktop_window_is_refused_until_the_gateway_is_ready_and_starts_nothing() {
+    fn a_desktop_window_read_that_does_not_wait_is_refused_until_the_gateway_is_ready_and_starts_nothing(
+    ) {
         let credential = FakeCredentials::holding("fixture-only");
         let (gateway, host) = recording_gateway(Ok(reconciled_registration()));
         for _ in 0..3 {
@@ -550,8 +551,10 @@ mod tests {
                     ))
                     .unwrap();
             });
-            // The window asks while startup is held, whatever the scheduler
-            // does: its first read can only see startup still running.
+            // The window is about to ask while startup is held. Its first read
+            // sees startup still running unless that thread stalls past the
+            // 300 ms below; then the test passes without the wait, never
+            // fails wrongly.
             asking_rx.recv().unwrap();
             let before_ended = told_rx.recv_timeout(Duration::from_millis(300)).ok();
             release.send(()).unwrap();
@@ -655,6 +658,22 @@ mod tests {
         assert!(asked.elapsed() >= Duration::from_millis(200));
         assert_eq!(*host.registrations.lock().unwrap(), 0);
         assert_eq!(credential.reads(), 0);
+    }
+
+    /// The host's own start failing after a surface's reconciliation already
+    /// brought the gateway up leaves it up: that reconciliation owns the phase.
+    #[test]
+    fn a_host_start_that_fails_after_a_surface_brought_the_gateway_up_leaves_it_ready() {
+        let credential = FakeCredentials::holding("fixture-only");
+        let (gateway, host) = recording_gateway(Ok(reconciled_registration()));
+        load(panel::MAIN_WINDOW, Some(&gateway), &credential).unwrap();
+        host.classify_panics
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        assert!(tauri::async_runtime::block_on(gateway.start()).is_err());
+        assert_eq!(
+            load(DESKTOP_WINDOW, Some(&gateway), &credential).unwrap(),
+            "fixture-only"
+        );
     }
 
     /// A build without a managed gateway does not wait for one, for the

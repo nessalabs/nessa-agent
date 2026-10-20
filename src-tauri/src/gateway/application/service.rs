@@ -1167,7 +1167,7 @@ impl Gateway {
             // waiting on this startup (the desktop window's read) waits for
             // one that never runs.
             Err(error) => {
-                admission_failed(&self.lifecycle, &self.startup_events, &error);
+                start_failed(&self.lifecycle, &self.startup_events, &error);
                 Err(error)
             }
         }
@@ -1645,6 +1645,30 @@ fn admission_failed(
 ) {
     let failed = lifecycle.lock().ok().and_then(|mut current| {
         if current.running.is_some() {
+            return None;
+        }
+        current.startup = current
+            .startup
+            .next(GatewayStartupPhase::Failed(error.clone()));
+        Some(current.startup.clone())
+    });
+    if let Some(failed) = &failed {
+        publish(events, failed);
+    }
+}
+
+/// `Gateway::start` failed before admitting a reconciliation: Failed, but
+/// only over the startup no reconciliation has moved on from yet. A
+/// surface's reconciliation that ran first owns the phase, Ready included.
+fn start_failed(
+    lifecycle: &Arc<Mutex<Lifecycle>>,
+    events: &Arc<dyn GatewayStartupEvents>,
+    error: &GatewayError,
+) {
+    let failed = lifecycle.lock().ok().and_then(|mut current| {
+        let unstarted = current.running.is_none()
+            && current.startup.revision() == GatewayStartup::starting().revision();
+        if !unstarted {
             return None;
         }
         current.startup = current
