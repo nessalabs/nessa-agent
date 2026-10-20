@@ -22,7 +22,8 @@ use crate::conversation::application::{
     POOL,
 };
 use nessa_local_storage::{
-    create_directory, is_unsafe_file, open, sync_directory, OpenMode, PrivateTempFile,
+    create_directory, is_replaced_file, is_unsafe_file, open, sync_directory, OpenMode,
+    PrivateTempFile,
 };
 use nessa_protocol::conversation::domain::ConversationId;
 use nessa_sdk::domain::agent_execution::leases::{EnvironmentRef, PeerEnvironment};
@@ -83,28 +84,19 @@ fn write(directory: PathBuf, path: PathBuf, value: &impl Serialize) -> Result<()
     sync_directory(&directory).map_err(unavailable)
 }
 
-/// How many times a read opens a file that was replaced while it opened it.
-const REPLACED_WHILE_OPENED: usize = 4;
-
 /// The bytes of the file at `path`, at most [`MAX_BYTES`]; `None` when there
 /// is none.
 ///
 /// A binding is replaced whole while others read it. A read that opens the
 /// file a replacement is moving over holds a file with no name left, which
-/// `open` refuses as unsafe like any file not linked once; opened again, the
-/// name is the replacement's. So a refusal is retried a few times before it
-/// is taken for a file this build must not read.
+/// `open` refuses as replaced; opened again, the name is the replacement's.
+/// Each retry follows a replacement that finished, so it is not counted.
 fn read_bytes(path: PathBuf) -> Result<Option<Vec<u8>>, PlacementError> {
-    let mut attempts = 0;
     let file = loop {
-        attempts += 1;
         match open(&path, OpenMode::Read) {
             Ok(file) => break file,
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
-            // Let the replacement's writer finish before opening again.
-            Err(error) if is_unsafe_file(&error) && attempts < REPLACED_WHILE_OPENED => {
-                std::thread::yield_now();
-            }
+            Err(error) if is_replaced_file(&error) => {}
             Err(error) if is_unsafe_file(&error) => return Err(PlacementError::Unreadable),
             Err(_) => return Err(PlacementError::Unavailable),
         }

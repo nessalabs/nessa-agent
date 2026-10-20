@@ -99,6 +99,39 @@ fn unsafe_file() -> io::Error {
     io::Error::new(io::ErrorKind::PermissionDenied, UnsafeFile)
 }
 
+/// An opened file that had no name left when it was checked: it was replaced
+/// or removed after it was opened. Its content is not what the name holds, so
+/// it is refused like any unsafe file, but opening the name again reads what
+/// is there now.
+#[derive(Debug)]
+struct ReplacedFile;
+
+impl std::fmt::Display for ReplacedFile {
+    fn fmt(&self, output: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        output.write_str("local storage file was replaced while it was opened")
+    }
+}
+
+impl std::error::Error for ReplacedFile {}
+
+#[cfg_attr(
+    not(unix),
+    allow(dead_code, reason = "only Unix checks an opened file's links")
+)]
+fn replaced_file() -> io::Error {
+    io::Error::new(io::ErrorKind::PermissionDenied, ReplacedFile)
+}
+
+/// Reports whether `open` refused a file only because it was replaced or
+/// removed after it was opened. Opening the same name again is safe: it reads
+/// the replacement, or finds nothing.
+pub fn is_replaced_file(error: &io::Error) -> bool {
+    error
+        .get_ref()
+        .and_then(|cause| cause.downcast_ref::<ReplacedFile>())
+        .is_some()
+}
+
 /// Reports whether an I/O error proves that a local-storage object is unsafe.
 ///
 /// Ordinary absence and operating-system availability failures are deliberately
@@ -108,6 +141,7 @@ pub fn is_unsafe_file(error: &io::Error) -> bool {
         .get_ref()
         .and_then(|cause| cause.downcast_ref::<UnsafeFile>())
         .is_some()
+        || is_replaced_file(error)
     {
         return true;
     }
@@ -529,6 +563,37 @@ mod tests {
             .unwrap();
         assert_eq!(text, "owner");
         assert!(!reserved.exists(), "the publisher's own name is gone");
+    }
+    /// A file replaced after it was opened is told apart from one with a
+    /// second name: the first is safe to open again, the second never is.
+    #[cfg(unix)]
+    #[test]
+    fn a_file_replaced_after_it_was_opened_is_refused_as_replaced() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("private");
+        create_directory(&directory).unwrap();
+        let path = directory.join("record");
+        open(&path, OpenMode::CreateNew)
+            .unwrap()
+            .write_all(b"first")
+            .unwrap();
+        let opened = open(&path, OpenMode::Read).unwrap();
+        let mut temp = PrivateTempFile::new_in(&directory).unwrap();
+        temp.as_file_mut().write_all(b"second").unwrap();
+        temp.persist(&path).unwrap();
+
+        let error = verify_file(&opened).unwrap_err();
+        assert!(is_replaced_file(&error) && is_unsafe_file(&error));
+        let mut text = String::new();
+        open(&path, OpenMode::Read)
+            .unwrap()
+            .read_to_string(&mut text)
+            .unwrap();
+        assert_eq!(text, "second");
+
+        std::fs::hard_link(&path, directory.join("alias")).unwrap();
+        let error = open(&path, OpenMode::Read).unwrap_err();
+        assert!(is_unsafe_file(&error) && !is_replaced_file(&error));
     }
     #[test]
     fn private_creation_reopen_replace_and_hardlink_rejection() {
