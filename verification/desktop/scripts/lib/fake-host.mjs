@@ -54,6 +54,8 @@ export function gatewayHost({ endpoint, credential, notices = false }) {
       return new Promise(() => {})
     },
   }
+  // Up from the start, so a window that never sends a set is seen to.
+  if (notices) noticeHost(null, null)
 
   function noticeHost(command, args) {
     const OPENED = "nessa://review-notice-opened"
@@ -83,9 +85,15 @@ export function gatewayHost({ endpoint, credential, notices = false }) {
       const next = args.reviews
       const staying = new Set(next.map(key))
       const shown = new Set(state.up.map(key))
+      const arrived = next.filter((each) => !shown.has(key(each)))
       state.withdrawn.push(...state.up.filter((each) => !staying.has(key(each))))
-      state.posted.push(...next.filter((each) => !shown.has(key(each))))
-      state.up = next.map((each) => ({ ...each }))
+      state.posted.push(...arrived)
+      // A notice already up keeps the words it was posted with, as the
+      // system's does: the host never posts it again.
+      state.up = [
+        ...state.up.filter((each) => staying.has(key(each))),
+        ...arrived.map((each) => ({ ...each })),
+      ]
       state.syncs++
       try {
         sessionStorage.setItem(KEPT, JSON.stringify(state.up))

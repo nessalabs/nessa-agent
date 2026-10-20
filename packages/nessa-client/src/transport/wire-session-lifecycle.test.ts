@@ -286,3 +286,35 @@ it("a throwing or reentrant close observer cannot prevent pending-request or soc
   expect(close).toHaveBeenCalled()
   expect(vi.getTimerCount()).toBe(0)
 })
+
+it("a late waiting-review subscriber is handed the set the socket already received", async () => {
+  const { session } = fixture()
+  const waiting = (permissionId: string) => ({
+    type: "event" as const,
+    event: "permission.reviewWaiting",
+    payload: { reviews: [{ permissionId }] },
+    seq: 1,
+    stateVersion: 0,
+  })
+  // The gateway sends the set once the socket is authenticated, before the
+  // window has subscribed.
+  session.dispatchFrame(waiting("first"))
+  session.dispatchFrame(waiting("second"))
+  const late = vi.fn()
+  session.onEvent("permission.reviewWaiting", late)
+  expect(late).not.toHaveBeenCalled()
+  await Promise.resolve()
+  expect(late.mock.calls).toEqual([[{ reviews: [{ permissionId: "second" }] }]])
+
+  // A subscriber removed before the hand-over gets nothing; another event
+  // is not kept.
+  const removed = vi.fn()
+  session.onEvent("permission.reviewWaiting", removed)()
+  session.dispatchFrame({ ...waiting("x"), event: "conversation.listed" })
+  const listed = vi.fn()
+  session.onEvent("conversation.listed", listed)
+  await Promise.resolve()
+  expect(removed).not.toHaveBeenCalled()
+  expect(listed).not.toHaveBeenCalled()
+  session.close()
+})

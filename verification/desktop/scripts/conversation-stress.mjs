@@ -60,8 +60,8 @@
  *               not show: the host's system notice names its tool and the
  *               conversation's title, opening it brings that conversation
  *               up with its card, and answering there takes the notice back;
- *               a second review there, answered by another client while the
- *               window shows the main conversation, is taken back too
+ *               a second review there stays up across a reload of the
+ *               window, and is taken back once another client answers it
  *   linking     native linking is turned on, then off, with the switch in
  *               Settings › Connections › Linked devices; each time the gateway
  *               saves config.json and starts itself again in the same
@@ -1218,6 +1218,28 @@ const steps = {
     )
     const again = await noticePosted(run, conversationId, failures, posted.notice)
     if (!again) return
+    // The window is reloaded while that review waits. The gateway sends the
+    // waiting set as soon as the new socket is up, before the window listens;
+    // the window must still hand it to the host, which keeps the notice up.
+    await run.page.reload()
+    await run.page
+      .locator(selectorFor.sessionListRowFor(run.main.id))
+      .waitFor({ timeout: 30_000 })
+    const kept = await waitFor(async () => {
+      const notices = await hostNotices(run.page)
+      return (
+        notices !== null &&
+        notices.syncs > 0 &&
+        notices.up.some((each) => sameNotice(each, again.notice))
+      )
+    }, 15_000)
+    if (!kept) {
+      failures.push(
+        "after a reload the window did not hand the waiting review to the host",
+      )
+      return
+    }
+    await openStressConversation(run.page, run.main.id, run.main.title)
     const { permissionTargets } = await import("@nessa/client")
     const view = await readWithReviews(run.client, conversationId)
     const index = view.permissions.findIndex(
@@ -1754,12 +1776,12 @@ async function atRest(run, ids) {
   // Every review settled, so the host shows none of their notices.
   const cleared = await waitFor(async () => {
     const notices = await hostNotices(run.page)
-    return notices !== null && notices.up.length === 0
+    return notices !== null && notices.syncs > 0 && notices.up.length === 0
   }, 15_000)
   if (!cleared) {
     const notices = await hostNotices(run.page)
     failures.push(
-      notices === null
+      !notices?.syncs
         ? "the window never told the host which reviews wait"
         : `${notices.up.length} review notices are still up`,
     )
