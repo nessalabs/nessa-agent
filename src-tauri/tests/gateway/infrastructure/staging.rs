@@ -1261,17 +1261,25 @@ struct StrategyTiming {
 }
 
 fn time_staging(
-    stage: impl FnOnce(&(dyn Fn(RuntimeCopyProgress) + Sync)) -> Result<PathBuf, String>,
+    source: &Path,
+    installations: &Path,
+    expected: &str,
+    sequential: bool,
 ) -> StrategyTiming {
     let mut armed = ArmedMeasurement::begin();
     let started = Instant::now();
     let first = Mutex::new(None);
-    let result = stage(&|progress| {
+    let report = |progress: RuntimeCopyProgress| {
         let mut slot = first.lock().expect("progress");
         if slot.is_none() && progress.files_total > 0 {
             *slot = Some(started.elapsed());
         }
-    });
+    };
+    let result = if sequential {
+        stage_runtime_sequential(source, installations, expected, Some(&report))
+    } else {
+        stage_runtime_reporting(source, installations, expected, &report)
+    };
     let wall = started.elapsed();
     let phases = armed.end();
     result.expect("stage_runtime");
@@ -1399,14 +1407,7 @@ fn compare_runtime_staging_strategies() {
         "disk cache purge failed: {}",
         sequential_purge.1
     );
-    let sequential = time_staging(&|report| {
-        stage_runtime_sequential(
-            &source,
-            &root.0.join("sequential"),
-            &fingerprint,
-            Some(report),
-        )
-    });
+    let sequential = time_staging(&source, &root.0.join("sequential"), &fingerprint, true);
 
     let tree_purge = purge_disk_cache(purge_required);
     assert!(
@@ -1414,9 +1415,7 @@ fn compare_runtime_staging_strategies() {
         "disk cache purge failed: {}",
         tree_purge.1
     );
-    let tree = time_staging(&|report| {
-        stage_runtime_reporting(&source, &root.0.join("tree"), &fingerprint, report)
-    });
+    let tree = time_staging(&source, &root.0.join("tree"), &fingerprint, false);
 
     let sequential_report = strategy_report(&sequential, 1);
     let tree_report = strategy_report(&tree, 1);
