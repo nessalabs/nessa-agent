@@ -3,7 +3,7 @@
 use crate::composition::HostDependencies;
 use crate::gateway::{
     application::Gateway,
-    infrastructure::{GatewayReader, DESKTOP_STARTUP_WAIT},
+    infrastructure::{desktop_startup_wait, GatewayReader},
 };
 use crate::host_refusal::SurfaceCommandError;
 use std::{io::Read, path::PathBuf, sync::Arc, time::Duration};
@@ -284,7 +284,7 @@ pub async fn load_surface_credential(
         &*credential,
         &stage,
         &url,
-        DESKTOP_STARTUP_WAIT,
+        desktop_startup_wait(),
     )
     .await
 }
@@ -296,9 +296,9 @@ mod tests {
     use crate::gateway::application::{
         testing::{
             reconciled_registration, recording_gateway, recording_gateway_held,
-            RecordingGatewayHost,
+            recording_gateway_on, RecordingGatewayHost,
         },
-        GatewayError, ReconciledGateway,
+        GatewayError, MonotonicClock, ReconciledGateway,
     };
     use crate::gateway::domain::value_objects::{BundledSurface, ReconciliationInitiator};
     use crate::panel;
@@ -309,7 +309,7 @@ mod tests {
     use std::{
         fs,
         io::Write,
-        sync::{mpsc::channel, Arc, Mutex},
+        sync::{mpsc::channel, Arc, Mutex, OnceLock},
         thread,
         time::Duration,
     };
@@ -642,22 +642,51 @@ mod tests {
         );
         assert!(asked.elapsed() < Duration::from_secs(5));
 
-        // Never started: still starting when the wait ends.
-        let (starting, host) = recording_gateway(Ok(reconciled_registration()));
-        let asked = std::time::Instant::now();
+        // Never started: still starting when the whole wait has passed, on
+        // the gateway's clock, which here moves only as the read pauses.
+        let clock = Arc::new(VirtualClock::default());
+        let (starting, host) = recording_gateway_on(Ok(reconciled_registration()), clock.clone());
         assert_eq!(
             load_waiting(
                 DESKTOP_WINDOW,
                 Some(&starting),
                 &credential,
-                Duration::from_millis(200)
+                Duration::from_secs(15)
             )
             .err(),
             Some(SurfaceCommandError::not_ready())
         );
-        assert!(asked.elapsed() >= Duration::from_millis(200));
+        assert_eq!(clock.paused(), Duration::from_secs(15));
         assert_eq!(*host.registrations.lock().unwrap(), 0);
         assert_eq!(credential.reads(), 0);
+    }
+
+    /// A clock that stands still until a reader pauses on it, then moves on
+    /// by the pause at once.
+    #[derive(Default)]
+    struct VirtualClock {
+        start: OnceLock<std::time::Instant>,
+        paused: Mutex<Duration>,
+    }
+
+    impl VirtualClock {
+        fn paused(&self) -> Duration {
+            *self.paused.lock().unwrap()
+        }
+    }
+
+    impl MonotonicClock for VirtualClock {
+        fn now(&self) -> std::time::Instant {
+            *self.start.get_or_init(std::time::Instant::now) + self.paused()
+        }
+
+        fn pause(
+            &self,
+            duration: Duration,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
+            *self.paused.lock().unwrap() += duration;
+            Box::pin(std::future::ready(()))
+        }
     }
 
     /// The host's own start failing after a surface's reconciliation already

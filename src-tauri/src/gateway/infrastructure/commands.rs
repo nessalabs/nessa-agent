@@ -15,7 +15,7 @@ use crate::{
 };
 use serde::Serialize;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use std::{
     io::Error as IoError,
     panic::{catch_unwind, AssertUnwindSafe},
@@ -107,16 +107,24 @@ pub(crate) fn bundled_window(label: &str) -> Result<BundledSurface, String> {
 }
 
 /// How long one desktop window read of the gateway waits for a startup that
-/// is still running. A connect reads the endpoint and then the credential,
-/// and each may wait (startup can go back to starting between them, when a
-/// replacement begins), so twice this stays under the window's budget for
-/// that connect (`defaultGatewayTiming.callMs`, 35 s): a startup that takes
-/// longer is the window's refusal, and its retry clock asks again.
-pub(crate) const DESKTOP_STARTUP_WAIT: Duration = Duration::from_secs(15);
-
-/// How often a waiting desktop window reads the startup state again: one
-/// lock of the host's own state, so a launch is seen within this of `Ready`.
-const STARTUP_POLL: Duration = Duration::from_millis(50);
+/// is still running: `desktopStartupWaitMs` in `src/host/startup-timing.json`,
+/// the one number the window's tests and the stress check's fake host read
+/// too. A connect reads the endpoint and then the credential, and each may
+/// wait (startup can go back to starting between them, when a replacement
+/// begins), so twice this stays under the window's budget for that connect
+/// (`defaultGatewayTiming.callMs`, held by `startup-timing.test.ts`): a
+/// startup that takes longer is the window's refusal, and its retry clock
+/// asks again.
+pub(crate) fn desktop_startup_wait() -> Duration {
+    let timing: serde_json::Value =
+        serde_json::from_str(include_str!("../../../../src/host/startup-timing.json"))
+            .expect("startup timing is JSON");
+    Duration::from_millis(
+        timing["desktopStartupWaitMs"]
+            .as_u64()
+            .expect("desktopStartupWaitMs is a whole number of milliseconds"),
+    )
+}
 
 /// Who may read the local gateway's endpoint and the surface credential, and
 /// how each waits for the gateway first (#419).
@@ -126,7 +134,7 @@ const STARTUP_POLL: Duration = Duration::from_millis(50);
 /// on record as the initiator. The desktop window only reads the gateway that
 /// startup brought up: it is served once startup is `Ready`. While startup is
 /// still running it waits for it, up to the wait it is given
-/// ([`DESKTOP_STARTUP_WAIT`] from the commands), so a window opened at launch
+/// ([`desktop_startup_wait`] from the commands), so a window opened at launch
 /// connects the moment the gateway is up instead of covering itself with the
 /// startup screen; a startup that failed, or one still running when the wait
 /// ends, is refused. Its arm of [`GatewayReader::ready`] only reads the
@@ -168,26 +176,17 @@ impl GatewayReader {
                 .wait_ready(surface)
                 .await
                 .map_err(|error| GatewayUnread::Other(error.to_string())),
-            Self::DesktopWindow => {
-                let deadline = Instant::now() + startup_wait;
-                loop {
-                    match gateway
-                        .startup()
-                        .map_err(|error| GatewayUnread::Other(error.to_string()))?
-                        .phase()
-                    {
-                        GatewayStartupPhase::Ready => return Ok(()),
-                        GatewayStartupPhase::Failed(_) => return Err(GatewayUnread::NotReady),
-                        GatewayStartupPhase::Starting(_) => {
-                            let now = Instant::now();
-                            if now >= deadline {
-                                return Err(GatewayUnread::NotReady);
-                            }
-                            tokio::time::sleep(STARTUP_POLL.min(deadline - now)).await;
-                        }
-                    }
+            Self::DesktopWindow => match gateway
+                .settled_startup(startup_wait)
+                .await
+                .map_err(|error| GatewayUnread::Other(error.to_string()))?
+                .phase()
+            {
+                GatewayStartupPhase::Ready => Ok(()),
+                GatewayStartupPhase::Starting(_) | GatewayStartupPhase::Failed(_) => {
+                    Err(GatewayUnread::NotReady)
                 }
-            }
+            },
         }
     }
 }

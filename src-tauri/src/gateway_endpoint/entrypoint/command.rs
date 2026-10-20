@@ -2,7 +2,7 @@ use crate::{
     composition::HostDependencies,
     gateway::{
         application::Gateway,
-        infrastructure::{GatewayReader, DESKTOP_STARTUP_WAIT},
+        infrastructure::{desktop_startup_wait, GatewayReader},
     },
     gateway_endpoint::application::GatewayEndpointAccess,
     host_refusal::SurfaceCommandError,
@@ -44,7 +44,7 @@ pub async fn load_gateway_endpoint(
         gateway.as_deref(),
         endpoint,
         &stage,
-        DESKTOP_STARTUP_WAIT,
+        desktop_startup_wait(),
     )
     .await
 }

@@ -40,6 +40,10 @@ use std::{
     time::{Duration, Instant},
 };
 
+/// How often [`Gateway::settled_startup`] reads the startup again: one lock
+/// of the lifecycle, so a waiting reader sees `Ready` within this.
+const STARTUP_POLL: Duration = Duration::from_millis(50);
+
 struct Lifecycle {
     startup: GatewayStartup,
     retained_gateway: Option<ReconciledGateway>,
@@ -1153,6 +1157,25 @@ impl Gateway {
             .lock()
             .map(|lifecycle| lifecycle.startup.clone())
             .map_err(|_| GatewayError::Registration("gateway startup state is unavailable".into()))
+    }
+
+    /// The startup once it is no longer running, or as it stands when `wait`
+    /// has passed on this gateway's clock while it still runs. Only reads:
+    /// it starts, joins and reconciles nothing (the desktop window's read,
+    /// `GatewayReader`).
+    pub async fn settled_startup(&self, wait: Duration) -> Result<GatewayStartup, GatewayError> {
+        let deadline = self.clock.now() + wait;
+        loop {
+            let startup = self.startup()?;
+            if !matches!(startup.phase(), GatewayStartupPhase::Starting(_)) {
+                return Ok(startup);
+            }
+            let remaining = deadline.saturating_duration_since(self.clock.now());
+            if remaining.is_zero() {
+                return Ok(startup);
+            }
+            self.clock.pause(remaining.min(STARTUP_POLL)).await;
+        }
     }
 
     pub async fn start(&self) -> Result<(), GatewayError> {

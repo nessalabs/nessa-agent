@@ -4,13 +4,18 @@
  * native and `main.tsx` composes `hostGateway` over IPC.
  */
 
+import timing from "../../../../src/host/startup-timing.json" with { type: "json" }
+
 /**
  * A host that can be held in startup: the session storage key that holds it
  * (`gatewayHost`'s `starting`), and how long it holds the desktop window's
- * read meanwhile — `DESKTOP_STARTUP_WAIT` in `src-tauri`, which no test ties
- * this number to.
+ * read meanwhile — the real host's own number (`desktop_startup_wait` in
+ * `src-tauri`), from the file both read.
  */
-export const STARTING = { key: "nessa-fake-host-starting", waitMs: 15_000 }
+export const STARTING = {
+  key: "nessa-fake-host-starting",
+  waitMs: timing.desktopStartupWaitMs,
+}
 
 /**
  * Installed before the page's own scripts, as Tauri installs its IPC. The
