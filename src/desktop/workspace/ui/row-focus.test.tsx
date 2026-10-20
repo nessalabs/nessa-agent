@@ -2,7 +2,7 @@
 import { act, useRef, useState } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { afterEach, beforeEach, expect, it } from "vitest"
-import { useRowFocusKept } from "./row-focus"
+import { focusSessionRow, useRowFocusKept } from "./row-focus"
 
 let host: HTMLDivElement
 let root: Root
@@ -43,6 +43,13 @@ function List() {
     </ul>
   )
 }
+
+it("focuses the session's row as the list draws it now", async () => {
+  await act(async () => root.render(<List />))
+  expect(focusSessionRow("b")).toBe(true)
+  expect(document.activeElement?.getAttribute("data-session-row")).toBe("b")
+  expect(focusSessionRow("missing")).toBe(false)
+})
 
 it("a row whose control beside it held focus hands focus to the row in its place", async () => {
   await act(async () => root.render(<List />))
