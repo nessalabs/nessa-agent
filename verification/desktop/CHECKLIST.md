@@ -1291,7 +1291,7 @@ says why where the conversations would be.
   and no gateway listening each show "Nessa couldn’t start", the code
   `STARTUP_GATEWAY` from `src/host/startup-refusals.json`, and Restart and
   Quit as icon actions. The log sentences (started without the local server,
-  still starting, not answering) stay off the screen. The avatar mark is absent.
+  did not start in time or failed, not answering) stay off the screen. The avatar mark is absent.
   While the host is still starting the gateway it holds the window's read of
   the endpoint, up to 15 seconds, so a launch that goes well never shows the
   calm screen. A startup that failed, or one still running past that hold, is
