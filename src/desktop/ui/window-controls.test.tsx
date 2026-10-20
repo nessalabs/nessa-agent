@@ -2,7 +2,11 @@
 import { act } from "react"
 import { createRoot } from "react-dom/client"
 import { afterEach, expect, it, vi } from "vitest"
-import { WindowControlsProvider, useWindowControlsLead } from "./window-controls"
+import {
+  WindowControlsCovered,
+  WindowControlsProvider,
+  useWindowControlsLead,
+} from "./window-controls"
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -42,6 +46,47 @@ it("tells the host each place the first column moves to, and the window's edge o
 
   await act(async () => root.unmount())
   expect(asked).toEqual([0, 48, 0, 48, 0])
+})
+
+it("leaves the window's controls at its edge while another surface covers the view", async () => {
+  const asked: number[] = []
+  const lead = (by: number) => {
+    asked.push(by)
+    return Promise.resolve()
+  }
+  const host = document.createElement("div")
+  const root = createRoot(host)
+  // Settings over the workspace, then gone again, with the rail open throughout.
+  const render = (covered: boolean) =>
+    act(async () =>
+      root.render(
+        <WindowControlsProvider lead={lead}>
+          <WindowControlsCovered covered={covered}>
+            <Leads by={48} />
+          </WindowControlsCovered>
+        </WindowControlsProvider>,
+      ),
+    )
+
+  await render(false)
+  await render(true)
+  await render(false)
+  expect(asked).toEqual([48, 0, 48])
+
+  // Covered from outside, a cover inside that is not covering keeps it covered.
+  await act(async () =>
+    root.render(
+      <WindowControlsProvider lead={lead}>
+        <WindowControlsCovered covered>
+          <WindowControlsCovered covered={false}>
+            <Leads by={48} />
+          </WindowControlsCovered>
+        </WindowControlsCovered>
+      </WindowControlsProvider>,
+    ),
+  )
+  expect(asked.at(-1)).toBe(0)
+  await act(async () => root.unmount())
 })
 
 it("says when the host could not move them, and asks nothing with no host", async () => {

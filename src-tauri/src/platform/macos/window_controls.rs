@@ -31,9 +31,14 @@ pub fn hold(window: &tauri::WebviewWindow) -> Result<(), String> {
 }
 
 /// Moves the buttons into a column that starts `by` points from the window's
-/// left edge (`traffic_lights::lead`). Asked from a command thread; AppKit's
-/// views move on the main thread only, so the move is queued there.
+/// left edge (`traffic_lights::lead`). Tauri runs the page's command on the
+/// main thread, where AppKit's views move, and the result goes back to the
+/// page; asked from anywhere else, the move is queued there and only its
+/// queueing can be answered.
 pub fn lead(window: &tauri::WebviewWindow, by: f64) -> Result<(), String> {
+    if let Some(main) = MainThreadMarker::new() {
+        return lead_now(window, by, main);
+    }
     let target = window.clone();
     window
         .run_on_main_thread(move || {
@@ -41,15 +46,17 @@ pub fn lead(window: &tauri::WebviewWindow, by: f64) -> Result<(), String> {
                 .ok_or_else(|| {
                     String::from("the traffic lights are placed on the main thread only")
                 })
-                .and_then(|main| {
-                    let handle = target.ns_window().map_err(|error| error.to_string())?;
-                    // SAFETY: the live window's NSWindow, borrowed for this call on the main thread.
-                    let ns_window = unsafe { &*handle.cast::<NSWindow>() };
-                    traffic_lights::lead(ns_window, by, main)
-                });
+                .and_then(|main| lead_now(&target, by, main));
             if let Err(error) = led {
                 eprintln!("[nessa] could not move the traffic lights: {error}");
             }
         })
         .map_err(|error| error.to_string())
+}
+
+fn lead_now(window: &tauri::WebviewWindow, by: f64, main: MainThreadMarker) -> Result<(), String> {
+    let handle = window.ns_window().map_err(|error| error.to_string())?;
+    // SAFETY: the live window's NSWindow, borrowed for this call on the main thread.
+    let ns_window = unsafe { &*handle.cast::<NSWindow>() };
+    traffic_lights::lead(ns_window, by, main)
 }

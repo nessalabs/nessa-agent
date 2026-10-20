@@ -152,6 +152,12 @@ bindConversationTitles((conversationId) => {
 store.dispatch(followWorkspace())
 void store.dispatch(loadWorkspace())
 
+// The host keeps where it last put the window's controls across a reload;
+// nothing drawn yet stands beside them, so they start at the window's edge.
+void leadWindowControls(0).catch((error: unknown) => {
+  console.error("[nessa] could not move the window's controls", error)
+})
+
 const container = document.getElementById("root")
 if (!container) throw new Error("missing #root")
 

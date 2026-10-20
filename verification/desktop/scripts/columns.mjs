@@ -21,9 +21,9 @@
  *                    ⌘B, ⌘0 and ⌥⌘S change nothing behind it, and coming back
  *                    to Agents finds it as it was left.
  *   titlebar-steady  every frame of a rail toggle draws the titlebar's controls
- *                    between where they were and where they land: still, in a
- *                    window whose controls are placed from its edge (macOS),
- *                    and never under its traffic lights.
+ *                    where they were or where they land, never between: the
+ *                    traffic lights jump by the rail's width with it
+ *                    (`useWindowControlsLead`), so a slide would pass under them.
  *   titlebar-row     the titlebar's controls are centred 24px below the window's
  *                    top, the line the host centres the traffic lights on
  *                    (`src-tauri/src/platform/macos/traffic_lights.rs`), in
@@ -81,8 +81,8 @@ Checks, per engine, layout and size:
   rail-view-inert  ⌘B, ⌘0 and ⌥⌘S under a full view change nothing behind it
   rail-loading     an item's view opens empty; still loading at 3 s it shows
                    only the kit's sweeping text, with no panel or border
-  titlebar-steady  through a rail toggle the titlebar's controls stay between
-                   where they were and where they land, every frame
+  titlebar-steady  through a rail toggle the titlebar's controls are where
+                   they were or where they land, every frame, never between
   titlebar-row     the titlebar's controls are centred 24px down, on the traffic
                    lights' line, in every frame of ⌘B closing and opening the sidebar
   rail-off         with the preview off (the default): no rail, no toggle
@@ -326,13 +326,16 @@ const body = {
         throw new Error(`${step}: the titlebar's sidebar toggle was not measured`)
       const from = frames[0]
       const to = frames.at(-1)
-      const low = Math.min(from, to) - 1
-      const high = Math.max(from, to) + 1
-      const strays = frames.filter((x) => x < low || x > high)
+      // The traffic lights jump with the rail, and the controls land at once
+      // with the columns (a zero-length flight): a frame anywhere between the
+      // two places would be one drawn under the lights.
+      const strays = frames.filter((x) => Math.abs(x - from) > 1 && Math.abs(x - to) > 1)
       runs.push({ step, from, to, frames: frames.length })
+      if (Math.abs(to - from) < 1)
+        failures.push(`${step}: the controls stayed at ${Math.round(from)}`)
       if (strays.length)
         failures.push(
-          `${step}: ${strays.length} frame(s) drew the controls at ${strays.map(Math.round)} — outside ${Math.round(from)}…${Math.round(to)}`,
+          `${step}: ${strays.length} frame(s) drew the controls at ${strays.map(Math.round)} — between ${Math.round(from)} and ${Math.round(to)}`,
         )
     }
     return { runs, failures }
