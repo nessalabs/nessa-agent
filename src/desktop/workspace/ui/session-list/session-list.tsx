@@ -1,4 +1,10 @@
-import { memo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react"
+import {
+  memo,
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from "react"
 import { shallowEqual } from "react-redux"
 import { Button } from "@nessa-ui/react/button"
 import { EmptyState } from "@nessa-ui/react/empty-state"
@@ -55,6 +61,34 @@ import { useRowFocusKept } from "../row-focus"
 import { useSessionRowActions, type SessionRowActions } from "../session-row-actions"
 
 /**
+ * The focused session, one frame after it changes. Reading it in the list
+ * renders the list on the click that opens a pane; the tab stop can wait.
+ */
+function useFocusedSessionNextFrame(): string | null {
+  const store = useWorkspaceStore()
+  const [value, setValue] = useState(() => selectFocusedSessionId(store.getState()))
+  const shown = useRef(value)
+  useEffect(() => {
+    let frame = 0
+    const update = () => {
+      const next = selectFocusedSessionId(store.getState())
+      if (Object.is(shown.current, next)) return
+      cancelAnimationFrame(frame)
+      frame = requestAnimationFrame(() => {
+        shown.current = next
+        setValue(next)
+      })
+    }
+    const unsubscribe = store.subscribe(update)
+    return () => {
+      unsubscribe()
+      cancelAnimationFrame(frame)
+    }
+  }, [store])
+  return value
+}
+
+/**
  * The middle column: what the sidebar chose — a channel's sessions, or every
  * session in one state — grouped "Needs you", "Running", "Earlier", with a
  * search over them. Arrow keys walk the list and open as they go, like Mail's
@@ -81,7 +115,8 @@ export const SessionList = memo(function SessionList() {
   const title = channel?.name ?? ""
   const ordered = groups.flatMap((group) => group.ids)
   // One row takes Tab: the open one, or the first when none here is open.
-  const focusedId = useWorkspaceSelector(selectFocusedSessionId)
+  // A frame later, so opening a pane does not render this list in the click.
+  const focusedId = useFocusedSessionNextFrame()
   const tabStop = focusedId && ordered.includes(focusedId) ? focusedId : ordered[0]
 
   // ↑ and ↓ walk the list, Home and End go to its ends, each opening as it

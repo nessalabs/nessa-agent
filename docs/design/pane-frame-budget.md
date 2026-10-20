@@ -106,7 +106,9 @@ starts the measured row.
    that paint, and the composer's blur the frame after the grain. A drag's
    copy does not paint the night scene. A pane change does not render the
    shell. The fitted window renders it, and the columns bail while the
-   sidebar they paint is unchanged. It does not render the sidebar unless
+   sidebar they paint is unchanged. The session list's tab stop follows
+   the focused session a frame later, so the list does not render in the
+   click. It does not render the sidebar unless
    the reveal itself changed, and it does not render the night scene or
    the overview unless their own inputs changed.
 
