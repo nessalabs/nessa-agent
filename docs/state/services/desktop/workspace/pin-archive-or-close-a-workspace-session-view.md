@@ -8,6 +8,7 @@ parent: "desktop-workspace"
 sources:
   - "src/desktop/workspace/ui/session-actions.tsx"
   - "src/desktop/workspace/adapters/store/commands.ts"
+  - "src/desktop/workspace/adapters/store/session-commands.ts"
   - "src/desktop/workspace/adapters/in-memory/in-memory-source.ts"
   - "src/desktop/workspace/application/usecases/updates.ts"
   - "src/desktop/workspace/application/usecases/panes.ts"

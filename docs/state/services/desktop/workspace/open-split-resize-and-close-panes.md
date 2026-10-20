@@ -8,6 +8,7 @@ parent: "desktop-workspace"
 sources:
   - "src/desktop/workspace/application/usecases/panes.ts"
   - "src/desktop/workspace/adapters/store/commands.ts"
+  - "src/desktop/workspace/adapters/store/pane-commands.ts"
   - "src/desktop/workspace/adapters/store/split-panes-source.ts"
   - "src/desktop/split-panes/index.ts"
   - "src/desktop/split-panes/model/pane-layout.ts"
