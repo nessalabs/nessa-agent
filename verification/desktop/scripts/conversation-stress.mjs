@@ -99,6 +99,7 @@ import { turnEnded } from "../../../scripts/mcp-test-server/evidence.mjs"
 import {
   SAYS,
   STRESS,
+  TABLE_LINES,
   WATCH_CALLS,
   stressScenario,
 } from "../../../scripts/mcp-test-server/scenarios/stress.mjs"
@@ -1420,6 +1421,119 @@ const steps = {
       15_000,
     )
     if (!hidden) failures.push("the window still lists the deleted conversation")
+  },
+
+  async table(run, step, failures) {
+    const text = prompt(run, STRESS.table, step)
+    const seen = await send(run, run.main.id, text, failures)
+    const { turn } = await settled(run, run.main.id, seen, text, "completed", failures)
+    if (!turn) return
+    // The gateway keeps the answer as it streamed: every line, in order, once.
+    const said = (turn.parts ?? []).map((part) => part.text ?? "").join("")
+    const expected = `${SAYS.table}${text}\n\n${TABLE_LINES.map((line) => `${line}\n`).join("")}`
+    if (said.trimEnd() !== expected.trimEnd())
+      failures.push(`the table answer came back as ${JSON.stringify(said.slice(0, 120))}`)
+    // The window draws both tables in the agent's message, and draws them
+    // whole: no word split across lines, the narrow table inside the reply,
+    // the wide one scrolling in its own panel with its hidden side faded.
+    const message = run.page
+      .locator('.workspace-message[data-role="agent"]')
+      .filter({ hasText: `${SAYS.table}${text}` })
+    const tables = message.locator('[data-slot="markdown-table"]')
+    // Both tables whole: the last cell streamed is drawn, and the window has
+    // finished revealing the answer (no word still in its fade-in span), so
+    // every column has its final width.
+    const lastCell = TABLE_LINES.at(-1).split("|").at(-2).trim()
+    const drawn = await waitFor(
+      async () =>
+        (await tables.count()) === 2 &&
+        (await tables.nth(1).getByText(lastCell, { exact: true }).count()) === 1 &&
+        (await message.locator('span[class*="starting:"]').count()) === 0,
+      15_000,
+    )
+    if (!drawn) {
+      failures.push(
+        `the window drew ${await tables.count()} of 2 tables, or not all of them`,
+      )
+      return
+    }
+    // Short runs each table holds, which a squeezed column used to split.
+    const words = [
+      ["Price", "$16.99", "CAD", "$150"],
+      ["Runtime", "Format", "Projectionist"],
+    ]
+    const measured = await message.evaluate((element, words) => {
+      const lines = (root, word) => {
+        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
+        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+          const at = node.textContent.indexOf(word)
+          if (at < 0) continue
+          const range = document.createRange()
+          range.setStart(node, at)
+          range.setEnd(node, at + word.length)
+          return new Set([...range.getClientRects()].map((rect) => Math.round(rect.top)))
+            .size
+        }
+        return 0
+      }
+      const reply = element.getBoundingClientRect()
+      return [...element.querySelectorAll('[data-slot="markdown-table"]')].map(
+        (table, index) => {
+          const port = table.querySelector('[data-slot="table-container"]')
+          return {
+            rows: table.querySelectorAll("tbody tr").length,
+            missing: words[index].filter((word) => lines(table, word) === 0),
+            split: words[index].filter((word) => lines(table, word) > 1),
+            hidden: port.scrollWidth - port.clientWidth,
+            within: table.getBoundingClientRect().right <= reply.right + 1,
+            fadedRight: port.hasAttribute("data-hidden-right"),
+          }
+        },
+      )
+    }, words)
+    // Each table shows its data rows once, as streamed: a table's lines less
+    // its heading and delimiter.
+    const rows = TABLE_LINES.join("\n")
+      .split("\n\n")
+      .map((table) => table.split("\n").length - 2)
+    for (const [index, table] of measured.entries()) {
+      if (table.rows !== rows[index])
+        failures.push(`table ${index + 1} shows ${table.rows} rows, not ${rows[index]}`)
+      if (table.missing.length)
+        failures.push(`table ${index + 1} does not show ${JSON.stringify(table.missing)}`)
+      if (table.split.length)
+        failures.push(
+          `table ${index + 1} split ${JSON.stringify(table.split)} across lines`,
+        )
+      if (!table.within) failures.push(`table ${index + 1} is wider than the reply`)
+    }
+    const [narrow, wide] = measured
+    if (narrow.hidden > 1 || narrow.fadedRight)
+      failures.push(`the narrow table scrolls (${narrow.hidden} px hidden)`)
+    if (wide.hidden <= 1)
+      failures.push(
+        `the wide table does not scroll in its panel (${wide.hidden} px hidden)`,
+      )
+    const port = tables.nth(1).locator('[data-slot="table-container"]')
+    const faded = (left, right) =>
+      waitFor(
+        async () =>
+          ((await port.getAttribute("data-hidden-left")) !== null) === left &&
+          ((await port.getAttribute("data-hidden-right")) !== null) === right,
+        5_000,
+      )
+    if (!(await faded(false, true)))
+      failures.push(
+        "the wide table does not fade its right side, where columns are hidden",
+      )
+    if (run.evidence)
+      await run.page.screenshot({
+        path: join(run.evidence, `table-${run.engine ?? "window"}.png`),
+      })
+    // Scrolled to its end, the fade moves to the side now hidden.
+    await port.evaluate((each) => each.scrollTo({ left: each.scrollWidth }))
+    if (!(await faded(true, false)))
+      failures.push("scrolled to its end, the wide table did not fade its left side")
   },
 
   async long(run, step, failures) {
