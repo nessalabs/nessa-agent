@@ -1,22 +1,22 @@
 //! Immutable runtime installations. Copy and verify in a private sibling directory,
 //! then publish once; old and already-published generations are never rewritten.
 //!
-//! File durability runs on a bounded pool sized to the machine. The full-tree
-//! digest runs at the same time: hashing reads bytes that are already written,
-//! while `sync_all` only flushes them. The digest still matches before the
-//! exclusive rename, and every file and directory sync finishes before that
-//! rename. A failed attempt drops only its own temporary directory, after the
-//! pool has joined.
+//! Directories are created before file workers start. Those workers clone or
+//! byte-copy on a pool sized to the machine, then queue `sync_all` on a second
+//! pool. Progress counts a file only after that `sync_all` returns. The
+//! full-tree digest runs at the same time as the remaining syncs: hashing
+//! reads bytes that are already written, while `sync_all` only flushes them.
+//! Every file sync and every directory sync finishes before the exclusive
+//! rename. A failed attempt drops only its own temporary directory, after both
+//! pools have joined. The attempt owns that directory; a worker does not.
 use super::{generation::random_generation, runtime_fingerprint};
+use crate::gateway::application::{RuntimeCopyPhase, RuntimeCopyProgress};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 #[cfg(test)]
 use std::{
     cell::RefCell,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
+    sync::Arc,
     time::{Duration, Instant},
 };
 use std::{
@@ -27,6 +27,7 @@ use std::{
     os::fd::AsRawFd,
     os::unix::fs::{symlink, DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
+    sync::atomic::{AtomicBool, AtomicUsize, Ordering},
     sync::{mpsc, Condvar, Mutex},
     thread,
 };
@@ -100,8 +101,6 @@ impl Drop for TemporaryRuntime {
         let _ = fs::remove_dir_all(&self.0);
     }
 }
-
-type CloneFile = fn(&Path, &Path) -> Result<bool, String>;
 
 /// Off unless a staging measurement test on this thread turns it on.
 ///
@@ -297,6 +296,13 @@ macro_rules! note_link {
     }};
 }
 
+/// A sealed file waiting for `sync_all`. `bytes` is what progress counts after
+/// that sync returns.
+struct SealedFile {
+    file: fs::File,
+    bytes: u64,
+}
+
 /// Files already sealed, waiting for `sync_all`. The bound keeps a large tree
 /// from holding one open file per entry.
 struct FileQueue {
@@ -306,7 +312,7 @@ struct FileQueue {
 }
 
 struct FileQueueState {
-    files: VecDeque<fs::File>,
+    files: VecDeque<SealedFile>,
     closed: bool,
 }
 
@@ -322,7 +328,7 @@ impl FileQueue {
         }
     }
 
-    fn push(&self, file: fs::File) -> Result<(), String> {
+    fn push(&self, file: SealedFile) -> Result<(), String> {
         let mut state = mutex_lock(&self.inner);
         while state.files.len() >= self.bound && !state.closed {
             state = self
@@ -339,7 +345,7 @@ impl FileQueue {
         Ok(())
     }
 
-    fn pop(&self) -> Option<fs::File> {
+    fn pop(&self) -> Option<SealedFile> {
         let mut state = mutex_lock(&self.inner);
         loop {
             if let Some(file) = state.files.pop_front() {
@@ -462,21 +468,65 @@ fn parallelism() -> usize {
         .clamp(1, 32)
 }
 
-fn mutex_lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+fn mutex_lock<T: ?Sized>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 #[cfg(test)]
-type CopyHookFn = dyn FnMut(&Path);
-
+type CopyHookFn = dyn FnMut(&Path) -> Result<(), String> + Send;
 #[cfg(test)]
-type CopyHook = Box<CopyHookFn>;
+type SyncHookFn = dyn FnMut() + Send;
 
+/// The attempt that is staging captures these on its own thread. Workers use
+/// that capture. They do not read the slot, so a test on another thread cannot
+/// see or clear them.
 #[cfg(test)]
 thread_local! {
-    static COPY_HOOK: RefCell<Option<CopyHook>> = const { RefCell::new(None) };
+    static COPY_HOOK: RefCell<Option<Arc<Mutex<CopyHookFn>>>> = const { RefCell::new(None) };
+    static SYNC_HOOK: RefCell<Option<Arc<Mutex<SyncHookFn>>>> = const { RefCell::new(None) };
+}
+
+#[cfg(test)]
+struct AttemptHooks {
+    copy: Option<Arc<Mutex<CopyHookFn>>>,
+    before_sync: Option<Arc<Mutex<SyncHookFn>>>,
+}
+
+#[cfg(not(test))]
+struct AttemptHooks;
+
+impl AttemptHooks {
+    fn capture() -> Self {
+        #[cfg(test)]
+        {
+            return Self {
+                copy: COPY_HOOK.with(|slot| slot.borrow().clone()),
+                before_sync: SYNC_HOOK.with(|slot| slot.borrow().clone()),
+            };
+        }
+        #[cfg(not(test))]
+        Self
+    }
+
+    fn note_file(&self, path: &Path) -> Result<(), String> {
+        #[cfg(test)]
+        if let Some(hook) = &self.copy {
+            return mutex_lock(hook)(path);
+        }
+        let _ = (self, path);
+        Ok(())
+    }
+
+    fn note_before_sync(&self) {
+        #[cfg(test)]
+        if let Some(hook) = &self.before_sync {
+            mutex_lock(hook)();
+        }
+        #[cfg(not(test))]
+        let _ = self;
+    }
 }
 
 #[cfg(test)]
@@ -484,8 +534,8 @@ struct CopyHookGuard;
 
 #[cfg(test)]
 impl CopyHookGuard {
-    fn set(hook: impl FnMut(&Path) + 'static) -> Self {
-        COPY_HOOK.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
+    fn set(hook: impl FnMut(&Path) -> Result<(), String> + Send + 'static) -> Self {
+        COPY_HOOK.with(|slot| *slot.borrow_mut() = Some(Arc::new(Mutex::new(hook))));
         Self
     }
 }
@@ -497,15 +547,22 @@ impl Drop for CopyHookGuard {
     }
 }
 
-fn note_file_queued(path: &Path) {
-    #[cfg(test)]
-    COPY_HOOK.with(|slot| {
-        if let Some(hook) = slot.borrow_mut().as_mut() {
-            hook(path);
-        }
-    });
-    #[cfg(not(test))]
-    let _ = path;
+#[cfg(test)]
+struct SyncHookGuard;
+
+#[cfg(test)]
+impl SyncHookGuard {
+    fn set(hook: impl FnMut() + Send + 'static) -> Self {
+        SYNC_HOOK.with(|slot| *slot.borrow_mut() = Some(Arc::new(Mutex::new(hook))));
+        Self
+    }
+}
+
+#[cfg(test)]
+impl Drop for SyncHookGuard {
+    fn drop(&mut self) {
+        SYNC_HOOK.with(|slot| *slot.borrow_mut() = None);
+    }
 }
 
 pub(super) fn stage_runtime(
@@ -513,7 +570,7 @@ pub(super) fn stage_runtime(
     installations: &Path,
     expected: &str,
 ) -> Result<PathBuf, String> {
-    stage_runtime_using(source, installations, expected, clone_file)
+    stage_runtime_using(source, installations, expected, clone_file, None)
 }
 
 pub(super) fn stage_runtime_cached(
@@ -532,12 +589,125 @@ pub(super) fn stage_runtime_cached(
     Ok(published)
 }
 
+/// One file the copy pool will clone or byte-copy. `bytes` is the size known
+/// before any worker starts, and the total the progress report is measured
+/// against.
+struct PlannedFile {
+    source: PathBuf,
+    destination: PathBuf,
+    bytes: u64,
+}
+
+struct PlannedCopy {
+    files: Vec<PlannedFile>,
+    /// Post-order: a directory is listed after the directories inside it, so
+    /// directory `sync` runs after the entries it names are durable.
+    directories: Vec<PathBuf>,
+}
+
+/// How far `sync_all` has got. A file is counted after its own sync returns.
+/// The count and the callback share one lock, so a slower report cannot move
+/// the percent backwards and cannot land after the final file. The callback
+/// must not call back into this progress. A non-final report is sent only when
+/// its percent is higher than the last one sent. The final file is always sent.
+/// `sync_progress_counts_a_file_only_after_its_sync_returns` observes the count.
+/// `a_slower_progress_report_does_not_move_the_percent_backwards` holds the callback.
+struct CopyProgress<'a> {
+    state: Mutex<CopyCount>,
+    report: Option<&'a (dyn Fn(RuntimeCopyProgress) + Sync)>,
+}
+
+struct CopyCount {
+    files_completed: u64,
+    bytes_completed: u64,
+    files_total: u64,
+    bytes_total: u64,
+    last_percent: u64,
+    final_sent: bool,
+}
+
+impl<'a> CopyProgress<'a> {
+    fn start(
+        files_total: u64,
+        bytes_total: u64,
+        report: Option<&'a (dyn Fn(RuntimeCopyProgress) + Sync)>,
+    ) -> Self {
+        let progress = Self {
+            state: Mutex::new(CopyCount {
+                files_completed: 0,
+                bytes_completed: 0,
+                files_total,
+                bytes_total,
+                last_percent: u64::MAX,
+                final_sent: false,
+            }),
+            report,
+        };
+        progress.synced(0, true);
+        progress
+    }
+
+    /// `opening` is the zero report from [`Self::start`]. A finished file
+    /// passes `opening` as false and adds its planned size.
+    fn synced(&self, bytes: u64, opening: bool) {
+        let Some(report) = self.report else {
+            return;
+        };
+        let mut state = mutex_lock(&self.state);
+        if state.final_sent || state.files_total == 0 {
+            return;
+        }
+        if !opening {
+            state.files_completed += 1;
+            state.bytes_completed += bytes;
+        }
+        let files = state.files_completed;
+        let done = state.bytes_completed;
+        let percent = copy_percent(files, done, state.files_total, state.bytes_total);
+        let is_final = files == state.files_total;
+        if !is_final && state.last_percent != u64::MAX && percent <= state.last_percent {
+            return;
+        }
+        state.last_percent = percent;
+        state.final_sent = is_final;
+        let progress = RuntimeCopyProgress {
+            state: RuntimeCopyPhase::Copying,
+            files_completed: files,
+            files_total: state.files_total,
+            bytes_completed: done,
+            bytes_total: state.bytes_total,
+        };
+        report(progress);
+    }
+}
+
+fn copy_percent(files: u64, bytes: u64, files_total: u64, bytes_total: u64) -> u64 {
+    if bytes_total > 0 {
+        bytes.saturating_mul(100) / bytes_total
+    } else if files_total > 0 {
+        files.saturating_mul(100) / files_total
+    } else {
+        100
+    }
+}
+
+pub(super) fn stage_runtime_reporting(
+    source: &Path,
+    installations: &Path,
+    expected: &str,
+    report: &(dyn Fn(RuntimeCopyProgress) + Sync),
+) -> Result<PathBuf, String> {
+    stage_runtime_using(source, installations, expected, clone_file, Some(report))
+}
+
 fn stage_runtime_using(
     source: &Path,
     installations: &Path,
     expected: &str,
-    clone: CloneFile,
+    clone: impl Fn(&Path, &Path) -> Result<bool, String> + Sync,
+    report: Option<&(dyn Fn(RuntimeCopyProgress) + Sync)>,
 ) -> Result<PathBuf, String> {
+    let hooks = AttemptHooks::capture();
     validate_fingerprint(expected)?;
     utf8(installations)?;
     let source = source.canonicalize().map_err(|error| error.to_string())?;
@@ -566,7 +736,7 @@ fn stage_runtime_using(
         .map_err(|error| error.to_string())?;
     note_dir!();
     let temporary = TemporaryRuntime(temporary_path);
-    copy_sync_and_match(&temporary.0, &source, expected, clone)?;
+    copy_sync_and_match(&temporary.0, &source, expected, &clone, report, &hooks)?;
     phase!(Phase::Publish, publish(&temporary.0, &published))?;
     // After publication the old temporary path no longer exists; its guard cannot
     // remove the published directory even if directory synchronization fails.
@@ -579,40 +749,78 @@ fn stage_runtime_using(
 
 /// Copy, flush, and hash `source` into `staged`.
 ///
-/// The pool joins before this returns, including on failure, so the caller's
-/// temporary-directory guard removes that directory only after every worker
-/// has closed its files.
+/// Directories and symlinks are created before file workers start. The copy
+/// pool and the sync pool both join before this returns, including on failure,
+/// so the caller's temporary-directory guard removes that directory only after
+/// every worker has closed its files. The attempt owns the directory.
 fn copy_sync_and_match(
     staged: &Path,
     source: &Path,
     expected: &str,
-    clone: CloneFile,
+    clone: &(impl Fn(&Path, &Path) -> Result<bool, String> + Sync),
+    report: Option<&(dyn Fn(RuntimeCopyProgress) + Sync)>,
+    hooks: &AttemptHooks,
 ) -> Result<(), String> {
-    let workers = parallelism();
+    let mut plan = PlannedCopy {
+        files: Vec::new(),
+        directories: Vec::new(),
+    };
+    plan_copy(source, source, staged, &mut plan)?;
+    let bytes_total = plan.files.iter().map(|file| file.bytes).sum();
+    let progress = CopyProgress::start(plan.files.len() as u64, bytes_total, report);
+    let workers = if plan.files.is_empty() {
+        0
+    } else {
+        parallelism()
+    };
     let queue = FileQueue::new(workers.saturating_mul(2));
     let syncs = SyncWait::default();
+    let copies = SyncWait::default();
+    for _ in &plan.files {
+        copies.start();
+    }
+    let next = AtomicUsize::new(0);
+    let cancel = AtomicBool::new(false);
     #[cfg(test)]
     let ledger = current_ledger();
     thread::scope(|scope| {
         for _ in 0..workers {
             let queue = &queue;
             let syncs = &syncs;
+            let progress = &progress;
+            let hooks = hooks;
             #[cfg(test)]
             let ledger = ledger.clone();
             scope.spawn(move || {
                 #[cfg(test)]
                 install_measurement(ledger);
-                sync_queued_files(queue, syncs);
+                sync_queued_files(queue, syncs, progress, hooks);
             });
         }
-        let directories = match copy_directory(source, source, staged, clone, &queue, &syncs) {
-            Ok(directories) => directories,
-            Err(error) => {
-                queue.close();
-                let _ = syncs.wait();
-                return Err(error);
-            }
-        };
+        for _ in 0..workers {
+            let plan = &plan;
+            let next = &next;
+            let cancel = &cancel;
+            let queue = &queue;
+            let copies = &copies;
+            let syncs = &syncs;
+            let hooks = hooks;
+            #[cfg(test)]
+            let ledger = ledger.clone();
+            scope.spawn(move || {
+                #[cfg(test)]
+                install_measurement(ledger);
+                copy_planned_files(plan, next, cancel, clone, queue, copies, syncs, hooks);
+            });
+        }
+        let copied = copies.wait();
+        if let Err(error) = copied {
+            // Sync workers leave only after the queue is closed. Joining them
+            // here keeps the temporary directory alive until their files close.
+            queue.close();
+            let _ = syncs.wait();
+            return Err(error);
+        }
         // Bytes are sealed. Hashing them overlaps the syncs still in flight;
         // sync_all does not change those bytes.
         let (digest_tx, digest_rx) = mpsc::channel();
@@ -627,7 +835,7 @@ fn copy_sync_and_match(
         });
         queue.close();
         syncs.wait()?;
-        for directory in &directories {
+        for directory in &plan.directories {
             phase!(
                 Phase::DirSync,
                 nessa_local_storage::sync_directory(directory).map_err(|error| error.to_string())
@@ -645,17 +853,105 @@ fn copy_sync_and_match(
     })
 }
 
-fn sync_queued_files(queue: &FileQueue, syncs: &SyncWait) {
-    while let Some(file) = queue.pop() {
+fn sync_queued_files(
+    queue: &FileQueue,
+    syncs: &SyncWait,
+    progress: &CopyProgress<'_>,
+    hooks: &AttemptHooks,
+) {
+    while let Some(sealed) = queue.pop() {
         let mut finish = SyncFinish {
             wait: syncs,
             result: None,
         };
-        finish.result = Some(phase!(
+        hooks.note_before_sync();
+        let result = phase!(
             Phase::FileSync,
-            file.sync_all().map_err(|error| error.to_string())
-        ));
+            sealed.file.sync_all().map_err(|error| error.to_string())
+        );
+        if result.is_ok() {
+            progress.synced(sealed.bytes, false);
+        }
+        finish.result = Some(result);
     }
+}
+
+fn copy_planned_files(
+    plan: &PlannedCopy,
+    next: &AtomicUsize,
+    cancel: &AtomicBool,
+    clone: &(impl Fn(&Path, &Path) -> Result<bool, String> + Sync),
+    queue: &FileQueue,
+    copies: &SyncWait,
+    syncs: &SyncWait,
+    hooks: &AttemptHooks,
+) {
+    loop {
+        let index = next.fetch_add(1, Ordering::Relaxed);
+        if index >= plan.files.len() {
+            return;
+        }
+        let mut finish = SyncFinish {
+            wait: copies,
+            result: None,
+        };
+        if cancel.load(Ordering::Relaxed) {
+            // The first error is already recorded. This file is not copied,
+            // and finishing Ok leaves that error as the one `wait` returns.
+            finish.result = Some(Ok(()));
+            continue;
+        }
+        let file = &plan.files[index];
+        match copy_file(
+            &file.source,
+            &file.destination,
+            file.bytes,
+            clone,
+            queue,
+            syncs,
+            hooks,
+        ) {
+            Ok(()) => finish.result = Some(Ok(())),
+            Err(error) => {
+                cancel.store(true, Ordering::Relaxed);
+                finish.result = Some(Err(error));
+            }
+        }
+    }
+}
+
+fn plan_copy(
+    root: &Path,
+    source: &Path,
+    destination: &Path,
+    plan: &mut PlannedCopy,
+) -> Result<(), String> {
+    for (_, path) in children(source)? {
+        let name = path.file_name().ok_or("Missing runtime entry name")?;
+        let output = destination.join(name);
+        let metadata = fs::symlink_metadata(&path).map_err(|error| error.to_string())?;
+        if metadata.file_type().is_symlink() {
+            symlink(checked_link(root, &path)?, &output).map_err(|error| error.to_string())?;
+            note_link!();
+        } else if metadata.is_dir() {
+            DirBuilder::new()
+                .mode(0o700)
+                .create(&output)
+                .map_err(|error| error.to_string())?;
+            note_dir!();
+            plan_copy(root, &path, &output, plan)?;
+        } else if metadata.is_file() {
+            plan.files.push(PlannedFile {
+                source: path,
+                destination: output,
+                bytes: metadata.len(),
+            });
+        } else {
+            return Err("Unsupported runtime entry type".into());
+        }
+    }
+    plan.directories.push(destination.to_path_buf());
+    Ok(())
 }
 
 fn validate_fingerprint(expected: &str) -> Result<(), String> {
@@ -706,47 +1002,18 @@ fn checked_link(root: &Path, path: &Path) -> Result<PathBuf, String> {
     }
     Ok(target)
 }
-fn copy_directory(
-    root: &Path,
-    source: &Path,
-    destination: &Path,
-    clone: CloneFile,
-    queue: &FileQueue,
-    syncs: &SyncWait,
-) -> Result<Vec<PathBuf>, String> {
-    let mut directories = Vec::new();
-    for (_, path) in children(source)? {
-        let name = path.file_name().ok_or("Missing runtime entry name")?;
-        let output = destination.join(name);
-        let metadata = fs::symlink_metadata(&path).map_err(|error| error.to_string())?;
-        if metadata.file_type().is_symlink() {
-            symlink(checked_link(root, &path)?, &output).map_err(|error| error.to_string())?;
-            note_link!();
-        } else if metadata.is_dir() {
-            DirBuilder::new()
-                .mode(0o700)
-                .create(&output)
-                .map_err(|error| error.to_string())?;
-            note_dir!();
-            directories.extend(copy_directory(root, &path, &output, clone, queue, syncs)?);
-        } else if metadata.is_file() {
-            copy_file(&path, &output, clone, queue, syncs)?;
-        } else {
-            return Err("Unsupported runtime entry type".into());
-        }
-    }
-    // Directory entries become durable only after every file sync in the tree.
-    directories.push(destination.to_path_buf());
-    Ok(directories)
-}
-
 fn copy_file(
     path: &Path,
     output: &Path,
-    clone: CloneFile,
+    planned_bytes: u64,
+    clone: &(impl Fn(&Path, &Path) -> Result<bool, String> + Sync),
     queue: &FileQueue,
     syncs: &SyncWait,
+    hooks: &AttemptHooks,
 ) -> Result<(), String> {
+    // Before the open, so a test can move or replace the bundle and fail this
+    // attempt even when another worker has already copied a different file.
+    hooks.note_file(path)?;
     let mut input = phase!(
         Phase::Open,
         OpenOptions::new()
@@ -779,14 +1046,15 @@ fn copy_file(
         )?;
     }
     seal_file(&file, opened.permissions().mode())?;
-    // Drop the source descriptor before a test hook can move the bundle.
     drop(input);
     let queued = SyncQueued::arm(syncs);
-    queue.push(file)?;
+    queue.push(SealedFile {
+        file,
+        bytes: planned_bytes,
+    })?;
     queued.queued();
     #[cfg(test)]
     note_file(cloned, opened.len());
-    note_file_queued(path);
     Ok(())
 }
 

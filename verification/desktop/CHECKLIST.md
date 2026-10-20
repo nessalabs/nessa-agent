@@ -1584,6 +1584,19 @@ Both cases require zero page errors. The rule is owned by
 [adapter tests](../../src/onboarding/adapters/agents.test.ts) and
 [setup recovery tests](../../src/onboarding/ui/onboarding-readiness-timeout.test.tsx).
 
+### Runtime copy progress during setup
+
+`node verification/desktop/scripts/runtime-copy.mjs` drives the real setup agent
+list in Chromium and WebKit. The fixture moves a `RuntimeCopy` value; it does
+not stage a runtime. While the value is `copying`, the progress bar is named
+"Preparing the private runtime" and its value follows the reported bytes. A
+ready Claude stays enabled, with no `aria-disabled`. Advancing the report
+moves the value, and `settled` removes the bar. Claude is still enabled.
+Both engines require zero page errors and a painted Claude control. The copy
+itself is
+[ADR 109](../../docs/adr/done/109-parallel-runtime-staging.md). Signed-Mac
+timing remains #562.
+
 ### Linux linger at setup
 
 `node verification/desktop/scripts/linux-linger.mjs` drives the real setup UI

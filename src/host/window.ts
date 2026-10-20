@@ -54,8 +54,22 @@ const HOST_EVENTS = {
   attachmentReadying: "nessa://attachment-readying",
   attachmentBatch: "nessa://attachment-batch",
   gatewayStartup: "nessa://gateway-startup",
+  runtimeCopy: "nessa://runtime-copy",
   reviewNoticeOpened: "nessa://review-notice-opened",
 } as const
+
+/** How many staged runtime files have finished `sync_all`.
+ *
+ * `settled` means the host stopped reporting. It does not say the generation
+ * was published. This is not gateway startup, and setup does not treat it as
+ * readiness. */
+export interface RuntimeCopy {
+  state: "copying" | "settled"
+  filesCompleted: number
+  filesTotal: number
+  bytesCompleted: number
+  bytesTotal: number
+}
 
 export interface WebviewConsoleEntry {
   level: "warn" | "error"
@@ -131,6 +145,13 @@ export async function onGatewayStartup(handler: (startup: GatewayStartup) => voi
   return listen<GatewayStartup>(HOST_EVENTS.gatewayStartup, ({ payload }) =>
     handler(payload),
   )
+}
+
+/** Subscribes to private-runtime copy progress. A browser has no staged runtime. */
+export async function onRuntimeCopy(handler: (progress: RuntimeCopy) => void) {
+  if (!inTauri) return () => undefined
+  const { listen } = await import("@tauri-apps/api/event")
+  return listen<RuntimeCopy>(HOST_EVENTS.runtimeCopy, ({ payload }) => handler(payload))
 }
 
 /** Asks the host to retry a failed gateway reconciliation. */

@@ -22,9 +22,11 @@
 //! and keeps the bundle path for
 //! the rest of this process while the installed definition still names it. A
 //! failure after the early ready publish carries a strictly newer startup
-//! revision. File durability
-//! and the tree digest overlap on a pool sized to the machine; both finish
-//! before the exclusive rename. Existing versions remain available across app
+//! revision. Directories exist before file workers start. Those workers copy
+//! in parallel, then queue `sync_all` on a second pool. Progress counts a file
+//! only after that sync returns and is a separate host event, not gateway
+//! startup. File durability and the tree digest overlap; both finish before
+//! the exclusive rename. Existing versions remain available across app
 //! replacement.
 //! Its `pruning` module then collects, under the same lock and only once a
 //! gateway is up, the versions neither the new service, the loaded service, nor

@@ -83,6 +83,33 @@ describe("gateway startup", () => {
     expect(listen).not.toHaveBeenCalled()
     expect(received).not.toHaveBeenCalled()
   })
+
+  it("subscribes to runtime copy progress without reading gateway startup", async () => {
+    const progress = {
+      state: "copying",
+      filesCompleted: 1,
+      filesTotal: 4,
+      bytesCompleted: 10,
+      bytesTotal: 40,
+    } as const
+    const stop = vi.fn()
+    let publish!: (event: { payload: typeof progress }) => void
+    listen.mockImplementation(async (_name, handler) => {
+      publish = handler
+      return stop
+    })
+    const { onRuntimeCopy } = await import("./window")
+    const received = vi.fn()
+
+    const unlisten = await onRuntimeCopy(received)
+    publish({ payload: progress })
+    unlisten()
+
+    expect(listen).toHaveBeenCalledWith("nessa://runtime-copy", expect.any(Function))
+    expect(received).toHaveBeenCalledWith(progress)
+    expect(invoke).not.toHaveBeenCalled()
+    expect(stop).toHaveBeenCalledOnce()
+  })
 })
 
 describe("native attachment picker", () => {

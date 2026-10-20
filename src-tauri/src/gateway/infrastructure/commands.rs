@@ -4,7 +4,11 @@ use super::super::application::{
     ClaudeConfigurationChangeError, ClaudeDirectorySettings, ClaudeSettingsPublishError, Gateway,
     GatewayStartup as ApplicationStartup, GatewayStartupEvents, GatewayStartupPhase, StartupStep,
 };
+#[cfg(any(target_os = "macos", test))]
+use super::super::application::{RuntimeCopyPhase, RuntimeCopyProgress};
 use crate::gateway::domain::value_objects::claude_config_directory_is_durable;
+#[cfg(any(target_os = "macos", test))]
+use crate::host::{RuntimeCopy, RuntimeCopyState, RUNTIME_COPY};
 use crate::settings::SettingsStore;
 use crate::{
     composition::HostDependencies,
@@ -27,6 +31,30 @@ pub(super) struct HostGatewayStartupEvents {
 }
 
 impl GatewayStartupEvents for HostGatewayStartupEvents {
+    #[cfg(any(target_os = "macos", test))]
+    fn runtime_copy(&self, progress: &RuntimeCopyProgress) {
+        let payload = RuntimeCopy {
+            state: match progress.state {
+                RuntimeCopyPhase::Copying => RuntimeCopyState::Copying,
+                RuntimeCopyPhase::Settled => RuntimeCopyState::Settled,
+            },
+            files_completed: progress.files_completed,
+            files_total: progress.files_total,
+            bytes_completed: progress.bytes_completed,
+            bytes_total: progress.bytes_total,
+        };
+        for (label, _) in BUNDLED_WINDOWS {
+            if let Err(error) = self.app.emit_to(label, RUNTIME_COPY, &payload) {
+                tracing::warn!(
+                    target: "nessa.launch",
+                    label,
+                    %error,
+                    "could not publish runtime copy progress"
+                );
+            }
+        }
+    }
+
     fn publish(&self, startup: &ApplicationStartup) {
         log_startup_phase(startup);
         let payload = payload(startup);

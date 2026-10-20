@@ -21,7 +21,7 @@ use super::{
     ReconciliationHistoryFact, StartupStep,
 };
 #[cfg(any(target_os = "macos", test))]
-use super::{DeferredStageLaunch, DeferredStageReporter};
+use super::{DeferredStageLaunch, DeferredStageReporter, StageMessage};
 use super::{DesktopHostClaim, DesktopHostLease};
 use crate::gateway::domain::value_objects::{
     AuditDeliveryReceipt, BundledSurface, LifecycleCommandResult, LifecycleEffect,
@@ -393,17 +393,26 @@ struct DeferredStageWait {
 
 impl DeferredStageWait {
     /// The publication result. The copy starts here, after the plan was accepted.
-    fn publication_result(&mut self) -> Result<(), String> {
+    ///
+    /// Sync progress is forwarded while this waits. It does not write startup.
+    fn publication_result(&mut self, events: &dyn GatewayStartupEvents) -> Result<(), String> {
         #[cfg(any(target_os = "macos", test))]
         {
-            let (reporter, result) = DeferredStageReporter::pair();
+            let (reporter, incoming) = DeferredStageReporter::pair();
             self.launch.start(reporter);
-            result.recv().unwrap_or_else(|_| {
-                Err("deferred runtime publication ended without a result".into())
-            })
+            loop {
+                match incoming.recv() {
+                    Ok(StageMessage::Progress(progress)) => events.runtime_copy(&progress),
+                    Ok(StageMessage::Finished(result)) => return result,
+                    Err(_) => {
+                        return Err("deferred runtime publication ended without a result".into())
+                    }
+                }
+            }
         }
         #[cfg(not(any(target_os = "macos", test)))]
         {
+            let _ = events;
             Err("deferred runtime publication is unavailable".into())
         }
     }
@@ -2148,11 +2157,11 @@ fn execute_attempt(
                 // writer gate first so quit can record a stop against the
                 // ready gateway. The stage file lock stays held.
                 let stage_result = if early.is_some() {
-                    progress
-                        .journal
-                        .while_lock_yielded(&mut || deferred.publication_result())
+                    progress.journal.while_lock_yielded(&mut || {
+                        deferred.publication_result(progress.events.as_ref())
+                    })
                 } else {
-                    deferred.publication_result()
+                    deferred.publication_result(progress.events.as_ref())
                 };
                 match complete_deferred_stage(
                     &progress,

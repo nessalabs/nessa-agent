@@ -54,6 +54,35 @@ pub const LINK_NOT_OPENED: &str = "nessa://link-not-opened";
 /// [`GatewayStartup`]; a snapshot command carries the same revisioned value so
 /// subscribing before asking cannot lose or reorder a transition.
 pub const GATEWAY_STARTUP: &str = "nessa://gateway-startup";
+/// How many staged runtime files have finished `sync_all`.
+///
+/// The payload is [`RuntimeCopy`]. It is not [`GatewayStartup`]: setup keeps
+/// answering agent readiness from that projection while this count moves.
+/// Linux does not stage a bundled runtime, so the event exists only where
+/// the copy runs and in tests that exercise the adapter.
+#[cfg(any(target_os = "macos", test))]
+pub const RUNTIME_COPY: &str = "nessa://runtime-copy";
+
+/// Sync progress for the private runtime copy. `Settled` means reporting
+/// stopped. It does not say whether the fingerprint directory was renamed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg(any(target_os = "macos", test))]
+pub struct RuntimeCopy {
+    pub state: RuntimeCopyState,
+    pub files_completed: u64,
+    pub files_total: u64,
+    pub bytes_completed: u64,
+    pub bytes_total: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+#[cfg(any(target_os = "macos", test))]
+pub enum RuntimeCopyState {
+    Copying,
+    Settled,
+}
 /// A waiting review's notice was opened. Sent to the desktop window, which has
 /// just been brought forward; the payload is the conversation id to open.
 /// Only the hosts with a notice center send it.

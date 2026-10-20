@@ -3,8 +3,9 @@ use super::{
     begin_stage_measurement, clone_file, end_stage_measurement, entry_name, finalize_file,
     launch_settings, parallelism, publish, stage_runtime, stage_runtime_cached,
     stage_runtime_using, tree_fingerprint, utf8, validate_runtime, CopyHookGuard, StagePhases,
-    ValidatedRuntimes,
+    SyncHookGuard, ValidatedRuntimes,
 };
+use crate::gateway::application::{RuntimeCopyPhase, RuntimeCopyProgress};
 use serde_json::json;
 use std::{
     ffi::{CString, OsString},
@@ -17,7 +18,10 @@ use std::{
     },
     path::{Path, PathBuf},
     process::{Command, Stdio},
-    sync::Arc,
+    sync::{
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        Arc, Mutex,
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -230,7 +234,8 @@ fn byte_copy_fallback_preserves_the_published_runtime_contract() {
     let fingerprint = Fixture::manifest(&source);
     let versions = fixture.0.join("versions");
 
-    let staged = stage_runtime_using(&source, &versions, &fingerprint, force_byte_copy).unwrap();
+    let staged =
+        stage_runtime_using(&source, &versions, &fingerprint, force_byte_copy, None).unwrap();
 
     assert_eq!(staged, versions.join(&fingerprint));
     assert_eq!(fs::read(staged.join("nessa")).unwrap(), b"gateway\0bytes");
@@ -254,8 +259,8 @@ fn clone_attempt_failure_removes_its_unpublished_runtime() {
     let fingerprint = Fixture::manifest(&source);
     let versions = fixture.0.join("versions");
 
-    let error =
-        stage_runtime_using(&source, &versions, &fingerprint, fail_clone_attempt).unwrap_err();
+    let error = stage_runtime_using(&source, &versions, &fingerprint, fail_clone_attempt, None)
+        .unwrap_err();
 
     assert_eq!(error, "forced clone failure");
     assert!(!versions.join(&fingerprint).exists());
@@ -328,6 +333,11 @@ fn published_permissions_and_manifest_are_validated_without_repair() {
     fs::set_permissions(staged.join("node"), Permissions::from_mode(0o600)).unwrap();
     fs::write(staged.join("manifest.json"), b"invalid").unwrap();
     assert!(stage_runtime(&source, &versions, &fingerprint).is_err());
+    assert!(
+        staged.exists(),
+        "a failed validation removed the published generation"
+    );
+    assert_eq!(fs::read(staged.join("manifest.json")).unwrap(), b"invalid");
 }
 
 #[test]
@@ -424,7 +434,9 @@ fn moving_the_bundle_during_copy_removes_only_this_attempt() {
     let _hook = CopyHookGuard::set(move |copied| {
         if copied.file_name().and_then(|name| name.to_str()) == Some("manifest.json") {
             fs::rename(&source_path, &moved_during_copy).unwrap();
+            return Err("bundle moved during copy".into());
         }
+        Ok(())
     });
 
     assert!(stage_runtime(&source, &versions, &fingerprint).is_err());
@@ -446,7 +458,9 @@ fn replacing_an_uncopied_bundle_file_during_copy_fails_closed() {
     let _hook = CopyHookGuard::set(move |copied| {
         if copied.file_name().and_then(|name| name.to_str()) == Some("manifest.json") {
             fs::write(&node, b"replaced while the gateway is running").unwrap();
+            return Err("bundle file replaced during copy".into());
         }
+        Ok(())
     });
 
     assert!(stage_runtime(&source, &versions, &fingerprint).is_err());
@@ -457,6 +471,202 @@ fn replacing_an_uncopied_bundle_file_during_copy_fails_closed() {
         b"replaced while the gateway is running"
     );
     assert_eq!(fs::read(source.join("nessa")).unwrap(), b"gateway\0bytes");
+}
+
+#[test]
+fn file_copies_overlap_when_the_machine_has_more_than_one_worker() {
+    let fixture = Fixture::new();
+    let source = fixture.source();
+    let fingerprint = Fixture::manifest(&source);
+    let versions = fixture.0.join("versions");
+    let in_flight = AtomicUsize::new(0);
+    let max_in_flight = AtomicUsize::new(0);
+    stage_runtime_using(
+        &source,
+        &versions,
+        &fingerprint,
+        |path, output| {
+            let now = in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+            max_in_flight.fetch_max(now, Ordering::SeqCst);
+            thread::sleep(Duration::from_millis(50));
+            let result = force_byte_copy(path, output);
+            in_flight.fetch_sub(1, Ordering::SeqCst);
+            result
+        },
+        None,
+    )
+    .unwrap();
+    let max = max_in_flight.load(Ordering::SeqCst);
+    if parallelism() > 1 {
+        assert!(max > 1, "file copies stayed serial: max in flight {max}");
+    } else {
+        assert_eq!(max, 1);
+    }
+}
+
+#[test]
+fn sync_progress_counts_a_file_only_after_its_sync_returns() {
+    let fixture = Fixture::new();
+    let source = fixture.0.join("source");
+    nessa_local_storage::create_directory(&source).unwrap();
+    let fingerprint = Fixture::manifest(&source);
+    let versions = fixture.0.join("versions");
+    let events = Arc::new(Mutex::new(Vec::<RuntimeCopyProgress>::new()));
+    let during_sync = events.clone();
+    let _hook = SyncHookGuard::set(move || {
+        let events = during_sync.lock().expect("progress");
+        assert!(
+            events.iter().all(|event| event.files_completed == 0),
+            "progress counted a file before sync_all: {events:?}"
+        );
+        assert!(
+            events
+                .last()
+                .is_some_and(|event| event.files_total == 1 && event.bytes_total > 0),
+            "the copy total is known before sync_all: {events:?}"
+        );
+    });
+    let recorded = events.clone();
+    stage_runtime_using(
+        &source,
+        &versions,
+        &fingerprint,
+        clone_file,
+        Some(&|progress| recorded.lock().expect("progress").push(progress)),
+    )
+    .unwrap();
+    let events = events.lock().expect("progress");
+    let last = events.last().expect("progress after sync");
+    assert_eq!(last.state, RuntimeCopyPhase::Copying);
+    assert_eq!(last.files_completed, 1);
+    assert_eq!(last.files_total, 1);
+    assert_eq!(last.bytes_completed, last.bytes_total);
+    assert!(last.bytes_total > 0);
+}
+
+/// Two sync workers can finish together. The first report holds the count
+/// until it returns, so the other file cannot publish a lower percent, or the
+/// final count, while that report is still running.
+#[test]
+fn a_slower_progress_report_does_not_move_the_percent_backwards() {
+    let fixture = Fixture::new();
+    let source = fixture.0.join("source");
+    nessa_local_storage::create_directory(&source).unwrap();
+    fs::write(source.join("large-a"), vec![b'a'; 4096]).unwrap();
+    fs::write(source.join("large-b"), vec![b'b'; 4096]).unwrap();
+    let fingerprint = Fixture::manifest(&source);
+    let versions = fixture.0.join("versions");
+    let parallel = parallelism() > 1;
+    let hold = Arc::new(AtomicBool::new(parallel));
+    let inside = Arc::new(AtomicBool::new(false));
+    let events = Arc::new(Mutex::new(Vec::<RuntimeCopyProgress>::new()));
+    let watcher = parallel.then(|| {
+        let events = events.clone();
+        let inside = inside.clone();
+        let hold = hold.clone();
+        thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(3);
+            while !inside.load(Ordering::SeqCst) {
+                assert!(
+                    Instant::now() < deadline,
+                    "no partial progress report started"
+                );
+                thread::yield_now();
+            }
+            thread::sleep(Duration::from_millis(40));
+            let events = events.lock().expect("progress");
+            let partials = events
+                .iter()
+                .filter(|event| {
+                    event.files_completed > 0 && event.files_completed < event.files_total
+                })
+                .count();
+            let finished = events
+                .iter()
+                .filter(|event| event.files_total > 0 && event.files_completed == event.files_total)
+                .count();
+            assert_eq!(
+                partials, 1,
+                "another report ran while the first callback held the count: {events:?}"
+            );
+            assert_eq!(
+                finished, 0,
+                "the final report landed while an earlier callback was still running: {events:?}"
+            );
+            hold.store(false, Ordering::SeqCst);
+        })
+    });
+    let recorded = events.clone();
+    let hold_for_report = hold.clone();
+    let inside_for_report = inside.clone();
+    stage_runtime_using(
+        &source,
+        &versions,
+        &fingerprint,
+        clone_file,
+        Some(&|progress| {
+            recorded.lock().expect("progress").push(progress);
+            if parallel
+                && progress.files_completed > 0
+                && progress.files_completed < progress.files_total
+            {
+                inside_for_report.store(true, Ordering::SeqCst);
+                let deadline = Instant::now() + Duration::from_secs(3);
+                while hold_for_report.load(Ordering::SeqCst) {
+                    assert!(
+                        Instant::now() < deadline,
+                        "the following sync did not stay behind this report"
+                    );
+                    thread::yield_now();
+                }
+            }
+        }),
+    )
+    .unwrap();
+    if let Some(watcher) = watcher {
+        watcher.join().expect("progress watcher");
+    }
+    let events = events.lock().expect("progress");
+    let mut previous = 0u64;
+    for event in events.iter() {
+        let percent = if event.bytes_total == 0 {
+            0
+        } else {
+            event.bytes_completed.saturating_mul(100) / event.bytes_total
+        };
+        assert!(percent >= previous, "progress moved backwards: {events:?}");
+        previous = percent;
+    }
+    let last = events.last().expect("final progress");
+    assert_eq!(last.files_completed, last.files_total);
+    assert_eq!(last.bytes_completed, last.bytes_total);
+    assert_eq!(
+        events
+            .iter()
+            .position(|event| event.files_completed == event.files_total),
+        Some(events.len() - 1)
+    );
+}
+
+#[test]
+fn a_reused_generation_reports_no_copy_progress() {
+    let fixture = Fixture::new();
+    let source = fixture.source();
+    let fingerprint = Fixture::manifest(&source);
+    let versions = fixture.0.join("versions");
+    stage_runtime(&source, &versions, &fingerprint).unwrap();
+    let reports = AtomicUsize::new(0);
+    stage_runtime_using(
+        &source,
+        &versions,
+        &fingerprint,
+        clone_file,
+        Some(&|_| {
+            reports.fetch_add(1, Ordering::SeqCst);
+        }),
+    )
+    .unwrap();
+    assert_eq!(reports.load(Ordering::SeqCst), 0);
 }
 
 #[test]
