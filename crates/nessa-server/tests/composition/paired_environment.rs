@@ -1030,7 +1030,7 @@ async fn an_environment_with_only_a_relay_path_is_approved_and_serves_through_it
     a.until_connected(peer, true).await;
     let ran = a.echo(peer, "through the relay").await.unwrap();
     assert_eq!(ran.stdout, b"through the relay");
-    let relayed = command_checkpoint(&directory.path().join("e"));
+    let relayed = ended_checkpoint(&directory.path().join("e")).await;
 
     // The same command over a direct connection, on the same gateway.
     let direct_machine = a
@@ -1052,7 +1052,7 @@ async fn an_environment_with_only_a_relay_path_is_approved_and_serves_through_it
     a.until_connected(direct_machine.peer, true).await;
     let ran = a.echo(direct_machine.peer, "direct").await.unwrap();
     assert_eq!(ran.stdout, b"direct");
-    let direct = command_checkpoint(&directory.path().join("direct"));
+    let direct = ended_checkpoint(&directory.path().join("direct")).await;
     assert_eq!(relayed, direct);
     assert_eq!(
         serde_json::Value::Array(relayed),
@@ -1077,6 +1077,25 @@ async fn an_environment_with_only_a_relay_path_is_approved_and_serves_through_it
             }
         ])
     );
+}
+
+/// `command_checkpoint` once the host has recorded the command's end.
+/// `echo` returns at `Ran`; the end line is what the checkpoint compares.
+async fn ended_checkpoint(root: &Path) -> Vec<serde_json::Value> {
+    tokio::time::timeout(WAIT, async {
+        loop {
+            let entries = command_checkpoint(root);
+            if entries
+                .iter()
+                .any(|entry| entry.get("kind").and_then(|kind| kind.as_str()) == Some("ended"))
+            {
+                return entries;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the host recorded the command's end")
 }
 
 /// A command lease's ledger with the lease id, the arguments and the peer
