@@ -38,7 +38,9 @@ not replace the sentence.
 The declined-review event carries the same rule the audit record carries.
 One check pairs them: a stop has a rule, a continue does not. The panel
 sentence is read from that event. Audit success is not an input to the
-sentence. The snapshot stores the rule id, revision, and grantor with the
+sentence. A configured close says the session is closing. That event requests
+the close, and this projection does not see whether cleanup confirmed it, so
+the sentence does not say the session has closed. The snapshot stores the rule id, revision, and grantor with the
 event and restores them through the same constructors. A saved stop without
 a rule, or a saved continue with one, is corrupt.
 
@@ -75,7 +77,7 @@ first matching row is what happens.
 
 | What is observed | Result |
 | --- | --- |
-| A configured refusal stops the turn | The notice is published with the rule, then the turn is finished locally as cancelled. The audit record of that decision is attempted after the fence. |
+| A configured refusal stops the turn | The notice is published with the rule, then the turn is finished locally as cancelled. An end-turn says the turn stopped. A close says the session is closing. The audit record of that decision is attempted after the fence. |
 | The provider's result arrives after that fence | The local outcome and the notice stay. The reply is a late provider result, a different record. |
 | The audit sink fails or stalls | The turn reports the audit failure. The notice already published still names the rule and the tool. Cleanup still finishes. |
 | The session snapshot is restored | The event's rule id, revision, and grantor are the ones that were saved. The panel sentence is computed again from that event. |

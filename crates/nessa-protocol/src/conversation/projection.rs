@@ -366,7 +366,10 @@ fn stopped_tool(name: Option<&str>) -> &str {
 fn stopping_rule_notice(decline: &ReviewDecline, rule: &ApprovalRuleReference) -> String {
     let verb = match decline.outcome() {
         RefusalOutcome::EndTurn => "stopped this turn",
-        RefusalOutcome::CloseSession => "closed the session",
+        // The decline requests the close. Cleanup can still be unconfirmed,
+        // and this projection does not see that confirmation. The confirmed
+        // transition is the session_closed audit, not this sentence.
+        RefusalOutcome::CloseSession => "is closing the session",
         RefusalOutcome::Continue => "declined a tool review",
     };
     format!(

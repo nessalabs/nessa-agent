@@ -2358,7 +2358,7 @@ fn a_stopping_refusal_says_why_the_turn_stopped() {
     )]);
     assert_eq!(
         local_notice(&closed.messages[0]).text,
-        "Nessa closed the session before the requested tool ran because rule refuse-shell (revision 3) refused it. The request offered no usable choices."
+        "Nessa is closing the session before the requested tool ran because rule refuse-shell (revision 3) refused it. The request offered no usable choices."
     );
 }
 
