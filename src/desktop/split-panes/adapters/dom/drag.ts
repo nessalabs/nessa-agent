@@ -530,12 +530,14 @@ export function useSplitPanesDrag(
         reflectMark(scope, marks.pressing, options.previewPanes)
         return
       }
-      // A frame after the preview's own paint is gone, so that frame does not
-      // also rebuild the glass blur (`styles.test.ts`).
+      // Two frames after this one, so the frame that paints a drop's new boxes
+      // does not also rebuild the glass blur (`styles.test.ts`).
       glassFrame = requestAnimationFrame(() => {
-        if (!active || generation !== glass) return
-        glassFrame = null
-        reflectMark(scope, marks.pressing, false)
+        glassFrame = requestAnimationFrame(() => {
+          if (!active || generation !== glass) return
+          glassFrame = null
+          reflectMark(scope, marks.pressing, false)
+        })
       })
     }
     /** Drops the pending commit's frame and its listeners, if a drop is waiting on one. */

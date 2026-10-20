@@ -43,11 +43,11 @@ with it. The same split covers that open. A panel frame that still exceeds
 | Resting | A shape change (split, open beside, open the subagents pane, resize, drop commit) | The layout is known. The grid keeps the boxes it last painted. An existing scene keeps the layout size of its lines and is only cropped. A new scene's lines are not laid out. |
 | Shell | The scene's `ResizeObserver` reports a positive content height | The scale is written from that height. The lines stay unlaid. |
 | Measured | The next frame | The new pane takes focus. The lines stay unlaid, so focus does not share their layout. |
-| Focused | The frame after that | Only the dim layer lays out. The scene is `data-scene-ready`. The layers' width is fixed at that text's width. Rain, the lit layer, and steam stay unlaid. |
-| Lit | The frame after that | Those layers lay out at the fixed width. The scene is `data-scene-complete`. |
+| Focused | The frame after that | The dim layer's text mounts and lays out. The scene is `data-scene-ready`. The layers' width is fixed at that text's width. Rain, the lit layer, and steam are not mounted. |
+| Lit | The frame after that | Those layers mount and lay out at the fixed width. The scene is `data-scene-complete`. |
 | Carrying | `pointerup` on a shown zone | The copy flies to the box `paneBox` already computed. No pane layout is committed. |
 | Painted | The next frame | The drop commits in state. The grid is still on its last boxes, because every column change waits a frame. The room is read before the unmark dirties the tree. |
-| Drawn | The frame after that | The grid paints the new boxes, then the preview lets go, before that frame's paint. |
+| Drawn | The frame after that | The grid paints the new boxes, then the preview lets go, before that frame's paint. The glass blur stays off for one more frame, so that paint does not also rebuild it. |
 
 A content height of 0 leaves the scene unready. The next positive height
 starts the measured row.
