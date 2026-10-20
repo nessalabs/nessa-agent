@@ -24,6 +24,17 @@ function image(change: { size?: number } = {}) {
   return { digest: DIGEST, mimeType: "image/png", size: 3, ...change }
 }
 
+function messageParts(value: ReturnType<typeof view>) {
+  return value.messages[1]!.parts as Array<{
+    offset: number
+    kind: string
+    text: string
+    toolId: string
+    noticeId: string
+    noticeKind?: "review" | "hook"
+  }>
+}
+
 function view() {
   return {
     conversationId: "conversation",
@@ -328,7 +339,7 @@ describe("conversation view agreement", () => {
 
   it("accepts one bounded local notice and rejects a repeated identity", () => {
     const value = view()
-    value.messages[1]!.parts.push({
+    messageParts(value).push({
       offset: 1,
       kind: "local_notice",
       text: "Nessa declined.",
@@ -339,7 +350,7 @@ describe("conversation view agreement", () => {
     expect(conversationView(value, "conversation").messages[1]!.parts[1]!.noticeId).toBe(
       "1",
     )
-    value.messages[1]!.parts.push({
+    messageParts(value).push({
       offset: 2,
       kind: "local_notice",
       text: "conflicting duplicate",
@@ -369,7 +380,8 @@ describe("conversation view agreement", () => {
 
   it("keeps a hook notice beside a review notice that uses the same decimal", () => {
     const value = view()
-    value.messages[1]!.parts.push(
+    const parts = messageParts(value)
+    parts.push(
       {
         offset: 1,
         kind: "local_notice",
@@ -387,9 +399,12 @@ describe("conversation view agreement", () => {
         noticeKind: "hook",
       },
     )
-    const parts = conversationView(value, "conversation").messages[1]!.parts
-    expect(parts.map((part) => part.noticeKind)).toEqual([undefined, "review", "hook"])
-    value.messages[1]!.parts.push({
+    expect(
+      conversationView(value, "conversation").messages[1]!.parts.map(
+        (part) => part.noticeKind,
+      ),
+    ).toEqual([undefined, "review", "hook"])
+    parts.push({
       offset: 3,
       kind: "local_notice",
       text: "another hook",
@@ -400,13 +415,13 @@ describe("conversation view agreement", () => {
     expect(() => conversationView(value, "conversation")).toThrow(
       "repeats a local notice identity",
     )
-    value.messages[1]!.parts.pop()
-    value.messages[1]!.parts[1]!.noticeKind = undefined
+    parts.pop()
+    delete parts[1]!.noticeKind
     expect(() => conversationView(value, "conversation")).toThrow(
       "local notice has no source",
     )
-    value.messages[1]!.parts[1]!.noticeKind = "review"
-    value.messages[1]!.parts[0]!.noticeKind = "review"
+    parts[1]!.noticeKind = "review"
+    parts[0]!.noticeKind = "review"
     expect(() => conversationView(value, "conversation")).toThrow(
       "non-notice part has a notice identity",
     )
@@ -414,7 +429,7 @@ describe("conversation view agreement", () => {
 
   it("rejects a local notice identity outside the SDK sequence range", () => {
     const value = view()
-    value.messages[1]!.parts.push({
+    messageParts(value).push({
       offset: 1,
       kind: "local_notice",
       text: "Nessa declined.",
