@@ -22,13 +22,15 @@
 //! and keeps the bundle path for
 //! the rest of this process while the installed definition still names it. A
 //! failure after the early ready publish carries a strictly newer startup
-//! revision. Directories exist before file workers start. Those workers copy
-//! in parallel, then queue `sync_all` on a second pool. Progress counts a file
-//! only after that sync returns. The host retains the latest report and
-//! answers it to a bundled window that subscribes afterwards. The report is a
-//! separate host event, not gateway startup. File durability and the tree
-//! digest overlap; both finish before
-//! the exclusive rename. Existing versions remain available across app
+//! revision. The copy clones the source tree with one `clonefile`, then one
+//! thread seals each file and runs `sync_all`. A filesystem that cannot clone
+//! copies one file at a time on that same single thread. Progress counts a
+//! file only after that sync returns, and the zero report is sent once the
+//! file count is known, before `clonefile`. The host retains the latest
+//! report and answers it to a bundled window that subscribes afterwards. The
+//! report is a separate host event, not gateway startup. The digest runs
+//! after each file has been sealed and synced; both finish before the
+//! exclusive rename. Existing versions remain available across app
 //! replacement.
 //! Its `pruning` module then collects, under the same lock and only once a
 //! gateway is up, the versions neither the new service, the loaded service, nor

@@ -2,8 +2,9 @@ use super::super::generation::random_generation;
 use super::{
     begin_stage_measurement, clone_file, copy_percent, end_stage_measurement, entry_name,
     finalize_file, launch_settings, parallelism, publish, stage_runtime, stage_runtime_cached,
-    stage_runtime_using, tree_fingerprint, utf8, validate_runtime, CopyHookGuard, StagePhases,
-    SyncHookGuard, ValidatedRuntimes,
+    stage_runtime_reporting, stage_runtime_sequential, stage_runtime_tree, stage_runtime_using,
+    tree_fingerprint, utf8, validate_runtime, CopyHookGuard, StagePhases, SyncHookGuard,
+    ValidatedRuntimes,
 };
 use crate::gateway::application::{RuntimeCopyPhase, RuntimeCopyProgress};
 use serde_json::json;
@@ -208,6 +209,90 @@ fn cloned_files_are_synced_through_the_normalized_finalization_boundary() {
         fs::metadata(&cloned).unwrap().permissions().mode() & 0o777,
         0o711
     );
+}
+
+#[test]
+fn refused_tree_clone_still_publishes_a_private_runtime() {
+    let fixture = Fixture::new();
+    let source = fixture.source();
+    set_test_attribute(&source.join("nessa"));
+    let fingerprint = Fixture::manifest(&source);
+    let versions = fixture.0.join("versions");
+
+    let staged = stage_runtime_tree(&source, &versions, &fingerprint, None, &|_, destination| {
+        fs::create_dir(destination).unwrap();
+        fs::write(destination.join("junk"), b"junk").unwrap();
+        Ok(false)
+    })
+    .unwrap();
+
+    assert!(!staged.join("junk").exists());
+    assert_eq!(fs::read(staged.join("nessa")).unwrap(), b"gateway\0bytes");
+    assert_eq!(
+        fs::metadata(staged.join("nessa"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o711
+    );
+    assert!(!has_test_attribute(&staged.join("nessa")));
+    assert_eq!(tree_fingerprint(&staged).unwrap(), fingerprint);
+    assert_eq!(
+        fs::metadata(&staged).unwrap().permissions().mode() & 0o7777,
+        0o700
+    );
+}
+
+#[test]
+fn tree_clone_error_removes_the_unpublished_runtime() {
+    let fixture = Fixture::new();
+    let source = fixture.source();
+    let fingerprint = Fixture::manifest(&source);
+    let versions = fixture.0.join("versions");
+
+    let error = stage_runtime_tree(&source, &versions, &fingerprint, None, &|_, _| {
+        Err("forced tree failure".into())
+    })
+    .unwrap_err();
+
+    assert_eq!(error, "forced tree failure");
+    assert!(!versions.join(&fingerprint).exists());
+    assert_eq!(fs::read_dir(versions).unwrap().count(), 0);
+}
+
+#[test]
+fn the_zero_report_is_sent_before_tree_clone_returns() {
+    let fixture = Fixture::new();
+    let source = fixture.source();
+    let fingerprint = Fixture::manifest(&source);
+    let versions = fixture.0.join("versions");
+    let events = Arc::new(Mutex::new(Vec::<RuntimeCopyProgress>::new()));
+    let during_clone = events.clone();
+
+    stage_runtime_tree(
+        &source,
+        &versions,
+        &fingerprint,
+        Some(&|progress| {
+            events.lock().expect("progress").push(progress);
+        }),
+        &|_, destination| {
+            assert!(
+                !destination.exists(),
+                "clonefile was asked to write onto an existing directory"
+            );
+            let seen = during_clone.lock().expect("progress");
+            assert!(
+                seen.iter().any(|event| {
+                    event.files_completed == 0 && event.files_total == 3 && event.bytes_total > 0
+                }),
+                "the bar was still waiting on clonefile: {seen:?}"
+            );
+            Ok(false)
+        },
+    )
+    .unwrap();
 }
 
 #[test]
@@ -719,7 +804,8 @@ fn measurement_ledger_counts_the_staged_files_and_records_sync_and_digest() {
     let phases = armed.end();
     assert_eq!(phases.files, 3);
     assert_eq!(phases.cloned_files + phases.copied_files, 3);
-    assert!(phases.directories >= 1);
+    assert_eq!(phases.directories, 1);
+    assert!(phases.tree_cloned);
     assert!(phases.file_sync > Duration::ZERO);
     assert!(phases.xattr > Duration::ZERO);
     assert!(phases.digest > Duration::ZERO);
@@ -992,19 +1078,7 @@ fn measure_runtime_staging_phases() {
     let fingerprint = Fixture::manifest(&source);
     quarantine_tree(&source);
 
-    let purge = if purge_required {
-        let output = Command::new("sudo").args(["-n", "purge"]).output();
-        match output {
-            Ok(output) if output.status.success() => (true, String::new()),
-            Ok(output) => (
-                false,
-                String::from_utf8_lossy(&output.stderr).trim().to_owned(),
-            ),
-            Err(error) => (false, error.to_string()),
-        }
-    } else {
-        (false, "not requested".to_owned())
-    };
+    let purge = purge_disk_cache(purge_required);
     assert!(
         !purge_required || purge.0,
         "disk cache purge failed: {}",
@@ -1099,7 +1173,10 @@ fn measure_runtime_staging_phases() {
         + phases.parent_sync;
     let report = serde_json::json!({
         "profile": if cfg!(debug_assertions) { "debug" } else { "release" },
-        "workers": parallelism(),
+        "workers": 1,
+        "strategy": "clonefile-tree",
+        "cpu_parallelism": parallelism(),
+        "tree_cloned": phases.tree_cloned,
         "destination": "fresh directory under ~/Library/Application Support",
         "destination_path": root.0,
         "filesystem": command_text("stat", &["-f", "%T", root.0.to_str().unwrap()]),
@@ -1161,6 +1238,224 @@ fn measure_runtime_staging_phases() {
         "launchctl bootstrap failed: {}",
         String::from_utf8_lossy(&launch.stderr)
     );
+}
+
+fn purge_disk_cache(required: bool) -> (bool, String) {
+    if !required {
+        return (false, "not requested".to_owned());
+    }
+    match Command::new("sudo").args(["-n", "purge"]).output() {
+        Ok(output) if output.status.success() => (true, String::new()),
+        Ok(output) => (
+            false,
+            String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+        ),
+        Err(error) => (false, error.to_string()),
+    }
+}
+
+struct StrategyTiming {
+    wall: Duration,
+    first_progress: Duration,
+    phases: StagePhases,
+}
+
+fn time_staging(
+    stage: impl FnOnce(&(dyn Fn(RuntimeCopyProgress) + Sync)) -> Result<PathBuf, String>,
+) -> StrategyTiming {
+    let mut armed = ArmedMeasurement::begin();
+    let started = Instant::now();
+    let first = Mutex::new(None);
+    let result = stage(&|progress| {
+        let mut slot = first.lock().expect("progress");
+        if slot.is_none() && progress.files_total > 0 {
+            *slot = Some(started.elapsed());
+        }
+    });
+    let wall = started.elapsed();
+    let phases = armed.end();
+    result.expect("stage_runtime");
+    StrategyTiming {
+        wall,
+        first_progress: first.into_inner().expect("progress").expect("zero report"),
+        phases,
+    }
+}
+
+fn strategy_report(timing: &StrategyTiming, workers: usize) -> serde_json::Value {
+    let phases = &timing.phases;
+    let accounted = phases.open
+        + phases.clone
+        + phases.byte_copy
+        + phases.permissions
+        + phases.xattr
+        + phases.file_sync
+        + phases.dir_sync
+        + phases.private_walk
+        + phases.manifest
+        + phases.digest
+        + phases.publish
+        + phases.parent_sync;
+    serde_json::json!({
+        "workers": workers,
+        "copy_wall_ms": millis(timing.wall),
+        "first_progress_ms": millis(timing.first_progress),
+        "setup_usable_added_ms": 0,
+        "cloned_files": phases.cloned_files,
+        "copied_files": phases.copied_files,
+        "tree_cloned": phases.tree_cloned,
+        "files": phases.files,
+        "directories": phases.directories,
+        "symlinks": phases.symlinks,
+        "bytes": phases.bytes,
+        "phases_ms": {
+            "open": millis(phases.open),
+            "clone": millis(phases.clone),
+            "byte_copy": millis(phases.byte_copy),
+            "permissions": millis(phases.permissions),
+            "xattr": millis(phases.xattr),
+            "file_sync": millis(phases.file_sync),
+            "file_sync_work": millis(phases.file_sync_work),
+            "dir_sync": millis(phases.dir_sync),
+            "private_walk": millis(phases.private_walk),
+            "manifest": millis(phases.manifest),
+            "digest": millis(phases.digest),
+            "publish": millis(phases.publish),
+            "parent_sync": millis(phases.parent_sync),
+            "accounted": millis(accounted),
+            "wall": millis(timing.wall),
+        },
+    })
+}
+
+/// Old per-file copy on one thread beside the shipping tree clone.
+///
+/// Run this on the signed Mac after `sudo -v`, so `sudo -n purge` can drop
+/// the disk cache before each copy:
+///
+/// ```text
+/// sudo -v
+/// NESSA_STAGING_PURGE=required cargo test -p nessa-app --release compare_runtime_staging_strategies -- --ignored --nocapture --test-threads=1
+/// ```
+///
+/// `copy_wall_ms` is how long the copy takes. `setup_usable_added_ms` is how
+/// much of that copy sits in front of setup: none. Ready is published before
+/// either copy starts, and agents stay selectable. `first_progress_ms` is when
+/// the bar can appear, at the zero report, before `clonefile` or the first
+/// file copy.
+#[test]
+#[ignore = "cold ~390MB sequential and tree-clone comparison for a signed Mac"]
+fn compare_runtime_staging_strategies() {
+    let files = env_u64("NESSA_STAGING_FILES", 6337);
+    let directories = env_u64("NESSA_STAGING_DIRS", 685);
+    let bytes = env_u64("NESSA_STAGING_BYTES", 393_574_698);
+    let purge_required = std::env::var("NESSA_STAGING_PURGE").ok().as_deref() == Some("required");
+
+    let root = fresh_application_support();
+    let source = root.0.join("source");
+    fs::create_dir_all(&source).unwrap();
+    let subdirs = directories.saturating_sub(1);
+    for index in 0..subdirs {
+        fs::create_dir(source.join(format!("d{index:04}"))).unwrap();
+    }
+    let executable_len = fs::copy("/usr/bin/true", source.join("probe")).unwrap();
+    fs::set_permissions(source.join("probe"), Permissions::from_mode(0o755)).unwrap();
+    let small_count = files.saturating_sub(3);
+    let small_bytes = small_count.saturating_mul(64);
+    for index in 0..small_count {
+        let dir = index % subdirs.max(1);
+        let path = if subdirs == 0 {
+            source.join(format!("f{index:05}"))
+        } else {
+            source.join(format!("d{dir:04}/f{index:05}"))
+        };
+        fs::write(&path, [0x11u8; 64]).unwrap();
+    }
+    let payload = bytes.saturating_sub(executable_len + small_bytes);
+    if payload > 0 {
+        write_repeated(&source.join("payload.bin"), payload);
+    }
+    if payload > 0 {
+        for index in 0..8 {
+            let from = if subdirs == 0 {
+                source.join(format!("link-{index}"))
+            } else {
+                source.join(format!("d0000/link-{index}"))
+            };
+            let target = if subdirs == 0 {
+                "payload.bin"
+            } else {
+                "../payload.bin"
+            };
+            symlink(target, &from).unwrap();
+        }
+    }
+    let fingerprint = Fixture::manifest(&source);
+    quarantine_tree(&source);
+
+    let sequential_purge = purge_disk_cache(purge_required);
+    assert!(
+        !purge_required || sequential_purge.0,
+        "disk cache purge failed: {}",
+        sequential_purge.1
+    );
+    let sequential = time_staging(&|report| {
+        stage_runtime_sequential(
+            &source,
+            &root.0.join("sequential"),
+            &fingerprint,
+            Some(report),
+        )
+    });
+
+    let tree_purge = purge_disk_cache(purge_required);
+    assert!(
+        !purge_required || tree_purge.0,
+        "disk cache purge failed: {}",
+        tree_purge.1
+    );
+    let tree = time_staging(&|report| {
+        stage_runtime_reporting(&source, &root.0.join("tree"), &fingerprint, report)
+    });
+
+    let sequential_report = strategy_report(&sequential, 1);
+    let tree_report = strategy_report(&tree, 1);
+    let report = serde_json::json!({
+        "profile": if cfg!(debug_assertions) { "debug" } else { "release" },
+        "order": ["sequential", "tree_clone"],
+        "cache_purge": purge_required,
+        "setup_usable": {
+            "copy_wait_ms": 0,
+            "note": "Ready is published before either copy starts. The copy adds nothing to time-until-setup-is-usable. Agents stay selectable. first_progress_ms is when the bar can appear."
+        },
+        "sequential": sequential_report,
+        "tree_clone": tree_report,
+    });
+    let line = serde_json::to_string(&report).unwrap();
+    println!(
+        "strategy     copy_wall_ms  first_progress_ms  setup_usable_added_ms\n\
+         sequential   {sequential_wall:>12}  {sequential_first:>17}  0\n\
+         tree_clone   {tree_wall:>12}  {tree_first:>17}  0",
+        sequential_wall = sequential_report["copy_wall_ms"],
+        sequential_first = sequential_report["first_progress_ms"],
+        tree_wall = tree_report["copy_wall_ms"],
+        tree_first = tree_report["first_progress_ms"],
+    );
+    println!("NESSA_STAGE_COMPARE {line}");
+    if let Ok(path) = std::env::var("NESSA_STAGING_MEASUREMENT_OUT") {
+        fs::write(path, format!("{line}\n")).unwrap();
+    }
+    assert!(
+        sequential.phases.cloned_files > 0,
+        "sequential APFS clone did not run"
+    );
+    assert!(
+        tree.phases.tree_cloned,
+        "directory clonefile did not run; the tree path fell back to per-file copy"
+    );
+    assert!(tree.phases.cloned_files > 0, "tree APFS clone did not run");
+    assert!(sequential.first_progress <= sequential.wall);
+    assert!(tree.first_progress <= tree.wall);
 }
 
 /// Releases a deferred publication if the test fails while the thread is paused.

@@ -1,14 +1,16 @@
 //! Immutable runtime installations. Copy and verify in a private sibling directory,
 //! then publish once; old and already-published generations are never rewritten.
 //!
-//! Directories are created before file workers start. Those workers clone or
-//! byte-copy on a pool sized to the machine, then queue `sync_all` on a second
-//! pool. Progress counts a file only after that `sync_all` returns. The
-//! full-tree digest runs at the same time as the remaining syncs: hashing
-//! reads bytes that are already written, while `sync_all` only flushes them.
-//! Every file sync and every directory sync finishes before the exclusive
-//! rename. A failed attempt drops only its own temporary directory, after both
-//! pools have joined. The attempt owns that directory; a worker does not.
+//! The shipping copy clones the whole source tree with one `clonefile`, then
+//! one thread seals each file and runs `sync_all`. The digest follows that
+//! loop: it reads execute bits, and those bits have to be the sealed mode.
+//! `ENOTSUP` and `EXDEV` fall back to per-file work on one thread, and that
+//! path's digest overlaps the syncs after every seal has returned. Progress
+//! counts a file only after that `sync_all` returns, and the zero report is
+//! sent once the file count is known, before `clonefile`. Every file sync
+//! and every directory sync finishes before the exclusive rename. A failed
+//! attempt drops only its own temporary directory, after any digest thread
+//! has joined. The attempt owns that directory; a worker does not.
 use super::{generation::random_generation, runtime_fingerprint};
 use crate::gateway::application::{RuntimeCopyPhase, RuntimeCopyProgress};
 use serde_json::{json, Value};
@@ -155,6 +157,9 @@ struct StagePhases {
     bytes: u64,
     cloned_files: u64,
     copied_files: u64,
+    /// The shipping path's one directory `clonefile` returned success.
+    /// Per-file fallback and the sequential comparison leave this false.
+    tree_cloned: bool,
 }
 
 #[cfg(test)]
@@ -572,7 +577,7 @@ pub(super) fn stage_runtime(
     installations: &Path,
     expected: &str,
 ) -> Result<PathBuf, String> {
-    stage_runtime_using(source, installations, expected, clone_file, None)
+    stage_runtime_tree(source, installations, expected, None, &clone_directory)
 }
 
 pub(super) fn stage_runtime_cached(
@@ -591,20 +596,29 @@ pub(super) fn stage_runtime_cached(
     Ok(published)
 }
 
-/// One file the copy pool will clone or byte-copy. `bytes` is the size known
-/// before any worker starts, and the total the progress report is measured
-/// against.
+/// One file the copy will clone or byte-copy. `bytes` is the size known
+/// before any copy starts, and the total the progress report is measured
+/// against. `mode` is the source mode at survey time; sealing keeps its
+/// execute bits.
 struct PlannedFile {
     source: PathBuf,
     destination: PathBuf,
     bytes: u64,
+    mode: u32,
+}
+
+struct PlannedLink {
+    destination: PathBuf,
+    target: PathBuf,
 }
 
 struct PlannedCopy {
     files: Vec<PlannedFile>,
     /// Post-order: a directory is listed after the directories inside it, so
-    /// directory `sync` runs after the entries it names are durable.
+    /// directory `sync` runs after the entries it names are durable. Reversed,
+    /// it is a parent-before-child create order.
     directories: Vec<PathBuf>,
+    links: Vec<PlannedLink>,
 }
 
 /// How far `sync_all` has got. A file is counted after its own sync returns.
@@ -698,15 +712,88 @@ pub(super) fn stage_runtime_reporting(
     expected: &str,
     report: &(dyn Fn(RuntimeCopyProgress) + Sync),
 ) -> Result<PathBuf, String> {
-    stage_runtime_using(source, installations, expected, clone_file, Some(report))
+    stage_runtime_tree(
+        source,
+        installations,
+        expected,
+        Some(report),
+        &clone_directory,
+    )
 }
 
+#[cfg(test)]
 fn stage_runtime_using(
     source: &Path,
     installations: &Path,
     expected: &str,
     clone: impl Fn(&Path, &Path) -> Result<bool, String> + Sync,
     report: Option<&(dyn Fn(RuntimeCopyProgress) + Sync)>,
+) -> Result<PathBuf, String> {
+    stage_files(
+        source,
+        installations,
+        expected,
+        report,
+        parallelism(),
+        &clone,
+    )
+}
+
+/// Per-file clone on one thread. The comparison test times this against the
+/// shipping tree clone. It is test-only: production uses [`stage_runtime`].
+#[cfg(test)]
+fn stage_runtime_sequential(
+    source: &Path,
+    installations: &Path,
+    expected: &str,
+    report: Option<&(dyn Fn(RuntimeCopyProgress) + Sync)>,
+) -> Result<PathBuf, String> {
+    stage_files(source, installations, expected, report, 1, &clone_file)
+}
+
+/// Shipping copy, with the directory clone injected so a test can refuse it.
+fn stage_runtime_tree(
+    source: &Path,
+    installations: &Path,
+    expected: &str,
+    report: Option<&(dyn Fn(RuntimeCopyProgress) + Sync)>,
+    clone_tree: &(impl Fn(&Path, &Path) -> Result<bool, String> + Sync),
+) -> Result<PathBuf, String> {
+    stage_attempt(
+        source,
+        installations,
+        expected,
+        false,
+        |staged, source, hooks| copy_tree(staged, source, expected, clone_tree, report, hooks),
+    )
+}
+
+#[cfg(test)]
+fn stage_files(
+    source: &Path,
+    installations: &Path,
+    expected: &str,
+    report: Option<&(dyn Fn(RuntimeCopyProgress) + Sync)>,
+    workers: usize,
+    clone: &(impl Fn(&Path, &Path) -> Result<bool, String> + Sync),
+) -> Result<PathBuf, String> {
+    stage_attempt(
+        source,
+        installations,
+        expected,
+        true,
+        |staged, source, hooks| {
+            copy_sync_and_match(staged, source, expected, clone, workers, report, hooks)
+        },
+    )
+}
+
+fn stage_attempt(
+    source: &Path,
+    installations: &Path,
+    expected: &str,
+    create_directory: bool,
+    copy: impl FnOnce(&Path, &Path, &AttemptHooks) -> Result<(), String>,
 ) -> Result<PathBuf, String> {
     let hooks = AttemptHooks::capture();
     validate_fingerprint(expected)?;
@@ -731,13 +818,15 @@ fn stage_runtime_using(
         Err(error) => return Err(error.to_string()),
     }
     let temporary_path = installations.join(format!(".staging-{}", random_generation()?));
-    DirBuilder::new()
-        .mode(0o700)
-        .create(&temporary_path)
-        .map_err(|error| error.to_string())?;
-    note_dir!();
+    if create_directory {
+        DirBuilder::new()
+            .mode(0o700)
+            .create(&temporary_path)
+            .map_err(|error| error.to_string())?;
+        note_dir!();
+    }
     let temporary = TemporaryRuntime(temporary_path);
-    copy_sync_and_match(&temporary.0, &source, expected, &clone, report, &hooks)?;
+    copy(&temporary.0, &source, &hooks)?;
     phase!(Phase::Publish, publish(&temporary.0, &published))?;
     // After publication the old temporary path no longer exists; its guard cannot
     // remove the published directory even if directory synchronization fails.
@@ -748,31 +837,82 @@ fn stage_runtime_using(
     Ok(published)
 }
 
-/// Copy, flush, and hash `source` into `staged`.
+/// Copy, flush, and hash `source` into `staged` one file at a time.
 ///
-/// Directories and symlinks are created before file workers start. The copy
-/// pool and the sync pool both join before this returns, including on failure,
-/// so the caller's temporary-directory guard removes that directory only after
-/// every worker has closed its files. The attempt owns the directory.
+/// Directories and symlinks are created before file workers start. `workers`
+/// is 1 for the comparison's old path. The injected overlap tests pass the
+/// machine's parallelism. The copy pool and the sync pool both join before
+/// this returns, including on failure, so the caller's temporary-directory
+/// guard removes that directory only after every worker has closed its files.
+/// The attempt owns the directory. Production does not call this: it
+/// `clonefile`s the tree, and its per-file fallback calls `run_planned`
+/// with one worker.
+#[cfg(test)]
 fn copy_sync_and_match(
     staged: &Path,
     source: &Path,
     expected: &str,
     clone: &(impl Fn(&Path, &Path) -> Result<bool, String> + Sync),
+    workers: usize,
     report: Option<&(dyn Fn(RuntimeCopyProgress) + Sync)>,
     hooks: &AttemptHooks,
 ) -> Result<(), String> {
     let mut plan = PlannedCopy {
         files: Vec::new(),
         directories: Vec::new(),
+        links: Vec::new(),
     };
-    plan_copy(source, source, staged, &mut plan)?;
+    walk_tree(source, source, staged, &mut plan, true)?;
     let bytes_total = plan.files.iter().map(|file| file.bytes).sum();
     let progress = CopyProgress::start(plan.files.len() as u64, bytes_total, report);
+    run_planned(staged, expected, &plan, workers, &progress, hooks, clone)
+}
+
+/// One `clonefile` of the source tree, then one thread seals and syncs.
+///
+/// The zero report goes out once the survey knows the file count, before
+/// `clonefile`, so the bar is not stuck behind that call. `Ok(false)` is
+/// `ENOTSUP` or `EXDEV`: the per-file path then runs on one thread.
+fn copy_tree(
+    staged: &Path,
+    source: &Path,
+    expected: &str,
+    clone_tree: &(impl Fn(&Path, &Path) -> Result<bool, String> + Sync),
+    report: Option<&(dyn Fn(RuntimeCopyProgress) + Sync)>,
+    hooks: &AttemptHooks,
+) -> Result<(), String> {
+    let mut plan = PlannedCopy {
+        files: Vec::new(),
+        directories: Vec::new(),
+        links: Vec::new(),
+    };
+    walk_tree(source, source, staged, &mut plan, false)?;
+    let bytes_total = plan.files.iter().map(|file| file.bytes).sum();
+    let progress = CopyProgress::start(plan.files.len() as u64, bytes_total, report);
+    let cloned = phase!(Phase::Clone, clone_tree(source, staged))?;
+    if cloned {
+        #[cfg(test)]
+        with_phases(|phases| phases.tree_cloned = true);
+        return seal_cloned_tree(staged, expected, &plan, &progress, hooks);
+    }
+    discard_tree(staged)?;
+    materialize(&plan)?;
+    run_planned(staged, expected, &plan, 1, &progress, hooks, &clone_file)
+}
+
+fn run_planned(
+    staged: &Path,
+    expected: &str,
+    plan: &PlannedCopy,
+    workers: usize,
+    progress: &CopyProgress<'_>,
+    hooks: &AttemptHooks,
+    clone: &(impl Fn(&Path, &Path) -> Result<bool, String> + Sync),
+) -> Result<(), String> {
     let workers = if plan.files.is_empty() {
         0
     } else {
-        parallelism()
+        workers.max(1)
     };
     let queue = FileQueue::new(workers.saturating_mul(2));
     let syncs = SyncWait::default();
@@ -783,7 +923,7 @@ fn copy_sync_and_match(
     let next = AtomicUsize::new(0);
     let cancel = AtomicBool::new(false);
     let copy = CopyAttempt {
-        plan: &plan,
+        plan,
         next: &next,
         cancel: &cancel,
         queue: &queue,
@@ -838,22 +978,97 @@ fn copy_sync_and_match(
         });
         queue.close();
         syncs.wait()?;
-        for directory in &plan.directories {
-            phase!(
-                Phase::DirSync,
-                nessa_local_storage::sync_directory(directory).map_err(|error| error.to_string())
-            )?;
-        }
-        let checks = publication_checks(staged, expected);
-        let digest = digest_rx
-            .recv()
-            .unwrap_or_else(|_| Err("Runtime digest stopped before publication".into()))?;
-        checks?;
-        if digest != expected {
-            return Err(content_mismatch());
-        }
-        Ok(())
+        matched_tree(staged, expected, &plan.directories, recv_digest(&digest_rx))
     })
+}
+
+fn seal_cloned_tree(
+    staged: &Path,
+    expected: &str,
+    plan: &PlannedCopy,
+    progress: &CopyProgress<'_>,
+    hooks: &AttemptHooks,
+) -> Result<(), String> {
+    for directory in &plan.directories {
+        phase!(
+            Phase::Permissions,
+            fs::set_permissions(directory, Permissions::from_mode(0o700))
+                .map_err(|error| error.to_string())
+        )?;
+    }
+    // One thread, so the digest cannot overlap this loop without hashing a
+    // file that is not sealed yet. The fingerprint includes execute bits.
+    // Seal keeps the bits the source had; hashing afterwards reads those bits
+    // and not a mode `clonefile` was still wearing. `sync_all` is in this
+    // loop so a crash cannot observe a renamed tree whose file metadata never
+    // reached disk.
+    for file in &plan.files {
+        hooks.note_file(&file.source)?;
+        let sealed = phase!(
+            Phase::Open,
+            OpenOptions::new()
+                .write(true)
+                .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+                .open(&file.destination)
+                .map_err(|error| error.to_string())
+        )?;
+        seal_file(&sealed, file.mode)?;
+        phase!(
+            Phase::FileSync,
+            sealed.sync_all().map_err(|error| error.to_string())
+        )?;
+        progress.synced(file.bytes, false);
+        #[cfg(test)]
+        note_file(true, file.bytes);
+    }
+    let digest = phase!(Phase::Digest, tree_fingerprint(staged));
+    matched_tree(staged, expected, &plan.directories, digest)
+}
+
+fn recv_digest(digest_rx: &mpsc::Receiver<Result<String, String>>) -> Result<String, String> {
+    digest_rx
+        .recv()
+        .unwrap_or_else(|_| Err("Runtime digest stopped before publication".into()))
+}
+
+fn matched_tree(
+    staged: &Path,
+    expected: &str,
+    directories: &[PathBuf],
+    digest: Result<String, String>,
+) -> Result<(), String> {
+    for directory in directories {
+        phase!(
+            Phase::DirSync,
+            nessa_local_storage::sync_directory(directory).map_err(|error| error.to_string())
+        )?;
+    }
+    publication_checks(staged, expected)?;
+    if digest? != expected {
+        return Err(content_mismatch());
+    }
+    Ok(())
+}
+
+fn materialize(plan: &PlannedCopy) -> Result<(), String> {
+    for directory in plan.directories.iter().rev() {
+        DirBuilder::new()
+            .mode(0o700)
+            .create(directory)
+            .map_err(|error| error.to_string())?;
+    }
+    for link in &plan.links {
+        symlink(&link.target, &link.destination).map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+fn discard_tree(path: &Path) -> Result<(), String> {
+    match fs::symlink_metadata(path) {
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.to_string()),
+        Ok(_) => fs::remove_dir_all(path).map_err(|error| error.to_string()),
+    }
 }
 
 fn sync_queued_files(
@@ -927,31 +1142,53 @@ fn copy_planned_files(
     }
 }
 
-fn plan_copy(
+/// Survey `source` into `plan`.
+///
+/// `create` is the per-file path: it makes child directories and symlinks as
+/// it goes, and the caller has already created and counted the root. The tree
+/// path passes `create` as false, counts every directory including the root,
+/// and records symlinks for [`materialize`] if `clonefile` cannot run. Either
+/// way a directory is pushed after its children.
+fn walk_tree(
     root: &Path,
     source: &Path,
     destination: &Path,
     plan: &mut PlannedCopy,
+    create: bool,
 ) -> Result<(), String> {
+    if !create {
+        note_dir!();
+    }
     for (_, path) in children(source)? {
         let name = path.file_name().ok_or("Missing runtime entry name")?;
         let output = destination.join(name);
         let metadata = fs::symlink_metadata(&path).map_err(|error| error.to_string())?;
         if metadata.file_type().is_symlink() {
-            symlink(checked_link(root, &path)?, &output).map_err(|error| error.to_string())?;
+            let target = checked_link(root, &path)?;
+            if create {
+                symlink(&target, &output).map_err(|error| error.to_string())?;
+            } else {
+                plan.links.push(PlannedLink {
+                    destination: output,
+                    target,
+                });
+            }
             note_link!();
         } else if metadata.is_dir() {
-            DirBuilder::new()
-                .mode(0o700)
-                .create(&output)
-                .map_err(|error| error.to_string())?;
-            note_dir!();
-            plan_copy(root, &path, &output, plan)?;
+            if create {
+                DirBuilder::new()
+                    .mode(0o700)
+                    .create(&output)
+                    .map_err(|error| error.to_string())?;
+                note_dir!();
+            }
+            walk_tree(root, &path, &output, plan, create)?;
         } else if metadata.is_file() {
             plan.files.push(PlannedFile {
                 source: path,
                 destination: output,
                 bytes: metadata.len(),
+                mode: metadata.permissions().mode(),
             });
         } else {
             return Err("Unsupported runtime entry type".into());
@@ -1138,6 +1375,35 @@ fn extended_attribute_names(file: libc::c_int) -> Result<Vec<Vec<u8>>, String> {
         .filter(|name| !name.is_empty())
         .map(<[u8]>::to_vec)
         .collect())
+}
+
+/// `CLONE_NOFOLLOW` from `<sys/clonefile.h>`. The libc crate does not export it.
+const CLONE_NOFOLLOW: u32 = 0x0001;
+
+/// Clone the source directory onto `destination`, which must not exist.
+///
+/// `copyfile(COPYFILE_RECURSIVE)` still clonefiles each file and creates each
+/// directory, and it rejects `COPYFILE_CLONE_FORCE`. One `clonefile` of the
+/// directory is the call that is not a per-file metadata transaction. The
+/// kernel clones each item; this process then rewrites modes and extended
+/// attributes, which a faithful recursive copy would have kept. `ENOTSUP` and
+/// `EXDEV` return `Ok(false)` so the caller can copy one file at a time. The
+/// syscall is all-or-nothing: a failure leaves no destination tree.
+fn clone_directory(source: &Path, destination: &Path) -> Result<bool, String> {
+    let source = CString::new(utf8(source)?).map_err(|error| error.to_string())?;
+    let destination = CString::new(utf8(destination)?).map_err(|error| error.to_string())?;
+    if unsafe { libc::clonefile(source.as_ptr(), destination.as_ptr(), CLONE_NOFOLLOW) } == 0 {
+        return Ok(true);
+    }
+    let error = Error::last_os_error();
+    if matches!(
+        error.raw_os_error(),
+        Some(libc::ENOTSUP) | Some(libc::EXDEV)
+    ) {
+        Ok(false)
+    } else {
+        Err(error.to_string())
+    }
 }
 
 fn clone_file(source: &Path, destination: &Path) -> Result<bool, String> {

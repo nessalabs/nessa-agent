@@ -65,7 +65,7 @@ the Interactive macOS policy, local timing logs, and deferred follow-up work.
 | [141 — Unanswered permissions settle at a deadline](done/141-permission-deadlines.md) | A pending review's class deadline answers it, the deadline is its own audit decider, and a third-party harness that cannot defer is reported unavailable. Remembered approvals, notifications, BYOK deferral, and elicitation stay on #141 |
 | [768 — Native harness hooks are a per-harness choice](done/768-native-harness-hooks.md) | Claude and Codex read the stored choice at each process start. Off is the default. OpenCode stays suppressed |
 | [803 — Every policy decision goes through Cedar](done/803-policy-goes-through-cedar.md) | Gate 18 and the placement check in `scripts/architecture/policy-engine.mjs`. Gateway identity, conversation access, agent commands and MCP App calls, and environment host grants are Cedar policies behind ports, and a Drive grant names its own command hosts. SDK artifact recording was dropped as not policy. Follow-ups: paging `conversation.shares` so a grant can name more hosts ([#832](https://github.com/nessalabs/nessa-agent/issues/832)); the revoke-during-admission window recorded in the record |
-| [109 — Stage the bundled runtime in parallel](done/109-parallel-runtime-staging.md) | Copy files on a pool after the empty-cleanup plan, keep clonefile and per-file sync, reject hardlinks, and report sync progress on its own event. Signed-Mac timing remains #562 |
+| [109 — Stage the bundled runtime in parallel](done/109-parallel-runtime-staging.md) | One `clonefile` of the tree, then one thread seals and `sync_all`s. Ten copy workers lost on a signed Mac. Ready stays ahead of the copy. Signed-Mac comparison remains #562 |
 
 ## Todo — implementation priority
 
