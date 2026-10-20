@@ -1300,10 +1300,8 @@ const steps = {
     if (!turn) return
     // The gateway keeps the answer as it streamed: every line, in order, once.
     const said = (turn.parts ?? []).map((part) => part.text ?? "").join("")
-    if (
-      !said.startsWith(`${SAYS.table}${text}`) ||
-      !said.includes(TABLE_LINES.join("\n"))
-    )
+    const expected = `${SAYS.table}${text}\n\n${TABLE_LINES.map((line) => `${line}\n`).join("")}`
+    if (said.trimEnd() !== expected.trimEnd())
       failures.push(`the table answer came back as ${JSON.stringify(said.slice(0, 120))}`)
     // The window draws both tables in the agent's message, and draws them
     // whole: no word split across lines, the narrow table inside the reply,
@@ -1353,6 +1351,7 @@ const steps = {
         (table, index) => {
           const port = table.querySelector('[data-slot="table-container"]')
           return {
+            rows: table.querySelectorAll("tbody tr").length,
             missing: words[index].filter((word) => lines(table, word) === 0),
             split: words[index].filter((word) => lines(table, word) > 1),
             hidden: port.scrollWidth - port.clientWidth,
@@ -1362,7 +1361,14 @@ const steps = {
         },
       )
     }, words)
+    // Each table shows its data rows once, as streamed: a table's lines less
+    // its heading and delimiter.
+    const rows = TABLE_LINES.join("\n")
+      .split("\n\n")
+      .map((table) => table.split("\n").length - 2)
     for (const [index, table] of measured.entries()) {
+      if (table.rows !== rows[index])
+        failures.push(`table ${index + 1} shows ${table.rows} rows, not ${rows[index]}`)
       if (table.missing.length)
         failures.push(`table ${index + 1} does not show ${JSON.stringify(table.missing)}`)
       if (table.split.length)
