@@ -83,6 +83,12 @@
  *               window binds the conversation to the other, with new provider
  *               context, as the window's heading and the binding both say;
  *               both workers stop and linking is turned off again
+ *   upgrade     the gateway is stopped, its conversation metadata turned
+ *               back into the file an older build wrote (version 6, or 7
+ *               when a newer table holds rows), and started again: it
+ *               upgrades the file to the current version, lists every
+ *               conversation it listed before, and the message sent in the
+ *               window after it is answered
  *
  * Meanwhile `--parallel` background conversations take turns through the
  * gateway (every third one a watch), and `--followers` other clients follow
@@ -141,6 +147,7 @@ import {
 } from "./lib/selectors.mjs"
 import { freePort } from "./lib/server.mjs"
 import { Follower } from "./lib/stress-followers.mjs"
+import { asOlderBuild, metadataFile, schemaVersion } from "./lib/stress-upgrade.mjs"
 import {
   openStressConversation,
   selectedStressConversation,
@@ -150,6 +157,18 @@ import { KNOBS, describe, knobsFrom, plan, random } from "./lib/stress-plan.mjs"
 import { startWorker } from "./lib/stress-workers.mjs"
 
 const INSTANCE = "conversation-stress"
+/** The conversation metadata version this build writes (`schema.sql`'s last line). */
+const CURRENT_METADATA_VERSION = Number(
+  /PRAGMA user_version = (\d+);\s*$/.exec(
+    readFileSync(
+      new URL(
+        "../../../crates/nessa-server/src/conversation/infrastructure/schema.sql",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+  )[1],
+)
 /**
  * The environment that places a conversation on any of the gateway's paired
  * workers (`POOL` in crates/nessa-server/src/conversation/application/placement.rs).
@@ -492,12 +511,24 @@ const sessionRow = (page, conversationId) =>
 
 /**
  * Chooses `label` in the More menu of `conversationId`'s row: the pointer
- * over the row shows its buttons, as a person sees them.
+ * over the row shows its buttons, as a person sees them. The list re-sorts
+ * as other conversations change, which can move the row out from under the
+ * pointer and hide the button again; a person points at the row again, and
+ * so does this, until the button takes the click.
  */
 async function choose(page, conversationId, label) {
   const row = sessionRow(page, conversationId)
-  await row.hover({ timeout: 15_000 })
-  await row.locator('[data-session-action="more"]').click({ timeout: 10_000 })
+  const more = row.locator('[data-session-action="more"]')
+  const end = Date.now() + 20_000
+  for (;;) {
+    await row.hover({ timeout: 15_000 })
+    try {
+      await more.click({ timeout: 2_000 })
+      break
+    } catch (error) {
+      if (Date.now() > end) throw error
+    }
+  }
   await page
     .getByRole("menuitem", { name: label, exact: true })
     .click({ timeout: 10_000 })
@@ -849,7 +880,7 @@ const steps = {
       )
   },
   async reply(run, step, failures) {
-    const text = prompt(run, STRESS.reply, step)
+    const text = prompt(run, STRESS.reply, step, step.extra ?? "")
     const seen = await send(run, run.main.id, text, failures)
     const { turn } = await settled(run, run.main.id, seen, text, "completed", failures)
     // A reply carried on behind a failure echoes its notice first.
@@ -1043,6 +1074,44 @@ const steps = {
     if (failures.length === 0) await steps.reply(run, step, failures)
   },
 
+  async upgrade(run, step, failures) {
+    const listed = async () =>
+      (await run.client.conversation.list({})).conversations
+        .map((each) => each.conversationId)
+        .sort()
+    await run.exclusive(async () => {
+      const before = await listed()
+      const path = metadataFile(run.stack.gateway.directory)
+      let older
+      await run.restartConsole.during(run.opened, async () => {
+        const count = failures.length
+        const old = run.client
+        run.restarts += 1
+        await run.stack.gateway.restart("SIGTERM", async () => {
+          older = asOlderBuild(path)
+        })
+        old.close()
+        run.client = await connectClient(run.stack.gateway, INSTANCE, "panel")
+        log(`upgrade: restarted on a version ${older} file`)
+        const version = schemaVersion(path)
+        if (version !== CURRENT_METADATA_VERSION)
+          failures.push(
+            `the gateway left the version ${older} file at ${version}, not ${CURRENT_METADATA_VERSION}`,
+          )
+        const after = await listed()
+        if (JSON.stringify(after) !== JSON.stringify(before))
+          failures.push(
+            `the upgraded gateway lists ${after.length} conversations, not the ${before.length} it did`,
+          )
+        // The upgraded gateway still answers the conversation, in the
+        // window: that answer comes over the window's new connection, so
+        // the refused connections while it was down are the restart's.
+        if (failures.length === count) await steps.reply(run, step, failures)
+        return failures.length === count
+      })
+    })
+  },
+
   async rail(run, step, failures) {
     await run.exclusive(async () => {
       await setSideRail(run.page, true, failures)
@@ -1052,12 +1121,22 @@ const steps = {
         failures.push("the window had no room for the side rail")
         return
       }
+      // Open, closed, open again. Each open sends its own phrase: settled
+      // counts copies of one phrase, and the first send is already there.
+      let opened = 0
       for (const open of [true, false, true]) {
         if ((await toggle.getAttribute("aria-expanded")) !== String(open))
           await toggle.click()
         if (!(await aroundTheLights(run.page, open ? "open" : "closed", failures))) return
         // The workspace still takes a message with the rail beside it.
-        if (open && failures.length === 0) await steps.reply(run, step, failures)
+        if (open && failures.length === 0) {
+          opened += 1
+          await steps.reply(
+            run,
+            opened === 1 ? step : { ...step, extra: " again" },
+            failures,
+          )
+        }
       }
       // Turned off with the rail open: the rail goes, and back from Settings
       // the titlebar's controls start where the lights end again.

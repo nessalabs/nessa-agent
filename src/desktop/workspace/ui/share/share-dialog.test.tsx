@@ -8,7 +8,7 @@
 import { act, StrictMode } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { Provider } from "react-redux"
-import { afterEach, beforeEach, describe, expect, it } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { makeDesktopStore } from "../../../store"
 import { SharingError, type SharingSource } from "../../application/ports"
 import { createQuestionFlights } from "../../application/question-flights"
@@ -717,5 +717,89 @@ describe("the share dialog", () => {
     await click(within(row, '[data-share-action="confirm-revoke"]'))
     expect(find("[data-share-notice]").textContent).toBe("No longer shared.")
     expect(dialog()?.querySelector("[data-share-grant]")).toBeNull()
+  })
+
+  it("keeps Tab inside the dialog and returns focus to the session row after the menu is gone", async () => {
+    const row = document.createElement("button")
+    row.dataset.sessionRow = "a"
+    row.textContent = "Release notes"
+    const menuItem = document.createElement("button")
+    menuItem.setAttribute("role", "menuitem")
+    menuItem.textContent = "Share…"
+    document.body.append(row, menuItem)
+    try {
+      menuItem.focus()
+      const store = await render(inMemorySharing({ now: testNow }))
+      await open(store)
+      menuItem.remove()
+      const panel = dialog()
+      expect(panel?.contains(document.activeElement)).toBe(true)
+      for (let step = 0; step < 8; step++) {
+        document.activeElement?.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true }),
+        )
+        expect(panel?.contains(document.activeElement)).toBe(true)
+      }
+      await act(async () => {
+        document.dispatchEvent(
+          new KeyboardEvent("keydown", {
+            key: "Escape",
+            code: "Escape",
+            bubbles: true,
+            cancelable: true,
+          }),
+        )
+      })
+      await act(async () => {
+        await vi.waitFor(() => {
+          if (document.activeElement !== row) throw new Error("focus has not returned")
+        })
+      })
+      expect(dialog()).toBeNull()
+    } finally {
+      row.remove()
+      menuItem.remove()
+    }
+  })
+
+  it("returns focus to the session row from the close button", async () => {
+    const row = document.createElement("button")
+    row.dataset.sessionRow = "a"
+    document.body.append(row)
+    try {
+      const store = await render(inMemorySharing({ now: testNow }))
+      await open(store)
+      await click(find("button[aria-label='Close']"))
+      await act(async () => {
+        await vi.waitFor(() => {
+          if (document.activeElement !== row) throw new Error("focus has not returned")
+        })
+      })
+    } finally {
+      row.remove()
+    }
+  })
+
+  it("leaves focus where a later surface put it", async () => {
+    const keeper = document.createElement("button")
+    keeper.textContent = "Settings"
+    document.body.append(keeper)
+    try {
+      const store = await render(inMemorySharing({ now: testNow }))
+      await open(store)
+      // Settings takes focus from its own effect, after this dialog is gone
+      // and before the dialog's deferred restore.
+      await act(async () => {
+        store.dispatch(closeShare())
+      })
+      keeper.focus()
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0))
+      })
+      expect(document.activeElement).toBe(keeper)
+      expect(dialog()).toBeNull()
+    } finally {
+      keeper.remove()
+    }
   })
 })

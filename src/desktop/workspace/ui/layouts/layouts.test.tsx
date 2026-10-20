@@ -5,7 +5,7 @@
  * the switcher and the titlebar's controls are the same in both.
  */
 import { act } from "react"
-import { createRoot } from "react-dom/client"
+import { createRoot, type Root } from "react-dom/client"
 import { Provider } from "react-redux"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { isMac } from "../../../adapters/platform"
@@ -22,7 +22,13 @@ import {
   toggleSidebar,
 } from "../../adapters/store/commands"
 import { layoutShape, panesOf } from "../../../split-panes/model/pane-layout"
-import { controlledAnimationFrames, settle, shownBy, testStore } from "../../testing"
+import {
+  controlledAnimationFrames,
+  flushAnimationFrames,
+  settle,
+  shownBy,
+  testStore,
+} from "../../testing"
 import { paneItemOf } from "../../model/pane-item"
 import {
   openReviewEvent,
@@ -285,26 +291,30 @@ describe("every key of the shared map does the same in both layouts", () => {
 describe("the Agents entry is not marked on the open's own paint", () => {
   it("waits two frames, then takes the current page", async () => {
     const frames = controlledAnimationFrames()
+    let root: Root | undefined
     try {
-      const { root } = await render(SessionsInSidebar)
-      // Mount may have queued frames of its own. The open's frames are the ones after those.
-      await act(async () => {
-        for (let step = 0; step < 12 && frames.pending() > 0; step++) frames.runFrame()
-      })
-      expect(frames.pending()).toBe(0)
+      ;({ root } = await render(SessionsInSidebar))
+      // Mount's own frames, one `act` each, so an update that queues the next
+      // frame is visible to the following step (`flushAnimationFrames`).
+      // Whatever is still queued is not the entry's contract.
+      await flushAnimationFrames(frames, act)
       const entry = () => host.querySelector<HTMLButtonElement>(".agents-overview-entry")
+      const stacks = () => frames.pendingStacks().join("\n")
       await act(async () => entry()?.click())
-      expect(entry()?.getAttribute("data-active")).not.toBe("true")
+      expect(entry()?.getAttribute("data-active"), stacks()).not.toBe("true")
       expect(entry()?.getAttribute("aria-current") ?? null).toBeNull()
       await act(async () => frames.runFrame())
-      expect(entry()?.getAttribute("data-active")).not.toBe("true")
+      expect(entry()?.getAttribute("data-active"), stacks()).not.toBe("true")
       await act(async () => frames.runFrame())
       // The kit's row writes data-active either way; "true" is the mark.
-      expect(entry()?.getAttribute("data-active")).toBe("true")
+      expect(entry()?.getAttribute("data-active"), stacks()).toBe("true")
       expect(entry()?.getAttribute("aria-current")).toBe("page")
-      await act(async () => root.unmount())
     } finally {
-      frames.restore()
+      try {
+        if (root) await act(async () => root?.unmount())
+      } finally {
+        frames.restore()
+      }
     }
   })
 })

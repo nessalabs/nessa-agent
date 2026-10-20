@@ -11,6 +11,7 @@ sources:
   - "src/desktop/split-panes/model/drag.ts"
   - "src/desktop/split-panes/model/drop.ts"
   - "src/desktop/workspace/adapters/store/commands.ts"
+  - "src/desktop/workspace/adapters/store/pane-commands.ts"
   - "src/desktop/split-panes/adapters/dom/drag.test.tsx"
   - "src/desktop/workspace/adapters/dom/split-panes-drag.test.tsx"
   - "src/desktop/split-panes/model/drop.test.ts"

@@ -1,0 +1,265 @@
+{
+  "unit": "payload bytes",
+  "clock": "pace waits are the schedule's virtual clock; wallMs is process time and is not a percentile",
+  "profiles": [
+    {
+      "name": "unpaced",
+      "bytesPerSecond": null,
+      "payloadBytes": 1403,
+      "downloaded": 2,
+      "applied": 2,
+      "reopenDownloaded": 2,
+      "reopenApplied": 2,
+      "virtualLagMs": 0,
+      "wallMs": 2
+    },
+    {
+      "name": "paced-8000",
+      "bytesPerSecond": 8000,
+      "payloadBytes": 1403,
+      "downloaded": 2,
+      "applied": 2,
+      "reopenDownloaded": 2,
+      "reopenApplied": 2,
+      "virtualLagMs": 1000,
+      "wallMs": 2
+    }
+  ],
+  "profilesMatch": true,
+  "sizeTable": [
+    {
+      "payloadBytes": 1024,
+      "bytesPerSecond": 2000,
+      "waitMs": 1000
+    },
+    {
+      "payloadBytes": 1024,
+      "bytesPerSecond": 8000,
+      "waitMs": 1000
+    },
+    {
+      "payloadBytes": 1024,
+      "bytesPerSecond": 32000,
+      "waitMs": 1000
+    },
+    {
+      "payloadBytes": 4096,
+      "bytesPerSecond": 2000,
+      "waitMs": 3000
+    },
+    {
+      "payloadBytes": 4096,
+      "bytesPerSecond": 8000,
+      "waitMs": 1000
+    },
+    {
+      "payloadBytes": 4096,
+      "bytesPerSecond": 32000,
+      "waitMs": 1000
+    },
+    {
+      "payloadBytes": 8192,
+      "bytesPerSecond": 2000,
+      "waitMs": 5000
+    },
+    {
+      "payloadBytes": 8192,
+      "bytesPerSecond": 8000,
+      "waitMs": 2000
+    },
+    {
+      "payloadBytes": 8192,
+      "bytesPerSecond": 32000,
+      "waitMs": 1000
+    },
+    {
+      "payloadBytes": 16384,
+      "bytesPerSecond": 2000,
+      "waitMs": 9000
+    },
+    {
+      "payloadBytes": 16384,
+      "bytesPerSecond": 8000,
+      "waitMs": 3000
+    },
+    {
+      "payloadBytes": 16384,
+      "bytesPerSecond": 32000,
+      "waitMs": 1000
+    },
+    {
+      "payloadBytes": 32768,
+      "bytesPerSecond": 2000,
+      "waitMs": 17000
+    },
+    {
+      "payloadBytes": 32768,
+      "bytesPerSecond": 8000,
+      "waitMs": 5000
+    },
+    {
+      "payloadBytes": 32768,
+      "bytesPerSecond": 32000,
+      "waitMs": 2000
+    },
+    {
+      "payloadBytes": 65536,
+      "bytesPerSecond": 2000,
+      "waitMs": 33000
+    },
+    {
+      "payloadBytes": 65536,
+      "bytesPerSecond": 8000,
+      "waitMs": 9000
+    },
+    {
+      "payloadBytes": 65536,
+      "bytesPerSecond": 32000,
+      "waitMs": 3000
+    }
+  ],
+  "orderStatistics": {
+    "method": "nearest rank on the size table, ceil(percent * n / 100) - 1",
+    "of": "the 18 pace waits, not a sampled link",
+    "p50Ms": 2000,
+    "p95Ms": 33000
+  },
+  "experiments": [
+    {
+      "name": "foreground",
+      "winner": "openTranscript",
+      "artifactQuoteBytes": 32768,
+      "transcriptQuoteBytes": 524288,
+      "run": {
+        "decision": "admit",
+        "winner": "openTranscript",
+        "quantumRan": true,
+        "keptBytes": 0,
+        "remaining": 524288
+      }
+    },
+    {
+      "name": "background",
+      "winner": "openTranscript",
+      "run": {
+        "decision": "admit",
+        "winner": "openTranscript",
+        "quantumRan": true,
+        "keptBytes": 0,
+        "remaining": 524288
+      }
+    },
+    {
+      "name": "sleep",
+      "run": {
+        "decision": "sleep",
+        "winner": "none",
+        "quantumRan": false,
+        "keptBytes": 0,
+        "remaining": 524288
+      }
+    },
+    {
+      "name": "wake",
+      "run": {
+        "decision": "admit",
+        "winner": "openTranscript",
+        "quantumRan": true,
+        "keptBytes": 0,
+        "remaining": 524288
+      }
+    },
+    {
+      "name": "unreachable",
+      "run": {
+        "decision": "unreachable",
+        "winner": "none",
+        "quantumRan": false,
+        "keptBytes": 0,
+        "remaining": 524288
+      }
+    },
+    {
+      "name": "reachable",
+      "run": {
+        "decision": "admit",
+        "winner": "openTranscript",
+        "quantumRan": true,
+        "keptBytes": 0,
+        "remaining": 524288
+      }
+    },
+    {
+      "name": "catalogue",
+      "run": {
+        "decision": "admit",
+        "winner": "catalogue",
+        "quantumRan": true,
+        "keptBytes": 0,
+        "remaining": 1048576
+      }
+    },
+    {
+      "name": "subscriptionDown",
+      "run": {
+        "decision": "admit",
+        "winner": "olderHistory",
+        "quantumRan": true,
+        "keptBytes": 0,
+        "remaining": 524288
+      }
+    },
+    {
+      "name": "relay",
+      "route": "relay",
+      "run": {
+        "decision": "admit",
+        "winner": "openTranscript",
+        "quantumRan": true,
+        "keptBytes": 0,
+        "remaining": 524288
+      }
+    },
+    {
+      "name": "allowanceRaised",
+      "run": {
+        "before": "allowance",
+        "after": "admit",
+        "keptBytes": 0
+      }
+    },
+    {
+      "name": "meteredUnknownQuote",
+      "run": {
+        "decision": "unknownQuote",
+        "winner": "none",
+        "quantumRan": false,
+        "keptBytes": 0,
+        "remaining": 524288
+      }
+    },
+    {
+      "name": "reconnectAfterLoss",
+      "run": {
+        "cancelKept": {
+          "kept": 0,
+          "reconnecting": true
+        },
+        "next": "reconnect",
+        "inFlightBeforeCancel": true,
+        "keptBytes": 0,
+        "afterBackoff": "admit",
+        "remaining": 524288
+      }
+    }
+  ],
+  "relayPreambleBytes": 38,
+  "notMeasured": [
+    "phone radio",
+    "operating-system sleep",
+    "TLS",
+    "IP billing",
+    "sampled production lag",
+    "fragment reassembly"
+  ]
+}
