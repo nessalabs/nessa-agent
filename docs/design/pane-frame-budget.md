@@ -114,8 +114,8 @@ starts the measured row.
    toggle still paints in the turn. The click does not render the
    sidebar unless the reveal itself changed, it does not render the
    night scene or the overview unless their own inputs changed, and it
-   does not render the pane that lost focus: the focused mark is set on
-   the article before paint. A selector whose fields did not change is
+   does not render the pane that lost focus: the focused mark is written
+   on the next frame, not in the click. A selector whose fields did not change is
    not called. One that reads the new layout waits for the next frame
    (`useWorkspaceSelector`), so the click does not render it. A focus
    move between panes already open still paints in the turn.

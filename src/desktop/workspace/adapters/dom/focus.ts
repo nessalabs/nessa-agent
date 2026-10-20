@@ -31,7 +31,7 @@ import { inModal } from "../../../adapters/modal"
 import type { DesktopStore } from "../../../store"
 import { widgetBodyAttribute } from "../../../widgets"
 import { paneItemKey, widgetItem } from "../../model/pane-item"
-import { selectContentKind, selectWindowWidget } from "../store/selectors"
+import { selectContentKind, selectFocusedPaneKey, selectWindowWidget } from "../store/selectors"
 import { arrivalWaitingAttribute } from "./arrival"
 
 /** Marks the focused pane, whichever layout draws it, for the caret to find. */
@@ -192,7 +192,15 @@ export function useFocusFollowsPane(
 
     const follow = () => {
       stop()
-      stop = focusInFront(scope)
+      // The focused mark is written on the frame after the click. Until it
+      // names the pane the store focused, there is nothing to land in.
+      stop = focusAfterPaint(() => {
+        const key = selectFocusedPaneKey(store.getState())
+        const marked = scope.querySelector<HTMLElement>(`[${focusedPaneAttribute}]`)
+        if (key !== null && marked?.getAttribute("data-pane-key") !== String(key))
+          return null
+        return caretTarget(scope)
+      })
     }
     /**
      * `moved`: another pane took focus — a key, a split, an agent — so the
@@ -204,7 +212,12 @@ export function useFocusFollowsPane(
       const active = document.activeElement
       const lost = !active || active === document.body
       if (inModal(active)) return
-      const inFocused = !lost && active.closest(`[${focusedPaneAttribute}]`) !== null
+      const key = selectFocusedPaneKey(store.getState())
+      const marked = scope.querySelector<HTMLElement>(`[${focusedPaneAttribute}]`)
+      const markAgrees =
+        key === null || marked?.getAttribute("data-pane-key") === String(key)
+      const inFocused =
+        markAgrees && !lost && active.closest(`[${focusedPaneAttribute}]`) !== null
       const grid = gridOf(scope)
       const inOtherPane = !lost && !inFocused && grid?.contains(active) === true
       if (lost || inOtherPane || (moved && !inFocused)) follow()

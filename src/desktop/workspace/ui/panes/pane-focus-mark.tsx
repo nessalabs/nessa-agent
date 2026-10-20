@@ -23,14 +23,22 @@ function markPane(paneKey: PaneKey, multi: boolean, focused: boolean) {
 export function PaneFocusMark({ paneKey, multi }: { paneKey: PaneKey; multi: boolean }) {
   const store = useWorkspaceStore()
   useEffect(() => {
+    let frame = 0
     let focused = selectFocusedPaneKey(store.getState()) === paneKey
+    // The first paint writes in this effect. A later change waits for the
+    // next frame: writing it in the click restyles the pane on that frame.
     markPane(paneKey, multi, focused)
-    return store.subscribe(() => {
+    const unsubscribe = store.subscribe(() => {
       const next = selectFocusedPaneKey(store.getState()) === paneKey
       if (next === focused) return
       focused = next
-      markPane(paneKey, multi, focused)
+      cancelAnimationFrame(frame)
+      frame = requestAnimationFrame(() => markPane(paneKey, multi, next))
     })
+    return () => {
+      cancelAnimationFrame(frame)
+      unsubscribe()
+    }
   }, [store, paneKey, multi])
   return null
 }
