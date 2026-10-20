@@ -127,9 +127,11 @@ export const SplitPanes = memo(function SplitPanes({
       cancel()
       armed = true
       waiting = next
-      hold(next !== drawnRef.current)
       const queue = (left: number) => {
         const id = requestAnimationFrame(() => {
+          // The click paints nothing new. The hold starts on the next frame,
+          // before the window records the fold.
+          if (left === 3) hold(next !== drawnRef.current)
           if (left > 1) {
             queue(left - 1)
             return

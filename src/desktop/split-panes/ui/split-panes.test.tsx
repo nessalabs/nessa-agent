@@ -157,16 +157,15 @@ it("paints a new arrangement on the frame after it commits", async () => {
   const fake = fakeSource(layout)
   await mounted(fake)
   await fake.change(splitPane(layout, 2, "bottom", "c"))
-  // The commit's own turn keeps the boxes already painted, and so do the
-  // two frames after it: a drop's copy lets go, then a column title glides.
-  // The workspace holds a folded sidebar in the row for that wait.
+  // The commit's own turn keeps the boxes already painted and writes
+  // nothing. The next frame holds a folded sidebar in the row, and so does
+  // the frame after that: a drop's copy lets go, then a column title glides.
   expect(grid().querySelectorAll(".host-pane")).toHaveLength(2)
+  expect(host.hasAttribute("data-spare-held")).toBe(false)
+  await act(async () => new Promise<void>((resolve) => requestAnimationFrame(resolve)))
   expect(host.hasAttribute("data-spare-held")).toBe(true)
   await act(
-    async () =>
-      new Promise<void>((resolve) =>
-        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
-      ),
+    async () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
   )
   expect(grid().querySelectorAll(".host-pane")).toHaveLength(2)
   expect(host.hasAttribute("data-spare-held")).toBe(true)

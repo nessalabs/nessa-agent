@@ -677,11 +677,37 @@ function FittedWindow({
  * (`listPaintFrame`), so that commit does not restyle the rows.
  */
 function ListMeasureHold({ root }: { root: RefObject<HTMLElement | null> }) {
-  const columns = useWorkspaceSelector(selectColumnCount)
+  const store = useWorkspaceStore()
   const painted = usePaintedWithPanes(selectColumnCount, listPaintFrame)
-  useLayoutEffect(() => {
-    root.current?.toggleAttribute("data-list-held", columns !== painted)
-  }, [columns, painted, root])
+  const paintedRef = useRef(painted)
+  paintedRef.current = painted
+  useEffect(() => {
+    let frame = 0
+    let held = false
+    const apply = (on: boolean) => {
+      root.current?.toggleAttribute("data-list-held", on)
+    }
+    apply(selectColumnCount(store.getState()) !== paintedRef.current)
+    const unsubscribe = store.subscribe(() => {
+      const on = selectColumnCount(store.getState()) !== paintedRef.current
+      if (on === held) return
+      held = on
+      cancelAnimationFrame(frame)
+      // The click does not write the attribute. The next frame does, which
+      // is before the fold paints.
+      frame = requestAnimationFrame(() => apply(on))
+    })
+    return () => {
+      cancelAnimationFrame(frame)
+      unsubscribe()
+    }
+  }, [store, root])
+  useEffect(() => {
+    root.current?.toggleAttribute(
+      "data-list-held",
+      selectColumnCount(store.getState()) !== painted,
+    )
+  }, [painted, store, root])
   return null
 }
 
