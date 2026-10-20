@@ -568,7 +568,12 @@ export function conversationView(value: unknown, expected: string): Conversation
       const toolId = text(part, "toolId", 256)
       const noticeId = text(part, "noticeId", 20)
       const noticeKind = part.noticeKind
-      if (noticeKind !== undefined && noticeKind !== "review" && noticeKind !== "hook")
+      if (
+        noticeKind !== undefined &&
+        noticeKind !== "review" &&
+        noticeKind !== "hook" &&
+        noticeKind !== "deadline"
+      )
         throw new Error("Conversation local notice has no source")
       if (kind === "tool") {
         if (!toolId.length) throw new Error("Conversation tool part has no tool identity")
@@ -581,7 +586,7 @@ export function conversationView(value: unknown, expected: string): Conversation
         throw new Error("Conversation non-tool part has a tool identity")
       }
       if (kind === "local_notice") {
-        if (noticeKind !== "review" && noticeKind !== "hook")
+        if (noticeKind !== "review" && noticeKind !== "hook" && noticeKind !== "deadline")
           throw new Error("Conversation local notice has no source")
         if (
           !/^[1-9][0-9]{0,19}$/.test(noticeId) ||

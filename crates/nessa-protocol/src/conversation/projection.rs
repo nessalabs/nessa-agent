@@ -412,11 +412,14 @@ fn decline_notice(review: &DeclinedReview) -> String {
     text
 }
 
-/// A declined review or a deadline settlement. Its decimal is that review's.
+/// A declined review. Its decimal is the decline id.
 const REVIEW_NOTICE: &str = "review";
 /// A hook that stopped the turn. Its decimal is the permission's, which is a
 /// different identity from a review decline even when the text matches.
 const HOOK_NOTICE: &str = "hook";
+/// A deadline that settled its review. Its decimal is the permission's.
+/// A declined review may use the same decimal; this kind keeps that sentence.
+const DEADLINE_NOTICE: &str = "deadline";
 
 fn same_notice(part: &ConversationPart, kind: &str, id: &str) -> bool {
     part.kind == "local_notice" && part.notice_kind == kind && part.notice_id == id
@@ -1208,11 +1211,11 @@ impl Projection {
         // Decided once, before this event changes anything: a notice is shown
         // for the deadline that settled its review, and only the first time.
         // The notice part is that record, so a replayed record shows it again.
-        // The review's id becomes the notice's, and a notice id is the decimal
-        // a review decline has; a saved history may hold any permission id, so
-        // one that is not a notice id shows no notice rather than a view the
-        // client refuses whole. A hook notice uses the same decimal shape and
-        // a different kind, so it does not count as this review's notice.
+        // The permission id becomes the notice's. A notice id is a decimal a
+        // review decline can use; a saved history may hold any permission id,
+        // so one that is not a notice id shows no notice rather than a view
+        // the client refuses whole. A hook notice and a declined-review
+        // notice use different kinds, so neither counts as this deadline.
         let deadline_notice_shown = match event.update() {
             ExecutionUpdate::DeadlineAnswered {
                 id: permission,
@@ -1226,7 +1229,7 @@ impl Projection {
                     && !self.view.messages[index]
                         .parts
                         .iter()
-                        .any(|part| same_notice(part, REVIEW_NOTICE, permission.as_str()))
+                        .any(|part| same_notice(part, DEADLINE_NOTICE, permission.as_str()))
             }
             _ => false,
         };
@@ -1294,7 +1297,7 @@ impl Projection {
                         text: bounded,
                         tool_id: String::new(),
                         notice_id: permission.as_str().into(),
-                        notice_kind: REVIEW_NOTICE.into(),
+                        notice_kind: DEADLINE_NOTICE.into(),
                     })
                 }
             }

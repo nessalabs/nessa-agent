@@ -3120,8 +3120,8 @@
     },
     "ConversationNoticeKind": {
       "type": "string",
-      "enum": ["review", "hook"],
-      "description": "Which local decision a notice records. review is a declined review or a deadline settlement. hook is a permission-review hook that stopped the turn or closed the session. The two may share one decimal id."
+      "enum": ["review", "hook", "deadline"],
+      "description": "Which local decision a notice records. review is a declined review. hook is a permission-review hook that stopped the turn or closed the session. deadline is a deadline that settled its review. The three may share one decimal id."
     },
     "ConversationPart": {
       "type": "object",
@@ -3155,7 +3155,7 @@
           "maxLength": 20,
           "x-utf8MaxBytes": 20,
           "pattern": "^[1-9][0-9]{0,19}$|^$",
-          "description": "Decimal identity of a local notice; empty otherwise. A review notice uses the declined-review or permission id. A hook notice uses the permission id. Those identities are independent, so one decimal may name both; noticeKind says which decision it is."
+          "description": "Decimal identity of a local notice; empty otherwise. A review notice uses the declined-review id. A hook notice and a deadline notice use the permission id. Those identities are independent, so one decimal may name each of them; noticeKind says which decision it is."
         },
         "noticeKind": {
           "$ref": "#/$defs/ConversationNoticeKind",

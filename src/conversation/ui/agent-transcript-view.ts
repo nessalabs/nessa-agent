@@ -46,6 +46,11 @@ function nullableRawText(raw: Record<string, JsonValue>, key: string): string | 
   if (value === null || typeof value === "string") return value
   throw new Error("Transcript event has invalid source execution metadata")
 }
+function noticeContentKey(kind: string, id: string): string {
+  if (kind === "hook") return `notice:hook:${id}`
+  if (kind === "deadline") return `notice:deadline:${id}`
+  return `notice:${id}`
+}
 function localNotice(
   raw: JsonValue,
 ): { id: string; kind: string; text: string } | undefined {
@@ -55,7 +60,10 @@ function localNotice(
     return undefined
   if (!Object.hasOwn(value, "id") || !Object.hasOwn(value, "text")) return undefined
   if (typeof value.id !== "string" || typeof value.text !== "string") return undefined
-  const kind = Object.hasOwn(value, "kind") && value.kind === "hook" ? "hook" : "review"
+  const kind =
+    Object.hasOwn(value, "kind") && (value.kind === "hook" || value.kind === "deadline")
+      ? value.kind
+      : "review"
   return { id: value.id, kind, text: value.text }
 }
 function executionMetadata(events: readonly AgentEvent[]): ExecutionMetadata | undefined {
@@ -205,8 +213,7 @@ export function agentTurnView(turn: Turn, transcript: Transcript) {
       if (notice) {
         flushWork()
         content.push({
-          key:
-            notice.kind === "hook" ? `notice:hook:${notice.id}` : `notice:${notice.id}`,
+          key: noticeContentKey(notice.kind, notice.id),
           notice: notice.text,
         })
       }

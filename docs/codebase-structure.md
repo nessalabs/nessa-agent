@@ -1310,8 +1310,10 @@ its ordered thought and tool detail. Neither parses provider wire formats.
 Runtime-owned declined-review notices use their own ordered `local_notice` part
 and stable execution-scoped identity. A stopping refusal names the rule and the
 tool in that sentence. A hook that ends the turn or closes the session names the
-tool and the hook's reason, as a hook notice. A review notice and a hook notice
-may share one decimal; `noticeKind` says which decision the part is. The gateway upserts selection with its later
+tool and the hook's reason, as a hook notice. A deadline that settled its review
+is a deadline notice. A review notice, a hook notice, and a deadline notice
+may share one decimal; `noticeKind` says which decision the part is. Admission
+checks each identity inside its own type. The gateway upserts selection with its later
 local write evidence before the agent-stream adapter renders it; it is not a
 permission decision, provider message, tool failure, or execution status.
 `ui/transcript.tsx` renders a turn's terminal status once at row level,

@@ -1214,8 +1214,12 @@ export interface ConversationRuntime {
   /** Catalog reasoning capability. */
   reasoning: boolean
 }
-/** Which local decision a notice records. review is a declined review or a deadline settlement. hook is a permission-review hook that stopped the turn or closed the session. The two may share one decimal id. */
-export const ConversationNoticeKind = { Review: "review", Hook: "hook" } as const
+/** Which local decision a notice records. review is a declined review. hook is a permission-review hook that stopped the turn or closed the session. deadline is a deadline that settled its review. The three may share one decimal id. */
+export const ConversationNoticeKind = {
+  Review: "review",
+  Hook: "hook",
+  Deadline: "deadline",
+} as const
 export type ConversationNoticeKind =
   (typeof ConversationNoticeKind)[keyof typeof ConversationNoticeKind]
 /** One ordered observation fragment in a bounded execution projection; offsets may have gaps. */
@@ -1228,7 +1232,7 @@ export interface ConversationPart {
   text: string
   /** The tool call's identity, which names its entry in tools; empty otherwise. */
   toolId: string
-  /** Decimal identity of a local notice; empty otherwise. A review notice uses the declined-review or permission id. A hook notice uses the permission id. Those identities are independent, so one decimal may name both; noticeKind says which decision it is. */
+  /** Decimal identity of a local notice; empty otherwise. A review notice uses the declined-review id. A hook notice and a deadline notice use the permission id. Those identities are independent, so one decimal may name each of them; noticeKind says which decision it is. */
   noticeId: string
   /** Which local decision this notice is. Absent on every part that is not a local notice. */
   noticeKind?: ConversationNoticeKind

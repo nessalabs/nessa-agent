@@ -31,7 +31,7 @@ function messageParts(value: ReturnType<typeof view>) {
     text: string
     toolId: string
     noticeId: string
-    noticeKind?: "review" | "hook"
+    noticeKind?: "review" | "hook" | "deadline"
   }>
 }
 
@@ -406,6 +406,31 @@ describe("conversation view agreement", () => {
     ).toEqual([undefined, "review", "hook"])
     parts.push({
       offset: 3,
+      kind: "local_notice",
+      text: "Denied automatically.",
+      toolId: "",
+      noticeId: "7",
+      noticeKind: "deadline",
+    })
+    expect(
+      conversationView(value, "conversation").messages[1]!.parts.map(
+        (part) => part.noticeKind,
+      ),
+    ).toEqual([undefined, "review", "hook", "deadline"])
+    parts.push({
+      offset: 4,
+      kind: "local_notice",
+      text: "another deadline",
+      toolId: "",
+      noticeId: "7",
+      noticeKind: "deadline",
+    })
+    expect(() => conversationView(value, "conversation")).toThrow(
+      "repeats a local notice identity",
+    )
+    parts.pop()
+    parts.push({
+      offset: 4,
       kind: "local_notice",
       text: "another hook",
       toolId: "",

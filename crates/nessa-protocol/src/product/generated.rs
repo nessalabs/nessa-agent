@@ -1272,12 +1272,15 @@ pub enum ConversationNoticeKind {
     Review,
     #[serde(rename = "hook")]
     Hook,
+    #[serde(rename = "deadline")]
+    Deadline,
 }
 impl ConversationNoticeKind {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Review => "review",
             Self::Hook => "hook",
+            Self::Deadline => "deadline",
         }
     }
 }

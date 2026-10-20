@@ -2524,20 +2524,8 @@ fn hook_cancellation(outcome: RefusalOutcome, explanation: &str) -> ExecutionEve
     )
 }
 
-/// Fold events the way the panel does, without the snapshot admission check.
-/// Admission rejects a permission id that repeats a decline id. The panel
-/// still has to keep both sentences when a history reaches it with both,
-/// because those identities are independent.
-fn project_events(events: Vec<ExecutionEvent>) -> ConversationView {
-    let mut projection = projection();
-    for event in &events {
-        projection.observe(event);
-    }
-    projection.read()
-}
-
 /// A declined review and a hook stop are different decisions. The same decimal
-/// may name both, and each sentence stays.
+/// may name both, and each sentence stays. Admission accepts that history.
 #[test]
 fn a_hook_stop_stays_beside_a_declined_review_with_the_same_id() {
     let decline = DeclinedReview::selected(
@@ -2550,7 +2538,7 @@ fn a_hook_stop_stays_beside_a_declined_review_with_the_same_id() {
         None,
     )
     .unwrap();
-    let ended = project_events(vec![
+    let ended = shown(vec![
         declined(decline.clone()),
         review("{}".into()),
         hook_cancellation(RefusalOutcome::EndTurn, "shell is blocked"),
@@ -2572,7 +2560,7 @@ fn a_hook_stop_stays_beside_a_declined_review_with_the_same_id() {
     );
 
     let confirmed = decline.advance(ReviewDeclineStage::WriteConfirmed).unwrap();
-    let closed = project_events(vec![
+    let closed = shown(vec![
         declined(decline),
         review("{}".into()),
         hook_cancellation(RefusalOutcome::CloseSession, "shell is blocked"),
@@ -2590,6 +2578,79 @@ fn a_hook_stop_stays_beside_a_declined_review_with_the_same_id() {
     assert_eq!(
         closed[1].text,
         "Nessa closed the session before write_file ran because a hook refused it: shell is blocked."
+    );
+}
+
+#[test]
+fn a_repeated_permission_id_is_still_one_review() {
+    let snapshot = review_snapshot(vec![review("{}".into()), review("{}".into())]);
+    let error = CommittedSession::new(
+        SessionId::new("conversation").unwrap(),
+        "incarnation".into(),
+        1,
+        1,
+        1,
+        Some(snapshot),
+        CommittedStatus::new(CommittedCompleteness::Complete, CommittedFreshness::Current),
+    )
+    .expect_err("one permission id is one review");
+    assert!(
+        matches!(
+            error,
+            StorageError::Corrupt(ref message)
+                if message.contains("permission identity is repeated")
+        ),
+        "{error:?}"
+    );
+}
+
+/// A deadline settlement and a declined review are different decisions. The
+/// same decimal may name both once admission treats the identities as
+/// different, and each sentence stays.
+#[test]
+fn a_deadline_notice_stays_beside_a_declined_review_with_the_same_id() {
+    use crate::product::generated::{ConversationNoticeKind, ConversationPart as WirePart};
+    use nessa_sdk::domain::agent_execution::permissions::DeadlineReason;
+    let decline = DeclinedReview::selected(
+        ReviewDeclineId::new("7").unwrap(),
+        ReviewDecline::new(
+            Some("Bash"),
+            ReviewDeclineReason::ToolNotReviewable,
+            RefusalOutcome::Continue,
+        ),
+        None,
+    )
+    .unwrap();
+    let view = shown(vec![
+        review_with_deadline(PermissionEffect::Deny, STANDARD_DENY_REASON),
+        event(ExecutionUpdate::DeadlineAnswered {
+            id: PermissionId::new("7").unwrap(),
+            effect: PermissionEffect::Deny,
+            reason: DeadlineReason::new(STANDARD_DENY_REASON).unwrap(),
+        }),
+        declined(decline),
+    ]);
+    let shown_notices = notices(&view.messages[0]);
+    assert_eq!(shown_notices.len(), 2);
+    assert_eq!(shown_notices[0].notice_kind, "deadline");
+    assert_eq!(shown_notices[0].notice_id, "7");
+    assert_eq!(
+        shown_notices[0].text,
+        format!("Denied automatically: {STANDARD_DENY_REASON}")
+    );
+    assert_eq!(shown_notices[1].notice_kind, "review");
+    assert_eq!(shown_notices[1].notice_id, "7");
+    assert!(shown_notices[1].text.contains("not reviewable"));
+    let wire = |part: &crate::conversation::view::ConversationPart| -> WirePart {
+        serde_json::from_value(serde_json::to_value(part).unwrap()).unwrap()
+    };
+    assert_eq!(
+        wire(shown_notices[0]).notice_kind,
+        Some(ConversationNoticeKind::Deadline)
+    );
+    assert_eq!(
+        wire(shown_notices[1]).notice_kind,
+        Some(ConversationNoticeKind::Review)
     );
 }
 

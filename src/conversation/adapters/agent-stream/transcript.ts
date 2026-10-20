@@ -145,7 +145,10 @@ export function agentTranscript(
         flush()
         const noticeId = part.noticeId
         if (!noticeId) throw new Error("Local notice has no identity")
-        const noticeKind = part.noticeKind === "hook" ? "hook" : "review"
+        const noticeKind =
+          part.noticeKind === "hook" || part.noticeKind === "deadline"
+            ? part.noticeKind
+            : "review"
         push(
           `${turn.id}:notice:${noticeKind}:${noticeId}`,
           {
