@@ -1456,7 +1456,10 @@ fn environments(
     };
     if let (false, Some(audit)) = (hosts.is_empty(), &audit) {
         let connector = Arc::new(OpenSshConnector::new());
-        let installer = Arc::new(HostInstaller::this_build(connector.clone()));
+        let installer = Arc::new(HostInstaller::this_build(
+            connector.clone(),
+            root.join("host-builds"),
+        ));
         for host in hosts {
             environments.insert(
                 host.as_str().to_owned(),

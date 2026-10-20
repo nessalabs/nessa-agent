@@ -346,7 +346,7 @@ fn this_build_installs_on_a_host_without_it_and_then_serves_there() {
     let binary = Path::new(env!("CARGO_BIN_EXE_nessa"));
     let digest = format!("{:x}", Sha256::digest(std::fs::read(binary).unwrap()));
     let probe = |home: &Path| {
-        let output = on_host(home, &probe_command(LEASE_PROTOCOL, &digest))
+        let output = on_host(home, &probe_command(LEASE_PROTOCOL, &[&digest]))
             .output()
             .unwrap();
         Probe::parse(&String::from_utf8(output.stdout).unwrap()).unwrap()
@@ -362,7 +362,10 @@ fn this_build_installs_on_a_host_without_it_and_then_serves_there() {
     let answer = String::from_utf8(output.stdout).unwrap();
     assert_eq!(Upload::parse(&answer), Some(Upload::Installed), "{answer}");
     assert_eq!(probe(home.path()), Probe::Present);
-    let serving = serve_by(on_host(home.path(), &serve_command(&digest)), root.path());
+    let serving = serve_by(
+        on_host(home.path(), &serve_command(&[&digest])),
+        root.path(),
+    );
     match serving.next() {
         FromEnvironment::Hello { protocol, .. } => assert_eq!(protocol, LEASE_PROTOCOL),
         other => panic!("the hello comes first: {other:?}"),
