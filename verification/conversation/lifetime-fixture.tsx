@@ -13,12 +13,12 @@ import {
 import { useConversation } from "../../src/conversation/ui/use-conversation"
 import { ConversationControls } from "../../src/conversation/ui/conversation-controls"
 import { ClockProvider } from "../../src/clock"
+import { createLifetimeCounters, publishLifetimeCounters } from "./lifetime-counters"
 
 const A = "00000000-0000-4000-8000-000000000001"
 const B = "00000000-0000-4000-8000-000000000002"
-const follows: string[] = []
-const closed: string[] = []
-let stops = 0
+const counters = createLifetimeCounters()
+publishLifetimeCounters(counters)
 let release!: () => void
 const preparation = new Promise<void>((done) => {
   release = done
@@ -32,13 +32,13 @@ const store = makeStore(
         return { conversationId }
       },
       close: async (conversationId) => {
-        closed.push(conversationId)
+        counters.noteClose(conversationId)
       },
       follow: (id, follower) => {
-        follows.push(id)
+        counters.noteFollow(id)
         queueMicrotask(() => follower.failed("unavailable"))
         return () => {
-          stops += 1
+          counters.noteStop()
         }
       },
     },
@@ -59,9 +59,6 @@ function Fixture() {
       data-phase={phase}
       data-local-id={active.id}
       data-server-id={active.serverConversationId}
-      data-follows={JSON.stringify(follows)}
-      data-stops={stops}
-      data-closed={JSON.stringify(closed)}
       data-error={active.error ?? ""}
     >
       <h1>{active.title}</h1>
