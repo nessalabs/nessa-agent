@@ -2,7 +2,6 @@ import { useCallback, useRef, useSyncExternalStore } from "react"
 import { useStore } from "react-redux"
 import type { DesktopState, DesktopStore } from "../../../store"
 import type { WorkspaceState } from "../../application/workspace-state"
-import { paneBoxFrame } from "./paint-with-panes"
 import { selectColumnCount } from "./selectors"
 
 /**
@@ -10,38 +9,28 @@ import { selectColumnCount } from "./selectors"
  * selector in the window, and that script was the long frame. A selector is
  * called only when a field of `workspace` it read has a new reference. When
  * that change is the new layout (`panes` or `chrome`) and the column count
- * changed, the call waits until the new boxes paint (`paneBoxFrame`), so
- * neither the click nor the frame after it renders the window. Anything
- * else renders in the turn (`selector-paint.test.tsx`). The session list's
- * own marks wait one frame more (`listPaintFrame`).
+ * changed, the call waits for the next frame, so the click does not render
+ * it. Anything else renders in the turn (`selector-paint.test.tsx`). The
+ * window's fold paints with the new boxes, and the session list's rows wait
+ * until the frame after those boxes (`listPaintFrame`).
  */
 
 const layoutFields = new Set(["panes", "chrome"])
 
 let deferred: Set<() => void> | null = null
-let deferredFrames: number[] = []
+let deferredFrame = 0
 
 function defer(notify: () => void) {
   if (deferred?.has(notify)) return
   if (!deferred) {
     deferred = new Set()
-    const queue = (left: number) => {
-      const id = requestAnimationFrame(() => {
-        // A frame cancelled by the last listener leaving must not queue the next.
-        if (!deferred) return
-        if (left > 1) {
-          queue(left - 1)
-          return
-        }
-        const pending = deferred
-        deferred = null
-        deferredFrames = []
-        if (!pending) return
-        for (const tell of pending) tell()
-      })
-      deferredFrames.push(id)
-    }
-    queue(paneBoxFrame)
+    deferredFrame = requestAnimationFrame(() => {
+      const pending = deferred
+      deferred = null
+      deferredFrame = 0
+      if (!pending) return
+      for (const tell of pending) tell()
+    })
   }
   deferred.add(notify)
 }
@@ -49,9 +38,9 @@ function defer(notify: () => void) {
 function forget(notify: () => void) {
   if (!deferred?.delete(notify)) return
   if (deferred.size > 0) return
-  for (const id of deferredFrames) cancelAnimationFrame(id)
-  deferredFrames = []
+  cancelAnimationFrame(deferredFrame)
   deferred = null
+  deferredFrame = 0
 }
 
 function fieldOf(workspace: WorkspaceState, field: string): unknown {
@@ -130,7 +119,7 @@ export function useWorkspaceSelector<Selected>(
 
 /**
  * The new column count, and every field that changed is the layout. Paint
- * it with the new boxes. A focus move keeps the count, so it paints in the turn.
+ * it next frame. A focus move keeps the count, so it paints in the turn.
  */
 function layoutChange(
   store: DesktopStore,
