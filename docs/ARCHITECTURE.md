@@ -242,7 +242,8 @@ channel discloses its newest sessions inline, with a quick switcher (⌘K; ⌘\ 
 for room when the window grows too narrow for the panes, and bring them back
 when it widens (`model/window-fit.ts`, `src/desktop/model/side-column.ts`).
 The two layouts differ only in how the sidebar region is composed; the
-workspace shell (`ui/layouts/workspace-shell.tsx`) owns everything else,
+workspace shell (`ui/layouts/workspace-shell.tsx`) coordinates everything else
+through `use-workspace-window.ts`, and `workspace-layout.tsx` renders it,
 the quick switcher included. Titlebar content starts at the one safe area,
 `--desktop-titlebar-safe-start` (the host's window controls and our cluster);
 nothing draws under the window's controls. A column's title sits inline in
@@ -306,7 +307,8 @@ not reading the session, which stays unread.
 - `adapters/store/` is the Redux slice, which only names actions over those use
   cases; `commands.ts`, the one list of commands a person or an agent
   dispatches (plain actions, and thunks where an id, the time or the source is
-  needed); `effects.ts`, listener effects that read the conversation of a
+  needed, implemented by `index-commands.ts`, `pane-commands.ts`, and
+  `session-commands.ts`); `effects.ts`, listener effects that read the conversation of a
   session on screen — in a pane or the open overview — and mark one a pane
   shows read, whoever caused the change — a refused read waits for the pane's
   Try Again rather than being retried on every update, and is forgotten once

@@ -56,6 +56,14 @@
  *   delete      another conversation is deleted from its row's More menu,
  *               once asked; the gateway refuses it as deleted, and neither
  *               list nor the window holds it
+ *   rail        the side rail is turned on in Settings › Advanced ›
+ *               Experimental and opened: the window's traffic lights stay
+ *               where the host puts them and the rail holds them in its top
+ *               row, its controls centred under them, the first card past
+ *               them by the gap they keep from the window's edge; a message
+ *               sent with the rail open is answered; closed, opened again,
+ *               and turned off while open, the titlebar's controls go back to
+ *               starting where the lights end
  *   notice      a review waits in another conversation, which the window does
  *               not show: the host's system notice names its tool and the
  *               conversation's title, opening it brings that conversation
@@ -75,6 +83,12 @@
  *               window binds the conversation to the other, with new provider
  *               context, as the window's heading and the binding both say;
  *               both workers stop and linking is turned off again
+ *   upgrade     the gateway is stopped, its conversation metadata turned
+ *               back into the file an older build wrote (version 6, or 7
+ *               when a newer table holds rows), and started again: it
+ *               upgrades the file to the current version, lists every
+ *               conversation it listed before, and the message sent in the
+ *               window after it is answered
  *
  * Meanwhile `--parallel` background conversations take turns through the
  * gateway (every third one a watch), and `--followers` other clients follow
@@ -133,6 +147,7 @@ import {
 } from "./lib/selectors.mjs"
 import { freePort } from "./lib/server.mjs"
 import { Follower } from "./lib/stress-followers.mjs"
+import { asOlderBuild, metadataFile, schemaVersion } from "./lib/stress-upgrade.mjs"
 import {
   openStressConversation,
   selectedStressConversation,
@@ -142,6 +157,18 @@ import { KNOBS, describe, knobsFrom, plan, random } from "./lib/stress-plan.mjs"
 import { startWorker } from "./lib/stress-workers.mjs"
 
 const INSTANCE = "conversation-stress"
+/** The conversation metadata version this build writes (`schema.sql`'s last line). */
+const CURRENT_METADATA_VERSION = Number(
+  /PRAGMA user_version = (\d+);\s*$/.exec(
+    readFileSync(
+      new URL(
+        "../../../crates/nessa-server/src/conversation/infrastructure/schema.sql",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+  )[1],
+)
 /**
  * The environment that places a conversation on any of the gateway's paired
  * workers (`POOL` in crates/nessa-server/src/conversation/application/placement.rs).
@@ -338,18 +365,170 @@ async function untilView(run, conversationId, ready, seconds = 60) {
 
 const ended = (turn) => turnEnded(turn.status)
 
+/**
+ * Turns the side rail preview on or off where a person does: Settings ›
+ * Advanced › Experimental. Leaves Settings, back in the workspace.
+ */
+async function setSideRail(page, on, failures) {
+  if (!(await page.$(css.settings))) await page.keyboard.press(keys.settings)
+  await page.locator(css.settingsCategory, { hasText: names.advanced }).click()
+  // A category with one tab draws no tab list.
+  const tab = page.locator(css.settingsTab, { hasText: names.experimental })
+  if (await tab.count()) await tab.click()
+  const toggle = page.locator(`${selectorFor.settingRow("side-rail")} [role='switch']`)
+  if ((await toggle.getAttribute("aria-checked")) !== String(on)) await toggle.click()
+  const switched = await waitFor(
+    async () => (await toggle.getAttribute("aria-checked")) === String(on),
+    5_000,
+  )
+  if (!switched) failures.push(`the side rail's switch did not turn ${on ? "on" : "off"}`)
+  const drawn = await waitFor(
+    async () => (await railLayout(page)).rail === (on ? "open" : "off"),
+    10_000,
+  )
+  if (!drawn) {
+    const now = await railLayout(page)
+    failures.push(
+      on && now.rail === "closed"
+        ? "the window had no room for the side rail"
+        : `under Settings the rail is ${now.rail}, not ${on ? "open" : "off"}`,
+    )
+  }
+  await page.getByRole("button", { name: names.leaveSettings }).first().click()
+  await page.waitForSelector(css.settings, { state: "detached", timeout: 10_000 })
+  const shown = await waitFor(
+    async () => (await page.locator(css.sideRailToggle).count()) === (on ? 1 : 0),
+    10_000,
+  )
+  if (!shown) failures.push(`the side rail's toggle is ${on ? "missing" : "still shown"}`)
+}
+
+/**
+ * The macOS traffic lights, where `traffic_lights.rs` puts them and keeps
+ * them: the close button 16px from the window's edge, the three 23px apart,
+ * so they end 76px in and their middle is 46px in. The page never moves them.
+ */
+const LIGHTS = { left: 16, middle: 46, end: 76 }
+// The page's rail is tied to the host's and the stylesheet's copies in
+// `side-rail.test.tsx`; this copy is the harness's own model of the host.
+
+/**
+ * Waits until the rail is `rail` (open, closed, or off) and laid out around
+ * the traffic lights: open, the rail holds them in its top row, its items
+ * centred under them, and the first card starts past them by the gap they
+ * keep from the window's edge; open or closed, the rail's toggle stays
+ * centred under them; open or not, the titlebar's first control starts
+ * where they end, never under them. False, with the last measurement
+ * said, when that never holds.
+ */
+async function aroundTheLights(page, rail, failures) {
+  const near = (a, b) => Math.abs(a - b) <= 0.5
+  const holds = (now) =>
+    now.rail === rail &&
+    [now.at.workspace, now.at.inset, now.at.control].every(Number.isFinite) &&
+    near(now.at.control, now.at.workspace + now.at.inset) &&
+    now.at.control >= LIGHTS.end &&
+    (rail === "open"
+      ? near(now.at.workspace, now.at.railWidth) &&
+        near(now.at.card, LIGHTS.end + LIGHTS.left) &&
+        near(now.at.item, LIGHTS.middle)
+      : near(now.at.workspace, 0)) &&
+    (rail === "off" || near(now.at.toggle, LIGHTS.middle))
+  if (await waitFor(async () => holds(await railLayout(page)), 10_000)) return true
+  const now = await railLayout(page)
+  failures.push(
+    `rail ${rail} (now ${now.rail}) around lights ending at ${LIGHTS.end}, middle ${LIGHTS.middle}: ` +
+      JSON.stringify(now.at),
+  )
+  return false
+}
+
+/**
+ * The rail's state and, from the window's left edge: its width, the middle of
+ * its first item and of its toggle, where the workspace and its first card start,
+ * the window controls' inset from it, and where its titlebar's first control
+ * starts.
+ */
+function railLayout(page) {
+  return page.evaluate(
+    ({ frame, workspace, control, rail, item, toggle }) => {
+      const box = (selector) => document.querySelector(selector)?.getBoundingClientRect()
+      const middle = (selector) => {
+        const at = box(selector)
+        return at ? at.left + at.width / 2 : NaN
+      }
+      // A length token may be a calc(): resolved by laying it out.
+      const length = (inside, token) => {
+        const probe = document.createElement("div")
+        probe.style.cssText = `position:absolute;visibility:hidden;width:var(${token})`
+        inside.append(probe)
+        const width = probe.getBoundingClientRect().width
+        probe.remove()
+        return width
+      }
+      // The workspace's first card: the rounded panel at its left edge.
+      const card = (inside) => {
+        const left = inside.getBoundingClientRect().left
+        const x = left + length(inside, "--desktop-gutter") + 2
+        const panel = document
+          .elementsFromPoint(x, innerHeight / 2)
+          .find(
+            (e) =>
+              inside.contains(e) &&
+              parseFloat(getComputedStyle(e).borderTopLeftRadius) >= 8 &&
+              e.getBoundingClientRect().height > innerHeight / 2,
+          )
+        return panel?.getBoundingClientRect().left ?? NaN
+      }
+      const at = document.querySelector(workspace)
+      return {
+        rail: document.querySelector(frame)?.dataset.rail,
+        at: {
+          railWidth: box(rail)?.width ?? NaN,
+          item: middle(item),
+          toggle: middle(toggle),
+          workspace: at.getBoundingClientRect().left,
+          card: card(at),
+          inset: length(at, "--desktop-window-controls-inset"),
+          control: box(control)?.left ?? NaN,
+        },
+      }
+    },
+    {
+      frame: css.workspaceWindow,
+      workspace: css.workspace,
+      control: css.titlebarSidebarToggle,
+      rail: css.sideRail,
+      item: `${css.sideRail} [data-rail-item]`,
+      toggle: css.sideRailToggle,
+    },
+  )
+}
+
 /** The row of the conversation `conversationId` in the window's list. */
 const sessionRow = (page, conversationId) =>
   page.locator(selectorFor.sessionListRowFor(conversationId))
 
 /**
  * Chooses `label` in the More menu of `conversationId`'s row: the pointer
- * over the row shows its buttons, as a person sees them.
+ * over the row shows its buttons, as a person sees them. The list re-sorts
+ * as other conversations change, which can move the row out from under the
+ * pointer and hide the button again; a person points at the row again, and
+ * so does this, until the button takes the click.
  */
 async function choose(page, conversationId, label) {
   const row = sessionRow(page, conversationId)
-  await row.hover({ timeout: 15_000 })
-  await row.locator('[data-session-action="more"]').click({ timeout: 10_000 })
+  const more = row.locator('[data-session-action="more"]')
+  const end = Date.now() + 20_000
+  for (;;) {
+    await row.hover({ timeout: 15_000 })
+    try {
+      await more.click({ timeout: 2_000 })
+      break
+    } catch (error) {
+      if (Date.now() > end) throw error
+    }
+  }
   await page
     .getByRole("menuitem", { name: label, exact: true })
     .click({ timeout: 10_000 })
@@ -893,6 +1072,67 @@ const steps = {
     })
     // The restarted gateway still answers the conversation, in the window.
     if (failures.length === 0) await steps.reply(run, step, failures)
+  },
+
+  async upgrade(run, step, failures) {
+    const listed = async () =>
+      (await run.client.conversation.list({})).conversations
+        .map((each) => each.conversationId)
+        .sort()
+    await run.exclusive(async () => {
+      const before = await listed()
+      const path = metadataFile(run.stack.gateway.directory)
+      let older
+      await run.restartConsole.during(run.opened, async () => {
+        const count = failures.length
+        const old = run.client
+        run.restarts += 1
+        await run.stack.gateway.restart("SIGTERM", async () => {
+          older = asOlderBuild(path)
+        })
+        old.close()
+        run.client = await connectClient(run.stack.gateway, INSTANCE, "panel")
+        log(`upgrade: restarted on a version ${older} file`)
+        const version = schemaVersion(path)
+        if (version !== CURRENT_METADATA_VERSION)
+          failures.push(
+            `the gateway left the version ${older} file at ${version}, not ${CURRENT_METADATA_VERSION}`,
+          )
+        const after = await listed()
+        if (JSON.stringify(after) !== JSON.stringify(before))
+          failures.push(
+            `the upgraded gateway lists ${after.length} conversations, not the ${before.length} it did`,
+          )
+        // The upgraded gateway still answers the conversation, in the
+        // window: that answer comes over the window's new connection, so
+        // the refused connections while it was down are the restart's.
+        if (failures.length === count) await steps.reply(run, step, failures)
+        return failures.length === count
+      })
+    })
+  },
+
+  async rail(run, step, failures) {
+    await run.exclusive(async () => {
+      await setSideRail(run.page, true, failures)
+      if (failures.length) return
+      const toggle = run.page.locator(css.sideRailToggle)
+      if ((await toggle.getAttribute("aria-disabled")) === "true") {
+        failures.push("the window had no room for the side rail")
+        return
+      }
+      for (const open of [true, false, true]) {
+        if ((await toggle.getAttribute("aria-expanded")) !== String(open))
+          await toggle.click()
+        if (!(await aroundTheLights(run.page, open ? "open" : "closed", failures))) return
+        // The workspace still takes a message with the rail beside it.
+        if (open && failures.length === 0) await steps.reply(run, step, failures)
+      }
+      // Turned off with the rail open: the rail goes, and back from Settings
+      // the titlebar's controls start where the lights end again.
+      await setSideRail(run.page, false, failures)
+      await aroundTheLights(run.page, "off", failures)
+    })
   },
 
   async pool(run, step, failures) {

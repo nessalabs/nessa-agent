@@ -26,6 +26,7 @@ import type { Transcript } from "./model/transcript"
 import { atWork, emptyTranscript } from "./model/transcript"
 import { panesOf, type Pane, type PaneLayout } from "../split-panes/model/pane-layout"
 import { paneItemOf } from "./model/pane-item"
+import { loadWorkspace } from "./adapters/store/commands"
 
 /**
  * What a pane shows, as a test reads it: a session's id, or a widget as
@@ -375,6 +376,22 @@ export function testStore(
 export async function settle(times = 5): Promise<void> {
   for (let index = 0; index < times; index++) await Promise.resolve()
 }
+
+/** The index loaded, which is where a command test starts. */
+export async function ready(source = fakeSource()) {
+  const store = testStore(source)
+  await store.dispatch(loadWorkspace())
+  await settle()
+  return { store, source }
+}
+
+/** What the panes show, as a list of session ids. */
+export const shown = (store: ReturnType<typeof testStore>) =>
+  shownIn(store.getState().workspace.panes)
+
+/** A session's outbox, or none. */
+export const outboxOf = (store: ReturnType<typeof testStore>, sessionId: string) =>
+  store.getState().workspace.outbox[sessionId] ?? []
 
 /**
  * Animation frames a test runs itself.

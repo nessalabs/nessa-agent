@@ -18,7 +18,9 @@ use nessa_protocol::conversation::view::ConversationModelChangeEffect;
 use nessa_sdk::application::agent_execution::providers::ProviderIdentity;
 
 /// Current contract only: opening refuses an earlier alpha shape before any
-/// service can issue SQL against it. No table is added to an existing file.
+/// service can issue SQL against it. A version 7 file may already have held
+/// `model_requests` when it was brought to 8 (`schema_upgrades/7.sql`); this
+/// checks that the table it kept is the current one.
 pub(super) fn validate_shape(connection: &Connection) -> Result<(), OpenError> {
     connection.prepare("SELECT conversation_id,request_id,initiator,surface,prior_provider,prior_context,requested_provider,requested_context,prior_model,prior_mode,requested_model,state,application,applied_mode,effect,requested_at_ms FROM model_requests LIMIT 0")
         .map_err(|error| OpenError::Damaged(format!("conversation metadata lacks the required current model-request shape: {error}")))?;

@@ -58,6 +58,9 @@ const REFUSALS: Partial<Record<ConversationErrorCode, string>> = {
     "Nessa could not install itself on the SSH host this conversation runs on: the copy could not be downloaded, did not verify, did not run there, or could not be stored, so nothing was sent. Retry; the gateway's environment audit says which.",
   linked_file_unreachable:
     "This conversation runs on an SSH host, which cannot read files on this computer, so the message was not sent. Remove the linked files, or attach images, whose bytes are sent with them.",
+  // Named apart from the two codes below, which say the turn was saved.
+  revoked:
+    "Access changed before the message was admitted, so nothing was saved. Sending it again needs a new message.",
   revoked_after_save:
     "The message was saved, then refused because its access changed before it reached the agent. Sending it again needs a new message.",
   unavailable_after_save:

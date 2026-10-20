@@ -458,3 +458,33 @@ test("the content policy reaches every port a stage can listen on", () => {
     }
   }
 })
+
+/** The bundler deletes a .app nobody named, and the .app is what is verified. */
+test("a macOS build that would not keep the .app is refused before it starts", () => {
+  for (const args of [["--bundles", "dmg"], ["--bundles=dmg"], ["-b", "dmg"]]) {
+    const started = []
+    assert.throws(
+      () =>
+        runDesktopBuild({
+          args,
+          environment: { APPLE_SIGNING_IDENTITY: "-" },
+          platform: "darwin",
+          spawn(command, spawnArgs) {
+            started.push(spawnArgs)
+            return { status: 0 }
+          },
+        }),
+      /--bundles app,dmg/,
+    )
+    assert.deepEqual(started, [], `${args.join(" ")} started a build`)
+  }
+  for (const bundles of ["app", "app,dmg", "dmg,app", "all"]) {
+    const status = runDesktopBuild({
+      args: ["--bundles", bundles],
+      environment: { APPLE_SIGNING_IDENTITY: "-" },
+      platform: "darwin",
+      spawn: () => ({ status: 0 }),
+    })
+    assert.equal(status, 0, bundles)
+  }
+})

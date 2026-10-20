@@ -9,6 +9,7 @@ sources:
   - "src/desktop/workspace/application/usecases/sessions.ts"
   - "src/desktop/workspace/model/session-lifecycle.ts"
   - "src/desktop/workspace/adapters/store/commands.ts"
+  - "src/desktop/workspace/adapters/store/session-commands.ts"
   - "src/desktop/workspace/adapters/in-memory/in-memory-source.ts"
   - "src/desktop/workspace/adapters/in-memory/scripted-replies.ts"
   - "src/desktop/workspace/ui/panes/conversation.tsx"

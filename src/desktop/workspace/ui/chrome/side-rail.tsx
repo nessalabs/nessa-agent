@@ -13,6 +13,7 @@ import {
   useRef,
   useState,
 } from "react"
+import type { HostKind } from "../../../../host/features"
 import { IconButton } from "../../../ui/icon-button"
 import { IdentityFooter } from "./identity-footer"
 import "./side-rail.css"
@@ -22,8 +23,22 @@ import "./side-rail.css"
  * One corner control (28px) with the control edge (10px) on each side, from
  * the geometry in `styles.css`, so the rail's column of controls is the
  * titlebar's.
+ *
+ * In the macOS window the traffic lights stay where the host puts them
+ * (`traffic_lights.rs`: 16px in, 23px apart, so they end 76px in), and the
+ * rail holds them in its top row (`holdsWindowControls`): the first card's
+ * edge (this plus `--desktop-gutter`) stands as far past the green button as
+ * the red one stands from the window's edge, and the rail's controls are
+ * centred under the lights (`side-rail.css`).
  */
-export const RAIL_WIDTH = 48
+export function railWidth(host: HostKind): number {
+  return holdsWindowControls(host) ? 84 : 48
+}
+
+/** Whether the open rail holds the window's own controls (the traffic lights). */
+export function holdsWindowControls(host: HostKind): boolean {
+  return host === "macos"
+}
 
 export interface RailItem {
   readonly id: string
@@ -145,6 +160,7 @@ export function SideRail({
       aria-hidden={!open || undefined}
       style={{ "--rail-index": index } as CSSProperties}
     >
+      <div className="side-rail-drag" data-tauri-drag-region aria-hidden="true" />
       <div className="side-rail-items">
         <span className="side-rail-lens" aria-hidden="true" />
         {railItems.map((item, i) => (
