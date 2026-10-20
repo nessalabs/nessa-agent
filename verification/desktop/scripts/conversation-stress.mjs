@@ -511,12 +511,24 @@ const sessionRow = (page, conversationId) =>
 
 /**
  * Chooses `label` in the More menu of `conversationId`'s row: the pointer
- * over the row shows its buttons, as a person sees them.
+ * over the row shows its buttons, as a person sees them. The list re-sorts
+ * as other conversations change, which can move the row out from under the
+ * pointer and hide the button again; a person points at the row again, and
+ * so does this, until the button takes the click.
  */
 async function choose(page, conversationId, label) {
   const row = sessionRow(page, conversationId)
-  await row.hover({ timeout: 15_000 })
-  await row.locator('[data-session-action="more"]').click({ timeout: 10_000 })
+  const more = row.locator('[data-session-action="more"]')
+  const end = Date.now() + 20_000
+  for (;;) {
+    await row.hover({ timeout: 15_000 })
+    try {
+      await more.click({ timeout: 2_000 })
+      break
+    } catch (error) {
+      if (Date.now() > end) throw error
+    }
+  }
   await page
     .getByRole("menuitem", { name: label, exact: true })
     .click({ timeout: 10_000 })
@@ -1091,11 +1103,13 @@ const steps = {
           failures.push(
             `the upgraded gateway lists ${after.length} conversations, not the ${before.length} it did`,
           )
+        // The upgraded gateway still answers the conversation, in the
+        // window: that answer comes over the window's new connection, so
+        // the refused connections while it was down are the restart's.
+        if (failures.length === count) await steps.reply(run, step, failures)
         return failures.length === count
       })
     })
-    // The upgraded gateway still answers the conversation, in the window.
-    if (failures.length === 0) await steps.reply(run, step, failures)
   },
 
   async rail(run, step, failures) {
