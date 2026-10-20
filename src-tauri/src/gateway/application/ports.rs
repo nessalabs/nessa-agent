@@ -1730,6 +1730,17 @@ pub(crate) mod testing {
         (gateway, host, on_entered, release)
     }
 
+    /// As [`recording_gateway_held`], on `clock`.
+    pub(crate) fn recording_gateway_held_on(
+        registration: Result<ReconciledGateway, GatewayError>,
+        clock: Arc<dyn super::MonotonicClock>,
+    ) -> (Gateway, Arc<RecordingGatewayHost>, Receiver<()>, Sender<()>) {
+        let (entered, on_entered) = channel();
+        let (release, on_release) = channel();
+        let (gateway, host) = gateway_on(registration, Some((entered, on_release)), clock);
+        (gateway, host, on_entered, release)
+    }
+
     /// As [`recording_gateway`], on `clock`.
     pub(crate) fn recording_gateway_on(
         registration: Result<ReconciledGateway, GatewayError>,

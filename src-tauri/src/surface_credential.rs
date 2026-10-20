@@ -296,7 +296,7 @@ mod tests {
     use crate::gateway::application::{
         testing::{
             reconciled_registration, recording_gateway, recording_gateway_held,
-            recording_gateway_on, RecordingGatewayHost,
+            recording_gateway_held_on, recording_gateway_on, RecordingGatewayHost,
         },
         GatewayError, MonotonicClock, ReconciledGateway,
     };
@@ -533,15 +533,15 @@ mod tests {
         registration: Result<ReconciledGateway, GatewayError>,
     ) -> (Option<Told>, Told, Arc<RecordingGatewayHost>) {
         let credential = FakeCredentials::holding("fixture-only");
-        let (gateway, host, entered, release) = recording_gateway_held(registration);
+        let (clock, paused) = PauseHeard::new();
+        let (gateway, host, entered, release) =
+            recording_gateway_held_on(registration, Arc::new(clock));
         let (before_ended, told) = thread::scope(|scope| {
             let starting = scope.spawn(|| tauri::async_runtime::block_on(gateway.start()));
             entered.recv().unwrap();
-            let (asking_tx, asking_rx) = channel();
             let (told_tx, told_rx) = channel();
             let (window_gateway, window_credential) = (&gateway, &credential);
             let asking = scope.spawn(move || {
-                asking_tx.send(()).unwrap();
                 told_tx
                     .send(load_waiting(
                         DESKTOP_WINDOW,
@@ -551,14 +551,15 @@ mod tests {
                     ))
                     .unwrap();
             });
-            // The window is about to ask while startup is held. Its first read
-            // sees startup still running unless that thread stalls past the
-            // 300 ms below; then the test passes without the wait, never
-            // fails wrongly.
-            asking_rx.recv().unwrap();
-            let before_ended = told_rx.recv_timeout(Duration::from_millis(300)).ok();
+            // The read pausing on the gateway's clock is the read holding:
+            // it saw startup still running and did not answer. Startup is
+            // released either way, so a read that never held fails below
+            // instead of hanging the test.
+            let held = paused.recv_timeout(Duration::from_secs(5)).is_ok();
+            let before_ended = told_rx.try_recv().ok();
             release.send(()).unwrap();
             let _ = starting.join().unwrap();
+            assert!(held, "the window's read never held for the startup");
             let told = told_rx
                 .recv_timeout(Duration::from_secs(5))
                 .expect("the waiting window was not answered once startup ended");
@@ -566,6 +567,30 @@ mod tests {
             (before_ended, told)
         });
         (before_ended, told, host)
+    }
+
+    /// The system clock, telling the test each time a reader pauses on it.
+    struct PauseHeard(Mutex<std::sync::mpsc::Sender<()>>);
+
+    impl PauseHeard {
+        fn new() -> (Self, std::sync::mpsc::Receiver<()>) {
+            let (heard, paused) = channel();
+            (Self(Mutex::new(heard)), paused)
+        }
+    }
+
+    impl MonotonicClock for PauseHeard {
+        fn now(&self) -> std::time::Instant {
+            std::time::Instant::now()
+        }
+
+        fn pause(
+            &self,
+            duration: Duration,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
+            let _ = self.0.lock().unwrap().send(());
+            Box::pin(tokio::time::sleep(duration))
+        }
     }
 
     /// A window opened at launch waits out the host's own startup, joining
