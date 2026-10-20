@@ -1293,7 +1293,7 @@ says why where the conversations would be.
   Quit as icon actions. The log sentences (started without the local server,
   still starting, not answering) stay off the screen. The avatar mark is absent.
   While the host is still starting the gateway it holds the window's read of
-  the endpoint, up to 20 seconds, so a launch that goes well never shows the
+  the endpoint, up to 15 seconds, so a launch that goes well never shows the
   calm screen. A startup that failed, or one still running past that hold, is
   refused and the credential is never asked for. Signed out, the status sits inside the chat
   area and the window, Try Again is at least 24px tall with nothing over it,

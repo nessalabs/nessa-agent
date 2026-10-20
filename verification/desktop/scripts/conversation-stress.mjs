@@ -86,8 +86,8 @@
  *   launch      the window is reloaded while the host is still starting the
  *               gateway: the host holds the window's read, the startup
  *               screen never covers it, and once the gateway is up the
- *               window lists the conversation at once, not on a retry, and
- *               the message sent after it is answered
+ *               window lists the conversation and the message sent after
+ *               it is answered
  *   upgrade     the gateway is stopped, its conversation metadata turned
  *               back into the file an older build wrote (version 6, or 7
  *               when a newer table holds rows), and started again: it
@@ -132,7 +132,7 @@ import {
 } from "../../../scripts/mcp-test-server/scenarios/stress.mjs"
 import { openPage, withEngines } from "./lib/browser.mjs"
 import { CannotRun, log } from "./lib/cli.mjs"
-import { gatewayHost, STARTING_KEY } from "./lib/fake-host.mjs"
+import { gatewayHost, STARTING } from "./lib/fake-host.mjs"
 import {
   connectClient,
   panelTarget,
@@ -238,13 +238,13 @@ const FRESH_BURST = 24
 const FRESH_CLIENTS = 3
 /**
  * The `launch` step's host stays "starting" this long after the window is
- * reloaded, well under the host's hold (`STARTUP_WAIT_MS`); and then the
- * window must list the conversation within `LAUNCH_LISTED_MS`, short of the
- * window's retry clock (`defaultGatewayTiming.retryMs`, 5 s): a window that
- * was refused and waited for a retry is late.
+ * reloaded, well under the host's hold (`STARTING.waitMs`). A refused window
+ * covers itself with the startup screen at once, which is what the step
+ * checks; `LAUNCH_LISTED_MS` only bounds how long listing may take once the
+ * gateway is up.
  */
 const LAUNCH_STARTING_MS = 3_000
-const LAUNCH_LISTED_MS = 4_000
+const LAUNCH_LISTED_MS = 10_000
 /**
  * How much longer opening the `long` conversation again may take than
  * opening one of a single long turn, both closed first so their whole saved
@@ -1129,10 +1129,13 @@ const steps = {
   async launch(run, step, failures) {
     await run.exclusive(async () => {
       const page = run.page
+      const removeKey = () =>
+        page.evaluate((key) => sessionStorage.removeItem(key), STARTING.key)
       // The window opens while the host is still starting the gateway, as at
       // every launch: the host holds its read until the gateway is up.
-      await page.evaluate((key) => sessionStorage.setItem(key, "1"), STARTING_KEY)
+      await page.evaluate((key) => sessionStorage.setItem(key, "1"), STARTING.key)
       let covered
+      let askedWhileStarting
       try {
         await page.reload()
         // Whatever the window shows meanwhile, it is never the startup
@@ -1142,9 +1145,14 @@ const steps = {
           .waitFor({ timeout: LAUNCH_STARTING_MS })
           .then(() => true)
           .catch(() => false)
+        // And the window did ask while it was starting: the hold was met.
+        askedWhileStarting = await page.evaluate(
+          () => window.__fakeHostAsked.load_gateway_endpoint,
+        )
       } finally {
         // Up, whatever happened: a later reload must not find it starting.
-        await page.evaluate((key) => sessionStorage.removeItem(key), STARTING_KEY)
+        // A page mid-navigation refuses the evaluate; the next one may not.
+        await removeKey().catch(() => removeKey().catch(() => {}))
       }
       if (covered) {
         failures.push(
@@ -1152,7 +1160,10 @@ const steps = {
         )
         return
       }
-      // The gateway is up: the window connects then, not on a retry later.
+      if (!(askedWhileStarting > 0)) {
+        failures.push("the window did not ask for the gateway while it was starting")
+        return
+      }
       const started = Date.now()
       const listed = await page
         .locator(selectorFor.sessionListRowFor(run.main.id))
@@ -2572,7 +2583,12 @@ await main(
         initScripts: [
           [
             gatewayHost,
-            { endpoint: stack.endpoint, credential: stack.credential, notices: true },
+            {
+              endpoint: stack.endpoint,
+              credential: stack.credential,
+              notices: true,
+              starting: STARTING,
+            },
           ],
         ],
       })

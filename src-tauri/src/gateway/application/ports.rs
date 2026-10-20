@@ -1632,9 +1632,22 @@ pub(crate) mod testing {
         pub(crate) initiators: Mutex<Vec<ReconciliationInitiator>>,
         /// Told when a held registration is entered, then waited on to let it finish.
         hold: Mutex<Option<(Sender<()>, Receiver<()>)>>,
+        /// Whether classifying startup panics, so `Gateway::start` fails before
+        /// any reconciliation is admitted.
+        pub(crate) classify_panics: std::sync::atomic::AtomicBool,
     }
 
     impl GatewayHost for RecordingGatewayHost {
+        fn startup_cause(&self) -> super::ReconciliationCause {
+            if self
+                .classify_panics
+                .load(std::sync::atomic::Ordering::SeqCst)
+            {
+                panic!("the test's startup classification panics");
+            }
+            super::ReconciliationCause::Startup
+        }
+
         fn register(
             &self,
             _: &Path,
@@ -1718,6 +1731,7 @@ pub(crate) mod testing {
             registrations: Mutex::new(0),
             initiators: Mutex::new(Vec::new()),
             hold: Mutex::new(hold),
+            classify_panics: std::sync::atomic::AtomicBool::new(false),
         });
         (
             Gateway::bootstrap(

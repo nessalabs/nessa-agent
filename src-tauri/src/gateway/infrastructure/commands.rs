@@ -106,11 +106,13 @@ pub(crate) fn bundled_window(label: &str) -> Result<BundledSurface, String> {
         .ok_or_else(|| "Only a bundled Nessa surface can access the gateway".into())
 }
 
-/// How long the desktop window's read of the gateway waits for a startup
-/// that is still running. Under the window's own budget for a call
-/// (`defaultGatewayTiming.callMs`, 35 s), so a startup that takes longer is
-/// the window's refusal, and its retry clock asks again.
-pub(crate) const DESKTOP_STARTUP_WAIT: Duration = Duration::from_secs(20);
+/// How long one desktop window read of the gateway waits for a startup that
+/// is still running. A connect reads the endpoint and then the credential,
+/// and each may wait (startup can go back to starting between them, when a
+/// replacement begins), so twice this stays under the window's budget for
+/// that connect (`defaultGatewayTiming.callMs`, 35 s): a startup that takes
+/// longer is the window's refusal, and its retry clock asks again.
+pub(crate) const DESKTOP_STARTUP_WAIT: Duration = Duration::from_secs(15);
 
 /// How often a waiting desktop window reads the startup state again: one
 /// lock of the host's own state, so a launch is seen within this of `Ready`.

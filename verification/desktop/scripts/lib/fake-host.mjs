@@ -4,10 +4,13 @@
  * native and `main.tsx` composes `hostGateway` over IPC.
  */
 
-/** Session storage key that holds the fake host in startup (`gatewayHost`). */
-export const STARTING_KEY = "nessa-fake-host-starting"
-/** How long the host holds the desktop window's read through a startup (`DESKTOP_STARTUP_WAIT`). */
-export const STARTUP_WAIT_MS = 20_000
+/**
+ * A host that can be held in startup: the session storage key that holds it
+ * (`gatewayHost`'s `starting`), and how long it holds the desktop window's
+ * read meanwhile — `DESKTOP_STARTUP_WAIT` in `src-tauri`, which no test ties
+ * this number to.
+ */
+export const STARTING = { key: "nessa-fake-host-starting", waitMs: 15_000 }
 
 /**
  * Installed before the page's own scripts, as Tauri installs its IPC. The
@@ -23,22 +26,18 @@ export const STARTUP_WAIT_MS = 20_000
  * is up is kept in session storage, so a reloaded window must take back
  * what it no longer waits on, as it must from the real host.
  *
- * While `STARTING_KEY` is set in session storage, the host is still starting
- * the gateway: the endpoint is answered once it is removed, as the real host
- * holds the desktop window's read through a startup still running
- * (`GatewayReader`), and refused as not ready if it is still set after
- * `STARTUP_WAIT_MS` (`DESKTOP_STARTUP_WAIT`). A scenario sets it before a
- * reload and removes it once the gateway is "up": a launch.
+ * Given `starting` (`STARTING`), while its key is set in session storage the
+ * host is still starting the gateway: the endpoint is answered once the key
+ * is removed, as the real host holds the desktop window's read through a
+ * startup still running (`GatewayReader`), and refused as not ready if it is
+ * still set after `waitMs`. A scenario sets it before a reload and removes it
+ * once the gateway is "up": a launch.
  */
-export function gatewayHost({ endpoint, credential, notices = false }) {
+export function gatewayHost({ endpoint, credential, notices = false, starting = null }) {
   // The host's typed refusals (`SurfaceCommandError`). The page maps the
   // reason; a sentence here would be an untyped failure.
   const notReady = { reason: "not-ready" }
   const notProvisioned = { reason: "not-provisioned" }
-  // `STARTING_KEY` and `STARTUP_WAIT_MS`, spelled here: this function runs
-  // in the page, alone.
-  const STARTING = "nessa-fake-host-starting"
-  const STARTUP_WAIT_MS = 20_000
   let callbacks = 0
   const handlers = new Map()
   const asked = { load_gateway_endpoint: 0, load_surface_credential: 0 }
@@ -60,7 +59,8 @@ export function gatewayHost({ endpoint, credential, notices = false }) {
         asked[command]++
         window.__fakeHostAskTimes.push(performance.now())
         if (endpoint === null) return Promise.reject(notReady)
-        return startedBy(performance.now() + STARTUP_WAIT_MS).then(() => endpoint)
+        if (!starting) return Promise.resolve(endpoint)
+        return startedBy(performance.now() + starting.waitMs).then(() => endpoint)
       }
       if (command === "load_surface_credential") {
         asked[command]++
@@ -71,9 +71,9 @@ export function gatewayHost({ endpoint, credential, notices = false }) {
       return new Promise(() => {})
     },
   }
-  function starting() {
+  function stillStarting() {
     try {
-      return sessionStorage.getItem(STARTING) !== null
+      return sessionStorage.getItem(starting.key) !== null
     } catch {
       return false
     }
@@ -83,7 +83,7 @@ export function gatewayHost({ endpoint, credential, notices = false }) {
   function startedBy(deadline) {
     return new Promise((resolve, reject) => {
       const check = () => {
-        if (!starting()) resolve()
+        if (!stillStarting()) resolve()
         else if (performance.now() >= deadline) reject(notReady)
         else setTimeout(check, 50)
       }

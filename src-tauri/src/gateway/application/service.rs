@@ -1156,11 +1156,21 @@ impl Gateway {
     }
 
     pub async fn start(&self) -> Result<(), GatewayError> {
-        let cause = catch_unwind(AssertUnwindSafe(|| self.host.startup_cause())).map_err(|_| {
-            GatewayError::Registration("gateway host startup classification panicked".into())
-        })?;
-        self.reconcile(evidence(cause, ReconciliationInitiator::DesktopHost)?)
-            .await
+        let admitted = catch_unwind(AssertUnwindSafe(|| self.host.startup_cause()))
+            .map_err(|_| {
+                GatewayError::Registration("gateway host startup classification panicked".into())
+            })
+            .and_then(|cause| evidence(cause, ReconciliationInitiator::DesktopHost));
+        match admitted {
+            Ok(evidence) => self.reconcile(evidence).await,
+            // Startup failed before any reconciliation: said, so nothing
+            // waiting on this startup (the desktop window's read) waits for
+            // one that never runs.
+            Err(error) => {
+                admission_failed(&self.lifecycle, &self.startup_events, &error);
+                Err(error)
+            }
+        }
     }
 
     pub async fn wait_ready(&self, surface: BundledSurface) -> Result<(), GatewayError> {
