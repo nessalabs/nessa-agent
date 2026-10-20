@@ -231,16 +231,22 @@ order to start. They ask the gateway to attach, and the gateway returns
 the live endpoint. The gateway's own tool path reads the row and dials
 that endpoint. Attach then follows the record.
 
-- The endpoint is live. The caller joins the process that published it.
-  The desktop loads the UI into the plugin frame, or the standalone
-  window loads the same UI. The harness dials the endpoint as a remote
-  MCP URL. No process is started.
+- The endpoint is live and the credential is current. The caller joins
+  the process that published it. The desktop loads the UI into the
+  plugin frame, or the standalone window loads the same UI. The harness
+  dials the endpoint as a remote MCP URL. No process is started. A
+  closed credential is not this join.
 - The endpoint is absent. The gateway starts the process entry from the
-  row, once. The process publishes the endpoint before it accepts a view
-  or a tool call, then authenticates. The caller then attaches.
+  row, once. That start issues the process credential and writes the
+  secret once on the pipe to the process. The process reads it before it
+  publishes the endpoint, then authenticates. The caller then attaches.
 - A second start is already in flight, or it finds the endpoint live. It
-  exits before `session.authenticate`. The process that published the
-  endpoint keeps the socket.
+  exits before it issues and before `session.authenticate`. The process
+  that published the endpoint keeps the socket.
+- The endpoint is live and the credential is still current, and the
+  socket has dropped. The process authenticates again with the secret it
+  already holds. The gateway does not issue another credential and does
+  not start another process.
 
 The socket in the state table is that gateway session. A harness
 connection is a client of the published endpoint. Two harness sessions
@@ -260,14 +266,48 @@ application principal, an active member of kind `integration`. The panel
 token stays the owner's. A `gateway:<key>` credential stays a peer.
 
 The owner installs the package, which mints that principal, its active
-membership, and an application registration, then issues a credential
-holding `server.read` and `conversation.read`. `hold.person` already
-permits an integration to hold those. The install does not put
-`conversation.write` or `credential.manage` on the credential it writes.
-A later issue with a new request id is another credential on the same
-principal, which is what the registry does now. This plan does not add
-the webhook's refusal of a second credential. The grant is on the
-principal, so each of its credentials is asked the same rows.
+membership, and an application registration. Install does not issue a
+credential and does not return a secret.
+
+The gateway issues the process credential when it starts the process,
+and the gateway is the only issuer of that credential. The process
+presents the secret. It does not call `credential.issue` or
+`credential.revoke`. `hold.person` already permits an integration to
+hold `server.read` and `conversation.read`. The issue does not put
+`conversation.write` or `credential.manage` on it.
+
+The issue uses a new request id. The registry stores the verifier only
+(`crates/nessa-auth/src/adapters/local/registry.rs`). The secret is in
+the issue result and nowhere else the gateway keeps. A repeated request
+id returns `ExistingSecretUnavailable` and no secret, so a start does
+not retry an old id to recover one. The gateway writes the secret once,
+on the pipe to the process it just exec'd, and does not write it to the
+install row, the endpoint file, or a credential file. The process reads
+it into memory before it publishes the endpoint. The frame does not see
+the pipe (H1).
+
+That secret's lifetime is the process. The start closes any earlier
+process credential for this principal before it issues, because that
+secret died with the earlier process. The process then has one current
+credential. A start that finds the old credential already closed still
+issues. That replacement is not the webhook's refusal of a second
+credential, and it is not surface provisioning. Surface provisioning is
+the panel token's rotation, and it supersedes whatever credential the
+principal holds. The grant is on the principal.
+
+While the process is up and the credential is current, a dropped socket
+is that process authenticating again with the secret it holds. The
+gateway does not issue a replacement for the drop, and it does not
+inject again.
+
+Revoke, or the socket's built expiry close, closes the socket. The
+gateway then stops the process named by the endpoint record and removes
+that record. Nothing runs at `expires_at` beyond that built close. The
+credential stays closed. A re-authenticate that finds the credential
+closed is this stop, not another try with the same secret.
+Grants stay. A later attach does not join the old endpoint. It is a
+start, and the start issues a new credential. Uninstall removes the
+row, so there is no next start.
 
 The registration is the fact Cedar sees. It is not a fifth principal
 kind. Slice 1 asks Cedar on the no-binding path and passes that fact:
@@ -287,10 +327,12 @@ the principal-subject permits for a principal that has an application
 registration. Rust gathers the registration, the row, and the action,
 and acts on Cedar's answer.
 
-`conversation.share` accepts a current credential whose principal has
-an application registration or, when that slice exists, a webhook
-registration. It does not accept a browser token, which has neither.
-The check does not read a webhook URL or a package path. The two
+`conversation.share` accepts a principal that has an application
+registration or, when that slice exists, a webhook registration. It
+does not accept a browser token, which has neither. The application
+target does not need a process credential yet. Install can share before
+the first start, and the credential a later start issues is asked that
+grant. The check does not read a webhook URL or a package path. The two
 registrations are two kinds of one record per principal. Each command
 refuses a principal that already has the other kind.
 
@@ -303,8 +345,11 @@ sequenceDiagram
   participant Gateway
   participant Cedar
   participant Frame as Sandboxed frame
-  Owner->>Gateway: Issue the credential and share one conversation
+  Owner->>Gateway: Install the package and share one conversation
   Gateway->>Cedar: Ask before writing the grant
+  Note over Gateway,Process: An attach finds the endpoint absent
+  Gateway->>Gateway: Issue; the secret stays in this start
+  Gateway->>Process: The secret, once, on the start pipe
   Process->>Gateway: session.authenticate
   Gateway->>Cedar: This principal, this resource, the row
   Cedar-->>Gateway: Permit or refuse
@@ -385,6 +430,7 @@ flat status such as "granted" is not a state.
 | --- | --- |
 | Principal | absent, or present as an active member |
 | Credential | none, current, or closed (revoked or expired), per credential |
+| Process secret | absent, or held by the running process |
 | Grant on resource R | absent, or active at an epoch |
 | Install row | absent, or present at one version |
 | Endpoint | absent, or live |
@@ -399,31 +445,33 @@ flat status such as "granted" is not a state.
 | Row | Before | Event | After | Effect |
 | --- | --- | --- | --- | --- |
 | A1 | principal absent | owner installs | principal present, application registration written, credential none, no grants | membership active |
-| A2 | credential none | owner issues | one credential current | holds `server.read` and `conversation.read`; secret returned once |
-| A3 | a credential current | owner issues again, new request id | another credential current | the registry already does this; both are asked the same grants |
-| A4 | a credential current | owner shares conversation R, Cedar permits | grant R active | no receiver; the epoch of that commit |
+| A2 | credential none, process down | the gateway's start issues, new request id | one credential current, secret held by that process | verifier stored; the secret is not on the row, the endpoint, or a later read of that request id |
+| A3 | a process credential current, process down, secret absent | the next start | that credential closed, one new credential current, secret held by the new process | the new request id is not the old one; the closed secret is not replayed |
+| A4 | principal present, application registration written | owner shares conversation R, Cedar permits | grant R active | no receiver and no process secret; the epoch of that commit |
 | A5 | grant R active | owner shares a set Cedar denies | unchanged | nothing written; the policy ids |
 | A6 | credential current | that credential authenticates | its socket open | inactive membership is refused, as `AuthenticateSession` does today |
 | A7 | socket open, grant R active | read or follow R | unchanged | Cedar permits; the epoch just read is stamped |
 | A8 | socket open, grant R absent | read or follow R, or list it | unchanged | Cedar refuses; no row created |
 | A9 | grant R active | owner revokes R | grant R absent | sockets stay; the next admission misses R |
-| A10 | credential current, its socket open | revoke or expire that credential | credential closed, that socket closed | **built** close reasons; other credentials' sockets stay; grants and epochs stay |
+| A10 | credential current, socket open, process up, endpoint live | revoke or expire that credential | credential closed, socket closed, process down, endpoint absent | **built** close reasons; grants and epochs stay; the next attach is R2, not R3 |
+| A13 | process up, endpoint live, socket closed, credential current, secret held by the process | the socket drops and the gateway is back | socket open | the process authenticates with the secret it holds; no issue, no injection, no second process |
 | A11 | principal present | owner uninstalls | principal absent, install row absent, process down | credentials closed, grants removed, sockets closed; a row from slice 2 is removed and its process is stopped |
 | A12 | credential current, no grants | authenticate | socket open | A8 on every conversation |
 
 A4 applies again for a second conversation. The result is a second row.
 A9 on one row leaves the other. A6 is the process's socket. A second
-process is R4: it exits before this authenticate.
+process is R4: it exits before this authenticate. A10 does not leave
+the endpoint live. A13 is the same process and the same credential.
 
 ### The install row
 
 | Row | Before | Event | After | Effect |
 | --- | --- | --- | --- | --- |
 | R1 | no row | owner installs a directory | row present, endpoint absent, process down | one version |
-| R2 | endpoint absent | plugin, window, or a tool call asks to attach | process up, endpoint live, one socket | the gateway starts the process entry once; the caller does not exec |
-| R3 | endpoint live | another of those asks, including the plugin while the window is up | unchanged | it attaches; no second process and no second gateway socket |
-| R4 | endpoint absent | two starts at once | one process up | one in-flight start; the process that publishes the endpoint keeps the socket; the other exits before `session.authenticate` |
-| R5 | process up | the process exits | process down; endpoint absent if the process removed the file | a clean exit removes the endpoint file; the attempt record remains (O9); the next attach is R2; a file left behind is R6 |
+| R2 | endpoint absent, principal present | plugin, window, or a tool call asks to attach | process up, endpoint live, one socket, secret held by the process | A3 when a process credential is current, otherwise A2; the gateway then starts the process once; the caller does not exec |
+| R3 | endpoint live, credential current | another of those asks, including the plugin while the window is up | unchanged | the view attaches; a closed socket under that current credential is A13; a closed credential is A10, then R2 |
+| R4 | endpoint absent | two starts at once | one process up | one in-flight start; the process that publishes the endpoint keeps the socket; the other exits before it issues and before `session.authenticate` |
+| R5 | process up | the process exits | process down, credential closed; endpoint absent if the process removed the file | the secret died with the process, so the gateway closes that credential; a clean exit removes the endpoint file; the attempt record remains (O9); the next attach is R2; a file left behind is R6 |
 | R6 | endpoint present, process does not answer | the gateway reads it | endpoint absent | then R2; the caller still does not exec |
 
 ### Views, the window, and context
@@ -477,16 +525,17 @@ Each rule names the rows that hold it.
 2. One grant is one principal, one resource, the capability set, and the
    constraints. A second conversation is a second row. A4 applied twice,
    then A9 on one of them.
-3. The credential names an active integration member and the install's
-   credential holds `server.read` and `conversation.read`. It is not the
-   panel token and not a peer gateway. Rows A1, A2, A6.
+3. The process credential names an active integration member and holds
+   `server.read` and `conversation.read`. It is not the panel token and
+   not a peer gateway. Rows A1, A2, A6.
 4. A UI action runs on the one live view it names. Rows U1–U5.
 5. The gateway's install row owns the one process that runs every
    operation. A plugin view, a standalone window, and a tool call attach
    to it and do not exec. The gateway starts that process when the
-   endpoint is absent. A second start exits before it opens a socket.
-   The attempt record survives the process exiting, and the next start
-   does not apply the effect twice. Rows R1–R6, O1–O3, O9–O11.
+   endpoint is absent. A second start exits before it issues and before
+   it opens a socket. The attempt record survives the process exiting,
+   and the next start does not apply the effect twice. Rows R1–R6,
+   O1–O3, O9–O11.
 6. A view's context does not outlive that view. Rows U6, U7, M6.
 7. An MCP App mount stays the tool call it is, on the caller's session.
    Rows M1–M4.
@@ -499,6 +548,12 @@ Each rule names the rows that hold it.
 11. The install list slice 2 writes has one version. Another version is
     refused and not rewritten. Startup does not delete it. Alpha: no
     migration.
+12. The process credential's secret is held by that process and nowhere
+    else. A start issues it and injects it on the start pipe. A live
+    endpoint is a current credential. Revoke, expiry, and process exit
+    end that credential and the endpoint together. A socket that drops
+    under a current credential is the process authenticating again, not
+    a new issue. Rows A2, A3, A6, A10, A13, R2, R3, R5.
 
 ## Packaging
 
@@ -513,8 +568,9 @@ owner installs it on this gateway. The install list is the owner's,
 beside the stored MCP servers, not a channel of the updater. The first
 install is a local path. That install is one owner action: it mints the
 principal in [Authentication](#authentication) and writes the row in
-[One process](#one-process). The row is how every entry point reaches
-the process, and it lands before any view. A signed feed is out of scope.
+[One process](#one-process). It does not issue the process credential.
+That issue is the start. The row is how every entry point reaches the
+process, and it lands before any view. A signed feed is out of scope.
 
 A stored stdio server is one process per harness session, ended with
 that session (`open_admitted` in
@@ -535,10 +591,13 @@ into the desktop tree.
 
 The dashboard, in order, once the slices have landed:
 
-1. The process authenticates as the application. The page it serves
-   reads the one granted conversation and does not open a gateway
-   socket. Another conversation is refused, and so is a list of the rest
-   (A6–A8, A12, R3).
+1. The process authenticates as the application with the secret the
+   start injected. The page it serves reads the one granted conversation
+   and does not open a gateway socket. Another conversation is refused,
+   and so is a list of the rest. Revoking the credential removes the
+   endpoint, and the next open authenticates with a new one. A gateway
+   restart that leaves the process up re-authenticates with the secret
+   the process still holds (A6–A8, A10, A12, A13, R2, R3).
 2. Chart selection runs on the open view and is refused when that view
    is closed, with nothing saved (U1, U2, U4).
 3. Save runs with no view open. Dropping the view leaves the
@@ -567,8 +626,8 @@ Each slice depends only on slices above it.
 
 | Slice | Delivers | Rows |
 | --- | --- | --- |
-| 1. Principal, grant, and admission ([#1052](https://github.com/nessalabs/nessa-agent/issues/1052)) | The active member and the application registration. A credential holding `server.read` and `conversation.read`. `conversation.share` accepts that registration and refuses a browser token. No-binding admission asks Cedar with the registration fact: no registration keeps today's owner fallback; an application registration matches a principal-subject grant or is refused. `mcp.*` stays off this principal. | A1–A12, M4 |
-| 2. Install row and the one process ([#1067](https://github.com/nessalabs/nessa-agent/issues/1067)) | The gateway owns the versioned row: UI document, process entry, and the endpoint. The gateway is the only starter. Attach is R2–R6. The remote MCP URL is that endpoint. A stdio child of a harness session is not this process. | R1–R6, rule 11, O7 |
+| 1. Principal, grant, and admission ([#1052](https://github.com/nessalabs/nessa-agent/issues/1052)) | The active member and the application registration at install, with no process secret returned. Issue and revoke of an integration credential holding `server.read` and `conversation.read`, so a start can issue and can close the one it replaces. `conversation.share` accepts that registration and refuses a browser token. No-binding admission asks Cedar with the registration fact: no registration keeps today's owner fallback; an application registration matches a principal-subject grant or is refused. `mcp.*` stays off this principal. | A1, A4–A9, A11, A12, M4 |
+| 2. Install row and the one process ([#1067](https://github.com/nessalabs/nessa-agent/issues/1067)) | The gateway owns the versioned row: UI document, process entry, and the endpoint. The gateway is the only starter and the only issuer of the process credential. A start injects the secret on the process pipe and does not store it. Credential closure stops the process and removes the endpoint. A current credential re-authenticates in the same process. Uninstall removes the row and stops the process. The remote MCP URL is that endpoint. A stdio child of a harness session is not this process. | A2, A3, A6, A10, A11, A13, R1–R6, rule 11, rule 12, O7 |
 | 3. Connected web view ([#1053](https://github.com/nessalabs/nessa-agent/issues/1053)) | `examples/dashboard` is a page the process serves. The page does not open a gateway socket. It renders the granted conversation. No desktop import. | A6–A8, A12, R3 |
 | 4. Action contract and the dashboard save ([#1054](https://github.com/nessalabs/nessa-agent/issues/1054)) | `packages/nessa-app`. UI action, operation, the attempt record, explicit MCP registration, the import test. UI actions run on the page slice 3 serves. The process from slice 2 runs the operations. | U1–U7, O1–O11 |
 | 5. Plugin entry ([#1055](https://github.com/nessalabs/nessa-agent/issues/1055)) | The window place asks the row to attach and does not exec, whether or not the endpoint is already live. H1. M6 against a tool-call widget already in the window place. Mounts stay M1–M3. | H1, M5, M6, R2, R3, U6, U7 |
@@ -576,7 +635,12 @@ Each slice depends only on slices above it.
 | 7. `nessa init` ([#1057](https://github.com/nessalabs/nessa-agent/issues/1057)) | The scaffold writes a directory slice 2 already installs. It does not add a second start. | acceptance 7 |
 
 [#1067](https://github.com/nessalabs/nessa-agent/issues/1067) is the
-install row. It is not a later packaging step that the views assume.
+install row and the start that issues the process credential. It is not
+a later packaging step that the views assume.
+[#1052](https://github.com/nessalabs/nessa-agent/issues/1052) as filed
+issues the credential at install and returns the secret once. The
+process credential is issued at the start, and the secret is not
+returned to the owner.
 [#1057](https://github.com/nessalabs/nessa-agent/issues/1057) as filed
 still bundles that install, the versioned list, and a stored-server
 launch with the scaffold, and it says it depends on the action contract.
@@ -635,6 +699,24 @@ a second app needs them.
 desktop binary. The install list sits beside stored MCP servers. The
 tool route is the row's endpoint, not a stdio command, because stdio's
 process ends with the harness session.
+
+**Keep the bearer on the install row or in the registry.** The registry
+stores a verifier. A repeated request id does not return the secret.
+The row is the rendezvous a view attaches through. Neither place can
+supply `session.authenticate` on a later start.
+
+**Store a panel-token file per package.** The panel file is the owner's
+credential, read back by the desktop. A package file would be a second
+persisted bearer. Revoke would have to delete it, or the next start
+would present a dead secret. Surface provisioning is that panel
+rotation, and it supersedes the principal's credentials. The process
+credential is an ordinary issue, and its secret lives only as long as
+the process.
+
+**Leave the process up after the credential closes.** The endpoint
+would stay live. The next attach would be R3 and would join a process
+that cannot authenticate. Closure removes the endpoint, and the next
+attach starts again with a new credential.
 
 **Let each entry point start the package.** The desktop would spawn a
 process when the plugin opens, and the standalone window would spawn
