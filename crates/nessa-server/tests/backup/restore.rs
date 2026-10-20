@@ -2306,7 +2306,7 @@ async fn a_failed_fetch_fallback_empties_the_session() {
     .unwrap_err();
     assert_eq!(error, RestoreFault::Audit);
     let path = place.live.join("sessions/conv-bulk.sqlite3");
-    assert_eq!(fs::read(&path).unwrap(), b"");
+    assert_eq!(fs::metadata(&path).unwrap().len(), 0);
     assert!(!path.with_extension("sqlite3.rejected").exists());
 }
 

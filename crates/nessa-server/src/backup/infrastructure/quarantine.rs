@@ -584,15 +584,20 @@ impl QuarantineLayout for DirectoryQuarantine {
     }
 
     fn spoil(&self, path: &Path) -> Result<(), RestoreFault> {
-        // A fetched session may not be mode 0600. The opener refuses that,
-        // and this fallback still has to empty the file.
+        // This fallback destroys a session the storage opener may refuse:
+        // mode is not 0600, or the Windows ACL is not the one `open` trusts.
+        // Truncate with the process file API. On Unix, make the file writable
+        // first so a read-only copy can still be emptied.
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o600));
         }
-        let file = open(path, OpenMode::ReadWrite).map_err(|_| RestoreFault::Unreadable)?;
-        file.set_len(0).map_err(|_| RestoreFault::Unreadable)?;
+        let file = fs::OpenOptions::new()
+            .write(true)
+            .truncate(true)
+            .open(path)
+            .map_err(|_| RestoreFault::Unreadable)?;
         file.sync_all().map_err(|_| RestoreFault::Unreadable)?;
         Ok(())
     }

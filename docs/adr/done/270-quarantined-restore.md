@@ -81,5 +81,6 @@ acceptance then carries onto the live path without its audit. Accept also
 holds the live path's lock across that rename. A quarantine is promotable
 only after its sealed audit is stored. The fetch checks the session with
 the restore layout, and a fetch that cannot be audited removes, moves, or
-empties that file. A canonical session image that cannot be read is not
+empties that file. Emptying truncates the file directly, because the
+storage opener refuses a copy it did not create. A canonical session image that cannot be read is not
 sealed while a conversation fence applies.
