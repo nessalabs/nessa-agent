@@ -2,6 +2,12 @@
 -- line), which the server includes (`store.rs`).
 -- See docs/adr/done/196-conversation-metadata-database.md.
 --
+-- Any change to what this file creates raises the version and adds the step
+-- that brings the version before it forward, in `schema_upgrades/`, with
+-- the same statements (docs/adr/todo/202-versioned-local-datasets.md,
+-- "Migrations"). `an_upgraded_file_is_the_shape_a_new_one_is` holds the two
+-- to the same shape.
+--
 -- Columns hold stored text and numbers, and a flag is 0 or 1, the file's
 -- spelling of a boolean. What a valid value is — an identity, a title's
 -- length, a time a list can carry — is the domain's, and is checked when a
@@ -196,4 +202,4 @@ CREATE TABLE unfinished_turns (
     retry_at_ms INTEGER CHECK (retry_at_ms >= 0)
 ) STRICT, WITHOUT ROWID;
 
-PRAGMA user_version = 7;
+PRAGMA user_version = 8;

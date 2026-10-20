@@ -1,3 +1,4 @@
+import { includesBundle } from "./bundle-architecture.mjs"
 import { LINUX_RUNTIME_TARGET } from "./prepare-linux.mjs"
 import { releaseBundles } from "./release-assets.mjs"
 import { desktopStageEnvironment, resolveDesktopStage } from "./stage.mjs"
@@ -100,6 +101,17 @@ export function runDesktopBuild({ args, environment, platform, spawn, now = Date
   if (platform === "linux" && choosesBundles(own))
     throw new Error(
       "A Linux build makes the release's bundles; drop --bundles and --no-bundle",
+    )
+  // The macOS check verifies the .app, the one the disk image holds, and the
+  // bundler deletes the .app after a build that did not name it. A choice
+  // without it would build for minutes and then fail its own check.
+  if (
+    platform === "darwin" &&
+    parsed.bundles &&
+    !includesBundle(parsed.bundles, [], "app")
+  )
+    throw new Error(
+      `A macOS build verifies the .app, which the bundler removes unless it is built too; use --bundles app,${parsed.bundles}`,
     )
   const bundles =
     parsed.bundles ??

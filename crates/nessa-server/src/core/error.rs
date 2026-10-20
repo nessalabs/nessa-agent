@@ -16,7 +16,7 @@ use crate::env::EnvironmentError;
 use nessa_auth::adapters::local::LocalStoreError;
 use nessa_auth::application::credential_registry::CredentialRegistryAuditError;
 use nessa_auth::application::pairing::PrivateStateError;
-use nessa_local_database::OpenError;
+use nessa_local_database::{rusqlite, OpenError};
 use std::fmt;
 use std::io::{self, ErrorKind};
 use std::net::SocketAddr;
@@ -199,6 +199,24 @@ impl RunError {
             OpenError::Version { .. } | OpenError::Unreadable(_) | OpenError::Damaged(_) => {
                 Self::Dataset(DatasetRefusal::new(dataset, path, cause))
             }
+            // A step the file itself refuses (a table already there, a
+            // constraint) refuses it again on every start; one that met a
+            // lock, a full disk or an I/O failure was rolled back and can
+            // succeed next time.
+            OpenError::Upgrade {
+                cause: ref step, ..
+            } => match step.sqlite_error_code() {
+                Some(
+                    rusqlite::ErrorCode::DatabaseBusy
+                    | rusqlite::ErrorCode::DatabaseLocked
+                    | rusqlite::ErrorCode::DiskFull
+                    | rusqlite::ErrorCode::SystemIoFailure
+                    | rusqlite::ErrorCode::OutOfMemory
+                    | rusqlite::ErrorCode::CannotOpen
+                    | rusqlite::ErrorCode::ReadOnly,
+                ) => Self::Agent(format!("{dataset} at {}: {cause}", path.display())),
+                _ => Self::Dataset(DatasetRefusal::new(dataset, path, cause)),
+            },
             // Listed, not caught by `_`, so a new way to fail does not
             // compile until someone says whether it can clear.
             OpenError::Directory(_)
