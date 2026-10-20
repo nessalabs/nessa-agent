@@ -1372,7 +1372,7 @@ const steps = {
         "the wide table does not fade its right side, where columns are hidden",
       )
     if (run.evidence)
-      await message.screenshot({
+      await run.page.screenshot({
         path: join(run.evidence, `table-${run.engine ?? "window"}.png`),
       })
     // Scrolled to its end, the fade moves to the side now hidden.
