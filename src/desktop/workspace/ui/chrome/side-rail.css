@@ -6,8 +6,8 @@
  * Every control sits `--desktop-control-edge` from the window's left edge, so
  * the rail's items, its toggle and the titlebar's sidebar toggle stand in one
  * column, and the toggle's corner is concentric with the sidebar card's. In
- * the macOS window the open rail is wider and its column is centred under the
- * traffic lights instead (`--rail-column`).
+ * the macOS window the rail is wider and its column, the toggle's included,
+ * is centred under the traffic lights instead (`--rail-column`).
  */
 
 /*
@@ -250,6 +250,12 @@
   z-index: 42;
   bottom: var(--desktop-control-edge);
   left: var(--rail-column);
+}
+
+/* With no rail and no sidebar card to stand in, it keeps to the corner. */
+.workspace-window[data-rail="closed"]:is([data-sidebar="closed"], [data-rail-view])
+  .side-rail-toggle {
+  left: var(--desktop-control-edge);
 }
 
 .side-rail-toggle:active {

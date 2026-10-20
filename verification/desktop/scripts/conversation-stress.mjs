@@ -375,8 +375,8 @@ async function setSideRail(page, on, failures) {
  * so they end 76px in and their middle is 46px in. The page never moves them.
  */
 const LIGHTS = { left: 16, middle: 46, end: 76 }
-// The same geometry against the host's and the page's own copies:
-// `side-rail.test.ts`.
+// The page's rail is tied to the host's and the stylesheet's copies in
+// `side-rail.test.tsx`; this copy is the harness's own model of the host.
 
 /**
  * Waits until the rail is `rail` (open, closed, or off) and laid out around
