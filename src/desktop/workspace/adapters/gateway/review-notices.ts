@@ -3,9 +3,10 @@
  * desktop notice that names it.
  *
  * The push is the whole set still waiting. A review that leaves the set is
- * cleared. The notice names the tool, and the conversation by its title when
- * the window has one, otherwise by its id. Selecting the notice opens that
- * conversation.
+ * cleared. The notice names the tool, and the conversation by the title the
+ * gateway sent with the review: a review can arrive before the window's list
+ * names its conversation. A gateway that sent none leaves the window's own
+ * title, then the id. Selecting the notice opens that conversation.
  */
 
 /** One review the gateway says is waiting. */
@@ -14,6 +15,8 @@ export interface WaitingReview {
   readonly executionId: string
   readonly permissionId: string
   readonly tool: string
+  /** The conversation's title as the gateway lists it (the push's `title`), when it has one. */
+  readonly conversationTitle?: string
 }
 
 /** Show a review, and close the notice when it is no longer waiting. */
@@ -72,9 +75,24 @@ export function waitingReviews(payload: unknown): readonly WaitingReview[] | nul
     const permissionId = text(review, "permissionId")
     const tool = text(review, "tool")
     if (!conversationId || !executionId || !permissionId || !tool) return null
-    parsed.push({ conversationId, executionId, permissionId, tool })
+    const title = text(review, "title")?.trim()
+    parsed.push({
+      conversationId,
+      executionId,
+      permissionId,
+      tool,
+      ...(title ? { conversationTitle: title } : {}),
+    })
   }
   return parsed
+}
+
+/** The reviews the gateway last said are waiting, whichever notices show them. */
+let waitingNow: readonly WaitingReview[] = []
+
+/** Whether a review still waits in `conversationId`, by the last set the gateway sent. */
+export function reviewWaitsIn(conversationId: string): boolean {
+  return waitingNow.some((review) => review.conversationId === conversationId)
 }
 
 const noticeKey = (review: WaitingReview) =>
@@ -116,6 +134,7 @@ export function waitingReviewNotices(notifier: ReviewNotifier): {
   let latest: readonly WaitingReview[] = []
   return {
     apply(reviews) {
+      waitingNow = reviews
       applyReviewSnapshot(previous, reviews, notifier)
       previous = reviews
       latest = reviews
@@ -132,7 +151,8 @@ let showWaitingReviewsNow: (() => void) | undefined
 
 /** What a notice says: the tool, and the conversation by title or id. */
 function noticeText(review: WaitingReview): { title: string; body: string } {
-  const name = readConversationTitle(review.conversationId)?.trim()
+  const name =
+    review.conversationTitle ?? readConversationTitle(review.conversationId)?.trim()
   return {
     title: `${review.tool} needs a decision`,
     body: name ? name : review.conversationId,
@@ -280,6 +300,7 @@ export function hostReviewNotices(host: HostNotices): {
   }
   return {
     apply(reviews) {
+      waitingNow = reviews
       latest = reviews
       send()
     },

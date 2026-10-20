@@ -270,6 +270,8 @@ test("apt installs and every CI job are bounded", () => {
     "release.yml": {
       version: 10,
       "updater-key": 30,
+      "host-builds": 60,
+      "host-pins": 10,
       build: 120,
       release: 15,
     },
@@ -620,6 +622,7 @@ test("nothing in a release is built or published before the key pairing gate", (
   )
   assert.match(workflow, /NESSA_REQUIRE_UPDATER_KEY_PAIRING: "1"/)
   assert.match(workflow, /needs: \[version, updater-key\]/)
+  assert.match(workflow, /needs: \[version, updater-key, host-pins\]/)
   assert.match(workflow, /needs: \[version, build\]/)
 })
 

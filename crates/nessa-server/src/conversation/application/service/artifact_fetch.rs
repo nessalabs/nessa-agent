@@ -323,7 +323,7 @@ impl ConversationService {
         }
         // Where the agent runs now is the only lease it holds, compared as
         // `artifacts_publish` compares it.
-        let placed = match self.inner.environment.placement(id).await {
+        let placed = match self.inner.environment.runs_on(id).await {
             Ok(placed) => placed,
             Err(_) => return refused(FetchCallRefusal::EnvironmentNotLeased),
         };

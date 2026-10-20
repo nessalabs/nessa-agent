@@ -14,7 +14,7 @@ use super::{
     app_reviews::{AppReviews, ReviewAnswer, ReviewAnswerer, Taken},
     drive_tools::{checked_source, AdmittedPolicies, DriveToolHook, DriveTools},
     environment::{
-        confirmed_despite, issue, open_lease, AgentEnd, LeaseIssueError, LeaseRequest, LiveLease,
+        confirmed_despite, issue, open_lease_on, AgentEnd, LeaseIssueError, LeaseRequest, LiveLease,
     },
     live_changes::LiveChanges,
     locks::ConversationLocks,
@@ -1977,35 +1977,86 @@ impl ConversationService {
                             // Where it runs was decided when it was
                             // created; a placement that cannot be read, or
                             // names a host no longer configured, opens it
-                            // nowhere.
-                            let environment = service
-                                .inner
-                                .environment
-                                .of(&id)
-                                .await
-                                .map_err(|cause| OpeningFailure {
-                                    cause,
-                                    holds: false,
-                                })?;
+                            // nowhere. On any worker of the pool, a worker
+                            // that refuses it as it starts draining is left
+                            // for another.
                             let ownership = match owned_preparation {
                                 Some(ref gate) => Some(gate.clone()),
                                 None => service.ownership_gate(&id, &actor).await
                                     .map_err(|cause| OpeningFailure { cause, holds: false })?,
                             };
-                            if ownership.as_ref().is_some_and(|gate| gate.is_sealed()) {
-                                return Err(OpeningFailure { cause: ConversationError::Unavailable, holds: false });
-                            }
-                            let opening = open_lease(
-                                environment.as_ref(),
-                                LeaseRequest {
-                                    work,
-                                    sandbox: SandboxProfile::HarnessDefault,
-                                    binding: configured.sandbox,
-                                },
-                                configured.provider.clone(),
-                                service.inner.clock.as_ref(),
-                            )
-                            .await;
+                            let mut avoid = Vec::new();
+                            // Each refusal left for another worker, recorded
+                            // before the lease this opening ends with.
+                            let mut left = Vec::new();
+                            let (environment, opening) = loop {
+                                let place = match service
+                                    .inner
+                                    .environment
+                                    .for_lease(&id, &avoid)
+                                    .await
+                                {
+                                    Ok(place) => place,
+                                    // Another worker could not be placed: the
+                                    // refusal already given stands, and is
+                                    // recorded as any refusal is.
+                                    Err(_) if !left.is_empty() => {
+                                        break left.pop().expect("one refusal left");
+                                    }
+                                    Err(cause) => {
+                                        return Err(OpeningFailure {
+                                            cause,
+                                            holds: false,
+                                        })
+                                    }
+                                };
+                                let worker =
+                                    place.context.as_ref().map(|context| context.worker());
+                                // No other worker to ask: the refusal it gave stands.
+                                if worker.as_ref().is_some_and(|worker| avoid.contains(worker)) {
+                                    if let Some(refused) = left.pop() {
+                                        break refused;
+                                    }
+                                }
+                                // Placement may wait or select another worker.
+                                // Check the same lifetime after that wait and
+                                // before each environment lease is acquired.
+                                if ownership.as_ref().is_some_and(|gate| gate.is_sealed()) {
+                                    return Err(OpeningFailure { cause: ConversationError::Unavailable, holds: false });
+                                }
+                                let opening = open_lease_on(
+                                    place.environment.as_ref(),
+                                    LeaseRequest {
+                                        work: work.clone(),
+                                        sandbox: SandboxProfile::HarnessDefault,
+                                        binding: configured.sandbox,
+                                    },
+                                    configured.provider.clone(),
+                                    service.inner.clock.as_ref(),
+                                    place.context,
+                                )
+                                .await;
+                                match worker {
+                                    Some(worker)
+                                        if opening.refusal.is_some()
+                                            && !avoid.contains(&worker)
+                                            && service
+                                                .inner
+                                                .environment
+                                                .left_the_pool(&worker) =>
+                                    {
+                                        tracing::info!(
+                                            conversation_id = %id,
+                                            worker = worker.name(),
+                                            refusal = ?opening.refusal,
+                                            "a worker that left the pool refused the lease; asking another"
+                                        );
+                                        avoid.push(worker);
+                                        left.push((place.environment, opening));
+                                    }
+                                    _ => break (place.environment, opening),
+                                }
+                            };
                             let tool_source = checked_source(agent);
                             let agent = Agent::prepare(
                                 opening.fence.clone(),
@@ -2042,6 +2093,23 @@ impl ConversationService {
                                     child: id.clone(),
                                 },
                             ));
+                            // A refusal left for another worker is recorded
+                            // as the refused lease it was, so the history says
+                            // which worker was asked and why it moved on. One
+                            // that cannot be recorded is logged; the opening
+                            // goes on to record its own lease.
+                            for (refused_on, refused) in &left {
+                                if let Err(error) = issue(
+                                    agent.session_manager(),
+                                    refused_on.as_ref(),
+                                    refused,
+                                    &actor,
+                                )
+                                .await
+                                {
+                                    tracing::error!(conversation_id = %id, %error, "a refusal left for another worker could not be recorded");
+                                }
+                            }
                             let issued = issue(
                                 agent.session_manager(),
                                 environment.as_ref(),
@@ -3296,7 +3364,7 @@ impl ConversationService {
     /// one rule, the summary's, whichever of the two is drawing it
     /// (`a_read_carries_the_title_the_list_shows`). A summary that cannot be
     /// read is logged and the view goes without a title.
-    async fn title(&self, id: &ConversationId) -> Option<String> {
+    pub(crate) async fn title(&self, id: &ConversationId) -> Option<String> {
         match self.inner.summaries.load(id).await {
             Ok(summary) => summary
                 .as_ref()

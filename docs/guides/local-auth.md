@@ -408,6 +408,20 @@ a single service. Two containers never serve one volume at once: the second
 waits up to 15 seconds for the first to let go of the volume, then exits, and
 its restart policy starts it again.
 
+Run several workers for one gateway, each on a volume of its own and paired
+with an invitation of its own, and create conversations on `peer:any`: the
+gateway puts each on the worker with the fewest agents running, and keeps it
+there while that worker serves. To replace a worker with no gap, start the new
+one on a new volume first, then stop the old one: draining, it tells the
+gateway at once, its leases end, and the next message to each of its
+conversations starts that conversation's agent on another worker, with new
+context (its earlier provider session stays on the old worker's volume).
+
+To bound what one organization runs at once across its workers, set
+`limits.organizationLeases` and `limits.organizationCommands` on the gateway
+(0, the default, bounds nothing). Past either, the lease or command is refused
+as the environment being busy.
+
 To let the agent run single commands on a host with its `run` tool (beside
 `environments_list`), name the host in `environmentTools.commandHosts` on the
 gateway, and on the host itself set `envServe.commands` in its `config.json`.

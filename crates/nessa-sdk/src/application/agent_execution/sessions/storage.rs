@@ -414,6 +414,17 @@ pub enum SessionChange {
     ModelChanged(ModelChangeRecord),
     /// A verified approval or effort change, retaining complete before/after settings.
     ConfigurationChanged(SessionConfigurationRecord),
+    /// The provider identity this history goes on under when its saved
+    /// context is not restored: the same provider and model, whose context
+    /// fingerprint differs, such as a harness that now works in another
+    /// worker's workspace. Only [`ProviderIdentity::context`] differs; a
+    /// model goes on under another only by [`Self::ModelChanged`].
+    ProviderIdentityChanged {
+        /// The identity the history held.
+        before: ProviderIdentity,
+        /// The identity it goes on under.
+        after: ProviderIdentity,
+    },
     /// The first empty state of a newly created conversation.
     Opened {
         /// Conversation identity.

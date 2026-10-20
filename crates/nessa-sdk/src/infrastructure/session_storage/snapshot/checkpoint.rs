@@ -4,7 +4,7 @@ use super::{
     leases::SavedLease,
     notes::WireNote,
     queue_order::QueueEvent,
-    records::{Event, Metadata, Provider},
+    records::{CancellationContext, Event, Metadata, Provider},
     scheduling::SchedulingEvent,
     tools::corrupt,
 };
@@ -155,12 +155,13 @@ impl Snapshot {
                 .map(SchedulingEvent::decode)
                 .collect::<Result<_, _>>()?;
             for event in saved.events {
-                let provider = context
-                    .as_ref()
-                    .ok_or_else(|| corrupt("checkpoint observation has no provider context"))?;
-                record
-                    .events
-                    .push(event.decode(provider, &record.request.execution_id)?);
+                if context.is_none() {
+                    return Err(corrupt("checkpoint observation has no provider context"));
+                }
+                record.events.push(event.decode(
+                    CancellationContext::Checkpoint,
+                    &record.request.execution_id,
+                )?);
             }
             invocations.push(record);
         }

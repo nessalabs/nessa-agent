@@ -5709,6 +5709,8 @@ async fn k1_a_drain_ends_every_lease_recorded_then_serving_ends_once_answered() 
     // Asked twice, acted on once.
     gateway.drain.send_replace(true);
     gateway.drain.send_replace(true);
+    // Said first: the gateway asks for nothing more here.
+    assert_eq!(gateway.said().await, FromEnvironment::Draining);
     let (mut ending, mut ran) = (None, None);
     while ending.is_none() || ran.is_none() {
         match gateway.said().await {
@@ -5838,7 +5840,7 @@ async fn k1_a_grant_waiting_as_the_drain_is_asked_is_refused() {
     let mut refused = None;
     while refused.is_none() {
         match gateway.said().await {
-            FromEnvironment::Ending { .. } => {}
+            FromEnvironment::Draining | FromEnvironment::Ending { .. } => {}
             frame @ FromEnvironment::Refused { .. } => refused = Some(frame),
             other => panic!("admitted after the drain: {other:?}"),
         }
@@ -5875,6 +5877,8 @@ async fn k1_a_drain_that_cannot_be_recorded_still_stops_and_answers_uncertain() 
     let mut gateway = revocable(ledger.clone());
     gateway.started(LEASE).await;
     gateway.drain.send_replace(true);
+    // Said first: the gateway asks for nothing more here.
+    assert_eq!(gateway.said().await, FromEnvironment::Draining);
     assert_eq!(
         gateway.said().await,
         FromEnvironment::Ending {
@@ -5912,6 +5916,8 @@ async fn k1_a_revocation_after_a_drain_ends_the_lease_once_as_drained() {
     let mut gateway = revocable(Arc::new(MemoryLedger::default()));
     gateway.started(LEASE).await;
     gateway.drain.send_replace(true);
+    // Said first: the gateway asks for nothing more here.
+    assert_eq!(gateway.said().await, FromEnvironment::Draining);
     assert_eq!(
         gateway.said().await,
         FromEnvironment::Ending {
@@ -5955,6 +5961,8 @@ async fn k1_a_drain_ends_serving_once_its_last_command_answers() {
         .await;
     gateway.settled().await;
     gateway.drain.send_replace(true);
+    // Said first: the gateway asks for nothing more here.
+    assert_eq!(gateway.said().await, FromEnvironment::Draining);
     assert!(matches!(
         gateway.said().await,
         FromEnvironment::Ran {
@@ -5984,6 +5992,8 @@ async fn k1_a_drain_waits_for_the_run_of_a_command_it_ended_unrun() {
     gateway.next().await;
     gateway.settled().await;
     gateway.drain.send_replace(true);
+    // Said first: the gateway asks for nothing more here.
+    assert_eq!(gateway.said().await, FromEnvironment::Draining);
     // Recorded ended, but the gateway has not heard: serving is open.
     let ended = LedgerEntry::Ended {
         lease: UNRUN.into(),
@@ -6031,6 +6041,8 @@ async fn k1_an_unrecorded_drain_of_an_unrun_command_answers_its_run_uncertain() 
     gateway.next().await;
     gateway.settled().await;
     gateway.drain.send_replace(true);
+    // Said first: the gateway asks for nothing more here.
+    assert_eq!(gateway.said().await, FromEnvironment::Draining);
     // Its `Run` is sent once the drain has ended it, not before.
     let ended = LedgerEntry::Ended {
         lease: UNRUN.into(),
@@ -6079,6 +6091,8 @@ async fn k1_a_drain_waits_for_the_end_of_a_lease_expired_before_it() {
         }
     );
     gateway.drain.send_replace(true);
+    // Said first: the gateway asks for nothing more here.
+    assert_eq!(gateway.said().await, FromEnvironment::Draining);
     tokio::time::sleep(Duration::from_millis(100)).await;
     assert!(!gateway.served.is_finished());
     assert_eq!(

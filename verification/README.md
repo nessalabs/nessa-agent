@@ -112,7 +112,7 @@ verification/
         stress-restart.mjs   scope intentional restart console lines to exact socket evidence and verified recovery (#1024)
         stress-restart.test.mjs temporal, endpoint, occurrence, failed-recovery and cleanup boundaries
         stress-followers.mjs subscription churn and capacity probes, correlated with exact run-owned deletions
-        stress-followers.test.mjs deletion during admission, foreign/late markers, typed refusal and capacity/cleanup controls
+        stress-followers.test.mjs end/open ordering, cursor resume, real held counts and deletion/capacity controls
         page-lines.mjs      report each collected page event through its step or close owner
         page-lines.test.mjs queue-free page API, classification, once-only reporting and concurrent attribution
         workspace.mjs       open panes and completed tool work, read pane rects and focus, lift a pane, rect containment, a model rule or value read in the page
@@ -246,6 +246,34 @@ Bare-Node reporter/routing tests cover V1–V4 and the full-run argument decisio
 V5–V9's actual fixture and server lifetime also require production browser
 qualification; helper tests alone do not establish that the built fixture renders.
 No frame budget, RPC deadline or browser readiness wait changes with this routing.
+
+## Stress follower end/open ordering (#1038)
+
+The follower owns desired targets separately from live subscription handles.
+The generated `ConversationSubscriptionEndReason` contract owns recoverability:
+`source_closed` and `lagging` subscribe again, as does the client's
+`disconnected`. A view resumes from its applied frame cursor, events from their
+applied batch cursor, and a list receives a replacement snapshot. End callbacks
+retire ownership even when they report an unexpected failure. Opening identity
+is shared across all three stream kinds; data and end callbacks from a retired
+opening cannot change its successor. `stress-followers.test.mjs` exercises these
+orderings and the existing exact deletion/capacity controls.
+
+| State/event | Ownership and next action |
+| --- | --- |
+| Opening receives its handle | Retain it only while that opening is current |
+| Recoverable end before or after the open answer | Retire the opening and handle, preserve applied data/cursor, request reopening; close a late handle |
+| Unexpected end | Retire identically, retain the failure, and request reopening without erasing that failure |
+| Retired opening delivers data/end | Ignore it; its successor owns application progress |
+| Intentional churn | Retire before awaiting close, then reopen from the applied cursor |
+| Run-owned deletion during events admission | Retire and close any late handle; remove the desired target |
+| Missing or opening list/view/events | Defer capacity probes; desired targets still reserve their room for reopening |
+| An owned stream ends while a probe awaits admission | End that measurement and close probe handles; a later stable round measures capacity |
+| Settlement after churn ends | Reopen list, view and events before comparing final state |
+
+`held()` counts live conversation handles, while desired targets reserve room
+independently. Lists have their separate published allowance. These rules do not
+change server capacity, approval policy, concurrency or deadlines.
 
 ## Output
 

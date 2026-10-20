@@ -4144,7 +4144,7 @@ mod tests {
     }
 
     #[test]
-    fn an_abandoned_cancellation_does_not_keep_its_witness() {
+    fn an_abandoned_cancellation_leaves_no_provider_evidence() {
         let scope = scope();
         let mut fold = TranscriptFold::new(scope.clone()).unwrap();
         fold.apply(&records(&scope, 1, &save_frames(open_recorded(), 0, 0)))
@@ -4180,6 +4180,198 @@ mod tests {
         assert!(fold.snapshot().unwrap().invocations[0].events.is_empty());
         assert_eq!(fold.unreadable().len(), 1);
         fold.committed.assert_retained_accounting();
+    }
+
+    /// A cancellation names the provider context in force when it was
+    /// recorded. A later revision to a new context applies, and a checkpoint
+    /// and a replay from the records both read the cancellation back. A
+    /// cancellation naming a context no longer in force at its own fact is
+    /// still unreadable.
+    #[test]
+    fn a_cancellation_under_an_earlier_context_survives_a_move_to_a_new_one() {
+        let scope = scope();
+        let earlier = ProviderContext::Recorded(ExecutionSessionId::new("remote").unwrap());
+        let later = ProviderContext::Recorded(ExecutionSessionId::new("elsewhere").unwrap());
+        let mut fold = TranscriptFold::new(scope.clone()).unwrap();
+        let mut history = records(&scope, 1, &save_frames(opened(), 0, 0));
+        fold.apply(&history).unwrap();
+        for (generation, changes) in [
+            vec![SessionChange::ProviderContext {
+                before: ProviderContext::Absent,
+                after: earlier.clone(),
+            }],
+            vec![accepted_input("output")],
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let unit = one_unit(&fold, &changes, generation as u64 + 1);
+            fold.apply(&unit).unwrap();
+            history.extend(unit);
+        }
+        let (requested, cancelled) = permission_cancellation("review");
+        let moved = SessionChange::ProviderContext {
+            before: earlier.clone(),
+            after: later.clone(),
+        };
+        let stale = [
+            SessionChange::ProviderObservation(requested.clone()),
+            moved.clone(),
+            SessionChange::ProviderObservation(cancelled.clone()),
+        ];
+        assert!(matches!(
+            snapshot::decode_semantic_batch(
+                &snapshot::encode_semantic_batch(&stale).unwrap(),
+                &earlier
+            ),
+            Err(StorageError::Corrupt(_))
+        ));
+        let stale = one_unit(&fold, &stale, 3);
+        fold.apply(&stale).unwrap();
+        history.extend(stale);
+        assert_eq!(
+            fold.unreadable().len(),
+            1,
+            "a cancellation naming a context no longer in force is corrupt"
+        );
+        assert!(fold.snapshot().unwrap().invocations[0].events.is_empty());
+        assert_eq!(fold.snapshot().unwrap().provider_context, earlier);
+
+        for (generation, changes) in [
+            vec![
+                SessionChange::ProviderObservation(requested),
+                SessionChange::ProviderObservation(cancelled),
+            ],
+            vec![moved],
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let unit = one_unit(&fold, &changes, generation as u64 + 4);
+            fold.apply(&unit).unwrap();
+            history.extend(unit);
+        }
+        assert_eq!(fold.unreadable().len(), 1, "the move applies");
+        let snapshot = fold.snapshot().unwrap().clone();
+        assert_eq!(snapshot.provider_context, later);
+        assert!(matches!(
+            snapshot.invocations[0].events[1].update(),
+            ExecutionUpdate::PermissionCancelled(record)
+                if record.session_id().as_str() == "remote"
+        ));
+        fold.committed.assert_retained_accounting();
+
+        let checkpoint = fold.checkpoint().unwrap();
+        let restored = TranscriptFold::restore(scope.clone(), fold.applied(), &checkpoint).unwrap();
+        assert_eq!(restored.snapshot(), Some(&snapshot));
+        assert_eq!(restored.checkpoint().unwrap(), checkpoint);
+
+        let mut replayed = TranscriptFold::new(scope).unwrap();
+        replayed.apply(&history).unwrap();
+        assert_eq!(replayed.snapshot(), Some(&snapshot));
+        assert_eq!(replayed.unreadable().len(), 1);
+        replayed.committed.assert_retained_accounting();
+    }
+
+    /// A provider identity change moves only the context fingerprint, and the
+    /// new fingerprint may be another length: retained size follows it, and a
+    /// checkpoint and a replay from the records read the same snapshot. A
+    /// change whose prior identity is not the snapshot's is refused as a
+    /// mismatch; one that also moves the name or model is corrupt.
+    #[test]
+    fn a_provider_identity_change_moves_the_fingerprint_and_nothing_else() {
+        let scope = scope();
+        let original = ProviderIdentity::new("provider", "model", "workspace").unwrap();
+        let moved = ProviderIdentity::new(
+            "provider",
+            "model",
+            "workspace:on-a-much-longer-worker-name",
+        )
+        .unwrap();
+        assert_ne!(original.context().len(), moved.context().len());
+        let mut fold = TranscriptFold::new(scope.clone()).unwrap();
+        let mut history = records(&scope, 1, &save_frames(opened(), 0, 0));
+        fold.apply(&history).unwrap();
+        assert_eq!(fold.snapshot().unwrap().provider, original);
+        let before = fold.committed.retained_bytes();
+        let unit = one_unit(
+            &fold,
+            &[SessionChange::ProviderIdentityChanged {
+                before: original.clone(),
+                after: moved.clone(),
+            }],
+            1,
+        );
+        fold.apply(&unit).unwrap();
+        history.extend(unit);
+        assert!(fold.unreadable().is_empty());
+        let snapshot = fold.snapshot().unwrap().clone();
+        assert_eq!(snapshot.provider, moved);
+        assert_eq!(
+            fold.committed.retained_bytes(),
+            before + moved.context().len() - original.context().len()
+        );
+        fold.assert_retained_accounting();
+
+        let checkpoint = fold.checkpoint().unwrap();
+        let restored = TranscriptFold::restore(scope.clone(), fold.applied(), &checkpoint).unwrap();
+        assert_eq!(restored.snapshot(), Some(&snapshot));
+        assert_eq!(restored.checkpoint().unwrap(), checkpoint);
+        restored.assert_retained_accounting();
+
+        let mut replayed = TranscriptFold::new(scope).unwrap();
+        replayed.apply(&history).unwrap();
+        assert_eq!(replayed.snapshot(), Some(&snapshot));
+        assert!(replayed.unreadable().is_empty());
+        replayed.assert_retained_accounting();
+
+        let refusal =
+            |fold: &mut TranscriptFold, before: &ProviderIdentity, after: ProviderIdentity| {
+                let change = SessionChange::ProviderIdentityChanged {
+                    before: before.clone(),
+                    after,
+                };
+                let position = fold.committed.applied() + 1;
+                let mut state = fold.committed.begin_transaction();
+                let refused = fold
+                    .committed
+                    .stage_apply(position, std::slice::from_ref(&change), &mut state)
+                    .map_err(|refusal| refusal.error);
+                fold.committed.restore_transaction(state);
+                assert_eq!(fold.snapshot(), Some(&snapshot));
+                let unread = fold.unreadable().len();
+                let unit = one_unit(fold, &[change], 2);
+                fold.apply(&unit).unwrap();
+                assert_eq!(fold.unreadable().len(), unread + 1);
+                assert_eq!(fold.snapshot(), Some(&snapshot));
+                fold.assert_retained_accounting();
+                refused
+            };
+        let other_worker = ProviderIdentity::new("provider", "model", "elsewhere").unwrap();
+        assert!(matches!(
+            refusal(&mut fold, &original, other_worker.clone()),
+            Err(StorageError::IdentityMismatch)
+        ));
+        assert!(matches!(
+            refusal(
+                &mut fold,
+                &moved,
+                ProviderIdentity::new("provider", "another-model", "elsewhere").unwrap()
+            ),
+            Err(StorageError::Corrupt(_))
+        ));
+        assert!(matches!(
+            refusal(
+                &mut fold,
+                &moved,
+                ProviderIdentity::new("another-provider", "model", "elsewhere").unwrap()
+            ),
+            Err(StorageError::Corrupt(_))
+        ));
+        assert!(matches!(
+            refusal(&mut fold, &moved, moved.clone()),
+            Err(StorageError::Corrupt(_))
+        ));
     }
 
     #[test]

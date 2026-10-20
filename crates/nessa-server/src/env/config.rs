@@ -24,8 +24,19 @@ pub mod default {
     pub const HOST: &str = "127.0.0.1";
 }
 
-/// Crate version from `Cargo.toml`. Sole `env!` usage in this crate.
+/// Crate version from `Cargo.toml`.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// The standalone `nessa` a release publishes for each target, built from
+/// these same sources just before this build (#734), as
+/// `<target>=<sha256>:<bytes>`, comma-separated. Set by the release
+/// workflow when it compiles a release; `None` in every other build, which
+/// so installs only its own executable on a host.
+pub const HOST_BUILDS: Option<&str> = option_env!("NESSA_HOST_BUILDS");
+
+/// Where [`HOST_BUILDS`] are published: the release's download address,
+/// under which each is `nessa-<target>`. Set beside them.
+pub const HOST_BUILDS_FROM: Option<&str> = option_env!("NESSA_HOST_BUILDS_FROM");
 
 /// Name the lease protocol by the sources that define it, listed once: the
 /// names for checking the list, the fingerprint for the hello.

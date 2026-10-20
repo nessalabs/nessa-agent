@@ -281,14 +281,11 @@ pub(super) enum ChangeUndo {
     Context(ProviderContext),
     Configuration(Option<SessionConfigurationRecord>),
     Model(ProviderIdentity, Option<ModelChangeRecord>),
+    Provider(ProviderIdentity),
     /// Provider evidence before this change. Rollback of an abandoned unit
     /// restores it with the mutations; a later context record must not see
     /// evidence for an event that was rolled back.
     Evidence(ProviderEvidence),
-    /// Context witness before this change. A permission cancellation records
-    /// the event a later context revision rechecks. Rolling the event back
-    /// without the witness leaves that check indexing a missing event.
-    ContextWitness(Option<(usize, usize)>),
     Lease(Option<super::CurrentLease>),
     Artifact,
     Note,
@@ -485,7 +482,6 @@ impl continuation::Continuation {
             invocations,
             queue,
             evidence: provider_evidence,
-            context_witness,
             identity_bytes,
             ..
         } = self;
@@ -691,12 +687,6 @@ impl continuation::Continuation {
                 let observation_undo =
                     invocations[index].observe(&context, record, record.events.len(), event)?;
                 undo.push(ChangeUndo::Observation(index, Box::new(observation_undo)));
-                if context_witness.is_none()
-                    && matches!(event.update(), ExecutionUpdate::PermissionCancelled(_))
-                {
-                    undo.push(ChangeUndo::ContextWitness(*context_witness));
-                    *context_witness = Some((index, record.events.len()));
-                }
                 crate::application::agent_execution::executions::limits::reserve_observation_slot(
                     &mut record.events,
                 );
@@ -854,6 +844,26 @@ impl continuation::Continuation {
                     snapshot.model_change.replace(record.clone()),
                 ));
             }
+            SessionChange::ProviderIdentityChanged { before, after } => {
+                let snapshot = candidate
+                    .as_mut()
+                    .ok_or_else(|| corrupt("provider identity precedes session open"))?;
+                if &snapshot.provider != before {
+                    return Err(StorageError::IdentityMismatch);
+                }
+                if before == after
+                    || before.name() != after.name()
+                    || before.model_id() != after.model_id()
+                {
+                    return Err(corrupt(
+                        "provider identity change differs in more than its context",
+                    ));
+                }
+                undo.push(ChangeUndo::Provider(std::mem::replace(
+                    &mut snapshot.provider,
+                    after.clone(),
+                )));
+            }
             SessionChange::ProviderContext { before, after } => {
                 let snapshot = candidate
                     .as_mut()
@@ -863,13 +873,10 @@ impl continuation::Continuation {
                         "provider context revision does not match prior value",
                     ));
                 }
+                // Earlier observations are not checked against `after`: each
+                // cancellation names the context in force at its own fact,
+                // which was checked when that fact was staged.
                 provider_evidence.validate(after)?;
-                if let Some((invocation, event)) = *context_witness {
-                    super::validation::validate_observation_context(
-                        after,
-                        &snapshot.invocations[invocation].events[event],
-                    )?;
-                }
                 undo.push(ChangeUndo::Context(std::mem::replace(
                     &mut snapshot.provider_context,
                     after.clone(),
@@ -1063,6 +1070,9 @@ impl continuation::Continuation {
                 snapshot.provider = provider;
                 snapshot.model_change = configuration;
             }
+            ChangeUndo::Provider(provider) => {
+                self.snapshot.as_mut().expect("open").provider = provider;
+            }
             ChangeUndo::Configuration(record) => {
                 self.snapshot.as_mut().expect("open").current_configuration = record;
             }
@@ -1070,7 +1080,6 @@ impl continuation::Continuation {
                 self.snapshot.as_mut().expect("open").provider_context = context
             }
             ChangeUndo::Evidence(prior) => self.evidence = prior,
-            ChangeUndo::ContextWitness(prior) => self.context_witness = prior,
             ChangeUndo::Lease(prior) => {
                 let snapshot = self.snapshot.as_mut().expect("open");
                 self.snapshot_bytes = self

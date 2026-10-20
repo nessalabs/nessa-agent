@@ -11,7 +11,7 @@ use super::{
     notes::{WireNote, WireNoteRetired},
     permissions::Actor,
     queue_order::QueueEvent,
-    records::{Acknowledgement, Event, Metadata, Provider},
+    records::{Acknowledgement, CancellationContext, Event, Metadata, Provider},
     scheduling::SchedulingEvent,
     settlement::Settlement,
     tools::corrupt,
@@ -219,6 +219,10 @@ enum WireChange<E = Event> {
         before: Option<String>,
         after: Option<String>,
     },
+    ProviderIdentityChanged {
+        before: Provider,
+        after: Provider,
+    },
     Lease(WireLease),
     Artifact(WireArtifact),
     Note(WireNote),
@@ -334,6 +338,12 @@ impl<'a> From<&'a SessionChange> for WireChange<Event<&'a str>> {
                 before: encode_context(before),
                 after: encode_context(after),
             },
+            SessionChange::ProviderIdentityChanged { before, after } => {
+                Self::ProviderIdentityChanged {
+                    before: before.into(),
+                    after: after.into(),
+                }
+            }
             SessionChange::Lease(record) => Self::Lease(record.into()),
             SessionChange::Artifact(record) => Self::Artifact(record.into()),
             SessionChange::Note(record) => Self::Note(record.into()),
@@ -422,6 +432,12 @@ impl TryFrom<WireChange> for SessionChange {
                 before: decode_context(before)?,
                 after: decode_context(after)?,
             },
+            WireChange::ProviderIdentityChanged { before, after } => {
+                Self::ProviderIdentityChanged {
+                    before: before.decode()?,
+                    after: after.decode()?,
+                }
+            }
             WireChange::Lease(record) => Self::Lease(record.decode()?),
             WireChange::Artifact(record) => Self::Artifact(record.decode()?),
             WireChange::Note(record) => Self::Note(record.decode()?),
@@ -440,9 +456,10 @@ fn decode_wire_change(
                 .recorded()
                 .ok_or_else(|| corrupt("provider observation has no provider context"))?;
             let execution_id = ExecutionId::new(&event.execution_id).map_err(corrupt)?;
-            Ok(SessionChange::ProviderObservation(
-                event.decode(provider_context, &execution_id)?,
-            ))
+            Ok(SessionChange::ProviderObservation(event.decode(
+                CancellationContext::AtFact(provider_context),
+                &execution_id,
+            )?))
         }
         other => {
             let change: SessionChange = other.try_into()?;
@@ -1299,6 +1316,19 @@ mod tests {
             decode_one(&bytes, &context),
             Err(StorageError::Corrupt(_))
         ));
+    }
+
+    #[test]
+    fn a_provider_identity_change_round_trips() {
+        let change = SessionChange::ProviderIdentityChanged {
+            before: ProviderIdentity::new("fixture", "model", "workspace:one").unwrap(),
+            after: ProviderIdentity::new("fixture", "model", "workspace:two").unwrap(),
+        };
+        let bytes = encode_batch(std::slice::from_ref(&change)).unwrap();
+        assert_eq!(
+            decode_batch(&bytes, &ProviderContext::Absent).unwrap(),
+            [change]
+        );
     }
 
     #[test]

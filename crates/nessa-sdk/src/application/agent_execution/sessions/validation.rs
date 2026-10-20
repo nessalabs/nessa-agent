@@ -48,6 +48,10 @@ pub(super) struct InvocationObservationUndo {
     created_witness: bool,
 }
 impl InvocationContinuation {
+    /// Rebuild from a whole snapshot. The snapshot holds only its final
+    /// provider context, so a cancellation recorded under an earlier one is
+    /// accepted here; the fact that recorded it checked it against the
+    /// context then in force.
     pub(super) fn rebuild(
         snapshot: &SessionSnapshot,
         invocation: &InvocationRecord,
@@ -87,7 +91,7 @@ impl InvocationContinuation {
     ) -> Result<InvocationObservationUndo, StorageError> {
         event.validate_payload_size().map_err(corrupt)?;
         let usage = self.usage.with_event(event).map_err(corrupt)?;
-        let observation = self.observations.observe(context, record, index, event)?;
+        let observation = self.observations.observe(record, index, event)?;
         let created_witness = self.witness.is_none();
         if created_witness {
             let witness = context
@@ -165,11 +169,15 @@ pub(crate) fn validate(snapshot: &SessionSnapshot) -> Result<(), StorageError> {
 pub(super) fn continuation(
     snapshot: &SessionSnapshot,
 ) -> Result<Vec<InvocationContinuation>, StorageError> {
-    if snapshot
-        .model_change
-        .as_ref()
-        .is_some_and(|record| record.change().after() != &snapshot.provider)
-    {
+    // The last model change chose the provider and the model. The context
+    // part of the fingerprint may have changed since, when the conversation
+    // moved to where its saved context is not restored
+    // (`ProviderIdentityChanged`, which keeps the name and the model).
+    if snapshot.model_change.as_ref().is_some_and(|record| {
+        let chosen = record.change().after();
+        chosen.name() != snapshot.provider.name()
+            || chosen.model_id() != snapshot.provider.model_id()
+    }) {
         return Err(StorageError::IdentityMismatch);
     }
 
@@ -309,20 +317,37 @@ pub(super) fn validate_admission_actor(
     Ok(())
 }
 
-/// A context-bound observation must agree with the context at its own fact,
-/// before a later provider-context revision can change the final projection.
+/// A cancellation names the provider context in force when it was recorded.
+/// The fact that records it is the one place that context is known, so the
+/// check is made there; a later provider-context revision does not recheck
+/// it, and a whole snapshot, which holds only its final context, checks only
+/// [`validate_observation_identity`].
 pub(super) fn validate_observation_context(
     context: &ProviderContext,
     event: &ExecutionEvent,
 ) -> Result<(), StorageError> {
+    validate_observation_identity(event)?;
+    match event.update() {
+        ExecutionUpdate::PermissionCancelled(record)
+            if context.recorded() != Some(record.session_id()) =>
+        {
+            Err(corrupt(
+                "cancellation belongs to a different session or invocation",
+            ))
+        }
+        _ => Ok(()),
+    }
+}
+
+/// The checks on a cancellation that hold whatever context is current: its
+/// identities are bounded and it names its own invocation.
+pub(super) fn validate_observation_identity(event: &ExecutionEvent) -> Result<(), StorageError> {
     let ExecutionUpdate::PermissionCancelled(record) = event.update() else {
         return Ok(());
     };
     validate_observation_id(record.request().id().as_str()).map_err(corrupt)?;
     validate_observation_id(record.request().tool_id().as_str()).map_err(corrupt)?;
-    if context.recorded() != Some(record.session_id())
-        || record.request().execution_id() != event.execution_id()
-    {
+    if record.request().execution_id() != event.execution_id() {
         return Err(corrupt(
             "cancellation belongs to a different session or invocation",
         ));

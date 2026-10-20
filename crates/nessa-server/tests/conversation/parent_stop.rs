@@ -33,6 +33,8 @@ use sha2::{Digest, Sha256};
 use std::sync::atomic::AtomicBool;
 use std::sync::Mutex;
 use tokio::sync::Notify;
+#[path = "parent_stop/placement.rs"]
+mod placement;
 pub(super) async fn bind(
     service: &ConversationService,
     storage: &Arc<RecordStorage>,

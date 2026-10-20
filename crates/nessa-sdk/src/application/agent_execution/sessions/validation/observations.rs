@@ -1,9 +1,9 @@
 //! Incremental relationship checks shared by full admission and semantic suffixes.
-use super::{corrupt, validate_observation_context};
+use super::{corrupt, validate_observation_identity};
 use crate::application::agent_execution::{
     executions::{limits::validate_observation_id, ExecutionEvent, ExecutionUpdate},
     permissions::CancellationOrigin,
-    sessions::{app_sources, InvocationRecord, ProviderContext, StorageError},
+    sessions::{app_sources, InvocationRecord, StorageError},
 };
 use crate::domain::agent_execution::{
     permissions::{
@@ -42,12 +42,11 @@ pub(super) enum ObservationUndo {
 impl Observations {
     pub(super) fn observe(
         &mut self,
-        context: &ProviderContext,
         record: &InvocationRecord,
         index: usize,
         event: &ExecutionEvent,
     ) -> Result<ObservationUndo, StorageError> {
-        validate_observation_context(context, event)?;
+        validate_observation_identity(event)?;
         let undo = match event.update() {
             ExecutionUpdate::Tool(tool) => {
                 validate_observation_id(tool.id().as_str()).map_err(corrupt)?;

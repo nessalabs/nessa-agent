@@ -116,6 +116,18 @@ fn catalogue() -> &'static [Limit] {
             meaning: "an agent idle this many seconds, nothing queued or waiting and nobody following its conversation, is stopped; the conversation stays open and the next message starts the agent again, resuming its session. 0 never stops one",
         },
         Limit {
+            id: "organization.leases",
+            tier: "configured",
+            owner: "config.json limits.organizationLeases",
+            meaning: "a lease of an agent asked of a paired environment while this many run on this gateway's paired environments together is refused environment_busy before the environment is asked. 0, the default, bounds none",
+        },
+        Limit {
+            id: "organization.commands",
+            tier: "configured",
+            owner: "config.json limits.organizationCommands",
+            meaning: "a command asked of a paired environment while this many run on this gateway's paired environments together is refused environment_busy before the environment is asked. 0, the default, bounds none",
+        },
+        Limit {
             id: "socket.ordinary_slots",
             tier: "configured",
             owner: "config.json limits.ordinarySlots",
@@ -569,6 +581,14 @@ pub(crate) fn effective_json(
     put(
         "server.agent_idle_seconds",
         limits.agent_idle().map_or(0, |idle| idle.as_secs()),
+    );
+    put(
+        "organization.leases",
+        limits.organization_leases().map_or(0, count),
+    );
+    put(
+        "organization.commands",
+        limits.organization_commands().map_or(0, count),
     );
     put("socket.ordinary_slots", count(limits.ordinary_slots()));
     put("socket.control_slots", count(limits.control_slots()));

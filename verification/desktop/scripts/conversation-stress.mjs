@@ -57,11 +57,25 @@
  *   delete      another conversation is deleted from its row's More menu,
  *               once asked; the gateway refuses it as deleted, and neither
  *               list nor the window holds it
+ *   notice      a review waits in another conversation, which the window does
+ *               not show: the host's system notice names its tool and the
+ *               conversation's title, opening it brings that conversation
+ *               up with its card, and answering there takes the notice back;
+ *               a second review there stays up across a reload of the
+ *               window, and is taken back once another client answers it
  *   linking     native linking is turned on, then off, with the switch in
  *               Settings › Connections › Linked devices; each time the gateway
  *               saves config.json and starts itself again in the same
  *               process, the window comes back to the new state, and the
  *               message sent after it is answered
+ *   pool        native linking is turned on in Settings and two real
+ *               `nessa env dial` workers pair with the gateway; a
+ *               conversation created on `peer:any` is bound to one of them
+ *               and stays there while it serves; that worker is stopped with
+ *               SIGTERM, drains and exits, and the next message sent in the
+ *               window binds the conversation to the other, with new provider
+ *               context, as the window's heading and the binding both say;
+ *               both workers stop and linking is turned off again
  *
  * Meanwhile `--parallel` background conversations take turns through the
  * gateway (every third one a watch), and `--followers` other clients follow
@@ -94,6 +108,7 @@ import { turnEnded } from "../../../scripts/mcp-test-server/evidence.mjs"
 import {
   SAYS,
   STRESS,
+  TABLE_LINES,
   WATCH_CALLS,
   stressScenario,
 } from "../../../scripts/mcp-test-server/scenarios/stress.mjs"
@@ -103,6 +118,7 @@ import { gatewayHost } from "./lib/fake-host.mjs"
 import {
   connectClient,
   panelTarget,
+  scriptedLaunch,
   startGatewayStack,
   waitFor,
 } from "./lib/gateway-stack.mjs"
@@ -125,8 +141,14 @@ import {
 import { observeGatewayRestarts } from "./lib/stress-restart.mjs"
 import { parentRestarted, parentStopCheckpoint } from "./lib/stress-parent-stop.mjs"
 import { KNOBS, describe, knobsFrom, plan, random } from "./lib/stress-plan.mjs"
+import { startWorker } from "./lib/stress-workers.mjs"
 
 const INSTANCE = "conversation-stress"
+/**
+ * The environment that places a conversation on any of the gateway's paired
+ * workers (`POOL` in crates/nessa-server/src/conversation/application/placement.rs).
+ */
+const POOL = "peer:any"
 
 const meta = {
   name: "conversation-stress",
@@ -988,62 +1010,209 @@ const steps = {
   },
 
   async linking(run, step, failures) {
-    const gateway = run.stack.gateway
-    const config = join(gateway.directory, "ci", "instances", INSTANCE, "config.json")
     await run.exclusive(async () => {
-      const pid = gateway.server.pid
-      if (!(await run.page.$(css.settings))) await run.page.keyboard.press(keys.settings)
-      await run.page.locator(css.settingsCategory, { hasText: names.connections }).click()
-      await run.page.locator(css.settingsTab, { hasText: names.linkedDevices }).click()
-      for (const enabled of [true, false]) {
-        const want = enabled ? "on" : "off"
-        const before = await waitFor(
-          async () =>
-            (await run.page.locator(css.linked).getAttribute("data-linked")) ===
-            (enabled ? "off" : "on"),
-          30_000,
-        )
-        if (!before) {
-          failures.push(`linking was not ${enabled ? "off" : "on"} before the switch`)
-          return
-        }
-        await run.restartConsole.during(run.opened, async () => {
-          const before = failures.length
-          const old = run.client
-          run.restarts += 1
-          await run.page.locator(`${css.linked} [role='switch']`).click()
-          const shown = await waitFor(
-            async () =>
-              (await run.page.locator(css.linked).getAttribute("data-linked")) === want,
-            60_000,
-          )
-          if (!shown) failures.push(`the window did not come back with linking ${want}`)
-          old.close()
-          run.client = await connectClient(gateway, INSTANCE, "panel")
-          const answered = await run.client.pairing.pending().then(
-            () => "on",
-            (error) =>
-              error?.refusal === "pairing_not_configured" ? "off" : String(error),
-          )
-          if (answered !== want)
-            failures.push(`the gateway answers linking ${answered}, not ${want}`)
-          const saved = JSON.parse(readFileSync(config, "utf8")).native
-          if (
-            (saved?.enabled !== false) !== enabled ||
-            saved?.listenAddress !== run.nativeAddress
-          )
-            failures.push(`config.json holds native ${JSON.stringify(saved)}`)
-          if (gateway.server.pid !== pid || gateway.server.exitCode !== null)
-            failures.push("the gateway did not start again in the same process")
-          return failures.length === before
-        })
-      }
-      // Esc does not close Settings; its back control returns to the app.
-      await run.page.getByRole("button", { name: "Back to nessa Agent" }).first().click()
-      await run.page.waitForSelector(css.settings, { state: "detached", timeout: 10_000 })
+      await openLinkedDevices(run.page)
+      for (const enabled of [true, false])
+        if (!(await switchLinking(run, enabled, failures))) return
+      await closeSettings(run.page)
     })
     // The restarted gateway still answers the conversation, in the window.
     if (failures.length === 0) await steps.reply(run, step, failures)
+  },
+
+  async pool(run, step, failures) {
+    // Workers dial the gateway's native listener, which is off in this run
+    // until a step turns it on: a person does it in Settings, here as in
+    // the `linking` step, and turns it off again once the workers are gone.
+    const linked = await run.exclusive(async () => {
+      await openLinkedDevices(run.page)
+      const on = await switchLinking(run, true, failures)
+      if (on) await closeSettings(run.page)
+      return on
+    })
+    if (!linked) return
+    const workers = []
+    let owner
+    try {
+      // Pairing is the owner's: the panel's credential cannot approve.
+      owner = await connectClient(run.stack.gateway, INSTANCE, "owner")
+      const launch = scriptedLaunch(run.stack.agent, { scenario: run.stack.scenario })
+      for (const label of ["a", "b"])
+        workers.push(
+          await startWorker({
+            owner,
+            address: run.nativeAddress,
+            agent: run.stack.agent,
+            launch,
+            label: `${label}${step.index}`,
+            connected: async (name) =>
+              (await offers(run, (environments) => environments.includes(name))).includes(
+                name,
+              ),
+          }),
+        )
+      const offered = await offers(run, (environments) =>
+        workers.every((each) => environments.includes(each.name)),
+      )
+      if (offered?.[0] !== POOL) {
+        failures.push(
+          `the gateway offers ${JSON.stringify(offered)}, not ${POOL} first and both workers`,
+        )
+        return
+      }
+      const conversationId = randomUUID()
+      await run.client.conversation.create({
+        conversationId,
+        agent: run.stack.agent,
+        environment: POOL,
+      })
+      const first = prompt(run, STRESS.reply, step, " pool")
+      await run.client.conversation.submit(
+        run.client.conversation.prepare(conversationId, first),
+      )
+      const { view: before } = await settled(
+        run,
+        conversationId,
+        new Set(),
+        first,
+        "completed",
+        failures,
+      )
+      if (failures.length) return
+      const bound = bindingOf(run, conversationId)
+      const from = workers.find((each) => each.name === bound?.worker)
+      const to = workers.find((each) => each !== from)
+      if (!from || !bound.context) {
+        failures.push(
+          `the pool conversation is bound as ${JSON.stringify(bound)}, not to a worker with its context`,
+        )
+        return
+      }
+      if (before.lease?.environment !== "peer" || before.lease?.host !== from.name)
+        failures.push(`its lease runs on ${before.lease?.host}, not ${from.name}`)
+      // A person opens it and writes in it: it stays on the worker it is bound to.
+      await openStressConversation(
+        run.page,
+        conversationId,
+        await titleOf(run, conversationId),
+      )
+      await expectShown(run.page, await placeOf(from), failures)
+      const stays = prompt(run, STRESS.reply, step, " pool stays")
+      const kept = await send(
+        run,
+        conversationId,
+        stays,
+        failures,
+        new Set(before.messages.map((each) => each.executionId)),
+      )
+      const { view: still } = await settled(
+        run,
+        conversationId,
+        kept,
+        stays,
+        "completed",
+        failures,
+      )
+      await expectShown(run.page, `${SAYS.echo}${stays}`, failures)
+      if (JSON.stringify(bindingOf(run, conversationId)) !== JSON.stringify(bound))
+        failures.push(
+          `a message moved the conversation off its serving worker: ${JSON.stringify(bindingOf(run, conversationId))}`,
+        )
+      if (failures.length) return
+      // Its worker is stopped the way a container runtime stops it: it
+      // drains, ends its lease, and exits on its own.
+      const drainedAt = Date.now()
+      if (!(await from.stop("SIGTERM", 30_000))) {
+        failures.push(`worker ${from.label} did not drain and exit within 30 s`)
+        return
+      }
+      if (from.process.exitCode !== 0)
+        failures.push(
+          `worker ${from.label} exited ${from.process.exitCode ?? from.process.signalCode} after draining`,
+        )
+      log(`pool: worker ${from.label} drained in ${Date.now() - drainedAt} ms`)
+      const left = await offers(
+        run,
+        (environments) =>
+          !environments.includes(from.name) && environments.includes(to.name),
+      )
+      if (!left || left[0] !== POOL)
+        failures.push(`after the drain the gateway offers ${JSON.stringify(left)}`)
+      // The gateway's view of it, once the drain's end of its lease is
+      // there. A view asked while the gateway closes the agent that lease
+      // ran is refused, as a read across a restart is; the next one is not.
+      const lease = await waitFor(async () => {
+        try {
+          const { lease } = await followedOnce(run, conversationId)
+          return lease?.state === "ended" ? lease : null
+        } catch (error) {
+          log(`view ${conversationId}: ${explain(error)}`)
+          return null
+        }
+      }, 30_000)
+      if (
+        lease?.state !== "ended" ||
+        lease.cause !== "stopped" ||
+        lease.host !== from.name
+      )
+        failures.push(`the drained lease is ${JSON.stringify(lease)}, not ended stopped`)
+      // The next message moves it: another worker, a new provider context.
+      const moves = prompt(run, STRESS.reply, step, " pool moves")
+      const moved = await send(
+        run,
+        conversationId,
+        moves,
+        failures,
+        new Set(still?.messages.map((each) => each.executionId)),
+      )
+      const { view: after } = await settled(
+        run,
+        conversationId,
+        moved,
+        moves,
+        "completed",
+        failures,
+      )
+      const rebound = bindingOf(run, conversationId)
+      if (rebound?.worker !== to.name)
+        failures.push(`after the drain it is bound to ${rebound?.worker}, not ${to.name}`)
+      if (!rebound?.context || rebound.context === bound.context)
+        failures.push(
+          `after the move its provider context is ${rebound?.context}, not a new one`,
+        )
+      if (failures.length) return
+      await expectShown(run.page, `${SAYS.echo}${moves}`, failures)
+      await expectShown(run.page, await placeOf(to), failures)
+      if (after?.lease?.state !== "live" || after.lease.host !== to.name)
+        failures.push(
+          `after the move its lease is ${after?.lease?.state} on ${after?.lease?.host}`,
+        )
+      // With no worker serving, the gateway refuses to read it
+      // (`environment_not_configured`), so it is checked at rest here, while
+      // one serves, and not in `run.checked` for the run's own rest check.
+      failures.push(...(await atRest(run, [conversationId])))
+      const stopped = Date.now()
+      if (!(await to.stop("SIGTERM", 30_000)))
+        failures.push(`worker ${to.label} did not drain and exit within 30 s`)
+      else if (to.process.exitCode !== 0)
+        failures.push(
+          `worker ${to.label} exited ${to.process.exitCode ?? to.process.signalCode} after draining`,
+        )
+      log(`pool: worker ${to.label} drained in ${Date.now() - stopped} ms`)
+      await openStressConversation(run.page, run.main.id, run.main.title)
+    } finally {
+      // Nothing the step started outlives it, whatever went wrong.
+      for (const each of workers) {
+        if (run.evidence)
+          writeFileSync(join(run.evidence, `worker-${each.label}.log`), each.log())
+        await each.close()
+      }
+      owner?.close()
+      await run.exclusive(async () => {
+        await openLinkedDevices(run.page)
+        if (await switchLinking(run, false, failures)) await closeSettings(run.page)
+      })
+    }
   },
 
   async delegate(run, step, failures) {
@@ -1273,6 +1442,130 @@ const steps = {
     await openStressConversation(run.page, run.main.id, run.main.title)
   },
 
+  async notice(run, step, failures) {
+    const conversationId = randomUUID()
+    run.checked.push(conversationId)
+    await run.client.conversation.create({
+      conversationId,
+      agent: run.stack.agent,
+      approvalMode: "ask",
+    })
+    // Named by a first turn: the gateway records a conversation's title just
+    // after the agent takes its first message, and the scripted agent can
+    // ask before that lands, which a model never does.
+    const naming = prompt(run, STRESS.reply, step, " notice")
+    await run.client.conversation.submit(
+      run.client.conversation.prepare(conversationId, naming),
+    )
+    const { view: named } = await settled(
+      run,
+      conversationId,
+      new Set(),
+      naming,
+      "completed",
+      failures,
+    )
+    if (failures.length) return
+    const title = await titleOf(run, conversationId)
+    // The person is on the main conversation: the review waits where the
+    // window does not show it, and only the notice says so.
+    const first = prompt(run, STRESS.permission, step, " notice")
+    await run.client.conversation.submit(
+      run.client.conversation.prepare(conversationId, first),
+    )
+    const posted = await noticePosted(run, conversationId, failures)
+    if (!posted) return
+    if (posted.notice.body !== title)
+      failures.push(
+        `the notice names ${JSON.stringify(posted.notice.body)}, not the conversation ${JSON.stringify(title)}`,
+      )
+    if (posted.notice.title !== `${posted.review.toolName} needs a decision`)
+      failures.push(
+        `the notice says ${JSON.stringify(posted.notice.title)}, not that ${posted.review.toolName} needs a decision`,
+      )
+    // The person clicks the notice: the host sends its event and the window
+    // opens that conversation on its card.
+    const listening = await run.page.evaluate(
+      (id) => window.__fakeHostOpenNotice?.(id) ?? 0,
+      conversationId,
+    )
+    if (listening !== 1)
+      failures.push(`${listening} windows listened for an opened notice, not 1`)
+    const opened = await run.page
+      .locator(`${selectorFor.sessionListRowFor(conversationId)}[aria-selected=true]`)
+      .waitFor({ timeout: 15_000 })
+      .then(() => true)
+      .catch(() => false)
+    if (!opened) {
+      failures.push("opening the notice did not bring its conversation up")
+      return
+    }
+    await answerCard(run, conversationId, "allow", failures, "Report the rows")
+    await noticeTakenBack(run, posted.notice, "answered in the window", failures)
+    const { view: before } = await settled(
+      run,
+      conversationId,
+      new Set(named?.messages.map((each) => each.executionId) ?? []),
+      first,
+      "completed",
+      failures,
+    )
+    await expectShown(run.page, SAYS.allowed, failures)
+    if (failures.length) return
+    // Back on the main conversation, a second review there is answered by
+    // another of the person's clients: the window was never shown it, and
+    // its notice still goes.
+    await openStressConversation(run.page, run.main.id, run.main.title)
+    const second = prompt(run, STRESS.permission, step, " notice elsewhere")
+    await run.client.conversation.submit(
+      run.client.conversation.prepare(conversationId, second),
+    )
+    const again = await noticePosted(run, conversationId, failures, posted.notice)
+    if (!again) return
+    // The window is reloaded while that review waits. The gateway sends the
+    // waiting set as soon as the new socket is up, before the window listens;
+    // the window must still hand it to the host, which keeps the notice up.
+    await run.page.reload()
+    await run.page
+      .locator(selectorFor.sessionListRowFor(run.main.id))
+      .waitFor({ timeout: 30_000 })
+    const kept = await waitFor(async () => {
+      const notices = await hostNotices(run.page)
+      return (
+        notices !== null &&
+        notices.syncs > 0 &&
+        notices.up.some((each) => sameNotice(each, again.notice))
+      )
+    }, 15_000)
+    if (!kept) {
+      failures.push(
+        "after a reload the window did not hand the waiting review to the host",
+      )
+      return
+    }
+    await openStressConversation(run.page, run.main.id, run.main.title)
+    const { permissionTargets } = await import("@nessa/client")
+    const view = await readWithReviews(run.client, conversationId)
+    const index = view.permissions.findIndex(
+      (each) => each.permissionId === again.review.permissionId,
+    )
+    const deny = view.permissions[index]?.options.find((each) => each.effect === "deny")
+    if (!deny) {
+      failures.push("the second review offers no deny")
+      return
+    }
+    await run.client.conversation.answer(permissionTargets(view)[index], deny.id)
+    await noticeTakenBack(run, again.notice, "answered elsewhere", failures)
+    await settled(
+      run,
+      conversationId,
+      new Set(before?.messages.map((each) => each.executionId) ?? []),
+      second,
+      "completed",
+      failures,
+    )
+  },
+
   async park(run, step, failures) {
     const conversationId = randomUUID()
     const first = prompt(run, STRESS.reply, step, " park")
@@ -1415,6 +1708,119 @@ const steps = {
       15_000,
     )
     if (!hidden) failures.push("the window still lists the deleted conversation")
+  },
+
+  async table(run, step, failures) {
+    const text = prompt(run, STRESS.table, step)
+    const seen = await send(run, run.main.id, text, failures)
+    const { turn } = await settled(run, run.main.id, seen, text, "completed", failures)
+    if (!turn) return
+    // The gateway keeps the answer as it streamed: every line, in order, once.
+    const said = (turn.parts ?? []).map((part) => part.text ?? "").join("")
+    const expected = `${SAYS.table}${text}\n\n${TABLE_LINES.map((line) => `${line}\n`).join("")}`
+    if (said.trimEnd() !== expected.trimEnd())
+      failures.push(`the table answer came back as ${JSON.stringify(said.slice(0, 120))}`)
+    // The window draws both tables in the agent's message, and draws them
+    // whole: no word split across lines, the narrow table inside the reply,
+    // the wide one scrolling in its own panel with its hidden side faded.
+    const message = run.page
+      .locator('.workspace-message[data-role="agent"]')
+      .filter({ hasText: `${SAYS.table}${text}` })
+    const tables = message.locator('[data-slot="markdown-table"]')
+    // Both tables whole: the last cell streamed is drawn, and the window has
+    // finished revealing the answer (no word still in its fade-in span), so
+    // every column has its final width.
+    const lastCell = TABLE_LINES.at(-1).split("|").at(-2).trim()
+    const drawn = await waitFor(
+      async () =>
+        (await tables.count()) === 2 &&
+        (await tables.nth(1).getByText(lastCell, { exact: true }).count()) === 1 &&
+        (await message.locator('span[class*="starting:"]').count()) === 0,
+      15_000,
+    )
+    if (!drawn) {
+      failures.push(
+        `the window drew ${await tables.count()} of 2 tables, or not all of them`,
+      )
+      return
+    }
+    // Short runs each table holds, which a squeezed column used to split.
+    const words = [
+      ["Price", "$16.99", "CAD", "$150"],
+      ["Runtime", "Format", "Projectionist"],
+    ]
+    const measured = await message.evaluate((element, words) => {
+      const lines = (root, word) => {
+        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
+        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+          const at = node.textContent.indexOf(word)
+          if (at < 0) continue
+          const range = document.createRange()
+          range.setStart(node, at)
+          range.setEnd(node, at + word.length)
+          return new Set([...range.getClientRects()].map((rect) => Math.round(rect.top)))
+            .size
+        }
+        return 0
+      }
+      const reply = element.getBoundingClientRect()
+      return [...element.querySelectorAll('[data-slot="markdown-table"]')].map(
+        (table, index) => {
+          const port = table.querySelector('[data-slot="table-container"]')
+          return {
+            rows: table.querySelectorAll("tbody tr").length,
+            missing: words[index].filter((word) => lines(table, word) === 0),
+            split: words[index].filter((word) => lines(table, word) > 1),
+            hidden: port.scrollWidth - port.clientWidth,
+            within: table.getBoundingClientRect().right <= reply.right + 1,
+            fadedRight: port.hasAttribute("data-hidden-right"),
+          }
+        },
+      )
+    }, words)
+    // Each table shows its data rows once, as streamed: a table's lines less
+    // its heading and delimiter.
+    const rows = TABLE_LINES.join("\n")
+      .split("\n\n")
+      .map((table) => table.split("\n").length - 2)
+    for (const [index, table] of measured.entries()) {
+      if (table.rows !== rows[index])
+        failures.push(`table ${index + 1} shows ${table.rows} rows, not ${rows[index]}`)
+      if (table.missing.length)
+        failures.push(`table ${index + 1} does not show ${JSON.stringify(table.missing)}`)
+      if (table.split.length)
+        failures.push(
+          `table ${index + 1} split ${JSON.stringify(table.split)} across lines`,
+        )
+      if (!table.within) failures.push(`table ${index + 1} is wider than the reply`)
+    }
+    const [narrow, wide] = measured
+    if (narrow.hidden > 1 || narrow.fadedRight)
+      failures.push(`the narrow table scrolls (${narrow.hidden} px hidden)`)
+    if (wide.hidden <= 1)
+      failures.push(
+        `the wide table does not scroll in its panel (${wide.hidden} px hidden)`,
+      )
+    const port = tables.nth(1).locator('[data-slot="table-container"]')
+    const faded = (left, right) =>
+      waitFor(
+        async () =>
+          ((await port.getAttribute("data-hidden-left")) !== null) === left &&
+          ((await port.getAttribute("data-hidden-right")) !== null) === right,
+        5_000,
+      )
+    if (!(await faded(false, true)))
+      failures.push(
+        "the wide table does not fade its right side, where columns are hidden",
+      )
+    if (run.evidence)
+      await run.page.screenshot({
+        path: join(run.evidence, `table-${run.engine ?? "window"}.png`),
+      })
+    // Scrolled to its end, the fade moves to the side now hidden.
+    await port.evaluate((each) => each.scrollTo({ left: each.scrollWidth }))
+    if (!(await faded(true, false)))
+      failures.push("scrolled to its end, the wide table did not fade its left side")
   },
 
   async long(run, step, failures) {
@@ -1560,6 +1966,118 @@ async function reopened(run, conversationId) {
     view = await run.client.conversation.read(conversationId)
   }
   return { ms, view, reads }
+}
+
+/** Opens Settings › Connections › Linked devices, as a person does. */
+async function openLinkedDevices(page) {
+  if (!(await page.$(css.settings))) await page.keyboard.press(keys.settings)
+  await page.locator(css.settingsCategory, { hasText: names.connections }).click()
+  await page.locator(css.settingsTab, { hasText: names.linkedDevices }).click()
+}
+
+/** Leaves Settings: Esc does not close it; its back control returns to the app. */
+async function closeSettings(page) {
+  await page.getByRole("button", { name: "Back to nessa Agent" }).first().click()
+  await page.waitForSelector(css.settings, { state: "detached", timeout: 10_000 })
+}
+
+/**
+ * Turns native linking `enabled` with the switch on the Linked devices tab,
+ * already open. The gateway saves config.json and starts itself again in
+ * the same process; the window comes back to the new state, and the run's
+ * client is connected again. Resolves whether all of that held. Called with
+ * nothing else in flight (`run.exclusive`).
+ */
+async function switchLinking(run, enabled, failures) {
+  const gateway = run.stack.gateway
+  const config = join(gateway.directory, "ci", "instances", INSTANCE, "config.json")
+  const pid = gateway.server.pid
+  const want = enabled ? "on" : "off"
+  const before = await waitFor(
+    async () =>
+      (await run.page.locator(css.linked).getAttribute("data-linked")) ===
+      (enabled ? "off" : "on"),
+    30_000,
+  )
+  if (!before) {
+    failures.push(`linking was not ${enabled ? "off" : "on"} before the switch`)
+    return false
+  }
+  let held = false
+  await run.restartConsole.during(run.opened, async () => {
+    const before = failures.length
+    const old = run.client
+    run.restarts += 1
+    await run.page.locator(`${css.linked} [role='switch']`).click()
+    const shown = await waitFor(
+      async () =>
+        (await run.page.locator(css.linked).getAttribute("data-linked")) === want,
+      60_000,
+    )
+    if (!shown) failures.push(`the window did not come back with linking ${want}`)
+    old.close()
+    run.client = await connectClient(gateway, INSTANCE, "panel")
+    const answered = await run.client.pairing.pending().then(
+      () => "on",
+      (error) => (error?.refusal === "pairing_not_configured" ? "off" : String(error)),
+    )
+    if (answered !== want)
+      failures.push(`the gateway answers linking ${answered}, not ${want}`)
+    const saved = JSON.parse(readFileSync(config, "utf8")).native
+    if (
+      (saved?.enabled !== false) !== enabled ||
+      saved?.listenAddress !== run.nativeAddress
+    )
+      failures.push(`config.json holds native ${JSON.stringify(saved)}`)
+    if (gateway.server.pid !== pid || gateway.server.exitCode !== null)
+      failures.push("the gateway did not start again in the same process")
+    held = failures.length === before
+    return held
+  })
+  return held
+}
+
+/**
+ * The places the gateway offers a new conversation (`agents.list`
+ * `environments`), once `holds` is true of them; what they last were after
+ * 30 s otherwise. A worker that connects or leaves changes them.
+ */
+const offers = (run, holds) =>
+  waitFor(async () => {
+    const { environments } = await run.client.agents.list()
+    return holds(environments) ? environments : null
+  }, 30_000).then(
+    (environments) =>
+      environments ?? run.client.agents.list().then((each) => each.environments),
+  )
+
+/**
+ * Which worker of the pool holds `conversationId` now, as the gateway keeps
+ * it: `bindings/<id>.json` beside its conversations, `{ worker, context }`.
+ * `null` when it has none.
+ */
+function bindingOf(run, conversationId) {
+  const file = join(
+    run.stack.gateway.directory,
+    "ci",
+    "instances",
+    INSTANCE,
+    "conversations",
+    "bindings",
+    `${conversationId}.json`,
+  )
+  try {
+    return JSON.parse(readFileSync(file, "utf8"))
+  } catch (error) {
+    if (error.code === "ENOENT") return null
+    throw error
+  }
+}
+
+/** What the window's heading names `worker` by, in the client's words. */
+async function placeOf(worker) {
+  const { environmentPlace } = await import("@nessa/client")
+  return environmentPlace(worker.name)
 }
 
 /**
@@ -1712,6 +2230,53 @@ async function titleOf(run, conversationId) {
   return title
 }
 
+/** What the window has told the host about waiting reviews (`fake-host.mjs`). */
+const hostNotices = (page) => page.evaluate(() => window.__fakeHostNotices ?? null)
+
+const sameNotice = (a, b) =>
+  a.conversationId === b.conversationId &&
+  a.executionId === b.executionId &&
+  a.permissionId === b.permissionId
+
+/**
+ * The notice the host shows for the review now waiting in `conversationId`,
+ * and that review read in full; `null` (a failure noted) when none is up
+ * within 30 s. `not` is a notice of the same conversation already settled.
+ */
+async function noticePosted(run, conversationId, failures, not = null) {
+  let found = null
+  await waitFor(async () => {
+    const view = await readWithReviews(run.client, conversationId).catch(() => null)
+    const review = view?.permissions[0]
+    const notices = await hostNotices(run.page)
+    const notice =
+      review &&
+      notices?.up.find(
+        (each) =>
+          each.conversationId === conversationId &&
+          each.executionId === review.executionId &&
+          each.permissionId === review.permissionId,
+      )
+    if (notice && !(not && sameNotice(notice, not))) found = { notice, review }
+    return Boolean(found)
+  }, 30_000)
+  if (!found) failures.push(`no notice was posted for the review in ${conversationId}`)
+  return found
+}
+
+/** Waits for the host to take `notice` back once its review was `how`. */
+async function noticeTakenBack(run, notice, how, failures) {
+  const gone = await waitFor(async () => {
+    const notices = await hostNotices(run.page)
+    return (
+      notices !== null &&
+      !notices.up.some((each) => sameNotice(each, notice)) &&
+      notices.withdrawn.some((each) => sameNotice(each, notice))
+    )
+  }, 15_000)
+  if (!gone) failures.push(`the notice of a review ${how} was not taken back`)
+}
+
 async function atRest(run, ids) {
   const failures = []
   for (const conversationId of ids) {
@@ -1736,6 +2301,19 @@ async function atRest(run, ids) {
         failures.push(`${conversationId}: a review was hidden`)
     }
     if (view.permissions.length) failures.push(`${conversationId} still has open reviews`)
+  }
+  // Every review settled, so the host shows none of their notices.
+  const cleared = await waitFor(async () => {
+    const notices = await hostNotices(run.page)
+    return notices !== null && notices.syncs > 0 && notices.up.length === 0
+  }, 15_000)
+  if (!cleared) {
+    const notices = await hostNotices(run.page)
+    failures.push(
+      !notices?.syncs
+        ? "the window never told the host which reviews wait"
+        : `${notices.up.length} review notices are still up`,
+    )
   }
   const text = await pageText(run.page)
   if (/display limit|Denied automatically/i.test(text))
@@ -1794,6 +2372,7 @@ async function startStack(options) {
     agent: options.agent,
     acpRecording: join(recordingDirectory, "acp.jsonl"),
     nativeAddress,
+    scenario,
     endpoint: stack.gateway.url.replace(/^http/, "ws"),
   }))
 }
@@ -1816,7 +2395,10 @@ await main(
         layout,
         lines: { engine, layout },
         initScripts: [
-          [gatewayHost, { endpoint: stack.endpoint, credential: stack.credential }],
+          [
+            gatewayHost,
+            { endpoint: stack.endpoint, credential: stack.credential, notices: true },
+          ],
         ],
       })
       const run = new Run(stack, opened, knobs, restartConsole)

@@ -18,17 +18,26 @@
 # signs them with it. Still unproven past that point: a stapled ticket, and an
 # agent actually running out of a downloaded bundle.
 #
-#   tag v* ──▶ version ──▶ updater-key ──┬─▶ build (macos-latest,    aarch64) ─┐
-#                                        ├─▶ build (macos-15-intel, x86_64) ──┤
-#                                        └─▶ build (ubuntu-22.04,   x86_64) ──┤
-#                                                                             ▼
-#                                                              release (draft)
-#                                                                latest.json
+#   tag v* ──▶ version ──▶ updater-key ──▶ host-builds (one per target) ──▶ host-pins
+#
+#   host-pins ──┬─▶ build (macos-latest,    aarch64) ─┐
+#               ├─▶ build (macos-15-intel, x86_64) ──┤
+#               └─▶ build (ubuntu-22.04,   x86_64) ──┤
+#                                                    ▼
+#                                     release (draft): latest.json, nessa-<target>
 #
 # Arrows are `needs`: nothing to the right starts until everything to its left
 # passed. The builds converge because one `latest.json` has to describe every
 # platform — `releases/latest/download/latest.json` is a single file, and a
 # platform missing from it reports itself as up to date forever.
+#
+# The host builds come first (#734). A gateway installs itself on an SSH host
+# with no copy of its build; on a host of another platform it sends that
+# platform's `nessa`, built from the same commit, which it knows by the
+# SHA-256 and length each app build is compiled with (NESSA_HOST_BUILDS).
+# Those files are published as they were measured, so a host is sent exactly
+# what the pin names; scripts/desktop/host-builds.mjs owns their names and
+# the pins.
 #
 # macOS and x86_64 Linux: the platforms whose gateway host runs an agent
 # (launchd and a systemd user unit). Windows has no gateway host yet
@@ -173,9 +182,83 @@ jobs:
           save: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo test -p nessa-app --test updater_key_pairing --no-default-features
 
+  # Each target's standalone gateway, from the tagged commit, compiled with
+  # no pins: the app's own builds below pin these, and a host of that platform
+  # is sent this file. Only the gateway is built, so this needs neither the
+  # desktop's Linux packages nor signing; on Apple silicon the linker's own
+  # signature is what lets it run.
+  host-builds:
+    name: Host build ${{ matrix.host-target }}
+    needs: [version, updater-key]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-latest
+            host-target: aarch64-apple-darwin
+          - runner: macos-15-intel
+            host-target: x86_64-apple-darwin
+          # The oldest supported Ubuntu, as the app's Linux build: the gateway
+          # links the glibc it is built against.
+          - runner: ubuntu-22.04
+            host-target: x86_64-unknown-linux-gnu
+    runs-on: ${{ matrix.runner }}
+    # A cold release build of the gateway alone; the app builds compile it as
+    # well as everything else in at most 25.7 minutes.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.sha }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.host-target }}
+      - name: Build the gateway
+        run: cargo build --locked --release -p nessa-server --bin nessa --target ${{ matrix.host-target }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Stage it under its published name
+        run: node scripts/desktop/host-builds.mjs stage --target ${{ matrix.host-target }} --binary target/${{ matrix.host-target }}/release/nessa --into host-build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: host-build-${{ matrix.host-target }}
+          path: host-build/
+          if-no-files-found: error
+          retention-days: 7
+
+  # Every host build's SHA-256 and length, read once, for each app build to
+  # compile in.
+  host-pins:
+    name: Host build pins
+    needs: [version, host-builds]
+    runs-on: ubuntu-latest
+    # Downloading three gateways and hashing them.
+    timeout-minutes: 10
+    outputs:
+      pins: ${{ steps.pins.outputs.pins }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: host-build-*
+          path: host-builds
+          merge-multiple: true
+      - id: pins
+        run: |
+          set -euo pipefail
+          pins="$(node scripts/desktop/host-builds.mjs pins --directory host-builds)"
+          printf 'pins=%s\n' "$pins" >> "$GITHUB_OUTPUT"
+          echo "$pins"
+
   build:
     name: Build ${{ matrix.updater-target }}
-    needs: [version, updater-key]
+    needs: [version, updater-key, host-pins]
     strategy:
       # Every row's failure is worth seeing in one run; none ships without the
       # others regardless, because the release job needs all of them.
@@ -218,6 +301,10 @@ jobs:
       # Where the App Store Connect key is written. Not a secret, and read by
       # the cleanup step as well as by the credentials step.
       APPLE_API_KEY_FILE: ${{ github.workspace }}/.apple-api-key.p8
+      # The host builds the gateway compiled here pins, and where they are
+      # published: crates/nessa-server/src/env/config.rs reads both.
+      NESSA_HOST_BUILDS: ${{ needs.host-pins.outputs.pins }}
+      NESSA_HOST_BUILDS_FROM: https://github.com/${{ github.repository }}/releases/download/${{ needs.version.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -350,6 +437,13 @@ jobs:
           pattern: release-*
           path: release-assets
           merge-multiple: true
+      # The host builds, under the names the gateways compiled above fetch
+      # them by. Their bytes are the ones pinned.
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: host-build-*
+          path: release-assets
+          merge-multiple: true
       - name: Write the updater manifest
         env:
           TAG: ${{ needs.version.outputs.tag }}
@@ -380,6 +474,11 @@ jobs:
           cat > release-notes.md <<'END'
           Nessa for macOS (Apple Silicon and Intel) and x86_64 Linux (.deb for
           Ubuntu 22.04 or later).
+
+          `nessa-<target>` is the gateway alone, for each of those platforms.
+          A gateway of this release installs it on an SSH host of another
+          platform, checked against the SHA-256 it was built with, so this
+          release has to stay published for that to work.
 
           Whether the macOS artifacts are notarized is decided by the
           repository's secrets, so it is stated by the build rather than

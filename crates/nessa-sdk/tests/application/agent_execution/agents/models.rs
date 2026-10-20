@@ -250,6 +250,9 @@ struct Provider {
     capabilities: EffectiveCapabilities,
     backend: Arc<Backend>,
     restores: Arc<Mutex<Vec<Option<ExecutionSessionId>>>>,
+    /// Set for a provider that starts where no saved context is: it
+    /// restores none, and the context it opens is named this.
+    elsewhere: Option<&'static str>,
 }
 impl AgentProvider for Provider {
     fn identity(&self) -> ProviderIdentity {
@@ -268,6 +271,9 @@ impl AgentProvider for Provider {
     }
     fn native_hooks_allowed(&self) -> bool {
         self.native_hooks
+    }
+    fn restores_saved_context(&self, _saved: &ExecutionSessionId) -> bool {
+        self.elsewhere.is_none()
     }
     fn effort_level(&self) -> Option<EffortLevel> {
         self.effort.clone()
@@ -351,8 +357,10 @@ impl AgentProvider for Provider {
             *self.backend.events.lock().unwrap() = Some(sender);
             Ok(OpenedProviderSession {
                 session: ProviderSession::new(
-                    restore
-                        .unwrap_or_else(|| ExecutionSessionId::new("same-native-context").unwrap()),
+                    restore.unwrap_or_else(|| {
+                        ExecutionSessionId::new(self.elsewhere.unwrap_or("same-native-context"))
+                            .unwrap()
+                    }),
                     self.backend.clone(),
                     self.capabilities.clone(),
                 ),
@@ -507,6 +515,7 @@ async fn prepared_with_capabilities(
         capabilities,
         backend,
         restores: Arc::new(Mutex::new(Vec::new())),
+        elsewhere: None,
     });
     let storage = MemoryStorage::default();
     struct Audit(Arc<Mutex<Vec<ExecutionAuditRecord>>>, Arc<AtomicBool>);
@@ -546,6 +555,375 @@ async fn prepared_with_capabilities(
         .unwrap();
     (agent, provider, storage)
 }
+/// A provider that starts where the saved context is not (another worker
+/// than the one that opened it) is asked to restore nothing: attaching opens
+/// new context and records it in place of the saved one, which the next
+/// provider that does hold it restores.
+#[tokio::test]
+async fn a_provider_that_does_not_hold_the_saved_context_opens_new_context_in_its_place() {
+    let (agent, prior, storage) = prepared(None).await;
+    timeout(Duration::from_secs(3), agent.close(close_action()))
+        .await
+        .expect("agent close settles")
+        .unwrap();
+    drop(agent);
+    let elsewhere = Arc::new(Provider {
+        elsewhere: Some("context-on-another-worker"),
+        ..(*prior).clone()
+    });
+    let moved = attached_agent(elsewhere.clone(), storage.manager().await)
+        .await
+        .unwrap();
+    assert_eq!(elsewhere.restores.lock().unwrap().last(), Some(&None));
+    assert_eq!(
+        moved
+            .session_manager()
+            .snapshot()
+            .await
+            .unwrap()
+            .provider_context
+            .recorded()
+            .unwrap()
+            .as_str(),
+        "context-on-another-worker"
+    );
+    timeout(Duration::from_secs(3), moved.close(close_action()))
+        .await
+        .expect("agent close settles")
+        .unwrap();
+    drop(moved);
+    let holding = Arc::new(Provider {
+        elsewhere: None,
+        ..(*prior).clone()
+    });
+    let reopened = attached_agent(holding.clone(), storage.manager().await)
+        .await
+        .unwrap();
+    assert_eq!(
+        holding
+            .restores
+            .lock()
+            .unwrap()
+            .last()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .as_str(),
+        "context-on-another-worker"
+    );
+    timeout(Duration::from_secs(3), reopened.close(close_action()))
+        .await
+        .expect("agent close settles")
+        .unwrap();
+}
+/// A provider that does not restore the saved context goes on under its own
+/// context fingerprint, which the history records in place of the saved one;
+/// a later provider with that fingerprint that does restore the context
+/// reopens it, and one still carrying the replaced fingerprint is refused.
+#[tokio::test]
+async fn a_provider_that_does_not_hold_the_saved_context_records_its_own_fingerprint() {
+    let (agent, prior, storage) = prepared(None).await;
+    timeout(Duration::from_secs(3), agent.close(close_action()))
+        .await
+        .expect("agent close settles")
+        .unwrap();
+    drop(agent);
+    let elsewhere = Arc::new(Provider {
+        context: "another-workspace".into(),
+        elsewhere: Some("context-on-another-worker"),
+        ..(*prior).clone()
+    });
+    assert_ne!(elsewhere.identity(), prior.identity());
+    assert_eq!(elsewhere.identity().name(), prior.identity().name());
+    assert_eq!(elsewhere.identity().model_id(), prior.identity().model_id());
+    let moved = attached_agent(elsewhere.clone(), storage.manager().await)
+        .await
+        .expect("a provider that restores nothing goes on under its own fingerprint");
+    assert_eq!(elsewhere.restores.lock().unwrap().last(), Some(&None));
+    let snapshot = moved.session_manager().snapshot().await.unwrap();
+    assert_eq!(snapshot.provider, elsewhere.identity());
+    assert_eq!(
+        snapshot.provider_context.recorded().unwrap().as_str(),
+        "context-on-another-worker"
+    );
+    timeout(Duration::from_secs(3), moved.close(close_action()))
+        .await
+        .expect("agent close settles")
+        .unwrap();
+    drop(moved);
+    assert_eq!(
+        storage
+            .0
+            .lock()
+            .unwrap()
+            .snapshot
+            .as_ref()
+            .unwrap()
+            .provider,
+        elsewhere.identity()
+    );
+
+    let stale = Arc::new(Provider {
+        elsewhere: None,
+        ..(*prior).clone()
+    });
+    let writes = storage.writes();
+    match attached_agent(stale, storage.manager().await).await {
+        Ok(_) => panic!("a restore under the replaced fingerprint is refused"),
+        Err(error) => assert_eq!(error, AgentError::Storage(StorageError::IdentityMismatch)),
+    }
+    assert_eq!(storage.writes(), writes);
+
+    let holding = Arc::new(Provider {
+        elsewhere: None,
+        ..(*elsewhere).clone()
+    });
+    let reopened = attached_agent(holding.clone(), storage.manager().await)
+        .await
+        .expect("the recorded fingerprint reopens");
+    assert_eq!(
+        holding
+            .restores
+            .lock()
+            .unwrap()
+            .last()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .as_str(),
+        "context-on-another-worker"
+    );
+    assert_eq!(
+        reopened
+            .session_manager()
+            .snapshot()
+            .await
+            .unwrap()
+            .provider,
+        elsewhere.identity()
+    );
+    timeout(Duration::from_secs(3), reopened.close(close_action()))
+        .await
+        .expect("agent close settles")
+        .unwrap();
+}
+/// Only the context fingerprint may change under a provider that does not
+/// restore the saved context: another provider name or model is refused
+/// before anything is saved, and the history keeps its identity.
+#[tokio::test]
+async fn a_provider_that_does_not_hold_the_saved_context_cannot_change_name_or_model() {
+    let (agent, prior, storage) = prepared(None).await;
+    timeout(Duration::from_secs(3), agent.close(close_action()))
+        .await
+        .expect("agent close settles")
+        .unwrap();
+    drop(agent);
+    let saved_identity = prior.identity();
+    let renamed = ProviderIdentity::new(
+        "another-fixture",
+        saved_identity.model_id(),
+        format!("another-workspace:{}", saved_identity.model_id()),
+    )
+    .unwrap();
+    storage
+        .0
+        .lock()
+        .unwrap()
+        .snapshot
+        .as_mut()
+        .unwrap()
+        .provider = renamed.clone();
+    let elsewhere = Arc::new(Provider {
+        context: "another-workspace".into(),
+        elsewhere: Some("context-on-another-worker"),
+        ..(*prior).clone()
+    });
+    assert_eq!(elsewhere.identity().model_id(), renamed.model_id());
+    assert_ne!(elsewhere.identity().name(), renamed.name());
+    let saved = storage.0.lock().unwrap().snapshot.clone();
+    let writes = storage.writes();
+    match attached_agent(elsewhere.clone(), storage.manager().await).await {
+        Ok(_) => panic!("another provider name is refused"),
+        Err(error) => assert_eq!(error, AgentError::Storage(StorageError::IdentityMismatch)),
+    }
+    assert_eq!(storage.writes(), writes);
+    assert_eq!(storage.0.lock().unwrap().snapshot, saved);
+
+    storage
+        .0
+        .lock()
+        .unwrap()
+        .snapshot
+        .as_mut()
+        .unwrap()
+        .provider = saved_identity.clone();
+    let remodelled = Arc::new(Provider {
+        elsewhere: Some("context-on-another-worker"),
+        ..(*target(&prior)).clone()
+    });
+    assert_eq!(remodelled.identity().name(), saved_identity.name());
+    assert_ne!(remodelled.identity().model_id(), saved_identity.model_id());
+    let saved = storage.0.lock().unwrap().snapshot.clone();
+    match attached_agent(remodelled, storage.manager().await).await {
+        Ok(_) => panic!("another model is refused"),
+        Err(error) => assert_eq!(error, AgentError::Storage(StorageError::IdentityMismatch)),
+    }
+    assert_eq!(storage.writes(), writes);
+    assert_eq!(storage.0.lock().unwrap().snapshot, saved);
+    assert_eq!(
+        storage
+            .0
+            .lock()
+            .unwrap()
+            .snapshot
+            .as_ref()
+            .unwrap()
+            .provider,
+        saved_identity
+    );
+}
+/// A cancellation names the provider context in force when it was recorded,
+/// so a review cancelled under the first context does not stop the
+/// conversation from moving: the new context is recorded in its place, the
+/// cancellation keeps naming the first, and the conversation reopens.
+#[tokio::test]
+async fn a_review_cancelled_before_the_move_does_not_stop_the_conversation_moving() {
+    let (agent, prior, storage) = prepared(None).await;
+    agent
+        .invoke(input("reviewed", 400), Submitter::owner(close_action()))
+        .await
+        .unwrap();
+    timeout(Duration::from_secs(3), agent.close(close_action()))
+        .await
+        .expect("agent close settles")
+        .unwrap();
+    drop(agent);
+    let first = ExecutionSessionId::new("same-native-context").unwrap();
+    {
+        let mut state = storage.0.lock().unwrap();
+        let saved = state.snapshot.as_mut().unwrap();
+        assert_eq!(saved.provider_context.recorded(), Some(&first));
+        let execution = saved.invocations[0].request.execution_id.clone();
+        let id = PermissionId::new("review").unwrap();
+        let tool = ToolCallId::new("tool").unwrap();
+        let input = ToolReviewInput {
+            name: "Read".into(),
+            arguments_json: "{}".into(),
+        };
+        let options = PermissionOptions::new(
+            vec![PermissionOption::new(
+                PermissionOptionId::new("allow").unwrap(),
+                "Allow",
+                PermissionDecision::new(PermissionEffect::Allow, PermissionScope::request()),
+            )
+            .unwrap()],
+            &PermissionOfferPolicy::once_only(),
+        )
+        .unwrap();
+        let mut aggregate = ExecutionSession::new(first.clone());
+        aggregate.begin_execution(execution.clone()).unwrap();
+        aggregate
+            .observe_tool(
+                &execution,
+                ToolCallUpdate::new(tool.clone(), None, None, None, None, None),
+            )
+            .unwrap();
+        aggregate
+            .request_permission(PermissionRequest::new(
+                id.clone(),
+                execution.clone(),
+                tool.clone(),
+                options.clone(),
+            ))
+            .unwrap();
+        let record = aggregate
+            .cancel_permission(
+                &execution,
+                &id,
+                PermissionCancellationReason::provider_withdrawal(),
+            )
+            .unwrap()
+            .unwrap();
+        let cancellation = PermissionCancellation::from_record(
+            first.clone(),
+            record,
+            input.clone(),
+            CancellationOrigin::Provider,
+        )
+        .unwrap();
+        for (at, update) in [
+            ExecutionUpdate::PermissionRequested {
+                id,
+                tool_id: tool,
+                observation: ToolObservation::default(),
+                input,
+                options,
+                deadline: None,
+            },
+            ExecutionUpdate::PermissionCancelled(cancellation),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            saved.invocations[0]
+                .events
+                .insert(at, ExecutionEvent::new(execution.clone(), update));
+        }
+    }
+    let cancelled = |snapshot: &SessionSnapshot| {
+        snapshot.invocations[0].events.iter().any(|event| {
+            matches!(
+                event.update(),
+                ExecutionUpdate::PermissionCancelled(record) if record.session_id() == &first
+            )
+        })
+    };
+    let elsewhere = Arc::new(Provider {
+        elsewhere: Some("context-on-another-worker"),
+        ..(*prior).clone()
+    });
+    let moved = attached_agent(elsewhere, storage.manager().await)
+        .await
+        .expect("a cancelled review does not stop the move");
+    let snapshot = moved.session_manager().snapshot().await.unwrap();
+    assert_eq!(
+        snapshot.provider_context.recorded().unwrap().as_str(),
+        "context-on-another-worker"
+    );
+    assert!(cancelled(&snapshot));
+    timeout(Duration::from_secs(3), moved.close(close_action()))
+        .await
+        .expect("agent close settles")
+        .unwrap();
+    drop(moved);
+    let holding = Arc::new(Provider {
+        elsewhere: None,
+        ..(*prior).clone()
+    });
+    let reopened = attached_agent(holding.clone(), storage.manager().await)
+        .await
+        .expect("the moved conversation reopens");
+    assert_eq!(
+        holding
+            .restores
+            .lock()
+            .unwrap()
+            .last()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .as_str(),
+        "context-on-another-worker"
+    );
+    assert!(cancelled(
+        &reopened.session_manager().snapshot().await.unwrap()
+    ));
+    timeout(Duration::from_secs(3), reopened.close(close_action()))
+        .await
+        .expect("agent close settles")
+        .unwrap();
+}
+
 #[tokio::test]
 async fn a_live_model_change_keeps_the_active_turn_and_context_and_changes_later_admission() {
     let (release, hold) = oneshot::channel();
@@ -891,6 +1269,55 @@ async fn an_explicit_cold_model_change_retains_context_history_and_exact_attribu
     let selected = reopened.session_manager().snapshot().await.unwrap();
     assert_eq!(selected.provider_context, original.provider_context);
     assert_eq!(selected.invocations, original.invocations);
+    reopened.close(close_action()).await.unwrap();
+}
+
+/// A conversation whose model was changed can still move: the last model
+/// change chose the name and model, and the move keeps both while it
+/// replaces the context fingerprint, so the moved history reopens there.
+#[tokio::test]
+async fn a_conversation_whose_model_changed_still_moves_and_reopens() {
+    let (agent, prior, storage) = prepared(None).await;
+    agent.close(close_action()).await.unwrap();
+    drop(agent);
+    let target = target(&prior);
+    let change = ModelChange::between(prior.as_ref(), target.as_ref()).unwrap();
+    let mut manager = storage.manager().await;
+    manager.change_model(change, close_action()).await.unwrap();
+    attached_agent(target.clone(), manager)
+        .await
+        .unwrap()
+        .close(close_action())
+        .await
+        .unwrap();
+
+    let elsewhere = Arc::new(Provider {
+        context: "another-workspace".into(),
+        elsewhere: Some("context-on-another-worker"),
+        ..(*target).clone()
+    });
+    let moved = attached_agent(elsewhere.clone(), storage.manager().await)
+        .await
+        .expect("a model-changed conversation moves");
+    timeout(Duration::from_secs(3), moved.close(close_action()))
+        .await
+        .expect("agent close settles")
+        .unwrap();
+    drop(moved);
+
+    let holding = Arc::new(Provider {
+        elsewhere: None,
+        ..(*elsewhere).clone()
+    });
+    let reopened = attached_agent(holding, storage.manager().await)
+        .await
+        .expect("the moved history reopens");
+    let snapshot = reopened.session_manager().snapshot().await.unwrap();
+    assert_eq!(snapshot.provider, elsewhere.identity());
+    assert_eq!(
+        snapshot.model_change.unwrap().change().after(),
+        &target.identity()
+    );
     reopened.close(close_action()).await.unwrap();
 }
 
