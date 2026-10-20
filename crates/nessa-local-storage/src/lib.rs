@@ -114,10 +114,6 @@ impl std::fmt::Display for ReplacedFile {
 
 impl std::error::Error for ReplacedFile {}
 
-#[cfg_attr(
-    not(unix),
-    allow(dead_code, reason = "only Unix checks an opened file's links")
-)]
 fn replaced_file() -> io::Error {
     io::Error::new(io::ErrorKind::PermissionDenied, ReplacedFile)
 }

@@ -300,10 +300,15 @@ fn verify_acl(file: &File) -> io::Result<()> {
 }
 pub fn verify_file(file: &File) -> io::Result<()> {
     let info = information(file)?;
-    if info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY != 0 || info.nNumberOfLinks != 1 {
+    if info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY != 0 {
         return Err(unsafe_file());
     }
-    verify_acl(file)
+    match info.nNumberOfLinks {
+        1 => verify_acl(file),
+        // Replaced or removed since it was opened.
+        0 => Err(replaced_file()),
+        _ => Err(unsafe_file()),
+    }
 }
 pub fn open(path: &Path, mode: OpenMode) -> io::Result<File> {
     open_with_additional_access(path, mode, 0)
