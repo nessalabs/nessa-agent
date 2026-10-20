@@ -393,6 +393,7 @@ fn an_answer_says_how_the_command_ended_or_why_it_was_refused() {
                 stderr: vec![0xff],
                 dropped_bytes: 4,
                 cleanup,
+                published: Vec::new(),
             },
             recorded,
         })
@@ -413,6 +414,7 @@ fn an_answer_says_how_the_command_ended_or_why_it_was_refused() {
             "droppedBytes": 4,
             "cleanup": "confirmed",
             "recorded": true,
+            "published": [],
         })
     );
     assert_eq!(exited["content"][0]["type"], "text");

@@ -10,6 +10,9 @@ sources:
   - "src/desktop/workspace/application/workspace-state.ts"
   - "src/desktop/workspace/application/ports.ts"
   - "src/desktop/workspace/adapters/store/commands.ts"
+  - "src/desktop/workspace/adapters/store/index-commands.ts"
+  - "src/desktop/workspace/adapters/store/pane-commands.ts"
+  - "src/desktop/workspace/adapters/store/session-commands.ts"
   - "src/desktop/widgets/app/model/lifecycle.ts"
 diagramLinks:
   F0: "desktop-workspace-open-dismiss-and-reopen-the-desktop-window"

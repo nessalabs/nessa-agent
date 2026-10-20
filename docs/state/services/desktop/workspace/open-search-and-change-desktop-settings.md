@@ -8,6 +8,8 @@ parent: "desktop-workspace"
 sources:
   - "src/desktop/ui/desktop-window.tsx"
   - "src/desktop/settings/ui/settings-view.tsx"
+  - "src/desktop/settings/ui/use-settings-surface.ts"
+  - "src/desktop/settings/ui/settings-layout.tsx"
   - "src/desktop/settings/model/settings-catalogue.ts"
   - "src/desktop/settings/ui/settings-tabs.tsx"
   - "src/desktop/settings/ui/settings-controls.tsx"

@@ -17,6 +17,9 @@ cli = []
 name = "read_only_sync"
 required-features = ["cli"]
 
+[[example]]
+name = "weak_link_measure"
+
 [dependencies]
 base64 = "0.22"
 nessa-auth = { path = "../nessa-auth" }

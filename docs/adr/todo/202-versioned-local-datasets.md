@@ -6,7 +6,7 @@ Every store Nessa keeps on disk states the version of its shape. When it meets
 data it cannot read, the refusal covers the smallest thing that owns that data:
 the whole gateway for gateway-wide records, one conversation for one
 conversation's records, nothing at all for a cache. This record also says how
-migrations ship once Nessa leaves alpha. It generalizes the refusal
+migrations ship. It generalizes the refusal
 [196](../done/196-conversation-metadata-database.md) introduced, and changes none of
 196's tables.
 
@@ -70,16 +70,16 @@ version, or a file that is not a readable database. A failure that can clear on
 its own (I/O, a lock) keeps its current, retried reason. The registry keeps its
 own reasons, which already work this way.
 
-**4. Migrations.** During alpha, none ship. A gateway-scope store at another
-version is refused under rule 3, and the owner resets that namespace by hand,
-as for 196. After alpha, each build carries forward-only migrations in the
-owning context, from every version any 1.x release wrote. They run at open,
-under the store's own lock, all or nothing. A newer version is refused, and
-there is no downgrade. The first migration to ship brings its own record, with
-the ordering table gate 15 asks for (crash mid-step, two openers, failure). A
-migration that fails keeps its own cause and step. It is not reported as "too
-old". No
-migration code exists before then.
+**4. Migrations.** Each build carries forward-only steps in the owning
+context, one per version, from the oldest version it still brings forward.
+They run at open, under the store's own lock, all or nothing (see
+"Migrations" below). A newer version, or one older than the first step, is
+refused under rule 3, and there is no downgrade. A step that fails keeps its
+own cause and step. It is not reported as "too old". During alpha a store may
+still refuse an older version and have the owner reset it by hand, as for
+196; once Nessa leaves alpha, every 1.x version is brought forward. Rule 1
+holds either way: a change to what a store creates raises its version in the
+same change, and a step brings the version before it forward.
 
 ## Opening a gateway-scope store (gate 15)
 
@@ -123,6 +123,37 @@ an append that never answered anybody. Cutting it loses nothing that was
 confirmed. SDK conversation records use a separate SQLite stream contract. Only the last line
 can lack a newline, because reading stops at each one.
 
+## Migrations
+
+Conversation metadata has the first steps. Version 7 added
+`unfinished_turns`, and a later change added `model_requests` without
+raising the version, so a version 7 file may hold that table or not.
+Version 8 is today's shape, and an owner's version 6 or 7 file is brought
+to it rather than reset (2026-10-20, owner's call through the project's
+coordinator). Each step only adds what its version added, with the
+statements the current definition uses, so an upgraded file and a new one
+are the same shape. The 7 to 8 step creates `model_requests` only if it is
+absent, and the store then checks the table it finds.
+
+`nessa-local-database` runs them. A `Schema` names its `Upgrade`s; a file
+at a version some step starts from is checked like a current one, then every
+step from there runs in the transaction that would have created an empty
+file, and each must set the version one above the one it started from.
+
+| Row | Found | Result | Test |
+| --- | --- | --- | --- |
+| M1 | A version a step starts from | `quick_check`, then every step from there, then committed at the current version. Rows kept. | `an_older_file_is_upgraded_in_one_transaction_and_keeps_its_rows`, `a_version_6_file_is_upgraded_and_keeps_its_conversations` |
+| M2 | Version 7, with or without `model_requests` | Brought to 8; the same shape as a new file either way | `a_version_7_file_from_before_model_requests_gains_that_table`, `a_version_7_file_that_already_has_model_requests_is_raised_as_it_is` |
+| M3 | A step the file refuses (its table already there) | `OpenError::Upgrade` naming that step; no step is committed, and the file keeps its version and rows (a write-ahead journal mode is still turned back to the rollback journal). `datasetRefused`, not retried | `a_failed_step_rolls_back_every_step_before_it`, `a_step_that_fails_leaves_the_file_at_its_version_and_says_which` |
+| M4 | A step that meets a lock, a full disk, or an I/O failure | Rolled back, the same `OpenError::Upgrade`; retried as `agent` | follows from M3's rollback; classified in `RunError::opening` |
+| M5 | The process dies mid-step | SQLite's rollback journal undoes the transaction; the next open finds the older version (M1) | follows from M1 being one transaction |
+| M6 | Two openers of an older file | The second waits on the write lock, then reads the version again and finds it current | the version is read again under the lock that runs the steps |
+| M7 | A version no step starts from | Refused as G3 | `a_version_no_step_starts_from_is_still_refused`, `a_version_5_database_is_refused_without_erasing_its_grants` |
+
+The stress check's `upgrade` step turns a live gateway's file back into an
+older build's, restarts it on that file, and checks every conversation is
+still listed and the next message is answered.
+
 ## Decisions taken for the owner
 
 The owner asked on 2026-09-25 for the simplest design, and delegated these
@@ -162,9 +193,9 @@ choices:
   that happens after open still fails only the calls that meet it
   (`conversation_storage_unavailable`).
 - A cache never costs the gateway.
-- After alpha, every shape change carries a migration and a checked-in fixture
-  of the version it migrates from.
+- Every shape change raises the version and carries its step, with a test
+  that opens the version it migrates from.
 - A browser-session journal whose last append was cut short by a crash
   starts again on its own (J2). Only a journal holding something replay refuses
   stops the gateway.
-- Remaining: migrations, once Nessa leaves alpha.
+- Remaining: steps for the other gateway-scope stores, once they change shape.
