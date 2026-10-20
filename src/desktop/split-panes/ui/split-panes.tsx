@@ -171,16 +171,24 @@ export const SplitPanes = memo(function SplitPanes({
     const id = requestAnimationFrame(() => grid.removeAttribute(marks.painting))
     return () => cancelAnimationFrame(id)
   }, [drawn])
-  // The workspace holds the sidebar in the row until these boxes paint.
-  // Folding it out of the row on the earlier frame widens the one pane and
-  // lays its text out, then the boxes lay it out again.
+  // The workspace holds the sidebar in the row through the paint of these
+  // boxes. Folding it out on this paint lays the session list out again.
+  // It leaves on the next frame, when the scene text returns.
   useLayoutEffect(() => {
     const workspace = gridRef.current?.closest<HTMLElement>("[data-workspace]")
     if (!workspace) return
     const live = source.layout()?.columns ?? null
-    workspace.toggleAttribute("data-spare-held", drawn !== live)
-    return () => workspace.removeAttribute("data-spare-held")
+    if (drawn !== live) {
+      workspace.setAttribute("data-spare-held", "")
+      return
+    }
+    const id = requestAnimationFrame(() => workspace.removeAttribute("data-spare-held"))
+    return () => cancelAnimationFrame(id)
   }, [drawn, source])
+  useEffect(() => {
+    const workspace = gridRef.current?.closest<HTMLElement>("[data-workspace]")
+    return () => workspace?.removeAttribute("data-spare-held")
+  }, [])
   const multi = panes.length > 1
   // In the order the panes were opened, not where they sit: a pane is placed
   // by its fractions, so its node never moves in the document, and a moved
