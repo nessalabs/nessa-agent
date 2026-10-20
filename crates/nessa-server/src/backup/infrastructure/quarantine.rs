@@ -183,6 +183,11 @@ fn session_without_fenced(
             _ => None,
         })
         .collect::<Vec<_>>();
+    // A notes row that is not a database is a note. A canonical body is the
+    // session image, so an unreadable one cannot be sealed while a fence applies.
+    if fenced.is_empty() || (store == StoreKind::Notes && !body.starts_with(b"SQLite format 3")) {
+        return Ok(None);
+    }
     without_fenced_conversations(body, &fenced).map_err(|_| RestoreFault::FencedBody)
 }
 
@@ -474,6 +479,10 @@ impl QuarantineLayout for DirectoryQuarantine {
         if let Some(parent) = live.parent() {
             let _ = sync_directory(parent);
         }
+        let marker = live.join("accept-ready");
+        if marker.exists() {
+            let _ = fs::remove_file(marker);
+        }
         Ok(())
     }
 
@@ -554,6 +563,40 @@ impl QuarantineLayout for DirectoryQuarantine {
         Ok(Box::new(RootHold { _file: file }))
     }
 
+    fn mark_ready(&self, root: &Path) -> Result<(), RestoreFault> {
+        let path = ready_path(root);
+        if path.exists() {
+            fs::remove_file(&path).map_err(|_| RestoreFault::Unreadable)?;
+        }
+        let mut file = open(&path, OpenMode::CreateNew).map_err(|_| RestoreFault::Unreadable)?;
+        file.write_all(b"ready\n")
+            .map_err(|_| RestoreFault::Unreadable)?;
+        file.sync_all().map_err(|_| RestoreFault::Unreadable)?;
+        Ok(())
+    }
+
+    fn ready(&self, root: &Path) -> Result<bool, RestoreFault> {
+        let path = ready_path(root);
+        if !path.is_file() {
+            return Ok(false);
+        }
+        Ok(fs::read(&path).map_err(|_| RestoreFault::Unreadable)? == b"ready\n")
+    }
+
+    fn spoil(&self, path: &Path) -> Result<(), RestoreFault> {
+        // A fetched session may not be mode 0600. The opener refuses that,
+        // and this fallback still has to empty the file.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o600));
+        }
+        let file = open(path, OpenMode::ReadWrite).map_err(|_| RestoreFault::Unreadable)?;
+        file.set_len(0).map_err(|_| RestoreFault::Unreadable)?;
+        file.sync_all().map_err(|_| RestoreFault::Unreadable)?;
+        Ok(())
+    }
+
     fn session_cut(&self, path: &Path, conversation_id: &str) -> Result<SessionCut, RestoreFault> {
         let stream =
             inspect_conversation(path, conversation_id).map_err(|_| RestoreFault::Tamper)?;
@@ -569,6 +612,12 @@ struct RootHold {
 }
 
 impl RestoreHold for RootHold {}
+
+/// Inside the quarantine, so a later tree cannot inherit a marker that
+/// belonged to a directory already renamed away. Not part of the seal.
+fn ready_path(root: &Path) -> PathBuf {
+    root.join("accept-ready")
+}
 
 /// `canonicalize` on Windows returns `\\?\C:\...`. The storage opener accepts
 /// only a drive prefix, so the verbatim prefix is removed after the ancestor
@@ -652,7 +701,7 @@ fn walk(
             return Err(RestoreFault::Tamper);
         }
         let relative = relative_to(root, &path)?;
-        if relative == "journal.txt" {
+        if relative == "journal.txt" || relative == "accept-ready" {
             continue;
         }
         let fingerprint = hash_file(&path)?;

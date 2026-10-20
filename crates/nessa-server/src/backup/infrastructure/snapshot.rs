@@ -551,8 +551,11 @@ pub(crate) fn without_fenced_conversations(
     bytes: &[u8],
     fenced: &[String],
 ) -> Result<Option<Vec<u8>>, MaterializeError> {
-    if fenced.is_empty() || !bytes.starts_with(b"SQLite format 3") {
+    if fenced.is_empty() {
         return Ok(None);
+    }
+    if !bytes.starts_with(b"SQLite format 3") {
+        return Err(MaterializeError::Unreadable);
     }
     let mut source = Connection::open_in_memory().map_err(|_| MaterializeError::Unreadable)?;
     source

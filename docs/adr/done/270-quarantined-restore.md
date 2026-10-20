@@ -77,4 +77,9 @@ that drops a fence the cut already has is refused; a missing later inventory
 does not claim to know revocations made after the cut. A fenced conversation
 that is still inside a session database is removed from that restored image.
 Accept and fetch share one lock so a fetch cannot publish a session that
-acceptance then carries onto the live path without its audit.
+acceptance then carries onto the live path without its audit. Accept also
+holds the live path's lock across that rename. A quarantine is promotable
+only after its sealed audit is stored. The fetch checks the session with
+the restore layout, and a fetch that cannot be audited removes, moves, or
+empties that file. A canonical session image that cannot be read is not
+sealed while a conversation fence applies.

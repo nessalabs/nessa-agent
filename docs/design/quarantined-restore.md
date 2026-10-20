@@ -95,9 +95,20 @@ the result is a visible audit failure, not a second rename back.
   A session image that cannot be checked is not copied.
   `a_fenced_conversation_inside_the_session_is_not_restored`
 - Stage, accept, and fetch take one lock on the restore root and hold it
-  across publication and the audit that records it. A refusal whose audit
-  line is not stored is an audit failure.
+  across publication and the audit that records it. Accept also holds the
+  live path's lock, so a fetch of the live path waits through the rename.
   `accept_and_fetch_wait_for_the_restore_root`,
+  `accept_holds_the_live_lock_across_promotion`
+- A quarantine is acceptable only after the sealed audit is stored. The
+  marker is a file inside that quarantine, not a sibling, and it is not part
+  of the seal. A stage whose cleanup cannot delete the tree is still refused
+  by accept. `a_failed_stage_cleanup_still_refuses_acceptance`
+- A fetched session is checked by the layout, not by the source that wrote
+  it. If the fetch audit is not stored, the file is removed, moved aside,
+  or emptied. `a_failed_fetch_fallback_empties_the_session`
+- A session body that cannot be inspected is not sealed while a conversation
+  fence applies. `an_unreadable_session_body_is_not_sealed_when_a_conversation_is_fenced`
+- A refusal whose audit line is not stored is an audit failure.
   `a_lost_refusal_audit_is_not_a_plain_refusal`
 - A lease line `granted` or `command_granted` without a later `ended` gains
   one `ended` line with uncertain cleanup. Accept then requires an operator

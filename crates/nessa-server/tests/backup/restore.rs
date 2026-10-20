@@ -534,6 +534,18 @@ impl QuarantineLayout for StickyQuarantine {
         DirectoryQuarantine.hold(root)
     }
 
+    fn mark_ready(&self, root: &Path) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.mark_ready(root)
+    }
+
+    fn ready(&self, root: &Path) -> Result<bool, RestoreFault> {
+        DirectoryQuarantine.ready(root)
+    }
+
+    fn spoil(&self, path: &Path) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.spoil(path)
+    }
+
     fn session_cut(
         &self,
         path: &Path,
@@ -598,6 +610,18 @@ impl QuarantineLayout for KeepsSession {
         root: &Path,
     ) -> Result<Box<dyn crate::backup::application::RestoreHold>, RestoreFault> {
         DirectoryQuarantine.hold(root)
+    }
+
+    fn mark_ready(&self, root: &Path) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.mark_ready(root)
+    }
+
+    fn ready(&self, root: &Path) -> Result<bool, RestoreFault> {
+        DirectoryQuarantine.ready(root)
+    }
+
+    fn spoil(&self, path: &Path) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.spoil(path)
     }
 
     fn session_cut(
@@ -1281,7 +1305,7 @@ async fn a_fenced_deferred_conversation_is_not_listed() {
     let text = fs::read_to_string(place.quarantine.join("deferred.txt")).unwrap();
     assert!(!text.contains("conv-bulk"));
     accept(&place, &MemoryAudit::open(), &NoReceipts).unwrap();
-    let source = FakeSource::matching(11, digest);
+    let source = FakeSource::unused();
     let error = open_one(&place, "conv-bulk", &source, &MemoryAudit::open()).unwrap_err();
     assert_eq!(error, RestoreFault::NotDeferred);
     assert_eq!(*source.writes.lock().unwrap(), 0);
@@ -1352,18 +1376,46 @@ async fn an_unfenced_executor_blocks_acceptance() {
     assert_eq!(accepted.after, "live");
 }
 
-struct FakeSource {
+struct SealedSession {
+    bytes: Vec<u8>,
     size: u64,
     digest: Fingerprint,
+}
+
+fn sealed_session(payload: &[u8]) -> SealedSession {
+    let bytes = session_database(&[("conv-bulk", payload)]);
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("s.sqlite3");
+    fs::write(&path, &bytes).unwrap();
+    let cut = DirectoryQuarantine.session_cut(&path, "conv-bulk").unwrap();
+    SealedSession {
+        bytes,
+        size: cut.size,
+        digest: cut.digest,
+    }
+}
+
+struct FakeSource {
+    bytes: Vec<u8>,
+    other: Vec<u8>,
     mode: &'static str,
     writes: Mutex<u32>,
 }
 
 impl FakeSource {
-    fn matching(size: u64, digest: Fingerprint) -> Self {
+    fn matching(session: &SealedSession) -> Self {
         Self {
-            size,
-            digest,
+            bytes: session.bytes.clone(),
+            other: sealed_session(b"other-payload").bytes,
+            mode: "match",
+            writes: Mutex::new(0),
+        }
+    }
+
+    fn unused() -> Self {
+        Self {
+            bytes: Vec::new(),
+            other: Vec::new(),
             mode: "match",
             writes: Mutex::new(0),
         }
@@ -1378,15 +1430,19 @@ impl DeferredSessionSource for FakeSource {
         progress: &mut dyn FetchProgress,
     ) -> Result<(), SessionSourceError> {
         *self.writes.lock().unwrap() += 1;
-        progress.report(0, self.size);
+        progress.report(0, self.bytes.len() as u64);
         match self.mode {
             "missing" => Err(SessionSourceError::Missing),
             "interrupted" => {
                 fs::write(destination, b"partial-session").unwrap();
                 Err(SessionSourceError::Interrupted)
             }
+            "changed" => {
+                fs::write(destination, &self.other).unwrap();
+                Ok(())
+            }
             _ => {
-                fs::write(destination, b"session").unwrap();
+                fs::write(destination, &self.bytes).unwrap();
                 Ok(())
             }
         }
@@ -1394,20 +1450,12 @@ impl DeferredSessionSource for FakeSource {
 
     fn inspect(
         &self,
-        _conversation_id: &str,
-        _path: &Path,
+        conversation_id: &str,
+        path: &Path,
     ) -> Result<SessionCut, SessionSourceError> {
-        let digest = if self.mode == "changed" || self.mode == "differs" {
-            Fingerprint::of(b"other")
-        } else {
-            self.digest
-        };
-        let size = if self.mode == "changed" || self.mode == "differs" {
-            self.size + 1
-        } else {
-            self.size
-        };
-        Ok(SessionCut { size, digest })
+        DirectoryQuarantine
+            .session_cut(path, conversation_id)
+            .map_err(|_| SessionSourceError::Unreadable)
     }
 }
 
@@ -1457,13 +1505,14 @@ fn open_one(
 
 #[tokio::test]
 async fn an_opened_deferred_conversation_matches_the_recorded_fingerprint() {
-    let digest = Fingerprint::of(b"session-v1");
-    let (_bundle, place) = deferred_bundle(deferred_rows("conv-bulk", 11, digest)).await;
-    let source = FakeSource::matching(11, digest);
+    let session = sealed_session(b"session-v1");
+    let (_bundle, place) =
+        deferred_bundle(deferred_rows("conv-bulk", session.size, session.digest)).await;
+    let source = FakeSource::matching(&session);
     let audit = MemoryAudit::open();
     let report = open_one(&place, "conv-bulk", &source, &audit).unwrap();
-    assert_eq!(report.size, 11);
-    assert_eq!(report.digest, digest);
+    assert_eq!(report.size, session.size);
+    assert_eq!(report.digest, session.digest);
     assert!(!report.already_present);
     assert_eq!(*source.writes.lock().unwrap(), 1);
     assert!(place.live.join("sessions/conv-bulk.sqlite3").is_file());
@@ -1487,7 +1536,7 @@ async fn a_changed_deferred_line_is_not_fetched() {
     let mut text = fs::read_to_string(&path).unwrap();
     text = text.replace("11", "12");
     fs::write(&path, text).unwrap();
-    let source = FakeSource::matching(12, digest);
+    let source = FakeSource::unused();
     let error = open_one(&place, "conv-bulk", &source, &MemoryAudit::open()).unwrap_err();
     assert_eq!(error, RestoreFault::Tamper);
     assert_eq!(*source.writes.lock().unwrap(), 0);
@@ -1496,9 +1545,10 @@ async fn a_changed_deferred_line_is_not_fetched() {
 
 #[tokio::test]
 async fn a_failed_fetch_audit_removes_the_session() {
-    let digest = Fingerprint::of(b"session-v1");
-    let (_bundle, place) = deferred_bundle(deferred_rows("conv-bulk", 11, digest)).await;
-    let source = FakeSource::matching(11, digest);
+    let session = sealed_session(b"session-v1");
+    let (_bundle, place) =
+        deferred_bundle(deferred_rows("conv-bulk", session.size, session.digest)).await;
+    let source = FakeSource::matching(&session);
     let error = open_one(&place, "conv-bulk", &source, &MemoryAudit::fail_after(1)).unwrap_err();
     assert_eq!(error, RestoreFault::Audit);
     assert!(!place.live.join("sessions/conv-bulk.sqlite3").exists());
@@ -1507,9 +1557,10 @@ async fn a_failed_fetch_audit_removes_the_session() {
 
 #[tokio::test]
 async fn a_failed_fetch_cleanup_moves_the_session() {
-    let digest = Fingerprint::of(b"session-v1");
-    let (_bundle, place) = deferred_bundle(deferred_rows("conv-bulk", 11, digest)).await;
-    let source = FakeSource::matching(11, digest);
+    let session = sealed_session(b"session-v1");
+    let (_bundle, place) =
+        deferred_bundle(deferred_rows("conv-bulk", session.size, session.digest)).await;
+    let source = FakeSource::matching(&session);
     let error = open_deferred_conversation(
         &OpenRequest {
             facts: person(RestoreAction::Fetch),
@@ -1533,11 +1584,12 @@ async fn a_failed_fetch_cleanup_moves_the_session() {
 
 #[tokio::test]
 async fn a_changed_source_is_refused_and_other_conversations_stay() {
-    let digest = Fingerprint::of(b"session-v1");
-    let (_bundle, place) = deferred_bundle(deferred_rows("conv-bulk", 11, digest)).await;
+    let session = sealed_session(b"session-v1");
+    let (_bundle, place) =
+        deferred_bundle(deferred_rows("conv-bulk", session.size, session.digest)).await;
     let other = place.live.join("records/notes/note-1");
     let before = fs::read(&other).unwrap();
-    let mut source = FakeSource::matching(11, digest);
+    let mut source = FakeSource::matching(&session);
     source.mode = "changed";
     let error = open_one(&place, "conv-bulk", &source, &MemoryAudit::open()).unwrap_err();
     assert_eq!(error, RestoreFault::SourceChanged);
@@ -1552,7 +1604,7 @@ async fn a_missing_source_is_refused_and_other_conversations_stay() {
     let (_bundle, place) = deferred_bundle(deferred_rows("conv-bulk", 11, digest)).await;
     let other = place.live.join("records/notes/note-1");
     let before = fs::read(&other).unwrap();
-    let mut source = FakeSource::matching(11, digest);
+    let mut source = FakeSource::unused();
     source.mode = "missing";
     let error = open_one(&place, "conv-bulk", &source, &MemoryAudit::open()).unwrap_err();
     assert_eq!(error, RestoreFault::SourceMissing);
@@ -1564,7 +1616,7 @@ async fn a_missing_source_is_refused_and_other_conversations_stay() {
 async fn an_interrupted_fetch_leaves_no_partial_session() {
     let digest = Fingerprint::of(b"session-v1");
     let (_bundle, place) = deferred_bundle(deferred_rows("conv-bulk", 11, digest)).await;
-    let mut source = FakeSource::matching(11, digest);
+    let mut source = FakeSource::unused();
     source.mode = "interrupted";
     let error = open_one(&place, "conv-bulk", &source, &MemoryAudit::open()).unwrap_err();
     assert_eq!(error, RestoreFault::Interrupted);
@@ -1580,7 +1632,7 @@ async fn an_interrupted_fetch_leaves_no_partial_session() {
 async fn an_unknown_conversation_is_not_fetched() {
     let digest = Fingerprint::of(b"session-v1");
     let (_bundle, place) = deferred_bundle(deferred_rows("conv-bulk", 11, digest)).await;
-    let source = FakeSource::matching(11, digest);
+    let source = FakeSource::unused();
     let error = open_one(&place, "conv-other", &source, &MemoryAudit::open()).unwrap_err();
     assert_eq!(error, RestoreFault::NotDeferred);
     assert_eq!(*source.writes.lock().unwrap(), 0);
@@ -1599,7 +1651,7 @@ async fn disagreeing_deferred_lines_are_refused() {
         DeferredEntry::new(StoreKind::Notes, "conv-bulk", 12, Fingerprint::of(b"two")).unwrap(),
     ];
     let (_bundle, place) = deferred_bundle(lines).await;
-    let source = FakeSource::matching(11, Fingerprint::of(b"one"));
+    let source = FakeSource::unused();
     let error = open_one(&place, "conv-bulk", &source, &MemoryAudit::open()).unwrap_err();
     assert_eq!(error, RestoreFault::Fingerprint);
     assert_eq!(*source.writes.lock().unwrap(), 0);
@@ -1607,31 +1659,33 @@ async fn disagreeing_deferred_lines_are_refused() {
 
 #[tokio::test]
 async fn a_matching_session_is_not_fetched_again() {
-    let digest = Fingerprint::of(b"session-v1");
-    let (_bundle, place) = deferred_bundle(deferred_rows("conv-bulk", 11, digest)).await;
+    let session = sealed_session(b"session-v1");
+    let (_bundle, place) =
+        deferred_bundle(deferred_rows("conv-bulk", session.size, session.digest)).await;
     let path = place.live.join("sessions/conv-bulk.sqlite3");
     fs::create_dir_all(path.parent().unwrap()).unwrap();
-    fs::write(&path, b"already").unwrap();
-    let source = FakeSource::matching(11, digest);
+    fs::write(&path, &session.bytes).unwrap();
+    let source = FakeSource::matching(&session);
     let report = open_one(&place, "conv-bulk", &source, &MemoryAudit::open()).unwrap();
     assert!(report.already_present);
     assert_eq!(*source.writes.lock().unwrap(), 0);
-    assert_eq!(fs::read(&path).unwrap(), b"already");
+    assert_eq!(fs::read(&path).unwrap(), session.bytes);
 }
 
 #[tokio::test]
 async fn a_different_session_file_is_not_replaced() {
-    let digest = Fingerprint::of(b"session-v1");
-    let (_bundle, place) = deferred_bundle(deferred_rows("conv-bulk", 11, digest)).await;
+    let session = sealed_session(b"session-v1");
+    let other = sealed_session(b"other-payload");
+    let (_bundle, place) =
+        deferred_bundle(deferred_rows("conv-bulk", session.size, session.digest)).await;
     let path = place.live.join("sessions/conv-bulk.sqlite3");
     fs::create_dir_all(path.parent().unwrap()).unwrap();
-    fs::write(&path, b"do-not-replace").unwrap();
-    let mut source = FakeSource::matching(11, digest);
-    source.mode = "differs";
+    fs::write(&path, &other.bytes).unwrap();
+    let source = FakeSource::matching(&session);
     let error = open_one(&place, "conv-bulk", &source, &MemoryAudit::open()).unwrap_err();
     assert_eq!(error, RestoreFault::SessionDiffers);
     assert_eq!(*source.writes.lock().unwrap(), 0);
-    assert_eq!(fs::read(&path).unwrap(), b"do-not-replace");
+    assert_eq!(fs::read(&path).unwrap(), other.bytes);
 }
 
 #[tokio::test]
@@ -1983,10 +2037,10 @@ async fn accept_and_fetch_wait_for_the_restore_root() {
     use std::sync::mpsc;
     use std::time::Duration;
 
-    let digest = Fingerprint::of(b"session");
+    let session = sealed_session(b"session");
     let bundle = publish(
         note_bundle_rows(),
-        deferred_rows("conv-bulk", 7, digest),
+        deferred_rows("conv-bulk", session.size, session.digest),
         None,
     )
     .await;
@@ -2017,7 +2071,7 @@ async fn accept_and_fetch_wait_for_the_restore_root() {
             &policy(),
             &MemoryAudit::open(),
             &DirectoryQuarantine,
-            &FakeSource::matching(7, digest),
+            &FakeSource::matching(&session),
             &mut Quiet,
         );
         fetch_finished.send(outcome.map(|_| ())).unwrap();
@@ -2081,4 +2135,208 @@ async fn accept_and_fetch_wait_for_the_restore_root() {
     assert!(!quarantine
         .join("sessions/conv-bulk.sqlite3.partial")
         .exists());
+}
+
+#[tokio::test]
+async fn accept_holds_the_live_lock_across_promotion() {
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    let bundle = publish(note_bundle_rows(), vec![], None).await;
+    let place = roots();
+    stage(
+        &bundle,
+        &place.quarantine,
+        &place.live,
+        &MemoryAudit::open(),
+        person(RestoreAction::Stage),
+        None,
+    )
+    .unwrap();
+    let live = DirectoryQuarantine.anchor(&place.live).unwrap();
+    let quarantine = DirectoryQuarantine.anchor(&place.quarantine).unwrap();
+    let hold = DirectoryQuarantine.hold(&live).unwrap();
+    let (started, ready) = mpsc::channel();
+    let (finished, result) = mpsc::channel();
+    let accept_live = live.clone();
+    std::thread::spawn(move || {
+        started.send(()).unwrap();
+        let outcome = accept_quarantine(
+            &AcceptRequest {
+                facts: person(RestoreAction::Accept),
+                quarantine: &quarantine,
+                live: &accept_live,
+                receipts: &NoReceipts,
+            },
+            &policy(),
+            &MemoryAudit::open(),
+            &DirectoryQuarantine,
+        );
+        finished.send(outcome.map(|_| ())).unwrap();
+    });
+    ready.recv_timeout(Duration::from_secs(10)).unwrap();
+    assert!(
+        matches!(
+            result.recv_timeout(Duration::from_secs(1)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ),
+        "accept must hold the live path's lock before promotion"
+    );
+    assert!(!live.exists());
+    drop(hold);
+    result
+        .recv_timeout(Duration::from_secs(10))
+        .unwrap()
+        .unwrap();
+    assert!(live.exists());
+}
+
+struct KeepsTree;
+
+impl QuarantineLayout for KeepsTree {
+    fn begin(&self, quarantine: &Path, live: &Path) -> Result<Box<dyn Staging>, RestoreFault> {
+        DirectoryQuarantine.begin(quarantine, live)
+    }
+    fn load(&self, root: &Path) -> Result<LoadedTree, RestoreFault> {
+        DirectoryQuarantine.load(root)
+    }
+    fn promote(&self, quarantine: &Path, live: &Path) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.promote(quarantine, live)
+    }
+    fn remove_tree(&self, _path: &Path) -> Result<(), RestoreFault> {
+        Err(RestoreFault::Unreadable)
+    }
+    fn read_bytes(&self, path: &Path) -> Result<Vec<u8>, RestoreFault> {
+        DirectoryQuarantine.read_bytes(path)
+    }
+    fn session_temp(&self, root: &Path, relative: &str) -> Result<PathBuf, RestoreFault> {
+        DirectoryQuarantine.session_temp(root, relative)
+    }
+    fn publish_file(&self, temp: &Path, final_path: &Path) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.publish_file(temp, final_path)
+    }
+    fn remove_file(&self, path: &Path) -> Result<(), RestoreFault> {
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("");
+        if name.ends_with(".partial") {
+            return DirectoryQuarantine.remove_file(path);
+        }
+        Err(RestoreFault::Unreadable)
+    }
+    fn exists(&self, path: &Path) -> Result<bool, RestoreFault> {
+        DirectoryQuarantine.exists(path)
+    }
+    fn canonicalize(&self, path: &Path) -> Result<PathBuf, RestoreFault> {
+        DirectoryQuarantine.canonicalize(path)
+    }
+    fn anchor(&self, path: &Path) -> Result<PathBuf, RestoreFault> {
+        DirectoryQuarantine.anchor(path)
+    }
+    fn hold(
+        &self,
+        root: &Path,
+    ) -> Result<Box<dyn crate::backup::application::RestoreHold>, RestoreFault> {
+        DirectoryQuarantine.hold(root)
+    }
+    fn mark_ready(&self, root: &Path) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.mark_ready(root)
+    }
+    fn ready(&self, root: &Path) -> Result<bool, RestoreFault> {
+        DirectoryQuarantine.ready(root)
+    }
+    fn spoil(&self, path: &Path) -> Result<(), RestoreFault> {
+        DirectoryQuarantine.spoil(path)
+    }
+    fn session_cut(&self, path: &Path, conversation_id: &str) -> Result<SessionCut, RestoreFault> {
+        DirectoryQuarantine.session_cut(path, conversation_id)
+    }
+}
+
+#[tokio::test]
+async fn a_failed_stage_cleanup_still_refuses_acceptance() {
+    let bundle = publish(note_bundle_rows(), vec![], None).await;
+    let place = roots();
+    let source = DirectoryVerificationSource::open(bundle.root.clone()).unwrap();
+    let error = stage_quarantine(
+        &StageRequest {
+            facts: person(RestoreAction::Stage),
+            bundle: &source,
+            format: &ExportFormat,
+            verifier: &bundle.key,
+            limits: VerificationLimits::default(),
+            later_inventory: None,
+            quarantine: &place.quarantine,
+            live: &place.live,
+        },
+        &policy(),
+        &MemoryAudit::fail_after(1),
+        &KeepsTree,
+        &DirectoryMaterializer,
+        &KeyedInventory::new(bundle.key),
+    )
+    .unwrap_err();
+    assert_eq!(error, RestoreFault::Audit);
+    assert!(place.quarantine.join("journal.txt").is_file());
+    assert!(!DirectoryQuarantine.ready(&place.quarantine).unwrap());
+    let accepted = accept(&place, &MemoryAudit::open(), &NoReceipts).unwrap_err();
+    assert_eq!(accepted, RestoreFault::Tamper);
+    assert!(!place.live.exists());
+}
+
+#[tokio::test]
+async fn a_failed_fetch_fallback_empties_the_session() {
+    let session = sealed_session(b"session-v1");
+    let (_bundle, place) =
+        deferred_bundle(deferred_rows("conv-bulk", session.size, session.digest)).await;
+    let source = FakeSource::matching(&session);
+    let error = open_deferred_conversation(
+        &OpenRequest {
+            facts: person(RestoreAction::Fetch),
+            root: &place.live,
+            conversation_id: "conv-bulk",
+        },
+        &policy(),
+        &MemoryAudit::fail_after(1),
+        &KeepsTree,
+        &source,
+        &mut Quiet,
+    )
+    .unwrap_err();
+    assert_eq!(error, RestoreFault::Audit);
+    let path = place.live.join("sessions/conv-bulk.sqlite3");
+    assert_eq!(fs::read(&path).unwrap(), b"");
+    assert!(!path.with_extension("sqlite3.rejected").exists());
+}
+
+#[tokio::test]
+async fn an_unreadable_session_body_is_not_sealed_when_a_conversation_is_fenced() {
+    let later = DeletionLog::default()
+        .append(DeletionFence::conversation("conv-fenced").unwrap())
+        .0;
+    let bundle = publish(
+        vec![Row {
+            store: StoreKind::CanonicalRecords,
+            identity: "records.sqlite3".into(),
+            bytes: Bytes::Public(b"not-a-database".to_vec()),
+        }],
+        vec![],
+        None,
+    )
+    .await;
+    let sealed = seal_inventory(bundle.key, &later);
+    let place = roots();
+    let error = stage(
+        &bundle,
+        &place.quarantine,
+        &place.live,
+        &MemoryAudit::open(),
+        person(RestoreAction::Stage),
+        Some(&sealed),
+    )
+    .unwrap_err();
+    assert_eq!(error, RestoreFault::FencedBody);
+    assert!(!place.quarantine.exists());
+    assert!(!place.live.exists());
 }

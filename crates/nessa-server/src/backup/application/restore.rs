@@ -53,6 +53,12 @@ pub trait QuarantineLayout {
     fn anchor(&self, path: &Path) -> Result<PathBuf, RestoreFault>;
     /// One lock for this root, held across publication and the audit that records it.
     fn hold(&self, root: &Path) -> Result<Box<dyn RestoreHold>, RestoreFault>;
+    /// Record that the sealed audit was stored. Accept refuses without it.
+    fn mark_ready(&self, root: &Path) -> Result<(), RestoreFault>;
+    /// Whether [`QuarantineLayout::mark_ready`] has been stored for `root`.
+    fn ready(&self, root: &Path) -> Result<bool, RestoreFault>;
+    /// Make a published session unreadable in place.
+    fn spoil(&self, path: &Path) -> Result<(), RestoreFault>;
     /// Stream size and fingerprint of one session file.
     fn session_cut(&self, path: &Path, conversation_id: &str) -> Result<SessionCut, RestoreFault>;
 }
@@ -156,7 +162,7 @@ pub fn stage_quarantine(
     if let Err(error) = paths_are_distinct(&quarantine, &live) {
         return Err(recorded.stop(error));
     }
-    let _hold = match layout.hold(&quarantine) {
+    let _hold = match hold_roots(layout, &quarantine, &live) {
         Ok(hold) => hold,
         Err(error) => return Err(recorded.stop(error)),
     };
@@ -216,12 +222,13 @@ pub fn stage_quarantine(
         .write("absent", "verified", "sealed", "effect")
         .is_err()
     {
-        if layout.remove_tree(&quarantine).is_ok() {
-            let _ = recorded.write("verified", "absent", RestoreFault::Audit.cause(), "effect");
-        } else {
-            let _ = layout.remove_file(&quarantine.join("journal.txt"));
-        }
+        let _ = layout.remove_tree(&quarantine);
+        let _ = layout.remove_file(&quarantine.join("journal.txt"));
         return Err(RestoreFault::Audit);
+    }
+    if let Err(error) = layout.mark_ready(&quarantine) {
+        let _ = layout.remove_tree(&quarantine);
+        return Err(recorded.stop(error));
     }
     Ok(StageReport {
         leases: prepared.leases,
@@ -275,7 +282,7 @@ pub fn accept_quarantine(
     if let Err(error) = paths_are_distinct(&quarantine, &live) {
         return Err(recorded.stop(error));
     }
-    let _hold = match layout.hold(&quarantine) {
+    let _hold = match hold_roots(layout, &quarantine, &live) {
         Ok(hold) => hold,
         Err(error) => return Err(recorded.stop(error)),
     };
@@ -296,6 +303,11 @@ pub fn accept_quarantine(
     }
     if let Err(error) = sessions_match(layout, &quarantine, &deferred, &loaded.extras) {
         return Err(recorded.stop(error));
+    }
+    match layout.ready(&quarantine) {
+        Ok(true) => {}
+        Ok(false) => return Err(recorded.stop(RestoreFault::Tamper)),
+        Err(error) => return Err(recorded.stop(error)),
     }
     let attestations = match attested(&journal, request.receipts) {
         Ok(text) => text,
@@ -400,7 +412,7 @@ pub fn open_deferred_conversation(
         Err(error) => return Err(recorded.stop(error)),
     };
     if present {
-        return match source.inspect(request.conversation_id, &final_path) {
+        return match layout.session_cut(&final_path, request.conversation_id) {
             Ok(cut) if cut.size == expected.size && cut.digest == expected.digest => {
                 recorded.write("available", "available", "already", "effect")?;
                 Ok(OpenReport {
@@ -410,7 +422,7 @@ pub fn open_deferred_conversation(
                 })
             }
             Ok(_) => Err(recorded.stop(RestoreFault::SessionDiffers)),
-            Err(error) => Err(recorded.stop(source_fault(error))),
+            Err(error) => Err(recorded.stop(error)),
         };
     }
     let temp = match layout.session_temp(&root, &relative) {
@@ -424,11 +436,11 @@ pub fn open_deferred_conversation(
         let _ = layout.remove_file(&temp);
         return Err(recorded.stop(source_fault(error)));
     }
-    let cut = match source.inspect(request.conversation_id, &temp) {
+    let cut = match layout.session_cut(&temp, request.conversation_id) {
         Ok(cut) => cut,
         Err(error) => {
             let _ = layout.remove_file(&temp);
-            return Err(recorded.stop(source_fault(error)));
+            return Err(recorded.stop(error));
         }
     };
     if cut.size != expected.size || cut.digest != expected.digest {
@@ -443,11 +455,7 @@ pub fn open_deferred_conversation(
         .write("deferred", "available", "fetched", "effect")
         .is_err()
     {
-        if layout.remove_file(&final_path).is_err() {
-            let mut rejected = final_path.as_os_str().to_owned();
-            rejected.push(".rejected");
-            let _ = layout.publish_file(&final_path, Path::new(&rejected));
-        }
+        retire_session(layout, &final_path);
         return Err(RestoreFault::Audit);
     }
     Ok(OpenReport {
@@ -561,6 +569,41 @@ fn sessions_match(
         }
     }
     Ok(())
+}
+
+struct HeldRoots {
+    _earlier: Box<dyn RestoreHold>,
+    _later: Box<dyn RestoreHold>,
+}
+
+fn hold_roots(
+    layout: &dyn QuarantineLayout,
+    first: &Path,
+    second: &Path,
+) -> Result<HeldRoots, RestoreFault> {
+    let (left, right) = if first.as_os_str() <= second.as_os_str() {
+        (first, second)
+    } else {
+        (second, first)
+    };
+    Ok(HeldRoots {
+        _earlier: layout.hold(left)?,
+        _later: layout.hold(right)?,
+    })
+}
+
+/// Remove the published session, or move it aside, or empty it.
+fn retire_session(layout: &dyn QuarantineLayout, path: &Path) -> bool {
+    if layout.remove_file(path).is_ok() {
+        return true;
+    }
+    let mut rejected = path.as_os_str().to_owned();
+    rejected.push(".rejected");
+    let rejected = PathBuf::from(rejected);
+    if layout.remove_file(&rejected).is_ok() && layout.publish_file(path, &rejected).is_ok() {
+        return true;
+    }
+    layout.spoil(path).is_ok()
 }
 
 fn decide(
