@@ -1,4 +1,4 @@
-use nessa_local_database::{open, open_existing, OpenError, Schema};
+use nessa_local_database::{open, open_existing, OpenError, Schema, Upgrade};
 use std::path::PathBuf;
 
 const DEFINITION: &str = "CREATE TABLE parents (id TEXT PRIMARY KEY) STRICT;
@@ -308,4 +308,141 @@ fn a_current_file_with_a_damaged_page_is_refused_and_left_as_it_was() {
         "{refused:?}"
     );
     assert_eq!(std::fs::read(&path).unwrap(), bytes);
+}
+
+const UPGRADED: &str = "CREATE TABLE parents (id TEXT PRIMARY KEY) STRICT;
+CREATE TABLE children (parent TEXT NOT NULL REFERENCES parents(id), note TEXT) STRICT;
+CREATE TABLE added (id TEXT) STRICT;
+CREATE TABLE later (id TEXT) STRICT;
+PRAGMA user_version = 5;
+";
+static STEPS: [Upgrade; 2] = [
+    Upgrade::new(
+        3,
+        "CREATE TABLE added (id TEXT) STRICT;\nPRAGMA user_version = 4;",
+    ),
+    Upgrade::new(
+        4,
+        "CREATE TABLE later (id TEXT) STRICT;\nPRAGMA user_version = 5;",
+    ),
+];
+
+fn upgraded() -> Schema {
+    Schema::new(UPGRADED)
+        .unwrap()
+        .with_upgrades(&STEPS)
+        .unwrap()
+}
+
+fn tables(path: &std::path::Path) -> Vec<String> {
+    let connection = rusqlite_connection(path);
+    let mut statement = connection
+        .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' ORDER BY name")
+        .unwrap();
+    let names = statement
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<Result<Vec<String>, _>>()
+        .unwrap();
+    names
+}
+
+#[test]
+fn an_older_file_is_upgraded_in_one_transaction_and_keeps_its_rows() {
+    let (_directory, root) = private_directory();
+    let path = root.join("store.sqlite3");
+    let connection = open(&path, &schema()).unwrap();
+    connection
+        .execute("INSERT INTO parents (id) VALUES ('kept')", [])
+        .unwrap();
+    drop(connection);
+
+    let connection = open(&path, &upgraded()).unwrap();
+    let version: u32 = connection
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .unwrap();
+    assert_eq!(version, 5);
+    let kept: String = connection
+        .query_row("SELECT id FROM parents", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(kept, "kept");
+    drop(connection);
+    assert_eq!(tables(&path), ["added", "children", "later", "parents"]);
+    // Opened again, it is current, and the older schema now refuses it.
+    drop(open(&path, &upgraded()).unwrap());
+    assert!(matches!(
+        open(&path, &schema()),
+        Err(OpenError::Version {
+            found: 5,
+            expected: 3
+        })
+    ));
+}
+
+#[test]
+fn an_upgrade_starts_at_the_version_the_file_is_at() {
+    let (_directory, root) = private_directory();
+    let path = root.join("store.sqlite3");
+    let middle =
+        Schema::new("CREATE TABLE parents (id TEXT PRIMARY KEY) STRICT;\nPRAGMA user_version = 4;")
+            .unwrap();
+    drop(open(&path, &middle).unwrap());
+    drop(open(&path, &upgraded()).unwrap());
+    // Only the 4 to 5 step ran: the 3 to 4 step's table is not there.
+    assert_eq!(tables(&path), ["later", "parents"]);
+}
+
+#[test]
+fn a_failed_step_rolls_back_every_step_before_it() {
+    let (_directory, root) = private_directory();
+    let path = root.join("store.sqlite3");
+    drop(open(&path, &schema()).unwrap());
+    rusqlite_connection(&path)
+        .execute_batch("CREATE TABLE later (id TEXT) STRICT;")
+        .unwrap();
+    assert!(matches!(
+        open(&path, &upgraded()),
+        Err(OpenError::Upgrade { from: 4, .. })
+    ));
+    let version: u32 = rusqlite_connection(&path)
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .unwrap();
+    assert_eq!(version, 3);
+    assert_eq!(tables(&path), ["children", "later", "parents"]);
+}
+
+#[test]
+fn a_version_no_step_starts_from_is_still_refused() {
+    let (_directory, root) = private_directory();
+    let path = root.join("store.sqlite3");
+    let older =
+        Schema::new("CREATE TABLE parents (id TEXT) STRICT;\nPRAGMA user_version = 2;").unwrap();
+    drop(open(&path, &older).unwrap());
+    assert!(matches!(
+        open(&path, &upgraded()),
+        Err(OpenError::Version {
+            found: 2,
+            expected: 5
+        })
+    ));
+    assert_eq!(tables(&path), ["parents"]);
+}
+
+#[test]
+fn upgrades_must_chain_to_the_schemas_version() {
+    static GAP: [Upgrade; 2] = [
+        Upgrade::new(3, "PRAGMA user_version = 4;"),
+        Upgrade::new(5, "PRAGMA user_version = 6;"),
+    ];
+    static SHORT: [Upgrade; 1] = [Upgrade::new(3, "PRAGMA user_version = 4;")];
+    static WRONG: [Upgrade; 1] = [Upgrade::new(4, "PRAGMA user_version = 6;")];
+    let five = || Schema::new(UPGRADED).unwrap();
+    for steps in [&GAP[..], &SHORT[..], &WRONG[..]] {
+        assert!(matches!(
+            five().with_upgrades(steps),
+            Err(OpenError::UnversionedSchema)
+        ));
+    }
+    assert!(five().with_upgrades(&STEPS).is_ok());
+    assert!(five().with_upgrades(&[]).is_ok());
 }
