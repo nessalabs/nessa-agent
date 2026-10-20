@@ -848,8 +848,8 @@ const steps = {
         ),
       )
   },
-  async reply(run, step, failures, extra = "") {
-    const text = prompt(run, STRESS.reply, step, extra)
+  async reply(run, step, failures) {
+    const text = prompt(run, STRESS.reply, step)
     const seen = await send(run, run.main.id, text, failures)
     const { turn } = await settled(run, run.main.id, seen, text, "completed", failures)
     // A reply carried on behind a failure echoes its notice first.
@@ -1052,18 +1052,12 @@ const steps = {
         failures.push("the window had no room for the side rail")
         return
       }
-      // Each open is its own turn. `reply` would otherwise name both by this
-      // step alone, and the view requires that text once.
-      let opened = 0
       for (const open of [true, false, true]) {
         if ((await toggle.getAttribute("aria-expanded")) !== String(open))
           await toggle.click()
         if (!(await aroundTheLights(run.page, open ? "open" : "closed", failures))) return
         // The workspace still takes a message with the rail beside it.
-        if (open && failures.length === 0) {
-          opened += 1
-          await steps.reply(run, step, failures, ` rail ${opened}`)
-        }
+        if (open && failures.length === 0) await steps.reply(run, step, failures)
       }
       // Turned off with the rail open: the rail goes, and back from Settings
       // the titlebar's controls start where the lights end again.
